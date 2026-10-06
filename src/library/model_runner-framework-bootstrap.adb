@@ -8,7 +8,6 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
-with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Transitions;
@@ -30,6 +29,33 @@ package body Model_Runner.Framework.Bootstrap is
    begin
       Into.Outputs.Append (Item);
    end Append;
+
+   -------------------
+   -- Mark_Imported --
+   -------------------
+
+   procedure Mark_Imported
+     (Change : in out Stores.Transaction;
+      Kind   : Intent.Intent_Kind;
+      Named  : String;
+      From   : Output)
+   is
+      Where  : constant Area :=
+        (case Kind is
+            when Intent.Requirement   => Requirements_Area,
+            when Intent.Specification => Specs_Area,
+            when Intent.Decision      => Decisions_Area);
+      Value  : Records.Item;
+      Staged : Boolean;
+   begin
+      Stores.Pending (Change, Where, Named, Value, Staged);
+      if Staged then
+         Records.Set (Value, "imported_text", To_String (From.Text));
+         Records.Set (Value, "imported_criteria", To_String (From.Criteria));
+         Records.Set (Value, "imported_title", To_String (From.Title));
+         Stores.Put (Change, Where, Named, Value);
+      end if;
+   end Mark_Imported;
 
    function Length (From : Output_List) return Natural
    is (Natural (From.Outputs.Length));
@@ -3164,16 +3190,8 @@ package body Model_Runner.Framework.Bootstrap is
             --  made: what is compared with the next run, so a person's own
             --  revision is not taken for the document's.
             procedure Mark_Imported (Kind : Intent.Intent_Kind; Named : String) is
-               Value  : Records.Item;
-               Staged : Boolean;
             begin
-               Stores.Pending (Change, Area_Of (Kind), Named, Value, Staged);
-               if Staged then
-                  Records.Set (Value, "imported_text", To_String (Next.Text));
-                  Records.Set (Value, "imported_criteria", To_String (Next.Criteria));
-                  Records.Set (Value, "imported_title", To_String (Next.Title));
-                  Stores.Put (Change, Area_Of (Kind), Named, Value);
-               end if;
+               Bootstrap.Mark_Imported (Change, Kind, Named, Next);
             end Mark_Imported;
 
             --  Found again. The document unchanged since it was imported --

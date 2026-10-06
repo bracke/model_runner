@@ -1442,29 +1442,8 @@ package body Model_Runner.CLI.Intents is
                                     --  what it was imported as, so a later edit
                                     --  of the document is the document's.
                                     if E.Is_Ok (Status) then
-                                       declare
-                                          Where  : constant Model_Runner.Framework.Area :=
-                                            (case Kind is
-                                               when Nt.Requirement   =>
-                                                  Model_Runner.Framework.Requirements_Area,
-                                               when Nt.Specification =>
-                                                  Model_Runner.Framework.Specs_Area,
-                                               when Nt.Decision      =>
-                                                  Model_Runner.Framework.Decisions_Area);
-                                          Value  : Model_Runner.Framework.Records.Item;
-                                          Staged : Boolean;
-                                       begin
-                                          S.Pending (Change, Where, Word (2), Value, Staged);
-                                          if Staged then
-                                             Model_Runner.Framework.Records.Set
-                                               (Value, "imported_text", To_String (One.Text));
-                                             Model_Runner.Framework.Records.Set
-                                               (Value, "imported_criteria", To_String (One.Criteria));
-                                             Model_Runner.Framework.Records.Set
-                                               (Value, "imported_title", To_String (One.Title));
-                                             S.Put (Change, Where, Word (2), Value);
-                                          end if;
-                                       end;
+                                       Model_Runner.Framework.Bootstrap.Mark_Imported
+                                         (Change, Kind, Word (2), One);
                                     end if;
                                  end if;
                               end;

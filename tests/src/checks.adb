@@ -567,6 +567,19 @@ package body Checks is
       function Mentions (Relative, Token : String) return Boolean
       is (Project_Tools.Text.Contains (Contents (Relative), Token));
 
+      --  The store's calls that write a record, as the command line would
+      --  spell them.
+      type Text_Access is access constant String;
+      Put_S     : aliased constant String := "S.Put (";
+      Remove_S  : aliased constant String := "S.Remove (";
+      Stage_S   : aliased constant String := "S.Stage (";
+      Put_F     : aliased constant String := "Stores.Put (";
+      Remove_F  : aliased constant String := "Stores.Remove (";
+      Stage_F   : aliased constant String := "Stores.Stage (";
+      Store_Writers : constant array (1 .. 6) of Text_Access :=
+        [Put_S'Access, Remove_S'Access, Stage_S'Access,
+         Put_F'Access, Remove_F'Access, Stage_F'Access];
+
       --  Visit every Ada source under a directory.
       generic
          with procedure Visit (Relative : String);
@@ -808,6 +821,32 @@ package body Checks is
          procedure Scan_Lower is new For_Each_Source (Visit_Lower);
       begin
          Scan_Lower ("src");
+      end;
+
+      --  Layering, the other way: the command line asks the framework's
+      --  domain packages to change the project's state and decides when the
+      --  change is committed, but writes no record of it itself -- what a
+      --  record holds is the domain's to say.
+      declare
+         procedure Visit_Cli (Relative : String) is
+            Name : constant String := T.To_Lower (Relative);
+         begin
+            if not T.Starts_With (Name, "src/library/model_runner-cli") then
+               return;
+            end if;
+            Result.Performed := Result.Performed + 1;
+            for Writer of Store_Writers loop
+               if Mentions (Relative, Writer.all) then
+                  Fail (Relative & " writes the project's state itself ("
+                        & Writer.all & "); ask the framework package that "
+                        & "owns the record");
+               end if;
+            end loop;
+         end Visit_Cli;
+
+         procedure Scan_Cli is new For_Each_Source (Visit_Cli);
+      begin
+         Scan_Cli ("src");
       end;
 
       --  Style: the documented line-length budget.

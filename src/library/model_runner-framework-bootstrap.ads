@@ -3,6 +3,7 @@ private with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Stores;
 
 --  Establishing what a project is meant to be from what it already says.
@@ -165,6 +166,22 @@ package Model_Runner.Framework.Bootstrap is
       Status : out Model_Runner.Errors.Error_Info;
       Accept_Numbered : Boolean := True;
       Only_Read       : Boolean := False);
+
+   --  Keep on an entry staged in a change what the document said when it
+   --  was imported -- its text, criteria and title -- which is what the
+   --  next import compares with, so a person's own revision is not taken
+   --  for the document's. An entry not staged in the change is left alone.
+   --
+   --  @param Change The transaction holding the staged entry.
+   --  @param Kind What the entry is: a requirement, a specification or a
+   --    decision.
+   --  @param Named The entry's identifier.
+   --  @param From What the document said.
+   procedure Mark_Imported
+     (Change : in out Stores.Transaction;
+      Kind   : Intent.Intent_Kind;
+      Named  : String;
+      From   : Output);
 
 private
 

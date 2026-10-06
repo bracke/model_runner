@@ -2334,6 +2334,34 @@ package body Tests.Framework_Cases is
                 Bs.Scan ("docs/parser.md",
                          Document & "Output MUST be flushed." & LF),
                 Report, Status);
+      --  What the document said is kept on what it made, staged with it;
+      --  marked again it is what is said then, and an entry the change
+      --  does not hold is left alone.
+      Assert (not Report.Made.Is_Empty, "bootstrap over an edited document made nothing");
+      if not Report.Made.Is_Empty then
+         declare
+            Id     : constant String := Report.Made.First_Element;
+            Value  : Model_Runner.Framework.Records.Item;
+            Staged : Boolean;
+            Was    : Bs.Output;
+         begin
+            S.Pending (Change, Model_Runner.Framework.Requirements_Area, Id, Value, Staged);
+            Assert (Staged, "what bootstrap made was not staged in its change");
+            Was.Text := To_Unbounded_String (Model_Runner.Framework.Records.Get (Value, "imported_text"));
+            Was.Title := To_Unbounded_String (Model_Runner.Framework.Records.Get (Value, "imported_title"));
+            Was.Criteria :=
+              To_Unbounded_String (Model_Runner.Framework.Records.Get (Value, "imported_criteria"));
+            Bs.Mark_Imported (Change, Nt.Requirement, Id,
+                              (Text => To_Unbounded_String ("said otherwise"), others => <>));
+            S.Pending (Change, Model_Runner.Framework.Requirements_Area, Id, Value, Staged);
+            Assert (Model_Runner.Framework.Records.Get (Value, "imported_text") = "said otherwise",
+                    "what a document said was not kept on the entry it made");
+            Bs.Mark_Imported (Change, Nt.Requirement, Id, Was);
+            Bs.Mark_Imported (Change, Nt.Requirement, "REQ-NONE", Was);
+            S.Pending (Change, Model_Runner.Framework.Requirements_Area, "REQ-NONE", Value, Staged);
+            Assert (not Staged, "an entry the change did not hold was written");
+         end;
+      end if;
       S.Commit (Store, Change, Status);
       --  The new line made, and nothing else revised.
       Assert (Report.Created = 1 and then Natural (Report.Revised.Length) = 0,
