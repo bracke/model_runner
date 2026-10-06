@@ -6203,7 +6203,7 @@ package body Tests.Backend_Cases is
 
    --  A feed-forward's gate and up as one step, the unit between them,
    --  against the two products and the combination it stands for: the
-   --  same bits, one position and three. And the two plain products
+   --  same bits, one position and three, either unit. And the two plain products
    --  reading one shared region -- each its own rows inside it, the gate a
    --  pad's way in -- against each reading its own matrix: the same bits
    --  again. The matrices lie a short gap apart behind a run of other
@@ -6269,6 +6269,7 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
+      for Unit in Natural range 0 .. 1 loop
       for Count in Positive range 1 .. 3 loop
          if Count = 2 then
             goto Next_Count;
@@ -6315,7 +6316,7 @@ package body Tests.Backend_Cases is
                Products.Packed_Q4_K, Rows, Columns, Added, Kept => False,
                From_Step => 1);
             Assert (Added, "the up was refused");
-            Products.Add_Combination (Steps, 0, Added);
+            Products.Add_Combination (Steps, Unit, Added);
             Assert (Added, "the combination was refused");
             Products.Run (Engine, Steps, Input, Count, Plain, Ok, Halted);
             Assert (Ok, "the plain feed-forward was refused");
@@ -6335,7 +6336,7 @@ package body Tests.Backend_Cases is
                From_Step => 1, Region_Rows => Region,
                Region_At => Pad + Natural (Pair_At));
             Assert (Added, "the up in the region was refused");
-            Products.Add_Combination (Steps, 0, Added);
+            Products.Add_Combination (Steps, Unit, Added);
             Assert (Added, "the combination was refused");
             Products.Run (Engine, Steps, Input, Count, Shared, Ok, Halted);
             Assert (Ok, "the feed-forward in one region was refused");
@@ -6352,7 +6353,7 @@ package body Tests.Backend_Cases is
                Products.Add_Gated_Pair
                  (Steps, Stored'Address, Stored'Length, Start, Pair_At,
                   Products.Packed_Q4_K, Rows, Columns, Added,
-                  Key => Stored (Gate_At)'Address);
+                  Key => Stored (Gate_At)'Address, Unit => Unit);
                Assert (Added, "the gated pair was refused");
                Products.Run (Engine, Steps, Input, Count, Paired, Ok, Halted);
                Assert (Ok, "the gated pair would not run");
@@ -6362,7 +6363,8 @@ package body Tests.Backend_Cases is
                           & N.Real'Image (Paired (Pair + Index))
                           & " where its parts answer"
                           & N.Real'Image (Plain (Made + Index)) & " at"
-                          & Index'Image & ", " & Count'Image & " positions");
+                          & Index'Image & ", " & Count'Image & " positions,"
+                          & " unit" & Unit'Image);
                end loop;
             else
                Ada.Text_IO.Put_Line
@@ -6373,6 +6375,7 @@ package body Tests.Backend_Cases is
          end;
 
          <<Next_Count>>
+      end loop;
       end loop;
 
       Products.Close (Engine);

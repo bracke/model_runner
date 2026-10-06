@@ -4316,7 +4316,7 @@ package body Model_Runner.Backend.Device is
                --  normalization between them.
                Paired : constant Boolean :=
                  Gated
-                 and then Unit = 0
+                 and then Unit in 0 | 1
                  and then Alpha = 0.0 and then Limit = 0.0
                  and then Gate_P = Products.Packed_Q4_K
                  and then Up_P = Gate_P
@@ -4365,7 +4365,7 @@ package body Model_Runner.Backend.Device is
                     (Steps, Gate.Base, Gate.Span, Start, Pair_At,
                      Gate_P, Natural (Gate.Rows), Natural (Gate.Columns),
                      Added, Key => Pair_Key, Kept => False,
-                     From_Step => Step_Norm_Feed);
+                     From_Step => Step_Norm_Feed, Unit => Unit);
                   if not Added then
                      return;
                   end if;

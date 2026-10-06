@@ -10134,7 +10134,8 @@ package body Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
-      From_Step : Natural := 0)
+      From_Step : Natural := 0;
+      Unit      : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -10148,6 +10149,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Steps.Held = Sequence_Limit
         or else Base = System.Null_Address
         or else Packing /= Packed_Q4_K
+        or else Unit > 1
         or else Columns = 0
         or else Columns mod 256 /= 0
         or else Rows = 0
@@ -10170,7 +10172,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Rows, Columns => Columns, Key => Key, Chained => True,
          Reads => (if From_Step = 0 then 0 else From_Step),
          Kept => Kept,
-         Blends => False, Unit => 0, Attends => False,
+         Blends => False, Unit => Unit, Attends => False,
          Glu => True, Pair_At => Natural (Pair_At),
          Region_Rows => Pair_Rows (Pair_At, Rows, Columns),
          Region_At => Pair_Pad (Pair_At, Rows, Columns),
@@ -14940,7 +14942,7 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
                         Base    => C.unsigned (Places (Index).Base),
                         Joins   => 0,
-                        Table   => 0,
+                        Table   => C.unsigned (This.Unit),
                         Members => [others => 0],
                         Stride  => C.unsigned (This.Pair_At),
                         Apart   => 0,

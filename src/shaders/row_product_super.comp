@@ -44,9 +44,6 @@ layout(local_size_x = 64 * KSPLIT) in;
 #define ACC NUM_ROWS
 #endif
 
-float sigmoid_weighted(float x) {
-    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
-}
 
 shared float wave_sums[KSPLIT * NUM_ROWS];
 
@@ -73,6 +70,24 @@ layout(push_constant) uniform Shape {
     uint apart;
     uint routed;
 } shape;
+
+float sigmoid_weighted(float x) {
+    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
+
+//  And the Gaussian unit in the tanh form, as combine.comp states it; the
+//  push block's table word says which of the two, as combine's unit word
+//  does: nought or one.
+float gaussian(float x) {
+    const float root = 0.7978845608028654;
+    const float bend = 0.044715;
+    float inner = root * (x + bend * x * x * x);
+    return 0.5 * x * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
+}
+
+float gate_unit(float x) {
+    return shape.table == 1u ? gaussian(x) : sigmoid_weighted(x);
+}
 
 #ifdef MULTI
 //  A few positions at once -- a drafted round's check, two to eight --
@@ -199,7 +214,7 @@ void main() {
             float up = subgroupAdd (temp[r + NUM_ROWS][k]);
             if (tid == 0u && row < shape.rows && real_k[k]) {
                 y[(shape.first + k) * shape.rows + row] =
-                  sigmoid_weighted (gate) * up;
+                  gate_unit (gate) * up;
             }
         }
     }
@@ -353,7 +368,7 @@ void main() {
         uint row = first_row + r;
 
         if (tid == 0u && row < shape.rows) {
-            y[shape.first * shape.rows + row] = sigmoid_weighted (gate) * up;
+            y[shape.first * shape.rows + row] = gate_unit (gate) * up;
         }
     }
     return;

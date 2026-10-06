@@ -835,7 +835,7 @@ package Model_Runner.Platform.Device.Products is
       Columns : Natural) return Natural;
 
    --  Name a feed-forward's gate and up projections as one step, with the
-   --  sigmoid-weighted unit on the gate and the two multiplied -- what two
+   --  unit on the gate and the two multiplied -- what two
    --  products and a combination make, the same bits, without the
    --  combination's dispatch and the barrier before it.
    --
@@ -858,6 +858,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param Kept False when nothing on the host reads the answer.
    --  @param From_Step Step whose answer is the activation, or zero for the
    --    step before this one.
+   --  @param Unit The unit on the gate, numbered as Add_Combination numbers
+   --    it: nought for the sigmoid-weighted one, one for the Gaussian.
    procedure Add_Gated_Pair
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -870,7 +872,8 @@ package Model_Runner.Platform.Device.Products is
       Added     : out Boolean;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
-      From_Step : Natural := 0);
+      From_Step : Natural := 0;
+      Unit      : Natural := 0);
 
    --  Whether the routing steps of the model now open leave the chosen
    --  experts' shares as the softmax gave them, rather than putting them
