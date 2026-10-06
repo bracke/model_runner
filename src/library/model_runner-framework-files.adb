@@ -1,3 +1,5 @@
+with Ada.Exceptions;
+with Ada.IO_Exceptions;
 with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
@@ -6,6 +8,7 @@ with Ada.Unchecked_Deallocation;
 with Hostkit.Fs;
 
 with Model_Runner.Framework.Records;
+with Model_Runner.Text;
 
 package body Model_Runner.Framework.Files is
 
@@ -186,15 +189,20 @@ package body Model_Runner.Framework.Files is
    -- Files_In --
    --------------
 
-   function Files_In (Directory : String) return Name_Lists.Vector is
-      Result : Name_Lists.Vector;
+   procedure Files_In
+     (Directory : String;
+      Result    : out Name_Lists.Vector;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
       Search : Dirs.Search_Type;
       Found  : Dirs.Directory_Entry_Type;
    begin
+      Result.Clear;
+      Status := E.Success;
       if not Dirs.Exists (Directory)
         or else Dirs.Kind (Directory) /= Dirs.Directory
       then
-         return Result;
+         return;
       end if;
 
       Dirs.Start_Search
@@ -207,10 +215,29 @@ package body Model_Runner.Framework.Files is
       Dirs.End_Search (Search);
 
       Sorting.Sort (Result);
-      return Result;
    exception
-      when others =>
-         return Result;
+      when Failure : others =>
+         Result.Clear;
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Directory, E.Param_Path);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure)
+                     & " " & Ada.Exceptions.Exception_Message (Failure));
+   end Files_In;
+
+   function Files_In (Directory : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Status : E.Error_Info;
+      Found  : Boolean;
+      Why    : E.Parameter;
+   begin
+      Files_In (Directory, Result, Status);
+      if E.Is_Error (Status) then
+         E.Find_Parameter (Status, "detail", Found, Why);
+         raise Ada.IO_Exceptions.Use_Error with
+           Directory & " could not be listed whole"
+           & (if Found then ": " & Model_Runner.Text.To_String (Why.Text_Value) else "");
+      end if;
+      return Result;
    end Files_In;
 
    -----------------

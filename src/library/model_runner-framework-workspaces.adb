@@ -53,18 +53,52 @@ package body Model_Runner.Framework.Workspaces is
       return Result;
    end Sorted;
 
-   --  Every file's fingerprint in a tree, by path.
-   function Snapshot (Directory : String; Within : Repository.Roots) return Maps.Map is
-      Found  : constant Repository.Graph := Repository.Scan (Directory, Within);
-      Result : Maps.Map;
+   --  What a scan's fingerprint is for a file it could not read: one no
+   --  file's text has, so a file that cannot be read is never taken for one
+   --  that is unchanged, nor -- being in the map -- for one that is gone.
+   Unknown_Print : constant String := "?";
+
+   --  Every file's fingerprint in a tree, by path; a file the scan could
+   --  not read is in it with Unknown_Print, and in Unread.
+   procedure Snapshot
+     (Directory : String;
+      Within    : Repository.Roots;
+      Result    : out Maps.Map;
+      Unread    : out Name_Lists.Vector)
+   is
+      Found : constant Repository.Graph := Repository.Scan (Directory, Within);
    begin
+      Result.Clear;
       for Index in 1 .. Repository.File_Count (Found) loop
          Result.Include
            (To_String (Repository.File_At (Found, Index).Path),
             To_String (Repository.File_At (Found, Index).Fingerprint));
       end loop;
+      Unread := Repository.Unread_Paths (Found);
+      for Path of Unread loop
+         Result.Include (Path, Unknown_Print);
+      end loop;
+   end Snapshot;
+
+   --  The same, for a caller that weighs an unread file as changed: it is
+   --  in the map, with a fingerprint nothing matches.
+   function Snapshot (Directory : String; Within : Repository.Roots) return Maps.Map is
+      Result : Maps.Map;
+      Unread : Name_Lists.Vector;
+   begin
+      Snapshot (Directory, Within, Result, Unread);
       return Result;
    end Snapshot;
+
+   --  A list's paths, joined for a message.
+   function Joined (Paths : Name_Lists.Vector) return String is
+      Text : Unbounded_String;
+   begin
+      for Path of Paths loop
+         Append (Text, (if Length (Text) = 0 then "" else ", ") & Path);
+      end loop;
+      return To_String (Text);
+   end Joined;
 
    --  The fingerprint of one file, or the empty string when it is not there.
    --  Where the files a workspace was found in conflict over are kept.
@@ -134,12 +168,33 @@ package body Model_Runner.Framework.Workspaces is
       return Result;
    end Words;
 
-   --  Copy the files of one tree into another, as a scan finds them.
-   function Copy_Tree (From, Into : String; Within : Repository.Roots) return Boolean is
-      Found : constant Repository.Graph := Repository.Scan (From, Within);
+   procedure Failed (Detail : String; Status : out E.Error_Info) is
    begin
+      Status := E.Make (E.Framework_Workspace_Failed);
+      E.Add_Text (Status, "detail", Detail);
+   end Failed;
+
+   --  Copy the files of one tree into another, as a scan finds them -- all
+   --  of them, or a failure naming what was not: a file the scan could not
+   --  read, a directory that could not be made, a copy that failed. A copy
+   --  missing a file is not a copy of the project.
+   procedure Copy_Tree
+     (From, Into : String;
+      Within     : Repository.Roots;
+      Status     : out E.Error_Info)
+   is
+      Found  : constant Repository.Graph := Repository.Scan (From, Within);
+      Unread : constant Name_Lists.Vector := Repository.Unread_Paths (Found);
+   begin
+      Status := E.Success;
+      if not Unread.Is_Empty then
+         Failed ("the project's files cannot all be read, so it cannot be copied whole: "
+                 & Joined (Unread), Status);
+         return;
+      end if;
       if not Files.Make_Directory (Into) then
-         return False;
+         Failed ("the directory " & Into & " cannot be made", Status);
+         return;
       end if;
       for Index in 1 .. Repository.File_Count (Found) loop
          declare
@@ -147,22 +202,19 @@ package body Model_Runner.Framework.Workspaces is
             Target : constant String := Hostkit.Fs.Join (Into, Path);
          begin
             if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
-               return False;
+               Failed ("the directory " & Dirs.Containing_Directory (Target) & " cannot be made", Status);
+               return;
             end if;
             Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target);
+         exception
+            when Failure : others =>
+               Failed (Path & " could not be copied to " & Target & ": "
+                       & Ada.Exceptions.Exception_Name (Failure) & " "
+                       & Ada.Exceptions.Exception_Message (Failure), Status);
+               return;
          end;
       end loop;
-      return True;
-   exception
-      when others =>
-         return False;
    end Copy_Tree;
-
-   procedure Failed (Detail : String; Status : out E.Error_Info) is
-   begin
-      Status := E.Make (E.Framework_Workspace_Failed);
-      E.Add_Text (Status, "detail", Detail);
-   end Failed;
 
    ------------
    -- Create --
@@ -255,7 +307,7 @@ package body Model_Runner.Framework.Workspaces is
                if Worked then
                   declare
                      Ignored : constant String :=
-                       Git (Project, Words ("worktree", "add", "--detach", Tree, Head),
+                       Git (Project, Words ("worktree", "add", "--detach", Dirs.Full_Name (Tree), Head),
                             Scratch, Worked);
                      pragma Unreferenced (Ignored);
                   begin
@@ -268,9 +320,18 @@ package body Model_Runner.Framework.Workspaces is
                         --  is gone is gone there too, so the work starts
                         --  from -- and is compared with -- what is here.
                         declare
-                           Here  : constant Maps.Map := Snapshot (Project, Repository.Roots_Of (Item));
-                           There : constant Maps.Map := Snapshot (Tree, Repository.Roots_Of (Item));
+                           Here, There  : Maps.Map;
+                           Unread_Here  : Name_Lists.Vector;
+                           Unread_There : Name_Lists.Vector;
+                           Not_Read     : exception;
                         begin
+                           Snapshot (Project, Repository.Roots_Of (Item), Here, Unread_Here);
+                           Snapshot (Tree, Repository.Roots_Of (Item), There, Unread_There);
+                           --  Not brought up to date from what cannot be
+                           --  read: copied whole instead, which refuses it.
+                           if not Unread_Here.Is_Empty or else not Unread_There.Is_Empty then
+                              raise Not_Read;
+                           end if;
                            for Position in Here.Iterate loop
                               if not There.Contains (Maps.Key (Position))
                                 or else There (Maps.Key (Position)) /= Maps.Element (Position)
@@ -296,7 +357,7 @@ package body Model_Runner.Framework.Workspaces is
                               --  Copied instead, whole, as without Git.
                               declare
                                  Gone : constant String :=
-                                   Git (Project, Words ("worktree", "remove", "--force", Tree),
+                                   Git (Project, Words ("worktree", "remove", "--force", Dirs.Full_Name (Tree)),
                                         Scratch, Worked);
                                  pragma Unreferenced (Gone);
                               begin
@@ -313,8 +374,8 @@ package body Model_Runner.Framework.Workspaces is
          end if;
 
          if not Worked then
-            if not Copy_Tree (Project, Tree, Repository.Roots_Of (Item)) then
-               Failed ("the project's files cannot be copied", Status);
+            Copy_Tree (Project, Tree, Repository.Roots_Of (Item), Status);
+            if E.Is_Error (Status) then
                return;
             end if;
             Result.Kind := File_Copy;
@@ -323,12 +384,15 @@ package body Model_Runner.Framework.Workspaces is
          --  The project's files as they are now, kept beside the tree: what
          --  a change made to both sides since is joined against.
          --  Without it, changes to both sides are settled by a person.
+         --  A base that could not be kept whole is none: a later change to
+         --  both sides is then settled by a person, not joined from it.
          declare
-            Kept : constant Boolean :=
-              Copy_Tree (Project, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item));
-            pragma Unreferenced (Kept);
+            Kept : E.Error_Info;
          begin
-            null;
+            Copy_Tree (Project, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item), Kept);
+            if E.Is_Error (Kept) then
+               Files.Remove_Tree (Hostkit.Fs.Join (Home, "base"));
+            end if;
          end;
 
          declare
@@ -916,7 +980,7 @@ package body Model_Runner.Framework.Workspaces is
          declare
             Ignored : constant String :=
               Git (Project_Of (Item),
-                   Words ("worktree", "remove", "--force", To_String (Held.Path)),
+                   Words ("worktree", "remove", "--force", Dirs.Full_Name (To_String (Held.Path))),
                    Hostkit.Fs.Join (Home, "git-output"), Worked);
             pragma Unreferenced (Ignored);
          begin

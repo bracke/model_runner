@@ -2632,6 +2632,32 @@ package body Tests.CLI_Cases is
          Assert (Status /= 0 and then Model_Runner.Presentation.Errors_Reported (Screen) = Before + 1
                  and then Model_Runner.Presentation.First_Failure (Screen) = 0,
                  "a project command's failure was not its status, or was said twice");
+         --  A directory /init cannot look into is not taken for an empty
+         --  one: what it offers first depends on what is there, so it
+         --  stops, says so, and makes nothing.
+         declare
+            Closed : constant String := Root & "/closed-init";
+            Errors : constant Natural := Model_Runner.Presentation.Errors_Reported (Screen);
+            Was    : constant String := Ada.Directories.Current_Directory;
+         begin
+            Ada.Directories.Create_Path (Closed);
+            GNAT.OS_Lib.Set_Non_Readable (Closed);
+            Ada.Directories.Set_Directory (Closed);
+            --  Where permissions do not hold -- a superuser -- it can be
+            --  read, and there is nothing to see.
+            if not GNAT.OS_Lib.Is_Readable_File (".") then
+               Model_Runner.CLI.Project_Commands.Run_Without_Model ("/init", Screen, Status);
+               Assert (Model_Runner.Presentation.Errors_Reported (Screen) > Errors
+                       and then Status = Model_Runner.Errors.Exit_Status
+                                           (Model_Runner.Errors.Make
+                                              (Model_Runner.Errors.IO_Read_Failed))
+                       and then not Ada.Directories.Exists (Closed & "/.model_runner"),
+                       "/init took a directory it could not look into for an empty one");
+            end if;
+            Ada.Directories.Set_Directory (Was);
+            GNAT.OS_Lib.Set_Readable (Closed);
+            Ada.Directories.Delete_Tree (Closed);
+         end;
       end;
       declare
          package S renames Model_Runner.Framework.Stores;

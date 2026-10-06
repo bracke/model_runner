@@ -42,8 +42,8 @@ package body Untested_Surface is
    --  arm runs exactly that against the processor's logits; it is named
    --  there by what it compares, not by these.
    --
-   --  The project state's file operations. Read_Text, Write_Text and
-   --  Write_Whole are a private package of the framework, which a test
+   --  The project state's file operations. Read_Text, Write_Text,
+   --  Write_Whole and Files_In are a private package of the framework, which a test
    --  cannot name; every record the state's tests read and every change
    --  they commit goes through them, and a torn or wrong write fails the
    --  round trip and recovery tests that read it back.
@@ -131,6 +131,7 @@ package body Untested_Surface is
          | "Wide_From_Bits"
          | "Write_Text"
          | "Write_Whole"
+         | "Files_In"
          | "Show_Version"
          | "Show_Help"
          | "Do_Inspect"

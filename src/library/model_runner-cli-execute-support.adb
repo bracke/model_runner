@@ -524,6 +524,10 @@ package body Model_Runner.CLI.Execute.Support is
       Result : Opt.Command := Item;
       Ready  : Boolean;
 
+      --  The bytes of a mixture's experts in a file, which the device need
+      --  not hold. Nought where it has none -- and where the file cannot be
+      --  read as a model, which discounts nothing and so never puts on the
+      --  device what would not fit there: the cautious answer, not a guess.
       function Expert_Bytes (Path : String) return Interfaces.Unsigned_64 is
          From      : Files.File_Source;
          Parsed    : Containers.Container;
@@ -551,8 +555,10 @@ package body Model_Runner.CLI.Execute.Support is
          return Total;
       exception
          when others =>
+            --  Anything raised here is not a file that will not read --
+            --  that is the status above -- but a fault: closed, and on.
             Files.Close (From);
-            return 0;
+            raise;
       end Expert_Bytes;
    begin
       if Item.Backend_Set then
@@ -613,9 +619,16 @@ package body Model_Runner.CLI.Execute.Support is
 
       return Result;
    exception
-      when others =>
+      --  The model file gone or not to be read between the look and the
+      --  size: the run reports that itself, on the backend asked for.
+      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
          Model_Runner.Backend.Device.Close;
          return Item;
+      --  Anything else is a fault in the choosing, said as one at the
+      --  command's boundary rather than passed off as the default choice.
+      when others =>
+         Model_Runner.Backend.Device.Close;
+         raise;
    end Resolved_Backend;
 
    --  A run on the processor with no rewrite asked for: its weights in
@@ -650,7 +663,9 @@ package body Model_Runner.CLI.Execute.Support is
       end if;
       return Result;
    exception
-      when others =>
+      --  The file gone between the look and the size: run as asked, and
+      --  the run says what it finds.
+      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
          return Item;
    end With_Panels;
 

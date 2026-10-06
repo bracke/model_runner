@@ -357,6 +357,13 @@ package Model_Runner.Framework.Repository is
    --  @return The path and the reason.
    function Unread_At (From : Graph; Index : Positive) return String;
 
+   --  The paths the walk could not read, without why, and without the links
+   --  to directories it leaves alone by design: what a graph is missing.
+   --
+   --  @param From The graph.
+   --  @return The paths.
+   function Unread_Paths (From : Graph) return Name_Lists.Vector;
+
    --  One file.
    --
    --  @param From The graph.

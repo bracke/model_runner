@@ -102,11 +102,6 @@ package body Unreached_Codes is
          --  edited in place fails its own fingerprint first.
             | E.Framework_Result_Conflict
 
-         --  A workspace that cannot be made: a disk that refuses a
-         --  directory or a copy under the project's own state directory,
-         --  which the suite has no way to arrange short of breaking the
-         --  checkout it runs in.
-            | E.Framework_Workspace_Failed
          =>
             return True;
 

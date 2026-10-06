@@ -90,7 +90,21 @@ private package Model_Runner.Framework.Files is
    --  @return True when it is a directory afterwards.
    function Make_Directory (Path : String) return Boolean;
 
-   --  The ordinary files in a directory.
+   --  The ordinary files in a directory, all of them: a listing that fails
+   --  part way is a failure, never the part it had.
+   --
+   --  @param Directory The directory.
+   --  @param Result Their simple names, sorted; none when it is not there.
+   --  @param Status IO_Read_Failed naming the directory, with what was
+   --    raised, where it could not be listed whole.
+   procedure Files_In
+     (Directory : String;
+      Result    : out Name_Lists.Vector;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The same, for a caller with no failure of its own to report: one that
+   --  cannot be listed whole raises Ada.IO_Exceptions.Use_Error naming it,
+   --  rather than answering with part of it.
    --
    --  @param Directory The directory.
    --  @return Their simple names, sorted; none when it is not there.

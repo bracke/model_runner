@@ -714,8 +714,16 @@ package body Model_Runner.Framework.Stores is
    function Clear_Journal (Root : String) return Boolean is
       Journal : constant String := Journal_Directory (Root);
       Cleared : Boolean := True;
+      Listed  : Name_Lists.Vector;
+      Read    : E.Error_Info;
    begin
-      for File of Files_In (Journal) loop
+      --  A journal that cannot be listed whole is not cleared: its mark
+      --  stays, and the step that asked fails.
+      Files_In (Journal, Listed, Read);
+      if E.Is_Error (Read) then
+         return False;
+      end if;
+      for File of Listed loop
          if File /= Manifest_File
            and then not Delete_If_Present (Join (Journal, File))
          then

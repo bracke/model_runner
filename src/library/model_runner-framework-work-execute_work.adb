@@ -21,8 +21,10 @@ is
    --  back as they were: the project's state is the harness's to change.
    Tampered : Name_Lists.Vector;
 
-   --  What it wrote that it may not, put back as it was.
+   --  What it wrote that it may not, put back as it was; and what could
+   --  not be, each with why.
    Put_Back_Files : Name_Lists.Vector;
+   Not_Put_Back   : Name_Lists.Vector;
 
    --  Parts it asked for, made proposals of their own as its agent may
    --  not make children.
@@ -734,10 +736,25 @@ begin
                if E.Is_Ok (Read)
                  and then not Permissions.Allows (Root_Agent.Allowed, Permissions.Write_Source, Path)
                  and then not Permissions.Allows (Root_Agent.Allowed, Permissions.Write_Specs, Path)
-                 and then Put_Back (Item, To_String (Result.Agent_Id), To_String (Place), Path,
-                                    Before.Contains (Path))
                then
-                  Put_Back_Files.Append (Path);
+                  declare
+                     Back : E.Error_Info;
+                     Said : Boolean;
+                     Why  : E.Parameter;
+                  begin
+                     Put_Back (Item, To_String (Result.Agent_Id), To_String (Place), Path,
+                               Before.Contains (Path), Back);
+                     if E.Is_Ok (Back) then
+                        Put_Back_Files.Append (Path);
+                     else
+                        --  Still there, and why, for what the run says.
+                        E.Find_Parameter (Back, "detail", Said, Why);
+                        Not_Put_Back.Append
+                          (Path & " (" & (if Said then Model_Runner.Text.To_String (Why.Text_Value)
+                                          else E.Error_Code'Image (Back.Code)) & ")");
+                        Kept.Append (Path);
+                     end if;
+                  end;
                else
                   Kept.Append (Path);
                end if;
@@ -963,6 +980,8 @@ begin
                            & (if Isolated then ""
                               else ", which are still in the project -- take them out before"
                                    & " /task complete"))
+                   & (if Not_Put_Back.Is_Empty then ""
+                      else "; putting back failed for " & Comma_Separated (Not_Put_Back))
                    & Sandbox_Said (Comma_Separated (Put_Back_Files)
                                    & (if Denied = Null_Unbounded_String then ""
                                       else "," & To_String (Denied)))

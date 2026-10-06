@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
@@ -835,35 +836,40 @@ package body Model_Runner.Framework.Work is
    end Keep_Originals;
 
    --  Put a file an agent was not to write back as it was: its kept copy
-   --  over it, or, when it was not there before, gone.
-   function Put_Back
+   --  over it, or, when it was not there before, gone. Where it cannot be,
+   --  Status says why -- no copy was kept (the file was over the bound), or
+   --  what writing or removing it raised -- with the file as its path.
+   procedure Put_Back
      (Item    : Stores.Store;
       Agent   : String;
       Place   : String;
       Path    : String;
-      Existed : Boolean) return Boolean
+      Existed : Boolean;
+      Status  : out E.Error_Info)
    is
       Copy   : constant String := Hostkit.Fs.Join (Kept_Directory (Item, Agent), Path);
       Target : constant String := Hostkit.Fs.Join (Place, Path);
    begin
+      Status := E.Success;
       if Existed then
          if not Ada.Directories.Exists (Copy) then
-            return False;
+            Files.Write_Failed (Target, Status);
+            E.Add_Text (Status, "detail", "no copy of it was kept to put back");
+            return;
          end if;
          if not Ada.Directories.Exists (Ada.Directories.Containing_Directory (Target)) then
             Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Target));
          end if;
          Ada.Directories.Copy_File (Copy, Target);
-         return True;
-      else
-         if Ada.Directories.Exists (Target) then
-            Ada.Directories.Delete_File (Target);
-         end if;
-         return True;
+      elsif Ada.Directories.Exists (Target) then
+         Ada.Directories.Delete_File (Target);
       end if;
    exception
-      when others =>
-         return False;
+      when Failure : others =>
+         Files.Write_Failed (Target, Status);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure)
+                     & (if Ada.Exceptions.Exception_Message (Failure) = "" then ""
+                        else ": " & Ada.Exceptions.Exception_Message (Failure)));
    end Put_Back;
 
    --  What a child answers with.

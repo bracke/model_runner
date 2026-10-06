@@ -5622,6 +5622,30 @@ package body Tests.Framework_Cases is
                  "an earlier copy was said to be replaced where none was");
       end;
 
+      --  A project with a file that cannot be read is not copied into a
+      --  workspace without it: refused, the file named, rather than a copy
+      --  that is missing it and a baseline that does not know.
+      declare
+         Secret : constant String := Fresh_Root (Store) & "/src/secret.adb";
+         Found  : Boolean;
+         Said   : E.Parameter;
+      begin
+         Put_File (Secret, "procedure Secret is begin null; end Secret;" & LF);
+         GNAT.OS_Lib.Set_Non_Readable (Secret);
+         if not GNAT.OS_Lib.Is_Readable_File (Secret) then
+            Ws.Create (Store, Change, To_String (Other), "AG-TEST", "3", False, Made, Status);
+            E.Find_Parameter (Status, "detail", Found, Said);
+            Assert (Status.Code = E.Framework_Workspace_Failed
+                    and then Found
+                    and then Ada.Strings.Fixed.Index
+                               (Model_Runner.Text.To_String (Said.Text_Value), "src/secret.adb") > 0,
+                    "a workspace was made of a project with a file that cannot be read: "
+                    & Code_Of (Status));
+         end if;
+         GNAT.OS_Lib.Set_Readable (Secret);
+         Dirs.Delete_File (Secret);
+      end;
+
       --  No file on both sides, but the code joins them: the workspace
       --  changes Parser, the project changes Lexer, which Parser withs.
       Put_File (Fresh_Root (Store) & "/src/lexer.ads", "package Lexer is" & LF & "end Lexer;" & LF);
@@ -6247,6 +6271,34 @@ package body Tests.Framework_Cases is
                  and then not Dirs.Exists (Dirs.Containing_Directory (S.Root (Store)) & "/src/hello.adb"),
                  "a task started though the files its agent may not write could not be kept: "
                  & Code_Of (Status) & " " & To_String (Again.Final_State));
+      end;
+
+      --  A file it may not write that was too large to keep is not put back
+      --  when it is written over, and the run says so and why.
+      declare
+         Large  : constant String := Dirs.Containing_Directory (S.Root (Store)) & "/src/hello.adb";
+         Third  : Unbounded_String;
+         Again  : Wk.Report;
+      begin
+         Put_File (Large, [1 .. 1_100_000 => 'x']);
+         Tk.Create (Store, Change, Fields ("Hello once more", "analysis"), "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Third),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Again, Status);
+         Assert (Ada.Strings.Fixed.Index
+                   (To_String (Again.Reason),
+                    "putting back failed for src/hello.adb (no copy of it was kept to put back)") > 0,
+                 "a file that could not be put back was not said, or not why: "
+                 & To_String (Again.Reason));
+         if Dirs.Exists (Large) then
+            Dirs.Delete_File (Large);
+         end if;
       end;
       S.Close (Store);
    end Writes_Stay_In_Bounds;

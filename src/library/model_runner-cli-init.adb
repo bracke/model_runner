@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
@@ -70,27 +71,35 @@ package body Model_Runner.CLI.Init is
       Outcome  : E.Error_Info;
 
       --  Whether the directory holds anything of its own already -- more
-      --  than what a version control system keeps.
-      function Has_Content return Boolean is
+      --  than what a version control system keeps -- looked at once, before
+      --  anything is offered. A directory that is not there holds nothing;
+      --  one that cannot be looked into is a failure, not an empty one: what
+      --  is offered first depends on the answer.
+      Has_Content : Boolean := False;
+
+      procedure Look_Inside (Status : out E.Error_Info) is
          use Ada.Directories;
          Search : Search_Type;
          Found  : Directory_Entry_Type;
-         Any    : Boolean := False;
       begin
+         Status := E.Success;
+         Has_Content := False;
          if not Exists (Directory) then
-            return False;
+            return;
          end if;
          Start_Search (Search, Directory, "");
-         while More_Entries (Search) and then not Any loop
+         while More_Entries (Search) and then not Has_Content loop
             Get_Next_Entry (Search, Found);
-            Any := Simple_Name (Found) not in "." | ".." | ".git" | ".hg" | ".svn";
+            Has_Content := Simple_Name (Found) not in "." | ".." | ".git" | ".hg" | ".svn";
          end loop;
          End_Search (Search);
-         return Any;
       exception
-         when others =>
-            return False;
-      end Has_Content;
+         when Failure : others =>
+            Status := E.Make (E.IO_Read_Failed);
+            E.Add_Text (Status, "path", Directory, E.Param_Path);
+            E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure)
+                        & " " & Ada.Exceptions.Exception_Message (Failure));
+      end Look_Inside;
 
       procedure Fail (Condition : E.Error_Info) is
       begin
@@ -304,6 +313,14 @@ package body Model_Runner.CLI.Init is
          if not T.Is_Empty (Item.Project_Directory) then
             Pres.Put_Note (Screen, "cli.next.in_directory", [Loc.Named ("path", Directory)]);
          end if;
+         return;
+      end if;
+
+      --  What is offered first depends on what the directory holds, so a
+      --  directory that cannot be looked into stops here.
+      Look_Inside (Outcome);
+      if E.Is_Error (Outcome) then
+         Fail (Outcome);
          return;
       end if;
 

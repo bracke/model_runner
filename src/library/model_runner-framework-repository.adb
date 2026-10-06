@@ -170,6 +170,23 @@ package body Model_Runner.Framework.Repository is
    function Unread_At (From : Graph; Index : Positive) return String
    is (From.Unread (Index));
 
+   function Unread_Paths (From : Graph) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Said of From.Unread loop
+         declare
+            Colon : constant Natural := Ada.Strings.Fixed.Index (Said, ": ");
+         begin
+            if Colon > Said'First
+              and then Said (Colon + 2 .. Said'Last) /= Link_Not_Followed
+            then
+               Result.Append (Said (Said'First .. Colon - 1));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Unread_Paths;
+
    function Symbol_Count (From : Graph) return Natural
    is (Natural (From.Symbols.Length));
 
