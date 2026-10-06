@@ -1289,6 +1289,11 @@ package body Model_Runner.CLI.Init is
             Pres.Put_Note (Screen, "cli.task.field",
                            [Loc.Named ("name", "found"), Loc.Named ("value", Line)]);
          end loop;
+         --  What it made and could not take back: the next /init is
+         --  refused while they are there, so they are named.
+         for Left of Done.Left_Behind loop
+            Pres.Put_Note (Screen, "cli.init.left_behind", [Loc.Named ("path", Left)]);
+         end loop;
          Fail (Outcome);
          return;
       end if;

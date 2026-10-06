@@ -516,6 +516,53 @@ package body Checks is
          end if;
       end Contents;
 
+      --  A body and its subunits: the parts of it that are bodies of their
+      --  own in files beside it, each opening "separate (Unit)". A check
+      --  that reads the body reads them all, wherever a part was moved.
+      function Unit_Contents (Relative : String) return String is
+         use Ada.Strings.Unbounded;
+         Whole  : Unbounded_String := To_Unbounded_String (Contents (Relative));
+         Folder : constant String := Ada.Directories.Containing_Directory (Path (Relative));
+         Stem   : constant String := Ada.Directories.Base_Name (Path (Relative));
+         Names  : Project_Tools.Ada_Source.String_List (1 .. 256);
+         Count  : Natural := 0;
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+      begin
+         Ada.Directories.Start_Search (Search, Folder, Stem & "-*.adb");
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            if Count < Names'Last then
+               Count := Count + 1;
+               Names (Count) := To_Unbounded_String (Ada.Directories.Simple_Name (Found));
+            end if;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         --  In name order, so the text read is the same on every host.
+         for I in 2 .. Count loop
+            for J in reverse 2 .. I loop
+               exit when Names (J - 1) <= Names (J);
+               declare
+                  Held : constant Unbounded_String := Names (J);
+               begin
+                  Names (J) := Names (J - 1);
+                  Names (J - 1) := Held;
+               end;
+            end loop;
+         end loop;
+         for I in 1 .. Count loop
+            declare
+               Part : constant String :=
+                 Contents (Ada.Directories.Containing_Directory (Relative) & "/" & To_String (Names (I)));
+            begin
+               if Project_Tools.Text.Starts_With (Part, "separate (") then
+                  Append (Whole, Part);
+               end if;
+            end;
+         end loop;
+         return To_String (Whole);
+      end Unit_Contents;
+
       --  The command line's execution, which is the parent unit and one
       --  child a command or a part they share: what reads it reads all.
       function Execution_Contents return String
@@ -2834,7 +2881,7 @@ package body Checks is
            & Contents ("src/library/model_runner-cli-driver.adb")
            & Execution_Contents
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
-           & Contents ("src/library/model_runner-llama.adb")
+           & Unit_Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-generation.adb")
            & Contents ("src/library/model_runner-tokenizer.adb")
            & Contents ("src/library/model_runner-templates.adb")
@@ -2951,7 +2998,7 @@ package body Checks is
          Spec : constant String :=
            Contents ("src/library/model_runner-llama.ads");
          Body_Text : constant String :=
-           Contents ("src/library/model_runner-llama.adb")
+           Unit_Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-generation.adb");
          Opening : constant String := "type Session_State is";
          From    : Natural := 0;
@@ -3041,7 +3088,7 @@ package body Checks is
          Spec : constant String :=
            Contents ("src/library/model_runner-memory.ads");
          Body_Text : constant String :=
-           Contents ("src/library/model_runner-llama.adb")
+           Unit_Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-generation.adb")
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
            & Contents ("src/library/model_runner-tokenizer.adb")
@@ -4323,7 +4370,7 @@ package body Checks is
            Contents ("src/library/model_runner-progress.ads");
          Body_Text : constant String :=
            Contents ("src/library/model_runner-generation.adb")
-           & Contents ("src/library/model_runner-llama.adb")
+           & Unit_Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
            & Execution_Contents;
          Named : Natural := 0;
@@ -4622,7 +4669,7 @@ package body Checks is
            Without_Assignments
              (Contents ("src/library/model_runner-backend.ads")
               & Contents ("src/library/model_runner-backend-cpu.adb")
-              & Contents ("src/library/model_runner-llama.adb")
+              & Unit_Contents ("src/library/model_runner-llama.adb")
               & Execution_Contents);
 
          --  The record's fields, between "type Capabilities is record" and

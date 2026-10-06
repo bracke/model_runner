@@ -74,6 +74,12 @@ package Model_Runner.Framework.Configurations is
       --  what the configuration says that is not granted, and, when the
       --  state did not come out whole, why the initialization was undone.
       Findings         : Name_Lists.Vector;
+
+      --  What an initialization that failed made and could not take back:
+      --  the state's directory, a file or a directory it wrote. Left there,
+      --  the project reads as initialized, and the next initialization is
+      --  refused until they are removed.
+      Left_Behind      : Name_Lists.Vector;
    end record;
 
    --  The fingerprint of a configuration: of what it configures, and not of

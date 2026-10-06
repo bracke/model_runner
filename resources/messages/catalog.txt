@@ -423,6 +423,7 @@ en.cli.init.file_kept =   file {path} (there already: kept as it is)
 en.cli.init.fact =   fact {name} = {value}
 en.cli.init.made = made {path}
 en.cli.init.kept = kept {path}, which was there already
+en.cli.init.left_behind = {path} was made by this /init and could not be removed: remove it before running /init again
 en.cli.init.check_refused = verification will not run {value} (the check named {name}): {detail}
 en.cli.init.check_missing = the check named {name} runs {value}, and {detail} is not installed here: it will fail until it is, or until /reconfigure {other}="{name}: COMMAND" gives it a command that is
 en.cli.init.check_no_script = the check named {name} runs {value}, and {path} names no test script: it will fail until it does, or until /reconfigure {other}="{name}: COMMAND" gives it another command
@@ -1879,6 +1880,7 @@ da.cli.init.file_kept =   fil {path} (findes allerede: beholdes som den er)
 da.cli.init.fact =   kendsgerning {name} = {value}
 da.cli.init.made = lavede {path}
 da.cli.init.kept = beholdt {path}, som var der i forvejen
+da.cli.init.left_behind = {path} blev lavet af denne /init og kunne ikke fjernes: fjern den, før /init køres igen
 da.cli.init.check_refused = verifikationen vil ikke køre {value} (tjekket ved navn {name}): {detail}
 da.cli.init.check_missing = tjekket {name} kører {value}, og {detail} er ikke installeret her: det fejler indtil det er, eller indtil /reconfigure {other}="{name}: KOMMANDO" giver det en kommando der er
 da.cli.init.check_no_script = tjekket {name} kører {value}, og {path} nævner intet test-script: det fejler indtil den gør, eller indtil /reconfigure {other}="{name}: KOMMANDO" giver det en anden kommando
@@ -3104,6 +3106,7 @@ qps.cli.init.file_kept = ⟦  fíĺé {path} (ŧhéŕé áĺŕéáðý: képŧ �
 qps.cli.init.fact = ⟦  fáçŧ {name} = {value}⟧
 qps.cli.init.made = ⟦máðé {path}⟧
 qps.cli.init.kept = ⟦képŧ {path}, whíçh wáß ŧhéŕé áĺŕéáðý⟧
+qps.cli.init.left_behind = ⟦{path} ŵáß máðé bý ŧhíß /íñíŧ áñð çóúĺð ñóŧ bé ŕémóvéð: ŕémóvé íŧ béfóŕé ŕúññíñg /íñíŧ ágáíñ⟧
 qps.cli.init.check_refused = ⟦véŕífíçáŧíóñ wíĺĺ ñóŧ ŕúñ {value} (ŧhé çhéçk ñáméð {name}): {detail}⟧
 qps.cli.init.check_missing = ⟦ŧhé çhéçk ñáméð {name} ŕúñß {value}, áñð {detail} íß ñóŧ íñßŧáĺĺéð héŕé: íŧ wíĺĺ fáíĺ úñŧíĺ íŧ íß, óŕ úñŧíĺ /ŕéçóñfígúŕé {other}="{name}: ÇOMMAND" gívéß íŧ á çómmáñð ŧháŧ íß⟧
 qps.cli.init.check_no_script = ⟦ŧhé çhéçk ñáméð {name} ŕúñß {value}, áñð {path} ñáméß ñó ŧéßŧ ßçŕípŧ: íŧ wíĺĺ fáíĺ úñŧíĺ íŧ ðóéß, óŕ úñŧíĺ /ŕéçóñfígúŕé {other}="{name}: ÇOMMAND" gívéß íŧ áñóŧhéŕ çómmáñð⟧

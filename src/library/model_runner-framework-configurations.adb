@@ -1198,19 +1198,34 @@ package body Model_Runner.Framework.Configurations is
       --  Take back what was made: the state, and the files and directories
       --  it made -- a project half made is refused when made again.
       procedure Undo is
+         --  Whether a path the undoing removes is still there; one that is
+         --  is said, rather than left to read as a project half made.
+         procedure Still_There (Path : String) is
+         begin
+            if Ada.Directories.Exists (Path) then
+               Done.Left_Behind.Append (Path);
+            end if;
+         exception
+            when others =>
+               Done.Left_Behind.Append (Path);
+         end Still_There;
       begin
          Stores.Close (Item);
          Files.Remove_Tree (Stores.State_Root (Project_Directory));
+         Still_There (Stores.State_Root (Project_Directory));
          for Name of Done.Written_Files loop
             Files.Discard (Hostkit.Fs.Join (Project_Directory, Name));
+            Still_There (Hostkit.Fs.Join (Project_Directory, Name));
          end loop;
          for Index in reverse 1 .. Natural (Done.Made_Directories.Length) loop
+            declare
+               Made : constant String :=
+                 Hostkit.Fs.Join (Project_Directory, Done.Made_Directories (Index));
             begin
-               Ada.Directories.Delete_Directory
-                 (Hostkit.Fs.Join (Project_Directory, Done.Made_Directories (Index)));
+               Ada.Directories.Delete_Directory (Made);
             exception
                when others =>
-                  null;
+                  Still_There (Made);
             end;
          end loop;
       end Undo;
