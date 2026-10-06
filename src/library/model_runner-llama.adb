@@ -4955,6 +4955,27 @@ package body Model_Runner.Llama is
                end if;
             end if;
 
+            --  The keys' and values' biases again, one after the other, for
+            --  the device step that adds both as it readies the heads.
+            if Current.Key_Bias /= null and then Current.Value_Bias /= null
+              and then Current.KV_Bias = null
+            then
+               declare
+                  Keys   : constant Element_Count :=
+                    Current.Key_Bias.all'Length;
+                  Values : constant Element_Count :=
+                    Current.Value_Bias.all'Length;
+               begin
+                  T.Allocate (Keys + Values, Current.KV_Bias);
+                  if Current.KV_Bias /= null then
+                     Current.KV_Bias.all (0 .. Keys - 1) :=
+                       Current.Key_Bias.all;
+                     Current.KV_Bias.all (Keys .. Keys + Values - 1) :=
+                       Current.Value_Bias.all;
+                  end if;
+               end;
+            end if;
+
             --  StableLM's larger sizes normalize each query and key head
             --  with a centred normalization and a gain of its own a head,
             --  which is a third kind of head normalization this does not
@@ -13730,6 +13751,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Query_Bias);
             T.Free (Which.Key_Bias);
             T.Free (Which.Value_Bias);
+            T.Free (Which.KV_Bias);
             T.Free (Which.Out_Bias);
             T.Free (Which.Up_Bias);
             T.Free (Which.Down_Bias);
@@ -20758,6 +20780,7 @@ package body Model_Runner.Llama is
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
+                        KV_Bias     => Current.KV_Bias,
                         Out_Bias    => Current.Out_Bias,
                         Post_Attention_Norm =>
                           Device_Norm (Current.Post_Attention_Norm,
@@ -23290,6 +23313,7 @@ package body Model_Runner.Llama is
                         Query_Bias  => Current.Query_Bias,
                         Key_Bias    => Current.Key_Bias,
                         Value_Bias  => Current.Value_Bias,
+                        KV_Bias     => Current.KV_Bias,
                         Out_Bias    => Current.Out_Bias,
                         Post_Attention_Norm =>
                           Device_Norm (Current.Post_Attention_Norm,

@@ -2284,6 +2284,11 @@ private
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Key_Bias and then Value_Bias in one array, which the device's
+      --  step that readies the heads reads both from; null where either
+      --  is.
+      KV_Bias        : Model_Runner.Tensors.Real_Array_Access;
       --  A gain for each element of a head, applied to every query head and
       --  every key head before the rotation. Null for an architecture that
       --  does not normalize its heads, which is what Llama and Qwen2 are.

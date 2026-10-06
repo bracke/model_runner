@@ -1582,10 +1582,16 @@ package body Model_Runner.Platform.Device.Products is
       --  zero for the ordinary per-arm source.
       Src_Stride     : C.unsigned := 0;
       V_Src_Stride   : C.unsigned := 0;
+
+      --  The projections' bias, where the weight binding holds it: whether,
+      --  where the heads' begins and where the values' begins, in elements.
+      Biased         : C.unsigned := 0;
+      Bias_Base      : C.unsigned := 0;
+      V_Bias_Base    : C.unsigned := 0;
    end record
      with Convention => C;
 
-   Heads_Bytes : constant := 23 * 4;
+   Heads_Bytes : constant := 26 * 4;
 
    --  What merge.comp is told.
    type Merge_Constants is record
@@ -11132,7 +11138,9 @@ package body Model_Runner.Platform.Device.Products is
       Source_Stride   : Natural := 0;
       V_Source_At     : Natural := 0;
       V_Source_Stride : Natural := 0;
-      V_Row_Count     : Natural := 0)
+      V_Row_Count     : Natural := 0;
+      Bias_Width      : Natural := 0;
+      V_Bias_At       : Natural := 0)
    is
       Width : constant Natural := Heads * Head_Size;
 
@@ -11162,6 +11170,13 @@ package body Model_Runner.Platform.Device.Products is
                            or else V_Step > Steps.Held
                            or else V_Stride < V_Actual))
         or else (not Into_Cache and then V_Step /= 0)
+        or else (Bias_Width /= 0
+                 and then (Weight = System.Null_Address
+                           or else Weight_Span
+                                   < Model_Runner.Bytes.Byte_Count
+                                       (Bias_Width) * 4
+                           or else Bias_Width < Width
+                           or else V_Bias_At + V_Actual > Bias_Width))
       then
          return;
       end if;
@@ -11186,6 +11201,7 @@ package body Model_Runner.Platform.Device.Products is
          First_Position => (if Into_Cache then First_Position else 0),
          Attends => False, Blends => False, Norms => False,
          Rotates => False, Places => False,
+         Bias_Width => Bias_Width, V_Bias_At => V_Bias_At,
          others => <>);
 
       --  The table's span is what the rotation step checks too: two wide
@@ -11832,8 +11848,9 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Weight := 0;
             elsif This.Readies then
                --  A heads step reads a projection and, placing, the
-               --  values' projection; it carries a weight one head wide or
-               --  none, kept like a normalization's; and it needs the
+               --  values' projection; it carries a weight one head wide, a
+               --  bias as wide as what it reads, or none, kept like a
+               --  normalization's; and it needs the
                --  cache where it places, and the pipeline at all.
                --  A reader of a fused product reads its own rows of it,
                --  every Reads_Stride: the product spans the stride, and the
@@ -11863,14 +11880,19 @@ package body Model_Runner.Platform.Device.Products is
                           and then Interfaces.Unsigned_64 (This.Span)
                                    < Interfaces.Unsigned_64 (This.At_Byte)
                                      + Interfaces.Unsigned_64
-                                         (This.Head_Size) * 4)
+                                         (if This.Bias_Width /= 0
+                                          then This.Bias_Width
+                                          else This.Head_Size) * 4)
                then
                   return;
                end if;
 
+               --  One head wide for a gain, or the whole bias.
                Places (Index).Weight :=
                  (if This.Base = System.Null_Address then 0
-                  else Interfaces.Unsigned_64 (This.Head_Size) * 4);
+                  else Interfaces.Unsigned_64
+                         (if This.Bias_Width /= 0 then This.Bias_Width
+                          else This.Head_Size) * 4);
 
                Turn_Room := Interfaces.Unsigned_64'Max
                  (Turn_Room,
@@ -12241,7 +12263,9 @@ package body Model_Runner.Platform.Device.Products is
                 elsif This.Rules
                 then 2 * This.Linear.Value_Heads + This.Linear.Head
                 elsif This.Routes then This.Columns
-                elsif This.Readies then This.Head_Size
+                elsif This.Readies
+                then (if This.Bias_Width /= 0 then This.Bias_Width
+                      else This.Head_Size)
                 elsif This.Rotates
                 then This.Turns / 2 * Natural (Count) * 4
                 else This.Columns),
@@ -13941,7 +13965,9 @@ package body Model_Runner.Platform.Device.Products is
                         Pairing   => (if This.Pairs = Split then 1 else 0),
                         Count     => C.unsigned (Count),
                         Normed    =>
-                          (if This.Base /= System.Null_Address then 1
+                          (if This.Base /= System.Null_Address
+                             and then This.Bias_Width = 0
+                           then 1
                            else 0),
                         Epsilon   => Bits (This.Epsilon),
                         Base      => C.unsigned (Places (Index).Base / 4),
@@ -14003,7 +14029,14 @@ package body Model_Runner.Platform.Device.Products is
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position),
                         Src_Stride     => C.unsigned (This.Reads_Stride),
-                        V_Src_Stride   => C.unsigned (This.V_Reads_Stride));
+                        V_Src_Stride   => C.unsigned (This.V_Reads_Stride),
+                        Biased         =>
+                          (if This.Bias_Width /= 0 then 1 else 0),
+                        Bias_Base      => C.unsigned (Places (Index).Base / 4),
+                        V_Bias_Base    =>
+                          C.unsigned (Places (Index).Base / 4
+                                      + Interfaces.Unsigned_64
+                                          (This.V_Bias_At)));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Heads_Bytes, Shape'Address);

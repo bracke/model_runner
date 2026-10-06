@@ -1664,6 +1664,11 @@ package Model_Runner.Platform.Device.Products is
    --  @param V_Row_Count The values' own row count where V_Step is a fused
    --    slice and its whole row count is not the values'; zero takes it from
    --    the step.
+   --  @param Bias_Width Where Weight is the projections' bias rather than
+   --    a gain: how many binary32 values it holds, the heads' bias first
+   --    and then the values'; the step adds them as it reads and
+   --    normalizes nothing. Zero for a gain or nothing.
+   --  @param V_Bias_At Where the values' bias begins in it, in elements.
    procedure Add_Heads
      (Steps       : in out Sequence;
       From_Step   : Positive;
@@ -1693,7 +1698,9 @@ package Model_Runner.Platform.Device.Products is
       Source_Stride   : Natural := 0;
       V_Source_At     : Natural := 0;
       V_Source_Stride : Natural := 0;
-      V_Row_Count     : Natural := 0);
+      V_Row_Count     : Natural := 0;
+      Bias_Width      : Natural := 0;
+      V_Bias_At       : Natural := 0);
 
    --  Name a write into the device's cache for a sequence to perform.
    --
@@ -3869,6 +3876,13 @@ private
       V_Rows     : Natural := 0;
       V_At_First : Model_Runner.Numerics.Element_Count := 0;
       V_Stride   : Natural := 0;
+
+      --  A heads step whose weight is the projections' bias rather than a
+      --  normalization's gain: how many binary32 values it holds -- the
+      --  heads' bias, then the values' from V_Bias_At on -- or nought for
+      --  none.
+      Bias_Width : Natural := 0;
+      V_Bias_At  : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

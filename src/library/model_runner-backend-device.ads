@@ -1495,6 +1495,9 @@ package Model_Runner.Backend.Device is
    --  @param Key_Bias The same for the keys, or null.
    --  @param Value_Bias The same for the values, or null; Values then
    --    receives the biased values.
+   --  @param KV_Bias Key_Bias and then Value_Bias in one array, or null:
+   --    where it is given, the step that readies the heads adds all three
+   --    biases as it reads, and the three steps that added them go.
    --  @param Out_Bias The bias on the way out of attention, added to the
    --    projection before the residual join, or null.
    --  @param Post_Attention_Norm The normalization Gemma 2 and 3 put on
@@ -1661,6 +1664,7 @@ package Model_Runner.Backend.Device is
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      KV_Bias        : Model_Runner.Tensors.Real_Array_Access := null;
       Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;

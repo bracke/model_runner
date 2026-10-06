@@ -2524,6 +2524,7 @@ package body Model_Runner.Backend.Device is
       Query_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Bias     : Model_Runner.Tensors.Real_Array_Access := null;
+      KV_Bias        : Model_Runner.Tensors.Real_Array_Access := null;
       Out_Bias       : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Attention_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Post_Feed_Norm      : Model_Runner.Tensors.Real_Array_Access := null;
@@ -2611,6 +2612,10 @@ package body Model_Runner.Backend.Device is
          --  ready-the-heads dispatches read their own rows out of the one
          --  fused step, strided.
          Biasless_Fused : Boolean := False;
+
+         --  Whether the step that readies the heads adds the projections'
+         --  biases; see where it is decided.
+         Fold_Biases : Boolean := False;
 
          --  Whether the mixture has a shared expert beside the chosen ones.
          Shared : constant Boolean :=
@@ -3476,9 +3481,32 @@ package body Model_Runner.Backend.Device is
             end;
          end if;
 
-         Add_Projection_Bias (Query_Bias, Q_Rows, Step_Q, Added);
-         if not Added then
-            return;
+         --  The three biases added by the step that readies the heads,
+         --  as it reads them, where that step is the one taken below and
+         --  normalizes nothing: three dispatches and their barriers fewer
+         --  a layer, the same adds in the same order.
+         Fold_Biases :=
+           Products.Readies_Heads (Engine)
+           and then Rotary > 0
+           and then not Mirror
+           and then not Head_Gates
+           and then Head_Size <= 256
+           and then Natural (Key.Rows) = Natural (Value.Rows)
+           and then Natural (Key.Rows) mod Head_Size = 0
+           and then Packed.K_Bits = 0
+           and then Query_Norm = null and then Key_Norm = null
+           and then Query_Bias /= null
+           and then Natural (Query_Bias.all'Length) = Natural (Q_Rows)
+           and then Key_Bias /= null and then Value_Bias /= null
+           and then KV_Bias /= null
+           and then Natural (KV_Bias.all'Length)
+                    = Natural (Key.Rows + Value.Rows);
+
+         if not Fold_Biases then
+            Add_Projection_Bias (Query_Bias, Q_Rows, Step_Q, Added);
+            if not Added then
+               return;
+            end if;
          end if;
 
          --  The keys go back to a caller that wants them (Mirror) from the
@@ -3496,10 +3524,12 @@ package body Model_Runner.Backend.Device is
          if Key_Bias /= null then
             At_Keys := Wanted;
          end if;
-         Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added,
-                              Kept => Mirror and then Rotary = 0);
-         if not Added then
-            return;
+         if not Fold_Biases then
+            Add_Projection_Bias (Key_Bias, Key.Rows, Step_K, Added,
+                                 Kept => Mirror and then Rotary = 0);
+            if not Added then
+               return;
+            end if;
          end if;
 
          Add_Input_Product (Value, V_P, Mirror and then Value_Bias = null, Added);
@@ -3517,10 +3547,12 @@ package body Model_Runner.Backend.Device is
          if Value_Bias /= null then
             At_Values := Wanted;
          end if;
-         Add_Projection_Bias (Value_Bias, Value.Rows, Step_V, Added,
-                              Kept => Mirror);
-         if not Added then
-            return;
+         if not Fold_Biases then
+            Add_Projection_Bias (Value_Bias, Value.Rows, Step_V, Added,
+                                 Kept => Mirror);
+            if not Added then
+               return;
+            end if;
          end if;
 
          <<After_Projections>>
@@ -3560,9 +3592,17 @@ package body Model_Runner.Backend.Device is
                Products.Add_Heads
                  (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
                   Rotary, Pairing, At_Turn, Span, Epsilon, Added,
-                  Weight => Weight_Of (Query_Norm),
-                  Weight_Span => Span_Of (Query_Norm),
-                  Key => Weight_Of (Query_Norm), Kept => False,
+                  Weight =>
+                    Weight_Of
+                      (if Fold_Biases then Query_Bias else Query_Norm),
+                  Weight_Span =>
+                    Span_Of (if Fold_Biases then Query_Bias else Query_Norm),
+                  Key =>
+                    Weight_Of
+                      (if Fold_Biases then Query_Bias else Query_Norm),
+                  Kept => False,
+                  Bias_Width =>
+                    (if Fold_Biases then Natural (Q_Rows) else 0),
                   Source_Stride =>
                     (if Biasless_Fused
                      then Natural (Query.Rows + Key.Rows + Value.Rows)
@@ -3615,9 +3655,17 @@ package body Model_Runner.Backend.Device is
                Products.Add_Heads
                  (Steps, Step_K, Natural (Key.Rows) / Head_Size, Head_Size,
                   Rotary, Pairing, At_Turn, Span, Epsilon, Added,
-                  Weight => Weight_Of (Key_Norm),
-                  Weight_Span => Span_Of (Key_Norm),
-                  Key => Weight_Of (Key_Norm),
+                  Weight =>
+                    Weight_Of (if Fold_Biases then KV_Bias else Key_Norm),
+                  Weight_Span =>
+                    Span_Of (if Fold_Biases then KV_Bias else Key_Norm),
+                  Key =>
+                    Weight_Of (if Fold_Biases then KV_Bias else Key_Norm),
+                  Bias_Width =>
+                    (if Fold_Biases then Natural (Key.Rows + Value.Rows)
+                     else 0),
+                  V_Bias_At =>
+                    (if Fold_Biases then Natural (Key.Rows) else 0),
                   Into_Cache => True, At_First => At_Key, Stride => KV_Width,
                   V_Step => Step_V, V_At_First => At_Value, V_Stride => V_Width,
                   Kept => False,

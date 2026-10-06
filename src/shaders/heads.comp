@@ -114,6 +114,15 @@ layout(push_constant) uniform Shape {
     //  the stream heads * head_size apart, the values v_width apart.
     uint src_stride;
     uint v_src_stride;
+
+    //  A projection's bias added as the heads are read, where the weight
+    //  binding holds it rather than a normalization's gain: the heads'
+    //  bias at bias_base, and for the dispatch that places the values,
+    //  theirs at v_bias_base. It was a step of its own for each of the
+    //  three, a dispatch and a barrier apiece around a few thousand adds.
+    uint biased;
+    uint bias_base;
+    uint v_bias_base;
 } shape;
 
 //  Where a placed row begins: the first row's place and one stride a
@@ -176,6 +185,10 @@ void main() {
         for (uint c = lane; c < shape.v_width; c += LANES) {
             float value = x[from + c];
 
+            if (shape.biased != 0u) {
+                value = value + g[shape.v_bias_base + c];
+            }
+
             //  Skip the binary32 cache where halves is two: the device
             //  keeps only the copy for a sinkless model whose binary32
             //  cache would not fit one storage buffer.
@@ -205,6 +218,11 @@ void main() {
     //  The head, into shared memory, and normalized there where it is.
     if (lane < shape.head_size) {
         row[lane] = x[from + lane];
+
+        if (shape.biased != 0u) {
+            row[lane] = row[lane]
+                        + g[shape.bias_base + head * shape.head_size + lane];
+        }
     }
 
     if (shape.normed != 0u) {
