@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write a generic Ada package Ring_Buffers with a discriminated record type Ring (Capacity : Positive) holding elements in an array, with Put, Get, Length and Clear. Give its specification and body, with Pre and Post contracts on Put and Get.<|im_end|>
+<|im_start|>assistant

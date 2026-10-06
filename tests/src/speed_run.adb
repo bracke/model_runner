@@ -666,6 +666,64 @@ package body Speed_Run is
       return Ada.Strings.Unbounded.To_String (Line);
    end Kept_By_Position;
 
+   procedure Pool (Into : in out Report; Item : Report) is
+   begin
+      if not Item.Ran then
+         return;
+      end if;
+
+      Into.Ran := True;
+      Into.Runs := Into.Runs + 1;
+      Into.Prompt := Into.Prompt + Item.Prompt;
+      Into.Produced := Into.Produced + Item.Produced;
+      Into.Generate := Into.Generate + Item.Generate;
+      Into.Evaluate := Into.Evaluate + Item.Evaluate;
+      Into.Drafted := Into.Drafted + Item.Drafted;
+      Into.Accepted := Into.Accepted + Item.Accepted;
+      for Position in Into.Offered_At'Range loop
+         Into.Offered_At (Position) :=
+           Into.Offered_At (Position) + Item.Offered_At (Position);
+         Into.Kept_At (Position) :=
+           Into.Kept_At (Position) + Item.Kept_At (Position);
+      end loop;
+   end Pool;
+
+   function Pooled_Summary (Item : Report) return String is
+      Shares : Ada.Strings.Unbounded.Unbounded_String;
+
+      function Percent (Part, Whole : Natural) return String
+      is (if Whole = 0 then "-"
+          else T.Image (100.0 * Long_Float (Part) / Long_Float (Whole), 1)
+               & "%");
+   begin
+      if not Item.Ran then
+         return "pooled: nothing measured";
+      end if;
+
+      for Position in Item.Offered_At'Range loop
+         exit when Item.Offered_At (Position) = 0;
+         Ada.Strings.Unbounded.Append
+           (Shares, " " & Percent (Item.Kept_At (Position),
+                                   Item.Offered_At (Position)));
+      end loop;
+
+      return "pooled over" & Natural'Image (Item.Runs) & " prompts:"
+        & Natural'Image (Item.Produced) & " generated in "
+        & T.Image (Long_Float (Item.Generate), 3) & " s, "
+        & (if Item.Generate > 0.0
+           then T.Image (Long_Float (Item.Produced)
+                         / Long_Float (Item.Generate), 2)
+           else "-")
+        & " tokens a second"
+        & (if Item.Drafted = 0 then ""
+           else "; proposed" & Natural'Image (Item.Drafted)
+                & " accepted" & Natural'Image (Item.Accepted)
+                & " (" & Percent (Item.Accepted, Item.Drafted) & ")"
+                & "; kept/offered by position:" & Kept_By_Position (Item)
+                & "; kept share by position:"
+                & Ada.Strings.Unbounded.To_String (Shares));
+   end Pooled_Summary;
+
    function Summary (Item : Report) return String is
       function Seconds (Value : Duration) return String
       is (T.Image (Long_Float (Value), 3) & " s");

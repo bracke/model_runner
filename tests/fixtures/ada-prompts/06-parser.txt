@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write an Ada package Expressions that parses arithmetic expressions with + - * / and parentheses over integers using recursive descent, and evaluates them. Raise a named exception Syntax_Error with a message on malformed input. Give the specification and the body.<|im_end|>
+<|im_start|>assistant

@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write an Ada package Job_Queues with a protected type Queue that holds up to 64 job identifiers, an entry Take that blocks while the queue is empty, and a procedure Add. Then write a small task type Worker that loops taking jobs and printing them with Ada.Text_IO.<|im_end|>
+<|im_start|>assistant

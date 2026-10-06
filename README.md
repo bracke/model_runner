@@ -12215,6 +12215,36 @@ the run to draft as it would have without one. Finding it reads each
 candidate's header, not its weights; loading it is the same second or so a
 named `--draft-model` costs.
 
+**A model may name its draft beside itself.** The largest file says nothing
+between two drafts of one size -- a draft tuned for a model beside the one it
+was tuned from -- so a text file next to the model, its file name with
+`.draft` added, names the draft in its first line that is not empty: a path,
+a name beside the model, or a bare name in the store. `run` takes it ahead of
+the search whenever no draft option is named, checks its tokens the same way,
+and says which it drafts with. `steelman-14b-r6-Q4_K_M.gguf.draft` holding
+`qwen2.gguf` drafts Steelman with Qwen2-0.5B where the search would find
+Qwen2.5-Coder-0.5B.
+
+**A drafter is judged over a set of prompts.** `tests speed --prompt-set DIR`
+measures every `.txt` prompt in the folder, in the order of their names, prints
+each one's line, and pools them: tokens a second over all of them, proposals
+kept, and each round position's kept share. One prompt's luck is the size of
+the differences a drafter is compared on; `tests/fixtures/ada-prompts` holds
+eight fresh-code Ada prompts. Steelman-14B drafted by Qwen2.5-Coder-0.5B,
+256 tokens each, 2026-10-06: **15.25 tokens a second pooled, 60.4 per cent of
+proposals kept, the first position of a round kept 73.0 per cent of the time,
+the first two 58.6, all three 49.7** -- the prompts ranging from 63 to 72 at
+the first position.
+
+**And what a drafter is taught from can be written out.** `run
+--logprobs-file PATH` writes each generated token's report as a line of JSON
+-- `{"token":T,"logprob":L,"top":[[ID,L],...]}`, twenty alternatives unless
+`--logprobs N` says otherwise -- from the raw logits the token was chosen
+from, drafting or not: a drafted round's tokens are reported from the
+verification row each was checked against, so a run with
+`--repeat-penalty 1.0` reports its every greedy token as its own most likely.
+Generated with drafting it is written at the drafted rate.
+
 What it saves is passes over the big model's weights: however many proposals
 are accepted, they cost one pass. What it costs is the draft model's own
 passes, one per proposal, and the output projection once per checked position

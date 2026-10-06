@@ -118,6 +118,7 @@ en.help.run.draft_lookup =   --draft-lookup          propose them from the conte
 en.help.run.context_shift =   --context-shift N       when the context fills, drop the oldest N and carry on
 en.help.run.context_keep =   --context-keep N        how many at the front to keep when that happens
 en.help.run.logprobs =   --logprobs N            report each token's log-probability and the N likeliest
+en.help.run.logprobs_file =   --logprobs-file PATH    write each token's report to a file as JSON lines
 en.help.run.logit_bias =   --logit-bias TOKEN=X    add X to that token's logit; repeatable
 en.help.run.memory_limit =   --memory-limit SIZE     limit model memory; accepts K, M and G suffixes
 en.help.run.device_memory =   --device-memory SIZE    device memory for the weights; 0 reads them where they lie
@@ -1741,6 +1742,7 @@ da.help.run.draft_lookup = --draft-lookup          foreslå dem fra konteksten i
 da.help.run.context_shift = --context-shift N       når konteksten er fuld, smid de ældste N væk og fortsæt
 da.help.run.context_keep = --context-keep N        hvor mange forrest der beholdes når det sker
 da.help.run.logprobs = --logprobs N            oplys hvert tokens log-sandsynlighed og de N mest sandsynlige
+da.help.run.logprobs_file = --logprobs-file STI     skriv hvert tokens rapport til en fil som JSON-linjer
 da.help.run.logit_bias = --logit-bias TOKEN=X    læg X til det tokens logit; kan gentages
 da.help.run.device_memory = --device-memory STØRRELSE  enhedshukommelse til vægtene; 0 læser dem hvor de ligger
 da.help.run.device_patience = --device-patience N     sekunder at vente på ét produkt før enheden opgives
@@ -2798,6 +2800,7 @@ qps.help.run.draft_lookup = ⟦  --draft-lookup          pŕópóßé ŧhém fŕ
 qps.help.run.context_shift = ⟦  --context-shift Ñ       whéñ ŧhé çóñŧéxŧ fíĺĺß, ðŕóp ŧhé óĺðéßŧ Ñ áñð çáŕŕy óñ⟧
 qps.help.run.context_keep = ⟦  --context-keep Ñ        hów máñy áŧ ŧhé fŕóñŧ ŧó kéép whéñ ŧháŧ háppéñß⟧
 qps.help.run.logprobs = ⟦  --logprobs Ñ            ŕépóŕŧ éáçh ŧókéñ'ß ĺóg-pŕóƀáƀíĺíŧy áñð ŧhé Ñ ĺíkéĺíéßŧ⟧
+qps.help.run.logprobs_file = ⟦  --logprobs-file PÁŦH    ŵŕíŧé éáçh ŧókéñ'ß ŕépóŕŧ ŧó á fíĺé áß JŜÓÑ ĺíñéß⟧
 qps.help.run.logit_bias = ⟦  --logit-bias ŦÓKÉÑ=X    áðð X ŧó ŧháŧ ŧókéñ'ß ĺógíŧ; ŕépéáŧáƀĺé⟧
 qps.help.run.memory_limit = ⟦  --memory-limit ŠÍZÉ     ĺímíŧ móðéĺ mémóŕý; áççépŧß K, M áñð G ßúffíxéß⟧
 qps.help.run.device_memory = ⟦  --device-memory ŠÍZÉ    ðévíçé mémóŕý fóŕ ŧhé wéíghŧß; 0 ŕéáðß ŧhém whéŕé ŧhéy ĺíé⟧

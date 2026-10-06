@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write an Ada package Matrices for square matrices of Long_Float with a generic dimension: declare the type, the operators "+" and "*", a function Transpose and a function Identity, then implement the package body using expression functions where they fit.<|im_end|>
+<|im_start|>assistant

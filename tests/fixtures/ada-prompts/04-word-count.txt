@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write a complete Ada main procedure Word_Count that reads standard input line by line, counts the occurrences of each word using Ada.Containers.Indefinite_Hashed_Maps, and prints the ten most frequent words with their counts, highest first.<|im_end|>
+<|im_start|>assistant

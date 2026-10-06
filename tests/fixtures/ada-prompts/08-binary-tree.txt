@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write a generic Ada package Binary_Search_Trees with a private access-based tree type, procedures Insert and Delete, a function Contains, and a generic procedure Traverse that visits the elements in order. Free nodes with Ada.Unchecked_Deallocation.<|im_end|>
+<|im_start|>assistant

@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write an Ada package Traffic_Lights modelling a traffic light controller as a state machine: an enumeration of states, a record holding the current state and a timer, a procedure Step that advances it, and a function Image. Use a case statement and comment each transition.<|im_end|>
+<|im_start|>assistant

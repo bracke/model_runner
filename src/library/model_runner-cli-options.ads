@@ -472,6 +472,10 @@ package Model_Runner.CLI.Options is
       --  for none.
       Logprobs : Natural := 0;
 
+      --  A file to write each token's report into as a line of JSON, or
+      --  empty for none. Given without --logprobs, twenty alternatives.
+      Logprobs_Path : Model_Runner.Text.Bounded;
+
       --  How many of the oldest positions to drop when the context fills,
       --  and how many at the front to keep when that happens.
       Context_Shift : Natural := 0;

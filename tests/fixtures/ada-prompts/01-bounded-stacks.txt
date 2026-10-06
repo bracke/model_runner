@@ -1,0 +1,5 @@
+<|im_start|>system
+You are an expert Ada 2022 programmer.<|im_end|>
+<|im_start|>user
+Write an Ada package Bounded_Stacks: a generic package with a formal element type and a capacity, declaring a private Stack type with Push, Pop, Top, Is_Empty and Is_Full, then its package body. Use preconditions on Push and Pop, and comment each subprogram.<|im_end|>
+<|im_start|>assistant

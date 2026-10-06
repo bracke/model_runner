@@ -60,4 +60,20 @@ package Model_Runner.Drafts is
       Share      : Positive := Default_Share;
       Least      : Long_Long_Integer := Default_Least) return String;
 
+   --  What a model's own sidecar names as its draft, where it has one.
+   --
+   --  Find takes the largest file that can draft, which says nothing
+   --  between two drafts of one size -- a tuned draft beside the one it was
+   --  tuned from. So a model may name its draft: a text file beside it,
+   --  the model's file name with ".draft" added, whose first line that is
+   --  not empty names the draft's file -- absolute, or relative to the
+   --  model's folder, or a bare name found in the model store.
+   --
+   --  @param Model_Path The model's file.
+   --  @param Store The model store, where a bare name is looked for after
+   --    the model's folder.
+   --  @return The draft's path where the sidecar names a file that is
+   --    there, or an empty string.
+   function Paired (Model_Path : String; Store : String) return String;
+
 end Model_Runner.Drafts;

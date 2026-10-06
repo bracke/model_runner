@@ -223,4 +223,22 @@ package Speed_Run is
    --  @return Human-readable summary.
    function Summary (Item : Report) return String;
 
+   --  Add one prompt's measurement to a pool of them: the tokens generated
+   --  and the seconds that took, what was proposed and kept, and the counts
+   --  by position in a round -- what a drafter is judged on, over a set of
+   --  prompts rather than one, where one prompt's luck is the size of the
+   --  difference being looked for.
+   --
+   --  @param Into The pool; Runs counts the prompts pooled.
+   --  @param Item One prompt's measurement; one that did not run is left
+   --    out.
+   procedure Pool (Into : in out Report; Item : Report);
+
+   --  One line describing a pool: tokens a second over every prompt, what
+   --  was proposed and kept, and each position's kept share.
+   --
+   --  @param Item The pool.
+   --  @return Human-readable summary.
+   function Pooled_Summary (Item : Report) return String;
+
 end Speed_Run;

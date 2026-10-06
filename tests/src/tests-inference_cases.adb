@@ -6503,6 +6503,76 @@ package body Tests.Inference_Cases is
       B.Free (Foreign);
    end A_Draft_Is_Found_Among_The_Stored_Models;
 
+   ----------------------------------------------
+   -- A_Draft_Named_Beside_Its_Model_Is_Taken --
+   ----------------------------------------------
+
+   --  A model's sidecar names its draft, and Paired reads it: a name beside
+   --  the model, a bare name in the store, an absolute path, the first line
+   --  that is not empty -- and nothing for a name that is not there or a
+   --  model without a sidecar.
+   procedure A_Draft_Named_Beside_Its_Model_Is_Taken
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Folder : constant String := "obj/draft-pair";
+      Store  : constant String := "obj/draft-pair-store";
+      Model  : constant String := Folder & "/model.gguf";
+
+      procedure Write (Path, Text : String) is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, Text);
+         Ada.Text_IO.Close (File);
+      end Write;
+
+      procedure Fresh (Directory : String) is
+      begin
+         if Ada.Directories.Exists (Directory) then
+            Ada.Directories.Delete_Tree (Directory);
+         end if;
+         Ada.Directories.Create_Path (Directory);
+      end Fresh;
+
+      function Named (Text : String) return String is
+      begin
+         Write (Model & ".draft", Text);
+         return Model_Runner.Drafts.Paired
+           (Model, Ada.Directories.Full_Name (Store));
+      end Named;
+
+      Beside  : constant String :=
+        Ada.Directories.Full_Name (Folder) & "/near.gguf";
+      In_Store : constant String :=
+        Ada.Directories.Full_Name (Store) & "/far.gguf";
+   begin
+      Fresh (Folder);
+      Fresh (Store);
+      Write (Model, "model");
+      Write (Folder & "/near.gguf", "near");
+      Write (Store & "/far.gguf", "far");
+
+      Assert (Model_Runner.Drafts.Paired (Model, Store) = "",
+              "a model without a sidecar named a draft");
+
+      Assert (Named ("near.gguf") = Beside,
+              "a name beside the model was not taken from its folder");
+      Assert (Named ("far.gguf") = In_Store,
+              "a bare name was not looked for in the store");
+      Assert (Named (Beside) = Beside, "an absolute path was not taken");
+      Assert (Named (ASCII.LF & "  " & ASCII.LF & "  near.gguf  "
+                     & ASCII.LF & "far.gguf") = Beside,
+              "the first line that is not empty was not the one taken");
+      Assert (Named ("missing.gguf") = "",
+              "a name that is nowhere was taken");
+      Assert (Named ("") = "", "an empty sidecar named a draft");
+
+      Ada.Directories.Delete_Tree (Folder);
+      Ada.Directories.Delete_Tree (Store);
+   end A_Draft_Named_Beside_Its_Model_Is_Taken;
+
    ------------------------------------
    -- Drafting_Runs_On_A_Device --
    ------------------------------------
@@ -14934,6 +15004,11 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Is_Found_Among_The_Stored_Models'Access,
          "a run with no draft named finds one among the stored models: the "
          & "file whose tokens are the model's, and not one of other tokens");
+      Register_Routine
+        (T, A_Draft_Named_Beside_Its_Model_Is_Taken'Access,
+         "a model's sidecar names its draft: beside it, in the store or by "
+         & "path, the first line that is not empty, and nothing for a name "
+         & "that is not there");
       Register_Routine
         (T, A_Draft_With_Fewer_Tokens_Keeps_The_Target'Access,
          "a draft whose vocabulary stops short of the target's drafts for "

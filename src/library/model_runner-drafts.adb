@@ -5,6 +5,8 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Text;
 
+with Ada.Streams.Stream_IO;
+
 package body Model_Runner.Drafts is
 
    package E renames Model_Runner.Errors;
@@ -127,5 +129,89 @@ package body Model_Runner.Drafts is
       when others =>
          return "";
    end Find;
+
+   ------------
+   -- Paired --
+   ------------
+
+   function Paired (Model_Path : String; Store : String) return String is
+      use Ada.Streams;
+
+      Sidecar : constant String := Model_Path & ".draft";
+
+      --  More than any path a sidecar needs; a larger file is not one.
+      Most : constant := 4096;
+
+      Handle : Stream_IO.File_Type;
+      Bytes  : Stream_Element_Array (1 .. Most);
+      Last   : Stream_Element_Offset := 0;
+   begin
+      if Model_Path = "" or else not Ada.Directories.Exists (Sidecar) then
+         return "";
+      end if;
+
+      Stream_IO.Open (Handle, Stream_IO.In_File, Sidecar);
+      Stream_IO.Read (Handle, Bytes, Last);
+      Stream_IO.Close (Handle);
+
+      declare
+         Text : String (1 .. Natural (Last));
+         Line_First : Positive := 1;
+
+         Folder : constant String :=
+           Ada.Directories.Containing_Directory
+             (Ada.Directories.Full_Name (Model_Path));
+
+         function Here (Path : String) return Boolean
+         is (Path /= ""
+             and then Ada.Directories.Exists (Path)
+             and then Ada.Directories."="
+                        (Ada.Directories.Kind (Path),
+                         Ada.Directories.Ordinary_File));
+
+         --  The draft a name names, or nothing.
+         function Resolved (Named : String) return String
+         is (if Named (Named'First) = '/'
+             then (if Here (Named) then Named else "")
+             elsif Here (Ada.Directories.Compose (Folder, Named))
+             then Ada.Directories.Compose (Folder, Named)
+             elsif Store /= ""
+               and then Here (Ada.Directories.Compose (Store, Named))
+             then Ada.Directories.Compose (Store, Named)
+             else "");
+      begin
+         for Index in Text'Range loop
+            Text (Index) :=
+              Character'Val (Bytes (Stream_Element_Offset (Index)));
+         end loop;
+
+         --  The first line that is not empty, trimmed.
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last
+              or else Text (Index) = ASCII.LF
+              or else Text (Index) = ASCII.CR
+            then
+               declare
+                  Named : constant String :=
+                    Ada.Strings.Fixed.Trim
+                      (Text (Line_First .. Index - 1), Ada.Strings.Both);
+               begin
+                  if Named /= "" then
+                     return Resolved (Named);
+                  end if;
+               end;
+               Line_First := Index + 1;
+            end if;
+         end loop;
+      end;
+
+      return "";
+   exception
+      when others =>
+         if Stream_IO.Is_Open (Handle) then
+            Stream_IO.Close (Handle);
+         end if;
+         return "";
+   end Paired;
 
 end Model_Runner.Drafts;

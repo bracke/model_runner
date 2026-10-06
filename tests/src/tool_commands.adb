@@ -40,7 +40,7 @@ package body Tool_Commands is
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Conform   : aliased constant String := " --arith ";
    Opts_Speed     : aliased constant String :=
-     " --model --prompt-file --max-tokens --threads --batch-size --repack"
+     " --model --prompt-file --prompt-set --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next --draft-floor --draft-adapts"
      & " --kv-cache --repeats"
@@ -76,8 +76,8 @@ package body Tool_Commands is
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Conform   : aliased constant String := "[--arith MODE]";
    Takes_Speed     : aliased constant String :=
-     "--model PATH [--prompt-file PATH] [--max-tokens N] [--threads N]"
-     & " [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
+     "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"
+     & " [--threads N] [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup] [--draft-next] [--draft-floor P] [--draft-adapts]"
      & " [--kv-cache MODE] [--repeats N] [--paged] [--no-paged]"

@@ -2798,6 +2798,7 @@ package body Model_Runner.CLI.Execute is
       Sink      : aliased Pres.Standard_Output_Sink;
       Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
       Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
+      Told_File : aliased Pres.Logprob_File_Reporter;
 
       --  A second, smaller model proposing tokens for the first to check,
       --  when one was named. Held here so it outlives the generation.
@@ -2907,6 +2908,7 @@ package body Model_Runner.CLI.Execute is
             Model_Runner.Platform.Signals.Remove;
             Attached := False;
          end if;
+         Pres.Close (Told_File);
          Model_Runner.Framework.Execution.Watch (null);
          Model_Runner.Stops.Close (Stop_Set);
          Model_Runner.Grammar.Close (Rules);
@@ -3166,7 +3168,23 @@ package body Model_Runner.CLI.Execute is
          --  and loaded as a named one is; one that will not load or open
          --  leaves the run to draft as it would have without it, since
          --  nobody asked for it.
+         --  A draft the model names beside itself comes first, whatever
+         --  the rest says: someone chose it. See Drafts.Paired.
          if T.Is_Empty (Item.Draft_Path)
+           and then not Item.Draft_Lookup
+           and then Item.Draft_Tokens > 0
+           and then L.Vocabulary (Prepared) /= null
+         then
+            Auto_Draft :=
+              T.To_Bounded
+                (Model_Runner.Drafts.Paired
+                   (Model_Runner.Platform.Resolve_Model_Path
+                      (Resolve_Alias (T.To_String (Item.Model_Path))),
+                    Model_Runner.Platform.Models_Directory));
+         end if;
+
+         if T.Is_Empty (Item.Draft_Path)
+           and then T.Is_Empty (Auto_Draft)
            and then not Item.Draft_Lookup
            and then not Item.Draft_Tokens_Set
            and then Item.Draft_Tokens > 0
@@ -4331,6 +4349,28 @@ package body Model_Runner.CLI.Execute is
                   end if;
                end loop;
 
+               --  The file the reports go to, made once a run: every prompt's
+               --  tokens one after another in it.
+               if not T.Is_Empty (Item.Logprobs_Path)
+                 and then not Ada.Text_IO.Is_Open (Told_File.File)
+               then
+                  declare
+                     Made : Boolean;
+                  begin
+                     Pres.Open (Told_File, T.To_String (Item.Logprobs_Path),
+                                Made);
+                     if not Made then
+                        Condition := E.Make (E.IO_Open_Failed);
+                        E.Add_Text
+                          (Condition, "path", T.To_String (Item.Logprobs_Path),
+                           E.Param_Path);
+                        Release_Rendered;
+                        Fail (Condition);
+                        return;
+                     end if;
+                  end;
+               end if;
+
                --  A rendered conversation already carries the beginning token, so
                --  the tokenizer must not add a second one.
                declare
@@ -4345,7 +4385,13 @@ package body Model_Runner.CLI.Execute is
                   end loop;
 
                   Request.Bias_Count := Item.Bias_Count;
-                  Request.Logprobs := Item.Logprobs;
+                  --  A file of reports asked for without a count gets twenty
+                  --  a token: what a draft is taught from wants more than a
+                  --  reader does.
+                  Request.Logprobs :=
+                    (if Item.Logprobs = 0
+                       and then not T.Is_Empty (Item.Logprobs_Path)
+                     then 20 else Item.Logprobs);
                   Request.Context_Shift := Item.Context_Shift;
                   Request.Context_Keep := Item.Context_Keep;
                   --  Without a draft model or a lookup, a model that carries
@@ -4529,7 +4575,9 @@ package body Model_Runner.CLI.Execute is
                        (if Draft_Ready then Draft_Session'Unchecked_Access
                         else null),
                      Reporter =>
-                       (if Item.Logprobs > 0
+                       (if not T.Is_Empty (Item.Logprobs_Path)
+                        then Told_File'Unchecked_Access
+                        elsif Item.Logprobs > 0
                         then Told'Unchecked_Access
                         else null),
                      Pictures => Pictures,

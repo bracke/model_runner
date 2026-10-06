@@ -12,6 +12,7 @@ with Ada.Calendar;
 pragma Unreserve_All_Interrupts;
 
 with Ada.Command_Line;
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
 with Interfaces;
 with Ada.Text_IO;
@@ -2797,83 +2798,160 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Roles_Named (Option ("--arith", "int8")));
 
-         Speed_Run.Run
-           (Path        => Option ("--model", ""),
-            Prompt_Path =>
-              Option ("--prompt-file",
-                      "../tests/fixtures/speed-prompt-short.txt"),
-            Tokens      => Count ("--max-tokens", 12),
-            Threads     => Number ("--threads",
-                                   Model_Runner.Platform.Core_Count - 1),
-            --  The command's own default, not a copy of it. This carried
-            --  its own 128 while the command's went to 512, and a sitting
-            --  taken with it measured a batch nobody would ever run --
-            --  which is the same failure this tool was fixed for once
-            --  before, when it read the prompt file differently from the
-            --  command it publishes figures for.
-            Batch       =>
-              Number ("--batch-size",
-                      Model_Runner.Generation.Request'(others => <>)
-                        .Batch_Size),
+         declare
+            --  One measurement of one prompt, with every other option as
+            --  the command was given it.
+            procedure Measure (Prompt : String; Into : out Speed_Run.Report)
+            is
+            begin
+               Speed_Run.Run
+                 (Path        => Option ("--model", ""),
+                  Prompt_Path => Prompt,
+                  Tokens      => Count ("--max-tokens", 12),
+                  Threads     => Number ("--threads",
+                                         Model_Runner.Platform.Core_Count - 1),
+                  --  The command's own default, not a copy of it. This carried
+                  --  its own 128 while the command's went to 512, and a sitting
+                  --  taken with it measured a batch nobody would ever run --
+                  --  which is the same failure this tool was fixed for once
+                  --  before, when it read the prompt file differently from the
+                  --  command it publishes figures for.
+                  Batch       =>
+                    Number ("--batch-size",
+                            Model_Runner.Generation.Request'(others => <>)
+                              .Batch_Size),
 
-            --  Named with a value like every other option this command
-            --  takes, so that a reader who saw --repack in the README does
-            --  not have to guess whether it is a flag here.
-            Repack      => Mode_Of (Option ("--repack", "none")),
+                  --  Named with a value like every other option this command
+                  --  takes, so that a reader who saw --repack in the README does
+                  --  not have to guess whether it is a flag here.
+                  Repack      => Mode_Of (Option ("--repack", "none")),
 
-            --  The storage the session keeps its context in, named the way
-            --  the command names it: f32, f16, q8 or q4, and by default
-            --  what the command keeps by default.
-            Cache       =>
-              (declare
-                 Named : constant String := Option ("--kv-cache", "f16");
+                  --  The storage the session keeps its context in, named the way
+                  --  the command names it: f32, f16, q8 or q4, and by default
+                  --  what the command keeps by default.
+                  Cache       =>
+                    (declare
+                       Named : constant String := Option ("--kv-cache", "f16");
+                     begin
+                       (if Named = Model_Runner.Llama.Cache_Name
+                                    (Model_Runner.Llama.Halved)
+                        then Model_Runner.Llama.Halved
+                        elsif Named = Model_Runner.Llama.Cache_Name
+                                        (Model_Runner.Llama.Eighth)
+                        then Model_Runner.Llama.Eighth
+                        elsif Named = Model_Runner.Llama.Cache_Name
+                                        (Model_Runner.Llama.Fourth)
+                        then Model_Runner.Llama.Fourth
+                        elsif Named = Model_Runner.Llama.Cache_Name
+                                        (Model_Runner.Llama.Exact)
+                        then Model_Runner.Llama.Exact
+                        else Model_Runner.Llama.Halved)),
+                  Backend     => Backend_Of (Option ("--backend", "cpu")),
+                  Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
+                  Draft       => Option ("--draft-model", ""),
+                  --  Three a round from the next block unless named, as run
+                  --  drafts from it.
+                  Draft_Tokens =>
+                    Number ("--draft-tokens",
+                            (if Given ("--draft-next") then 3 else 4)),
+                  Draft_Lookup => Given ("--draft-lookup"),
+                  Draft_Next  => Given ("--draft-next"),
+                  Repeats     => Number ("--repeats", 3),
+                  Budget      => Given ("--budget"),
+                  Timeline    => Given ("--device-timeline"),
+                  Context     => Whole ("--context-size"),
+                  Device_Bytes => Bytes ("--device-memory"),
+
+                  --  Paged where the command pages: on a device, unless told
+                  --  otherwise. The tool took --paged and dropped it, and opened
+                  --  every session unpaged -- which on a device holds a context
+                  --  past one storage buffer off the device, so qwen3-8b at its
+                  --  own 40,960 positions generated at 11.4 tokens a second here
+                  --  and 13.5 under the command.
+                  Paged       =>
+                    not Given ("--no-paged")
+                    and then (Given ("--paged")
+                              or else Option ("--backend", "cpu") = "device"),
+                  Ignore_End  => Given ("--ignore-eos"),
+                  Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
+                  Draft_Adapts => Given ("--draft-adapts"),
+                  Result      => Into);
+            end Measure;
+
+            Set : constant String := Option ("--prompt-set", "");
+         begin
+            if Set = "" then
+               Measure
+                 (Option ("--prompt-file",
+                          "../tests/fixtures/speed-prompt-short.txt"),
+                  Result);
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+            else
+               --  Every prompt file of a directory, in the order of their
+               --  names, each reported as one prompt is and the lot pooled:
+               --  a drafter is judged on what it keeps across kinds of text,
+               --  and one prompt's luck is the size of the difference.
+               declare
+                  package Names is new Ada.Containers.Indefinite_Vectors
+                    (Positive, String);
+                  package Sorting is new Names.Generic_Sorting;
+
+                  Found  : Names.Vector;
+                  Search : Ada.Directories.Search_Type;
+                  Entry_Of : Ada.Directories.Directory_Entry_Type;
+                  Pooled : Speed_Run.Report;
                begin
-                 (if Named = Model_Runner.Llama.Cache_Name
-                              (Model_Runner.Llama.Halved)
-                  then Model_Runner.Llama.Halved
-                  elsif Named = Model_Runner.Llama.Cache_Name
-                                  (Model_Runner.Llama.Eighth)
-                  then Model_Runner.Llama.Eighth
-                  elsif Named = Model_Runner.Llama.Cache_Name
-                                  (Model_Runner.Llama.Fourth)
-                  then Model_Runner.Llama.Fourth
-                  elsif Named = Model_Runner.Llama.Cache_Name
-                                  (Model_Runner.Llama.Exact)
-                  then Model_Runner.Llama.Exact
-                  else Model_Runner.Llama.Halved)),
-            Backend     => Backend_Of (Option ("--backend", "cpu")),
-            Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
-            Draft       => Option ("--draft-model", ""),
-            --  Three a round from the next block unless named, as run
-            --  drafts from it.
-            Draft_Tokens =>
-              Number ("--draft-tokens",
-                      (if Given ("--draft-next") then 3 else 4)),
-            Draft_Lookup => Given ("--draft-lookup"),
-            Draft_Next  => Given ("--draft-next"),
-            Repeats     => Number ("--repeats", 3),
-            Budget      => Given ("--budget"),
-            Timeline    => Given ("--device-timeline"),
-            Context     => Whole ("--context-size"),
-            Device_Bytes => Bytes ("--device-memory"),
+                  if Ada.Directories.Exists (Set)
+                    and then Ada.Directories."="
+                               (Ada.Directories.Kind (Set),
+                                Ada.Directories.Directory)
+                  then
+                     Ada.Directories.Start_Search
+                       (Search, Set, "*.txt",
+                        [Ada.Directories.Ordinary_File => True,
+                         others => False]);
+                     while Ada.Directories.More_Entries (Search) loop
+                        Ada.Directories.Get_Next_Entry (Search, Entry_Of);
+                        Found.Append
+                          (Ada.Directories.Full_Name (Entry_Of));
+                     end loop;
+                     Ada.Directories.End_Search (Search);
+                  end if;
+                  Sorting.Sort (Found);
 
-            --  Paged where the command pages: on a device, unless told
-            --  otherwise. The tool took --paged and dropped it, and opened
-            --  every session unpaged -- which on a device holds a context
-            --  past one storage buffer off the device, so qwen3-8b at its
-            --  own 40,960 positions generated at 11.4 tokens a second here
-            --  and 13.5 under the command.
-            Paged       =>
-              not Given ("--no-paged")
-              and then (Given ("--paged")
-                        or else Option ("--backend", "cpu") = "device"),
-            Ignore_End  => Given ("--ignore-eos"),
-            Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
-            Draft_Adapts => Given ("--draft-adapts"),
-            Result      => Result);
+                  for Prompt of Found loop
+                     declare
+                        One : Speed_Run.Report;
+                     begin
+                        Measure (Prompt, One);
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           Ada.Directories.Simple_Name (Prompt) & ": "
+                           & Speed_Run.Summary (One));
+                        Speed_Run.Pool (Pooled, One);
+                        if not One.Ran then
+                           Result := One;
+                        end if;
+                     end;
+                  end loop;
 
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     Speed_Run.Pooled_Summary (Pooled));
+
+                  --  Ran only where every prompt ran: a set with one that
+                  --  failed is not a measurement of the set.
+                  if Found.Is_Empty then
+                     Result.Ran := False;
+                  elsif Pooled.Runs = Natural (Found.Length) then
+                     Result := Pooled;
+                  else
+                     Result.Ran := False;
+                  end if;
+               end;
+            end if;
+         end;
 
          --  A run that measured nothing is a failure, and the missing model
          --  is the commonest way to measure nothing. This used to exempt it:

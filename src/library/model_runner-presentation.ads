@@ -1,3 +1,5 @@
+with Ada.Text_IO;
+
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
 with Interfaces;
@@ -654,6 +656,39 @@ package Model_Runner.Presentation is
    overriding procedure Explain
      (Item   : in out Logprob_Reporter;
       Report : Model_Runner.Sampling.Explanation);
+
+   --  The same report a position at a time, as a line of JSON in a file,
+   --  for a program to read rather than a person: the token chosen, its
+   --  log-probability, and the likeliest tokens with theirs --
+   --  {"token":T,"logprob":L,"top":[[ID,L],...]}. What a draft model is
+   --  taught from: the model's own distribution at each token it wrote.
+   type Logprob_File_Reporter is
+     limited new Model_Runner.Generation.Explainer with record
+      File : Ada.Text_IO.File_Type;
+   end record;
+
+   --  Write one position's probabilities as a line.
+   --
+   --  @param Item Reporter to write through.
+   --  @param Report What the model made of the position.
+   overriding procedure Explain
+     (Item   : in out Logprob_File_Reporter;
+      Report : Model_Runner.Sampling.Explanation);
+
+   --  Create the file, replacing one that is there.
+   --
+   --  @param Item Reporter to open.
+   --  @param Path Where the lines go.
+   --  @param Ok False where the file could not be made.
+   procedure Open
+     (Item : in out Logprob_File_Reporter;
+      Path : String;
+      Ok   : out Boolean);
+
+   --  Close the file, where it is open.
+   --
+   --  @param Item Reporter to close.
+   procedure Close (Item : in out Logprob_File_Reporter);
 
    --  A sink that writes generated text to standard output.
    --

@@ -2,7 +2,6 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
-with Ada.Text_IO;
 with Ada.Text_IO.Text_Streams;
 
 with Terminal_Styles;
@@ -1563,6 +1562,50 @@ package body Model_Runner.Presentation is
 
       Write_Line (Item.Screen.all, Diagnostic, Line (1 .. Used));
    end Explain;
+
+   overriding procedure Explain
+     (Item   : in out Logprob_File_Reporter;
+      Report : Model_Runner.Sampling.Explanation)
+   is
+      function Shown (Value : Model_Runner.Sampling.Real) return String
+      is (T.Image (Long_Float (Value), 6));
+   begin
+      if not Ada.Text_IO.Is_Open (Item.File) then
+         return;
+      end if;
+
+      Ada.Text_IO.Put
+        (Item.File,
+         "{""token"":" & T.Image (Long_Long_Integer (Report.Chosen))
+         & ",""logprob"":" & Shown (Report.Log_Of) & ",""top"":[");
+      for Index in 1 .. Report.Count loop
+         Ada.Text_IO.Put
+           (Item.File,
+            (if Index > 1 then "," else "") & "["
+            & T.Image (Long_Long_Integer (Report.Tokens (Index))) & ","
+            & Shown (Report.Log_Values (Index)) & "]");
+      end loop;
+      Ada.Text_IO.Put_Line (Item.File, "]}");
+   end Explain;
+
+   procedure Open
+     (Item : in out Logprob_File_Reporter;
+      Path : String;
+      Ok   : out Boolean) is
+   begin
+      Ada.Text_IO.Create (Item.File, Ada.Text_IO.Out_File, Path);
+      Ok := True;
+   exception
+      when others =>
+         Ok := False;
+   end Open;
+
+   procedure Close (Item : in out Logprob_File_Reporter) is
+   begin
+      if Ada.Text_IO.Is_Open (Item.File) then
+         Ada.Text_IO.Close (Item.File);
+      end if;
+   end Close;
 
    -----------
    -- Write --

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 113) of Registry_Row :=
+   Registry : constant array (1 .. 114) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -187,6 +187,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("context_keep")),
       (Text ("--logprobs"),
        [Command_Run => True, others => False], Text ("logprobs")),
+      (Text ("--logprobs-file"),
+       [Command_Run => True, others => False], Text ("logprobs_file")),
       (Text ("--draft-model"),
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--mmproj"),
@@ -881,7 +883,7 @@ package body Model_Runner.CLI.Options is
          Flag_Yarn_Beta_Fast, Flag_Yarn_Beta_Slow,
          Flag_Top_K, Flag_Top_P, Flag_Min_P, Flag_Top_A, Flag_Repeat_Penalty,
          Flag_Repeat_Window, Flag_Frequency_Penalty, Flag_Presence_Penalty,
-         Flag_Chat_Template, Flag_Chat_Template_File,
+         Flag_Chat_Template, Flag_Chat_Template_File, Flag_Logprobs_File,
          Flag_Delegate_System_File,
          Flag_Typical, Flag_Tail_Free,
          Flag_XTC_Probability, Flag_XTC_Threshold,
@@ -2028,6 +2030,13 @@ package body Model_Runner.CLI.Options is
                            return;
                         end if;
                      end;
+
+                  elsif Name = "--logprobs-file" then
+                     Bounded_Value
+                       (Flag_Logprobs_File, Result.Logprobs_Path, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--chat-template-file" then
                      Bounded_Value
