@@ -1047,6 +1047,19 @@ package body Tests.Template_Cases is
             "Y", "a long chain of or");
       Same ("{% for k, v in {'c': 1, 'a': 2, 'b': 3} | dictsort %}{{ k }}"
             & "{% endfor %}", "abc", "dictsort in key order");
+      Same ("{{ ('a', 1) }}|{{ (1,) }}|{{ {'b': 2, 'a': 1} | dictsort }}"
+            & "|{{ [('a', 1)] | tojson }}",
+            "('a', 1)|(1,)|[('a', 1), ('b', 2)]|[[""a"", 1]]",
+            "a tuple prints as a tuple and writes as a list");
+      Same ("{% set n = 'a""b&c' %}{{ ""'"" | safe + n + ""'"" | safe }}"
+            & "|{{ n ~ 'x' | safe }}", "'a&#34;b&amp;c'|a""b&cx",
+            "text added to markup is escaped, and run together it is not");
+      Same ("{% for message in messages %}{% if message.tool_calls %}"
+            & "{% set d = {'c': message.tool_calls[0]} %}"
+            & "{{ d.c.function.name }}{{ d.c.type }}{{ d.c.name is defined }}"
+            & "{% endif %}{% endfor %}", "ffunctionFalse",
+            "a call held as data has the conversation's shape",
+            With_Call => True);
    end Expressions_Render_As_The_Language_Would;
 
    --  The value model: what a template holds that is not text -- a list it

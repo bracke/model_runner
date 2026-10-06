@@ -1810,6 +1810,8 @@ package body Model_Runner.Templates is
                   Result.Kind := Term_List;
                   Result.Index_At := Start;
                   Result.Length := Given;
+                  --  A tuple is a list that prints as one: Offset says so.
+                  Result.Offset := (if Opener = '(' then 1 else 0);
                   From := Shut + 1;
                   Ok := True;
                   return;
@@ -6215,6 +6217,8 @@ package body Model_Runner.Templates is
       function Indexed (Value : Held; Key : String) return Held;
       function Resolve (Value : Term) return Held;
       function Is_Sum (Value : Operand) return Boolean;
+      function Has_Markup (Value : Operand) return Boolean;
+      function Markup_Joined (Value : Operand) return String;
       function Is_Repetition (Value : Operand) return Boolean;
       function Held_Of (Value : Operand) return Held;
       function Truth_Of (Value : Condition) return Boolean;
@@ -6242,11 +6246,11 @@ package body Model_Runner.Templates is
                then
                   return "null";
                end if;
-               return "{""name"": "
+               return "{""type"": ""function"", ""function"": {""name"": "
                  & Quoted (Conv.Call_Name (Messages, Value.Start, Value.Index))
                  & ", ""arguments"": "
                  & Conv.Call_Arguments (Messages, Value.Start, Value.Index)
-                 & "}";
+                 & "}}";
             when Value_Text => return Quoted (Text_Of (Value));
             when Value_Number => return Text_Of (Value);
             when Value_None => return "null";
@@ -6382,6 +6386,47 @@ package body Model_Runner.Templates is
       is (Src'Length > 0 and then Src (Src'First) = '{');
       function Is_JSON_List (Src : String) return Boolean
       is (Src'Length > 0 and then Src (Src'First) = '[');
+
+      --  A tuple -- written ('a', 1), or a pair dictsort and items make --
+      --  is held as a list whose bracket a blank follows: JSON that came
+      --  in is held without one, and every list this engine writes opens
+      --  with the bracket alone. It prints as Python prints a tuple, and
+      --  tojson writes it as the list JSON makes of one.
+      Tuple_Open : constant String := "[ ";
+
+      function Is_Tuple (Src : String) return Boolean
+      is (Src'Length > 1 and then Src (Src'First .. Src'First + 1) = Tuple_Open);
+
+      --  JSON text with the blank that marks a tuple taken out, outside
+      --  strings.
+      function Untupled (Src : String) return String is
+         R     : String (1 .. Src'Length);
+         M     : Natural := 0;
+         Quote : Boolean := False;
+         I     : Natural := Src'First;
+      begin
+         while I <= Src'Last loop
+            M := M + 1;
+            R (M) := Src (I);
+            if Quote then
+               if Src (I) = '\' and then I < Src'Last then
+                  M := M + 1;
+                  R (M) := Src (I + 1);
+                  I := I + 1;
+               elsif Src (I) = '"' then
+                  Quote := False;
+               end if;
+            elsif Src (I) = '"' then
+               Quote := True;
+            elsif Src (I) = '[' and then I < Src'Last
+              and then Src (I + 1) = ' '
+            then
+               I := I + 1;
+            end if;
+            I := I + 1;
+         end loop;
+         return R (1 .. M);
+      end Untupled;
 
       --  A JSON string's characters. The escapes are the ones JSON
       --  requires; a definition's own are decoded already.
@@ -6535,19 +6580,28 @@ package body Model_Runner.Templates is
          if Is_JSON_String (Src) then
             return "'" & Decoded (Src) & "'";
          elsif Is_JSON_List (Src) then
-            Ada.Strings.Unbounded.Append (R, "[");
-            Cursor := Src'First + 1;
-            loop
-               Next_Element (Src, Cursor, Value, Found);
-               exit when not Found;
-               if not First_One then
-                  Ada.Strings.Unbounded.Append (R, ", ");
-               end if;
-               First_One := False;
+            declare
+               Tuple : constant Boolean := Is_Tuple (Src);
+               Many  : Natural := 0;
+            begin
+               Ada.Strings.Unbounded.Append (R, (if Tuple then "(" else "["));
+               Cursor := Src'First + 1;
+               loop
+                  Next_Element (Src, Cursor, Value, Found);
+                  exit when not Found;
+                  if not First_One then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  First_One := False;
+                  Many := Many + 1;
+                  Ada.Strings.Unbounded.Append
+                    (R, Repr (Src (Value.First .. Value.Last)));
+               end loop;
+               --  Python writes a tuple of one with its comma: (1,).
                Ada.Strings.Unbounded.Append
-                 (R, Repr (Src (Value.First .. Value.Last)));
-            end loop;
-            Ada.Strings.Unbounded.Append (R, "]");
+                 (R, (if not Tuple then "]" elsif Many = 1 then ",)"
+                      else ")"));
+            end;
             return Ada.Strings.Unbounded.To_String (R);
          elsif Is_JSON_Mapping (Src) then
             Ada.Strings.Unbounded.Append (R, "{");
@@ -6864,7 +6918,8 @@ package body Model_Runner.Templates is
                declare
                   T : constant String := Text_Of (Value);
                begin
-                  return T /= "[]" and then T /= "{}" and then T /= "false"
+                  return T /= "[]" and then T /= "[ ]" and then T /= "{}"
+                    and then T /= "false"
                     and then T /= "null" and then T /= "0"
                     and then T /= """""";
                end;
@@ -8991,7 +9046,7 @@ package body Model_Runner.Templates is
                         exit when not Found;
                         Ada.Strings.Unbounded.Append
                           (Pairs,
-                           (if Any then ", " else "") & "["
+                           (if Any then ", " else "") & Tuple_Open
                            & Src (Key.First .. Key.Last) & ", "
                            & Src (Member.First .. Member.Last) & "]");
                         Any := True;
@@ -9068,7 +9123,7 @@ package body Model_Runner.Templates is
       --  Any value that can be walked, as a JSON list: a list as it is,
       --  the tools as their definitions, a list of messages as objects
       --  with a role, a content and the calls the turn asked for, one
-      --  turn's calls as objects with a name and arguments. What the list
+      --  turn's calls as objects with a type and a function. What the list
       --  filters walk, so that "messages | selectattr('role', 'equalto',
       --  'user')" is a question with an answer.
       function Listed (Value : Held) return String is
@@ -9079,12 +9134,14 @@ package body Model_Runner.Templates is
             Ada.Strings.Unbounded.Append (R, Text);
          end Add;
 
+         --  A call as the conversation's JSON holds one: its type, and
+         --  its name and arguments under function.
          procedure Add_Call (At_Message, Which : Positive) is
          begin
-            Add ("{""name"": "
+            Add ("{""type"": ""function"", ""function"": {""name"": "
                  & Quoted (Conv.Call_Name (Messages, At_Message, Which))
                  & ", ""arguments"": "
-                 & Conv.Call_Arguments (Messages, At_Message, Which) & "}");
+                 & Conv.Call_Arguments (Messages, At_Message, Which) & "}}");
          end Add_Call;
       begin
          case Value.Kind is
@@ -9365,10 +9422,11 @@ package body Model_Runner.Templates is
                          (0, Natural (Number_Of
                                (Value_Of (Item.Operands.all (Step.Arg1)))));
                   begin
-                     return As_Text (Indented_JSON (JSON_Text (Value), Width));
+                     return As_Text
+                       (Indented_JSON (Untupled (JSON_Text (Value)), Width));
                   end;
                end if;
-               return As_Text (JSON_Text (Value));
+               return As_Text (Untupled (JSON_Text (Value)));
 
             when Filter_Params =>
                return As_Text (Params_Of (JSON_Text (Value)));
@@ -10390,7 +10448,8 @@ package body Model_Runner.Templates is
                         Ada.Strings.Unbounded.Append (R, ", ");
                      end if;
                      Ada.Strings.Unbounded.Append
-                       (R, "[" & Src (Keys (I).First .. Keys (I).Last) & ", "
+                       (R, Tuple_Open & Src (Keys (I).First .. Keys (I).Last)
+                        & ", "
                         & Src (Members (I).First .. Members (I).Last) & "]");
                   end loop;
                   Ada.Strings.Unbounded.Append (R, "]");
@@ -10591,7 +10650,8 @@ package body Model_Runner.Templates is
                declare
                   R : Ada.Strings.Unbounded.Unbounded_String;
                begin
-                  Ada.Strings.Unbounded.Append (R, "[");
+                  Ada.Strings.Unbounded.Append
+                    (R, (if Value.Offset = 1 then Tuple_Open else "["));
                   for Which in 1 .. Value.Length loop
                      if Which > 1 then
                         Ada.Strings.Unbounded.Append (R, ", ");
@@ -10856,6 +10916,69 @@ package body Model_Runner.Templates is
       --  plus are still run together, and two numbers added: a template
       --  asking for messages[loop.index0 + 1] means the message after this
       --  one and not the one at position "01".
+      --  Text a filter said was safe -- 'x' | safe -- is markup, and in
+      --  Python markup added to text escapes the text: "'"|safe + name
+      --  writes the name with its quotes and ampersands as entities, on
+      --  either side of the plus, and the sum is markup from there on.
+      --  A run of plain additions with markup in it is joined that way.
+      function Is_Markup (T : Term) return Boolean
+      is (T.Filtered > 0 and then T.Filters (T.Filtered).Kind = Filter_Safe);
+
+      function Has_Markup (Value : Operand) return Boolean is
+      begin
+         if Value.Count < 2 then
+            return False;
+         end if;
+         for Index in 2 .. Value.Count loop
+            if Value.Terms (Index).Join /= Join_Plus then
+               return False;
+            end if;
+         end loop;
+         return (for some Index in 1 .. Value.Count =>
+                   Is_Markup (Value.Terms (Index)))
+           and then not Is_Sum (Value);
+      end Has_Markup;
+
+      function Markup_Joined (Value : Operand) return String is
+         function Escaped (Text : String) return String is
+            R : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            for C of Text loop
+               case C is
+                  when '&' => Ada.Strings.Unbounded.Append (R, "&amp;");
+                  when '<' => Ada.Strings.Unbounded.Append (R, "&lt;");
+                  when '>' => Ada.Strings.Unbounded.Append (R, "&gt;");
+                  when '"' => Ada.Strings.Unbounded.Append (R, "&#34;");
+                  when ''' => Ada.Strings.Unbounded.Append (R, "&#39;");
+                  when others => Ada.Strings.Unbounded.Append (R, C);
+               end case;
+            end loop;
+            return Ada.Strings.Unbounded.To_String (R);
+         end Escaped;
+
+         R      : Ada.Strings.Unbounded.Unbounded_String;
+         Markup : Boolean := False;
+      begin
+         for Index in 1 .. Value.Count loop
+            declare
+               Piece : constant String := Value_Of (Value.Terms (Index));
+               Safe  : constant Boolean := Is_Markup (Value.Terms (Index));
+            begin
+               if Markup then
+                  Ada.Strings.Unbounded.Append
+                    (R, (if Safe then Piece else Escaped (Piece)));
+               elsif Safe then
+                  R := Ada.Strings.Unbounded.To_Unbounded_String
+                    (Escaped (Ada.Strings.Unbounded.To_String (R)) & Piece);
+                  Markup := True;
+               else
+                  Ada.Strings.Unbounded.Append (R, Piece);
+               end if;
+            end;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (R);
+      end Markup_Joined;
+
       --  Text times a whole number, either way round: "<tok>" * n.
       function Is_Repetition (Value : Operand) return Boolean is
       begin
@@ -10966,6 +11089,10 @@ package body Model_Runner.Templates is
 
       procedure Emit_Operand (Value : Operand) is
       begin
+         if Has_Markup (Value) then
+            Put (Markup_Joined (Value));
+            return;
+         end if;
          --  A sum is printed as the number it comes to, and anything else
          --  one term at a time: a run of text is written out as it is
          --  reached rather than gathered up first, because what a template
@@ -11227,6 +11354,10 @@ package body Model_Runner.Templates is
       begin
          --  Text times a whole number is the text that many times over,
          --  "<tok>" * n, as Python repeats a string.
+         if Has_Markup (Value) then
+            return Markup_Joined (Value);
+         end if;
+
          if Is_Repetition (Value) then
             declare
                Left  : constant Held := Resolve (Value.Terms (1));
