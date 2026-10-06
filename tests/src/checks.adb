@@ -566,14 +566,14 @@ package body Checks is
       --  The command line's execution, which is the parent unit and one
       --  child a command or a part they share: what reads it reads all.
       function Execution_Contents return String
-      is (Contents ("src/library/model_runner-cli-execute.adb")
-          & Contents ("src/library/model_runner-cli-execute-support.adb")
-          & Contents ("src/library/model_runner-cli-execute-acquisition.adb")
-          & Contents ("src/library/model_runner-cli-execute-help_command.adb")
-          & Contents ("src/library/model_runner-cli-execute-inspect_command.adb")
-          & Contents ("src/library/model_runner-cli-execute-run_command.adb")
-          & Contents ("src/library/model_runner-cli-execute-embed_command.adb")
-          & Contents ("src/library/model_runner-cli-execute-models_command.adb"));
+      is (Unit_Contents ("src/library/model_runner-cli-execute.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-support.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-acquisition.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-help_command.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-inspect_command.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-run_command.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-embed_command.adb")
+          & Unit_Contents ("src/library/model_runner-cli-execute-models_command.adb"));
 
       --  One section of a document, from its heading to the next one.
       --  The heading must end at its line: "## Backend" is a prefix of
