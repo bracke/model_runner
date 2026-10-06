@@ -6283,113 +6283,113 @@ package body Tests.Backend_Cases is
          end if;
 
          for Unit in Natural range 0 .. 1 loop
-         for Count in Positive range 1 .. 3 loop
-            if Count = 2 then
-               goto Next_Count;
-            end if;
-
-            declare
-               Input : constant N.Real_Array :=
-                 Fixtures.Sequence
-                   (N.Element_Count (Columns * Count),
-                    Interfaces.Unsigned_64 (4099 + Count), 1.0);
-               --  Every step's answer lands, one after another: the
-               --  normalization's, then the gate's, the up's and the
-               --  combination's -- or the gated pair's.
-               Width : constant N.Element_Count := N.Element_Count (Count);
-               Plain, Shared :
-                 N.Real_Array (0 .. (Columns + 3 * Rows) * Width - 1);
-               Paired : N.Real_Array (0 .. (Columns + Rows) * Width - 1);
-               Made   : constant N.Element_Count := (Columns + 2 * Rows) * Width;
-               Pair   : constant N.Element_Count := Columns * Width;
-               Steps  : Products.Sequence;
-               Added  : Boolean;
-               Ok     : Boolean;
-               Halted : Boolean;
-
-               procedure Start_Steps is
-               begin
-                  Products.Open_Sequence (Steps);
-                  Products.Add_Norm
-                    (Steps, Gain (Gain'First)'Address,
-                     B.Byte_Count (Gain'Length) * 4, 0, Columns, 1.0E-6, Added,
-                     Key => Gain (Gain'First)'Address, Kept => False);
-                  Assert (Added, "the normalization was refused");
-               end Start_Steps;
-            begin
-               --  Each its own matrix.
-               Start_Steps;
-               Products.Add_Chained_Product
-                 (Steps, Stored'Address, Stored'Length, Gate_At,
-                  Packing, Rows, Columns, Added, Kept => False,
-                  From_Step => 1);
-               Assert (Added, "the gate was refused");
-               Products.Add_Chained_Product
-                 (Steps, Stored'Address, Stored'Length, Up_At,
-                  Packing, Rows, Columns, Added, Kept => False,
-                  From_Step => 1);
-               Assert (Added, "the up was refused");
-               Products.Add_Combination (Steps, Unit, Added);
-               Assert (Added, "the combination was refused");
-               Products.Run (Engine, Steps, Input, Count, Plain, Ok, Halted);
-               Assert (Ok, "the plain feed-forward was refused");
-
-               --  Both read out of the one region.
-               Start_Steps;
-               Products.Add_Chained_Product
-                 (Steps, Stored'Address, Stored'Length, Start,
-                  Packing, Rows, Columns, Added,
-                  Key => Stored (Gate_At)'Address, Kept => False,
-                  From_Step => 1, Region_Rows => Region, Region_At => Pad);
-               Assert (Added, "the gate in the region was refused");
-               Products.Add_Chained_Product
-                 (Steps, Stored'Address, Stored'Length, Start,
-                  Packing, Rows, Columns, Added,
-                  Key => Stored (Gate_At)'Address, Kept => False,
-                  From_Step => 1, Region_Rows => Region,
-                  Region_At => Pad + Natural (Pair_At));
-               Assert (Added, "the up in the region was refused");
-               Products.Add_Combination (Steps, Unit, Added);
-               Assert (Added, "the combination was refused");
-               Products.Run (Engine, Steps, Input, Count, Shared, Ok, Halted);
-               Assert (Ok, "the feed-forward in one region was refused");
-               Assert (N."=" (Shared (Made .. Made + Rows * Width - 1),
-                              Plain (Made .. Made + Rows * Width - 1)),
-                       "products in one region answer otherwise than each in "
-                       & "its own matrix, at" & Count'Image & " positions");
-
-               --  As one step, where the engine has the kernel.
-               if Products.Pairs_Gate
-                    (Engine, Packing, Count, Columns)
-               then
-                  Start_Steps;
-                  Products.Add_Gated_Pair
-                    (Steps, Stored'Address, Stored'Length, Start, Pair_At,
-                     Packing, Rows, Columns, Added,
-                     Key => Stored (Gate_At)'Address, Unit => Unit);
-                  Assert (Added, "the gated pair was refused");
-                  Products.Run (Engine, Steps, Input, Count, Paired, Ok, Halted);
-                  Assert (Ok, "the gated pair would not run");
-                  for Index in 0 .. Rows * Width - 1 loop
-                     Assert (Paired (Pair + Index) = Plain (Made + Index),
-                             "the gated pair answers"
-                             & N.Real'Image (Paired (Pair + Index))
-                             & " where its parts answer"
-                             & N.Real'Image (Plain (Made + Index)) & " at"
-                             & Index'Image & ", " & Count'Image & " positions,"
-                             & " unit" & Unit'Image
-                             & (if Q8 then ", Q8_0" else ", Q4_K"));
-                  end loop;
-               else
-                  Ada.Text_IO.Put_Line
-                    (Ada.Text_IO.Standard_Error,
-                     "note: no gated pair kernel at" & Count'Image
-                     & " positions here");
+            for Count in Positive range 1 .. 3 loop
+               if Count = 2 then
+                  goto Next_Count;
                end if;
-            end;
 
-            <<Next_Count>>
-         end loop;
+               declare
+                  Input : constant N.Real_Array :=
+                    Fixtures.Sequence
+                      (N.Element_Count (Columns * Count),
+                       Interfaces.Unsigned_64 (4099 + Count), 1.0);
+                  --  Every step's answer lands, one after another: the
+                  --  normalization's, then the gate's, the up's and the
+                  --  combination's -- or the gated pair's.
+                  Width : constant N.Element_Count := N.Element_Count (Count);
+                  Plain, Shared :
+                    N.Real_Array (0 .. (Columns + 3 * Rows) * Width - 1);
+                  Paired : N.Real_Array (0 .. (Columns + Rows) * Width - 1);
+                  Made   : constant N.Element_Count := (Columns + 2 * Rows) * Width;
+                  Pair   : constant N.Element_Count := Columns * Width;
+                  Steps  : Products.Sequence;
+                  Added  : Boolean;
+                  Ok     : Boolean;
+                  Halted : Boolean;
+
+                  procedure Start_Steps is
+                  begin
+                     Products.Open_Sequence (Steps);
+                     Products.Add_Norm
+                       (Steps, Gain (Gain'First)'Address,
+                        B.Byte_Count (Gain'Length) * 4, 0, Columns, 1.0E-6, Added,
+                        Key => Gain (Gain'First)'Address, Kept => False);
+                     Assert (Added, "the normalization was refused");
+                  end Start_Steps;
+               begin
+                  --  Each its own matrix.
+                  Start_Steps;
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, Gate_At,
+                     Packing, Rows, Columns, Added, Kept => False,
+                     From_Step => 1);
+                  Assert (Added, "the gate was refused");
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, Up_At,
+                     Packing, Rows, Columns, Added, Kept => False,
+                     From_Step => 1);
+                  Assert (Added, "the up was refused");
+                  Products.Add_Combination (Steps, Unit, Added);
+                  Assert (Added, "the combination was refused");
+                  Products.Run (Engine, Steps, Input, Count, Plain, Ok, Halted);
+                  Assert (Ok, "the plain feed-forward was refused");
+
+                  --  Both read out of the one region.
+                  Start_Steps;
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, Start,
+                     Packing, Rows, Columns, Added,
+                     Key => Stored (Gate_At)'Address, Kept => False,
+                     From_Step => 1, Region_Rows => Region, Region_At => Pad);
+                  Assert (Added, "the gate in the region was refused");
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, Start,
+                     Packing, Rows, Columns, Added,
+                     Key => Stored (Gate_At)'Address, Kept => False,
+                     From_Step => 1, Region_Rows => Region,
+                     Region_At => Pad + Natural (Pair_At));
+                  Assert (Added, "the up in the region was refused");
+                  Products.Add_Combination (Steps, Unit, Added);
+                  Assert (Added, "the combination was refused");
+                  Products.Run (Engine, Steps, Input, Count, Shared, Ok, Halted);
+                  Assert (Ok, "the feed-forward in one region was refused");
+                  Assert (N."=" (Shared (Made .. Made + Rows * Width - 1),
+                                 Plain (Made .. Made + Rows * Width - 1)),
+                          "products in one region answer otherwise than each in "
+                          & "its own matrix, at" & Count'Image & " positions");
+
+                  --  As one step, where the engine has the kernel.
+                  if Products.Pairs_Gate
+                       (Engine, Packing, Count, Columns)
+                  then
+                     Start_Steps;
+                     Products.Add_Gated_Pair
+                       (Steps, Stored'Address, Stored'Length, Start, Pair_At,
+                        Packing, Rows, Columns, Added,
+                        Key => Stored (Gate_At)'Address, Unit => Unit);
+                     Assert (Added, "the gated pair was refused");
+                     Products.Run (Engine, Steps, Input, Count, Paired, Ok, Halted);
+                     Assert (Ok, "the gated pair would not run");
+                     for Index in 0 .. Rows * Width - 1 loop
+                        Assert (Paired (Pair + Index) = Plain (Made + Index),
+                                "the gated pair answers"
+                                & N.Real'Image (Paired (Pair + Index))
+                                & " where its parts answer"
+                                & N.Real'Image (Plain (Made + Index)) & " at"
+                                & Index'Image & ", " & Count'Image & " positions,"
+                                & " unit" & Unit'Image
+                                & (if Q8 then ", Q8_0" else ", Q4_K"));
+                     end loop;
+                  else
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "note: no gated pair kernel at" & Count'Image
+                        & " positions here");
+                  end if;
+               end;
+
+               <<Next_Count>>
+            end loop;
          end loop;
 
          Products.Close (Engine);
