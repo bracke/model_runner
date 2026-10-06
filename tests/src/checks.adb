@@ -2884,7 +2884,7 @@ package body Checks is
            & Unit_Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-generation.adb")
            & Contents ("src/library/model_runner-tokenizer.adb")
-           & Contents ("src/library/model_runner-templates.adb")
+           & Unit_Contents ("src/library/model_runner-templates.adb")
            & Contents ("src/library/model_runner-sampling.adb");
 
          --  Whether the name is used, with nothing running on after it. The
@@ -5620,7 +5620,8 @@ package body Checks is
       declare
          procedure Reject_Reach (Relative, Token : String) is
          begin
-            if Holds (Contents (Relative), Token) then
+            --  With its subunits, each of which may name units of its own.
+            if Holds (Unit_Contents (Relative), Token) then
                Fail (Relative & " reaches a file while reading a model: "
                      & Token);
             end if;
