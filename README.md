@@ -7429,8 +7429,12 @@ repacks a model into panels unasked (`### The eight-row weight layout,
 built`), and `llama-bench` takes its own default; these rows were taken as
 the file stores the weights, which is a path a run never takes: 312.5 and
 282.7 t/s that way in the same sitting, against 614.5 and 456.4 in panels --
-1.58 and 1.46 times llama.cpp's 388.0 and 312.4. The generated token is
-level, 39.6 against 39.9. On the device every row is ahead: 58.9 against
+1.58 and 1.46 times llama.cpp's 388.0 and 312.4. The generated token reads
+39.6 against 39.9, and that is two depths set side by side: this program's
+was taken after the 110-token prompt, `llama-bench`'s `tg64` from an empty
+context. At the same depth it is level or ahead -- 40.03 against 40.13 from
+an empty context, **39.72 against 39.26** at 110 (`llama-bench -d 110`), the
+same sitting. On the device every row is ahead: 58.9 against
 56.5 generating, 1847.7 against 1840.4 at 1419 tokens and 1718.8 against
 1668.5 at 110. In the sitting
 before (2026-09-25) every processor row was ahead but the generated token:
