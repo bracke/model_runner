@@ -22,6 +22,38 @@ is
    Repack_Clock   : Model_Runner.Clocks.System_Clock;
    Repack_Started : Model_Runner.Clocks.Nanoseconds := 0;
 
+   --  Whether a dense model the device's room does not take whole is
+   --  split: its top layers' feed-forward left to the processor.
+   Dense_Split : Boolean := False;
+
+   --  The bytes a view's storage takes, or none where there is no view.
+   function Bytes_Of (View : T.View) return Interfaces.Unsigned_64
+   is (if T.Is_Present (View)
+       then Interfaces.Unsigned_64 (View.Rows) * Interfaces.Unsigned_64 (T.Row_Bytes (View))
+       else 0);
+
+   --  Whether a view is the gate, up or down of a layer whose
+   --  feed-forward the processor runs.
+   function Host_Fed (Where : View_Access) return Boolean is
+   begin
+      if Item.Layers /= null then
+         for Index in Item.Layers.all'Range loop
+            declare
+               L : Layer renames Item.Layers.all (Index);
+            begin
+               if L.Host_Feed
+                 and then (Where = L.Gate'Unchecked_Access
+                           or else Where = L.Up'Unchecked_Access
+                           or else Where = L.Down'Unchecked_Access)
+               then
+                  return True;
+               end if;
+            end;
+         end loop;
+      end if;
+      return False;
+   end Host_Fed;
+
    --  Abandon preparation, releasing every resource acquired so far.
    procedure Fail (Reason : E.Error_Info) is
    begin
@@ -1966,11 +1998,79 @@ begin
    --  way and only where the row count divides by the panel; everything
    --  else in the file is left where it lies, so the file's own bytes
    --  stay mapped and are never released here.
-   if Repack /= No_Repack then
+   --  A dense model the device's room does not take whole reads every
+   --  weight every token, so a shortfall left to the device is uploaded
+   --  every token: ThinkingCap-Qwen3.8-27B, 15.5 GB against 14.6, read
+   --  0.24 tokens a second so. Split instead, as a mixture's experts
+   --  are: the top layers' gate, up and down, enough of them for the rest
+   --  to fit, stay on the host in panels and the processor runs them,
+   --  while the device runs every layer's front half and every other
+   --  layer whole.
+   if Item.Settings.Experts = 0
+     and then Item.Layers /= null
+     and then Item.Able.Memory_Bytes > 0
+     and then Model_Runner.Backend."=" (Item.Able.Kind, Model_Runner.Backend.Backend_Device)
+   then
+      declare
+         Held  : constant View_List := Matrices (Item);
+         Total : Interfaces.Unsigned_64 := 0;
+         Freed : Interfaces.Unsigned_64 := 0;
+      begin
+         for Index in Held'Range loop
+            declare
+               Seen_Before : Boolean := False;
+            begin
+               for Earlier in Held'First .. Index - 1 loop
+                  if Held (Earlier).all.Base = Held (Index).all.Base
+                    and then Held (Earlier).all.Offset = Held (Index).all.Offset
+                  then
+                     Seen_Before := True;
+                     exit;
+                  end if;
+               end loop;
+               if not Seen_Before then
+                  Total := Total + Bytes_Of (Held (Index).all);
+               end if;
+            end;
+         end loop;
+
+         if Total > Item.Able.Memory_Bytes then
+            for Index in reverse Item.Layers.all'Range loop
+               exit when Total - Freed <= Item.Able.Memory_Bytes;
+               declare
+                  L : Layer renames Item.Layers.all (Index);
+               begin
+                  if L.Feed_Norm /= null
+                    and then T.Is_Present (L.Gate)
+                    and then T.Is_Present (L.Up)
+                    and then T.Is_Present (L.Down)
+                    and then Model_Runner.Quantization.Interleave.Interleaves
+                               (L.Gate.Format, L.Gate.Rows, L.Gate.Columns)
+                    and then Model_Runner.Quantization.Interleave.Interleaves
+                               (L.Up.Format, L.Up.Rows, L.Up.Columns)
+                    and then Model_Runner.Quantization.Interleave.Interleaves
+                               (L.Down.Format, L.Down.Rows, L.Down.Columns)
+                  then
+                     L.Host_Feed := True;
+                     Freed := Freed + Bytes_Of (L.Gate) + Bytes_Of (L.Up) + Bytes_Of (L.Down);
+                  end if;
+               end;
+            end loop;
+            Dense_Split := Total - Freed <= Item.Able.Memory_Bytes;
+            if not Dense_Split then
+               for L of Item.Layers.all loop
+                  L.Host_Feed := False;
+               end loop;
+            end if;
+         end if;
+      end;
+   end if;
+
+   if Repack /= No_Repack or else Dense_Split then
       Repack_Started := Model_Runner.Clocks.Now (Repack_Clock);
    end if;
 
-   if Repack = To_Rows then
+   if Repack = To_Rows or else Dense_Split then
       P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
 
       --  The head as the file has it, before it may be written in panels.
@@ -1995,6 +2095,8 @@ begin
          begin
             for Where of Whole loop
                if not Is_Lookup (Where)
+                 --  Split, only what the processor runs.
+                 and then (Repack = To_Rows or else Host_Fed (Where))
                  and then Model_Runner.Quantization.Interleave.Interleaves
                             (Where.all.Format, Where.all.Rows,
                              Where.all.Columns)
@@ -2223,7 +2325,9 @@ begin
                       Blocks_Of (Where));
             end loop;
 
-            if Panel_Cache /= "" and then Map_Panels (Needed) then
+            --  The cache is a whole model's panels; a split's few are
+            --  made afresh.
+            if Repack = To_Rows and then Panel_Cache /= "" and then Map_Panels (Needed) then
                goto Panels_Done;
             end if;
 
@@ -2392,7 +2496,7 @@ begin
                end loop;
             end;
 
-            if Panel_Cache /= "" then
+            if Repack = To_Rows and then Panel_Cache /= "" then
                Write_Panels (Needed);
             end if;
 
@@ -2715,6 +2819,15 @@ begin
             end if;
          end loop;
 
+         --  What the processor runs of a split is not the device's.
+         if Dense_Split then
+            for Where of Held loop
+               if Host_Fed (Where) and then Bytes_Of (Where.all) <= Total then
+                  Total := Total - Bytes_Of (Where.all);
+               end if;
+            end loop;
+         end if;
+
          --  What a TOKEN reads, which is what decides whether a model
          --  larger than the device's share runs well or badly.
          --
@@ -2807,7 +2920,7 @@ begin
    --  the residency, and a model whose stacks do not all fit would give
    --  back and upload again a whole stack where it gave back a slice.
    Item.Stacked := False;
-   Item.Split_Feed := False;
+   Item.Split_Feed := Dense_Split;
 
    if Item.Settings.Experts > 0
      and then Item.Settings.Experts_Used > 0

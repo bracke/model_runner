@@ -1272,7 +1272,8 @@ package body Tests.Inference_Cases is
               (From_Next : Boolean;
                Text      : out Model_Runner.Bytes.Byte_Array_Access;
                Length    : out Natural;
-               Proposed  : out Natural)
+               Proposed  : out Natural;
+               Cache     : L.Cache_Precision := L.Exact)
             is
                Live    : L.Session;
                Request : Gen.Request;
@@ -1280,7 +1281,7 @@ package body Tests.Inference_Cases is
                Outcome : Gen.Result;
                Local   : E.Error_Info;
             begin
-               L.Open (Live, Under.Ready, Context => Room, Status => Local);
+               L.Open (Live, Under.Ready, Context => Room, Cache => Cache, Status => Local);
                Assert (E.Is_Ok (Local), "the session did not open");
 
                Model_Runner.Stops.Open (Stop);
@@ -1329,6 +1330,21 @@ package body Tests.Inference_Cases is
                     "the run proposed nothing from its next block, so this "
                     & "compares two runs of the same path");
 
+            B.Free (Plain_Text);
+            B.Free (Next_Text);
+
+            --  And where the stack's cache is not exact -- halves, the
+            --  default -- the block keeps its own and drafts all the same:
+            --  it once drafted only over an exact cache, so at the default
+            --  a model's own block never proposed a token.
+            Turn (False, Plain_Text, Plain_Last, Ignored, Cache => L.Halved);
+            Turn (True, Next_Text, Next_Last, Proposed, Cache => L.Halved);
+            Assert (Proposed > 0,
+                    "over a half-precision cache the next block proposed nothing");
+            Assert (Next_Last = Plain_Last
+                    and then B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                                    Next_Text.all (1 .. B.Byte_Index (Next_Last))),
+                    "over a half-precision cache drafting from the next block changed the text");
             B.Free (Plain_Text);
             B.Free (Next_Text);
          end;
@@ -14486,17 +14502,21 @@ package body Tests.Inference_Cases is
 
       Tokens : constant Vocab.Token_Array := [3, 4, 5, 6];
 
-      --  What the model says with the device opened at a given budget.
+      --  What the model says with the device opened at a given budget,
+      --  and how many layer steps ran split, their feed-forward on the
+      --  processor.
       procedure Said
         (Budget : Interfaces.Unsigned_64;
          Into   : out N.Real_Array;
-         Ran    : out Boolean)
+         Ran    : out Boolean;
+         Split  : out Natural)
       is
          Ready  : Boolean;
          Status : E.Error_Info;
          Able   : Boolean;
       begin
          Ran := False;
+         Split := 0;
          Into := [others => 0.0];
 
          Device.Close;
@@ -14544,6 +14564,7 @@ package body Tests.Inference_Cases is
                        & E.Error_Code'Image (Status.Code));
             end loop;
 
+            Split := Device.Layers_Split;
             L.Close (Live);
             L.Close (Under.Ready, Ignored);
          end;
@@ -14559,15 +14580,17 @@ package body Tests.Inference_Cases is
          Wide : constant N.Element_Count :=
            N.Element_Count (Tiny_Model.Vocabulary);
 
-         Plenty, Pinched : N.Real_Array (0 .. Wide - 1);
+         Plenty, Pinched, Halved : N.Real_Array (0 .. Wide - 1);
 
-         Ran_One, Ran_Two : Boolean;
+         Ran_One, Ran_Two, Ran_Three : Boolean;
+
+         Split_One, Split_Two, Split_Three : Natural;
 
          Apart : N.Real := 0.0;
       begin
          --  Whatever the device offers, which for this fixture is room for
          --  every matrix at once.
-         Said (0, Plenty, Ran_One);
+         Said (0, Plenty, Ran_One, Split_One);
 
          if not Ran_One then
             Ada.Text_IO.Put_Line
@@ -14577,10 +14600,15 @@ package body Tests.Inference_Cases is
             return;
          end if;
 
-         --  And a budget too small for it, which makes every matrix taken
-         --  cost one given back.
-         Said (Interfaces.Unsigned_64 (16 * 1024), Pinched, Ran_Two);
+         Assert (Split_One = 0, "a model that fits was split");
+
+         --  And a budget too small for it even with every layer's
+         --  feed-forward left to the processor, which makes every matrix
+         --  taken cost one given back.
+         Said (Interfaces.Unsigned_64 (1024), Pinched, Ran_Two, Split_Two);
          Assert (Ran_Two, "the device would not open at a small budget");
+         Assert (Split_Two = 0,
+                 "a model whose split would not fit either was split");
 
          for Index in Plenty'Range loop
             Apart := N.Real'Max (Apart, abs (Plenty (Index) - Pinched (Index)));
@@ -14599,6 +14627,23 @@ package body Tests.Inference_Cases is
                  "a model that does not fit answers" & N.Real'Image (Apart)
                  & " away from the same model when it does, so a buffer "
                  & "given back and taken again is not what it was");
+
+         --  And a budget the model fits once its top layers' feed-forward
+         --  is the processor's: split, and the same answer to within the
+         --  processor's arithmetic against the device's.
+         Said (Interfaces.Unsigned_64 (16 * 1024), Halved, Ran_Three,
+               Split_Three);
+         Assert (Ran_Three, "the device would not open at a split budget");
+         Assert (Split_Three > 0,
+                 "a dense model the budget takes split was not split");
+
+         Apart := 0.0;
+         for Index in Plenty'Range loop
+            Apart := N.Real'Max (Apart, abs (Plenty (Index) - Halved (Index)));
+         end loop;
+         Assert (Apart <= 1.0E-4,
+                 "a split model answers" & N.Real'Image (Apart)
+                 & " away from the same model whole on the device");
       end;
 
       B.Free (Image);

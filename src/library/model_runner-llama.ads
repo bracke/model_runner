@@ -2225,6 +2225,12 @@ private
    type Layer is record
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
 
+      --  Whether this dense layer's feed-forward is the processor's where
+      --  the device runs the rest: a dense model the device's room does
+      --  not take whole, split as a mixture's experts are, its top layers'
+      --  gate, up and down left on the host in panels.
+      Host_Feed : Boolean := False;
+
       --  Applied to what a sublayer produced, before it is added back to
       --  the residual, rather than to what it was given. Null for an
       --  architecture that normalizes only on the way in, which is every
@@ -2990,7 +2996,9 @@ private
       --  Whether this session's products go to the processor's pool
       --  whatever the model's backend: set while a mixture's feed-forward
       --  runs for a model whose experts the device does not hold, and
-      --  whose layers the device runs the front half of (Split_Feed).
+      --  whose layers the device runs the front half of (Split_Feed), and
+      --  while a split dense model's layer runs whose gate, up and down
+      --  the processor holds (Layer.Host_Feed).
       Host_Feed  : Boolean := False;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;
 

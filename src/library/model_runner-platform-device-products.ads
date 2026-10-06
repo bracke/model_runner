@@ -3361,6 +3361,10 @@ private
       XS_Wave_Shader : System.Address := System.Null_Address;
       XS_Wave_Line   : System.Address := System.Null_Address;
 
+      --  And IQ4_XS over two, three or four vectors at once, as Q8_0's.
+      XS_Multi_Shaders : Multi_Array := [others => System.Null_Address];
+      XS_Multi_Lines   : Multi_Array := [others => System.Null_Address];
+
       --  And Q2_K and Q3_K, a lane a sub-block: the generic row kernel's
       --  eight lanes a row read a Q2_K model seven per cent behind
       --  llama.cpp's generation, three quarters of it Q3_K.

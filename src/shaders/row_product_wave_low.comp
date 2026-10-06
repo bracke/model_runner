@@ -1945,7 +1945,117 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 }
 #endif
 
-#ifdef VEC
+#if defined(VEC) && defined(IQ4_XS)
+//  IQ4_XS over a few vectors at once, as Q8_0's below: each lane's sixteen
+//  weights of a row -- both nibbles of eight bytes of one sub-block, as the
+//  one-vector walk takes them -- decoded once and dotted with every
+//  vector's sixteen activations. The generic low-bit row kernel it replaces
+//  for two to four positions read a 27B model's feed-forward at a fifth of
+//  this kernel's one-vector rate, so a drafted round's check cost three
+//  generated tokens.
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    if (tid < 16u) {
+        kv4[tid] = KV4[tid];
+    }
+    barrier();
+
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+    uint ib = itid / 2u;
+    uint half_of = itid % 2u;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_k[VEC];
+    bool real_k[VEC];
+    for (uint k = 0u; k < VEC; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+
+    float temp[NUM_ROWS][VEC];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < VEC; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < groups; i += 4u) {
+        if (i * 256u + ib * 32u < shape.columns) {
+            vec4 a[VEC][4];
+            for (uint k = 0u; k < VEC; ++k) {
+                uint xb = ((from_k[k] + i * 256u) >> 2u) + ib * 8u
+                          + half_of * 2u;
+                a[k][0] = x4[xb];
+                a[k][1] = x4[xb + 1u];
+                a[k][2] = x4[xb + 4u];
+                a[k][3] = x4[xb + 5u];
+            }
+
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
+
+                uint low = (byte_at(at + 4u + (ib >> 1u)) >> (4u * (ib & 1u)))
+                           & 15u;
+                uint high = (u16_at(at + 2u) >> (2u * ib)) & 3u;
+                float dl = half_at(at) * float(int(low | (high << 4u)) - 32);
+
+                uint q = (at + 8u + 16u * ib + half_of * 8u) >> 2u;
+                uint q0 = w[q];
+                uint q1 = w[q + 1u];
+                vec4 l0 = nl4(q0, 0u);
+                vec4 l1 = nl4(q1, 0u);
+                vec4 h0 = nl4(q0, 4u);
+                vec4 h1 = nl4(q1, 4u);
+
+                for (uint k = 0u; k < VEC; ++k) {
+                    temp[r][k] += dl
+                                  * (dot(a[k][0], l0) + dot(a[k][1], l1)
+                                   + dot(a[k][2], h0) + dot(a[k][3], h1));
+                }
+            }
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float whole = subgroupAdd(temp[r][k]);
+
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#elif defined(VEC)
 //  A few vectors at once -- a drafted round's check, two to four positions
 //  -- through the same walk: each lane's sixteen weights of a row decoded
 //  once and dotted with every vector's sixteen activations, which a lane

@@ -6,6 +6,7 @@ with Interfaces;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Integers;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.Quantization;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Platform;
@@ -515,8 +516,12 @@ package body Model_Runner.CLI.Execute.Support is
    --  goes there when the rest of it does: the device runs each layer's
    --  front half and the processor the experts. What the budget is weighed
    --  against is then the model's bytes less its experts' -- the tensors
-   --  named *_exps -- or the whole file where it has none, or cannot be
-   --  read as a model here (the run reports that itself).
+   --  named *_exps -- or the whole file where it cannot be read as a model
+   --  here (the run reports that itself). A dense model is split the same
+   --  way, a layer's gate, up and down to the processor's panels, so its
+   --  bytes are weighed less those of the layers whose three the panels
+   --  take: ThinkingCap-Qwen3.8-27B, 15.5 GB against 14.6, generates at
+   --  3.66 tokens a second split and 2.90 on the processor alone.
    function Resolved_Backend
      (Item   : Opt.Command;
       Screen : in out Pres.Console) return Opt.Command
@@ -524,15 +529,40 @@ package body Model_Runner.CLI.Execute.Support is
       Result : Opt.Command := Item;
       Ready  : Boolean;
 
-      --  The bytes of a mixture's experts in a file, which the device need
-      --  not hold. Nought where it has none -- and where the file cannot be
-      --  read as a model, which discounts nothing and so never puts on the
-      --  device what would not fit there: the cautious answer, not a guess.
-      function Expert_Bytes (Path : String) return Interfaces.Unsigned_64 is
+      --  The bytes of a file the device need not hold: a mixture's
+      --  experts, or where it has none, the feed-forward of every layer
+      --  whose gate, up and down the processor's panels take. Nought where
+      --  the file cannot be read as a model, which discounts nothing and so
+      --  never puts on the device what would not fit there: the cautious
+      --  answer, not a guess.
+      function Spared_Bytes (Path : String) return Interfaces.Unsigned_64 is
          From      : Files.File_Source;
          Parsed    : Containers.Container;
          Condition : E.Error_Info;
          Total     : Interfaces.Unsigned_64 := 0;
+         Dense     : Interfaces.Unsigned_64 := 0;
+
+         --  The tensor of this name, or nought.
+         function Named (Wanted : String) return Natural is
+         begin
+            for Index in 1 .. Containers.Tensor_Count (Parsed) loop
+               if Containers.Tensor_Name (Parsed, Index) = Wanted then
+                  return Index;
+               end if;
+            end loop;
+            return 0;
+         end Named;
+
+         --  Whether the panels take this matrix, as the split asks.
+         function Paneled (Index : Natural) return Boolean
+         is (Index /= 0
+             and then Containers.Tensor_Rank (Parsed, Index) = 2
+             and then Model_Runner.Quantization.Interleave.Interleaves
+                        (Containers.Tensor_Format (Parsed, Index),
+                         Model_Runner.Numerics.Element_Count
+                           (Containers.Tensor_Dimension (Parsed, Index, 2)),
+                         Model_Runner.Numerics.Element_Count
+                           (Containers.Tensor_Dimension (Parsed, Index, 1))));
       begin
          Files.Open (From, Path, Status => Condition);
          if E.Is_Error (Condition) then
@@ -542,12 +572,35 @@ package body Model_Runner.CLI.Execute.Support is
          Containers.Reader.Parse (Parsed, From, Status => Condition);
          if not E.Is_Error (Condition) then
             for Index in 1 .. Containers.Tensor_Count (Parsed) loop
-               if Ada.Strings.Fixed.Index
-                    (Containers.Tensor_Name (Parsed, Index), "_exps.") > 0
-               then
-                  Total := Total + Containers.Tensor_Bytes (Parsed, Index);
-               end if;
+               declare
+                  Name : constant String :=
+                    Containers.Tensor_Name (Parsed, Index);
+                  Gate : constant Natural :=
+                    Ada.Strings.Fixed.Index (Name, "ffn_gate.weight");
+               begin
+                  if Ada.Strings.Fixed.Index (Name, "_exps.") > 0 then
+                     Total := Total + Containers.Tensor_Bytes (Parsed, Index);
+                  elsif Gate > 0 and then Gate + 14 = Name'Last then
+                     declare
+                        Stem : constant String := Name (Name'First .. Gate - 1);
+                        Up   : constant Natural := Named (Stem & "ffn_up.weight");
+                        Down : constant Natural := Named (Stem & "ffn_down.weight");
+                     begin
+                        if Paneled (Index) and then Paneled (Up)
+                          and then Paneled (Down)
+                        then
+                           Dense := Dense
+                             + Containers.Tensor_Bytes (Parsed, Index)
+                             + Containers.Tensor_Bytes (Parsed, Up)
+                             + Containers.Tensor_Bytes (Parsed, Down);
+                        end if;
+                     end;
+                  end if;
+               end;
             end loop;
+            if Total = 0 then
+               Total := Dense;
+            end if;
          end if;
 
          Containers.Close (Parsed);
@@ -559,7 +612,7 @@ package body Model_Runner.CLI.Execute.Support is
             --  that is the status above -- but a fault: closed, and on.
             Files.Close (From);
             raise;
-      end Expert_Bytes;
+      end Spared_Bytes;
    begin
       if Item.Backend_Set then
          return Result;
@@ -598,7 +651,7 @@ package body Model_Runner.CLI.Execute.Support is
          if Weights > 0
            and then Holds > 0
            and then (Weights <= Holds
-                     or else Weights - Expert_Bytes (Path) <= Holds)
+                     or else Weights - Spared_Bytes (Path) <= Holds)
          then
             Result.Backend := Model_Runner.Backend.Backend_Device;
          else

@@ -116,9 +116,10 @@ package body Model_Runner.Backend.Device is
    --  describes them, and the positions the run was for to within a
    --  doubling -- a prompt's experts are each run for however many
    --  positions chose them, and a shape a count would be one a run.
-   --  Sixteen is more shapes than a model runs, and a seventeenth is
-   --  counted and not summed.
-   Shape_Limit : constant := 16;
+   --  Sixteen was fewer than a hybrid of mixed formats runs: a prompt's
+   --  shapes filled the table and a drafted round's checks went uncounted.
+   --  A ninety-seventh is counted and not summed.
+   Shape_Limit : constant := 96;
    Label_Limit : constant := 40;
 
    --  Which doubling a count of positions is in: one, two and three, four

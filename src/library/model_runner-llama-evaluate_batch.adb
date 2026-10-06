@@ -262,6 +262,7 @@ is
 
    function Linear_Layer_Fits (L : Layer) return Boolean
    is (Linear_Front_Fits (L)
+       and then not L.Host_Feed
        and then (if Settings.Experts > 0 then Mixture_Whole (L)
                  else T.Is_Present (L.Up)));
 
@@ -324,6 +325,7 @@ is
         then Mixture_Whole (L)
         else T.Is_Present (L.Up))
        and then Front_Fits (L, Index)
+       and then not L.Host_Feed
        and then (Settings.Experts = 0
                  or else (L.Up_Bias = null and then L.Down_Bias = null))
        and then (L.Post_Feed_Norm = null
@@ -345,8 +347,8 @@ is
    --  -- a normalization before the feed-forward, joined after it.
    function Split_Here (L : Layer) return Boolean
    is (Source.Split_Feed
-       and then L.Experts /= null
-       and then not Mixture_Whole (L)
+       and then ((L.Experts /= null and then not Mixture_Whole (L))
+                 or else L.Host_Feed)
        and then L.Feed_Norm /= null
        and then not Normalizes_After (Settings.Kind)
        and then not Settings.Parallel_Residual
@@ -777,6 +779,12 @@ begin
    end if;
 
    for Index in Source.Layers.all'Range loop
+      --  A dense layer whose feed-forward the processor runs reads its
+      --  products there; every other runs where it always has.
+      if Source.Split_Feed and then Settings.Experts = 0 then
+         Item.Host_Feed := Source.Layers.all (Index).Host_Feed;
+      end if;
+
       if C.Is_Cancelled (Cancel) then
          --  Nothing was committed, so the cache still describes exactly
          --  the context that was valid before this call.
@@ -2725,6 +2733,8 @@ begin
                elsif Model_Runner.Backend."="
                        (Item.Owner.Able.Kind,
                         Model_Runner.Backend.Backend_Device)
+                 --  Not a layer whose feed-forward the processor runs.
+                 and then not Item.Host_Feed
                then
                   --  A device takes the whole gated block at once -- both
                   --  arms, the unit, the multiply, and the projection that
@@ -2821,6 +2831,11 @@ begin
          end if;
       end;
    end loop;
+
+   --  Every layer's products where they always ran, past the stack.
+   if Source.Split_Feed and then Settings.Experts = 0 then
+      Item.Host_Feed := False;
+   end if;
 
    --  The host's own copy of the cache, brought up to date out of the
    --  device's, for the layers that did not send it back a step at a

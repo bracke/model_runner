@@ -91,8 +91,9 @@ option always wins.
   device may hold -- its own memory and the share of system memory it can map,
   leaving room for the rest of the machine -- and on the processor otherwise.
   A mixture whose experts do not fit but whose other layers do runs those
-  layers on the device and its experts on the processor. `--backend` names
-  one.
+  layers on the device and its experts on the processor; a dense model that
+  does not fit keeps the gate, up and down of enough of its top layers on the
+  processor, in panels, for the rest to fit. `--backend` names one.
 - **How the processor holds the weights.** Repacked once into eight-row
   panels (`--repack rows`) where the processor has the kernels, the model fits
   in free memory and in one allocation; the panels are kept under
