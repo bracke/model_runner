@@ -344,6 +344,19 @@ package Model_Runner.Framework.Repository is
    --  @return The count.
    function File_Count (From : Graph) return Natural;
 
+   --  How many things the walk that made a graph could not read.
+   --
+   --  @param From The graph.
+   --  @return The count.
+   function Unread_Count (From : Graph) return Natural;
+
+   --  One thing the walk could not read, as "PATH: why".
+   --
+   --  @param From The graph.
+   --  @param Index Which, from one.
+   --  @return The path and the reason.
+   function Unread_At (From : Graph; Index : Positive) return String;
+
    --  One file.
    --
    --  @param From The graph.
@@ -466,6 +479,13 @@ private
 
       --  The file being read, which every relation added meanwhile is from.
       Reading   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What the walk could not read, each "PATH: why": a file that went
+      --  while it was walked, one it may not open, a directory it could
+      --  not list, one a language's reader stopped on. None of them is in
+      --  the graph, and a reader of the graph is told so rather than left
+      --  to take it as the whole project. Not kept with the graph.
+      Unread    : Name_Lists.Vector;
    end record;
 
 end Model_Runner.Framework.Repository;

@@ -509,6 +509,31 @@ package body Tests.Catalog_Cases is
                  "rendered """ & Loc.Describe (Catalog, Named) & """");
       end;
 
+      --  An exception nothing expected keeps what was raised, and what was
+      --  being done; the places that say nothing of it read as before.
+      declare
+         Failure : E.Error_Info;
+         Found   : Boolean;
+         Given   : E.Parameter;
+      begin
+         begin
+            raise Constraint_Error with "index check";
+         exception
+            when Raised : Constraint_Error =>
+               Failure := E.Unexpected (Raised, "command RUN");
+         end;
+         Assert (Failure.Code = E.Internal_Unexpected_Exception
+                 and then Failure.Frame_Total = 1
+                 and then Loc.Describe (Catalog, Failure)
+                          = "unexpected internal failure: CONSTRAINT_ERROR: index check",
+                 "rendered """ & Loc.Describe (Catalog, Failure) & """");
+         E.Find_Parameter (Failure, "detail", Found, Given);
+         Assert (Found, "what was raised was not kept as the condition's detail");
+         Assert (Loc.Describe (Catalog, E.Make (E.Internal_Unexpected_Exception))
+                   = "unexpected internal failure",
+                 "the bare form was not used where nothing was raised");
+      end;
+
       --  A value carrying a terminal escape must not reach the terminal as
       --  one.
       declare

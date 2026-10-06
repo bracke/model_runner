@@ -628,8 +628,8 @@ package body Model_Runner.CLI.Execute is
             end if;
          end if;
       exception
-         when others =>
-            Status := E.Make (E.Internal_Unexpected_Exception);
+         when Failure : others =>
+            Status := E.Unexpected (Failure, "delegated run");
       end;
 
       --  Always give the session back, whatever happened.
@@ -5948,8 +5948,8 @@ package body Model_Runner.CLI.Execute is
             Status := E.Exit_Usage;
       end case;
    exception
-      when others =>
-         Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
+      when Failure : others =>
+         Pres.Report (Screen, E.Unexpected (Failure, "command " & Opt.Command_Kind'Image (Item.Kind)));
          Status := E.Exit_Internal;
    end Dispatch;
 

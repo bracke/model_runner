@@ -3,6 +3,8 @@ with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Directories;
+with Ada.Exceptions;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 with Ada.Strings.Maps;
@@ -27,6 +29,20 @@ package body Model_Runner.Framework.Repository is
 
    Index_Name : constant String := "repository";
    Tab        : constant Character := ASCII.HT;
+
+   --  Why a file or directory could not be read, from what stopped it:
+   --  gone, not to be opened, or whatever else, by its name.
+   function Why (Failure : Ada.Exceptions.Exception_Occurrence) return String is
+      use Ada.Exceptions;
+   begin
+      if Exception_Identity (Failure) = Ada.IO_Exceptions.Name_Error'Identity then
+         return "not there any more";
+      elsif Exception_Identity (Failure) = Ada.IO_Exceptions.Use_Error'Identity then
+         return "may not be opened";
+      end if;
+      return Exception_Name (Failure)
+        & (if Exception_Message (Failure) = "" then "" else " " & Exception_Message (Failure));
+   end Why;
 
    --  Files larger than this are recorded and not read.
    Largest_Read : constant := 4 * 1024 * 1024;
@@ -145,6 +161,12 @@ package body Model_Runner.Framework.Repository is
 
    function File_At (From : Graph; Index : Positive) return File_Entry
    is (From.Files (Index));
+
+   function Unread_Count (From : Graph) return Natural
+   is (Natural (From.Unread.Length));
+
+   function Unread_At (From : Graph; Index : Positive) return String
+   is (From.Unread (Index));
 
    function Symbol_Count (From : Graph) return Natural
    is (Natural (From.Symbols.Length));
@@ -1384,6 +1406,10 @@ package body Model_Runner.Framework.Repository is
                   begin
                      if Size <= Largest_Read then
                         Files.Read_Text (Full, Text, Status);
+                        if E.Is_Error (Status) then
+                           Result.Unread.Append (Relative & ": could not be read");
+                           raise Skip_File;
+                        end if;
                      end if;
                      --  A built program or object -- bytes, not text, a NUL
                      --  among its first -- is no file of the project's.
@@ -1418,13 +1444,16 @@ package body Model_Runner.Framework.Repository is
             exception
                when Skip_File =>
                   null;
-               when others =>
-                  null;
+               when Failure : others =>
+                  --  Gone while walked, not to be opened, or stopped on
+                  --  by its reader: left out of the graph, and said so.
+                  Result.Unread.Append (Relative & ": " & Why (Failure));
             end;
          end loop;
       exception
-         when others =>
-            null;
+         when Failure : others =>
+            Result.Unread.Append
+              ((if Prefix = "" then "." else Prefix) & ": " & Why (Failure));
       end Walk;
    begin
       Walk (Project_Directory, "");
@@ -1489,13 +1518,14 @@ package body Model_Runner.Framework.Repository is
                   Now_Stamps.Append (Stamp_Of (Full));
                end if;
             exception
-               when others =>
-                  null;
+               when Failure : others =>
+                  Result.Unread.Append (Relative & ": " & Why (Failure));
             end;
          end loop;
       exception
-         when others =>
-            null;
+         when Failure : others =>
+            Result.Unread.Append
+              ((if Prefix = "" then "." else Prefix) & ": " & Why (Failure));
       end Walk;
 
       function Kept_Index (Path : String) return Natural is
@@ -1508,7 +1538,21 @@ package body Model_Runner.Framework.Repository is
          return 0;
       end Kept_Index;
 
-      --  The text of a file, and whether it could be read.
+      --  Whether the walk has a file down as unread.
+      function Unreadable (Path : String) return Boolean is
+      begin
+         for Said of Result.Unread loop
+            if Said'Length > Path'Length + 1
+              and then Said (Said'First .. Said'First + Path'Length) = Path & ":"
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Unreadable;
+
+      --  The text of a file; one that cannot be read is put down as
+      --  unread, and left out of the graph as a scan leaves it out.
       function Text_Of (Path : String) return String is
          Text   : Unbounded_String;
          Status : E.Error_Info;
@@ -1517,10 +1561,16 @@ package body Model_Runner.Framework.Repository is
       begin
          if Dirs.Size (Full) <= Largest_Read then
             Files.Read_Text (Full, Text, Status);
+            if E.Is_Error (Status) and then not Unreadable (Path) then
+               Result.Unread.Append (Path & ": could not be read");
+            end if;
          end if;
          return To_String (Text);
       exception
-         when others =>
+         when Failure : others =>
+            if not Unreadable (Path) then
+               Result.Unread.Append (Path & ": " & Why (Failure));
+            end if;
             return "";
       end Text_Of;
 
@@ -1578,7 +1628,9 @@ package body Model_Runner.Framework.Repository is
          end if;
       end loop;
       if Changed.Is_Empty and then Gone.Is_Empty then
-         return Kept;
+         return Same : Graph := Kept do
+            Same.Unread := Result.Unread;
+         end return;
       end if;
 
       --  The kept symbols and relations by the file they came from, so a
@@ -1601,15 +1653,25 @@ package body Model_Runner.Framework.Repository is
                   Text : constant String := Text_Of (Path);
                begin
                   Read_Again := Read_Again + 1;
-                  Add_File
-                    (Result,
-                     (Path        => To_Unbounded_String (Path),
-                      Language    => To_Unbounded_String (Language_Of (Path)),
-                      Role        => (if Says_Generated (Text) then Generated
-                                      else Role_Of (Path, Within)),
-                      Fingerprint => To_Unbounded_String (Fingerprint (Text)),
-                      Stamp       => To_Unbounded_String (Now_Stamps (Index))));
-                  Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);
+                  --  One that could not be read is left out, as Scan
+                  --  leaves it out.
+                  if not Unreadable (Path) then
+                     Add_File
+                       (Result,
+                        (Path        => To_Unbounded_String (Path),
+                         Language    => To_Unbounded_String (Language_Of (Path)),
+                         Role        => (if Says_Generated (Text) then Generated
+                                         else Role_Of (Path, Within)),
+                         Fingerprint => To_Unbounded_String (Fingerprint (Text)),
+                         Stamp       => To_Unbounded_String (Now_Stamps (Index))));
+                     begin
+                        Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);
+                     exception
+                        when Failure : others =>
+                           --  As a scan has it: what its reader stopped on.
+                           Result.Unread.Append (Path & ": " & Why (Failure));
+                     end;
+                  end if;
                end;
             else
                Add_File (Result, Kept.Files (Kept_Index (Path)));

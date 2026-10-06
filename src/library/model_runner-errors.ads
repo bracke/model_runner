@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Interfaces;
 
 with Model_Runner.Text;
@@ -565,6 +566,19 @@ package Model_Runner.Errors is
    procedure Add_Frame
      (Item  : in out Error_Info;
       Frame : String);
+
+   --  An exception nothing was written to expect, as the condition a
+   --  subsystem's boundary reports: Internal_Unexpected_Exception, with
+   --  the exception's name and message as its detail -- what the user is
+   --  told stays one line, and what was raised is no longer lost -- and
+   --  what was being done as a frame.
+   --
+   --  @param Failure What was raised.
+   --  @param Doing What was being done: a command, a step.
+   --  @return The condition.
+   function Unexpected
+     (Failure : Ada.Exceptions.Exception_Occurrence;
+      Doing   : String) return Error_Info;
 
    --  Look up the parameter with a given name.
    --

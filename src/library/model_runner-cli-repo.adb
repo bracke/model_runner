@@ -499,6 +499,21 @@ package body Model_Runner.CLI.Repo is
             [Loc.Named ("count", Image (Rp.File_Count (Found))),
              Loc.Named ("total", Image (Rp.Relation_Count (Found))),
              Loc.Named ("value", Rp.Graph_Fingerprint (Found))]);
+         --  What could not be read: named, so a graph missing a file is
+         --  not taken for the whole project.
+         if Rp.Unread_Count (Found) > 0 then
+            declare
+               Said : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               for Index in 1 .. Rp.Unread_Count (Found) loop
+                  Ada.Strings.Unbounded.Append
+                    (Said, (if Index = 1 then "" else "; ") & Rp.Unread_At (Found, Index));
+               end loop;
+               Pres.Put_Note (Screen, "cli.repo.not_read",
+                              [Loc.Named ("count", Image (Rp.Unread_Count (Found))),
+                               Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Said))]);
+            end;
+         end if;
          --  Source in a language whose symbols are not read: named, so a
          --  /sym or /deps that finds nothing there is no surprise.
          declare

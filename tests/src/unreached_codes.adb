@@ -96,11 +96,6 @@ package body Unreached_Codes is
          --  overflow rather than the refusal.
             | E.Tensor_Non_Finite_Value
 
-         --  The last resort. Raised where an exception reaches a handler
-         --  that has nothing better to say, and a test that reached it would
-         --  be a test that had already found a defect.
-            | E.Internal_Unexpected_Exception
-
          --  Another content stored under a result's identifier. The
          --  identifier is the fingerprint of the content, so reaching this
          --  takes two contents with one FNV-1a hash, and a stored result

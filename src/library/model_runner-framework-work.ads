@@ -203,9 +203,18 @@ package Model_Runner.Framework.Work is
    --  part way can be undone where version control cannot: an untracked
    --  file, or one with a person's edits not committed.
    --
+   --  A copy that cannot be made is a failure, not a file with nothing to
+   --  go back to: the write is then not to be made.
+   --
    --  @param Host The host.
    --  @param Path The file, relative to the project.
-   procedure Keep_Before_Write (Host : in out Child_Host; Path : String);
+   --  @param Status Framework_Transaction_Failed naming the copy where it
+   --    could not be made; success where it was made, was made before, or
+   --    there is no file to keep.
+   procedure Keep_Before_Write
+     (Host   : in out Child_Host;
+      Path   : String;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Whether the work's time is up: past it, no tool call is run.
    --

@@ -1432,13 +1432,13 @@ package body Model_Runner.CLI.Interactive is
       Close (Typing);
       Release_Pictures;
    exception
-      when others =>
+      when Failure : others =>
          Gen.Release (Last_Result);
          Model_Runner.Stops.Close (Stop_Set);
          Conv.Close (Messages);
          Close (Typing);
          Release_Pictures;
-         Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
+         Pres.Report (Screen, E.Unexpected (Failure, "chat"));
          Status := E.Exit_Internal;
    end Run;
 

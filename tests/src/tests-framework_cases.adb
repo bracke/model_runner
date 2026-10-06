@@ -3148,6 +3148,64 @@ package body Tests.Framework_Cases is
               "languages or roles are not what the names say");
       S.Close (Store);
 
+      --  What the walk cannot read is said, and not taken into the graph
+      --  as an empty file: a file it may not open, a directory it may not
+      --  list -- by a scan, and by a refresh.
+      declare
+         Secret : constant String := Project & "/src/secret.ads";
+         Closed : constant String := Project & "/src/closed";
+         Before : constant Rp.Graph := Rp.Scan (Project);
+
+         function Says (Found : Rp.Graph; Path : String) return Boolean is
+         begin
+            for Index in 1 .. Rp.Unread_Count (Found) loop
+               if Ada.Strings.Fixed.Index (Rp.Unread_At (Found, Index), Path & ": ") = 1 then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Says;
+
+         function Holds (Found : Rp.Graph; Path : String) return Boolean is
+         begin
+            for Index in 1 .. Rp.File_Count (Found) loop
+               if To_String (Rp.File_At (Found, Index).Path) = Path then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Holds;
+      begin
+         Assert (Rp.Unread_Count (Before) = 0, "a readable tree had something unread");
+         Put_File (Secret, "package Secret is" & LF & "end Secret;" & LF);
+         Dirs.Create_Path (Closed);
+         Put_File (Closed & "/inner.ads", "package Inner is" & LF & "end Inner;" & LF);
+         GNAT.OS_Lib.Set_Non_Readable (Secret);
+         GNAT.OS_Lib.Set_Non_Readable (Closed);
+         --  Where permissions do not hold -- a superuser -- nothing is
+         --  unreadable, and there is nothing to see.
+         if not GNAT.OS_Lib.Is_Readable_File (Secret) then
+            declare
+               Found     : constant Rp.Graph := Rp.Scan (Project);
+               Read      : Natural;
+               Refreshed : constant Rp.Graph := Rp.Refresh (Project, Before, Read);
+            begin
+               Assert (Says (Found, "src/secret.ads") and then not Holds (Found, "src/secret.ads"),
+                       "a file the scan could not read was not said, or was taken in empty");
+               Assert (Says (Found, "src/closed") and then not Holds (Found, "src/closed/inner.ads"),
+                       "a directory the scan could not list was not said");
+               Assert (Says (Refreshed, "src/secret.ads")
+                       and then not Holds (Refreshed, "src/secret.ads")
+                       and then Rp.File_Count (Refreshed) = Rp.File_Count (Found),
+                       "a refresh took in a file it could not read, or missed saying so");
+            end;
+         end if;
+         GNAT.OS_Lib.Set_Readable (Closed);
+         GNAT.OS_Lib.Set_Readable (Secret);
+         Dirs.Delete_Tree (Closed);
+         Dirs.Delete_File (Secret);
+      end;
+
       --  What another language's adapter would write, by hand.
       declare
          Built : Rp.Graph;
@@ -9093,7 +9151,12 @@ package body Tests.Framework_Cases is
             --  where the work is not apart in a workspace.
             Dirs.Create_Path (Project & "/src");
             Put_File (Project & "/src/kept.txt", "before");
-            Children.Keep_Before_Write ("src/kept.txt");
+            declare
+               Kept_Status : E.Error_Info;
+            begin
+               Children.Keep_Before_Write ("src/kept.txt", Kept_Status);
+               Assert (E.Is_Ok (Kept_Status), "a file's copy before writing was not made");
+            end;
             Put_File (Project & "/src/kept.txt", "after");
             if Dirs.Exists (Project & "/.model_runner")
               and then Ada.Strings.Fixed.Index (Project, "/workspaces/") = 0
@@ -9111,6 +9174,35 @@ package body Tests.Framework_Cases is
                   end loop;
                   Dirs.End_Search (Search);
                   Assert (Kept, "a file written in the project was not kept as it was before");
+               end;
+               --  A copy that cannot be made fails, and is tried again: the
+               --  write it was for is not made over nothing to go back to.
+               declare
+                  Search : Dirs.Search_Type;
+                  Found  : Dirs.Directory_Entry_Type;
+                  Aside  : Unbounded_String;
+                  Kept_Status : E.Error_Info;
+               begin
+                  Dirs.Start_Search (Search, Project & "/.model_runner/runtime", "overwritten-*",
+                                     [Dirs.Directory => True, others => False]);
+                  while Dirs.More_Entries (Search) loop
+                     Dirs.Get_Next_Entry (Search, Found);
+                     Aside := To_Unbounded_String (Dirs.Full_Name (Found) & "/src");
+                  end loop;
+                  Dirs.End_Search (Search);
+                  Put_File (Project & "/src/locked.txt", "before");
+                  GNAT.OS_Lib.Set_Non_Writable (To_String (Aside));
+                  Children.Keep_Before_Write ("src/locked.txt", Kept_Status);
+                  GNAT.OS_Lib.Set_Writable (To_String (Aside));
+                  Assert (E.Is_Error (Kept_Status),
+                          "a copy that could not be made was taken as made");
+                  Children.Keep_Before_Write ("src/locked.txt", Kept_Status);
+                  Assert (E.Is_Ok (Kept_Status)
+                          and then Dirs.Exists (To_String (Aside) & "/locked.txt"),
+                          "a copy that failed was not tried again");
+                  --  Left as it was before, for what is asserted next.
+                  Dirs.Delete_File (To_String (Aside) & "/locked.txt");
+                  Dirs.Delete_File (Project & "/src/locked.txt");
                end;
                --  The copy is listed, put back over the project's file, and
                --  removed.

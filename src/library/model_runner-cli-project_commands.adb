@@ -1089,13 +1089,23 @@ package body Model_Runner.CLI.Project_Commands is
               & (if Pm.Sandbox_Refuses (Path, True) then " (" & Pm.Sandbox_Source & " confines it)" else "")
               & (if Self.Host = null then "" else "; you may write " & Wk.Where_Writes (Self.Host.all)));
       else
-         --  What it overwrites in the project is kept as it was first.
-         if Named = "write_file" and then Self.Host /= null then
-            Wk.Keep_Before_Write (Self.Host.all, Path);
-         end if;
-         Model_Runner.Tools.Builtin.Run
-           (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
-            Status);
+         --  What it overwrites in the project is kept as it was first; a
+         --  file whose copy could not be made is not written over.
+         declare
+            Kept : E.Error_Info := E.Success;
+         begin
+            if Named = "write_file" and then Self.Host /= null then
+               Wk.Keep_Before_Write (Self.Host.all, Path, Kept);
+            end if;
+            if E.Is_Error (Kept) then
+               Put ("error: " & Path & " was not written: a copy of it as it was could not be"
+                    & " kept first, so the write could not be undone");
+            else
+               Model_Runner.Tools.Builtin.Run
+                 (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
+                  Status);
+            end if;
+         end;
       end if;
    end Run;
 
@@ -1134,11 +1144,11 @@ package body Model_Runner.CLI.Project_Commands is
          Host.Spend (Tokens, Prompt_Tokens => Read);
       end if;
    exception
-      when others =>
+      when Failure : others =>
          Ada.Directories.Set_Directory (Before);
          L.Reset (Self.Session.all);
          Answer := Null_Unbounded_String;
-         Status := E.Make (E.Internal_Unexpected_Exception);
+         Status := E.Unexpected (Failure, "work");
    end Work_On;
 
    -------------
@@ -9463,7 +9473,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  A fault in one command is that command's: said, with what was
       --  raised where, and the session goes on.
       when Fault : others =>
-         Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
+         Pres.Report (Screen, E.Unexpected (Fault, Word));
          Pres.Put_Note (Screen, "cli.project.internal",
                         [Loc.Named ("name", Word),
                          Loc.Named ("detail", Where_Raised (Ada.Exceptions.Exception_Information (Fault)))]);

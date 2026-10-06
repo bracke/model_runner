@@ -423,6 +423,26 @@ package body Model_Runner.Errors is
       end if;
    end Add_Frame;
 
+   ----------------
+   -- Unexpected --
+   ----------------
+
+   function Unexpected
+     (Failure : Ada.Exceptions.Exception_Occurrence;
+      Doing   : String) return Error_Info
+   is
+      Message : constant String := Ada.Exceptions.Exception_Message (Failure);
+      Result  : Error_Info := Make (Internal_Unexpected_Exception);
+   begin
+      Add_Text (Result, "detail",
+                Ada.Exceptions.Exception_Name (Failure)
+                & (if Message = "" then "" else ": " & Message));
+      if Doing /= "" then
+         Add_Frame (Result, Doing);
+      end if;
+      return Result;
+   end Unexpected;
+
    --------------------
    -- Find_Parameter --
    --------------------

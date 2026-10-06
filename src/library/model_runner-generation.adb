@@ -1,4 +1,3 @@
-with Ada.Exceptions;
 with Ada.Long_Float_Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -2581,10 +2580,7 @@ package body Model_Runner.Generation is
       when Occurrence : others =>
          Cleanup;
          Outcome.Reason := Runtime_Error;
-         Outcome.Error := E.Make (E.Internal_Unexpected_Exception);
-         E.Add_Frame (Outcome.Error, "generation.generate");
-         E.Add_Frame
-           (Outcome.Error, Ada.Exceptions.Exception_Name (Occurrence));
+         Outcome.Error := E.Unexpected (Occurrence, "generation.generate");
    end Generate;
 
 end Model_Runner.Generation;

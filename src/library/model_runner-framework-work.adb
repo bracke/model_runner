@@ -1289,17 +1289,21 @@ package body Model_Runner.Framework.Work is
 
    --  Keep a copy of each file an agent may not write, as far as a bound
    --  allows: a file over a megabyte, or past 64 megabytes in all, is not
-   --  kept, and cannot be put back.
+   --  kept, and cannot be put back. A copy within the bound that cannot be
+   --  made fails the keeping, and the agent is not started: it would run
+   --  with a file it may not write and nothing to put back should it.
    procedure Keep_Originals
      (Item    : Stores.Store;
       Agent   : String;
       Place   : String;
       Present : Configurations.Value_Maps.Map;
-      Allowed : Permissions.Permission_Set)
+      Allowed : Permissions.Permission_Set;
+      Status  : out E.Error_Info)
    is
       Into  : constant String := Kept_Directory (Item, Agent);
       Total : Long_Long_Integer := 0;
    begin
+      Status := E.Success;
       for Position in Present.Iterate loop
          declare
             Path : constant String := Configurations.Value_Maps.Key (Position);
@@ -1318,11 +1322,23 @@ package body Model_Runner.Framework.Work is
                   Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Copy));
                   Ada.Directories.Copy_File (From, Copy);
                   Total := Total + Long_Long_Integer (Ada.Directories.Size (From));
+               exception
+                  when others =>
+                     --  Gone in the meantime is nothing to keep.
+                     if Ada.Directories.Exists (From) then
+                        Files.Write_Failed (Copy, Status);
+                        return;
+                     end if;
                end;
             end if;
          exception
             when others =>
-               null;
+               --  Its size or kind could not be had: gone is nothing to
+               --  keep, and anything else is a copy not made.
+               if Ada.Directories.Exists (From) then
+                  Files.Write_Failed (Hostkit.Fs.Join (Into, Path), Status);
+                  return;
+               end if;
          end;
       end loop;
    end Keep_Originals;
@@ -2156,15 +2172,19 @@ package body Model_Runner.Framework.Work is
    -- Keep_Before_Write --
    -----------------------
 
-   procedure Keep_Before_Write (Host : in out Child_Host; Path : String) is
+   procedure Keep_Before_Write
+     (Host   : in out Child_Host;
+      Path   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
       From    : constant String := Hostkit.Fs.Join (Project, Path);
       To      : constant String := Hostkit.Fs.Join (Before_Copy (Host.Item.all, To_String (Host.Task_Id)), Path);
    begin
+      Status := E.Success;
       if Host.Apart or else Host.Kept_Before.Contains (Path) then
          return;
       end if;
-      Host.Kept_Before.Append (Path);
       --  The first copy is the one before any run wrote it: a later run's
       --  does not replace it.
       if Ada.Directories.Exists (From) and then not Ada.Directories.Exists (To)
@@ -2173,9 +2193,18 @@ package body Model_Runner.Framework.Work is
          Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (To));
          Ada.Directories.Copy_File (From, To);
       end if;
+      --  Noted once the copy is there, so a copy that failed is tried
+      --  again before the next write rather than taken as made.
+      Host.Kept_Before.Append (Path);
    exception
       when others =>
-         null;
+         --  Gone in the meantime is nothing to keep; anything else is a
+         --  copy that is not there, and the write waits on it.
+         if Ada.Directories.Exists (From) then
+            Files.Write_Failed (To, Status);
+         else
+            Host.Kept_Before.Append (Path);
+         end if;
    end Keep_Before_Write;
 
    ---------
@@ -3448,7 +3477,7 @@ package body Model_Runner.Framework.Work is
                      Status);
                   if E.Is_Ok (Read) and then not Isolated then
                      Keep_Originals (Item, To_String (Result.Agent_Id), To_String (Place), Before,
-                                     Root_Agent.Allowed);
+                                     Root_Agent.Allowed, Status);
                   end if;
                end;
             end if;

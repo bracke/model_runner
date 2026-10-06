@@ -330,9 +330,9 @@ package body Model_Runner.CLI.Driver is
    exception
       --  The outermost boundary. An unexpected exception becomes one concise
       --  internal-failure diagnostic; no traceback reaches the user.
-      when others =>
+      when Failure : others =>
          Opt.Release (Item);
-         Pres.Report (Screen, E.Make (E.Internal_Unexpected_Exception));
+         Pres.Report (Screen, E.Unexpected (Failure, "command line"));
          Loc.Close (Catalog);
          Status := E.Exit_Internal;
    end Run;

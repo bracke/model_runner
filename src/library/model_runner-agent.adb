@@ -716,11 +716,11 @@ package body Model_Runner.Agent is
       Gen.Release (Last_Result);
       Model_Runner.Grammar.Close (Rules_Grammar);
    exception
-      when others =>
+      when Failure : others =>
          Gen.Release (Last_Result);
          Model_Runner.Grammar.Close (Rules_Grammar);
          Result.Reason := Generation_Failed;
-         Result.Error := E.Make (E.Internal_Unexpected_Exception);
+         Result.Error := E.Unexpected (Failure, "agent");
    end Run;
 
 end Model_Runner.Agent;
