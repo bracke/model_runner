@@ -2844,7 +2844,11 @@ begin
             Backend     => Backend_Of (Option ("--backend", "cpu")),
             Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
             Draft       => Option ("--draft-model", ""),
-            Draft_Tokens => Number ("--draft-tokens", 4),
+            --  Three a round from the next block unless named, as run
+            --  drafts from it.
+            Draft_Tokens =>
+              Number ("--draft-tokens",
+                      (if Given ("--draft-next") then 3 else 4)),
             Draft_Lookup => Given ("--draft-lookup"),
             Draft_Next  => Given ("--draft-next"),
             Repeats     => Number ("--repeats", 3),

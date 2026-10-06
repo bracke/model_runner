@@ -291,6 +291,17 @@ package body Speed_Run is
          Result.Load :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
 
+         --  The next block's proposals read a slice of the head at four
+         --  bits, as the command takes it: they read the file's precision
+         --  here, 1.6 ms a proposal on qwen3.6 where run reads less.
+         if Draft_Next and then Draft = "" and then not Draft_Lookup then
+            declare
+               Lighter : E.Error_Info;
+            begin
+               L.Lighten_Draft_Head (Engine, Threads, Lighter);
+            end;
+         end if;
+
          --  And a draft, when one was named. The figures it produces are a
          --  comparison, so both halves belong to one command: this is the
          --  same run with --draft-model and without it.
