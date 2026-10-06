@@ -122,6 +122,22 @@ package Model_Runner.Framework.Configurations is
    --  are what the provider finds in the project -- its directories, or its
    --  files at the top that match -- and it is a choice among them.
    --
+   --  A provider's listing that fails is a failure, not a project that
+   --  offers no choices.
+   --
+   --  @param Declared The input.
+   --  @param Project_Directory The project.
+   --  @param Status IO_Read_Failed naming the project, where what the
+   --    provider lists could not be listed.
+   --  @return The input, its choices filled in; as declared on a failure.
+   function Resolved
+     (Declared          : Templates.Input_Declaration;
+      Project_Directory : String;
+      Status            : out Model_Runner.Errors.Error_Info) return Templates.Input_Declaration;
+
+   --  The same, raising Ada.IO_Exceptions.Use_Error where the listing
+   --  failed, rather than answering with no choices.
+   --
    --  @param Declared The input.
    --  @param Project_Directory The project.
    --  @return The input, its choices filled in.

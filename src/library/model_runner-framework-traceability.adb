@@ -81,15 +81,29 @@ package body Model_Runner.Framework.Traceability is
          return not Repository.Find_Symbols (Files, Target).Is_Empty;
       end Held_By_Repository;
 
-      --  Whether the document an entry was read from is still there.
-      function Source_Here (Source : String) return Boolean is
+      --  Whether the document an entry was read from is still there: there,
+      --  gone, or not to be told -- a look that failed is not a certainty
+      --  either way.
+      type Presence is (Present, Missing, Unknown);
+
+      function Source_Here (Source : String) return Presence is
       begin
-         return Ada.Directories.Exists
-                  (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Source);
+         return (if Ada.Directories.Exists
+                      (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Source)
+                 then Present else Missing);
       exception
          when others =>
-            return True;
+            return Unknown;
       end Source_Here;
+
+      function Source_Kind (Source : String) return String
+      is (case Source_Here (Source) is
+             when Present => "sources",
+             when Missing => "sources, missing",
+             when Unknown => "sources, not looked at");
+
+      function Source_Sure (Source : String) return Repository.Confidence
+      is (if Source_Here (Source) = Present then Repository.Certain else Repository.Uncertain);
 
       procedure Component (Name : String) is
       begin
@@ -158,10 +172,9 @@ package body Model_Runner.Framework.Traceability is
                     and then To_String (Held.State) not in "rejected" | "obsolete" | "superseded"
                   then
                      Link (Result, "file:" & To_String (Held.Source), Node,
-                           (if Source_Here (To_String (Held.Source)) then "sources" else "sources, missing"),
+                           Source_Kind (To_String (Held.Source)),
                            Repository.Explicit,
-                           (if Source_Here (To_String (Held.Source)) then Repository.Certain
-                            else Repository.Uncertain), Id);
+                           Source_Sure (To_String (Held.Source)), Id);
                   end if;
                   --  One the repository does not hold is linked all the same,
                   --  and said to be missing: not a certainty.
@@ -320,10 +333,9 @@ package body Model_Runner.Framework.Traceability is
                   then
                      Link (Result, "file:" & To_String (Held.Source),
                            Id & "@" & Image (Held.Revision),
-                           (if Source_Here (To_String (Held.Source)) then "sources" else "sources, missing"),
+                           Source_Kind (To_String (Held.Source)),
                            Repository.Explicit,
-                           (if Source_Here (To_String (Held.Source)) then Repository.Certain
-                            else Repository.Uncertain), Id);
+                           Source_Sure (To_String (Held.Source)), Id);
                   end if;
                end;
             end loop;

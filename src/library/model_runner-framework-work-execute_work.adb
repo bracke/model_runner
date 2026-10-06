@@ -764,7 +764,7 @@ begin
             end loop;
             Result.Changed_Files := Kept;
          end;
-         Files.Remove_Tree (Kept_Directory (Item, To_String (Result.Agent_Id)));
+         Files.Discard_Tree (Kept_Directory (Item, To_String (Result.Agent_Id)));
       end if;
    end;
 

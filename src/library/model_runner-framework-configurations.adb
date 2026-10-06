@@ -1,3 +1,6 @@
+with Model_Runner.Text;
+with Ada.IO_Exceptions;
+with Ada.Exceptions;
 with Ada.Characters.Handling;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -231,9 +234,13 @@ package body Model_Runner.Framework.Configurations is
       return Ada.Directories.Simple_Name (Full);
    end Project_Named;
 
+   --  An input whose choices the project provides -- its directories, or
+   --  its files of a pattern -- with them listed; a listing that failed is
+   --  a failure, not a project that offers none.
    function Resolved
      (Declared          : Templates.Input_Declaration;
-      Project_Directory : String) return Templates.Input_Declaration
+      Project_Directory : String;
+      Status            : out E.Error_Info) return Templates.Input_Declaration
    is
       Result   : Templates.Input_Declaration := Declared;
       Provider : constant String := To_String (Declared.Provider);
@@ -243,6 +250,7 @@ package body Model_Runner.Framework.Configurations is
       Item     : Ada.Directories.Directory_Entry_Type;
       use type Ada.Directories.File_Kind;
    begin
+      Status := E.Success;
       if Provider = "" or else not Ada.Directories.Exists (Project_Directory) then
          return Result;
       end if;
@@ -273,8 +281,31 @@ package body Model_Runner.Framework.Configurations is
       Result.Choices := Found;
       return Result;
    exception
-      when others =>
-         return Result;
+      when Failure : others =>
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Project_Directory, E.Param_Path);
+         E.Add_Text (Status, "detail", "the " & Provider & " offered as choices for "
+                     & To_String (Declared.Id) & " could not be listed: "
+                     & Ada.Exceptions.Exception_Name (Failure));
+         return Declared;
+   end Resolved;
+
+   function Resolved
+     (Declared          : Templates.Input_Declaration;
+      Project_Directory : String) return Templates.Input_Declaration
+   is
+      Status : E.Error_Info;
+      Result : constant Templates.Input_Declaration :=
+        Resolved (Declared, Project_Directory, Status);
+      Found  : Boolean;
+      Said   : E.Parameter;
+   begin
+      if E.Is_Error (Status) then
+         E.Find_Parameter (Status, "detail", Found, Said);
+         raise Ada.IO_Exceptions.Use_Error with
+           (if Found then Model_Runner.Text.To_String (Said.Text_Value) else Project_Directory);
+      end if;
+      return Result;
    end Resolved;
 
    --  Whether a text matches a pattern: * any run of characters, ? any
@@ -818,8 +849,9 @@ package body Model_Runner.Framework.Configurations is
 
       for Index in 1 .. Templates.Input_Count (Composed) loop
          declare
+            Looked   : E.Error_Info;
             Declared : constant Templates.Input_Declaration :=
-              Resolved (Templates.Input_At (Composed, Index), Project_Directory);
+              Resolved (Templates.Input_At (Composed, Index), Project_Directory, Looked);
             Id       : constant String := To_String (Declared.Id);
             Value    : Unbounded_String;
             Has      : Boolean := True;
@@ -842,6 +874,12 @@ package body Model_Runner.Framework.Configurations is
                end;
             end Waits_On_Missing;
          begin
+            --  The project's own choices unread: stopped, rather than offered
+            --  none and a configuration made without what it holds.
+            if E.Is_Error (Looked) then
+               Status := Looked;
+               return;
+            end if;
             if Given.Contains (Id) then
                Value := To_Unbounded_String (Given (Id));
             elsif Found.Contains (Id) then
@@ -1211,7 +1249,7 @@ package body Model_Runner.Framework.Configurations is
          end Still_There;
       begin
          Stores.Close (Item);
-         Files.Remove_Tree (Stores.State_Root (Project_Directory));
+         Files.Discard_Tree (Stores.State_Root (Project_Directory));
          Still_There (Stores.State_Root (Project_Directory));
          for Name of Done.Written_Files loop
             Files.Discard (Hostkit.Fs.Join (Project_Directory, Name));

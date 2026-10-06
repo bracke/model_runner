@@ -43,7 +43,8 @@ package body Untested_Surface is
    --  there by what it compares, not by these.
    --
    --  The project state's file operations. Read_Text, Write_Text,
-   --  Write_Whole and Files_In are a private package of the framework, which a test
+   --  Write_Whole, Files_In and Discard_Tree are a private package of the
+   --  framework, which a test
    --  cannot name; every record the state's tests read and every change
    --  they commit goes through them, and a torn or wrong write fails the
    --  round trip and recovery tests that read it back.
@@ -132,6 +133,7 @@ package body Untested_Surface is
          | "Write_Text"
          | "Write_Whole"
          | "Files_In"
+         | "Discard_Tree"
          | "Show_Version"
          | "Show_Help"
          | "Do_Inspect"

@@ -1276,6 +1276,21 @@ package body Tests.Framework_Cases is
                Assert (Checked.Code = E.Framework_Input_Invalid,
                        "a value none of the provided choices was taken");
             end;
+            --  A project whose provided choices cannot be listed offers
+            --  none it is sure of: a failure, not an empty choice.
+            GNAT.OS_Lib.Set_Non_Readable (Where);
+            if not GNAT.OS_Lib.Is_Readable_File (Where) then
+               declare
+                  Looked : E.Error_Info;
+                  Given  : constant Tp.Input_Declaration :=
+                    Cf.Resolved (Tp.Input_At (Made2, 1), Where, Looked);
+                  pragma Unreferenced (Given);
+               begin
+                  Assert (Looked.Code = E.IO_Read_Failed,
+                          "a provider that could not list the project was taken to offer nothing");
+               end;
+            end if;
+            GNAT.OS_Lib.Set_Readable (Where);
             Tp.Parse ("template = q" & LF & "name = Q" & LF & "description = D" & LF & "version = 1" & LF
                       & "input root" & LF & "  provider = elsewhere" & LF, "memory", Offering,
                       Status);
@@ -5644,6 +5659,60 @@ package body Tests.Framework_Cases is
          end if;
          GNAT.OS_Lib.Set_Readable (Secret);
          Dirs.Delete_File (Secret);
+      end;
+
+      --  Giving a workspace up keeps its work, all of it, or does not give
+      --  it up; a kept copy is put back whole or not at all; one dropped
+      --  is gone or said not to be.
+      declare
+         Held   : Ws.Workspace;
+         Blocker : Unbounded_String;
+         Name   : Unbounded_String;
+      begin
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "4", False, Made, Status);
+         S.Commit (Store, Change, Status);
+         Put_File (To_String (Made.Path) & "/src/given.adb", "work");
+         Blocker := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
+         Put_File (To_String (Blocker), "not a directory");
+         Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+         Ws.Read (Store, To_String (Made.Id), Held, Status);
+         Assert (To_String (Held.Status) = "active"
+                 and then Dirs.Exists (To_String (Made.Path) & "/src/given.adb"),
+                 "a workspace whose work could not be kept was given up: " & To_String (Held.Status));
+         Dirs.Delete_File (To_String (Blocker));
+         Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+         S.Commit (Store, Change, Status);
+         Name := To_Unbounded_String (Dirs.Simple_Name (To_String (Blocker)));
+         Assert (E.Is_Ok (Status)
+                 and then Ws.Kept_Files (Store, To_String (Name)).Contains ("src/given.adb"),
+                 "a workspace given up did not keep its work: " & Code_Of (Status));
+
+         --  Put back from a copy that cannot be read whole: not at all.
+         declare
+            Inner : constant String := To_String (Blocker) & "/src";
+         begin
+            GNAT.OS_Lib.Set_Non_Readable (Inner);
+            if not GNAT.OS_Lib.Is_Readable_File (Inner) then
+               Ws.Restore_Kept (Store, To_String (Name), Status);
+               Assert (E.Is_Error (Status)
+                       and then not Dirs.Exists (Fresh_Root (Store) & "/src/given.adb")
+                       and then not Ws.Was_Restored (Store, To_String (Name)),
+                       "a kept copy that could not be read whole was put back in part");
+            end if;
+            GNAT.OS_Lib.Set_Readable (Inner);
+
+            --  Dropped where it cannot all go: said so.
+            GNAT.OS_Lib.Set_Non_Writable (Inner);
+            if not GNAT.OS_Lib.Is_Write_Accessible_File (Inner) then
+               Ws.Drop_Kept (Store, To_String (Name), Status);
+               Assert (E.Is_Error (Status) and then Dirs.Exists (Inner & "/given.adb"),
+                       "a kept copy that could not all be removed was said to be dropped");
+            end if;
+            GNAT.OS_Lib.Set_Writable (Inner);
+            Ws.Drop_Kept (Store, To_String (Name), Status);
+            Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Blocker)),
+                    "a kept copy was not dropped: " & Code_Of (Status));
+         end;
       end;
 
       --  No file on both sides, but the code joins them: the workspace

@@ -75,8 +75,20 @@ private package Model_Runner.Framework.Files is
    --  workspace checked out with a link to somewhere else would take that
    --  somewhere with it.
    --
+   --  Gone, or a failure: Status says so where anything of it is still there
+   --  afterwards -- what a caller that depends on its being gone reads.
+   --
    --  @param Path The directory.
-   procedure Remove_Tree (Path : String);
+   --  @param Status Framework_Transaction_Failed naming it where it is
+   --    not all gone.
+   procedure Remove_Tree (Path : String; Status : out Model_Runner.Errors.Error_Info);
+
+   --  The same, as far as it goes and no further: for scratch whose being
+   --  left behind costs nothing but room -- never for what a caller then
+   --  takes to be gone.
+   --
+   --  @param Path The directory.
+   procedure Discard_Tree (Path : String);
 
    --  Remove a file when it is there and can be; one that stays is derived
    --  and is found wanting when it is next read.

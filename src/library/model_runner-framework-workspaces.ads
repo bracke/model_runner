@@ -187,11 +187,41 @@ package Model_Runner.Framework.Workspaces is
    --  directory under the project's runtime -- given-up-*, overwritten-*,
    --  replaced-*, before-restore-* -- newest first.
    --
+   --  A listing that fails part way is a failure, never the part it had.
+   --
+   --  @param Item The store.
+   --  @param Result Their names.
+   --  @param Status IO_Read_Failed naming the runtime directory, where it
+   --    could not be listed whole.
+   procedure Kept_Copies
+     (Item   : Stores.Store;
+      Result : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The same, raising Ada.IO_Exceptions.Use_Error where the listing
+   --  failed part way, rather than answering with part of it.
+   --
    --  @param Item The store.
    --  @return Their names.
    function Kept_Copies (Item : Stores.Store) return Name_Lists.Vector;
 
-   --  The files a kept copy holds, as paths within the project.
+   --  The files a kept copy holds, as paths within the project -- all of
+   --  them, or a failure: a copy put back from part of its list would be
+   --  put back in part.
+   --
+   --  @param Item The store.
+   --  @param Name The copy, as Kept_Copies names it.
+   --  @param Result The paths, sorted; none when there is no such copy.
+   --  @param Status IO_Read_Failed naming the directory that could not be
+   --    listed, where the copy could not be read whole.
+   procedure Kept_Files
+     (Item   : Stores.Store;
+      Name   : String;
+      Result : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The same, raising Ada.IO_Exceptions.Use_Error where the copy could
+   --  not be read whole, rather than answering with part of it.
    --
    --  @param Item The store.
    --  @param Name The copy, as Kept_Copies names it.

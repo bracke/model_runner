@@ -240,11 +240,11 @@ package body Model_Runner.Framework.Files is
       return Result;
    end Files_In;
 
-   -----------------
-   -- Remove_Tree --
-   -----------------
+   ------------------
+   -- Discard_Tree --
+   ------------------
 
-   procedure Remove_Tree (Path : String) is
+   procedure Discard_Tree (Path : String) is
       use Ada.Directories;
       Search : Search_Type;
       Found  : Directory_Entry_Type;
@@ -272,12 +272,26 @@ package body Model_Runner.Framework.Files is
       end loop;
       End_Search (Search);
       for Name of Names loop
-         Remove_Tree (Hostkit.Fs.Join (Path, Name));
+         Discard_Tree (Hostkit.Fs.Join (Path, Name));
       end loop;
       Delete_Directory (Path);
    exception
       when others =>
          null;
+   end Discard_Tree;
+
+   procedure Remove_Tree (Path : String; Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Success;
+      Discard_Tree (Path);
+      if Hostkit.Fs.Is_Link (Path) or else Ada.Directories.Exists (Path) then
+         Write_Failed (Path, Status);
+         E.Add_Text (Status, "detail", "it could not all be removed");
+      end if;
+   exception
+      when Failure : others =>
+         Write_Failed (Path, Status);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
    end Remove_Tree;
 
 end Model_Runner.Framework.Files;

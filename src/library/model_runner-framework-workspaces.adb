@@ -1,3 +1,5 @@
+with Model_Runner.Text;
+with Ada.IO_Exceptions;
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
@@ -362,7 +364,7 @@ package body Model_Runner.Framework.Workspaces is
                                  pragma Unreferenced (Gone);
                               begin
                                  if Dirs.Exists (Tree) then
-                                    Files.Remove_Tree (Tree);
+                                    Files.Discard_Tree (Tree);
                                  end if;
                                  Worked := False;
                               end;
@@ -374,6 +376,14 @@ package body Model_Runner.Framework.Workspaces is
          end if;
 
          if not Worked then
+            --  What git began there, gone first: a copy over the rest of a
+            --  worktree would be neither.
+            if Dirs.Exists (Tree) or else Hostkit.Fs.Is_Link (Tree) then
+               Files.Remove_Tree (Tree, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
             Copy_Tree (Project, Tree, Repository.Roots_Of (Item), Status);
             if E.Is_Error (Status) then
                return;
@@ -390,8 +400,13 @@ package body Model_Runner.Framework.Workspaces is
             Kept : E.Error_Info;
          begin
             Copy_Tree (Project, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item), Kept);
+            --  And a partial one left behind would be joined from: gone,
+            --  or the workspace is not made.
             if E.Is_Error (Kept) then
-               Files.Remove_Tree (Hostkit.Fs.Join (Home, "base"));
+               Files.Remove_Tree (Hostkit.Fs.Join (Home, "base"), Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
          end;
 
@@ -967,10 +982,15 @@ package body Model_Runner.Framework.Workspaces is
    end Semantic_Conflicts;
 
    --  Remove a workspace's files, and a worktree's registration.
-   procedure Remove_Tree (Item : Stores.Store; Held : Workspace) is
+   procedure Remove_Tree
+     (Item   : Stores.Store;
+      Held   : Workspace;
+      Status : out E.Error_Info)
+   is
       Worked : Boolean;
       Home   : constant String := Dirs.Containing_Directory (To_String (Held.Path));
    begin
+      Status := E.Success;
       --  Only a tree git keeps as a worktree -- its .git file there -- is
       --  removed through git; another has nothing for git to say of it, and
       --  asking prints git's refusal to the terminal.
@@ -988,7 +1008,7 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
       if Dirs.Exists (Home) then
-         Files.Remove_Tree (Home);
+         Files.Remove_Tree (Home, Status);
       end if;
 
       --  A worktree whose tree went some other way is still registered:
@@ -1005,8 +1025,9 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
    exception
-      when others =>
-         null;
+      when Failure : others =>
+         Files.Write_Failed (Home, Status);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
    end Remove_Tree;
 
    procedure Set_Status
@@ -1310,8 +1331,10 @@ package body Model_Runner.Framework.Workspaces is
       Status : E.Error_Info;
    begin
       Read (Item, Id, Held, Status);
+      --  What was taken in is the project's now: a tree that stays is room
+      --  taken, not work lost, and released all the same.
       if E.Is_Ok (Status) and then To_String (Held.Status) = "integrated" then
-         Remove_Tree (Item, Held);
+         Remove_Tree (Item, Held, Status);
       end if;
    end Release;
 
@@ -1357,14 +1380,19 @@ package body Model_Runner.Framework.Workspaces is
                  => Name'Length > Prefix'Length
                     and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix));
 
-   function Kept_Copies (Item : Stores.Store) return Name_Lists.Vector is
-      Result : Name_Lists.Vector;
+   procedure Kept_Copies
+     (Item   : Stores.Store;
+      Result : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Stamps : Name_Lists.Vector;
       Search : Dirs.Search_Type;
       Found  : Dirs.Directory_Entry_Type;
    begin
+      Result.Clear;
+      Status := E.Success;
       if not Dirs.Exists (Runtime_Of (Item)) then
-         return Result;
+         return;
       end if;
       Dirs.Start_Search (Search, Runtime_Of (Item), "", [Dirs.Directory => True, others => False]);
       while Dirs.More_Entries (Search) loop
@@ -1395,25 +1423,55 @@ package body Model_Runner.Framework.Workspaces is
          end if;
       end loop;
       Dirs.End_Search (Search);
-      return Result;
    exception
-      when others =>
-         return Result;
+      when Failure : others =>
+         Result.Clear;
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Runtime_Of (Item), E.Param_Path);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
+   end Kept_Copies;
+
+   --  A listing's failure, raised for the caller with none of its own.
+   procedure Raise_Unlisted (Status : E.Error_Info) is
+      Found : Boolean;
+      Said  : E.Parameter;
+   begin
+      E.Find_Parameter (Status, "path", Found, Said);
+      raise Ada.IO_Exceptions.Use_Error with
+        (if Found then Model_Runner.Text.To_String (Said.Text_Value) else "a kept copy")
+        & " could not be listed whole";
+   end Raise_Unlisted;
+
+   function Kept_Copies (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Status : E.Error_Info;
+   begin
+      Kept_Copies (Item, Result, Status);
+      if E.Is_Error (Status) then
+         Raise_Unlisted (Status);
+      end if;
+      return Result;
    end Kept_Copies;
 
    ----------------
    -- Kept_Files --
    ----------------
 
-   function Kept_Files (Item : Stores.Store; Name : String) return Name_Lists.Vector is
+   procedure Kept_Files
+     (Item   : Stores.Store;
+      Name   : String;
+      Result : out Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       package Name_Sorting is new Name_Lists.Generic_Sorting;
-      Result : Name_Lists.Vector;
+      Walking : Unbounded_String;
 
       procedure Walk (Directory, Prefix : String) is
          Search : Dirs.Search_Type;
          Found  : Dirs.Directory_Entry_Type;
          Below  : Name_Lists.Vector;
       begin
+         Walking := To_Unbounded_String (Directory);
          Dirs.Start_Search (Search, Directory, "");
          while Dirs.More_Entries (Search) loop
             Dirs.Get_Next_Entry (Search, Found);
@@ -1438,14 +1496,29 @@ package body Model_Runner.Framework.Workspaces is
       end Walk;
       Where : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
    begin
+      Result.Clear;
+      Status := E.Success;
       if Is_Kept_Name (Name) and then Dirs.Exists (Where) then
          Walk (Where, "");
       end if;
       Name_Sorting.Sort (Result);
-      return Result;
    exception
-      when others =>
-         return Result;
+      when Failure : others =>
+         Result.Clear;
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", To_String (Walking), E.Param_Path);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
+   end Kept_Files;
+
+   function Kept_Files (Item : Stores.Store; Name : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Status : E.Error_Info;
+   begin
+      Kept_Files (Item, Name, Result, Status);
+      if E.Is_Error (Status) then
+         Raise_Unlisted (Status);
+      end if;
+      return Result;
    end Kept_Files;
 
    Restored_Mark : constant String := ".restored";
@@ -1515,9 +1588,15 @@ package body Model_Runner.Framework.Workspaces is
    is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
       Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
-      Listed  : constant Name_Lists.Vector := Kept_Files (Item, Name);
+      Listed  : Name_Lists.Vector;
       Aside   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Replaced_Copy (Item, Name));
    begin
+      --  Read whole, or not put back at all: part of a copy put back and
+      --  said to be is worse than none.
+      Kept_Files (Item, Name, Listed, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       if Listed.Is_Empty then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", "a kept copy called " & Name);
@@ -1577,7 +1656,7 @@ package body Model_Runner.Framework.Workspaces is
          end if;
       end loop;
       if Kept_Files (Item, Name).Is_Empty then
-         Files.Remove_Tree (Where);
+         Files.Discard_Tree (Where);
       end if;
    exception
       when others =>
@@ -1600,8 +1679,7 @@ package body Model_Runner.Framework.Workspaces is
          E.Add_Text (Status, "name", "a kept copy called " & Name);
          return;
       end if;
-      Files.Remove_Tree (Where);
-      Status := E.Success;
+      Files.Remove_Tree (Where, Status);
    end Drop_Kept;
 
    procedure Abandon
@@ -1618,6 +1696,8 @@ package body Model_Runner.Framework.Workspaces is
          return;
       end if;
       --  What it changed, kept before its tree goes: given up is not lost.
+      --  All of it, or the workspace stays -- a file that could not be kept
+      --  is still in its tree, and the tree is what would go.
       declare
          Into : constant String := Kept_Copy (Item, Id);
       begin
@@ -1631,30 +1711,56 @@ package body Model_Runner.Framework.Workspaces is
                   Dirs.Copy_File (From, To);
                end if;
             exception
-               when others =>
-                  null;
+               when Failure : others =>
+                  Files.Write_Failed (To, Status);
+                  E.Add_Text (Status, "detail",
+                              Path & " could not be kept, so the workspace is not given up: "
+                              & Ada.Exceptions.Exception_Name (Failure));
+                  return;
             end;
          end loop;
          --  The same as a copy kept of an earlier attempt: this one, which
-         --  what is said now names, is kept, and the earlier goes.
+         --  what is said now names, is kept, and the earlier goes -- where
+         --  both can be read whole and the earlier can be removed; anything
+         --  less keeps both, which loses nothing.
          declare
-            Mine : constant String := Dirs.Simple_Name (Into);
+            Mine   : constant String := Dirs.Simple_Name (Into);
+            Copies : Name_Lists.Vector;
+            Listed : E.Error_Info;
          begin
-            for Other of Kept_Copies (Item) loop
-               if Other /= Mine and then Dirs.Exists (Into)
-                 and then Ada.Strings.Fixed.Index (Other, "given-up-" & To_String (Held.Task_Id) & "-") = Other'First
-                 and then Name_Lists."=" (Kept_Files (Item, Other), Kept_Files (Item, Mine))
-                 and then (for all Path of Kept_Files (Item, Mine) =>
-                             Print_Of (Hostkit.Fs.Join (Into, Path))
-                             = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
-               then
-                  Files.Remove_Tree (Hostkit.Fs.Join (Runtime_Of (Item), Other));
-                  Replaced_Last := To_Unbounded_String (Other);
-               end if;
-            end loop;
+            Kept_Copies (Item, Copies, Listed);
+            if E.Is_Ok (Listed) then
+               for Other of Copies loop
+                  if Other /= Mine and then Dirs.Exists (Into)
+                    and then Ada.Strings.Fixed.Index (Other, "given-up-" & To_String (Held.Task_Id) & "-")
+                             = Other'First
+                    and then Name_Lists."=" (Kept_Files (Item, Other), Kept_Files (Item, Mine))
+                    and then (for all Path of Kept_Files (Item, Mine) =>
+                                Print_Of (Hostkit.Fs.Join (Into, Path))
+                                = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
+                  then
+                     declare
+                        Gone : E.Error_Info;
+                     begin
+                        Files.Remove_Tree (Hostkit.Fs.Join (Runtime_Of (Item), Other), Gone);
+                        if E.Is_Ok (Gone) then
+                           Replaced_Last := To_Unbounded_String (Other);
+                        end if;
+                     end;
+                  end if;
+               end loop;
+            end if;
+         exception
+            when Ada.IO_Exceptions.Use_Error =>
+               null;
          end;
       end;
-      Remove_Tree (Item, Held);
+      --  Its tree gone, or not given up: a workspace said to be abandoned
+      --  whose tree is still there would be one nothing removes again.
+      Remove_Tree (Item, Held, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       Set_Status (Item, Change, Id, "abandoned", "");
       Files.Discard (Conflict_Record (Item, Id));
    end Abandon;

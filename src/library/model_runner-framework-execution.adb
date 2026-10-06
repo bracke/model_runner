@@ -155,17 +155,26 @@ package body Model_Runner.Framework.Execution is
                                           then Lease (Lease'First + 5 .. Lease'Last) else Lease));
          begin
             if Ada.Directories.Exists (Request) then
+               --  Seen, it is heeded: a request that cannot then be read
+               --  or taken away still stops the work, as a stop and not a
+               --  cancel where what it said cannot be told.
+               Withdrawn := True;
                declare
                   Said : Unbounded_String;
                   Read : E.Error_Info;
                begin
                   Files.Read_Text (Request, Said, Read);
-                  Outside_Cancel := Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0;
+                  Outside_Cancel := E.Is_Ok (Read)
+                    and then Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0;
+                  Ada.Directories.Delete_File (Request);
+               exception
+                  when others =>
+                     null;
                end;
-               Ada.Directories.Delete_File (Request);
-               Withdrawn := True;
             end if;
          exception
+            --  Whether there is a request could not be told: asked again
+            --  at the next look, a second from now.
             when others =>
                null;
          end;
@@ -181,16 +190,27 @@ package body Model_Runner.Framework.Execution is
                                       and then Lease (Lease'First .. Lease'First + 4) = "task."
                                     then Lease (Lease'First + 5 .. Lease'Last) else Lease)));
 
+   --  Whether the group of the command now running could not be recorded:
+   --  then nothing could stop it should this process be killed, so it is
+   --  stopped now, and the run says why.
+   Group_Unrecorded : Boolean := False;
+
    --  Told the process a command started as, which leads its own group.
    procedure Record_Group (Process_Id : Integer) is
-      Ignored : E.Error_Info;
+      Wrote : E.Error_Info;
    begin
       if Watched_Store /= null and then Length (Watched_Lease) > 0 then
          Files.Write_Text
            (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)),
-            Trim (Integer'Image (Process_Id)), Ignored);
+            Trim (Integer'Image (Process_Id)), Wrote);
+         Group_Unrecorded := E.Is_Error (Wrote);
       end if;
    end Record_Group;
+
+   --  What a command stopped for that reason says.
+   Unrecorded_Said : constant String :=
+     "its process group could not be recorded, for stopping it should this process be killed,"
+     & " so it was stopped";
 
    ----------------------
    -- Stop_Left_Groups --
@@ -264,7 +284,8 @@ package body Model_Runner.Framework.Execution is
    function Stop_Asked return Boolean
    is ((Model_Runner.Cancellation."/=" (Watched, null)
         and then Model_Runner.Cancellation.Is_Cancelled (Watched))
-       or else Work_Withdrawn);
+       or else Work_Withdrawn
+       or else Group_Unrecorded);
 
    --  Whether this host can take the network away from one program: asked
    --  once, by trying.
@@ -555,6 +576,7 @@ package body Model_Runner.Framework.Execution is
                            & " process slots are taken");
                return;
             end if;
+            Group_Unrecorded := False;
             Happened :=
               Hostkit.Process.Run_Captured
                 (Program           => Program,
@@ -572,6 +594,12 @@ package body Model_Runner.Framework.Execution is
             end if;
             if Slot /= "" then
                Files.Discard (Slot);
+            end if;
+            if Group_Unrecorded then
+               Group_Unrecorded := False;
+               Files.Write_Failed (Group_File (Stores.Root (Item), To_String (Watched_Lease)), Status);
+               E.Add_Text (Status, "detail", Command & ": " & Unrecorded_Said);
+               return;
             end if;
          end;
          Result.Cancelled := Happened.Timed_Out and then Stop_Asked;
@@ -664,6 +692,7 @@ package body Model_Runner.Framework.Execution is
          Append (Command, " " & Word);
       end loop;
 
+      Group_Unrecorded := False;
       Happened :=
         Hostkit.Process.Run_Captured
           (Program           => "env",
@@ -683,9 +712,12 @@ package body Model_Runner.Framework.Execution is
                  Directory   => To_Unbounded_String (Directory),
                  Started     => Happened.Started,
                  Timed_Out   => Happened.Timed_Out,
-                 Exit_Status => Happened.Exit_Status,
+                 Exit_Status => (if Group_Unrecorded then -1 else Happened.Exit_Status),
                  Seconds     => Natural (Ada.Calendar.Clock - Began),
+                 Output      => (if Group_Unrecorded then To_Unbounded_String (Unrecorded_Said)
+                                 else Null_Unbounded_String),
                  others      => <>);
+      Group_Unrecorded := False;
 
       --  What it said on its error stream, kept -- the end of it, which is
       --  where a program says why it stopped -- rather than thrown away.
@@ -697,8 +729,10 @@ package body Model_Runner.Framework.Execution is
             Files.Read_Text (Output & ".stderr", Said, Read);
             Files.Discard (Output & ".stderr");
             if E.Is_Ok (Read) and then Length (Said) > 0 then
-               Result.Output := To_Unbounded_String
-                 (Slice (Said, Integer'Max (1, Length (Said) - 3999), Length (Said)));
+               --  After why it was stopped, where it was.
+               Result.Output := (if Length (Result.Output) > 0 then Result.Output & ASCII.LF
+                                 else Null_Unbounded_String)
+                 & Slice (Said, Integer'Max (1, Length (Said) - 3999), Length (Said));
             end if;
          end if;
       end;
