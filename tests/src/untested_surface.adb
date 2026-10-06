@@ -47,6 +47,13 @@ package body Untested_Surface is
    --  cannot name; every record the state's tests read and every change
    --  they commit goes through them, and a torn or wrong write fails the
    --  round trip and recovery tests that read it back.
+   --
+   --  The command line's commands and what they share. Do_Run, Do_Embed,
+   --  Do_Inspect, Do_Models, Choose_Model, Show_Help and Show_Version, and
+   --  the helpers Read_File, Read_Standard_Input, Say_Device_Room,
+   --  Free_Reals and Free_Text, are private packages of the command line's
+   --  execution, which a test cannot name; every command-line test reaches
+   --  them through Dispatch, as a command run from the shell does.
    function Is_Untested (Name : String) return Boolean is
    begin
       return Name in
@@ -123,7 +130,19 @@ package body Untested_Surface is
          | "Typed_Line"
          | "Wide_From_Bits"
          | "Write_Text"
-         | "Write_Whole";
+         | "Write_Whole"
+         | "Show_Version"
+         | "Show_Help"
+         | "Do_Inspect"
+         | "Do_Embed"
+         | "Free_Reals"
+         | "Free_Text"
+         | "Read_File"
+         | "Read_Standard_Input"
+         | "Say_Device_Room"
+         | "Do_Run"
+         | "Choose_Model"
+         | "Do_Models";
    end Is_Untested;
 
    -----------

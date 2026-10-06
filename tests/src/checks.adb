@@ -516,6 +516,18 @@ package body Checks is
          end if;
       end Contents;
 
+      --  The command line's execution, which is the parent unit and one
+      --  child a command or a part they share: what reads it reads all.
+      function Execution_Contents return String
+      is (Contents ("src/library/model_runner-cli-execute.adb")
+          & Contents ("src/library/model_runner-cli-execute-support.adb")
+          & Contents ("src/library/model_runner-cli-execute-acquisition.adb")
+          & Contents ("src/library/model_runner-cli-execute-help_command.adb")
+          & Contents ("src/library/model_runner-cli-execute-inspect_command.adb")
+          & Contents ("src/library/model_runner-cli-execute-run_command.adb")
+          & Contents ("src/library/model_runner-cli-execute-embed_command.adb")
+          & Contents ("src/library/model_runner-cli-execute-models_command.adb"));
+
       --  One section of a document, from its heading to the next one.
       --  The heading must end at its line: "## Backend" is a prefix of
       --  "## Backends and pools", and matching the prefix let that section be
@@ -2781,7 +2793,7 @@ package body Checks is
            Contents ("src/library/model_runner-errors.adb")
            & Contents ("src/library/model_runner-presentation.adb")
            & Contents ("src/library/model_runner-cli-driver.adb")
-           & Contents ("src/library/model_runner-cli-execute.adb")
+           & Execution_Contents
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
            & Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-generation.adb")
@@ -2994,7 +3006,7 @@ package body Checks is
            & Contents ("src/library/model_runner-generation.adb")
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
            & Contents ("src/library/model_runner-tokenizer.adb")
-           & Contents ("src/library/model_runner-cli-execute.adb");
+           & Execution_Contents;
          Opening : constant String := "type Category is";
 
          --  Whether Text charges Name: the name after a dot, with no
@@ -4274,7 +4286,7 @@ package body Checks is
            Contents ("src/library/model_runner-generation.adb")
            & Contents ("src/library/model_runner-llama.adb")
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
-           & Contents ("src/library/model_runner-cli-execute.adb");
+           & Execution_Contents;
          Named : Natural := 0;
 
          --  The literals between "type NAME is" and the ");" that ends it.
@@ -4572,7 +4584,7 @@ package body Checks is
              (Contents ("src/library/model_runner-backend.ads")
               & Contents ("src/library/model_runner-backend-cpu.adb")
               & Contents ("src/library/model_runner-llama.adb")
-              & Contents ("src/library/model_runner-cli-execute.adb"));
+              & Execution_Contents);
 
          --  The record's fields, between "type Capabilities is record" and
          --  the "end record" that closes it.
