@@ -55,6 +55,32 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+//  GLU: a feed-forward's gate and up projections at once, as
+//  row_product_super.comp's GLU takes them -- the up's rows stride bytes
+//  past the gate's, each row summed as the plain kernel sums it, and the
+//  answer the gate's unit times the up, the unit named by the table word as
+//  combine.comp names it: nought sigmoid-weighted, one Gaussian.
+#ifdef GLU
+#define ACC (2u * NUM_ROWS)
+
+float sigmoid_weighted(float x) {
+    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
+
+float gaussian(float x) {
+    const float root = 0.7978845608028654;
+    const float bend = 0.044715;
+    float inner = root * (x + bend * x * x * x);
+    return 0.5 * x * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
+}
+
+float gate_unit(float x) {
+    return shape.table == 1u ? gaussian(x) : sigmoid_weighted(x);
+}
+#else
+#define ACC NUM_ROWS
+#endif
+
 //  One byte, a sixteen-bit field at an even position, and a half there.
 uint byte_at(uint at) {
     return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
@@ -1963,8 +1989,8 @@ void main() {
     uint groups = (shape.columns + 255u) / 256u;
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 
-    float temp[NUM_ROWS][VEC];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[ACC][VEC];
+    for (uint r = 0u; r < ACC; ++r) {
         for (uint k = 0u; k < VEC; ++k) {
             temp[r][k] = 0.0;
         }
@@ -1985,10 +2011,16 @@ void main() {
             uint block = col / BLOCK_ELEMS;
             uint within = col % BLOCK_ELEMS;
 
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < ACC; ++r) {
+#ifdef GLU
+                uint row = min(first_row + r % NUM_ROWS, shape.rows - 1u);
+                uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
+                          + row * span + block * BLOCK_BYTES;
+#else
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
+#endif
                 uint q = at + 2u + within;
                 float scale = half_at(at);
                 vec4 w0 = vec4(unpack8(int(quad_at(q))));
@@ -2005,6 +2037,19 @@ void main() {
         }
     }
 
+#ifdef GLU
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float gate = subgroupAdd(temp[r][k]);
+            float up = subgroupAdd(temp[r + NUM_ROWS][k]);
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                y[(shape.first + k) * shape.rows + row] = gate_unit(gate) * up;
+            }
+        }
+    }
+    return;
+#endif
     for (uint r = 0u; r < NUM_ROWS; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < VEC; ++k) {
@@ -2075,8 +2120,8 @@ void main() {
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif
 
-    float temp[NUM_ROWS];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[ACC];
+    for (uint r = 0u; r < ACC; ++r) {
         temp[r] = 0.0;
     }
 
@@ -2123,9 +2168,15 @@ void main() {
             uint block = col / BLOCK_ELEMS;
             uint within = col % BLOCK_ELEMS;
 
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < ACC; ++r) {
+#ifdef GLU
+                uint row = min(first_row + r % NUM_ROWS, shape.rows - 1u);
+                uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
+                          + row * span + block * BLOCK_BYTES;
+#else
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
+#endif
                 temp[r] += lane_dot(at, within, a0, a1, a2, a3);
             }
         }
@@ -2133,6 +2184,18 @@ void main() {
 #endif
     }
 
+#ifdef GLU
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float gate = subgroupAdd(temp[r]);
+        float up = subgroupAdd(temp[r + NUM_ROWS]);
+        uint row = first_row + r;
+
+        if (tid == 0u && row < shape.rows) {
+            y[shape.first * shape.rows + row] = gate_unit(gate) * up;
+        }
+    }
+    return;
+#endif
     for (uint r = 0u; r < NUM_ROWS; ++r) {
         float whole = subgroupAdd(temp[r]);
         uint row = first_row + r;

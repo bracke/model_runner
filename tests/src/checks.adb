@@ -6558,8 +6558,9 @@ package body Checks is
       --  And the compilations of the low-bit generating kernel, one a
       --  format from the one source -- the twelve low-bit formats, Q8_0, the
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
-      --  against it, and Q8_0's three over several vectors.
-      for Which in 1 .. 25 loop
+      --  against it, and Q8_0's three over several vectors, and its five
+      --  gate-and-up compilations.
+      for Which in 1 .. 30 loop
          declare
             Found : Boolean;
 
@@ -6593,6 +6594,11 @@ package body Checks is
                   when 23 => Model_Runner.Shaders.Low.Row_Product_Wave_Q5_0_Digest,
                   when 24 => Model_Runner.Shaders.Low.Row_Product_Wave_Q5_1_Digest,
                   when 25 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Short_Digest,
+                  when 26 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Glu_Digest,
+                  when 27 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Short_Glu_Digest,
+                  when 28 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Glu_Digest,
+                  when 29 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu_Digest,
+                  when 30 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

@@ -4305,8 +4305,13 @@ package body Model_Runner.Backend.Device is
                use type Products.Weight_Packing;
                use type Model_Runner.Numerics.Real;
 
+               Q8 : constant Boolean := Gate_P = Products.Packed_Q8_0;
+
                Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
-                 Model_Runner.Bytes.Byte_Count (Gate.Columns / 256) * 144
+                 (if Q8
+                  then Model_Runner.Bytes.Byte_Count (Gate.Columns / 32) * 34
+                  else Model_Runner.Bytes.Byte_Count (Gate.Columns / 256)
+                       * 144)
                  * Model_Runner.Bytes.Byte_Count (Gate.Rows);
 
                --  A gate and up the file keeps a short way apart, the up
@@ -4318,14 +4323,15 @@ package body Model_Runner.Backend.Device is
                  Gated
                  and then Unit in 0 | 1
                  and then Alpha = 0.0 and then Limit = 0.0
-                 and then Gate_P = Products.Packed_Q4_K
+                 and then Gate_P in Products.Packed_Q4_K
+                                  | Products.Packed_Q8_0
                  and then Up_P = Gate_P
                  and then Gate_Bias = null and then Up_Bias = null
                  and then Gate.Base = Up.Base
                  and then Gate.Span = Up.Span
                  and then Gate.Rows = Up.Rows
                  and then Gate.Columns = Up.Columns
-                 and then Gate.Columns mod 256 = 0
+                 and then Gate.Columns mod (if Q8 then 32 else 256) = 0
                  and then Up.Offset >= Gate.Offset + Gate_Bytes
                  and then Up.Offset - Gate.Offset - Gate_Bytes <= 2**20
                  and then Gate.Offset >= Gate_Bytes;
@@ -4336,13 +4342,15 @@ package body Model_Runner.Backend.Device is
                Region : constant Natural :=
                  (if Paired
                   then Products.Pair_Rows
-                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns))
+                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns),
+                          Gate_P)
                   else 0);
 
                Pad : constant Natural :=
                  (if Paired
                   then Products.Pair_Pad
-                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns))
+                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns),
+                          Gate_P)
                   else 0);
 
                --  Where the region begins: whole rows back from the up's

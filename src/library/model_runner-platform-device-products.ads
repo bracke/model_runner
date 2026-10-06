@@ -792,7 +792,8 @@ package Model_Runner.Platform.Device.Products is
 
    --  Whether the engine takes a feed-forward's gate and up projections
    --  as one step for a batch of Count, as Add_Gated_Pair names it: Q4_K
-   --  rows shorter than the long-row kernel's, one position or a few.
+   --  rows shorter than the long-row kernel's, one position or up to
+   --  eight; Q8_0 rows, one position or up to four.
    --
    --  @param Item The engine.
    --  @param Packing The two matrices' format.
@@ -805,7 +806,7 @@ package Model_Runner.Platform.Device.Products is
       Count   : Natural;
       Columns : Natural) return Boolean;
 
-   --  The rows of Q4_K a gate and up region holds, ending at the up's last
+   --  The rows a gate and up region holds, ending at the up's last
    --  row, the up's beginning Pair_At bytes past the gate's: what
    --  Add_Gated_Pair uploads, and what the two plain products name as
    --  their region so that all three share one upload. Whole rows from
@@ -815,11 +816,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Pair_At Bytes from the gate's first row to the up's.
    --  @param Rows Rows each matrix holds.
    --  @param Columns Elements a row holds.
+   --  @param Packing The two matrices' format, Q4_K or Q8_0.
    --  @return The region's rows, rounded up.
    function Pair_Rows
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
-      Columns : Natural) return Natural;
+      Columns : Natural;
+      Packing : Weight_Packing := Packed_Q4_K) return Natural;
 
    --  How far before the gate's first row the region Pair_Rows counts
    --  begins, in bytes: what rounding it to whole rows from the up's end
@@ -828,11 +831,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Pair_At Bytes from the gate's first row to the up's.
    --  @param Rows Rows each matrix holds.
    --  @param Columns Elements a row holds.
+   --  @param Packing The two matrices' format, Q4_K or Q8_0.
    --  @return Bytes the region begins before the gate.
    function Pair_Pad
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
-      Columns : Natural) return Natural;
+      Columns : Natural;
+      Packing : Weight_Packing := Packed_Q4_K) return Natural;
 
    --  Name a feed-forward's gate and up projections as one step, with the
    --  unit on the gate and the two multiplied -- what two
@@ -3339,6 +3344,15 @@ private
       --  drafted round's check.
       Q8_Multi_Shaders : Multi_Array := [others => System.Null_Address];
       Q8_Multi_Lines   : Multi_Array := [others => System.Null_Address];
+
+      --  Q8_0's gate and up at once, for one position -- long rows and
+      --  short -- and for a few; see Add_Gated_Pair.
+      Q8_Glu_Shader       : System.Address := System.Null_Address;
+      Q8_Glu_Line         : System.Address := System.Null_Address;
+      Q8_Glu_Short_Shader : System.Address := System.Null_Address;
+      Q8_Glu_Short_Line   : System.Address := System.Null_Address;
+      Q8_Glu_Multi_Shaders : Multi_Array := [others => System.Null_Address];
+      Q8_Glu_Multi_Lines   : Multi_Array := [others => System.Null_Address];
 
       --  And the two IQ4 formats, the same way: each read through its table
       --  of sixteen values, IQ4_XS with its sub-block scales beside.

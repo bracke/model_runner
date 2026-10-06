@@ -2235,15 +2235,17 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.343 s | **0.227 s** |
-| -- evaluating the prompt | 0.042 s | 0.024 s |
-| -- generating | 0.301 s | **0.202 s** |
-| -- processor time | 1.83 s | **0.07 s** |
-| 110-token prompt, one token | 0.347 s | **0.099 s** |
-| -- evaluating the prompt | 0.320 s | **0.079 s** |
+| 6-token prompt, 12 generated | 0.342 s | **0.225 s** |
+| -- evaluating the prompt | 0.040 s | 0.024 s |
+| -- generating | 0.301 s | **0.201 s** |
+| -- processor time | 1.82 s | **0.07 s** |
+| 110-token prompt, one token | 0.351 s | **0.099 s** |
+| -- evaluating the prompt | 0.323 s | **0.080 s** |
 | -- processor time | 2.66 s | **0.02 s** |
 
-Every cell was taken again later on 2026-10-06, once a device prompt held the
+Every cell was taken again later on 2026-10-06, once a Q8_0 feed-forward's
+gate and up became one step on the device, and read within its spread. Before
+that, every cell was taken again the same day once a device prompt held the
 part's clock up: the device's 110-token prompt 0.083 -> 0.079 s, every other
 cell within its spread. Before that, every cell was taken again the same day,
 both columns in one sitting, after a day of changes to the kernels: each moved within its spread or a little
@@ -7366,14 +7368,14 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 320.7 t/s | 39.2 t/s |
-| llama.cpp, processor | 386.9 t/s | 39.8 t/s |
-| model_runner, device | **1746.0 t/s** | **58.6 t/s** |
-| llama.cpp, device | 1671.8 t/s | 56.2 t/s |
+| model_runner, processor | 312.5 t/s | 39.5 t/s |
+| llama.cpp, processor | 383.2 t/s | 39.9 t/s |
+| model_runner, device | **1718.8 t/s** | **58.9 t/s** |
+| llama.cpp, device | 1668.5 t/s | 56.5 t/s |
 
 **The device's short prompt is ahead now, because the program holds the
-part's clock up itself** (2026-10-06, the whole table taken again in one
-sitting). A prompt of sixteen or more positions on the device starts the
+part's clock up itself** (2026-10-06; the whole table taken again in one
+sitting, and again once a Q8_0 feed-forward's gate and up became one step). A prompt of sixteen or more positions on the device starts the
 same keeper a split mixture uses -- a second context spinning a tenth of a
 millisecond of work on its own queue -- for the tenth of a second after it
 is asked, which is about how long the part takes to climb out of its lowest
@@ -7416,15 +7418,15 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | 280.9 t/s | 39.2 t/s |
-| llama.cpp, processor | 308.1 t/s | 39.8 t/s |
-| model_runner, device | **1874.5 t/s** | **58.6 t/s** |
-| llama.cpp, device | 1830.7 t/s | 56.2 t/s |
+| model_runner, processor | 282.7 t/s | 39.5 t/s |
+| llama.cpp, processor | 304.2 t/s | 39.9 t/s |
+| model_runner, device | **1847.7 t/s** | **58.9 t/s** |
+| llama.cpp, device | 1840.4 t/s | 56.5 t/s |
 
 **In this sitting the device is ahead on every row and the processor on
-none.** 58.6 against 56.2 generating on the device, 1874.5 against 1830.7 at
-1419 tokens and 1746.0 against 1671.8 at 110; the processor's prompts read
-0.83 and 0.91 of llama.cpp's and its generated token 39.2 against 39.8 --
+none.** 58.9 against 56.5 generating on the device, 1847.7 against 1840.4 at
+1419 tokens and 1718.8 against 1668.5 at 110; the processor's prompts read
+0.82 and 0.93 of llama.cpp's and its generated token 39.5 against 39.9 --
 the rows the paragraphs under the first table say move with the sitting
 rather than the code (the sitting before read 348.1, 282.2 and 39.9 on the
 same code). In the sitting
@@ -7657,9 +7659,9 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` added to the first two for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.343 s
-and 64 in 1.633 s on the processor, 0.063 s and 1.092 s on the device, and
-the long prompt in 5.052 s and 0.757 s, medians of three as everywhere else
+speed` reports seconds and this table reports rates: 110 tokens in 0.352 s
+and 64 in 1.620 s on the processor, 0.064 s and 1.086 s on the device, and
+the long prompt in 5.019 s and 0.768 s, medians of three as everywhere else
 here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -7674,8 +7676,8 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 774.0 t/s rather
-than 386.9 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 779.8 t/s rather
+than 383.2 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 

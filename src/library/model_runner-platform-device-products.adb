@@ -2745,7 +2745,49 @@ package body Model_Runner.Platform.Device.Products is
                   Request.Code := Words'Address;
                end;
 
-               --  And its compilations over several vectors.
+               --  Its gate-and-up compilations, long rows and short.
+               declare
+                  Glu   : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Glu;
+                  Glu_S : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Short_Glu;
+               begin
+                  Request.Size := Interfaces.C.size_t (Glu'Length * 4);
+                  Request.Code := Glu'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Q8_Glu_Shader := Made;
+                  end if;
+                  Request.Size := Interfaces.C.size_t (Glu_S'Length * 4);
+                  Request.Code := Glu_S'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Q8_Glu_Short_Shader := Made;
+                  end if;
+               end;
+
+               --  And its compilations over several vectors, plain and
+               --  gate-and-up.
+               for Count in Multi_Count loop
+                  declare
+                     Pair : aliased constant Model_Runner.Shaders.Word_Array :=
+                       (case Count is
+                          when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Glu,
+                          when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu,
+                          when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu);
+                  begin
+                     Request.Size := Interfaces.C.size_t (Pair'Length * 4);
+                     Request.Code := Pair'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Q8_Glu_Multi_Shaders (Count) := Made;
+                     end if;
+                  end;
+               end loop;
+
                for Count in Multi_Count loop
                   declare
                      More : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -3847,7 +3889,21 @@ package body Model_Runner.Platform.Device.Products is
                      Request.Stage.Module := Item.Q8_Multi_Shaders (Count);
                      Line (Low_Wave_Lanes, 1, Item.Q8_Multi_Lines (Count));
                   end if;
+                  if Item.Q8_Glu_Multi_Shaders (Count) /= Null_Handle then
+                     Request.Stage.Module := Item.Q8_Glu_Multi_Shaders (Count);
+                     Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Multi_Lines (Count));
+                  end if;
                end loop;
+
+               if Item.Q8_Glu_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q8_Glu_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Line);
+               end if;
+
+               if Item.Q8_Glu_Short_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Q8_Glu_Short_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Short_Line);
+               end if;
 
                if Item.NL_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.NL_Wave_Shader;
@@ -5062,8 +5118,11 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.Q8_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Q8_Short_Line, "vkDestroyPipeline");
+      Give_Back (Item.Q8_Glu_Line, "vkDestroyPipeline");
+      Give_Back (Item.Q8_Glu_Short_Line, "vkDestroyPipeline");
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Q8_Glu_Multi_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
@@ -5201,8 +5260,12 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.Q8_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q8_Short_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Q8_Glu_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Q8_Glu_Short_Shader, "vkDestroyShaderModule");
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Shaders (Count), "vkDestroyShaderModule");
+         Give_Back (Item.Q8_Glu_Multi_Shaders (Count),
+                    "vkDestroyShaderModule");
       end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
@@ -10069,16 +10132,36 @@ package body Model_Runner.Platform.Device.Products is
       Packing : Weight_Packing;
       Count   : Natural;
       Columns : Natural) return Boolean
-   is (Packing = Packed_Q4_K
-       and then Columns mod 256 = 0
-       and then ((Count = 1
-                  and then Columns < Long_Row_Columns
-                  and then Item.Glu_Line /= Null_Handle
-                  and then Waved (Item, Packing, Count))
-                 or else
-                 (Count in Many_Count
-                  and then Item.Glu_Many_Lines (Count) /= Null_Handle
-                  and then Waved (Item, Packing, Count))));
+   is ((Packing = Packed_Q4_K
+        and then Columns mod 256 = 0
+        and then ((Count = 1
+                   and then Columns < Long_Row_Columns
+                   and then Item.Glu_Line /= Null_Handle
+                   and then Waved (Item, Packing, Count))
+                  or else
+                  (Count in Many_Count
+                   and then Item.Glu_Many_Lines (Count) /= Null_Handle
+                   and then Waved (Item, Packing, Count))))
+       or else
+       (Packing = Packed_Q8_0
+        and then Columns mod 32 = 0
+        and then Waved (Item, Packing, Count)
+        and then ((Count = 1
+                   and then (if Q8_Short (Item, Packing, Count, Columns)
+                             then Item.Q8_Glu_Short_Line /= Null_Handle
+                             else Item.Q8_Glu_Line /= Null_Handle))
+                  or else
+                  (Count in Multi_Count
+                   and then Item.Q8_Glu_Multi_Lines (Count)
+                            /= Null_Handle))));
+
+   --  Bytes a row of either format a gated pair takes holds.
+   function Pair_Row_Bytes
+     (Packing : Weight_Packing;
+      Columns : Natural) return Model_Runner.Bytes.Byte_Count
+   is (if Packing = Packed_Q8_0
+       then Model_Runner.Bytes.Byte_Count (Columns / 32) * 34
+       else Model_Runner.Bytes.Byte_Count (Columns / 256) * 144);
 
    ---------------
    -- Pair_Rows --
@@ -10087,10 +10170,11 @@ package body Model_Runner.Platform.Device.Products is
    function Pair_Rows
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
-      Columns : Natural) return Natural
+      Columns : Natural;
+      Packing : Weight_Packing := Packed_Q4_K) return Natural
    is
       Wide : constant Model_Runner.Bytes.Byte_Count :=
-        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+        Pair_Row_Bytes (Packing, Columns);
    begin
       if Wide = 0 then
          return 0;
@@ -10107,13 +10191,15 @@ package body Model_Runner.Platform.Device.Products is
    function Pair_Pad
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
-      Columns : Natural) return Natural
+      Columns : Natural;
+      Packing : Weight_Packing := Packed_Q4_K) return Natural
    is
       Wide : constant Model_Runner.Bytes.Byte_Count :=
-        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+        Pair_Row_Bytes (Packing, Columns);
    begin
       return Natural
-        (Model_Runner.Bytes.Byte_Count (Pair_Rows (Pair_At, Rows, Columns))
+        (Model_Runner.Bytes.Byte_Count
+           (Pair_Rows (Pair_At, Rows, Columns, Packing))
          * Wide
          - Pair_At - Model_Runner.Bytes.Byte_Count (Rows) * Wide);
    end Pair_Pad;
@@ -10140,18 +10226,18 @@ package body Model_Runner.Platform.Device.Products is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
 
-      --  Bytes a Q4_K row holds.
+      --  Bytes a row holds.
       Wide : constant Model_Runner.Bytes.Byte_Count :=
-        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+        Pair_Row_Bytes (Packing, Columns);
    begin
       Added := False;
       if Steps.Held = 0
         or else Steps.Held = Sequence_Limit
         or else Base = System.Null_Address
-        or else Packing /= Packed_Q4_K
+        or else Packing not in Packed_Q4_K | Packed_Q8_0
         or else Unit > 1
         or else Columns = 0
-        or else Columns mod 256 /= 0
+        or else Columns mod (if Packing = Packed_Q8_0 then 32 else 256) /= 0
         or else Rows = 0
         or else Source not in 1 .. Steps.Held
         or else Columns /= Steps.Items (Source).Rows
@@ -10159,7 +10245,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Pair_At > Model_Runner.Bytes.Byte_Count (Natural'Last / 2)
         or else Span < At_Byte
                        + Model_Runner.Bytes.Byte_Count
-                           (Pair_Pad (Pair_At, Rows, Columns))
+                           (Pair_Pad (Pair_At, Rows, Columns, Packing))
                        + Pair_At
                        + Model_Runner.Bytes.Byte_Count (Rows) * Wide
       then
@@ -10174,8 +10260,8 @@ package body Model_Runner.Platform.Device.Products is
          Kept => Kept,
          Blends => False, Unit => Unit, Attends => False,
          Glu => True, Pair_At => Natural (Pair_At),
-         Region_Rows => Pair_Rows (Pair_At, Rows, Columns),
-         Region_At => Pair_Pad (Pair_At, Rows, Columns),
+         Region_Rows => Pair_Rows (Pair_At, Rows, Columns, Packing),
+         Region_At => Pair_Pad (Pair_At, Rows, Columns, Packing),
          others => <>);
       Added := True;
    end Add_Gated_Pair;
@@ -14932,7 +15018,22 @@ package body Model_Runner.Platform.Device.Products is
                if This.Glu then
                   declare
                      One  : constant Boolean := Count = 1;
-                     Band : constant Natural := (if One then 1 else 4);
+                     Q8   : constant Boolean := This.Packing = Packed_Q8_0;
+                     Short : constant Boolean :=
+                       Q8 and then Q8_Short (Item, This.Packing, Count,
+                                             This.Columns);
+                     --  Rows of each matrix a workgroup carries: half what
+                     --  the plain compilation carries of one.
+                     Band : constant Natural :=
+                       (if Q8 then (if One and then not Short then 1 else 2)
+                        elsif One then 1 else 4);
+                     Line : constant Address :=
+                       (if not Q8
+                        then (if One then Item.Glu_Line
+                              else Item.Glu_Many_Lines (Count))
+                        elsif not One then Item.Q8_Glu_Multi_Lines (Count)
+                        elsif Short then Item.Q8_Glu_Short_Line
+                        else Item.Q8_Glu_Line);
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Rows),
                         Columns => C.unsigned (This.Columns),
@@ -14948,10 +15049,7 @@ package body Model_Runner.Platform.Device.Products is
                         Apart   => 0,
                         Routed  => 0);
                   begin
-                     Bind_Pipeline
-                       (Item.Buffer, Bind_Point_Compute,
-                        (if One then Item.Glu_Line
-                         else Item.Glu_Many_Lines (Count)));
+                     Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Line);
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
