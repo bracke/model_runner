@@ -4588,14 +4588,22 @@ package body Tests.CLI_Cases is
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
 
-      --  A draft model with a grammar cannot draft: the verify pass carries
-      --  no grammar mask, so it is refused rather than ignored -- a draft is
-      --  a second model file, and a run that loads one and never asks it
-      --  anything has paid for nothing. A temperature is no longer refused:
-      --  above zero the draft is verified by speculative sampling, which
-      --  keeps the target's own distribution.
+      --  A draft model with a grammar or a schema drafts where the run is
+      --  greedy, and is refused where it samples -- that run cannot draft,
+      --  and a draft is a second model file a run that never asks it
+      --  anything has paid for. A temperature alone is not refused: above
+      --  zero the draft is verified by speculative sampling, which keeps
+      --  the target's own distribution.
       Expect (E.CLI_Option_Combination,
               "run m.gguf --prompt a --draft-model d.gguf --grammar root");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --draft-model d.gguf --json-schema {}");
+      Expect (E.No_Error,
+              "run m.gguf --prompt a --draft-model d.gguf --grammar root"
+              & " --temperature 0");
+      Expect (E.No_Error,
+              "run m.gguf --prompt a --draft-model d.gguf --json-schema {}"
+              & " --temperature 0");
       Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --temperature 0.8");
 

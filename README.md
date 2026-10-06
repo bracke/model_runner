@@ -82,6 +82,34 @@ Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage
 error, and `--` ends option processing.
 
+### What `run` decides on its own
+
+Each of these is what a run does when the option is not given; giving the
+option always wins.
+
+- **Where it runs.** On the device when one opens and the model fits what the
+  device may hold -- its own memory and the share of system memory it can map,
+  leaving room for the rest of the machine -- and on the processor otherwise.
+  A mixture whose experts do not fit but whose other layers do runs those
+  layers on the device and its experts on the processor. `--backend` names
+  one.
+- **How the processor holds the weights.** Repacked once into eight-row
+  panels (`--repack rows`) where the processor has the kernels, the model fits
+  in free memory and in one allocation; the panels are kept under
+  `~/.cache/model_runner/panels` so the next load maps them. `--repack none`
+  keeps the file's layout.
+- **How the context is stored.** Half precision (`--kv-cache f16`).
+- **Whether and how it drafts.** In this order: from the model's own
+  next-token block where it carries one and that block is cheap beside the
+  model; from a draft named beside the model in a `.draft` file; from the
+  largest file in the store or the model's folder that numbers its tokens as
+  the model does and is at most a sixth of its size, for a dense model of two
+  gigabytes a token or more; from the context (`--draft-lookup`) for such a
+  model on the device otherwise; and not at all for anything else. Three
+  proposals a round, and a draft model's rounds grow or shrink with what the
+  rounds keep. `--draft-tokens 0` turns it off; so does a grammar where the
+  run samples.
+
 ### Spec-driven development
 
 A session's project commands keep a project's development state in
@@ -12184,10 +12212,10 @@ Short prompts and drafting -- which reads four to eight positions at a time
 `--draft-model PATH` gives the run a second, smaller model to propose what
 comes next. The real model then reads several proposals in one pass and says
 what it would have said at each of those positions; the proposals it agrees
-with are what the run produces. Because this runs only at temperature zero, a
-proposal either is the model's own choice or it is not, so the text is what
-the model would have produced alone -- held by a test that runs the same
-prompt with and without a draft and compares. Up to one thing, which
+with are what the run produces. At temperature zero a proposal either is the
+model's own choice or it is not, so the text is what the model would have
+produced alone -- held by a test that runs the same prompt with and without a
+draft and compares. Above it, see `**Above temperature zero**` below. Up to one thing, which
 `### Drafting out of the context` below measures: a drafted run reads its
 positions in a batch and an undrafted one reads them singly, and those two
 are not bit-for-bit the same arithmetic.
@@ -12322,18 +12350,32 @@ The drafted run now prints the same digest as the undrafted one --
 with, showing up in a published figure rather than only in the test that
 holds it.
 
-Not with a grammar, and not above temperature zero. Both are refused rather
-than ignored, and the difference matters: a draft is a second model file, so
-a run that accepts the option and then never asks the draft anything has
-spent the loading and the memory to produce exactly what it would have
-produced without it. `--draft-tokens` without a draft model is a note instead
--- nothing was loaded, so nothing was wasted, and the only thing missing is
-the telling.
+**Above temperature zero** a proposal is checked by speculative sampling
+(Leviathan et al., Chen et al.): it is kept with probability min(1, p/q) --
+p the model's probability of it after the sampler's own settings, q the
+draft's -- and at the first one turned down the position takes a token from
+what is left of p once q is taken away, max(0, p - q), and the round ends.
+The tokens then follow the model's own distribution exactly as an undrafted
+run's would, though not the same tokens, since the random draws fall
+differently; a test draws thousands of runs each way and holds the two
+distributions to each other. This is how `run` drafts by default, since it
+samples by default.
 
-The reason for the restrictions is the guarantee. Above temperature zero,
-keeping it needs an acceptance test written against the sampler's own
-distribution, which this does not have; a grammar constrains what may be
-produced in a way the proposals know nothing about.
+**Under a grammar** (`--grammar`, `--json-schema`, tools) **a greedy run
+drafts and a sampled one does not.** Greedy, the round walks the grammar
+along the proposals and stops at the first it refuses, and keeps a proposal
+where it is the choice the run makes under the grammar at that position --
+the unmasked draw, or the filtered one where the grammar refuses that -- so
+the text is the undrafted run's. qwen3-8b drafted by Qwen3-0.6B under a JSON
+schema on the processor, 200 tokens: 9.46 to 14.79 tokens a second, 77 per
+cent of proposals kept, the same text. Sampled, keeping the distribution
+would need the grammar's mass over every token at every position -- the
+whole filter an undrafted run takes only when its first draw is refused --
+so a sampled run under a grammar generates undrafted, and `--draft-model`
+beside a grammar or a schema is refused there rather than loaded for
+nothing. `--draft-tokens` without anything to draft
+from is a note -- nothing was loaded, so nothing was wasted, and the only
+thing missing is the telling.
 
 ### Drafting out of the context, with no second model
 

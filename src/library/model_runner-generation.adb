@@ -513,10 +513,17 @@ package body Model_Runner.Generation is
       --  carrying the block drafted from it only when asked for greedy
       --  output. Grammar is greedy-only either way, the verify pass carrying
       --  no grammar mask.
+      --  Under a grammar a round drafts where it samples greedily: each
+      --  position's choice is then the one an undrafted run makes under the
+      --  grammar, and a proposal is kept where it is that choice. Sampled,
+      --  keeping the distribution would need the grammar's mass over every
+      --  token at every position -- the whole filter an undrafted run takes
+      --  only when its first draw is refused -- so a sampled run under a
+      --  grammar does not draft.
       Drafting : constant Boolean :=
         (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
-        and then Rules = null;
+        and then (Rules = null or else S.Is_Greedy (Item.Sampling));
 
       --  Whether this run's drafting verifies by speculative sampling rather
       --  than by matching the target's own greedy choice.
@@ -1486,6 +1493,68 @@ package body Model_Runner.Generation is
             Rejected : Boolean := False;
             Residual : Token_Id := Vocab.No_Token;
 
+            --  Whether the grammar takes a token from a state: Grammar_Takes,
+            --  from a state of the round's own rather than the run's.
+            function Takes_At
+              (State : Model_Runner.Grammar.Matcher;
+               Which : Token_Id) return Boolean
+            is (if Vocab.Ends_Generation (Words.all, Which)
+                then Model_Runner.Grammar.Is_Complete (Rules.all, State)
+                elsif Vocab.Text_Of (Spelt, Which) = "" then False
+                else Model_Runner.Grammar.Accepts
+                       (Rules.all, State, Vocab.Text_Of (Spelt, Which)));
+
+            --  The model's own choice at a position under the grammar, made
+            --  the way an undrafted run makes it: the draw unmasked, and the
+            --  whole filter and a second draw only where the grammar refuses
+            --  the first. Greedy, so the token is the one the run alone
+            --  would have taken there.
+            procedure Choose_Under
+              (State  : Model_Runner.Grammar.Matcher;
+               Row    : N.Real_Array;
+               Token  : out Token_Id;
+               Status : out E.Error_Info) is
+            begin
+               S.Release_Step_Mask (Sampler);
+               S.Sample (Sampler, Row, Token, Status, Sharing);
+               if E.Is_Error (Status) or else Takes_At (State, Token) then
+                  return;
+               end if;
+
+               declare
+                  Allowed : Natural := 0;
+               begin
+                  for Candidate in 0 .. Settings.Vocabulary - 1 loop
+                     if Takes_At (State, Token_Id (Candidate)) then
+                        Allowed := Allowed + 1;
+                     else
+                        S.Forbid_For_Step (Sampler, Token_Id (Candidate));
+                     end if;
+                  end loop;
+
+                  if Allowed = 0 then
+                     S.Release_Step_Mask (Sampler);
+                     Status := E.Make (E.Grammar_Rejected_Every_Token);
+                     return;
+                  end if;
+               end;
+
+               S.Sample (Sampler, Row, Token, Status, Sharing);
+               S.Release_Step_Mask (Sampler);
+            end Choose_Under;
+
+            --  A state moved on by a token, as the run's own is moved on by
+            --  each token it writes.
+            procedure Move
+              (State  : in out Model_Runner.Grammar.Matcher;
+               Which  : Token_Id;
+               Status : out E.Error_Info) is
+            begin
+               Model_Runner.Grammar.Advance
+                 (Rules.all, State, Vocab.Decode_Token (Words.all, Which),
+                  Status);
+            end Move;
+
             --  Drop the oldest positions from both sessions at once, when
             --  the caller asked for that. Both, because the draft is only
             --  useful while it is looking at what the target is looking at:
@@ -1541,7 +1610,11 @@ package body Model_Runner.Generation is
                Guess := Carried;
                Has_Carried := False;
             else
-               S.Sample (Sampler, Logits.all, Guess, Local, Sharing);
+               if Rules /= null then
+                  Choose_Under (Shape, Logits.all, Guess, Local);
+               else
+                  S.Sample (Sampler, Logits.all, Guess, Local, Sharing);
+               end if;
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
                   Failed := True;
@@ -1713,6 +1786,33 @@ package body Model_Runner.Generation is
                end loop;
             end if;
 
+            --  Under a grammar, no further than the first proposal the
+            --  grammar would refuse: the model can never choose it there, so
+            --  it and what follows it are as good as turned down already.
+            --  None past an end either, which the run stops at.
+            if Rules /= null and then Count > 1 then
+               declare
+                  Walk : Model_Runner.Grammar.Matcher := Shape;
+                  Kept : Natural := 1;
+               begin
+                  if not Vocab.Ends_Generation (Words.all, Proposed.all (1))
+                  then
+                     Move (Walk, Proposed.all (1), Local);
+                     if E.Is_Ok (Local) then
+                        for Step in 2 .. Count loop
+                           exit when not Takes_At (Walk, Proposed.all (Step));
+                           Kept := Step;
+                           exit when Vocab.Ends_Generation
+                                       (Words.all, Proposed.all (Step));
+                           Move (Walk, Proposed.all (Step), Local);
+                           exit when E.Is_Error (Local);
+                        end loop;
+                     end if;
+                  end if;
+                  Count := Kept;
+               end;
+            end if;
+
             --  No more than the context has room for: a round near its end
             --  checks the proposals that fit, rather than ending the run as
             --  full while a shorter round would still have gone in. The
@@ -1816,35 +1916,70 @@ package body Model_Runner.Generation is
             if not Sampled_Draft then
                --  Greedy: keep a proposal while the target's own choice at the
                --  position before it is that proposal, stopping at the first
-               --  it would not have made.
-               for Step in 2 .. Count loop
-                  declare
-                     Row : constant N.Element_Count :=
-                       N.Element_Count (Step - 2)
-                       * N.Element_Count (Settings.Vocabulary);
-
-                     Wanted : Token_Id;
-                  begin
-                     S.Sample
-                       (Sampler,
-                        Every.all (Every.all'First + Row
-                                   .. Every.all'First + Row
-                                      + N.Element_Count (Settings.Vocabulary)
-                                      - 1),
-                        Wanted, Local);
+               --  it would not have made -- under a grammar, the choice the
+               --  run makes under it, from where the proposals before have
+               --  taken it.
+               declare
+                  Check : Model_Runner.Grammar.Matcher;
+               begin
+                  if Rules /= null and then Count > 1 then
+                     Check := Shape;
+                     Move (Check, Proposed.all (1), Local);
                      if E.Is_Error (Local) then
                         Conclude (Runtime_Error, Local);
                         Failed := True;
                         return;
                      end if;
+                  end if;
 
-                     exit when Wanted /= Proposed.all (Step);
+                  for Step in 2 .. Count loop
+                     declare
+                        Row : constant N.Element_Count :=
+                          N.Element_Count (Step - 2)
+                          * N.Element_Count (Settings.Vocabulary);
 
-                     Verified_Count := Verified_Count + 1;
-                     Verified.all (Verified_Count) := Proposed.all (Step);
-                     S.Record_Token (Sampler, Proposed.all (Step));
-                  end;
-               end loop;
+                        Wanted : Token_Id;
+                     begin
+                        if Rules /= null then
+                           Choose_Under
+                             (Check,
+                              Every.all (Every.all'First + Row
+                                         .. Every.all'First + Row
+                                            + N.Element_Count
+                                                (Settings.Vocabulary) - 1),
+                              Wanted, Local);
+                        else
+                           S.Sample
+                             (Sampler,
+                              Every.all (Every.all'First + Row
+                                         .. Every.all'First + Row
+                                            + N.Element_Count
+                                                (Settings.Vocabulary) - 1),
+                              Wanted, Local);
+                        end if;
+                        if E.Is_Error (Local) then
+                           Conclude (Runtime_Error, Local);
+                           Failed := True;
+                           return;
+                        end if;
+
+                        exit when Wanted /= Proposed.all (Step);
+
+                        Verified_Count := Verified_Count + 1;
+                        Verified.all (Verified_Count) := Proposed.all (Step);
+                        S.Record_Token (Sampler, Proposed.all (Step));
+
+                        if Rules /= null and then Step < Count then
+                           Move (Check, Proposed.all (Step), Local);
+                           if E.Is_Error (Local) then
+                              Conclude (Runtime_Error, Local);
+                              Failed := True;
+                              return;
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+               end;
                Accepted := Verified_Count;
             else
                --  Speculative sampling: accept proposal x with probability

@@ -5,6 +5,7 @@ with Model_Runner.Platform;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Drafts;
+with Model_Runner.Grammar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -6075,7 +6076,8 @@ package body Tests.Inference_Cases is
             Proposed   : out Natural;
             Accepted   : out Natural;
             Adapts     : Boolean := False;
-            Tokens     : Positive := 6)
+            Tokens     : Positive := 6;
+            Rules      : Gen.Grammar_Reference := null)
          is
             Live    : L.Session;
             Second  : aliased L.Session;
@@ -6103,7 +6105,7 @@ package body Tests.Inference_Cases is
             Request.Draft_Adapts := Adapts;
 
             Gen.Generate
-              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+              (Under.Ready, Live, Prompt, Request, Stop, Rules, null,
                null, null, null, null,
                Draft =>
                  (if With_Draft then Under.Ready'Unchecked_Access
@@ -6194,6 +6196,44 @@ package body Tests.Inference_Cases is
 
             B.Free (Fixed_Text);
             B.Free (Adapt_Text);
+         end;
+
+         --  And under a grammar: a greedy round keeps a proposal where it is
+         --  the choice the run makes under the grammar, so the text is the
+         --  undrafted run's -- and the round does draft rather than falling
+         --  back. Three letters only, so the grammar refuses most of what
+         --  the model would say and its filter is what decides.
+         declare
+            Rules  : aliased Model_Runner.Grammar.Compiled;
+            Status : E.Error_Info;
+            Plain_G, Draft_G : Model_Runner.Bytes.Byte_Array_Access;
+            Plain_L, Draft_L : Natural;
+            Proposed_G, Kept_G, Unused_A, Unused_B : Natural;
+         begin
+            Model_Runner.Grammar.Compile (Rules, "root ::= [abc]+", Status);
+            Assert (E.Is_Ok (Status), "the grammar did not compile");
+
+            Turn (False, Plain_G, Plain_L, Unused_A, Unused_B,
+                  Tokens => 10, Rules => Rules'Unchecked_Access);
+            Turn (True, Draft_G, Draft_L, Proposed_G, Kept_G,
+                  Tokens => 10, Rules => Rules'Unchecked_Access);
+
+            Assert (Plain_L > 0, "the run under the grammar wrote nothing");
+            Assert (Draft_L = Plain_L
+                    and then B."="
+                               (Plain_G.all (1 .. B.Byte_Index (Plain_L)),
+                                Draft_G.all (1 .. B.Byte_Index (Draft_L))),
+                    "a drafted run under a grammar wrote other text");
+            for Index in 1 .. B.Byte_Index (Plain_L) loop
+               Assert (Character'Val (Plain_G.all (Index)) in 'a' .. 'c',
+                       "the grammar let through a byte it does not allow");
+            end loop;
+            Assert (Proposed_G > 0,
+                    "a greedy run under a grammar did not draft");
+
+            B.Free (Plain_G);
+            B.Free (Draft_G);
+            Model_Runner.Grammar.Close (Rules);
          end;
       end;
 

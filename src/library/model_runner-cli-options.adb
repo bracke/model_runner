@@ -2791,23 +2791,35 @@ package body Model_Runner.CLI.Options is
          return;
       end if;
 
-      --  A draft model that cannot draft. Above temperature zero a draft is
-      --  verified by speculative sampling, which keeps the target's own
-      --  distribution, so a temperature is no longer refused; a grammar still
-      --  is, the verify pass carrying no grammar mask. This is checked here
-      --  rather than shrugged off later: a draft is a second model file, and
-      --  a run that loads one and then never asks it anything has spent the
-      --  loading and the memory to do exactly what it would have done
-      --  without it. Silence there is worse than refusing, because the
-      --  refusal is the only thing that tells the caller their configuration
-      --  does not mean what they think.
-      if not T.Is_Empty (Result.Draft_Path) then
+      --  A draft model that cannot draft: one beside a grammar or a schema
+      --  where the run samples. Greedy, a round checks each proposal against
+      --  the choice the run makes under the grammar, which is the same text
+      --  as without the draft; sampled, keeping the distribution would need
+      --  the grammar's mass over every token at every position, so that run
+      --  does not draft. This is checked here rather than shrugged off later:
+      --  a draft is a second model file, and a run that loads one and then
+      --  never asks it anything has spent the loading and the memory to do
+      --  exactly what it would have done without it. Silence there is worse
+      --  than refusing, because the refusal is the only thing that tells the
+      --  caller their configuration does not mean what they think.
+      if not T.Is_Empty (Result.Draft_Path)
+        and then not Model_Runner.Sampling.Is_Greedy (Result.Sampling)
+      then
          if Result.Grammar_Text /= null
            or else not T.Is_Empty (Result.Grammar_Path)
          then
             Status := E.Make (E.CLI_Option_Combination);
             E.Add_Text (Status, "option", "--draft-model", E.Param_Identifier);
             E.Add_Text (Status, "other", "--grammar", E.Param_Identifier);
+            return;
+         end if;
+
+         if Result.Schema_Text /= null
+           or else not T.Is_Empty (Result.Schema_Path)
+         then
+            Status := E.Make (E.CLI_Option_Combination);
+            E.Add_Text (Status, "option", "--draft-model", E.Param_Identifier);
+            E.Add_Text (Status, "other", "--json-schema", E.Param_Identifier);
             return;
          end if;
       end if;

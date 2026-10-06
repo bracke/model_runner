@@ -8,7 +8,9 @@ on:
 jobs:
   linux-release-check:
     name: Linux release checklist
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest becomes Ubuntu 26 from 2026-10-19, and that move
+    # should be a change made on purpose and watched, not one that arrives.
+    runs-on: ubuntu-24.04
     # The whole conformance sweep takes over an hour on a workstation and
     # did not finish in the six hours a hosted runner allows, so every run
     # ended cancelled rather than failed or passed. The checklist is run
