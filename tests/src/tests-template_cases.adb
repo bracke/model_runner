@@ -801,7 +801,9 @@ package body Tests.Template_Cases is
 
       --  What a template renders with two messages, or the code it
       --  refused with, as text.
-      function Rendered (Source : String) return String is
+      function Rendered
+        (Source : String; With_Call : Boolean := False) return String
+      is
          Item   : Tmpl.Compiled;
          Status : E.Error_Info;
          Talk   : Conv.History;
@@ -814,6 +816,10 @@ package body Tests.Template_Cases is
             return "compile: " & E.Error_Code'Image (Status.Code);
          end if;
          Fill (Talk, 2);
+         --  The assistant's turn asking for one tool, where wanted.
+         if With_Call then
+            Conv.Append_Call (Talk, "f", "{""a"": 1}", Status);
+         end if;
          Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status);
          Conv.Close (Talk);
          Tmpl.Close (Item);
@@ -827,8 +833,10 @@ package body Tests.Template_Cases is
          return Room (1 .. Last);
       end Rendered;
 
-      procedure Same (Source, Expected, What : String) is
-         Got : constant String := Rendered (Source);
+      procedure Same
+        (Source, Expected, What : String; With_Call : Boolean := False)
+      is
+         Got : constant String := Rendered (Source, With_Call);
       begin
          Assert (Got = Expected,
                  What & ": " & Source & " rendered (" & Got
@@ -922,6 +930,34 @@ package body Tests.Template_Cases is
             & "{{ loop_forever(1) }}",
             "render: TEMPLATE_NESTING_TOO_DEEP loop_forever",
             "a macro that never returns");
+
+      --  What the crossing of other runtimes' templates found, each
+      --  against what jinja2 writes. A name holding false is false, and
+      --  text that says false is not.
+      Same ("{% set e = false %}{% if e is false %}F{% endif %}"
+            & "{% if e is true %}T{% endif %}{% set w = 'false' %}"
+            & "{% if w is false %}W{% endif %}",
+            "F", "is false of a name holding false, and of text");
+      --  A tag's indentation goes where the tag begins its line in the
+      --  file, though the tag before took that line's break.
+      Same ("{% for m in messages %}" & ASCII.LF
+            & "    {%- if true %}" & ASCII.LF
+            & "        {% set x = 1 -%}" & ASCII.LF
+            & "    {%- endif %}" & ASCII.LF
+            & "{%- endfor %}" & ASCII.LF & "Z",
+            "Z", "indentation before a tag after a trimmed break");
+      --  A message's field it has not got, asked in brackets, is undefined
+      --  rather than refused.
+      Same ("{% for message in messages %}{% if message['reasoning_content']"
+            & " %}R{% else %}n{% endif %}{% endfor %}",
+            "nn", "a message field it has not got, in brackets");
+      --  A turn's calls kept whole in a name, and a call read the way
+      --  the conversation's JSON writes it.
+      Same ("{% for message in messages %}{% set calls = message.tool_calls %}"
+            & "{% for c in message.tool_calls %}{{ c.function.name }}|"
+            & "{{ c.get('function').name }}|{{ c.type }}{% endfor %}"
+            & "{% endfor %}",
+            "f|f|function", "a call's function and type", With_Call => True);
    end Expressions_Render_As_The_Language_Would;
 
    --  The value model: what a template holds that is not text -- a list it

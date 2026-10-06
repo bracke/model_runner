@@ -736,6 +736,18 @@ package body Model_Runner.Templates is
       --  with the template.
       Exit_Chain : array (1 .. Max_Depth) of Natural := [others => 0];
 
+      --  A statement's text as a refusal names it: after its keyword,
+      --  trimmed, and cut to a line's worth so a long condition does not
+      --  bury the message.
+      function Shown (Text : String; Keyword : String) return String is
+         Whole : constant String := Model_Runner.Text.Trim (Text);
+         Most  : constant := 80;
+      begin
+         return Keyword
+           & (if Whole'Length <= Most then Whole
+              else Whole (Whole'First .. Whole'First + Most - 1) & "...");
+      end Shown;
+
       procedure Fail (Code : E.Error_Code; Detail : String := "") is
       begin
          Status := E.Make (Code);
@@ -2075,6 +2087,33 @@ package body Model_Runner.Templates is
                           or else Field = """tool_calls"""
                         then
                            Result.Kind := Term_Message_Calls;
+                        elsif Field'Length > 2
+                          and then (Field (Field'First) = '''
+                                    or else Field (Field'First) = '"')
+                          and then Field (Field'Last) = Field (Field'First)
+                          and then Is_Plain_Name
+                                     (Field (Field'First + 1
+                                             .. Field'Last - 1))
+                        then
+                           --  Any other field, read as message.NAME reads
+                           --  it: what the message holds is known when the
+                           --  render reads it, and a field it does not have
+                           --  is undefined there, as in jinja2. Templates
+                           --  ask message['reasoning_content'] and
+                           --  message['prefix'] this way, and were refused.
+                           declare
+                              Stored : Boolean;
+                           begin
+                              Result.Kind := Term_Variable;
+                              Result.Offset := Slot_Of ("message");
+                              Store_Literal
+                                (Field (Field'First + 1 .. Field'Last - 1),
+                                 Result.Path_At, Result.Path_Len, Stored);
+                              if Result.Offset = 0 or else not Stored then
+                                 Result :=
+                                   Refused (Text (First .. Close_Bracket));
+                              end if;
+                           end;
                         else
                            return;
                         end if;
@@ -4480,7 +4519,11 @@ package body Model_Runner.Templates is
                  (Model_Runner.Text.Trim (Trimmed (Trimmed'First + 3 .. Trimmed'Last)),
                   Test, Valid);
                if not Valid then
-                  Fail (E.Template_Unsupported_Construct, "if");
+                  --  The condition, which is what would not read: "if"
+                  --  alone sent a reader through every if in the file.
+                  Fail (E.Template_Unsupported_Construct,
+                        Shown (Trimmed (Trimmed'First + 3 .. Trimmed'Last),
+                               "if "));
                   return;
                end if;
 
@@ -4529,7 +4572,9 @@ package body Model_Runner.Templates is
                  (Model_Runner.Text.Trim (Trimmed (Trimmed'First + 5 .. Trimmed'Last)),
                   Test, Valid);
                if not Valid then
-                  Fail (E.Template_Unsupported_Construct, "elif");
+                  Fail (E.Template_Unsupported_Construct,
+                        Shown (Trimmed (Trimmed'First + 5 .. Trimmed'Last),
+                               "elif "));
                   return;
                end if;
 
@@ -4925,9 +4970,12 @@ package body Model_Runner.Templates is
 
                --  The newline itself stays: what is taken off is the
                --  indentation after it, not the line break before it.
-               if (Scan >= First and then Source (Scan) = ASCII.LF)
-                 or else (Scan < First and then First = Source'First)
-               then
+               --  Asked of the source, not of what is left of this text:
+               --  jinja2 strips a block tag's indentation where the tag
+               --  begins its line in the file, and a tag before it that
+               --  took the line break with it -- trim_blocks, or a
+               --  dash -- does not make the line begin anywhere else.
+               if Scan < Source'First or else Source (Scan) = ASCII.LF then
                   Last := Scan;
                end if;
             end;
@@ -5477,7 +5525,10 @@ package body Model_Runner.Templates is
          Kind   : Value_Kind := Value_Undefined;
          Offset : Natural := 0;
          Length : Natural := 0;
-         Start  : Positive := 1;
+         --  Nought for a message's calls taken whole -- what
+         --  {% set calls = message.tool_calls %} keeps -- and a position
+         --  from one for everything else that has one.
+         Start  : Natural := 1;
       end record;
 
       type Slot_Table is array (1 .. Max_Variables) of Slot;
@@ -6094,6 +6145,15 @@ package body Model_Runner.Templates is
                elsif Name = "arguments" then
                   return As_Data
                     (Conv.Call_Arguments (Messages, Value.Start, Value.Index));
+               elsif Name = "function" then
+                  --  A call as the conversation's JSON writes it:
+                  --  {"type": "function", "function": {"name", "arguments"}}.
+                  --  Templates read the name either way, call.name or
+                  --  call.function.name, and some take call.get("function")
+                  --  first and read the rest off what that gave.
+                  return Value;
+               elsif Name = "type" then
+                  return As_Text ("function");
                end if;
                return Nothing;
 
@@ -10709,9 +10769,28 @@ package body Model_Runner.Templates is
             when Compare_Is_True | Compare_Is_Not_True
                | Compare_Is_False | Compare_Is_Not_False =>
                declare
-                  Held : constant String := Value_Of (Value.Left);
-                  Says : constant Boolean := Held = "true";
-                  Nays : constant Boolean := Held = "false";
+                  --  By what the value is, where it is a boolean: a name
+                  --  holding false reads as the empty text, so asking the
+                  --  text answered "is false" no for false itself -- and a
+                  --  template's "enable_thinking is false" took the other
+                  --  branch. A JSON member is the JSON word; anything else
+                  --  is asked by its text as before.
+                  V    : constant Held := Held_Of (Value.Left);
+                  Text : constant String :=
+                    (if V.Kind in Value_Boolean | Value_Data then ""
+                     else Value_Of (Value.Left));
+                  Says : constant Boolean :=
+                    (case V.Kind is
+                        when Value_Boolean => V.Start = 1,
+                        when Value_Data    => Text_Of (V) = "true",
+                        when Value_Text    => False,
+                        when others        => Text = "true");
+                  Nays : constant Boolean :=
+                    (case V.Kind is
+                        when Value_Boolean => V.Start = 0,
+                        when Value_Data    => Text_Of (V) = "false",
+                        when Value_Text    => False,
+                        when others        => Text = "false");
                begin
                   Result :=
                     (case Value.Operator is
@@ -11448,10 +11527,13 @@ package body Model_Runner.Templates is
       --  is what the template's own "is defined" is there to find out: a
       --  caller who says nothing leaves the model to do what it was trained
       --  to do.
+      --  As the boolean jinja2 is handed, not the word for it: a template
+      --  asks "enable_thinking is false", which text never is.
       if Item.Thinking_Slot /= 0 and then Thinking /= Thinking_Unstated then
-         Assign_Text
-           (Item.Thinking_Slot,
-            (if Thinking = Thinking_On then "true" else "false"));
+         Slots (Item.Thinking_Slot) :=
+           (Kind   => Value_Boolean,
+            Offset => (if Thinking = Thinking_On then 1 else 0),
+            others => <>);
       end if;
 
       --  A flat instruction list with jumps. Rendering recurses in one

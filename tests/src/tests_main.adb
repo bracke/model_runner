@@ -1873,9 +1873,14 @@ begin
                Ada.Text_IO.Put
                  (Ada.Text_IO.Standard_Error,
                   "render: " & E.Diagnostic_Code (Status.Code));
-               --  And the construct refused, when the engine named one.
+               --  And what the engine named beside the code: the construct
+               --  refused, a path, the message a template raised.
                for P in 1 .. Status.Parameter_Total loop
-                  if E."=" (Status.Parameters (P).Kind, E.Param_Text) then
+                  if E."=" (Status.Parameters (P).Kind, E.Param_Text)
+                    or else E."=" (Status.Parameters (P).Kind,
+                                   E.Param_Identifier)
+                    or else E."=" (Status.Parameters (P).Kind, E.Param_Path)
+                  then
                      Ada.Text_IO.Put
                        (Ada.Text_IO.Standard_Error,
                         " " & Model_Runner.Text.To_String
@@ -1883,6 +1888,12 @@ begin
                         & "=" & Model_Runner.Text.To_String
                                   (Status.Parameters (P).Text_Value));
                   end if;
+               end loop;
+               --  And where it was, for an error the engine did not expect.
+               for F in 1 .. Status.Frame_Total loop
+                  Ada.Text_IO.Put
+                    (Ada.Text_IO.Standard_Error,
+                     " at " & Model_Runner.Text.To_String (Status.Frames (F)));
                end loop;
                Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
