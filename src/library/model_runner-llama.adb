@@ -21607,6 +21607,10 @@ package body Model_Runner.Llama is
       end if;
    end Evaluate;
 
+   --  The fewest positions a batch on the device holds the part's clock
+   --  up for: more than a drafted round checks.
+   Prompt_Clock_Least : constant Element_Count := 16;
+
    ---------------------
    -- Evaluate_Batch --
    ---------------------
@@ -22020,6 +22024,17 @@ package body Model_Runner.Llama is
       if not Source.Ready then
          Status := E.Make (E.Lifecycle_Model_Not_Ready);
          return;
+      end if;
+
+      --  A prompt on the device: the part has likely been idle and at its
+      --  lowest clock, which a short prompt is over before it climbs out
+      --  of. A round's few positions are not a prompt, and a keeper beside
+      --  a token's work costs it.
+      if Count >= Prompt_Clock_Least
+        and then Model_Runner.Backend."="
+                   (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+      then
+         Model_Runner.Backend.Device.Hold_Clock;
       end if;
 
       --  More than one token at a time is a thing the backend either does or

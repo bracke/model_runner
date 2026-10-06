@@ -578,6 +578,32 @@ package body Model_Runner.Backend.Device is
    function Given_Back return Natural is (Products.Given_Back (Engine));
 
    ----------------
+   -- Hold_Clock --
+   ----------------
+
+   procedure Hold_Clock is
+   begin
+      if not Keeper_Asked and then Ready_Now then
+         declare
+            Found : Boolean;
+         begin
+            Keeper_Asked := True;
+            Devices.Open
+              (Keeping, Model_Runner.Backend.Device.Held, Opened_Which,
+               Found);
+            if Found then
+               Products.Open_Keeper (Keeping, Found);
+            end if;
+            if not Found then
+               Devices.Close (Keeping);
+            end if;
+         end;
+      end if;
+
+      Products.Keep_Clock;
+   end Hold_Clock;
+
+   ----------------
    -- Note_Layer --
    ----------------
 
@@ -593,24 +619,7 @@ package body Model_Runner.Backend.Device is
 
          --  The device waits while the processor takes this layer's
          --  experts, and a part left waiting lowers its clock.
-         if not Keeper_Asked and then Ready_Now then
-            declare
-               Found : Boolean;
-            begin
-               Keeper_Asked := True;
-               Devices.Open
-                 (Keeping, Model_Runner.Backend.Device.Held, Opened_Which,
-                  Found);
-               if Found then
-                  Products.Open_Keeper (Keeping, Found);
-               end if;
-               if not Found then
-                  Devices.Close (Keeping);
-               end if;
-            end;
-         end if;
-
-         Products.Keep_Clock;
+         Hold_Clock;
          return;
       end if;
 

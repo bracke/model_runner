@@ -221,6 +221,13 @@ package Model_Runner.Backend.Device is
      (Not_Handed, Shape_Handed, Packed_Handed, Cache_Handed, Blocks_Handed,
       Room_Handed, Refused_Handed);
 
+   --  Hold the part's clock up for the next tenth of a second: a prompt
+   --  is about to be read, and a part that has been idle sits at its lowest
+   --  clock and takes longer than a short prompt does to climb out of it.
+   --  The keeper is the one a split mixture uses; it is opened here the
+   --  first time either asks, and asking again before it stops keeps it.
+   procedure Hold_Clock;
+
    --  @param Whole True where the whole layer went over as one sequence.
    --  @param Asked True where the device was asked, False where the
    --    engine's own check kept the layer back.

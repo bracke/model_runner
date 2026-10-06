@@ -6285,6 +6285,40 @@ package body Tests.Backend_Cases is
       end;
    end The_Keeper_Spins_While_Asked_And_Stops_After;
 
+   --  The backend's own way in to the keeper, which a prompt takes: on a
+   --  closed backend it does nothing, and on an open one it opens the
+   --  keeper the first time and spins it.
+   procedure Holding_The_Clock_Spins_The_Keeper
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Was_Open : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
+      Ready    : Boolean;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Hold_Clock;
+
+      Model_Runner.Backend.Device.Open (Ready);
+      if Ready then
+         declare
+            Before : constant Natural := Products.Keeper_Rounds;
+         begin
+            for Asked in 1 .. 10 loop
+               Model_Runner.Backend.Device.Hold_Clock;
+               delay 0.01;
+            end loop;
+            Assert (Products.Keeper_Rounds > Before,
+                    "the keeper ran no round while the clock was held");
+         end;
+      end if;
+
+      Model_Runner.Backend.Device.Close;
+      if Was_Open then
+         Model_Runner.Backend.Device.Open (Ready);
+      end if;
+   end Holding_The_Clock_Spins_The_Keeper;
+
    procedure The_Linear_Layer_On_The_Device_Says_What_The_Host_Says
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10263,6 +10297,10 @@ package body Tests.Backend_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Grows_With_Room'Access,
          "a cache asked for a little more than it holds is not made again");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Holding_The_Clock_Spins_The_Keeper'Access,
+         "holding the clock does nothing on a closed backend and spins the "
+         & "keeper on an open one");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, The_Keeper_Spins_While_Asked_And_Stops_After'Access,
          "the keeper spins while the engine says it is working, stops soon "
