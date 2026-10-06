@@ -44,6 +44,8 @@ package body Model_Runner.Framework.Repository is
         & (if Exception_Message (Failure) = "" then "" else " " & Exception_Message (Failure));
    end Why;
 
+   Link_Not_Followed : constant String := "a link to a directory, not followed";
+
    --  Files larger than this are recorded and not read.
    Largest_Read : constant := 4 * 1024 * 1024;
 
@@ -1395,7 +1397,12 @@ package body Model_Runner.Framework.Repository is
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
             begin
-               if Dirs.Kind (Full) = Dirs.Directory then
+               if Dirs.Kind (Full) = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
+                  --  A link to a directory is not followed, as version
+                  --  control does not follow one: it may lead out of the
+                  --  project, or back into it without end.
+                  Result.Unread.Append (Relative & ": " & Link_Not_Followed);
+               elsif Dirs.Kind (Full) = Dirs.Directory then
                   Walk (Full, Relative);
                elsif Dirs.Kind (Full) = Dirs.Ordinary_File then
                   declare
@@ -1511,7 +1518,9 @@ package body Model_Runner.Framework.Repository is
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
             begin
-               if Dirs.Kind (Full) = Dirs.Directory then
+               if Dirs.Kind (Full) = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
+                  Result.Unread.Append (Relative & ": " & Link_Not_Followed);
+               elsif Dirs.Kind (Full) = Dirs.Directory then
                   Walk (Full, Relative);
                elsif Dirs.Kind (Full) = Dirs.Ordinary_File then
                   Now_Paths.Append (Relative);

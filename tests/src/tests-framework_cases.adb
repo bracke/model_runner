@@ -3206,6 +3206,76 @@ package body Tests.Framework_Cases is
          Dirs.Delete_File (Secret);
       end;
 
+      --  The walk holds up against what a repository may hold: a link that
+      --  leads back into it, and source in every language read that is no
+      --  source at all -- bytes that are not UTF-8, brackets that never
+      --  close, a unit that ends three times. It answers, the same twice,
+      --  a refresh as a scan, and a loop's files are not taken in again.
+      declare
+         Loop_Link : constant String := Project & "/src/loop";
+         Seed      : Natural := 12_345;
+         Made_Link : Boolean;
+         Removed   : Boolean := True;
+
+         function Noise (Count : Positive) return String is
+            R : String (1 .. Count);
+         begin
+            for C of R loop
+               Seed := (Seed * 1_103 + 12_345) mod 65_521;
+               C := Character'Val (1 + Seed mod 255);
+            end loop;
+            return R;
+         end Noise;
+
+         Names : constant array (1 .. 6) of String (1 .. 13) :=
+           ["src/junk1.adb", "src/junk2.ads", "src/junk3.c  ", "src/junk4.py ",
+            "src/junk5.rs ", "src/junk6.cpp"];
+      begin
+         for Name of Names loop
+            Put_File (Project & "/" & Ada.Strings.Fixed.Trim (Name, Ada.Strings.Right),
+                      Noise (3_000) & LF & "package X is ((( [ { begin end end end ;;; is"
+                      & LF & Noise (500));
+         end loop;
+         Put_File (Project & "/src/junk7.adb",
+                   "package body is is is" & LF & "   procedure (" & LF
+                   & "end;" & LF & "end;" & LF & "end Z.Y.;" & LF
+                   & [Character'Val (16#C3#), Character'Val (16#28#), Character'Val (16#FF#)]);
+         Made_Link := Hostkit.Fs.Create_Link (Dirs.Full_Name (Project & "/src"), Loop_Link);
+         declare
+            Nothing : Rp.Graph;
+            First   : constant Rp.Graph := Rp.Scan (Project);
+            Second  : constant Rp.Graph := Rp.Scan (Project);
+            Read    : Natural;
+            Fresh   : constant Rp.Graph := Rp.Refresh (Project, Nothing, Read);
+            Looped : Boolean := False;
+            Said   : Boolean := False;
+         begin
+            for Index in 1 .. Rp.File_Count (First) loop
+               Looped := Looped
+                 or else Ada.Strings.Fixed.Index (To_String (Rp.File_At (First, Index).Path),
+                                                  "src/loop/") = 1;
+            end loop;
+            for Index in 1 .. Rp.Unread_Count (First) loop
+               Said := Said or else Rp.Unread_At (First, Index) = "src/loop: a link to a directory, not followed";
+            end loop;
+            --  Gone before anything is asserted, so a failure leaves no
+            --  loop behind for the next run's clean-up.
+            if Made_Link then
+               Removed := Hostkit.Fs.Delete_Link (Loop_Link);
+            end if;
+            Assert (not Looped and then (Said or else not Made_Link),
+                    "a link back into the project was followed, or not said");
+            Assert (Rp.Graph_Fingerprint (First) = Rp.Graph_Fingerprint (Second)
+                    and then Rp.Graph_Fingerprint (Fresh) = Rp.Graph_Fingerprint (First),
+                    "malformed source gave a graph that is not the same twice, or by a refresh");
+         end;
+         Assert (Removed, "the test's link was not removed");
+         for Name of Names loop
+            Dirs.Delete_File (Project & "/" & Ada.Strings.Fixed.Trim (Name, Ada.Strings.Right));
+         end loop;
+         Dirs.Delete_File (Project & "/src/junk7.adb");
+      end;
+
       --  What another language's adapter would write, by hand.
       declare
          Built : Rp.Graph;
