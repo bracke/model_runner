@@ -1162,20 +1162,34 @@ package body Model_Runner.Framework.Workspaces is
          Before : Maps.Map;
          Absent : Name_Lists.Vector;
 
+         --  Everything taken so far back as it was. What cannot be is said
+         --  with the failure that stopped the taking in: the project holds
+         --  part of the work there.
          procedure Put_Back is
-            Ignored : E.Error_Info;
+            Wrote : E.Error_Info;
+            Left  : Unbounded_String;
          begin
             for Path of Taken loop
                declare
                   Target : constant String := Hostkit.Fs.Join (Project, Path);
+                  Back   : Boolean := True;
                begin
                   if Absent.Contains (Path) then
-                     Files.Discard (Target);
+                     Back := Files.Delete_If_Present (Target);
                   elsif Before.Contains (Path) then
-                     Files.Write_Text (Target, Before (Path), Ignored);
+                     Files.Write_Text (Target, Before (Path), Wrote);
+                     Back := E.Is_Ok (Wrote);
+                  end if;
+                  if not Back then
+                     Append (Left, (if Length (Left) = 0 then "" else ", ") & Path);
                   end if;
                end;
             end loop;
+            if Length (Left) > 0 then
+               E.Add_Text (Status, "detail",
+                           "and what was taken in before it could not all be put back: "
+                           & To_String (Left));
+            end if;
             Taken.Clear;
          end Put_Back;
       begin
@@ -1244,8 +1258,15 @@ package body Model_Runner.Framework.Workspaces is
                            Dirs.Create_Path (Dirs.Containing_Directory (Aside));
                            Dirs.Copy_File (Target, Aside);
                         exception
+                           --  Not kept aside, not joined: a join that could
+                           --  not be put back is not made.
                            when others =>
-                              null;
+                              Files.Write_Failed (Aside, Status);
+                              E.Add_Text (Status, "detail",
+                                          "the project's own change to " & Path
+                                          & " could not be kept aside, so the two are not joined");
+                              Put_Back;
+                              return;
                         end;
                         Files.Write_Text (Target, To_String (Joined), Wrote);
                         if E.Is_Error (Wrote) then

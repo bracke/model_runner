@@ -1619,7 +1619,8 @@ package body Model_Runner.Framework.Stores is
    procedure Restore_State
      (Item    : Store;
       From    : State_Snapshot;
-      Changed : out Name_Lists.Vector)
+      Changed : out Name_Lists.Vector;
+      Left    : out Name_Lists.Vector)
    is
       Now    : State_Snapshot;
       Status : E.Error_Info;
@@ -1631,6 +1632,7 @@ package body Model_Runner.Framework.Stores is
    begin
       Snapshot_State (Item, Now);
       Changed.Clear;
+      Left.Clear;
       declare
          Log  : Unbounded_String;
          Read : E.Error_Info;
@@ -1655,6 +1657,11 @@ package body Model_Runner.Framework.Stores is
                Changed.Append (Name);
                if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
                   Files.Write_Text (Path, To_String (Text_Maps.Element (Position)), Status);
+                  if E.Is_Error (Status) then
+                     Left.Append (Name & ": cannot be written back");
+                  end if;
+               else
+                  Left.Append (Name & ": its directory cannot be made");
                end if;
             end if;
          end;
@@ -1664,7 +1671,9 @@ package body Model_Runner.Framework.Stores is
            and then not Committed.Contains (Text_Maps.Key (Position))
          then
             Changed.Append (Text_Maps.Key (Position));
-            Files.Discard (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position)));
+            if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))) then
+               Left.Append (Text_Maps.Key (Position) & ": cannot be removed");
+            end if;
          end if;
       end loop;
    end Restore_State;

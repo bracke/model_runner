@@ -799,14 +799,21 @@ package body Model_Runner.Framework.Verification is
                   --  Stopped by whoever started it: not a failure of what
                   --  it checks, so nothing is judged and no evidence kept.
                   if Ran.Cancelled then
-                     declare
-                        Changed : Name_Lists.Vector;
-                     begin
-                        Stores.Restore_State (Item, State, Changed);
-                     end;
                      Evidence := Null_Unbounded_String;
                      Status := E.Make (E.Generation_Cancelled);
-                     E.Add_Text (Status, "detail", To_String (Next.Label) & " was cancelled");
+                     declare
+                        Changed, Left : Name_Lists.Vector;
+                        Said          : Unbounded_String;
+                     begin
+                        Stores.Restore_State (Item, State, Changed, Left);
+                        for Path of Left loop
+                           Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Path);
+                        end loop;
+                        E.Add_Text (Status, "detail", To_String (Next.Label) & " was cancelled"
+                                    & (if Said = Null_Unbounded_String then ""
+                                       else "; what it changed in the state could not all be put back: "
+                                            & To_String (Said)));
+                     end;
                      return;
                   end if;
                   Good := Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
@@ -875,15 +882,19 @@ package body Model_Runner.Framework.Verification is
          --  The project's state is not the checks' to change: what they
          --  changed is put back, and they did not pass.
          declare
-            Changed : Name_Lists.Vector;
-            Named   : Unbounded_String;
+            Changed, Left : Name_Lists.Vector;
+            Named         : Unbounded_String;
          begin
-            Stores.Restore_State (Item, State, Changed);
+            Stores.Restore_State (Item, State, Changed, Left);
             if not Changed.Is_Empty then
                Passed := False;
                for Path of Changed loop
                   Append (Named, (if Named = Null_Unbounded_String then "" else [1 => ASCII.LF])
                                  & Path);
+               end loop;
+               --  And what of it is still as the checks left it.
+               for Path of Left loop
+                  Append (Named, [1 => ASCII.LF] & "not put back: " & Path);
                end loop;
                Records.Set (Value, "state_changed", To_String (Named));
             end if;

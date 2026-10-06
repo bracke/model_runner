@@ -406,10 +406,13 @@ package Model_Runner.Framework.Stores is
    --  @param From The state as it was before.
    --  @param Changed The files, relative to the state root, that had
    --    changed; none when it was left alone.
+   --  @param Left Those of them that could not be put back, each as
+   --    "NAME: why": the state is still as something else left it there.
    procedure Restore_State
      (Item    : Store;
       From    : State_Snapshot;
-      Changed : out Name_Lists.Vector);
+      Changed : out Name_Lists.Vector;
+      Left    : out Name_Lists.Vector);
 
 private
 

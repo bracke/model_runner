@@ -21,6 +21,9 @@ is
    --  back as they were: the project's state is the harness's to change.
    Tampered : Name_Lists.Vector;
 
+   --  What of it could not be put back, each with why.
+   Tamper_Left : Name_Lists.Vector;
+
    --  What it wrote that it may not, put back as it was; and what could
    --  not be, each with why.
    Put_Back_Files : Name_Lists.Vector;
@@ -646,7 +649,7 @@ begin
                             To_String (Result.Invocation_Id));
                end if;
                Runner.Run (Prompt, To_String (Place), Answer, Ran);
-               Stores.Restore_State (Item, State, Tampered);
+               Stores.Restore_State (Item, State, Tampered, Tamper_Left);
             end;
 
             --  What an agent run apart used, as its runner reports it:
@@ -929,6 +932,8 @@ begin
          end loop;
          Conclude ("failed", "it changed the project's state, which was put back: "
                    & To_String (Named)
+                   & (if Tamper_Left.Is_Empty then ""
+                      else "; but not all of it could be: " & Comma_Separated (Tamper_Left))
                    & (if Beyond_Permissions = "" then ""
                       else "; and it changed files it may not write, which are still there:"
                            & " " & Beyond_Permissions & " -- take them out before /task complete"

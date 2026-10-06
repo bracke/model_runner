@@ -8456,10 +8456,11 @@ package body Tests.Framework_Cases is
       declare
          Taken   : S.State_Snapshot;
          Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
       begin
          S.Snapshot_State (Store, Taken);
-         S.Restore_State (Store, Taken, Changed);
-         Assert (Changed.Is_Empty, "a state left alone was put back");
+         S.Restore_State (Store, Taken, Changed, Left);
+         Assert (Changed.Is_Empty and then Left.Is_Empty, "a state left alone was put back");
       end;
 
       --  What the harness commits meanwhile -- by this process or another --
@@ -8467,17 +8468,43 @@ package body Tests.Framework_Cases is
       declare
          Taken   : S.State_Snapshot;
          Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
          Other   : Unbounded_String;
       begin
          S.Snapshot_State (Store, Taken);
          Tk.Create (Store, Change, Fields ("Meanwhile", "analysis"), "user", "", Other, Status);
          S.Commit (Store, Change, Status);
          Put_File (Fresh_Root (Store) & "/.model_runner/sneaked.rec", "x");
-         S.Restore_State (Store, Taken, Changed);
+         S.Restore_State (Store, Taken, Changed, Left);
          Assert (Tk.State_Of (Store, To_String (Other)) = "candidate"
                  and then Changed.Contains ("sneaked.rec")
+                 and then Left.Is_Empty
                  and then not Dirs.Exists (Fresh_Root (Store) & "/.model_runner/sneaked.rec"),
                  "a commit made meanwhile was put back, or a write behind the harness kept");
+      end;
+
+      --  What cannot be taken back out is said, not passed off as put back.
+      declare
+         Taken   : S.State_Snapshot;
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Shut    : constant String := Fresh_Root (Store) & "/.model_runner/sneaked";
+      begin
+         S.Snapshot_State (Store, Taken);
+         Dirs.Create_Path (Shut);
+         Put_File (Shut & "/stuck.rec", "x");
+         GNAT.OS_Lib.Set_Non_Writable (Shut);
+         S.Restore_State (Store, Taken, Changed, Left);
+         GNAT.OS_Lib.Set_Writable (Shut);
+         --  Where permissions do not hold, it went, and there is nothing
+         --  left to say.
+         Assert (Left.Contains ("sneaked/stuck.rec: cannot be removed")
+                 or else not Dirs.Exists (Shut & "/stuck.rec"),
+                 "a write behind the harness that could not be taken out was not said");
+         if Dirs.Exists (Shut & "/stuck.rec") then
+            Dirs.Delete_File (Shut & "/stuck.rec");
+         end if;
+         Dirs.Delete_Directory (Shut);
       end;
 
       --  Work whose lease no longer names its agent is withdrawn.
