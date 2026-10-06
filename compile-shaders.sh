@@ -59,6 +59,8 @@ compile row_product_low              row_product.comp      vulkan1.0 LOW_BITS
 compile row_product_super            row_product_super.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super_long       row_product_super.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super_multi      row_product_super.comp vulkan1.1 NUM_ROWS=8u MULTI
+compile row_product_super_glu        row_product_super.comp vulkan1.1 NUM_ROWS=1u GLU
+compile row_product_super_glu_multi  row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super6           row_product_super6.comp vulkan1.1 NUM_ROWS=2u

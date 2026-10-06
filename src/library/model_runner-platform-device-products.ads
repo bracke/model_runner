@@ -790,6 +790,88 @@ package Model_Runner.Platform.Device.Products is
       Apart     : Natural := 0;
       Routed    : Natural := 0);
 
+   --  Whether the engine takes a feed-forward's gate and up projections
+   --  as one step for a batch of Count, as Add_Gated_Pair names it: Q4_K
+   --  rows shorter than the long-row kernel's, one position or a few.
+   --
+   --  @param Item The engine.
+   --  @param Packing The two matrices' format.
+   --  @param Count Positions in the batch.
+   --  @param Columns Elements a row holds.
+   --  @return True where Add_Gated_Pair's step can run.
+   function Pairs_Gate
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural;
+      Columns : Natural) return Boolean;
+
+   --  The rows of Q4_K a gate and up region holds, ending at the up's last
+   --  row, the up's beginning Pair_At bytes past the gate's: what
+   --  Add_Gated_Pair uploads, and what the two plain products name as
+   --  their region so that all three share one upload. Whole rows from
+   --  the up's end back, so the region begins Pair_Pad bytes before the
+   --  gate -- never past the end of a file whose last tensor is the up.
+   --
+   --  @param Pair_At Bytes from the gate's first row to the up's.
+   --  @param Rows Rows each matrix holds.
+   --  @param Columns Elements a row holds.
+   --  @return The region's rows, rounded up.
+   function Pair_Rows
+     (Pair_At : Model_Runner.Bytes.Byte_Count;
+      Rows    : Natural;
+      Columns : Natural) return Natural;
+
+   --  How far before the gate's first row the region Pair_Rows counts
+   --  begins, in bytes: what rounding it to whole rows from the up's end
+   --  adds at its front.
+   --
+   --  @param Pair_At Bytes from the gate's first row to the up's.
+   --  @param Rows Rows each matrix holds.
+   --  @param Columns Elements a row holds.
+   --  @return Bytes the region begins before the gate.
+   function Pair_Pad
+     (Pair_At : Model_Runner.Bytes.Byte_Count;
+      Rows    : Natural;
+      Columns : Natural) return Natural;
+
+   --  Name a feed-forward's gate and up projections as one step, with the
+   --  sigmoid-weighted unit on the gate and the two multiplied -- what two
+   --  products and a combination make, the same bits, without the
+   --  combination's dispatch and the barrier before it.
+   --
+   --  The two matrices lie in one region, the up's rows Pair_At bytes past
+   --  the gate's; the region from the gate's first row to the up's last is
+   --  what goes to the device.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base Where the region that holds both begins.
+   --  @param Span Bytes it holds.
+   --  @param At_Byte Where the region begins in it: Pair_Pad bytes before
+   --    the gate's rows.
+   --  @param Pair_At How far past them the up's rows begin, in bytes.
+   --  @param Packing The two matrices' format.
+   --  @param Rows Rows each holds, which is how wide the answer is.
+   --  @param Columns Elements a row holds.
+   --  @param Added False when the sequence is full or the shape does not
+   --    hold together.
+   --  @param Key What the region is known by on the device.
+   --  @param Kept False when nothing on the host reads the answer.
+   --  @param From_Step Step whose answer is the activation, or zero for the
+   --    step before this one.
+   procedure Add_Gated_Pair
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Pair_At   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Rows      : Natural;
+      Columns   : Natural;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      From_Step : Natural := 0);
+
    --  Whether the routing steps of the model now open leave the chosen
    --  experts' shares as the softmax gave them, rather than putting them
    --  back on a scale where they sum to one. DeepSeek-V2 leaves them; every
@@ -1470,6 +1552,11 @@ package Model_Runner.Platform.Device.Products is
    --    asks; on, for a small table feeding a unit where the rounding is
    --    below what the unit lets through, and the row kernel at a batch is
    --    the slow part of the layer.
+   --  @param Region_Rows Rows of the region the matrix is uploaded as part
+   --    of, from At_Byte -- a gate and up shared with a gated pair, see
+   --    Pair_Rows -- or nought for the matrix alone.
+   --  @param Region_At Bytes into that region where this matrix's rows
+   --    begin.
    procedure Add_Chained_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1482,7 +1569,9 @@ package Model_Runner.Platform.Device.Products is
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
       From_Step : Natural := 0;
-      Rounded   : Boolean := False);
+      Rounded   : Boolean := False;
+      Region_Rows : Natural := 0;
+      Region_At   : Natural := 0);
 
    --  Name a step that combines the two results before it.
    --
@@ -3215,6 +3304,13 @@ private
       Many_Shader6 : System.Address := System.Null_Address;
       Many_Lines4  : Many_Array := [others => System.Null_Address];
       Many_Lines6  : Many_Array := [others => System.Null_Address];
+
+      --  Q4_K's gate and up at once with the unit between them, for one
+      --  position and for a few; see Add_Gated_Pair.
+      Glu_Shader       : System.Address := System.Null_Address;
+      Glu_Line         : System.Address := System.Null_Address;
+      Glu_Many_Shader  : System.Address := System.Null_Address;
+      Glu_Many_Lines   : Many_Array := [others => System.Null_Address];
       Long_Shader6 : System.Address := System.Null_Address;
       Long_Line6   : System.Address := System.Null_Address;
       Mid_Shader6  : System.Address := System.Null_Address;
@@ -3883,6 +3979,21 @@ private
       --  none.
       Bias_Width : Natural := 0;
       V_Bias_At  : Natural := 0;
+
+      --  A product of a gate and an up projection at once, as
+      --  Add_Gated_Pair describes it: the up's rows begin Pair_At bytes
+      --  past the gate's, and the answer is the unit on the gate times the
+      --  up, Rows wide.
+      Glu     : Boolean := False;
+      Pair_At : Natural := 0;
+
+      --  A product whose matrix is uploaded as part of a larger region --
+      --  a feed-forward's gate and up as one, which the gated pair and the
+      --  two plain products then share on the device: the region's rows,
+      --  counted from At_Byte, and how many bytes in this step's own rows
+      --  begin. Nought rows is the matrix alone.
+      Region_Rows : Natural := 0;
+      Region_At   : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

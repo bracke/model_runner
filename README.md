@@ -2235,16 +2235,18 @@ tests speed --model MODEL --backend device
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.341 s | **0.225 s** |
-| -- evaluating the prompt | 0.041 s | 0.024 s |
-| -- generating | 0.300 s | **0.200 s** |
-| -- processor time | 1.82 s | **0.06 s** |
-| 110-token prompt, one token | 0.346 s | **0.101 s** |
-| -- evaluating the prompt | 0.320 s | **0.083 s** |
-| -- processor time | 2.65 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.343 s | **0.227 s** |
+| -- evaluating the prompt | 0.042 s | 0.024 s |
+| -- generating | 0.301 s | **0.202 s** |
+| -- processor time | 1.83 s | **0.07 s** |
+| 110-token prompt, one token | 0.347 s | **0.099 s** |
+| -- evaluating the prompt | 0.320 s | **0.079 s** |
+| -- processor time | 2.66 s | **0.02 s** |
 
-Every cell was taken again on 2026-10-06, both columns in one sitting, after
-a day of changes to the kernels: each moved within its spread or a little
+Every cell was taken again later on 2026-10-06, once a device prompt held the
+part's clock up: the device's 110-token prompt 0.083 -> 0.079 s, every other
+cell within its spread. Before that, every cell was taken again the same day,
+both columns in one sitting, after a day of changes to the kernels: each moved within its spread or a little
 faster, the processor's 110-token wall aside (0.327 -> 0.346 s with its prompt
 0.326 -> 0.320, the difference the one token generated after it). The
 device's cells were taken again on 2026-09-25 when the tile went to

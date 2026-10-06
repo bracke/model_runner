@@ -2544,8 +2544,13 @@ package body Model_Runner.Platform.Device.Products is
                   Item.Wave_Shader6 := Made;
                end if;
 
-               --  And the two compilations over a few positions at once.
+               --  And the two compilations over a few positions at once,
+               --  and Q4_K's gate and up at once for one and for a few.
                declare
+                  Glu  : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Row_Product_Super_Glu;
+                  Glus : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Row_Product_Super_Glu_Multi;
                   Four : aliased constant Model_Runner.Shaders.Word_Array :=
                     Model_Runner.Shaders.Row_Product_Super_Multi;
                   Six  : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -2565,6 +2570,22 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Many_Shader6 := Made;
+                  end if;
+
+                  Request.Size := Interfaces.C.size_t (Glu'Length * 4);
+                  Request.Code := Glu'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Glu_Shader := Made;
+                  end if;
+
+                  Request.Size := Interfaces.C.size_t (Glus'Length * 4);
+                  Request.Code := Glus'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Glu_Many_Shader := Made;
                   end if;
                end;
             end if;
@@ -3770,7 +3791,17 @@ package body Model_Runner.Platform.Device.Products is
                      Line (Wave_Lanes, C.unsigned (Count),
                            Item.Many_Lines6 (Count));
                   end if;
+                  if Item.Glu_Many_Shader /= Null_Handle then
+                     Request.Stage.Module := Item.Glu_Many_Shader;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Glu_Many_Lines (Count));
+                  end if;
                end loop;
+
+               if Item.Glu_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.Glu_Shader;
+                  Line (Wave_Lanes, 1, Item.Glu_Line);
+               end if;
 
                if Item.Long_Shader6 /= Null_Handle then
                   Request.Stage.Module := Item.Long_Shader6;
@@ -5016,9 +5047,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line5, "vkDestroyPipeline");
       Give_Back (Item.Wave_Line6, "vkDestroyPipeline");
+      Give_Back (Item.Glu_Line, "vkDestroyPipeline");
       for Count in Many_Count loop
          Give_Back (Item.Many_Lines4 (Count), "vkDestroyPipeline");
          Give_Back (Item.Many_Lines6 (Count), "vkDestroyPipeline");
+         Give_Back (Item.Glu_Many_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Long_Line6, "vkDestroyPipeline");
       Give_Back (Item.Mid_Line6, "vkDestroyPipeline");
@@ -5183,6 +5216,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Many_Shader4, "vkDestroyShaderModule");
       Give_Back (Item.Many_Shader6, "vkDestroyShaderModule");
+      Give_Back (Item.Glu_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Glu_Many_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Mid_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader, "vkDestroyShaderModule");
@@ -9931,6 +9966,9 @@ package body Model_Runner.Platform.Device.Products is
             return "gather " & Shape (This.Each, This.Columns) & " "
               & Packing_Name (This.Packing)
               & (if This.Joins then " +join" else "");
+         elsif This.Glu then
+            return "gated pair " & Shape (This.Rows, This.Columns) & " "
+              & Packing_Name (This.Packing);
          else
             return "product " & Shape (This.Rows, This.Columns) & " "
               & Packing_Name (This.Packing)
@@ -9989,7 +10027,9 @@ package body Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
       From_Step : Natural := 0;
-      Rounded   : Boolean := False)
+      Rounded   : Boolean := False;
+      Region_Rows : Natural := 0;
+      Region_At   : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -10015,9 +10055,128 @@ package body Model_Runner.Platform.Device.Products is
          Reads => (if From_Step = 0 then 0 else From_Step),
          Kept => Kept, Rounded => Rounded,
          Blends => False, Unit => 0, Attends => False,
+         Region_Rows => Region_Rows, Region_At => Region_At,
          others => <>);
       Added := True;
    end Add_Chained_Product;
+
+   ----------------
+   -- Pairs_Gate --
+   ----------------
+
+   function Pairs_Gate
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural;
+      Columns : Natural) return Boolean
+   is (Packing = Packed_Q4_K
+       and then Columns mod 256 = 0
+       and then ((Count = 1
+                  and then Columns < Long_Row_Columns
+                  and then Item.Glu_Line /= Null_Handle
+                  and then Waved (Item, Packing, Count))
+                 or else
+                 (Count in Many_Count
+                  and then Item.Glu_Many_Lines (Count) /= Null_Handle
+                  and then Waved (Item, Packing, Count))));
+
+   ---------------
+   -- Pair_Rows --
+   ---------------
+
+   function Pair_Rows
+     (Pair_At : Model_Runner.Bytes.Byte_Count;
+      Rows    : Natural;
+      Columns : Natural) return Natural
+   is
+      Wide : constant Model_Runner.Bytes.Byte_Count :=
+        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+   begin
+      if Wide = 0 then
+         return 0;
+      end if;
+      return Natural
+        ((Pair_At + Model_Runner.Bytes.Byte_Count (Rows) * Wide + Wide - 1)
+         / Wide);
+   end Pair_Rows;
+
+   --------------
+   -- Pair_Pad --
+   --------------
+
+   function Pair_Pad
+     (Pair_At : Model_Runner.Bytes.Byte_Count;
+      Rows    : Natural;
+      Columns : Natural) return Natural
+   is
+      Wide : constant Model_Runner.Bytes.Byte_Count :=
+        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+   begin
+      return Natural
+        (Model_Runner.Bytes.Byte_Count (Pair_Rows (Pair_At, Rows, Columns))
+         * Wide
+         - Pair_At - Model_Runner.Bytes.Byte_Count (Rows) * Wide);
+   end Pair_Pad;
+
+   --------------------
+   -- Add_Gated_Pair --
+   --------------------
+
+   procedure Add_Gated_Pair
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Pair_At   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Rows      : Natural;
+      Columns   : Natural;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      From_Step : Natural := 0)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      --  Bytes a Q4_K row holds.
+      Wide : constant Model_Runner.Bytes.Byte_Count :=
+        Model_Runner.Bytes.Byte_Count (Columns / 256) * 144;
+   begin
+      Added := False;
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Packing /= Packed_Q4_K
+        or else Columns = 0
+        or else Columns mod 256 /= 0
+        or else Rows = 0
+        or else Source not in 1 .. Steps.Held
+        or else Columns /= Steps.Items (Source).Rows
+        or else Pair_At < Model_Runner.Bytes.Byte_Count (Rows) * Wide
+        or else Pair_At > Model_Runner.Bytes.Byte_Count (Natural'Last / 2)
+        or else Span < At_Byte
+                       + Model_Runner.Bytes.Byte_Count
+                           (Pair_Pad (Pair_At, Rows, Columns))
+                       + Pair_At
+                       + Model_Runner.Bytes.Byte_Count (Rows) * Wide
+      then
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
+         Rows => Rows, Columns => Columns, Key => Key, Chained => True,
+         Reads => (if From_Step = 0 then 0 else From_Step),
+         Kept => Kept,
+         Blends => False, Unit => 0, Attends => False,
+         Glu => True, Pair_At => Natural (Pair_At),
+         Region_Rows => Pair_Rows (Pair_At, Rows, Columns),
+         Region_At => Pair_Pad (Pair_At, Rows, Columns),
+         others => <>);
+      Added := True;
+   end Add_Gated_Pair;
 
    --------------------------
    -- Add_Gathered_Product --
@@ -11512,6 +11671,7 @@ package body Model_Runner.Platform.Device.Products is
 
       function Tiled (Which : Positive) return Boolean
       is (Is_Product (Which)
+          and then not Steps.Items (Which).Glu
           and then Steps.Items (Which).Gathers <= 1
           and then not Steps.Items (Which).Listed
           and then not Steps.Items (Which).Exact
@@ -12095,7 +12255,9 @@ package body Model_Runner.Platform.Device.Products is
                                          else This.Reads)).Rows)
               or else Wide = 0
               or else Interfaces.Unsigned_64
-                        (if This.Gathers > 0 then This.Stack else This.Rows)
+                        (if This.Gathers > 0 then This.Stack
+                         elsif This.Region_Rows /= 0 then This.Region_Rows
+                         else This.Rows)
                         * Interfaces.Unsigned_64 (This.Columns) > Max_Elements
               or else Interfaces.Unsigned_64 (This.Columns)
                         * Interfaces.Unsigned_64 (Count) > Max_Elements
@@ -12104,15 +12266,20 @@ package body Model_Runner.Platform.Device.Products is
                         < Interfaces.Unsigned_64 (This.At_Byte)
                           + Interfaces.Unsigned_64
                               (if This.Gathers > 0 then This.Stack
+                               elsif This.Region_Rows /= 0
+                               then This.Region_Rows
                                else This.Rows) * Wide
             then
                return;
             else
                --  A gather uploads and keeps the whole stack, whatever
-               --  few of its slices this step reads.
+               --  few of its slices this step reads; a product in a
+               --  region -- a gate and up shared -- the whole region.
                Places (Index).Weight :=
                  Interfaces.Unsigned_64
-                   (if This.Gathers > 0 then This.Stack else This.Rows)
+                   (if This.Gathers > 0 then This.Stack
+                    elsif This.Region_Rows /= 0 then This.Region_Rows
+                    else This.Rows)
                  * Wide;
             end if;
             if This.Folded then
@@ -12254,6 +12421,7 @@ package body Model_Runner.Platform.Device.Products is
                     or else This.Mambas
                 then 1
                 elsif This.Gathers > 0 then This.Stack
+                elsif This.Region_Rows /= 0 then This.Region_Rows
                 else This.Rows),
                (if This.Norms then This.Rows / This.Groups
                 elsif This.Biases then This.Stack * This.Each
@@ -12282,6 +12450,18 @@ package body Model_Runner.Platform.Device.Products is
             if not Good then
                Release_All;
                return;
+            end if;
+
+            --  A product whose rows begin inside the region it uploads
+            --  reads from there: every dispatch below counts from Base,
+            --  and every binding ends at Base and Weight, which stays the
+            --  region's end.
+            if This.Region_At /= 0 then
+               Places (Index).Base :=
+                 Places (Index).Base + Interfaces.Unsigned_64 (This.Region_At);
+               Places (Index).Weight :=
+                 Places (Index).Weight
+                 - Interfaces.Unsigned_64 (This.Region_At);
             end if;
          end;
 
@@ -14737,6 +14917,45 @@ package body Model_Runner.Platform.Device.Products is
                      Half_From := Index;
                      Half_Wide := This.Rows;
                   end if;
+
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               --  A feed-forward's gate and up at once, the unit between
+               --  them: two rows of each a workgroup for one position,
+               --  four for a few.
+               if This.Glu then
+                  declare
+                     One  : constant Boolean := Count = 1;
+                     Band : constant Natural := (if One then 1 else 4);
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Rows),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => 0,
+                        Table   => 0,
+                        Members => [others => 0],
+                        Stride  => C.unsigned (This.Pair_At),
+                        Apart   => 0,
+                        Routed  => 0);
+                  begin
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        (if One then Item.Glu_Line
+                         else Item.Glu_Many_Lines (Count)));
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((This.Rows + Band - 1) / Band), 1, 1);
+                  end;
 
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,

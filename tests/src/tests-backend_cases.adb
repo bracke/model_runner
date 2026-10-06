@@ -6201,6 +6201,185 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Cache_Grows_With_Room;
 
+   --  A feed-forward's gate and up as one step, the unit between them,
+   --  against the two products and the combination it stands for: the
+   --  same bits, one position and three. And the two plain products
+   --  reading one shared region -- each its own rows inside it, the gate a
+   --  pad's way in -- against each reading its own matrix: the same bits
+   --  again. The matrices lie a short gap apart behind a run of other
+   --  bytes, as a file puts the feed-forward's normalization between them.
+   procedure The_Gated_Pair_Says_What_Its_Parts_Say
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Rows    : constant := 64;
+      Columns : constant := 512;
+      Wide    : constant := Columns / 256 * 144;
+      Before  : constant := 1024;
+      Gap     : constant := 64;
+
+      Gate_Values : constant N.Real_Array :=
+        Fixtures.Sequence (Rows * Columns, 2711, 1.0);
+      Up_Values   : constant N.Real_Array :=
+        Fixtures.Sequence (Rows * Columns, 3137, 1.0);
+      Gate_Bytes  : constant B.Byte_Array := Fixtures.Encode_Q4_K (Gate_Values);
+      Up_Bytes    : constant B.Byte_Array := Fixtures.Encode_Q4_K (Up_Values);
+
+      Gate_At : constant B.Byte_Count := Before;
+      Up_At   : constant B.Byte_Count := Before + Rows * Wide + Gap;
+      Pair_At : constant B.Byte_Count := Up_At - Gate_At;
+
+      Region : constant Natural := Products.Pair_Rows (Pair_At, Rows, Columns);
+      Pad    : constant Natural := Products.Pair_Pad (Pair_At, Rows, Columns);
+      Start  : constant B.Byte_Count := Gate_At - B.Byte_Count (Pad);
+
+      Stored : aliased B.Byte_Array (0 .. Up_At + Rows * Wide - 1) :=
+        [others => 7];
+
+      Gain : constant N.Real_Array (0 .. Columns - 1) := [others => 1.0];
+
+      Held    : Devices.Inventory;
+      Opened  : Devices.Context;
+      Engine  : Products.Engine;
+      Found   : Boolean;
+      Ready   : Boolean;
+   begin
+      Stored (Gate_At .. Gate_At + Rows * Wide - 1) := Gate_Bytes;
+      Stored (Up_At .. Up_At + Rows * Wide - 1) := Up_Bytes;
+
+      Assert (Natural (Pair_At + Rows * Wide) + Pad = Region * Wide,
+              "the region does not end where the up does");
+      Assert (Pad < Wide, "the region begins a row or more early");
+
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Count in Positive range 1 .. 3 loop
+         if Count = 2 then
+            goto Next_Count;
+         end if;
+
+         declare
+            Input : constant N.Real_Array :=
+              Fixtures.Sequence
+                (N.Element_Count (Columns * Count),
+                 Interfaces.Unsigned_64 (4099 + Count), 1.0);
+            --  Every step's answer lands, one after another: the
+            --  normalization's, then the gate's, the up's and the
+            --  combination's -- or the gated pair's.
+            Width : constant N.Element_Count := N.Element_Count (Count);
+            Plain, Shared :
+              N.Real_Array (0 .. (Columns + 3 * Rows) * Width - 1);
+            Paired : N.Real_Array (0 .. (Columns + Rows) * Width - 1);
+            Made   : constant N.Element_Count := (Columns + 2 * Rows) * Width;
+            Pair   : constant N.Element_Count := Columns * Width;
+            Steps  : Products.Sequence;
+            Added  : Boolean;
+            Ok     : Boolean;
+            Halted : Boolean;
+
+            procedure Start_Steps is
+            begin
+               Products.Open_Sequence (Steps);
+               Products.Add_Norm
+                 (Steps, Gain (Gain'First)'Address,
+                  B.Byte_Count (Gain'Length) * 4, 0, Columns, 1.0E-6, Added,
+                  Key => Gain (Gain'First)'Address, Kept => False);
+               Assert (Added, "the normalization was refused");
+            end Start_Steps;
+         begin
+            --  Each its own matrix.
+            Start_Steps;
+            Products.Add_Chained_Product
+              (Steps, Stored'Address, Stored'Length, Gate_At,
+               Products.Packed_Q4_K, Rows, Columns, Added, Kept => False,
+               From_Step => 1);
+            Assert (Added, "the gate was refused");
+            Products.Add_Chained_Product
+              (Steps, Stored'Address, Stored'Length, Up_At,
+               Products.Packed_Q4_K, Rows, Columns, Added, Kept => False,
+               From_Step => 1);
+            Assert (Added, "the up was refused");
+            Products.Add_Combination (Steps, 0, Added);
+            Assert (Added, "the combination was refused");
+            Products.Run (Engine, Steps, Input, Count, Plain, Ok, Halted);
+            Assert (Ok, "the plain feed-forward was refused");
+
+            --  Both read out of the one region.
+            Start_Steps;
+            Products.Add_Chained_Product
+              (Steps, Stored'Address, Stored'Length, Start,
+               Products.Packed_Q4_K, Rows, Columns, Added,
+               Key => Stored (Gate_At)'Address, Kept => False,
+               From_Step => 1, Region_Rows => Region, Region_At => Pad);
+            Assert (Added, "the gate in the region was refused");
+            Products.Add_Chained_Product
+              (Steps, Stored'Address, Stored'Length, Start,
+               Products.Packed_Q4_K, Rows, Columns, Added,
+               Key => Stored (Gate_At)'Address, Kept => False,
+               From_Step => 1, Region_Rows => Region,
+               Region_At => Pad + Natural (Pair_At));
+            Assert (Added, "the up in the region was refused");
+            Products.Add_Combination (Steps, 0, Added);
+            Assert (Added, "the combination was refused");
+            Products.Run (Engine, Steps, Input, Count, Shared, Ok, Halted);
+            Assert (Ok, "the feed-forward in one region was refused");
+            Assert (N."=" (Shared (Made .. Made + Rows * Width - 1),
+                           Plain (Made .. Made + Rows * Width - 1)),
+                    "products in one region answer otherwise than each in "
+                    & "its own matrix, at" & Count'Image & " positions");
+
+            --  As one step, where the engine has the kernel.
+            if Products.Pairs_Gate
+                 (Engine, Products.Packed_Q4_K, Count, Columns)
+            then
+               Start_Steps;
+               Products.Add_Gated_Pair
+                 (Steps, Stored'Address, Stored'Length, Start, Pair_At,
+                  Products.Packed_Q4_K, Rows, Columns, Added,
+                  Key => Stored (Gate_At)'Address);
+               Assert (Added, "the gated pair was refused");
+               Products.Run (Engine, Steps, Input, Count, Paired, Ok, Halted);
+               Assert (Ok, "the gated pair would not run");
+               for Index in 0 .. Rows * Width - 1 loop
+                  Assert (Paired (Pair + Index) = Plain (Made + Index),
+                          "the gated pair answers"
+                          & N.Real'Image (Paired (Pair + Index))
+                          & " where its parts answer"
+                          & N.Real'Image (Plain (Made + Index)) & " at"
+                          & Index'Image & ", " & Count'Image & " positions");
+               end loop;
+            else
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no gated pair kernel at" & Count'Image
+                  & " positions here");
+            end if;
+         end;
+
+         <<Next_Count>>
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end The_Gated_Pair_Says_What_Its_Parts_Say;
+
    procedure The_Keeper_Spins_While_Asked_And_Stops_After
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10297,6 +10476,11 @@ package body Tests.Backend_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Grows_With_Room'Access,
          "a cache asked for a little more than it holds is not made again");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, The_Gated_Pair_Says_What_Its_Parts_Say'Access,
+         "a gate and up as one step say what the two products and the "
+         & "combination say, and two products in one region what each in "
+         & "its own does");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Holding_The_Clock_Spins_The_Keeper'Access,
          "holding the clock does nothing on a closed backend and spins the "

@@ -4301,23 +4301,111 @@ package body Model_Runner.Backend.Device is
                Step_Room (Width);
             end if;
          else
-            if Gated then
-               Products.Add_Chained_Product
-                 (Steps, Gate.Base, Gate.Span, Gate.Offset, Gate_P,
-                  Natural (Gate.Rows), Natural (Gate.Columns), Added,
-                  Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
-                  From_Step => Step_Norm_Feed);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Gate.Rows);
-            end if;
+            declare
+               use type Products.Weight_Packing;
+               use type Model_Runner.Numerics.Real;
 
-            Products.Add_Chained_Product
-              (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
-               Natural (Up.Rows), Natural (Up.Columns), Added,
-               Key => At_Offset (Up.Base, Up.Offset), Kept => False,
-               From_Step => Step_Norm_Feed);
+               Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Gate.Columns / 256) * 144
+                 * Model_Runner.Bytes.Byte_Count (Gate.Rows);
+
+               --  A gate and up the file keeps a short way apart, the up
+               --  after: uploaded as one region the plain products and a
+               --  gated pair all read, so neither way of running the layer
+               --  holds a second copy. The file puts the feed-forward's
+               --  normalization between them.
+               Paired : constant Boolean :=
+                 Gated
+                 and then Unit = 0
+                 and then Alpha = 0.0 and then Limit = 0.0
+                 and then Gate_P = Products.Packed_Q4_K
+                 and then Up_P = Gate_P
+                 and then Gate_Bias = null and then Up_Bias = null
+                 and then Gate.Base = Up.Base
+                 and then Gate.Span = Up.Span
+                 and then Gate.Rows = Up.Rows
+                 and then Gate.Columns = Up.Columns
+                 and then Gate.Columns mod 256 = 0
+                 and then Up.Offset >= Gate.Offset + Gate_Bytes
+                 and then Up.Offset - Gate.Offset - Gate_Bytes <= 2**20
+                 and then Gate.Offset >= Gate_Bytes;
+
+               Pair_At : constant Model_Runner.Bytes.Byte_Count :=
+                 (if Paired then Up.Offset - Gate.Offset else 0);
+
+               Region : constant Natural :=
+                 (if Paired
+                  then Products.Pair_Rows
+                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns))
+                  else 0);
+
+               Pad : constant Natural :=
+                 (if Paired
+                  then Products.Pair_Pad
+                         (Pair_At, Natural (Gate.Rows), Natural (Gate.Columns))
+                  else 0);
+
+               --  Where the region begins: whole rows back from the up's
+               --  end, a little before the gate.
+               Start : constant Model_Runner.Bytes.Byte_Count :=
+                 Gate.Offset - Model_Runner.Bytes.Byte_Count (Pad);
+
+               Pair_Key : constant System.Address :=
+                 At_Offset (Gate.Base, Gate.Offset);
+            begin
+               --  The two and the unit between them as one step, where
+               --  the engine has the kernel for this batch: the
+               --  combination and the barrier before it go.
+               if Paired
+                 and then Products.Pairs_Gate
+                            (Engine, Gate_P, Natural (Slots),
+                             Natural (Gate.Columns))
+               then
+                  Products.Add_Gated_Pair
+                    (Steps, Gate.Base, Gate.Span, Start, Pair_At,
+                     Gate_P, Natural (Gate.Rows), Natural (Gate.Columns),
+                     Added, Key => Pair_Key, Kept => False,
+                     From_Step => Step_Norm_Feed);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Gate.Rows);
+                  goto Combined;
+               end if;
+
+               if Gated then
+                  Products.Add_Chained_Product
+                    (Steps, Gate.Base, Gate.Span,
+                     (if Paired then Start else Gate.Offset), Gate_P,
+                     Natural (Gate.Rows), Natural (Gate.Columns), Added,
+                     Key =>
+                       (if Paired then Pair_Key
+                        else At_Offset (Gate.Base, Gate.Offset)),
+                     Kept => False,
+                     From_Step => Step_Norm_Feed,
+                     Region_Rows => Region, Region_At => Pad);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Gate.Rows);
+               end if;
+
+               if Paired then
+                  Products.Add_Chained_Product
+                    (Steps, Gate.Base, Gate.Span, Start, Up_P,
+                     Natural (Up.Rows), Natural (Up.Columns), Added,
+                     Key => Pair_Key, Kept => False,
+                     From_Step => Step_Norm_Feed,
+                     Region_Rows => Region,
+                     Region_At => Pad + Natural (Pair_At));
+               else
+                  Products.Add_Chained_Product
+                    (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+                     Natural (Up.Rows), Natural (Up.Columns), Added,
+                     Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+                     From_Step => Step_Norm_Feed);
+               end if;
+            end;
             if not Added then
                return;
             end if;
@@ -4346,6 +4434,7 @@ package body Model_Runner.Backend.Device is
             end if;
             Step_Room (Up.Rows);
 
+            <<Combined>>
             Products.Add_Chained_Product
               (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
                Natural (Down.Rows), Natural (Down.Columns), Added,

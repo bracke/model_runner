@@ -6612,12 +6612,13 @@ package body Checks is
       --  the second time as the compilation that gives a long row two
       --  waves, and Q6_K's a third time as the compilation for rows past
       --  2048 columns that shares a block's scales round the wave; and
-      --  Q4_K's and Q6_K's compilations over a few positions at once.
-      for Which in 1 .. 9 loop
+      --  Q4_K's and Q6_K's compilations over a few positions at once, and
+      --  Q4_K's gate and up at once for one and for a few.
+      for Which in 1 .. 11 loop
          declare
             Name : constant String :=
               (if Which in 7 | 9 then "row_product_super6"
-               elsif Which = 8 then "row_product_super"
+               elsif Which in 8 | 10 | 11 then "row_product_super"
                else
                  (case (Which - 1) mod 3 is
                      when 0 => "row_product_super",
@@ -6645,6 +6646,10 @@ package body Checks is
                      Model_Runner.Shaders.Row_Product_Super_Multi_Digest,
                   when 9 =>
                      Model_Runner.Shaders.Row_Product_Super6_Multi_Digest,
+                  when 10 =>
+                     Model_Runner.Shaders.Row_Product_Super_Glu_Digest,
+                  when 11 =>
+                     Model_Runner.Shaders.Row_Product_Super_Glu_Multi_Digest,
                   when others =>
                      Model_Runner.Shaders.Row_Product_Super6_Mid_Digest);
          begin

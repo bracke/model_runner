@@ -32,6 +32,22 @@
 #endif
 layout(local_size_x = 64 * KSPLIT) in;
 
+//  GLU: a feed-forward's gate and up projections at once, the up's rows
+//  stride bytes past the gate's in the same buffer, and the answer the
+//  gate through the sigmoid-weighted unit times the up -- what combine.comp
+//  makes of the two, in the same order. Each row of either is summed as
+//  the plain kernel sums it, so the two arms are the same bits they were;
+//  what goes is the combining step and the barrier before it.
+#ifdef GLU
+#define ACC (2u * NUM_ROWS)
+#else
+#define ACC NUM_ROWS
+#endif
+
+float sigmoid_weighted(float x) {
+    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
+
 shared float wave_sums[KSPLIT * NUM_ROWS];
 
 layout(std430, binding = 0) readonly  buffer Weights  { uint  w[]; };
@@ -111,8 +127,8 @@ void main() {
     uint blocks = shape.columns / 256u;
     uint span = blocks * 144u;
 
-    float temp[NUM_ROWS][VEC];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[ACC][VEC];
+    for (uint r = 0u; r < ACC; ++r) {
         for (uint k = 0u; k < VEC; ++k) {
             temp[r][k] = 0.0;
         }
@@ -135,9 +151,15 @@ void main() {
                             dot (by232[k], vec4 (1.0)));
         }
 
-        for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint r = 0u; r < ACC; ++r) {
+#ifdef GLU
+            uint row = min (first_row + r % NUM_ROWS, shape.rows - 1u);
+            uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
+                      + row * span + i * 144u;
+#else
             uint row = min (first_row + r, shape.rows - 1u);
             uint at = shape.base + slice + row * span + i * 144u;
+#endif
             uint head = at >> 2u;
             vec2 dm = unpackHalf2x16 (w[head]);
             uvec3 sc = uvec3 (w[head + 1u], w[head + 2u], w[head + 3u]);
@@ -169,6 +191,20 @@ void main() {
         }
     }
 
+#ifdef GLU
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float gate = subgroupAdd (temp[r][k]);
+            float up = subgroupAdd (temp[r + NUM_ROWS][k]);
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                y[(shape.first + k) * shape.rows + row] =
+                  sigmoid_weighted (gate) * up;
+            }
+        }
+    }
+    return;
+#endif
     for (uint r = 0u; r < NUM_ROWS; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < VEC; ++k) {
@@ -223,8 +259,8 @@ void main() {
     uint blocks = shape.columns / 256u;   // super-blocks a row
     uint span = blocks * 144u;            // bytes a row takes
 
-    float temp[NUM_ROWS];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[ACC];
+    for (uint r = 0u; r < ACC; ++r) {
         temp[r] = 0.0;
     }
 
@@ -246,9 +282,15 @@ void main() {
         float bs20  = by20.x  + by20.y  + by20.z  + by20.w;
         float bs232 = by232.x + by232.y + by232.z + by232.w;
 
-        for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint r = 0u; r < ACC; ++r) {
+#ifdef GLU
+            uint row = first_row + r % NUM_ROWS;
+            uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
+                      + row * span + i * 144u;
+#else
             uint row = first_row + r;
             uint at = shape.base + slice + row * span + i * 144u;
+#endif
             uint head = at >> 2u;
 
             vec2 dm = unpackHalf2x16 (w[head]);
@@ -304,6 +346,18 @@ void main() {
         barrier ();
     }
 
+#ifdef GLU
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        float gate = subgroupAdd (temp[r]);
+        float up = subgroupAdd (temp[r + NUM_ROWS]);
+        uint row = first_row + r;
+
+        if (tid == 0u && row < shape.rows) {
+            y[shape.first * shape.rows + row] = sigmoid_weighted (gate) * up;
+        }
+    }
+    return;
+#endif
     for (uint r = 0u; r < NUM_ROWS; ++r) {
         float whole = subgroupAdd (temp[r]);
 
