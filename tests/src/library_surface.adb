@@ -172,6 +172,11 @@ package body Library_Surface is
       --  lowers it so a fixture's short batch takes the streamed road.
       new String'("Set_Stream_Least"),
 
+      --  Where a hybrid's checkpoint went. The engine does not ask: it
+      --  rewinds to it wherever it is; a test asks so that a device that
+      --  ran no linear layer is told apart from a copy that worked.
+      new String'("Checkpoint_On_Device"),
+
       --  How far back a windowed session may be rewound before a slid layer
       --  can no longer attend. The engine does not decide for the caller --
       --  rewind no further, or clear and re-read -- so it answers rather

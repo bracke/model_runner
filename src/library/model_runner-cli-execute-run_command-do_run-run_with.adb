@@ -1139,6 +1139,8 @@ begin
       --  own template and fails rather than guessing when that is unusable.
       declare
          Rendered : Opt.Text_Access := null;
+         --  See Templates.Opening; nought where no template was used.
+         Hold_Back : Natural := 0;
 
          procedure Release_Rendered is
          begin
@@ -1319,9 +1321,9 @@ begin
                     Model_Runner.CLI.Pictures.Picture_Marker (Seer),
                   Video_Marker =>
                     Model_Runner.CLI.Pictures.Video_Marker (Seer));
-               Conv.Close (Messages);
 
                if E.Is_Error (Condition) then
+                  Conv.Close (Messages);
                   Free_Text (Buffer);
                   Fail (Condition);
                   return;
@@ -1329,6 +1331,24 @@ begin
 
                Rendered := new String'(Buffer.all (1 .. Last));
                Free_Text (Buffer);
+
+               --  Where a later run on the saved session picks up.
+               Hold_Back :=
+                 Model_Runner.Templates.Opening
+                   (L.Template (Prepared).all, Messages,
+                    Vocab.Token_Text
+                      (Words.all, Vocab.Beginning_Token (Words.all)),
+                    Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
+                    Rendered.all,
+                    Thinking => Item.Thinking,
+                    Tools =>
+                      (if Tools_Ready
+                       then Offered'Unchecked_Access else null),
+                    Image_Marker =>
+                      Model_Runner.CLI.Pictures.Picture_Marker (Seer),
+                    Video_Marker =>
+                      Model_Runner.CLI.Pictures.Video_Marker (Seer));
+               Conv.Close (Messages);
 
                --  Said here because here is where it happens. Generation is
                --  handed a prompt that is already rendered and never sees
@@ -1565,6 +1585,7 @@ begin
             --  restoring it worth anything, and where they diverge the
             --  engine resets and reads the prompt as it would have.
             Request.Reuse_Committed_Prefix := Prefix_Reused;
+            Request.Hold_Back := Hold_Back;
 
             --  What the last prompt retained goes before this one
             --  begins: Generate starts from an empty result and would

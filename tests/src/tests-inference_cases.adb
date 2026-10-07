@@ -1222,6 +1222,124 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Hybrid_Keeps_Its_State_Through_Everything;
 
+   --  A hybrid's checkpoint kept on the device: a session given the slot
+   --  past its ring copies its states there and back on the device, and
+   --  the answer read again from the checkpoint is the one the straight
+   --  run gave -- the same as the host's copy, without reading the states
+   --  home.
+   procedure A_Hybrid_Checkpoint_Stays_On_The_Device
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image  : B.Byte_Array_Access;
+      Prompt : constant Vocab.Token_Array (1 .. 5) := [4, 7, 2, 9, 5];
+      Straight : Logit_Vector := [others => 0.0];
+      Rewound  : Logit_Vector := [others => 0.0];
+
+      function Worst (A, B : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in A'Range loop
+            Most := N.Real'Max (Most, abs (A (Index) - B (Index)));
+         end loop;
+         return Most;
+      end Worst;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
+
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if not Awake then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device kept a checkpoint here");
+            B.Free (Image);
+            return;
+         end if;
+      end;
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Able   : Boolean;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_Device, Able);
+         if not Able then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device kept a checkpoint here");
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open on the device");
+         L.Hold_Checkpoints (Live);
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, Prompt (1 .. 3), Straight, Status => Status);
+         Assert (E.Is_Ok (Status), "the batch before the checkpoint failed");
+         L.Mark_Checkpoint (Live);
+         if not L.Checkpoint_On_Device (Live) then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: the device ran no linear layer here; the checkpoint "
+               & "stayed on the host");
+         end if;
+         L.Evaluate_Batch
+           (Live, Under.Ready, Prompt (4 .. 5), Straight, Status => Status);
+         Assert (E.Is_Ok (Status), "the batch past the checkpoint failed");
+
+         L.Rewind (Live, 3, Status);
+         Assert (E.Is_Ok (Status),
+                 "a rewind to the checkpoint was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Evaluate_Batch
+           (Live, Under.Ready, Prompt (4 .. 5), Rewound, Status => Status);
+         Assert (E.Is_Ok (Status), "the batch after the checkpoint failed");
+
+         Assert (Worst (Straight, Rewound) = 0.0,
+                 "the state the device's checkpoint restored is not the "
+                 & "state that was there; the logits moved by"
+                 & N.Real'Image (Worst (Straight, Rewound)));
+
+         L.Close (Live);
+      end;
+
+      --  And the copy itself, on a room of its own: a run lands where it
+      --  was sent, and one that would overlap itself is refused.
+      declare
+         Sent : constant N.Real_Array (0 .. 511) :=
+           [for I in 0 .. 511 => N.Real (I) * 0.5];
+         Back : N.Real_Array (0 .. 511);
+         Ok   : Boolean;
+      begin
+         Model_Runner.Backend.Device.Reserve_State (2048, Ok);
+         Assert (Ok, "no room of rings was reserved");
+         Model_Runner.Backend.Device.Put_State (0, Sent, Ok);
+         Assert (Ok, "the run was not written");
+         Model_Runner.Backend.Device.Copy_State
+           (From => 0, Into => 1024, Elements => 512, Ok => Ok);
+         Assert (Ok, "the copy did not run");
+         Model_Runner.Backend.Device.Get_State (1024, Back, Ok);
+         Assert (Ok and then N."=" (Back, Sent),
+                 "the copy did not land what was sent");
+         Model_Runner.Backend.Device.Copy_State
+           (From => 0, Into => 256, Elements => 512, Ok => Ok);
+         Assert (not Ok, "a copy over itself was taken");
+         Model_Runner.Backend.Device.Release_State_Room;
+      end;
+
+      Model_Runner.Backend.Device.Close;
+      B.Free (Image);
+   end A_Hybrid_Checkpoint_Stays_On_The_Device;
+
    --  The block past a hybrid's stack drafts the next token, and a run
    --  drafting from it says exactly what it says without.
    --
@@ -15093,6 +15211,10 @@ package body Tests.Inference_Cases is
         (T, A_Hybrid_Keeps_Its_State_Through_Everything'Access,
          "a hybrid's linear state holds through a batch, a snapshot, a "
          & "kept rewind and a refused shift");
+      Register_Routine
+        (T, A_Hybrid_Checkpoint_Stays_On_The_Device'Access,
+         "a hybrid's checkpoint kept on the device restores the state "
+         & "that was there");
       Register_Routine
         (T, A_Hybrid_Drafts_From_Its_Next_Block'Access,
          "the block past a hybrid's stack drafts, chains on its draft, "

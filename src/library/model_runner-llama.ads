@@ -1330,6 +1330,15 @@ package Model_Runner.Llama is
    --  split and 207 streamed, and one of 1302, 107 and 168.
    Stream_Least_Default : constant := 256;
 
+   --  And the fewest a split dense model's batch holds for the feed-forward
+   --  its processor keeps to be streamed to the device instead, never more
+   --  than Stream_Least. Every position of a batch reads every row of a
+   --  dense layer, so streaming pays far sooner than a mixture's stacks
+   --  do: ThinkingCap's prompt of 110 read in 1.71 s on the processor's
+   --  half and 1.49 streamed, of 231 in 3.16 and 2.54, of 57 in 1.46 and
+   --  1.41; of 28 in 1.21 and 1.37, where the upload is most of a batch.
+   Feed_Stream_Least : constant := 48;
+
    --  Change it, for the run: a test streams a fixture's short batch.
    --
    --  @param Positions The fewest positions a streamed batch holds.
@@ -2003,11 +2012,29 @@ package Model_Runner.Llama is
    --  -- the conversation rendered again agrees with the session up to the
    --  answer, and the answer as the template writes it seldom agrees with
    --  the answer as it was generated. It costs a copy of every linear
-   --  layer's state, read back from the device where the device holds it.
+   --  layer's state: on the device, into the slot Hold_Checkpoints gives
+   --  the session there, or read back to the host where it has none.
    --  Nothing for an architecture without linear layers.
    --
    --  @param Item Open session.
    procedure Mark_Checkpoint (Item : in out Session);
+
+   --  Give a hybrid session's seat on the device a slot past its ring for
+   --  its checkpoints, so that Mark_Checkpoint copies there rather than
+   --  read 150 MB home through the mapping -- 0.67 s of every turn of a
+   --  ThinkingCap conversation. Asked once a session carries a
+   --  conversation on; a seat already taken is given up and taken again
+   --  the larger. Nothing for an architecture without linear layers.
+   --
+   --  @param Item Open session.
+   procedure Hold_Checkpoints (Item : in out Session);
+
+   --  Whether the session's checkpoint is kept on the device, in the slot
+   --  Hold_Checkpoints gave it, rather than on the host.
+   --
+   --  @param Item Session to ask.
+   --  @return True where Mark_Checkpoint last copied there.
+   function Checkpoint_On_Device (Item : Session) return Boolean;
 
    --  The furthest along of the positions at or before Position this
    --  session can be rewound to: Position itself for a session that keeps
@@ -3159,6 +3186,13 @@ private
       Check_State : Model_Runner.Tensors.Real_Array_Access := null;
       Check_Conv  : Model_Runner.Tensors.Real_Array_Access := null;
       Check_At    : Natural := 0;
+
+      --  Whether the session's seat on the device holds a slot past its
+      --  ring for the checkpoint (Hold_Checkpoints), and whether the
+      --  checkpoint at Check_At is there rather than in Check_State and
+      --  Check_Conv.
+      Check_Slot      : Boolean := False;
+      Check_On_Device : Boolean := False;
 
       --  Where the session's ring lies in the device's state room, in
       --  elements, while it holds a seat there; every session seated has

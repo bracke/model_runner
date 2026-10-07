@@ -18,13 +18,4 @@ package body Model_Runner.Platform.Pages is
       null;
    end Prefer_Large_At;
 
-   function Keep_Resident
-     (Start  : System.Address;
-      Length : Model_Runner.Bytes.Byte_Count) return Boolean
-   is
-      pragma Unreferenced (Start, Length);
-   begin
-      return False;
-   end Keep_Resident;
-
 end Model_Runner.Platform.Pages;

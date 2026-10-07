@@ -2040,6 +2040,7 @@ begin
          --  context named is room the matrices give up: more of the model
          --  on the processor, and the run slower but whole.
          Session_Margin  : constant Interfaces.Unsigned_64 := 3 * 2 ** 29;
+         Stream_Margin   : constant Interfaces.Unsigned_64 := 5 * 2 ** 28;
          State_Slots     : constant := 5;
          Planned_Context : constant := 16_384;
 
@@ -2104,6 +2105,18 @@ begin
          end if;
 
          Room := Counted_Room (Planned);
+
+         --  A model the room does not take whole is split, and a long
+         --  prompt's batch streams the feed-forward its processor keeps:
+         --  that batch's answers and the streamed matrices are room of
+         --  their own, which the margin above was measured without.
+         --  ThinkingCap's prompt of 4,024 at --context-size 8192 went
+         --  1.58 GB past what a short one needed, a third of it cache,
+         --  and ran the part out of memory where nothing was left for it.
+         if Room > Stream_Margin and then Total > Room then
+            Room := Room - Stream_Margin;
+         end if;
+
          if Room > 0 then
             Model_Runner.Backend.Device.Fit_Budget (Room);
             Item.Able := Model_Runner.Backend.Device.Describe;
@@ -2579,15 +2592,6 @@ begin
 
             if Repack = To_Rows and then Panel_Cache /= "" then
                Write_Panels (Needed);
-            end if;
-
-            --  A split's panels kept in the host's memory where it allows:
-            --  idle through a long prompt the device runs whole, they were
-            --  sent out to swap and read back at the first generated token.
-            if Dense_Split and then Item.Repacked /= null then
-               Zeroed_Storage.Keep_Resident
-                 (Item.Repacked.all (Item.Repacked.all'First)'Address,
-                  System.Storage_Elements.Storage_Count (Needed));
             end if;
 
             <<Panels_Done>>

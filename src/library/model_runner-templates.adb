@@ -810,4 +810,48 @@ package body Model_Runner.Templates is
       Video_Marker          : String := "")
    is separate;
 
+   -------------
+   -- Opening --
+   -------------
+
+   function Opening
+     (Item            : Compiled;
+      Messages        : Conv.History;
+      Beginning_Token : String;
+      End_Token       : String;
+      Rendered        : String;
+      Thinking        : Thinking_Choice := Thinking_Unstated;
+      Tools           : access constant Offered_Tools.Definitions := null;
+      Image_Marker    : String := "";
+      Video_Marker    : String := "") return Natural
+   is
+      --  Room for the rendering without the prompt, which is no longer
+      --  than the one with it where the template is the usual shape, and
+      --  for a little more where it is not -- and at least the room the
+      --  names a template sets are given, which is sized by it: a buffer
+      --  the rendering's length left a conversation's turns no room to be
+      --  held in names. Pages never written cost nothing.
+      Buffer : Text_Access :=
+        new String
+          (1 .. Natural'Max (Rendered'Length + 4096, Max_Variable_Bytes));
+      Last   : Natural;
+      Status : E.Error_Info;
+      Shared : Natural := 0;
+   begin
+      Render
+        (Item, Messages, Beginning_Token, End_Token, False, Buffer.all,
+         Last, Status, Thinking, Tools, Image_Marker, Video_Marker);
+      if E.Is_Error (Status) then
+         Free_Text (Buffer);
+         return 0;
+      end if;
+      while Shared < Last and then Shared < Rendered'Length
+        and then Buffer (Shared + 1) = Rendered (Rendered'First + Shared)
+      loop
+         Shared := Shared + 1;
+      end loop;
+      Free_Text (Buffer);
+      return Rendered'Length - Shared;
+   end Opening;
+
 end Model_Runner.Templates;

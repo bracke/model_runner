@@ -339,6 +339,19 @@ package Model_Runner.Backend.Device is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Copy a run of the room of rings to another part of it, on the
+   --  device: a hybrid session's checkpoint, kept beside its ring.
+   --
+   --  @param From Where the run begins, in elements.
+   --  @param Into Where the copy is to begin; the two do not overlap.
+   --  @param Elements How long the run is.
+   --  @param Ok True when the copy ran.
+   procedure Copy_State
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  Note that a block of the cache, or a seat in the room of rings, was
    --  moved to close a gap below it.
    --

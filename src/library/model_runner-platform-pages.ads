@@ -35,20 +35,4 @@ package Model_Runner.Platform.Pages is
      (Start  : System.Address;
       Length : Model_Runner.Bytes.Byte_Count);
 
-   --  Ask the host to keep a run of memory in its own memory, never written
-   --  out to swap: weights the processor reads only now and then, which a
-   --  host short of memory otherwise sends out while they wait and reads
-   --  back when they are wanted -- a split dense model's panels, idle
-   --  through a long prompt the device runs whole, came back from swap at
-   --  the first generated token, 860 MB and two seconds. Refused past the
-   --  host's limit on such memory, or by a host that has no such thing, and
-   --  then the memory is as it was.
-   --
-   --  @param Start The first byte.
-   --  @param Length Bytes in the run.
-   --  @return True when the host took it.
-   function Keep_Resident
-     (Start  : System.Address;
-      Length : Model_Runner.Bytes.Byte_Count) return Boolean;
-
 end Model_Runner.Platform.Pages;

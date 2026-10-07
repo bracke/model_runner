@@ -3087,7 +3087,14 @@ package body Model_Runner.Llama is
 
    --  How many elements a session's whole ring takes.
    function Device_Ring_Span (Item : Session) return Element_Count
-   is ((Element_Count (Item.Kept_States) + 1) * Device_Slot_Span (Item));
+   is ((Element_Count (Item.Kept_States) + 1
+        + (if Item.Check_Slot then 1 else 0))
+       * Device_Slot_Span (Item));
+
+   --  Where a session's checkpoint slot lies on the device: past its ring.
+   function Device_Check_At (Item : Session) return Element_Count
+   is (Item.State_Base
+       + (Element_Count (Item.Kept_States) + 1) * Device_Slot_Span (Item));
 
    --  Bring a session's ring home from the device, where the device's
    --  copy is the newer. A no-op otherwise, so it is asked wherever the
@@ -3153,6 +3160,12 @@ package body Model_Runner.Llama is
 
       Item.State_Seated := False;
       Item.State_On_Device := False;
+
+      --  A checkpoint the seat held goes with it.
+      if Item.Check_On_Device then
+         Item.Check_On_Device := False;
+         Item.Check_At := 0;
+      end if;
 
       --  And the room itself where nobody is seated in it: it grew to
       --  hold every seated ring and never shrank, so a hybrid session
@@ -7465,6 +7478,37 @@ package body Model_Runner.Llama is
             --  written, not the committed count.
             null;
          elsif Item.Check_At > 0 and then Position = Item.Check_At
+           and then Item.Check_On_Device and then Item.State_Seated
+         then
+            --  The checkpoint, copied on the device into the slot the
+            --  position reads; the device's ring is the one to read from
+            --  now, the others' contents past it never read again.
+            declare
+               Every : constant Element_Count := Device_Slot_Span (Item);
+               Moved : Boolean;
+            begin
+               Model_Runner.Backend.Device.Copy_State
+                 (From     => Device_Check_At (Item),
+                  Into     =>
+                    Item.State_Base + State_Slot (Item, Position) * Every,
+                  Elements => Every,
+                  Ok       => Moved);
+               if not Moved then
+                  Status := E.Make (E.Tensor_Shape_Mismatch);
+                  E.Add_Integer
+                    (Status, "input", Long_Long_Integer (Position));
+                  E.Add_Integer
+                    (Status, "expected",
+                     Long_Long_Integer
+                       (Natural'Max (0, Item.Kept_Newest - Item.Kept_States)));
+                  return;
+               end if;
+            end;
+            Item.State_On_Device := True;
+            Item.Ring_Written := False;
+            Item.Kept_Newest := Position;
+         elsif Item.Check_At > 0 and then Position = Item.Check_At
+           and then not Item.Check_On_Device
            and then Item.Check_State /= null and then Item.Check_Conv /= null
          then
             --  The checkpoint, into the slot the position reads; the
@@ -7613,6 +7657,7 @@ package body Model_Runner.Llama is
       Item.Ring_Written := False;
       Item.Kept_Newest := 0;
       Item.Check_At := 0;
+      Item.Check_On_Device := False;
 
       --  And the last state was the last of a context that is over.
       Item.Has_Final := False;
@@ -9396,6 +9441,26 @@ package body Model_Runner.Llama is
            State_Slot (Item, Item.Committed);
          Read        : Boolean := True;
       begin
+         --  On the device, into the slot past the ring, where the session
+         --  has one and the device holds the newer copy.
+         if Item.Check_Slot and then Item.State_On_Device
+           and then Item.State_Seated
+         then
+            declare
+               Every : constant Element_Count := Device_Slot_Span (Item);
+            begin
+               Model_Runner.Backend.Device.Copy_State
+                 (From     => Item.State_Base + Slot * Every,
+                  Into     => Device_Check_At (Item),
+                  Elements => Every,
+                  Ok       => Read);
+            end;
+            Item.Check_On_Device := Read;
+            Item.Check_At := (if Read then Item.Committed else 0);
+            return;
+         end if;
+         Item.Check_On_Device := False;
+
          if Item.Check_State = null then
             T.Allocate (Every_State, Item.Check_State);
          end if;
@@ -9433,6 +9498,30 @@ package body Model_Runner.Llama is
          Item.Check_At := (if Read then Item.Committed else 0);
       end;
    end Mark_Checkpoint;
+
+   ----------------------
+   -- Hold_Checkpoints --
+   ----------------------
+
+   procedure Hold_Checkpoints (Item : in out Session) is
+   begin
+      if Item.Check_Slot or else Item.Current in Closed | Failed
+        or else Item.Delta_State = null or else Item.Conv_State = null
+      then
+         return;
+      end if;
+
+      --  A seat already taken is the ring's size; the ring comes home and
+      --  the seat is taken again, the larger, when it is next sent.
+      if Item.State_Seated then
+         Fetch_States (Item'Unchecked_Access);
+         Release_State_Room (Item'Unchecked_Access);
+      end if;
+      Item.Check_Slot := True;
+   end Hold_Checkpoints;
+
+   function Checkpoint_On_Device (Item : Session) return Boolean
+   is (Item.Check_At > 0 and then Item.Check_On_Device);
 
    ------------------
    -- Rewind_Point --

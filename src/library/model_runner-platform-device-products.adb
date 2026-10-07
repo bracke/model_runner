@@ -234,8 +234,13 @@ package body Model_Runner.Platform.Device.Products is
    --  And the batch size at or below which it is the one to take, which is
    --  a separate question from how wide it is: above the narrow tile's own
    --  width a batch is several narrow tiles, and whether that beats one
-   --  wide tile is a measurement rather than arithmetic.
-   Narrow_Limit : constant := 64;
+   --  wide tile is a measurement rather than arithmetic. It does not: every
+   --  narrow tile reads the weights again, and one wide tile costs about
+   --  what two narrow ones do. It was sixty-four; qwen3-8b's prompt of 57
+   --  read in 0.420 s two narrow and 0.327 one wide, and ThinkingCap's,
+   --  whose processor half waits on the device, 2.45 and 1.44. At 28 the
+   --  narrow one still wins, 0.201 against 0.327.
+   Narrow_Limit : constant := Narrow_Vectors;
 
    --  Which of the two a batch of this size takes.
    function Narrowed (Count : Natural) return Boolean
@@ -1176,6 +1181,43 @@ package body Model_Runner.Platform.Device.Products is
        then Count
        else Batch_Group);
 
+   --  Whether this format has a few-vector walk for Count vectors: one
+   --  pass over the weights carrying them all.
+   function Has_Walk
+     (Item : Engine; Packing : Weight_Packing; Count : Natural)
+      return Boolean
+   is (Count in Many_Count
+       and then (Item.Wave_Multi_Lines (Packing) (Count) /= Null_Handle
+                 or else (Packing = Packed_Q4_K
+                          and then Waved (Item, Packing, Count)
+                          and then Item.Many_Lines4 (Count) /= Null_Handle)
+                 or else (Packing = Packed_Q5_K
+                          and then Waved (Item, Packing, Count)
+                          and then Item.Many_Lines5 (Count) /= Null_Handle)
+                 or else (Packing = Packed_Q6_K
+                          and then Waved (Item, Packing, Count)
+                          and then Item.Many_Lines6 (Count) /= Null_Handle)));
+
+   --  A batch of nine to sixteen taken as two few-vector walks, the first
+   --  carrying this many and the second the rest, where the format has
+   --  walks for both; nought where it goes to the tile. A tile costs what
+   --  its width costs whatever it is given, and a walk what its weights
+   --  do: ThinkingCap's prompt of 10 read in 1.15 s on the narrow tile
+   --  and 0.67 as two walks, of 15 in 1.14 and 0.87. Only the formats
+   --  whose tile decodes through a table, which the tile pays for at
+   --  every position: Q4_K's tile won, qwen3-8b's prompt of 15 0.195 s
+   --  against 0.268 as walks, and TinyLlama's Q2_K and Q3_K by a few
+   --  milliseconds, where its IQ4_NL lost 0.044 to 0.036.
+   function Split_Half
+     (Item : Engine; Packing : Weight_Packing; Count : Natural)
+      return Natural
+   is (if Count in Batch_Group + 1 .. 2 * Batch_Group
+         and then Packing in Packed_IQ4_XS | Packed_IQ4_NL
+         and then Has_Walk (Item, Packing, (Count + 1) / 2)
+         and then Has_Walk (Item, Packing, Count / 2)
+       then (Count + 1) / 2
+       else 0);
+
    --  Which of the four tiles answers this format at this width. Null when
    --  the device refused the one this batch would need.
    function Tile_Pipeline
@@ -1214,6 +1256,7 @@ package body Model_Runner.Platform.Device.Products is
        and then Item.Matrix_Line /= Null_Handle
        and then Rows mod Tile_Grain = 0
        and then Count >= Tile_Least
+       and then Split_Half (Item, Packing, Count) = 0
 
        --  The tile this width and this format has to exist, not merely
        --  some tile: the room the batch is rounded into is decided by the
@@ -7643,6 +7686,14 @@ package body Model_Runner.Platform.Device.Products is
 
                while First < Count loop
                   declare
+                     Half  : constant Natural :=
+                       Split_Half (Item, Packing, Count);
+                     --  The vectors this dispatch's kernel carries: the
+                     --  batch, or one walk's share of it.
+                     Carry : constant Natural :=
+                       (if Half = 0 then Count
+                        elsif First = 0 then Half
+                        else Count - Half);
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (Rows),
                         Columns => C.unsigned (Columns),
@@ -7653,18 +7704,24 @@ package body Model_Runner.Platform.Device.Products is
                         Base    => C.unsigned (Weight_Base),
                         Joins   => 0, Table => 0, others => <>);
                   begin
+                     if Half > 0 then
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute,
+                           Row_Line (Item, Carry, Packing, Columns));
+                     end if;
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Row_Reach (Item, Packing, Count, Rows, Columns)
-                              * Row_Lane_Count (Item, Packing, Count)
-                            + Row_Width (Item, Packing, Count) - 1)
-                           / Row_Width (Item, Packing, Count)), 1, 1);
-                  end;
+                          ((Row_Reach (Item, Packing, Carry, Rows, Columns)
+                              * Row_Lane_Count (Item, Packing, Carry)
+                            + Row_Width (Item, Packing, Carry) - 1)
+                           / Row_Width (Item, Packing, Carry)), 1, 1);
 
-                  First := First + Row_Group (Item, Count);
+                     First := First
+                       + (if Half > 0 then Carry else Row_Group (Item, Count));
+                  end;
                end loop;
             end;
          end if;
@@ -9400,6 +9457,74 @@ package body Model_Runner.Platform.Device.Products is
       Submit_And_Wait (Item, Good, Cancelled, null);
       Ok := Good;
    end Move_State;
+
+   procedure Copy_State
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      From_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (From) * 4;
+      Into_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Into) * 4;
+      Span      : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Elements) * 4;
+
+      Reset_Buffer : constant Reset_Buffer_Call :=
+        To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+      Start : constant Begin_Call :=
+        To_Begin (Point ("vkBeginCommandBuffer"));
+      Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+      Copier : constant Copy_Buffer_Call :=
+        To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+
+      Began : aliased Command_Begin_Info;
+
+      Good, Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_Buffer = Null_Handle
+        or else Elements = 0
+        or else (From_Byte < Into_Byte + Span
+                 and then Into_Byte < From_Byte + Span)
+        or else From_Byte + Span > Item.State_Bytes
+        or else Into_Byte + Span > Item.State_Bytes
+        or else Reset_Buffer = null or else Start = null
+        or else Stop = null or else Copier = null
+      then
+         return;
+      end if;
+
+      Settle (Item, Good);
+
+      if not Good
+        or else Reset_Buffer (Item.Buffer, 0) /= 0
+        or else Opened (Item.Buffer, Start, Began'Address) /= 0
+      then
+         return;
+      end if;
+
+      declare
+         Piece : aliased Copy_Region :=
+           (From => From_Byte, Into => Into_Byte, Span => Span);
+      begin
+         Copier (Item.Buffer, Item.State_Buffer, Item.State_Buffer, 1,
+                 Piece'Address);
+      end;
+
+      if Stop (Item.Buffer) /= 0 then
+         return;
+      end if;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      Ok := Good;
+   end Copy_State;
 
    procedure Clear_State
      (Item     : in out Engine;
@@ -12035,15 +12160,32 @@ package body Model_Runner.Platform.Device.Products is
             Room : constant Natural :=
               (if Tiled (Index) then Whole_Tiles (Count) else Count);
 
+            --  The most slices this step's attending can cut at this
+            --  batch, however deep the cache: one where the batch takes
+            --  the matrix or tiled kernel, which leaves no records. It was
+            --  Slice_Limit whatever was cut, and a prompt's batch of 2,048
+            --  on ThinkingCap held 812 MB for records nothing wrote.
+            Most_Slices : constant Natural :=
+              (if This.Attends and then Item.Merge_Line /= Null_Handle
+               then Natural'Min
+                      (Attend_Slices
+                         (Item, Count, This.Head_Size, This.Value_Size,
+                          First    => 0,
+                          Last     => Slice_Limit * Slice_Least,
+                          Rounding => False),
+                       Natural'Max
+                         (1, Merged_Rows / Natural'Max (1, This.Heads)))
+               else 1);
+
             Mine : constant Interfaces.Unsigned_64 :=
               Interfaces.Unsigned_64 (This.Rows)
               * Interfaces.Unsigned_64 (Room) * 4
               --  And after an attending step's answers, room for the
               --  records its slices leave for the merge: a blend and two
-              --  numbers a slice, position and head. Sized for the most
-              --  slices, whatever this run cuts.
-              + (if This.Attends and then Item.Merge_Line /= Null_Handle
-                 then Interfaces.Unsigned_64 (Slice_Limit)
+              --  numbers a slice, position and head, for the most slices
+              --  it can cut.
+              + (if Most_Slices > 1
+                 then Interfaces.Unsigned_64 (Most_Slices)
                       * Interfaces.Unsigned_64 (Room)
                       * Interfaces.Unsigned_64
                           (This.Rows + 2 * This.Heads) * 4
@@ -15454,6 +15596,15 @@ package body Model_Runner.Platform.Device.Products is
                      Sliced : constant Boolean := This.Gathers = 1;
                      Spread : constant Boolean := This.Gathers > 1;
 
+                     --  As two walks, where the batch goes that way; see
+                     --  Split_Half.
+                     Half  : constant Natural :=
+                       Split_Half (Item, This.Packing, Count);
+                     Carry : constant Natural :=
+                       (if Half = 0 then Count
+                        elsif First = 0 then Half
+                        else Count - Half);
+
                      Shape : aliased Shape_Constants :=
                        (Rows    =>
                           C.unsigned
@@ -15485,21 +15636,27 @@ package body Model_Runner.Platform.Device.Products is
                         end loop;
                      end if;
 
+                     if Half > 0 then
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute,
+                           Row_Line (Item, Carry, This.Packing, This.Columns));
+                     end if;
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned
-                          ((Row_Reach (Item, This.Packing, Count,
+                          ((Row_Reach (Item, This.Packing, Carry,
                                        Natural (Shape.Rows), This.Columns)
-                              * Row_Lane_Count (Item, This.Packing, Count)
-                            + Row_Width (Item, This.Packing, Count) - 1)
-                           / Row_Width (Item, This.Packing, Count)),
+                              * Row_Lane_Count (Item, This.Packing, Carry)
+                            + Row_Width (Item, This.Packing, Carry) - 1)
+                           / Row_Width (Item, This.Packing, Carry)),
                         1,
                         C.unsigned (if Spread then This.Gathers else 1));
-                  end;
 
-                  First := First + Row_Group (Item, Count);
+                     First := First
+                       + (if Half > 0 then Carry else Row_Group (Item, Count));
+                  end;
                end loop;
 
                <<Next_Dispatch>>

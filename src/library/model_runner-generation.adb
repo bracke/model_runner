@@ -1270,20 +1270,48 @@ package body Model_Runner.Generation is
                  L.Batch_Limit (Source)));
          Index : Natural := First_Token;
 
-         --  Where a conversation's next turn can pick up: a little before the
-         --  prompt's end, ahead of the template's opening of the answer --
-         --  the conversation rendered again writes that opening otherwise,
-         --  so a checkpoint at the prompt's very end lay past where the two
-         --  part, and a hybrid read its whole conversation again every turn.
-         --  The batch is cut there and the hybrid's states kept (see
-         --  Mark_Checkpoint); nought where no turn will follow.
-         --  A turn shorter than that keeps it where the turn begins.
+         --  Where a conversation's next turn can pick up: before the
+         --  template's opening of the answer -- the conversation rendered
+         --  again writes that opening otherwise, so a checkpoint at the
+         --  prompt's very end lay past where the two part, and a hybrid read
+         --  its whole conversation again every turn. The batch is cut there
+         --  and the hybrid's states kept (see Mark_Checkpoint); nought where
+         --  no turn will follow or the model keeps no states, which a cut
+         --  batch only costs. The opening is counted where the caller said
+         --  how long it is, a token over for where the two tokenize their
+         --  meeting otherwise, and otherwise taken as a fixed margin: a cut
+         --  thirty-two from the end cost ThinkingCap 1.9 s a turn, its last
+         --  batch a pass over the weights of its own, where the five or six
+         --  an opening takes go by the few-vector walk. A turn shorter than
+         --  that keeps it where the turn begins.
          Checkpoint_Margin : constant := 32;
+
+         function Held_Back return Natural is
+            Tail   : Token_Buffer;
+            Count  : Natural := 0;
+            Coding : E.Error_Info;
+         begin
+            if Item.Hold_Back = 0 or else Item.Hold_Back > Shown'Length then
+               return Checkpoint_Margin;
+            end if;
+            Tail := new Vocab.Token_Array (1 .. Item.Hold_Back + 2);
+            Vocab.Encode
+              (Words.all, Shown (Shown'Last - Item.Hold_Back + 1 .. Shown'Last),
+               False, False, Tail.all, Count, Coding);
+            Free_Tokens (Tail);
+            return (if E.Is_Error (Coding) then Checkpoint_Margin
+                    else Count + 1);
+         end Held_Back;
+
+         Margin : constant Natural :=
+           (if Item.Reuse_Committed_Prefix
+              and then L.Hybrid (L.Config (Source).Kind)
+            then Held_Back else 0);
          Hold_At : constant Natural :=
-           (if not Item.Reuse_Committed_Prefix then 0
-            elsif Prompt_Count > Checkpoint_Margin
-              and then Prompt_Count - Checkpoint_Margin >= First_Token
-            then Prompt_Count - Checkpoint_Margin
+           (if Margin = 0 then 0
+            elsif Prompt_Count > Margin
+              and then Prompt_Count - Margin >= First_Token
+            then Prompt_Count - Margin
             else First_Token - 1);
 
          --  The picture rows a batch starting at From reads: the soft
@@ -1331,6 +1359,11 @@ package body Model_Runner.Generation is
                      L.Position (Draft_Session.all) + Ahead - 1));
             end if;
          end;
+
+         --  The checkpoint kept on the device, beside the ring.
+         if Margin > 0 then
+            L.Hold_Checkpoints (Session);
+         end if;
 
          if Hold_At > 0 and then Hold_At = First_Token - 1
            and then L.Position (Session) = Hold_At

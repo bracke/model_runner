@@ -2557,6 +2557,23 @@ package Model_Runner.Platform.Device.Products is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Copy a run of that room to another part of it, on the device: a
+   --  hybrid session's checkpoint, a slot of its ring kept beside the
+   --  ring, where reading it home through the mapping took 0.67 s of
+   --  ThinkingCap's turn for 150 MB.
+   --
+   --  @param Item The engine.
+   --  @param From Where the run begins, in elements.
+   --  @param Into Where the copy is to begin; the two do not overlap.
+   --  @param Elements How long the run is.
+   --  @param Ok True when the copy was recorded and ran.
+   procedure Copy_State
+     (Item     : in out Engine;
+      From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean);
+
    --  Zero a run of that room, on the device.
    --
    --  A seat is a stretch of the room a session's ring lives in, and a

@@ -733,6 +733,24 @@ package body Model_Runner.Backend.Device is
    end Move_State;
 
    ----------------
+   -- Copy_State --
+   ----------------
+
+   procedure Copy_State
+     (From     : Model_Runner.Numerics.Element_Count;
+      Into     : Model_Runner.Numerics.Element_Count;
+      Elements : Model_Runner.Numerics.Element_Count;
+      Ok       : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Copy_State (Engine, From, Into, Elements, Ok);
+   end Copy_State;
+
+   ----------------
    -- Note_Moved --
    ----------------
 

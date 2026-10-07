@@ -379,6 +379,35 @@ package Model_Runner.Templates is
       Image_Marker          : String := "";
       Video_Marker          : String := "");
 
+   --  How many bytes at the end of a rendering with the generation prompt
+   --  the same conversation rendered without it does not share: the
+   --  template's opening of the answer, which the conversation's next
+   --  rendering writes otherwise -- or not at all -- once the answer is in
+   --  it. A conversation's session keeps what comes before; nought where
+   --  the rendering without it fails.
+   --
+   --  @param Item Compiled template.
+   --  @param Messages Conversation as rendered.
+   --  @param Beginning_Token Text substituted for bos_token.
+   --  @param End_Token Text substituted for eos_token.
+   --  @param Rendered The rendering with the generation prompt.
+   --  @param Thinking As Render was given.
+   --  @param Tools As Render was given.
+   --  @param Image_Marker As Render was given.
+   --  @param Video_Marker As Render was given.
+   --  @return Bytes from the end of Rendered.
+   function Opening
+     (Item            : Compiled;
+      Messages        : Model_Runner.Conversation.History;
+      Beginning_Token : String;
+      End_Token       : String;
+      Rendered        : String;
+      Thinking        : Thinking_Choice := Thinking_Unstated;
+      Tools           : access constant Model_Runner.Tools.Definitions
+        := null;
+      Image_Marker    : String := "";
+      Video_Marker    : String := "") return Natural;
+
    --  Report whether a template reads the tools a caller may offer.
    --
    --  @param Item Compiled template.

@@ -271,7 +271,8 @@ is
    is (Source.Split_Feed
        and then Settings.Experts = 0
        and then L.Host_Feed
-       and then Count >= Element_Count (Stream_Least)
+       and then Count
+                >= Element_Count (Natural'Min (Stream_Least, Feed_Stream_Least))
        and then T.Is_Present (L.File_Gate)
        and then T.Is_Present (L.File_Up)
        and then T.Is_Present (L.File_Down));
@@ -2890,7 +2891,9 @@ begin
       --  size: the tokens after a prompt stream nothing, and holding them
       --  slowed the generation after a 6,502-token prompt from 3.59 tokens
       --  a second to 2.81.
-      if Count >= Element_Count (Stream_Least) then
+      if Count
+         >= Element_Count (Natural'Min (Stream_Least, Feed_Stream_Least))
+      then
          Model_Runner.Backend.Device.Drop_Spares;
       end if;
    end if;

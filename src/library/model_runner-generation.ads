@@ -219,6 +219,13 @@ package Model_Runner.Generation is
       --  prompt is re-evaluated, so the cache never describes a conversation
       --  that differs from the one being rendered.
       Reuse_Committed_Prefix : Boolean := False;
+
+      --  Bytes at the prompt's end that the conversation's next rendering
+      --  writes otherwise -- the template's opening of the answer, as
+      --  Templates.Opening counts it. A hybrid keeps its states where they
+      --  begin, so its next turn picks up there; nought keeps them a fixed
+      --  margin before the end instead.
+      Hold_Back : Natural := 0;
    end record;
 
    --  What a run produced.

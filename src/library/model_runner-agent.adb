@@ -303,6 +303,17 @@ package body Model_Runner.Agent is
                exit Step_Loop;
             end if;
 
+            Request.Hold_Back :=
+              Model_Runner.Templates.Opening
+                (L.Template (Source).all, Messages,
+                 Vocab.Token_Text
+                   (Words.all, Vocab.Beginning_Token (Words.all)),
+                 Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
+                 Rendered.all,
+                 Thinking => Thinking,
+                 Tools    => (if Have_Tools then Offered'Unrestricted_Access
+                              else null));
+
             Gen.Release (Last_Result);
             Gen.Generate
               (Source   => Source,

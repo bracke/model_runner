@@ -1032,6 +1032,15 @@ package body Model_Runner.CLI.Interactive is
          --  usually holds an exact prefix of it and only the new suffix has to
          --  be evaluated.
          Request.Reuse_Committed_Prefix := True;
+         Request.Hold_Back :=
+           Model_Runner.Templates.Opening
+             (L.Template (Prepared).all, Messages,
+              Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
+              Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
+              Rendered.all,
+              Thinking => Item.Thinking, Tools => Tools,
+              Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
+              Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer));
 
          Gen.Release (Last_Result);
          Gen.Generate

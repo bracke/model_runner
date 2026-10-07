@@ -3640,6 +3640,59 @@ package body Tests.Template_Cases is
       Conv.Close (Messages);
    end Compaction_Keeps_The_Shape;
 
+   --  The opening of the answer, as a conversation's next turn writes it
+   --  otherwise: the bytes at the end of a rendering with the generation
+   --  prompt that the rendering without it does not share. None where the
+   --  template writes no prompt, and counted for a conversation whose
+   --  turns the template holds in names -- a rendering without the prompt
+   --  given only the room the one with it took had none for them.
+   procedure The_Opening_Is_What_The_Prompt_Adds
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Chat : constant String :=
+        "{% for m in messages %}{% set held = m.content %}"
+        & "{% set again = m.content %}<|im_start|>"
+        & "{{ m.role }}" & ASCII.LF & "{{ held }}<|im_end|>" & ASCII.LF
+        & "{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant"
+        & ASCII.LF & "{% endif %}";
+      Plain : constant String :=
+        "{% for m in messages %}{{ m.content }}{% endfor %}";
+
+      function Opening_Of (Source : String; Words : String) return Integer is
+         Item   : Tmpl.Compiled;
+         Talk   : Conv.History;
+         Status : E.Error_Info;
+         Room   : String (1 .. 4 * Words'Length + 4096);
+         Last   : Natural;
+         Result : Integer := -1;
+      begin
+         Tmpl.Compile (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the template did not compile");
+         Conv.Open (Talk, Status => Status);
+         Conv.Append (Talk, Conv.User_Role, Words, Status);
+         Tmpl.Render (Item, Talk, "", "", True, Room, Last, Status);
+         Assert (E.Is_Ok (Status), "the conversation did not render");
+         Result := Tmpl.Opening (Item, Talk, "", "", Room (1 .. Last));
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+         return Result;
+      end Opening_Of;
+
+      Opening : constant String := "<|im_start|>assistant" & ASCII.LF;
+   begin
+      Assert (Opening_Of (Chat, "Say hi.") = Opening'Length,
+              "the opening of a short turn is not the prompt the template "
+              & "adds; it said" & Opening_Of (Chat, "Say hi.")'Image);
+      Assert (Opening_Of (Chat, [1 .. 20_000 => 'x']) = Opening'Length,
+              "the opening of a long turn held in a name is not the prompt "
+              & "the template adds; it said"
+              & Opening_Of (Chat, [1 .. 20_000 => 'x'])'Image);
+      Assert (Opening_Of (Plain, "Say hi.") = 0,
+              "a template that adds no prompt was said to open the answer");
+   end The_Opening_Is_What_The_Prompt_Adds;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3715,6 +3768,10 @@ package body Tests.Template_Cases is
         (T, A_Copied_Name_Keeps_What_It_Copied'Access,
          "a name given another name's value keeps it after the other "
          & "changes");
+      Register_Routine
+        (T, The_Opening_Is_What_The_Prompt_Adds'Access,
+         "the opening of the answer is what the generation prompt adds to "
+         & "a conversation");
       Register_Routine
         (T, Compaction_Keeps_The_Shape'Access,
          "compacting a history drops the oldest turns and keeps the system "
