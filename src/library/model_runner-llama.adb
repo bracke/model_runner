@@ -7179,6 +7179,9 @@ package body Model_Runner.Llama is
       Release_State_Room (Item'Unchecked_Access);
       T.Free (Item.Conv_State);
       T.Free (Item.Delta_State);
+      T.Free (Item.Check_State);
+      T.Free (Item.Check_Conv);
+      Item.Check_At := 0;
       T.Free (Item.Routing);
       T.Free (Item.Mixture);
       T.Free (Item.Expert_Row);
@@ -7461,6 +7464,28 @@ package body Model_Runner.Llama is
             --  rewind's slot is intact is the highest position ever
             --  written, not the committed count.
             null;
+         elsif Item.Check_At > 0 and then Position = Item.Check_At
+           and then Item.Check_State /= null and then Item.Check_Conv /= null
+         then
+            --  The checkpoint, into the slot the position reads; the
+            --  host's ring is the one to send now, the others' contents
+            --  past it never read again.
+            declare
+               Settings : Configuration renames Item.Owner.Settings;
+               Slot : constant Element_Count := State_Slot (Item, Position);
+               Every_State : constant Element_Count := State_Room (Settings);
+               Every_Conv  : constant Element_Count := Conv_Room (Settings);
+            begin
+               Item.Delta_State.all
+                 (Slot * Every_State .. (Slot + 1) * Every_State - 1) :=
+                 Item.Check_State.all;
+               Item.Conv_State.all
+                 (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1) :=
+                 Item.Check_Conv.all;
+            end;
+            Item.State_On_Device := False;
+            Item.Ring_Written := True;
+            Item.Kept_Newest := Position;
          else
             Status := E.Make (E.Tensor_Shape_Mismatch);
             E.Add_Integer (Status, "input", Long_Long_Integer (Position));
@@ -7470,6 +7495,12 @@ package body Model_Runner.Llama is
                  (Natural'Max (0, Item.Kept_Newest - Item.Kept_States)));
             return;
          end if;
+      end if;
+
+      --  A checkpoint past where the session now stands describes a context
+      --  it no longer holds.
+      if Position < Item.Check_At then
+         Item.Check_At := 0;
       end if;
 
       --  Nothing is cleared. What is past the position is not read: every
@@ -7581,6 +7612,7 @@ package body Model_Runner.Llama is
       Item.State_On_Device := False;
       Item.Ring_Written := False;
       Item.Kept_Newest := 0;
+      Item.Check_At := 0;
 
       --  And the last state was the last of a context that is over.
       Item.Has_Final := False;
@@ -9342,5 +9374,109 @@ package body Model_Runner.Llama is
 
    function Device_Context (Item : Model) return Natural
    is (Item.Device_Context);
+
+   ---------------------
+   -- Mark_Checkpoint --
+   ---------------------
+
+   procedure Mark_Checkpoint (Item : in out Session) is
+   begin
+      if Item.Current in Closed | Failed
+        or else Item.Delta_State = null or else Item.Conv_State = null
+        or else Item.Committed = 0
+      then
+         return;
+      end if;
+
+      declare
+         Settings    : Configuration renames Item.Owner.Settings;
+         Every_State : constant Element_Count := State_Room (Settings);
+         Every_Conv  : constant Element_Count := Conv_Room (Settings);
+         Slot        : constant Element_Count :=
+           State_Slot (Item, Item.Committed);
+         Read        : Boolean := True;
+      begin
+         if Item.Check_State = null then
+            T.Allocate (Every_State, Item.Check_State);
+         end if;
+         if Item.Check_Conv = null then
+            T.Allocate (Every_Conv, Item.Check_Conv);
+         end if;
+         if Item.Check_State = null or else Item.Check_Conv = null then
+            Item.Check_At := 0;
+            return;
+         end if;
+
+         --  The one slot the next position reads, from wherever the newer
+         --  copy is; the device's whole ring is not brought home for it.
+         if Item.State_On_Device and then Item.State_Seated then
+            declare
+               Every : constant Element_Count := Device_Slot_Span (Item);
+            begin
+               Model_Runner.Backend.Device.Get_State
+                 (Item.State_Base + Slot * Every, Item.Check_Conv.all, Read);
+               if Read then
+                  Model_Runner.Backend.Device.Get_State
+                    (Item.State_Base + Slot * Every + Every_Conv,
+                     Item.Check_State.all, Read);
+               end if;
+            end;
+         else
+            Item.Check_State.all :=
+              Item.Delta_State.all
+                (Slot * Every_State .. (Slot + 1) * Every_State - 1);
+            Item.Check_Conv.all :=
+              Item.Conv_State.all
+                (Slot * Every_Conv .. (Slot + 1) * Every_Conv - 1);
+         end if;
+
+         Item.Check_At := (if Read then Item.Committed else 0);
+      end;
+   end Mark_Checkpoint;
+
+   ------------------
+   -- Rewind_Point --
+   ------------------
+
+   function Rewind_Point (Item : Session; Position : Natural) return Natural is
+      Wanted : Natural := Natural'Min (Position, Item.Committed);
+   begin
+      if Item.Current in Closed | Failed then
+         return 0;
+      end if;
+
+      --  A hybrid's linear states: within the ring, or the checkpoint.
+      if Item.Delta_State /= null and then Wanted < Item.Committed
+        and then Wanted > 0
+      then
+         if Wanted <= Item.Kept_Newest
+           and then Item.Kept_Newest - Wanted <= Item.Kept_States
+         then
+            null;
+         elsif Item.Check_At > 0 and then Item.Check_At <= Wanted then
+            Wanted := Item.Check_At;
+         else
+            return 0;
+         end if;
+      end if;
+
+      --  A sliding window holds the positions from its origin on, and a
+      --  position read again needs the window before it.
+      if Item.Owner /= null and then Item.Origin /= null
+        and then Item.Owner.Settings.Window > 0 and then Wanted > 0
+      then
+         for Layer in Item.Origin.all'Range loop
+            if Slides (Item.Owner.Settings, Natural (Layer))
+              and then Item.Origin.all (Layer) > 0
+              and then Natural (Item.Origin.all (Layer))
+                         + Item.Owner.Settings.Window > Wanted
+            then
+               return 0;
+            end if;
+         end loop;
+      end if;
+
+      return Wanted;
+   end Rewind_Point;
 
 end Model_Runner.Llama;

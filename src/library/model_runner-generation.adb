@@ -1138,33 +1138,54 @@ package body Model_Runner.Generation is
          return;
       end if;
 
-      --  Decide how much of the committed context can be kept. Reuse happens
-      --  only when the committed tokens are an exact prefix of the sequence
-      --  about to be evaluated; anything else resets the session, so the cache
-      --  never describes a different conversation from the rendered one.
+      --  Decide how much of the committed context can be kept: the tokens it
+      --  shares with the sequence about to be evaluated, from the front, as
+      --  far back as the session can be rewound. Anything past them goes, so
+      --  the cache never describes a different conversation from the
+      --  rendered one. It was the whole of the committed tokens or nothing,
+      --  and a template that writes an answer otherwise than it was
+      --  generated -- most do, a thinking block taken out -- read the whole
+      --  conversation again every turn; a hybrid, whose states go back only
+      --  to the ring or its checkpoint, picks up at the checkpoint the turn
+      --  before left where its prompt ended.
       declare
          Committed : constant Natural := L.Position (Session);
-         Matches   : Boolean := Item.Reuse_Committed_Prefix
-           and then Committed > 0
-           and then Committed <= Prompt_Count;
+         Shared    : Natural := 0;
+         Back_To   : Natural := 0;
+         Rewound   : E.Error_Info;
       begin
-         if Matches then
-            for Index in 1 .. Committed loop
-               if L.Committed_Token (Session, Index - 1) /= Tokens.all (Index)
-               then
-                  Matches := False;
-                  exit;
-               end if;
+         if Item.Reuse_Committed_Prefix and then Committed > 0 then
+            while Shared < Committed and then Shared < Prompt_Count
+              and then L.Committed_Token (Session, Shared)
+                       = Tokens.all (Shared + 1)
+            loop
+               Shared := Shared + 1;
             end loop;
          end if;
 
-         if Matches then
+         if Shared = Committed and then Committed > 0 then
             First_Token := Committed + 1;
          else
-            if Committed > 0 then
-               L.Reset (Session);
+            --  At least one token left to read, so the last position's
+            --  distribution is the session's own.
+            Back_To :=
+              L.Rewind_Point
+                (Session, Natural'Min (Shared, Prompt_Count - 1));
+            if Back_To > 0 then
+               L.Rewind (Session, Back_To, Rewound);
+               if E.Is_Error (Rewound) then
+                  Back_To := 0;
+               end if;
             end if;
-            First_Token := 1;
+
+            if Back_To > 0 then
+               First_Token := Back_To + 1;
+            else
+               if Committed > 0 then
+                  L.Reset (Session);
+               end if;
+               First_Token := 1;
+            end if;
          end if;
       end;
 
@@ -1249,6 +1270,22 @@ package body Model_Runner.Generation is
                  L.Batch_Limit (Source)));
          Index : Natural := First_Token;
 
+         --  Where a conversation's next turn can pick up: a little before the
+         --  prompt's end, ahead of the template's opening of the answer --
+         --  the conversation rendered again writes that opening otherwise,
+         --  so a checkpoint at the prompt's very end lay past where the two
+         --  part, and a hybrid read its whole conversation again every turn.
+         --  The batch is cut there and the hybrid's states kept (see
+         --  Mark_Checkpoint); nought where no turn will follow.
+         --  A turn shorter than that keeps it where the turn begins.
+         Checkpoint_Margin : constant := 32;
+         Hold_At : constant Natural :=
+           (if not Item.Reuse_Committed_Prefix then 0
+            elsif Prompt_Count > Checkpoint_Margin
+              and then Prompt_Count - Checkpoint_Margin >= First_Token
+            then Prompt_Count - Checkpoint_Margin
+            else First_Token - 1);
+
          --  The picture rows a batch starting at From reads: the soft
          --  tokens before it have taken that many rows already.
          function Given_Before (From : Positive) return L.Given_Rows is
@@ -1294,6 +1331,12 @@ package body Model_Runner.Generation is
                      L.Position (Draft_Session.all) + Ahead - 1));
             end if;
          end;
+
+         if Hold_At > 0 and then Hold_At = First_Token - 1
+           and then L.Position (Session) = Hold_At
+         then
+            L.Mark_Checkpoint (Session);
+         end if;
 
          Prefill_Loop :
          while Index <= Prompt_Count loop
@@ -1341,7 +1384,21 @@ package body Model_Runner.Generation is
                   end;
                end Batch_End;
 
-               Last : constant Natural := Batch_End;
+               --  Cut where the checkpoint goes, unless that is inside a
+               --  picture's rows, which travel together.
+               function Held_End return Natural is
+                  Last : constant Natural := Batch_End;
+               begin
+                  if Hold_At >= Index and then Hold_At < Last
+                    and then not (Pictures.Soft /= Vocab.No_Token
+                                  and then Is_Soft (Tokens.all (Hold_At + 1)))
+                  then
+                     return Hold_At;
+                  end if;
+                  return Last;
+               end Held_End;
+
+               Last : constant Natural := Held_End;
             begin
                --  With every position's state where the next block will
                --  be run over the prompt behind it -- which is only where
@@ -1429,6 +1486,10 @@ package body Model_Runner.Generation is
                end loop;
 
                Index := Last + 1;
+
+               if Last = Hold_At and then L.Position (Session) = Hold_At then
+                  L.Mark_Checkpoint (Session);
+               end if;
             end;
 
             P.Publish

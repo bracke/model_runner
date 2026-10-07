@@ -1162,6 +1162,60 @@ package body Tests.Inference_Cases is
 
             L.Close (Live);
          end;
+
+         --  A checkpoint: no ring at all, three tokens, the states kept,
+         --  two more, and back to the checkpoint however far behind it now
+         --  lies -- where a conversation's next turn picks up. A point
+         --  before it is out of reach, and the answer read again from it
+         --  is the one the straight run gave.
+         declare
+            Live : L.Session;
+            Straight : Logit_Vector := [others => 0.0];
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the checkpointing session did not open");
+
+            for Index in 1 .. 3 loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Straight,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation before the checkpoint failed");
+            end loop;
+            L.Mark_Checkpoint (Live);
+            for Index in 4 .. 5 loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Straight,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation past the checkpoint failed");
+            end loop;
+
+            Assert (L.Rewind_Point (Live, 4) = 3,
+                    "the checkpoint is not the point a rewind can reach; it "
+                    & "said" & Natural'Image (L.Rewind_Point (Live, 4)));
+            Assert (L.Rewind_Point (Live, 2) = 0,
+                    "a point before the checkpoint was said to be reachable");
+            L.Rewind (Live, 2, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind before the checkpoint was taken");
+
+            L.Rewind (Live, 3, Status);
+            Assert (E.Is_Ok (Status),
+                    "a rewind to the checkpoint was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            for Index in 4 .. 5 loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Rewound,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation after the checkpoint failed");
+            end loop;
+
+            Assert (Worst (Straight, Rewound) = 0.0,
+                    "the state the checkpoint restored is not the state "
+                    & "that was there; the logits moved by"
+                    & N.Real'Image (Worst (Straight, Rewound)));
+
+            L.Close (Live);
+         end;
       end;
 
       B.Free (Kept);

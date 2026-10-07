@@ -346,6 +346,7 @@ begin
 
    --  What was adopted is the host's, whatever the device held.
    Item.State_On_Device := False;
+   Item.Check_At := 0;
 
    --  What each position turns by, where the model has three parts
    --  and the snapshot carries them; a snapshot from before they were

@@ -259,6 +259,7 @@ begin
    end if;
 
    Item.Committed := Keep + Moved;
+   Item.Check_At := 0;
 
    --  A packed block went stale the same way and was not sent over
    --  either -- only an exact block is, above: Gemma 3 at q4 or q8

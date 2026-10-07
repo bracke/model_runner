@@ -1996,6 +1996,30 @@ package Model_Runner.Llama is
       Position : Natural;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Keep a hybrid's linear states as they stand, at the committed
+   --  position, beside the ring: a point Rewind can go back to however far
+   --  it lies behind. Marked where a prompt has been read and before the
+   --  answer to it, it is where the next turn of a conversation can pick up
+   --  -- the conversation rendered again agrees with the session up to the
+   --  answer, and the answer as the template writes it seldom agrees with
+   --  the answer as it was generated. It costs a copy of every linear
+   --  layer's state, read back from the device where the device holds it.
+   --  Nothing for an architecture without linear layers.
+   --
+   --  @param Item Open session.
+   procedure Mark_Checkpoint (Item : in out Session);
+
+   --  The furthest along of the positions at or before Position this
+   --  session can be rewound to: Position itself for a session that keeps
+   --  every position, within the ring or at the checkpoint for a hybrid's,
+   --  and no further back than a sliding window still holds -- nought
+   --  where none can be reached.
+   --
+   --  @param Item Open session.
+   --  @param Position The position wanted.
+   --  @return A position Rewind takes.
+   function Rewind_Point (Item : Session; Position : Natural) return Natural;
+
    --  Keep the last few positions' states, so that a hybrid session can
    --  be rewound.
    --
@@ -3129,6 +3153,12 @@ private
       --  mixture layer does before its first Mamba layer on the device is
       --  seated.
       Ring_Written : Boolean := False;
+
+      --  The linear states at Check_At, kept by Mark_Checkpoint; Check_At
+      --  is nought where none is kept.
+      Check_State : Model_Runner.Tensors.Real_Array_Access := null;
+      Check_Conv  : Model_Runner.Tensors.Real_Array_Access := null;
+      Check_At    : Natural := 0;
 
       --  Where the session's ring lies in the device's state room, in
       --  elements, while it holds a seat there; every session seated has
