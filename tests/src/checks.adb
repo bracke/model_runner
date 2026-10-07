@@ -25,6 +25,7 @@ with Tiny_Model;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
 with Shader_Generation;
 with Tool_Commands;
@@ -6640,10 +6641,10 @@ package body Checks is
 
             Recorded : constant Interfaces.Unsigned_64 :=
               (case Which is
-                  when 1 => Model_Runner.Shaders.Low.Matrix_Low_Digest,
-                  when 2 => Model_Runner.Shaders.Low.Matrix_Narrow_Low_Digest,
+                  when 1 => Model_Runner.Shaders.Low_Tiles.Matrix_Low_Digest,
+                  when 2 => Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Low_Digest,
                   when others =>
-                     Model_Runner.Shaders.Low.Matrix_Listed_Low_Digest);
+                     Model_Runner.Shaders.Low_Tiles.Matrix_Listed_Low_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 
@@ -6657,9 +6658,9 @@ package body Checks is
       --  And the compilations of the low-bit generating kernel, one a
       --  format from the one source -- the twelve low-bit formats, Q8_0, the
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
-      --  against it, and Q8_0's and IQ4_XS's three over several vectors, and
-      --  Q8_0's five gate-and-up compilations.
-      for Which in 1 .. 33 loop
+      --  against it, and Q8_0's three over several vectors, and its five
+      --  gate-and-up compilations.
+      for Which in 1 .. 30 loop
          declare
             Found : Boolean;
 
@@ -6698,9 +6699,6 @@ package body Checks is
                   when 28 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Glu_Digest,
                   when 29 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu_Digest,
                   when 30 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu_Digest,
-                  when 31 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V2_Digest,
-                  when 32 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V3_Digest,
-                  when 33 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V4_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;
@@ -6720,13 +6718,14 @@ package body Checks is
       --  the second time as the compilation that gives a long row two
       --  waves, and Q6_K's a third time as the compilation for rows past
       --  2048 columns that shares a block's scales round the wave; and
-      --  Q4_K's and Q6_K's compilations over a few positions at once, and
-      --  Q4_K's gate and up at once for one and for a few.
-      for Which in 1 .. 11 loop
+      --  Q4_K's, Q5_K's and Q6_K's compilations over a few positions at
+      --  once, and Q4_K's gate and up at once for one and for a few.
+      for Which in 1 .. 12 loop
          declare
             Name : constant String :=
               (if Which in 7 | 9 then "row_product_super6"
                elsif Which in 8 | 10 | 11 then "row_product_super"
+               elsif Which = 12 then "row_product_super5"
                else
                  (case (Which - 1) mod 3 is
                      when 0 => "row_product_super",
@@ -6758,6 +6757,8 @@ package body Checks is
                      Model_Runner.Shaders.Row_Product_Super_Glu_Digest,
                   when 11 =>
                      Model_Runner.Shaders.Row_Product_Super_Glu_Multi_Digest,
+                  when 12 =>
+                     Model_Runner.Shaders.Row_Product_Super5_Multi_Digest,
                   when others =>
                      Model_Runner.Shaders.Row_Product_Super6_Mid_Digest);
          begin
@@ -6888,7 +6889,7 @@ package body Checks is
                              when 2 =>
                                Model_Runner.Shaders.Matrix_Wider_Extra_Digest,
                              when others =>
-                               Model_Runner.Shaders.Low.Matrix_Wider_Low_Digest)
+                               Model_Runner.Shaders.Low_Tiles.Matrix_Wider_Low_Digest)
             then
                Fail ("a wider compilation of src/shaders/matrix_product.comp"
                      & " is older than the source; run ./compile-shaders.sh");

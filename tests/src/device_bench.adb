@@ -998,9 +998,14 @@ package body Device_Bench is
 
          type Values is access N.Real_Array;
 
-         Rows    : constant := 2048;
+         Rows    : constant := 8192;
          Columns : constant := 4096;
          Seconds : constant Duration := 0.30;
+
+         --  The vectors a product carries: a generated token's one, and a
+         --  drafted round's check of four or eight, which a format without
+         --  a kernel for a few vectors at once pays for several times over.
+         Widths : constant array (1 .. 3) of Positive := [1, 4, 8];
 
          type Shape is record
             Packing  : Products.Weight_Packing;
@@ -1043,9 +1048,9 @@ package body Device_Bench is
             (Products.Packed_NVFP4,   "nvfp4 ",  64,  36)];
 
          Asked : constant Values :=
-           new N.Real_Array (0 .. N.Element_Count (Columns) - 1);
+           new N.Real_Array (0 .. 8 * N.Element_Count (Columns) - 1);
          Got   : constant Values :=
-           new N.Real_Array (0 .. N.Element_Count (Rows) - 1);
+           new N.Real_Array (0 .. 8 * N.Element_Count (Rows) - 1);
       begin
          Asked.all := [others => 0.25];
 
@@ -1064,6 +1069,7 @@ package body Device_Bench is
                Spent   : Duration := 0.0;
                Ok      : Boolean := True;
                Halted  : Boolean;
+               First   : Long_Float := 0.0;
             begin
                Model_Runner.Bytes.Allocate (Room, Weights);
                exit when Weights = null;
@@ -1074,49 +1080,63 @@ package body Device_Bench is
                --  this would rightly ask.
                for Index in Weights.all'Range loop
                   Weights.all (Index) :=
-                    Model_Runner.Bytes.Byte ((Natural (Index) * 37) mod 251);
+                    Model_Runner.Bytes.Byte ((Long_Long_Integer (Index) * 37) mod 251);
                end loop;
 
-               Started := Ada.Calendar.Clock;
+               for Count of Widths loop
+                  Calls := 0;
+                  Spent := 0.0;
+                  Started := Ada.Calendar.Clock;
 
-               loop
-                  Products.Multiply
-                    (Engine, Weights.all, 0, Which.Packing, Rows, Columns,
-                     Asked.all, 1, Got.all, Ok, Halted,
-                     Key => Weights.all (Weights.all'First)'Address);
-                  exit when not Ok;
-                  Calls := Calls + 1;
-                  Spent := Ada.Calendar.Clock - Started;
-                  exit when Spent >= Seconds;
-               end loop;
+                  loop
+                     Products.Multiply
+                       (Engine, Weights.all, 0, Which.Packing, Rows, Columns,
+                        Asked.all (0 .. N.Element_Count (Count * Columns) - 1),
+                        Count,
+                        Got.all (0 .. N.Element_Count (Count * Rows) - 1),
+                        Ok, Halted,
+                        Key => Weights.all (Weights.all'First)'Address);
+                     exit when not Ok;
+                     Calls := Calls + 1;
+                     Spent := Ada.Calendar.Clock - Started;
+                     exit when Spent >= Seconds;
+                  end loop;
 
-               if Ok and then Calls > 0 then
-                  declare
-                     Each : constant Long_Float :=
-                       Long_Float (Spent) / Long_Float (Calls);
+                  if Ok and then Calls > 0 then
+                     declare
+                        Each : constant Long_Float :=
+                          Long_Float (Spent) / Long_Float (Calls);
 
-                     --  Nanoseconds an element and gigabytes a second, so
-                     --  that a format which reads fewer bytes and takes
-                     --  longer says so in both directions at once.
-                     Cell : constant Long_Float :=
-                       Each * 1.0E9
-                       / (Long_Float (Rows) * Long_Float (Columns));
+                        --  Nanoseconds an element and gigabytes a second, so
+                        --  that a format which reads fewer bytes and takes
+                        --  longer says so in both directions at once.
+                        Cell : constant Long_Float :=
+                          Each * 1.0E9
+                          / (Long_Float (Rows) * Long_Float (Columns));
 
-                     Rate : constant Long_Float :=
-                       Long_Float (Room) / Each / 1.0E9;
-                  begin
+                        Rate : constant Long_Float :=
+                          Long_Float (Room) / Each / 1.0E9;
+                     begin
+                        if Count = 1 then
+                           First := Each;
+                        end if;
+                        Ada.Text_IO.Put_Line
+                          ("    " & Which.Name & Positive'Image (Count)
+                           & Duration'Image (Duration (Each)) & " s a product,"
+                           & Long_Float'Image (Cell) & " ns an element,"
+                           & Long_Float'Image (Rate) & " GB/s,"
+                           & Model_Runner.Bytes.Byte_Count'Image (Room / 1024)
+                           & " KiB"
+                           & (if Count > 1 and then First > 0.0
+                              then "," & Long_Float'Image (Each / First)
+                                   & " times one vector's"
+                              else ""));
+                     end;
+                  else
                      Ada.Text_IO.Put_Line
-                       ("    " & Which.Name
-                        & Duration'Image (Duration (Each)) & " s a product,"
-                        & Long_Float'Image (Cell) & " ns an element,"
-                        & Long_Float'Image (Rate) & " GB/s,"
-                        & Model_Runner.Bytes.Byte_Count'Image (Room / 1024)
-                        & " KiB");
-                  end;
-               else
-                  Ada.Text_IO.Put_Line
-                    ("    " & Which.Name & " the device would not take it");
-               end if;
+                       ("    " & Which.Name & " the device would not take it");
+                  end if;
+               end loop;
 
                Products.Forget_Matrices (Engine);
                Model_Runner.Bytes.Free (Weights);
@@ -1277,7 +1297,7 @@ package body Device_Bench is
       --  And what one vector costs a format, which is the shape a generated
       --  token has: no reuse anywhere, so the decode is paid once an element
       --  and amortized over nothing.
-      Ada.Text_IO.Put_Line ("  one vector a product, by format:");
+      Ada.Text_IO.Put_Line ("  one, four and eight vectors a product, by format:");
       Formats;
 
       --  And a hundred and twenty-eight vectors a product, at the shapes a

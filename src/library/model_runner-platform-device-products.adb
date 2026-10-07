@@ -10,6 +10,7 @@ with System.Storage_Elements;
 with Model_Runner.Kernels;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
 
 --  Products on a device, through the same interface the parent opened it
@@ -951,13 +952,15 @@ package body Model_Runner.Platform.Device.Products is
         and then Count in Multi_Count
         and then Item.Q8_Multi_Lines (Count) /= Null_Handle)
        or else
-       (Packing = Packed_IQ4_XS
-        and then Count in Multi_Count
-        and then Item.XS_Multi_Lines (Count) /= Null_Handle)
+       (Count in Many_Count
+        and then Item.Wave_Multi_Lines (Packing) (Count) /= Null_Handle)
        or else
        (Count in Many_Count
         and then ((Packing = Packed_Q4_K
                    and then Item.Many_Lines4 (Count) /= Null_Handle)
+                  or else
+                  (Packing = Packed_Q5_K
+                   and then Item.Many_Lines5 (Count) /= Null_Handle)
                   or else
                   (Packing = Packed_Q6_K
                    and then Item.Many_Lines6 (Count) /= Null_Handle)))
@@ -1041,7 +1044,8 @@ package body Model_Runner.Platform.Device.Products is
       Short   : Boolean := False) return Positive
    is (if Packing = Packed_Q8_0 and then Count in Multi_Count
        then Q8_Multi_Rows
-       elsif Packing in Packed_Q4_K | Packed_Q6_K and then Count in Many_Count
+       elsif Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
+         and then Count in Many_Count
        then Many_Rows
        elsif Short then Q8_Short_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
@@ -1073,7 +1077,10 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural;
       Packing : Weight_Packing := Values_F32;
       Columns : Natural := 0) return Address
-   is (if Packing in Low_Packing and then Waved (Item, Packing, Count)
+   is (if Count in Many_Count
+         and then Item.Wave_Multi_Lines (Packing) (Count) /= Null_Handle
+       then Item.Wave_Multi_Lines (Packing) (Count)
+       elsif Packing in Low_Packing and then Waved (Item, Packing, Count)
        then Item.Low_Wave_Lines (Packing)
        elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
        then (if Count in Multi_Count then Item.Q8_Multi_Lines (Count)
@@ -1083,8 +1090,7 @@ package body Model_Runner.Platform.Device.Products is
        elsif Packing = Packed_IQ4_NL and then Waved (Item, Packing, Count)
        then Item.NL_Wave_Line
        elsif Packing = Packed_IQ4_XS and then Waved (Item, Packing, Count)
-       then (if Count in Multi_Count then Item.XS_Multi_Lines (Count)
-             else Item.XS_Wave_Line)
+       then Item.XS_Wave_Line
        elsif Packing = Packed_Q2_K and then Waved (Item, Packing, Count)
        then Item.Q2K_Wave_Line
        elsif Packing = Packed_Q3_K and then Waved (Item, Packing, Count)
@@ -1101,6 +1107,9 @@ package body Model_Runner.Platform.Device.Products is
        elsif Count in Many_Count and then Packing = Packed_Q4_K
          and then Waved (Item, Packing, Count)
        then Item.Many_Lines4 (Count)
+       elsif Count in Many_Count and then Packing = Packed_Q5_K
+         and then Waved (Item, Packing, Count)
+       then Item.Many_Lines5 (Count)
        elsif Count in Many_Count and then Packing = Packed_Q6_K
          and then Waved (Item, Packing, Count)
        then Item.Many_Lines6 (Count)
@@ -2560,6 +2569,8 @@ package body Model_Runner.Platform.Device.Products is
                     Model_Runner.Shaders.Row_Product_Super_Multi;
                   Six  : aliased constant Model_Runner.Shaders.Word_Array :=
                     Model_Runner.Shaders.Row_Product_Super6_Multi;
+                  Five : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Row_Product_Super5_Multi;
                begin
                   Request.Size := Interfaces.C.size_t (Four'Length * 4);
                   Request.Code := Four'Address;
@@ -2567,6 +2578,14 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Many_Shader4 := Made;
+                  end if;
+
+                  Request.Size := Interfaces.C.size_t (Five'Length * 4);
+                  Request.Code := Five'Address;
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Many_Shader5 := Made;
                   end if;
 
                   Request.Size := Interfaces.C.size_t (Six'Length * 4);
@@ -2841,12 +2860,6 @@ package body Model_Runner.Platform.Device.Products is
                     Item.NL_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs,
                     Item.XS_Wave_Shader);
-            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V2,
-                    Item.XS_Multi_Shaders (2));
-            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V3,
-                    Item.XS_Multi_Shaders (3));
-            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_V4,
-                    Item.XS_Multi_Shaders (4));
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,
                     Item.Q2K_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K,
@@ -3588,7 +3601,7 @@ package body Model_Runner.Platform.Device.Products is
 
                   declare
                      Words : aliased constant Model_Runner.Shaders.Word_Array :=
-                       Model_Runner.Shaders.Low.Matrix_Low;
+                       Model_Runner.Shaders.Low_Tiles.Matrix_Low;
                   begin
                      Request.Size := Interfaces.C.size_t (Words'Length * 4);
                      Request.Code := Words'Address;
@@ -3623,13 +3636,13 @@ package body Model_Runner.Platform.Device.Products is
                      Module (Model_Runner.Shaders.Matrix_Wider, Item.Wider);
                      Module (Model_Runner.Shaders.Matrix_Wider_Extra,
                              Item.Wider_More);
-                     Module (Model_Runner.Shaders.Low.Matrix_Wider_Low,
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Wider_Low,
                              Item.Wider_Low);
                   end;
 
                   declare
                      Words : aliased constant Model_Runner.Shaders.Word_Array :=
-                       Model_Runner.Shaders.Low.Matrix_Narrow_Low;
+                       Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Low;
                   begin
                      Request.Size := Interfaces.C.size_t (Words'Length * 4);
                      Request.Code := Words'Address;
@@ -3643,7 +3656,7 @@ package body Model_Runner.Platform.Device.Products is
 
                   declare
                      Words : aliased constant Model_Runner.Shaders.Word_Array :=
-                       Model_Runner.Shaders.Low.Matrix_Listed_Low;
+                       Model_Runner.Shaders.Low_Tiles.Matrix_Listed_Low;
                   begin
                      Request.Size := Interfaces.C.size_t (Words'Length * 4);
                      Request.Code := Words'Address;
@@ -3839,6 +3852,11 @@ package body Model_Runner.Platform.Device.Products is
                      Line (Wave_Lanes, C.unsigned (Count),
                            Item.Many_Lines4 (Count));
                   end if;
+                  if Item.Many_Shader5 /= Null_Handle then
+                     Request.Stage.Module := Item.Many_Shader5;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Many_Lines5 (Count));
+                  end if;
                   if Item.Many_Shader6 /= Null_Handle then
                      Request.Stage.Module := Item.Many_Shader6;
                      Line (Wave_Lanes, C.unsigned (Count),
@@ -3926,13 +3944,6 @@ package body Model_Runner.Platform.Device.Products is
                   Line (Low_Wave_Lanes, 1, Item.XS_Wave_Line);
                end if;
 
-               for Count in Multi_Count loop
-                  if Item.XS_Multi_Shaders (Count) /= Null_Handle then
-                     Request.Stage.Module := Item.XS_Multi_Shaders (Count);
-                     Line (Low_Wave_Lanes, 1, Item.XS_Multi_Lines (Count));
-                  end if;
-               end loop;
-
                if Item.Q2K_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.Q2K_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.Q2K_Wave_Line);
@@ -3950,6 +3961,43 @@ package body Model_Runner.Platform.Device.Products is
                            Item.Legacy_Wave_Lines (Packing));
                   end if;
                end loop;
+
+               --  And each of those over a few vectors at once, made from
+               --  the same compilation at its second constant.
+               declare
+                  procedure Many (Module : Address; Packing : Weight_Packing);
+
+                  --  Two to eight positions, as Q4_K's; but the seven
+                  --  codebook formats two to four, whose walk at eight
+                  --  measured twice the generic row kernel's cost (3.2 to
+                  --  3.8 ms against 1.6 on a 8192 by 4096 matrix) while at
+                  --  four it is half.
+                  procedure Many (Module : Address; Packing : Weight_Packing)
+                  is
+                     Most : constant Many_Count :=
+                       (if Packing in Packed_IQ3_S .. Packed_IQ1_M then 4
+                        else Many_Count'Last);
+                  begin
+                     if Module /= Null_Handle then
+                        Request.Stage.Module := Module;
+                        for Count in 2 .. Most loop
+                           Line (Low_Wave_Lanes, C.unsigned (Count),
+                                 Item.Wave_Multi_Lines (Packing) (Count));
+                        end loop;
+                     end if;
+                  end Many;
+               begin
+                  for Packing in Low_Packing loop
+                     Many (Item.Low_Wave_Shaders (Packing), Packing);
+                  end loop;
+                  Many (Item.NL_Wave_Shader, Packed_IQ4_NL);
+                  Many (Item.XS_Wave_Shader, Packed_IQ4_XS);
+                  Many (Item.Q2K_Wave_Shader, Packed_Q2_K);
+                  Many (Item.Q3K_Wave_Shader, Packed_Q3_K);
+                  for Packing in Legacy_Packing loop
+                     Many (Item.Legacy_Wave_Shaders (Packing), Packing);
+                  end loop;
+               end;
 
                Request.Stage.Module := Item.Shader;
                Request.Stage.Next := Null_Handle;
@@ -5124,6 +5172,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Glu_Line, "vkDestroyPipeline");
       for Count in Many_Count loop
          Give_Back (Item.Many_Lines4 (Count), "vkDestroyPipeline");
+         Give_Back (Item.Many_Lines5 (Count), "vkDestroyPipeline");
          Give_Back (Item.Many_Lines6 (Count), "vkDestroyPipeline");
          Give_Back (Item.Glu_Many_Lines (Count), "vkDestroyPipeline");
       end loop;
@@ -5144,8 +5193,11 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
-      for Count in Multi_Count loop
-         Give_Back (Item.XS_Multi_Lines (Count), "vkDestroyPipeline");
+      for Packing in Weight_Packing loop
+         for Count in Many_Count loop
+            Give_Back (Item.Wave_Multi_Lines (Packing) (Count),
+                       "vkDestroyPipeline");
+         end loop;
       end loop;
       Give_Back (Item.Q2K_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.Q3K_Wave_Line, "vkDestroyPipeline");
@@ -5290,9 +5342,6 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
-      for Count in Multi_Count loop
-         Give_Back (Item.XS_Multi_Shaders (Count), "vkDestroyShaderModule");
-      end loop;
       Give_Back (Item.Q2K_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");
       for Packing in Legacy_Packing loop
@@ -5302,6 +5351,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Many_Shader4, "vkDestroyShaderModule");
+      Give_Back (Item.Many_Shader5, "vkDestroyShaderModule");
       Give_Back (Item.Many_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Many_Shader, "vkDestroyShaderModule");

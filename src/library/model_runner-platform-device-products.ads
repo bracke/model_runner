@@ -228,6 +228,9 @@ package Model_Runner.Platform.Device.Products is
    subtype Legacy_Packing is Weight_Packing range Packed_Q4_0 .. Packed_Q5_1;
    type Legacy_Address_Array is array (Legacy_Packing) of System.Address;
 
+   --  A few-vector pipeline a format and a count; see Wave_Multi_Lines.
+   type Wave_Multi_Table is array (Weight_Packing) of Many_Array;
+
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
    --  super-blocks, so a width that is not a multiple of 256 is refused
@@ -3305,12 +3308,14 @@ private
       Wave_Shader6 : System.Address := System.Null_Address;
       Wave_Line6   : System.Address := System.Null_Address;
 
-      --  Q4_K's and Q6_K's compilations over a few positions at once, a
-      --  pipeline a count: a check round's products, each weight decoded
-      --  once for every position.
+      --  Q4_K's, Q5_K's and Q6_K's compilations over a few positions at
+      --  once, a pipeline a count: a check round's products, each weight
+      --  decoded once for every position.
       Many_Shader4 : System.Address := System.Null_Address;
+      Many_Shader5 : System.Address := System.Null_Address;
       Many_Shader6 : System.Address := System.Null_Address;
       Many_Lines4  : Many_Array := [others => System.Null_Address];
+      Many_Lines5  : Many_Array := [others => System.Null_Address];
       Many_Lines6  : Many_Array := [others => System.Null_Address];
 
       --  Q4_K's gate and up at once with the unit between them, for one
@@ -3332,6 +3337,13 @@ private
       --  compiled once a format, each with its decode and codebook alone.
       Low_Wave_Shaders : Low_Address_Array := [others => System.Null_Address];
       Low_Wave_Lines   : Low_Address_Array := [others => System.Null_Address];
+
+      --  Every one of those compilations, and the two IQ4 formats', Q2_K's,
+      --  Q3_K's and the four older formats', made again over two, three or
+      --  four vectors at once -- a drafted round's check -- by its second
+      --  constant.
+      Wave_Multi_Lines : Wave_Multi_Table :=
+        [others => [others => System.Null_Address]];
 
       --  And Q8_0, on the same kernel compiled for it.
       Q8_Wave_Shader : System.Address := System.Null_Address;
@@ -3360,10 +3372,6 @@ private
       NL_Wave_Line   : System.Address := System.Null_Address;
       XS_Wave_Shader : System.Address := System.Null_Address;
       XS_Wave_Line   : System.Address := System.Null_Address;
-
-      --  And IQ4_XS over two, three or four vectors at once, as Q8_0's.
-      XS_Multi_Shaders : Multi_Array := [others => System.Null_Address];
-      XS_Multi_Lines   : Multi_Array := [others => System.Null_Address];
 
       --  And Q2_K and Q3_K, a lane a sub-block: the generic row kernel's
       --  eight lanes a row read a Q2_K model seven per cent behind

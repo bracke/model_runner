@@ -58,6 +58,147 @@ uint u16 (uint base_word, uint index) {
     return (w[base_word + (index >> 1u)] >> ((index & 1u) * 16u)) & 0xFFFFu;
 }
 
+#ifdef MULTI
+//  A few positions at once -- a drafted round's check, two to eight -- as
+//  row_product_super.comp's MULTI takes Q4_K's: each lane's weights of a
+//  row decoded once and dotted with every position's activations. The row
+//  kernel this replaces took a check of four 1.6 times one position.
+layout(constant_id = 1) const uint VEC = 2u;
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+
+    uint il = itid >> 2u;
+    uint ir = itid & 3u;
+    uint v_im = il >> 1u;
+    uint v_in = il & 1u;
+    uint l0 = 4u * ir + 2u * v_in;
+    uint q_offset = 32u * v_im + l0;
+    uint y_offset = 64u * v_im + l0;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_k[VEC];
+    bool real_k[VEC];
+    for (uint k = 0u; k < VEC; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint blocks = shape.columns / 256u;
+    uint span = blocks * 176u;
+
+    float temp[NUM_ROWS][VEC];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < VEC; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < blocks; i += 4u) {
+        //  Each position's sixteen activations: two each from four runs of
+        //  sixteen in either half of the block, as the one-position walk.
+        vec4 ya[VEC], yb[VEC], za[VEC], zb[VEC];
+        for (uint k = 0u; k < VEC; ++k) {
+            uint y1 = from_k[k] + i * 256u + y_offset;
+            uint z1 = y1 + 128u;
+            ya[k] = vec4(x[y1], x[y1 + 1u], x[y1 + 16u], x[y1 + 17u]);
+            yb[k] = vec4(x[y1 + 32u], x[y1 + 33u], x[y1 + 48u], x[y1 + 49u]);
+            za[k] = vec4(x[z1], x[z1 + 1u], x[z1 + 16u], x[z1 + 17u]);
+            zb[k] = vec4(x[z1 + 32u], x[z1 + 33u], x[z1 + 48u], x[z1 + 49u]);
+        }
+
+        for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = min(first_row + r, shape.rows - 1u);
+            uint at = shape.base + slice + row * span + i * 176u;
+            uint head = at >> 2u;
+
+            vec2 dm = unpackHalf2x16 (w[head]);
+
+            uint sbase = (at + 4u) >> 2u;
+            uint s0 = u16 (sbase, v_im);
+            uint s4 = u16 (sbase, v_im + 2u);
+            uint s8 = u16 (sbase, v_im + 4u);
+            uint sl = (s4 << 16u) | s0;
+            uint sh = (sl & 0xC0C0C0C0u) >> 2u;
+            vec4 s04 = vec4 (unpack8 (sl & 0x3F3F3F3Fu));
+            vec4 s8f = vec4 (unpack8 ((((s8 << 12u) | s8) & 0x0F0F0F0Fu) | sh));
+
+            uint qbase = (at + 48u) >> 2u;
+            uint qhb   = (at + 16u) >> 2u;
+
+            uint qs0 = u16 (qbase, q_offset / 2u)
+                     | (u16 (qbase, q_offset / 2u + 8u) << 16u);
+            uint qs64 = u16 (qbase, q_offset / 2u + 32u)
+                      | (u16 (qbase, q_offset / 2u + 40u) << 16u);
+
+            uint qs0_lo = qs0 & 0x0F0F0F0Fu;
+            uint qs0_hi = (qs0 >> 4u) & 0x0F0F0F0Fu;
+            uint qs64_lo = qs64 & 0x0F0F0F0Fu;
+            uint qs64_hi = (qs64 >> 4u) & 0x0F0F0F0Fu;
+
+            uint qh = u16 (qhb, l0 / 2u) | (u16 (qhb, l0 / 2u + 8u) << 16u);
+            qs0_lo  += ((qh >> (2u * v_im)) & 0x01010101u) << 4u;
+            qs0_hi  += ((qh >> (2u * v_im)) & 0x02020202u) << 3u;
+            qs64_lo += ((qh >> (2u * v_im)) & 0x10101010u);
+            qs64_hi += ((qh >> (2u * v_im)) & 0x20202020u) >> 1u;
+
+            vec4 lo0 = vec4 (unpack8 (qs0_lo));
+            vec4 hi0 = vec4 (unpack8 (qs0_hi));
+            vec4 lo1 = vec4 (unpack8 (qs64_lo));
+            vec4 hi1 = vec4 (unpack8 (qs64_hi));
+
+            for (uint k = 0u; k < VEC; ++k) {
+                float sx = dot (ya[k], lo0);
+                float sy = dot (yb[k], hi0);
+                float sz = dot (za[k], lo1);
+                float sw = dot (zb[k], hi1);
+                float smin = dot (ya[k], vec4 (1.0)) * s04.z
+                           + dot (yb[k], vec4 (1.0)) * s04.w
+                           + dot (za[k], vec4 (1.0)) * s8f.z
+                           + dot (zb[k], vec4 (1.0)) * s8f.w;
+                temp[r][k] += dm.x * (sx * s04.x + sy * s04.y
+                                      + sz * s8f.x + sw * s8f.y)
+                              - dm.y * smin;
+            }
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float whole = subgroupAdd (temp[r][k]);
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#else
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint itid = tid & 15u;
@@ -208,3 +349,4 @@ void main() {
         }
     }
 }
+#endif

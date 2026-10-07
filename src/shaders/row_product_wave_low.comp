@@ -141,6 +141,21 @@ float signed_dot(uint lo, uint hi, uint signs, vec4 a, vec4 b) {
     return sum;
 }
 
+//  The same eight values with their signs on, for a walk that decodes a
+//  lane's weights once and dots them with several vectors.
+void signed_vals(uint lo, uint hi, uint signs, out vec4 x, out vec4 y) {
+    vec4 g0 = vec4(unpack8(lo));
+    vec4 g1 = vec4(unpack8(hi));
+    x = vec4((signs & 1u)   != 0u ? -g0.x : g0.x,
+             (signs & 2u)   != 0u ? -g0.y : g0.y,
+             (signs & 4u)   != 0u ? -g0.z : g0.z,
+             (signs & 8u)   != 0u ? -g0.w : g0.w);
+    y = vec4((signs & 16u)  != 0u ? -g1.x : g1.x,
+             (signs & 32u)  != 0u ? -g1.y : g1.y,
+             (signs & 64u)  != 0u ? -g1.z : g1.z,
+             (signs & 128u) != 0u ? -g1.w : g1.w);
+}
+
 //  Eight signed bytes -- IQ1's grid -- against eight activations.
 float plain_dot(uint lo, uint hi, vec4 a, vec4 b) {
     return dot(a, vec4(unpack8(int(lo)))) + dot(b, vec4(unpack8(int(hi))));
@@ -278,6 +293,28 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
                           a[2u * l], a[2u * l + 1u]);
     }
     return db * sum;
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint q = at + 2u + 8u * sub;
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uint aux0 = shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u);
+    uint aux1 = shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u);
+    float db = half_at(at) * (0.5 + float(aux1 >> 28u)) * 0.25;
+    for (uint l = 0u; l < 4u; ++l) {
+        uvec2 g = grid_shared[(aux0 >> (8u * l)) & 255u];
+        vec4 x, y;
+        signed_vals(g.x, g.y, ksign((aux1 >> (7u * l)) & 127u), x, y);
+        wv[2u * l] = db * x;
+        wv[2u * l + 1u] = db * y;
+    }
 }
 #endif
 
@@ -492,6 +529,33 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
                  + lane_half(hi >> 16u, a[6], a[7]);
     return d * ((0.5 + float(scales & 15u)) * first
                 + (0.5 + float(scales >> 4u)) * second);
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint q = at + 2u + 8u * sub;
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uint lo = shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u);
+    uint hi = shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u);
+    uint scales = byte_at(at + 66u + sub);
+    float d = half_at(at) * 0.25;
+    float s0 = d * (0.5 + float(scales & 15u));
+    float s1 = d * (0.5 + float(scales >> 4u));
+    uint lanes[4] = uint[4](lo & 0xFFFFu, lo >> 16u, hi & 0xFFFFu, hi >> 16u);
+    for (uint l = 0u; l < 4u; ++l) {
+        uvec2 g = grid_shared[lanes[l] & 511u];
+        vec4 x, y;
+        signed_vals(g.x, g.y, ksign(lanes[l] >> 9u), x, y);
+        float sc = l < 2u ? s0 : s1;
+        wv[2u * l] = sc * x;
+        wv[2u * l + 1u] = sc * y;
+    }
 }
 #endif
 
@@ -874,6 +938,28 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
            * ((0.5 + float(scales & 15u)) * sums[0]
               + (0.5 + float(scales >> 4u)) * sums[1]);
 }
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint qs = quad_at(at + 2u + 4u * sub);
+    uint signs = quad_at(at + 34u + 4u * sub);
+    uint tops = byte_at(at + 66u + sub);
+    uint scales = byte_at(at + 74u + sub);
+    float d = half_at(at) * 0.25;
+    float s0 = d * (0.5 + float(scales & 15u));
+    float s1 = d * (0.5 + float(scales >> 4u));
+    for (uint l = 0u; l < 4u; ++l) {
+        uvec2 g = grid_shared[((qs >> (8u * l)) & 255u)
+                              | (((tops >> (2u * l)) & 3u) << 8u)];
+        vec4 x, y;
+        signed_vals(g.x, g.y, (signs >> (8u * l)) & 255u, x, y);
+        float sc = l < 2u ? s0 : s1;
+        wv[2u * l] = sc * x;
+        wv[2u * l + 1u] = sc * y;
+    }
+}
 #endif
 
 #ifdef IQ3_XXS
@@ -957,6 +1043,32 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
                           a[2u * l], a[2u * l + 1u]);
     }
     return half_at(at) * (0.5 + float(aux >> 28u)) * 0.5 * sum;
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint q = at + 2u + 8u * sub;
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uvec2 qs = uvec2(shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u),
+                     shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u));
+    uint aux = quad_at(at + 66u + 4u * sub);
+    float sc = half_at(at) * (0.5 + float(aux >> 28u)) * 0.5;
+    for (uint l = 0u; l < 4u; ++l) {
+        uint word = l < 2u ? qs.x : qs.y;
+        uint k = 16u * (l & 1u);
+        vec4 x, y;
+        signed_vals(grid_shared[(word >> k) & 255u],
+                    grid_shared[(word >> (k + 8u)) & 255u],
+                    ksign((aux >> (7u * l)) & 127u), x, y);
+        wv[2u * l] = sc * x;
+        wv[2u * l + 1u] = sc * y;
+    }
 }
 #endif
 
@@ -1091,6 +1203,37 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
                           a[2u * l], a[2u * l + 1u]);
     }
     return db * sum;
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint q = at + 2u + 8u * sub;
+    uint i = q >> 2u;
+    uint shift = (q & 2u) * 8u;
+    uint w0 = w[i];
+    uint w1 = w[i + 1u];
+    uint w2 = w[i + 2u];
+    uvec2 qs = uvec2(shift == 0u ? w0 : (w0 >> 16u) | (w1 << 16u),
+                     shift == 0u ? w1 : (w1 >> 16u) | (w2 << 16u));
+    uint signs = quad_at(at + 74u + 4u * sub);
+    uint high = byte_at(at + 66u + sub);
+    uint scales = byte_at(at + 106u + sub / 2u);
+    uint scale = sub % 2u == 0u ? (scales & 15u) : (scales >> 4u);
+    float db = half_at(at) * float(1u + 2u * scale);
+    for (uint l = 0u; l < 4u; ++l) {
+        uint word = l < 2u ? qs.x : qs.y;
+        uint k = 16u * (l & 1u);
+        uint g0 = grid_shared[((word >> k) & 255u)
+                              | (((high >> (2u * l)) & 1u) << 8u)];
+        uint g1 = grid_shared[((word >> (k + 8u)) & 255u)
+                              | (((high >> (2u * l + 1u)) & 1u) << 8u)];
+        vec4 x, y;
+        signed_vals(g0, g1, (signs >> (8u * l)) & 255u, x, y);
+        wv[2u * l] = db * x;
+        wv[2u * l + 1u] = db * y;
+    }
 }
 #endif
 
@@ -1319,6 +1462,36 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
         all += a[2u * l] + a[2u * l + 1u];
     }
     return dl * (sum + (shift - 1.0) * dot(all, vec4(1.0)));
+}
+
+//  The two-bit fields of a grid entry, as lifted_dot reads them.
+void lifted_vals(uint entry, out vec4 lo, out vec4 hi) {
+    lo = vec4(float(bitfieldExtract(entry, 0, 2)),
+              float(bitfieldExtract(entry, 2, 2)),
+              float(bitfieldExtract(entry, 4, 2)),
+              float(bitfieldExtract(entry, 6, 2)));
+    hi = vec4(float(bitfieldExtract(entry, 8, 2)),
+              float(bitfieldExtract(entry, 10, 2)),
+              float(bitfieldExtract(entry, 12, 2)),
+              float(bitfieldExtract(entry, 14, 2)));
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint high = u16_at(at + 34u + 2u * sub);
+    float dl = half_at(at) * float(2u * ((high >> 12u) & 7u) + 1u);
+    float shift = (high & 0x8000u) != 0u ? -0.125 : 0.125;
+    uint quad = quad_at(at + 2u + 4u * sub);
+    for (uint l = 0u; l < 4u; ++l) {
+        uint e = iq1_entry(((quad >> (8u * l)) & 255u)
+                           | (((high >> (3u * l)) & 7u) << 8u));
+        vec4 lo, hi;
+        lifted_vals(e, lo, hi);
+        wv[2u * l] = dl * (lo + (shift - 1.0));
+        wv[2u * l + 1u] = dl * (hi + (shift - 1.0));
+    }
 }
 #endif
 
@@ -1557,6 +1730,49 @@ float lane_dot32(uint at, uint sub, vec4 a[8]) {
     return d * (float(2u * (scales & 7u) + 1u) * sums[0]
                 + float(2u * ((scales >> 3u) & 7u) + 1u) * sums[1]);
 }
+
+//  The two-bit fields of a grid entry, as lifted_dot reads them.
+void lifted_vals(uint entry, out vec4 lo, out vec4 hi) {
+    lo = vec4(float(bitfieldExtract(entry, 0, 2)),
+              float(bitfieldExtract(entry, 2, 2)),
+              float(bitfieldExtract(entry, 4, 2)),
+              float(bitfieldExtract(entry, 6, 2)));
+    hi = vec4(float(bitfieldExtract(entry, 8, 2)),
+              float(bitfieldExtract(entry, 10, 2)),
+              float(bitfieldExtract(entry, 12, 2)),
+              float(bitfieldExtract(entry, 14, 2)));
+}
+
+//  The lane's thirty-two weights, its scales on them, decoded once for a
+//  walk over several vectors: lane_dot32 is their dot with the activations.
+#define WEIGHTS32
+void lane_weights32(uint at, uint sub, out vec4 wv[8]) {
+    uint sa = w[(at + 48u) >> 2u];
+    uint sb = w[(at + 52u) >> 2u];
+    uint qs = w[(at + 4u * sub) >> 2u];
+    uint qh = (w[(at + 32u + 2u * sub) >> 2u] >> (16u * (sub & 1u))) & 0xFFFFu;
+    uint s0 = sa & 0xFFFFu;
+    uint s1 = sa >> 16u;
+    uint s2 = sb & 0xFFFFu;
+    uint s3 = sb >> 16u;
+    float d = unpackHalf2x16((s0 >> 12u) | ((s1 >> 8u) & 0x00F0u)
+                             | ((s2 >> 4u) & 0x0F00u) | (s3 & 0xF000u)).x;
+    uint pair = sub / 2u;
+    uint word = pair == 0u ? s0 : pair == 1u ? s1 : pair == 2u ? s2 : s3;
+    uint scales = word >> (6u * (sub % 2u));
+    float c0 = d * float(2u * (scales & 7u) + 1u);
+    float c1 = d * float(2u * ((scales >> 3u) & 7u) + 1u);
+    for (uint l = 0u; l < 4u; ++l) {
+        uint n = (qh >> (4u * l)) & 15u;
+        uint e = iq1_entry(((qs >> (8u * l)) & 255u) | ((n & 7u) << 8u));
+        float shift = (n & 8u) != 0u ? -0.125 : 0.125;
+        vec4 lo, hi;
+        lifted_vals(e, lo, hi);
+        float sc = l < 2u ? c0 : c1;
+        wv[2u * l] = sc * (lo + (shift - 1.0));
+        wv[2u * l + 1u] = sc * (hi + (shift - 1.0));
+    }
+}
 #endif
 
 #ifdef TQ2_0
@@ -1585,6 +1801,27 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
               + dot(a3, vec4(unpack8((q >> 6u) & 0x03030303u)));
     return half_at(at + 64u) * (sum - total);
 }
+
+//  The lane's sixteen weights once, as the IQ4 formats' are; its four runs
+//  of activations are thirty-two apart rather than the IQ4 formats' two
+//  pairs.
+void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
+                      out float lift) {
+    uint run = lane / 8u;
+    uint m = (lane % 8u) * 4u;
+    uint q = u32_at(at + run * 32u + m);
+    wv[0] = vec4(unpack8(q & 0x03030303u));
+    wv[1] = vec4(unpack8((q >> 2u) & 0x03030303u));
+    wv[2] = vec4(unpack8((q >> 4u) & 0x03030303u));
+    wv[3] = vec4(unpack8((q >> 6u) & 0x03030303u));
+    scale = half_at(at + 64u);
+    lift = -scale;
+}
+uint own_at(uint lane) {
+    return (lane / 8u) * 32u + (lane % 8u);
+}
+const uint OWN_STEPS[4] = uint[4](0u, 8u, 16u, 24u);
+#define WEIGHTS_OWN
 #endif
 
 #ifdef TQ1_0
@@ -1624,6 +1861,29 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
     return half_at(at + 52u) * (sum - total);
 }
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    float d = half_at(at + 52u);
+    if (within < 240u) {
+        uint byte0 = within < 160u ? at + within % 32u : at + 32u;
+        uint pow3 = POW3[within < 160u ? within / 32u : (within - 160u) / 16u];
+        wv[0] = d * trits4(quad_at(byte0), pow3);
+        wv[1] = d * trits4(quad_at(byte0 + 4u), pow3);
+        wv[2] = d * trits4(quad_at(byte0 + 8u), pow3);
+        wv[3] = d * trits4(quad_at(byte0 + 12u), pow3);
+    } else {
+        uint bytes = quad_at(at + 48u);
+        wv[0] = d * trits4(bytes, 1u);
+        wv[1] = d * trits4(bytes, 3u);
+        wv[2] = d * trits4(bytes, 9u);
+        wv[3] = d * trits4(bytes, 27u);
+    }
+    lift = -d;
+}
 #endif
 
 #ifdef Q1_0
@@ -1642,6 +1902,24 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     }
     return half_at(at) * sum;
 }
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    uint bits = byte_at(at + 2u + within / 8u)
+              | (byte_at(at + 3u + within / 8u) << 8u);
+    float d = half_at(at);
+    for (uint c = 0u; c < 4u; ++c) {
+        uint n = bits >> (4u * c);
+        wv[c] = d * vec4((n & 1u) != 0u ? 1.0 : -1.0,
+                         (n & 2u) != 0u ? 1.0 : -1.0,
+                         (n & 4u) != 0u ? 1.0 : -1.0,
+                         (n & 8u) != 0u ? 1.0 : -1.0);
+    }
+    lift = 0.0;
+}
 #endif
 
 #ifdef Q2_0
@@ -1659,6 +1937,25 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
               + dot(vec4(a0.w, a1.w, a2.w, a3.w), vec4(unpack8((q >> 6u) & 0x03030303u)));
     float total = dot(a0 + a1 + a2 + a3, vec4(1.0));
     return half_at(at) * (sum - total);
+}
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    uint q = u32_at(at + 2u + within / 4u);
+    float d = half_at(at);
+    vec4 v0 = vec4(unpack8(q & 0x03030303u));
+    vec4 v1 = vec4(unpack8((q >> 2u) & 0x03030303u));
+    vec4 v2 = vec4(unpack8((q >> 4u) & 0x03030303u));
+    vec4 v3 = vec4(unpack8((q >> 6u) & 0x03030303u));
+    //  Activation c's component j meets field j of byte c.
+    wv[0] = d * vec4(v0.x, v1.x, v2.x, v3.x);
+    wv[1] = d * vec4(v0.y, v1.y, v2.y, v3.y);
+    wv[2] = d * vec4(v0.z, v1.z, v2.z, v3.z);
+    wv[3] = d * vec4(v0.w, v1.w, v2.w, v3.w);
+    lift = -d;
 }
 #endif
 
@@ -1695,6 +1992,24 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     vec4 hi1 = vec4(FOURS[b1.x >> 4u], FOURS[b1.y >> 4u], FOURS[b1.z >> 4u], FOURS[b1.w >> 4u]);
     return e4m3(byte_at(at + run))
            * (dot(a0, lo0) + dot(a1, lo1) + dot(a2, hi0) + dot(a3, hi1));
+}
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    uint run = within / 16u;
+    uint w0 = quad_at(at + 4u + 8u * run);
+    uint w1 = quad_at(at + 8u + 8u * run);
+    uvec4 b0 = uvec4(unpack8(w0));
+    uvec4 b1 = uvec4(unpack8(w1));
+    float sc = e4m3(byte_at(at + run));
+    wv[0] = sc * vec4(FOURS[b0.x & 15u], FOURS[b0.y & 15u], FOURS[b0.z & 15u], FOURS[b0.w & 15u]);
+    wv[1] = sc * vec4(FOURS[b1.x & 15u], FOURS[b1.y & 15u], FOURS[b1.z & 15u], FOURS[b1.w & 15u]);
+    wv[2] = sc * vec4(FOURS[b0.x >> 4u], FOURS[b0.y >> 4u], FOURS[b0.z >> 4u], FOURS[b0.w >> 4u]);
+    wv[3] = sc * vec4(FOURS[b1.x >> 4u], FOURS[b1.y >> 4u], FOURS[b1.z >> 4u], FOURS[b1.w >> 4u]);
+    lift = 0.0;
 }
 #endif
 
@@ -1747,6 +2062,25 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
            * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
             + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
 }
+
+//  The same lane's sixteen weights, decoded once for a few vectors: the
+//  four runs the activations at nought, one, four and five meet, the scale
+//  on their sum, and nothing on the activations' own sum.
+void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
+                      out float lift) {
+    uint block = lane / 2u;
+    uint half_of = lane % 2u;
+    uint b = at + block * 18u;
+    uint q0 = quad_at(b + 2u + half_of * 8u);
+    uint q1 = quad_at(b + 6u + half_of * 8u);
+    wv[0] = nl4(q0, 0u);
+    wv[1] = nl4(q1, 0u);
+    wv[2] = nl4(q0, 4u);
+    wv[3] = nl4(q1, 4u);
+    scale = half_at(b);
+    lift = 0.0;
+}
+#define WEIGHTS_OWN
 #endif
 
 #ifdef IQ4_XS
@@ -1780,6 +2114,25 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
            * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
             + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
 }
+
+//  As IQ4_NL's: the lane's weights once, its sub-block's scale on them.
+void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
+                      out float lift) {
+    uint ib = lane / 2u;
+    uint half_of = lane % 2u;
+    uint low = (byte_at(at + 4u + (ib >> 1u)) >> (4u * (ib & 1u))) & 15u;
+    uint high = (u16_at(at + 2u) >> (2u * ib)) & 3u;
+    scale = half_at(at) * float(int(low | (high << 4u)) - 32);
+    uint q = (at + 8u + 16u * ib + half_of * 8u) >> 2u;
+    uint q0 = w[q];
+    uint q1 = w[q + 1u];
+    wv[0] = nl4(q0, 0u);
+    wv[1] = nl4(q1, 0u);
+    wv[2] = nl4(q0, 4u);
+    wv[3] = nl4(q1, 4u);
+    lift = 0.0;
+}
+#define WEIGHTS_OWN
 #endif
 
 #if defined(Q4_0) || defined(Q4_1) || defined(Q5_0) || defined(Q5_1)
@@ -1851,6 +2204,37 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
     return half_at(b) * (sum - 8.0 * total);
 #endif
 }
+
+//  As IQ4_NL's, and the centre or the minimum as what multiplies the
+//  activations' own sum.
+void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
+                      out float lift) {
+    uint block = lane / 2u;
+    uint half_of = lane % 2u;
+
+    uint b = at + block * SUB_BYTES;
+    uint q0 = quad_at(b + QUANTS_AT + half_of * 8u);
+    uint q1 = quad_at(b + QUANTS_AT + 4u + half_of * 8u);
+    uvec4 v = uvec4(q0 & 0x0F0F0F0Fu, q1 & 0x0F0F0F0Fu,
+                    (q0 >> 4u) & 0x0F0F0F0Fu, (q1 >> 4u) & 0x0F0F0F0Fu);
+#ifdef FIFTHS
+    uint f = quad_at(b + QUANTS_AT - 4u) >> (half_of * 8u);
+    v |= uvec4(fifth4(f), fifth4(f >> 4u), fifth4(f >> 16u), fifth4(f >> 20u));
+#endif
+    wv[0] = vec4(unpack8(v.x));
+    wv[1] = vec4(unpack8(v.y));
+    wv[2] = vec4(unpack8(v.z));
+    wv[3] = vec4(unpack8(v.w));
+    scale = half_at(b);
+#if defined(LIFTED)
+    lift = half_at(b + 2u);
+#elif defined(FIFTHS)
+    lift = -16.0 * scale;
+#else
+    lift = -8.0 * scale;
+#endif
+}
+#define WEIGHTS_OWN
 #endif
 
 #ifdef Q2_K
@@ -1886,6 +2270,26 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
     uint scale = byte_at(at + sub);
     vec2 dm = unpackHalf2x16(w[(at + 80u) >> 2u]);
     return dm.x * float(scale & 15u) * sum - dm.y * float(scale >> 4u) * total;
+}
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    uint sub = within >> 4u;
+    uint side = sub >> 3u;
+    uint group = (within & 127u) >> 5u;
+    uint upper = sub & 1u;
+    uint q = (at + 16u + 32u * side + 16u * upper) >> 2u;
+    uint shift = 2u * group;
+    uint scale = byte_at(at + sub);
+    vec2 dm = unpackHalf2x16(w[(at + 80u) >> 2u]);
+    float sc = dm.x * float(scale & 15u);
+    for (uint c = 0u; c < 4u; ++c) {
+        wv[c] = sc * vec4(unpack8((w[q + c] >> shift) & 0x03030303u));
+    }
+    lift = -dm.y * float(scale >> 4u);
 }
 #endif
 
@@ -1926,6 +2330,30 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 
     return half_at(at + 108u) * scale * (sum - 4.0 * total);
 }
+
+//  The lane's sixteen weights, scales on, and what multiplies the
+//  activations' own sum, decoded once for a walk over several vectors:
+//  lane_dot is their dot with the activations plus that.
+#define WEIGHTS16
+void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
+    uint sub = within >> 4u;
+    uint side = sub >> 3u;
+    uint group = (within & 127u) >> 5u;
+    uint upper = sub & 1u;
+    uint shift = 2u * group;
+    uint bit = 4u * side + group;
+    uvec4 q = span_at(at + 32u + 32u * side + 16u * upper);
+    uvec4 h = span_at(at + 16u * upper);
+    uvec4 v = ((q >> shift) & 0x03030303u) | (((h >> bit) & 0x01010101u) << 2u);
+    uint low = (byte_at(at + 96u + (sub & 7u)) >> (4u * (sub >> 3u))) & 15u;
+    uint high = (byte_at(at + 104u + (sub & 3u)) >> (2u * (sub >> 2u))) & 3u;
+    float sc = half_at(at + 108u) * float(int(low | (high << 4u)) - 32);
+    wv[0] = sc * vec4(unpack8(v.x));
+    wv[1] = sc * vec4(unpack8(v.y));
+    wv[2] = sc * vec4(unpack8(v.z));
+    wv[3] = sc * vec4(unpack8(v.w));
+    lift = -4.0 * sc;
+}
 #endif
 
 #ifdef Q8_0
@@ -1945,117 +2373,7 @@ float lane_dot(uint at, uint within, vec4 a0, vec4 a1, vec4 a2, vec4 a3) {
 }
 #endif
 
-#if defined(VEC) && defined(IQ4_XS)
-//  IQ4_XS over a few vectors at once, as Q8_0's below: each lane's sixteen
-//  weights of a row -- both nibbles of eight bytes of one sub-block, as the
-//  one-vector walk takes them -- decoded once and dotted with every
-//  vector's sixteen activations. The generic low-bit row kernel it replaces
-//  for two to four positions read a 27B model's feed-forward at a fifth of
-//  this kernel's one-vector rate, so a drafted round's check cost three
-//  generated tokens.
-void main() {
-    uint tid = gl_LocalInvocationID.x;
-    if (tid < 16u) {
-        kv4[tid] = KV4[tid];
-    }
-    barrier();
-
-    uint itid = tid & 15u;
-    uint ix = tid >> 4u;
-    uint ib = itid / 2u;
-    uint half_of = itid % 2u;
-
-    uint member = gl_WorkGroupID.z;
-    bool listed = shape.routed >= LISTED_BY_POSITION;
-    uint which = listed ? member
-               : shape.routed != 0u ? route[member] : shape.members[member];
-    uint slice = which * shape.stride;
-    uint experts = shape.members[0];
-    uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member] : shape.count - shape.first;
-    uint list_at = 2u * experts;
-
-    if (run_count == 0u) {
-        return;
-    }
-
-    uint from_k[VEC];
-    bool real_k[VEC];
-    for (uint k = 0u; k < VEC; ++k) {
-        uint kk = min(k, run_count - 1u);
-        real_k[k] = k < run_count;
-        from_k[k] = listed
-              ? (shape.routed == LISTED_BY_POSITION
-                   ? route[list_at + run_at + kk] : run_at + kk)
-                * shape.columns
-              : (shape.first + kk) * shape.columns + member * shape.apart;
-    }
-
-    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
-    uint groups = (shape.columns + 255u) / 256u;
-    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
-
-    float temp[NUM_ROWS][VEC];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
-        for (uint k = 0u; k < VEC; ++k) {
-            temp[r][k] = 0.0;
-        }
-    }
-
-    for (uint i = ix; i < groups; i += 4u) {
-        if (i * 256u + ib * 32u < shape.columns) {
-            vec4 a[VEC][4];
-            for (uint k = 0u; k < VEC; ++k) {
-                uint xb = ((from_k[k] + i * 256u) >> 2u) + ib * 8u
-                          + half_of * 2u;
-                a[k][0] = x4[xb];
-                a[k][1] = x4[xb + 1u];
-                a[k][2] = x4[xb + 4u];
-                a[k][3] = x4[xb + 5u];
-            }
-
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
-                uint row = min(first_row + r, shape.rows - 1u);
-                uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
-
-                uint low = (byte_at(at + 4u + (ib >> 1u)) >> (4u * (ib & 1u)))
-                           & 15u;
-                uint high = (u16_at(at + 2u) >> (2u * ib)) & 3u;
-                float dl = half_at(at) * float(int(low | (high << 4u)) - 32);
-
-                uint q = (at + 8u + 16u * ib + half_of * 8u) >> 2u;
-                uint q0 = w[q];
-                uint q1 = w[q + 1u];
-                vec4 l0 = nl4(q0, 0u);
-                vec4 l1 = nl4(q1, 0u);
-                vec4 h0 = nl4(q0, 4u);
-                vec4 h1 = nl4(q1, 4u);
-
-                for (uint k = 0u; k < VEC; ++k) {
-                    temp[r][k] += dl
-                                  * (dot(a[k][0], l0) + dot(a[k][1], l1)
-                                   + dot(a[k][2], h0) + dot(a[k][3], h1));
-                }
-            }
-        }
-    }
-
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
-        uint row = first_row + r;
-        for (uint k = 0u; k < VEC; ++k) {
-            float whole = subgroupAdd(temp[r][k]);
-
-            if (tid == 0u && row < shape.rows && real_k[k]) {
-                uint out_at = listed
-                              ? (run_at + k) * shape.rows + row
-                              : member * shape.rows * shape.count
-                                + (shape.first + k) * shape.rows + row;
-                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
-            }
-        }
-    }
-}
-#elif defined(VEC)
+#if defined(VEC)
 //  A few vectors at once -- a drafted round's check, two to four positions
 //  -- through the same walk: each lane's sixteen weights of a row decoded
 //  once and dotted with every vector's sixteen activations, which a lane
@@ -2176,7 +2494,301 @@ void main() {
     }
 }
 #else
-void main() {
+//  Every compilation but Q8_0's and the gate-and-up ones carries a walk
+//  over a few vectors too, chosen by the pipeline's second constant: one
+//  vector the plain walk, two to four the walk below. A pipeline made at
+//  one has the other folded away as it is made, so a generated token's
+//  code is what it was; and a format's few-vector pipelines cost no
+//  compilation of their own.
+#if !defined(GLU) && !defined(Q8_0)
+#define MANY
+layout(constant_id = 1) const uint MULTI = 1u;
+#endif
+
+#if defined(MANY) && defined(WEIGHTS_OWN)
+#ifndef TQ2_0
+//  Where a lane's activations begin, in fours, within a group, and its four
+//  runs from there: the IQ4 formats' and the older ones' two pairs.
+uint own_at(uint lane) {
+    return (lane / 2u) * 8u + (lane % 2u) * 2u;
+}
+const uint OWN_STEPS[4] = uint[4](0u, 1u, 4u, 5u);
+#endif
+//  The formats that read their own activations -- the two IQ4 formats and
+//  the four older ones -- over a few vectors at once: each lane's sixteen
+//  weights of a row decoded once, then every vector's sixteen activations
+//  dotted with them. The generic low-bit row kernel this replaces read a
+//  27B model's IQ4_XS feed-forward at a fifth of the one-vector rate, so a
+//  drafted round's check cost three generated tokens.
+void main_many() {
+    uint tid = gl_LocalInvocationID.x;
+#if defined(IQ4_NL) || defined(IQ4_XS)
+    if (tid < 16u) {
+        kv4[tid] = KV4[tid];
+    }
+    barrier();
+#endif
+
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+    uint ib = itid / 2u;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_k[MULTI];
+    bool real_k[MULTI];
+    for (uint k = 0u; k < MULTI; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+#if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
+    uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
+#else
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+#endif
+
+    float temp[NUM_ROWS][MULTI];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < MULTI; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < groups; i += 4u) {
+        if (i * 256u + ib * 32u < shape.columns) {
+            vec4 a[MULTI][4];
+            float total[MULTI];
+            for (uint k = 0u; k < MULTI; ++k) {
+                uint xb = ((from_k[k] + i * 256u) >> 2u) + own_at(itid);
+                a[k][0] = x4[xb + OWN_STEPS[0]];
+                a[k][1] = x4[xb + OWN_STEPS[1]];
+                a[k][2] = x4[xb + OWN_STEPS[2]];
+                a[k][3] = x4[xb + OWN_STEPS[3]];
+                total[k] = dot(a[k][0] + a[k][1] + a[k][2] + a[k][3],
+                               vec4(1.0));
+            }
+
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
+                vec4 wv[4];
+                float scale;
+                float lift;
+                lane_weights_own(at, itid, wv, scale, lift);
+
+                for (uint k = 0u; k < MULTI; ++k) {
+                    temp[r][k] += scale
+                                  * (dot(a[k][0], wv[0]) + dot(a[k][1], wv[1])
+                                   + dot(a[k][2], wv[2]) + dot(a[k][3], wv[3]))
+                                + lift * total[k];
+                }
+            }
+        }
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < MULTI; ++k) {
+            float whole = subgroupAdd(temp[r][k]);
+
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#elif defined(MANY)
+//  Any other format over a few vectors at once: the one-vector walk with
+//  every vector's activations dotted against the lane's weights, each
+//  vector in turn, so the weights come from memory once and from the cache
+//  after. The decode is paid once a vector, which is what this costs
+//  against a format with a walk of its own; the generic low-bit row kernel
+//  it replaces for two to four positions took a check of four 1.4 to 7.3
+//  times one vector's.
+void main_many() {
+    uint tid = gl_LocalInvocationID.x;
+
+#if defined(IQ4_NL)
+    if (tid < 16u) {
+        kv4[tid] = KV4[tid];
+    }
+    barrier();
+#endif
+#ifdef SHARED_GRID
+    load_grid(tid);
+    barrier();
+#endif
+#ifdef LANE32
+    uint itid = tid & 7u;
+    uint ix = tid >> 3u;
+    const uint IN_FLIGHT = 8u;
+#else
+    uint itid = tid & 15u;
+    uint ix = tid >> 4u;
+    const uint IN_FLIGHT = 4u;
+#endif
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint from_k[MULTI];
+    bool real_k[MULTI];
+    for (uint k = 0u; k < MULTI; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * shape.columns + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+#if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
+    uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
+#else
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+#endif
+
+    float temp[NUM_ROWS][MULTI];
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < MULTI; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    for (uint i = ix; i < groups; i += IN_FLIGHT) {
+#ifdef LANE32
+        uint col = i * 256u + itid * 32u;
+        if (col < shape.columns) {
+            uint block = col / BLOCK_ELEMS;
+            //  A vector's thirty-two activations are read again for every
+            //  row, from the cache, rather than held for all the rows: as
+            //  fast at four vectors, and four vectors' held would be a
+            //  hundred and twenty-eight registers a lane.
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span
+                          + block * BLOCK_BYTES;
+                vec4 wv[8];
+                lane_weights32(at, itid, wv);
+                for (uint k = 0u; k < MULTI; ++k) {
+                    uint xb = (from_k[k] + col) >> 2u;
+                    float sum = 0.0;
+                    for (uint e = 0u; e < 8u; ++e) {
+                        sum += dot(x4[xb + e], wv[e]);
+                    }
+                    temp[r][k] += sum;
+                }
+            }
+        }
+#elif defined(OWN_ACTIVATIONS)
+        if (i * 256u + (itid / 2u) * 32u < shape.columns) {
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span
+                          + i * BLOCK_BYTES;
+                for (uint k = 0u; k < MULTI; ++k) {
+                    uint xg = (from_k[k] + i * 256u) >> 2u;
+                    float unused;
+                    temp[r][k] += lane_dot_own(at, itid, xg, unused);
+                }
+            }
+        }
+#else
+        uint col = i * 256u + itid * 16u;
+        if (col < shape.columns) {
+            uint block = col / BLOCK_ELEMS;
+            uint within = col % BLOCK_ELEMS;
+            vec4 a[MULTI][4];
+            float total[MULTI];
+            for (uint k = 0u; k < MULTI; ++k) {
+                uint xb = (from_k[k] + col) >> 2u;
+                a[k][0] = x4[xb];
+                a[k][1] = x4[xb + 1u];
+                a[k][2] = x4[xb + 2u];
+                a[k][3] = x4[xb + 3u];
+                total[k] = dot(a[k][0] + a[k][1] + a[k][2] + a[k][3],
+                               vec4(1.0));
+            }
+            for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span
+                          + block * BLOCK_BYTES;
+#ifdef WEIGHTS16
+                vec4 wv[4];
+                float lift;
+                lane_weights(at, within, wv, lift);
+                for (uint k = 0u; k < MULTI; ++k) {
+                    temp[r][k] += dot(a[k][0], wv[0]) + dot(a[k][1], wv[1])
+                                + dot(a[k][2], wv[2]) + dot(a[k][3], wv[3])
+                                + lift * total[k];
+                }
+#else
+                for (uint k = 0u; k < MULTI; ++k) {
+                    temp[r][k] += lane_dot(at, within, a[k][0], a[k][1],
+                                           a[k][2], a[k][3]);
+                }
+#endif
+            }
+        }
+#endif
+    }
+
+    for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < MULTI; ++k) {
+            float whole = subgroupAdd(temp[r][k]);
+
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#endif
+
+void main_one() {
     uint tid = gl_LocalInvocationID.x;
 
 #if defined(IQ4_NL) || defined(IQ4_XS)
@@ -2318,5 +2930,15 @@ void main() {
             y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
         }
     }
+}
+
+void main() {
+#ifdef MANY
+    if (MULTI > 1u) {
+        main_many();
+        return;
+    }
+#endif
+    main_one();
 }
 #endif

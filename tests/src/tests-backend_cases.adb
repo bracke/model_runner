@@ -1373,9 +1373,10 @@ package body Tests.Backend_Cases is
       --  scales a lane each and passes them round the wave.
       --
       --  And an eighth, three vectors over an odd count of rows: a drafted
-      --  round's check, which Q8_0, IQ4_XS, Q4_K and Q6_K answer with
-      --  compilations that carry the few vectors at once.
-      Shapes : constant array (1 .. 8) of Shape :=
+      --  round's check, which every subgroup kernel's format answers with
+      --  a walk that carries the few vectors at once; and a ninth, seven,
+      --  which the k-quants and the formats but the codebooks' walk too.
+      Shapes : constant array (1 .. 9) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
@@ -1383,7 +1384,8 @@ package body Tests.Backend_Cases is
          (Tall => 64, Batch => 140, Tiled => True, others => <>),
          (Tall => 5, Batch => 1, Tiled => False, Across => 8192),
          (Tall => 7, Batch => 1, Tiled => False, Across => 4096),
-         (Tall => 13, Batch => 3, Tiled => False, others => <>)];
+         (Tall => 13, Batch => 3, Tiled => False, others => <>),
+         (Tall => 13, Batch => 7, Tiled => False, others => <>)];
 
       --  How far the device and the processor may differ.
       --

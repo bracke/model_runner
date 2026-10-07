@@ -63,6 +63,7 @@ compile row_product_super_glu        row_product_super.comp vulkan1.1 NUM_ROWS=1
 compile row_product_super_glu_multi  row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
+compile row_product_super5_multi     row_product_super5.comp vulkan1.1 NUM_ROWS=8u MULTI
 compile row_product_super6           row_product_super6.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super6_mid       row_product_super6.comp vulkan1.1 NUM_ROWS=2u SHARED_SCALES
 compile row_product_super6_long      row_product_super6.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u SHARED_SCALES
@@ -90,9 +91,6 @@ compile row_product_wave_q8_0_v3_glu  row_product_wave_low.comp vulkan1.1 NUM_RO
 compile row_product_wave_q8_0_v4_glu  row_product_wave_low.comp vulkan1.1 NUM_ROWS=2u Q8_0 VEC=4u GLU
 compile row_product_wave_iq4_nl       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_NL
 compile row_product_wave_iq4_xs       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS
-compile row_product_wave_iq4_xs_v2    row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS VEC=2u
-compile row_product_wave_iq4_xs_v3    row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS VEC=3u
-compile row_product_wave_iq4_xs_v4    row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS VEC=4u
 compile row_product_wave_nvfp4       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u NVFP4
 compile row_product_wave_q2_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q2_K
 compile row_product_wave_q3_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q3_K
