@@ -15,7 +15,15 @@
 --  Task safety: one run at a time; it writes to standard output.
 package Device_Bench is
 
-   --  Time attention at several shapes and say what each cost.
-   procedure Report;
+   --  Time attention at several shapes and say what each cost, and every
+   --  format's product at one, four and eight vectors.
+   --
+   --  @param Formats_Only Only the formats' products, which is what a
+   --    kernel change for a format is judged on.
+   --  @param Format_Rounds Rounds over every format and width, each cell
+   --    said as the median of its rounds.
+   procedure Report
+     (Formats_Only  : Boolean := False;
+      Format_Rounds : Positive := 5);
 
 end Device_Bench;

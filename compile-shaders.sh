@@ -93,7 +93,7 @@ compile row_product_wave_iq4_nl       row_product_wave_low.comp vulkan1.1 NUM_RO
 compile row_product_wave_iq4_xs       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS MANY_ROWS=8u
 compile row_product_wave_mxfp4        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u MXFP4 MANY_ROWS=8u
 compile row_product_wave_nvfp4       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u NVFP4
-compile row_product_wave_q2_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q2_K MANY_ROWS=8u
+compile row_product_wave_q2_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q2_K MANY_ROWS=8u MANY_ROWS_FEW=4u
 compile row_product_wave_q3_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q3_K MANY_ROWS=8u
 compile row_product_wave_q4_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q4_0 MANY_ROWS=8u MANY_ROWS_FEW=4u
 compile row_product_wave_q4_1        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q4_1 MANY_ROWS=8u MANY_ROWS_FEW=4u

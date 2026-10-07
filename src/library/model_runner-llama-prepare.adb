@@ -15,7 +15,8 @@ procedure Prepare
    Status   : out E.Error_Info;
    Stretch  : Rotary_Request := No_Rotary_Request;
    Panel_Cache : String := "";
-   Context  : Natural := 0)
+   Context  : Natural := 0;
+   Cache    : Cache_Precision := Exact)
 is
    Ignored : E.Error_Info;
 
@@ -2017,24 +2018,35 @@ begin
          Total : Interfaces.Unsigned_64 := 0;
          Freed : Interfaces.Unsigned_64 := 0;
 
-         --  Where the run named its context, the device's room for the
-         --  matrices is counted rather than assumed: both heaps, less the
-         --  session's context at that length counted at full precision,
-         --  less a ring of the hybrid's states five deep -- a drafted
-         --  round's rewind -- and less Session_Margin for the batch's
-         --  buffers, the driver and the desktop. The fixed share leaves a
-         --  quarter for all of that whatever the context: ThinkingCap at
-         --  1,024 positions generates 64 tokens in 15.4 s where the share
-         --  took 16.8; at 8,192 a 6,502-token prompt runs with the part's
-         --  mapped memory at most 14.8 GB of its 15.3 GiB, where a share of
-         --  seven eighths ran out at the same prompt. Unnamed, the context
-         --  may grow to the model's own and the share stands.
-         Session_Margin : constant Interfaces.Unsigned_64 := 2 ** 30;
-         State_Slots    : constant := 5;
+         --  The device's room for the matrices is counted rather than
+         --  assumed: both heaps, less the session's context at the length
+         --  planned for it and the precision it keeps, less a ring of the
+         --  hybrid's states five deep -- a drafted round's rewind -- and less
+         --  Session_Margin for the batch's buffers, the driver and the
+         --  desktop. The plan is the context the run named, or
+         --  Planned_Context where it named none, and the session is held to
+         --  it (Device_Context): a context left to grow to the model's own
+         --  grew past the room the share left it, and a long conversation
+         --  ended in the driver's refusal rather than at its length. The
+         --  fixed share left a quarter for all of that whatever the
+         --  context: ThinkingCap at 1,024 positions generates 64 tokens in
+         --  15.7 s where the share took 16.8, and named nothing, 16.4 s and
+         --  16,384 positions; a 12,478-token prompt, named nothing, runs
+         --  with the part's mapped memory at most 14.9 GB of its 15.3 GiB,
+         --  where a share of seven eighths ran out at 6,502. The margin is
+         --  what that measured needs: the heaps say half a gigabyte more
+         --  than the part maps, and a paged context a sixth more than its
+         --  plan, so a gigabyte left 16,384 positions too close. A long
+         --  context named is room the matrices give up: more of the model
+         --  on the processor, and the run slower but whole.
+         Session_Margin  : constant Interfaces.Unsigned_64 := 3 * 2 ** 29;
+         State_Slots     : constant := 5;
+         Planned_Context : constant := 16_384;
 
-         function Counted_Room return Interfaces.Unsigned_64 is
+         function Counted_Room (Planned : Natural) return Interfaces.Unsigned_64
+         is
             Plan    : Model_Runner.Memory.Session_Plan;
-            Planned : E.Error_Info;
+            Planning : E.Error_Info;
             Heaps   : constant Interfaces.Unsigned_64 :=
               Model_Runner.Backend.Device.Heap_Bytes;
             States  : constant Interfaces.Unsigned_64 :=
@@ -2045,11 +2057,11 @@ begin
                          + Conv_Room (Item.Settings)) * 4
                else 0);
          begin
-            if Context = 0 or else Heaps = 0 then
+            if Planned = 0 or else Heaps = 0 then
                return 0;
             end if;
-            Plan_Session (Item, Context, Plan, Planned);
-            if E.Is_Error (Planned)
+            Plan_Session (Item, Planned, Plan, Planning, Cache => Cache);
+            if E.Is_Error (Planning)
               or else Heaps <= Session_Margin + States + Plan.KV_Cache_Bytes
             then
                return 0;
@@ -2057,13 +2069,9 @@ begin
             return Heaps - Session_Margin - States - Plan.KV_Cache_Bytes;
          end Counted_Room;
 
-         Room : constant Interfaces.Unsigned_64 := Counted_Room;
+         Planned : Natural := Context;
+         Room    : Interfaces.Unsigned_64 := 0;
       begin
-         if Room > Item.Able.Memory_Bytes then
-            Model_Runner.Backend.Device.Widen_Budget (Room);
-            Item.Able := Model_Runner.Backend.Device.Describe;
-         end if;
-
          for Index in Held'Range loop
             declare
                Seen_Before : Boolean := False;
@@ -2081,6 +2089,28 @@ begin
                end if;
             end;
          end loop;
+
+         --  Unnamed, the longest context halving down from the model's own
+         --  at which every matrix still fits, and Planned_Context where none
+         --  does: a model that fits whole keeps as long a context as it
+         --  can, and one that does not keeps the matrices' room.
+         if Planned = 0 then
+            Planned := Item.Settings.Context_Length;
+            while Planned > Planned_Context
+              and then Counted_Room (Planned) < Total
+            loop
+               Planned := Natural'Max (Planned_Context, Planned / 2);
+            end loop;
+         end if;
+
+         Room := Counted_Room (Planned);
+         if Room > 0 then
+            Model_Runner.Backend.Device.Fit_Budget (Room);
+            Item.Able := Model_Runner.Backend.Device.Describe;
+            if Item.Able.Memory_Bytes = Room then
+               Item.Device_Context := Planned;
+            end if;
+         end if;
 
          if Total > Item.Able.Memory_Bytes then
             for Index in reverse Item.Layers.all'Range loop

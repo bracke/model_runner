@@ -93,11 +93,14 @@ option always wins.
   A mixture whose experts do not fit but whose other layers do runs those
   layers on the device and its experts on the processor; a dense model that
   does not fit keeps the gate, up and down of enough of its top layers on the
-  processor, in panels, for the rest to fit. Where the run names
-  `--context-size`, the room such a model takes on the device is counted --
-  the device's memory less that context, a hybrid's states and a margin --
-  rather than the fixed three quarters, so a short context keeps more of it
-  there. `--backend` names one.
+  processor, in panels, for the rest to fit. The room such a model takes on
+  the device is counted -- the device's memory less its context, a hybrid's
+  states and a margin -- rather than a fixed three quarters: the context the
+  run names, or where it names none the longest one, halving down from the
+  model's own, at which the whole model fits, and 16,384 positions where
+  none does. A session that named none is held to that context, because a
+  context left to grow on the device grows into the weights' room; the
+  statistics say the context size. `--backend` names one.
 - **How the processor holds the weights.** Repacked once into eight-row
   panels (`--repack rows`) where the processor has the kernels, the model fits
   in free memory and in one allocation; the panels are kept under

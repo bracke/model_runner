@@ -2252,7 +2252,8 @@ package body Model_Runner.Llama is
       Status   : out E.Error_Info;
       Stretch  : Rotary_Request := No_Rotary_Request;
       Panel_Cache : String := "";
-      Context  : Natural := 0)
+      Context  : Natural := 0;
+      Cache    : Cache_Precision := Exact)
    is separate;
 
    -----------

@@ -2559,8 +2559,29 @@ begin
 
    elsif Command = "device-bench" then
       --  Where an attention call's time goes, before another kernel is
-      --  written on a guess about it.
-      Device_Bench.Report;
+      --  written on a guess about it; or with --formats, only every
+      --  format's product, each cell the median of --rounds rounds.
+      declare
+         Rounds : Positive := 5;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+            if Ada.Command_Line.Argument (Index) = "--rounds" then
+               begin
+                  Rounds :=
+                    Positive'Value (Ada.Command_Line.Argument (Index + 1));
+               exception
+                  when Constraint_Error =>
+                     null;
+               end;
+            end if;
+         end loop;
+
+         Device_Bench.Report
+           (Formats_Only =>
+              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                 Ada.Command_Line.Argument (Index) = "--formats"),
+            Format_Rounds => Rounds);
+      end;
 
    elsif Command = "fixture-likeness" then
       --  Compare a published file's tensor list against the fixture this

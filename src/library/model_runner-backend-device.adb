@@ -571,16 +571,16 @@ package body Model_Runner.Backend.Device is
    function Heap_Bytes return Interfaces.Unsigned_64
    is (if Ready_Now then Products.Heaps (Engine) else 0);
 
-   ------------------
-   -- Widen_Budget --
-   ------------------
+   ----------------
+   -- Fit_Budget --
+   ----------------
 
-   procedure Widen_Budget (Bytes : Interfaces.Unsigned_64) is
+   procedure Fit_Budget (Bytes : Interfaces.Unsigned_64) is
    begin
       if Ready_Now and then Opened_Budget = 0 then
-         Products.Widen_Budget (Engine, Bytes);
+         Products.Fit_Budget (Engine, Bytes);
       end if;
-   end Widen_Budget;
+   end Fit_Budget;
 
    ---------------
    -- Imported --

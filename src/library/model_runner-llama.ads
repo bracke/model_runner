@@ -1055,8 +1055,11 @@ package Model_Runner.Llama is
    --    were written afresh writes them there for the next load.
    --  @param Context Positions the session will hold, as the run named
    --    them, or nought where it named none: on the device, a dense
-   --    model's room for its matrices is then the device's heaps less that
-   --    context and its states, where it is more than the fixed share.
+   --    model's room for its matrices is the device's heaps less that
+   --    context -- or a planned one where none was named, which the
+   --    session is then held to -- and less its states.
+   --  @param Cache The precision the session will keep its context in,
+   --    which is what that context is counted at.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1073,7 +1076,8 @@ package Model_Runner.Llama is
       Status   : out Model_Runner.Errors.Error_Info;
       Stretch  : Rotary_Request := No_Rotary_Request;
       Panel_Cache : String := "";
-      Context  : Natural := 0);
+      Context  : Natural := 0;
+      Cache    : Cache_Precision := Exact);
 
    --  Merge a low-rank adapter into a prepared model's weights.
    --
@@ -2707,6 +2711,12 @@ private
       --  and the processor the feed-forward: a mixture whose stacks do not
       --  fit the device while everything but its experts does.
       Split_Feed : Boolean := False;
+
+      --  The context the device's room was counted for, where Prepare
+      --  counted it: a session opened with none named is held to it, and
+      --  one opened with more would grow into the matrices' room. Nought
+      --  where nothing was counted.
+      Device_Context : Natural := 0;
 
       --  What has been merged into those weights, as a digest of every
       --  adapter and the scale it was applied at. Zero for a model as its

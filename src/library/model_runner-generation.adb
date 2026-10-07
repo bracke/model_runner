@@ -2562,6 +2562,7 @@ package body Model_Runner.Generation is
           (Interfaces.Unsigned_64 (Outcome.Generated_Tokens),
            Outcome.Decode_Ns);
       Outcome.Final_Position := L.Position (Session);
+      Outcome.Context_Size := L.Capacity (Session);
 
       P.Publish
         (Observer,

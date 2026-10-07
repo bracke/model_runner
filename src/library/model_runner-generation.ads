@@ -233,6 +233,11 @@ package Model_Runner.Generation is
       Prompt_Tokens    : Natural := 0;
       Generated_Tokens : Natural := 0;
       Final_Position   : Natural := 0;
+
+      --  How many positions the session holds: what the run named, or what
+      --  it was given where it named none -- on the device, no more than
+      --  the room set aside for the context beside the weights.
+      Context_Size     : Natural := 0;
       Seed             : Seed_Value := 0;
       Prefill_Ns       : Model_Runner.Clocks.Nanoseconds := 0;
       Decode_Ns        : Model_Runner.Clocks.Nanoseconds := 0;

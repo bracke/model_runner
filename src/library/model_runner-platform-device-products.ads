@@ -2794,16 +2794,15 @@ package Model_Runner.Platform.Device.Products is
    --  @return Bytes, or zero for a closed engine.
    function Heaps (Item : Engine) return Interfaces.Unsigned_64;
 
-   --  Let the matrices take Bytes where that is more than the budget the
-   --  engine opened with: the second heap first, up to all of it, and the
-   --  first for the rest, up to all of that. For a caller that has counted
-   --  what else the device will hold -- a session's context and states --
-   --  and found more room than the fixed share assumes. A smaller figure
-   --  changes nothing.
+   --  Let the matrices take Bytes, more or less than the budget the engine
+   --  opened with: the second heap first, up to all of it, and the first
+   --  for the rest, up to all of that. For a caller that has counted what
+   --  else the device will hold -- a session's context and states -- in
+   --  place of the fixed share's guess.
    --
-   --  @param Item Engine to widen.
+   --  @param Item Engine to fit.
    --  @param Bytes The budget asked for.
-   procedure Widen_Budget
+   procedure Fit_Budget
      (Item : in out Engine; Bytes : Interfaces.Unsigned_64);
 
    --  The largest buffer this device will read, in bytes.

@@ -35,6 +35,7 @@ package body Tool_Commands is
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
+   Opts_Bench     : aliased constant String := " --formats --rounds ";
    Opts_Check     : aliased constant String :=
      " --repository --record-warnings --short ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
@@ -111,7 +112,7 @@ package body Tool_Commands is
    Takes_Session   : aliased constant String := "/COMMAND [WORDS]";
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
-   Takes_Bench     : aliased constant String := "";
+   Takes_Bench     : aliased constant String := "[--formats] [--rounds N]";
 
    Says_Outside : aliased constant String :=
      "run somebody else's measuring tool through this repository's load"
@@ -120,7 +121,9 @@ package body Tool_Commands is
 
    Says_Bench : aliased constant String :=
      "what one attention call costs on a device, at several shapes, with the"
-     & " arithmetic done beside the seconds taken";
+     & " arithmetic done beside the seconds taken, and every format's"
+     & " product at one, four and eight vectors, each the median of its"
+     & " rounds";
    Says_Slow : aliased constant String :=
      "where the suite's time goes: each case on its own, or one test named"
      & " by the prefix AUnit's filter understands";
@@ -285,7 +288,7 @@ package body Tool_Commands is
       (Name_Slow'Access, Takes_Slow'Access, Says_Slow'Access,
        Opts_None'Access),
       (Name_Device_Bench'Access, Takes_Bench'Access, Says_Bench'Access,
-       Opts_None'Access),
+       Opts_Bench'Access),
       (Name_Agent_Eval'Access, Takes_Agent_Eval'Access,
        Says_Agent_Eval'Access, Opts_Agent_Eval'Access)];
 

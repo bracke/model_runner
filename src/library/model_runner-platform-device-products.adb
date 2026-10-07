@@ -1054,7 +1054,11 @@ package body Model_Runner.Platform.Device.Products is
        --  faster at eight rows than at four, the IQ4 formats' 4 to 7; the
        --  older formats slower at four vectors and faster at eight, so they
        --  take eight past four (MANY_ROWS_FEW). Sixteen for Q2_K's check of
-       --  four measured the same as eight, alternated.
+       --  four measured the same as eight, alternated; four for it, 3 per
+       --  cent faster than eight at four vectors and 6 slower at eight, so
+       --  it too takes eight only past four.
+       elsif Packing = Packed_Q2_K and then Count in Multi_Count
+       then Q2K_Wave_Rows
        elsif Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
                         | Packed_Q2_K | Packed_Q3_K
                         | Packed_IQ4_NL | Packed_IQ4_XS | Packed_MXFP4
@@ -5976,33 +5980,17 @@ package body Model_Runner.Platform.Device.Products is
    function Heaps (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Heap + Item.Second_Heap);
 
-   procedure Widen_Budget
-     (Item : in out Engine; Bytes : Interfaces.Unsigned_64)
-   is
-      Extra : Interfaces.Unsigned_64;
-      Step  : Interfaces.Unsigned_64;
+   procedure Fit_Budget
+     (Item : in out Engine; Bytes : Interfaces.Unsigned_64) is
    begin
-      if Bytes <= Item.Budget then
-         return;
-      end if;
-
-      Extra := Bytes - Item.Budget;
-
-      if Item.Second >= 0 and then Item.Second_Heap > Item.Tier_Limit (2) then
-         Step := Interfaces.Unsigned_64'Min
-           (Extra, Item.Second_Heap - Item.Tier_Limit (2));
-         Item.Tier_Limit (2) := Item.Tier_Limit (2) + Step;
-         Extra := Extra - Step;
-      end if;
-
-      if Extra > 0 and then Item.Heap > Item.Tier_Limit (1) then
-         Step := Interfaces.Unsigned_64'Min
-           (Extra, Item.Heap - Item.Tier_Limit (1));
-         Item.Tier_Limit (1) := Item.Tier_Limit (1) + Step;
-      end if;
-
+      Item.Tier_Limit (2) :=
+        (if Item.Second >= 0
+         then Interfaces.Unsigned_64'Min (Bytes, Item.Second_Heap)
+         else 0);
+      Item.Tier_Limit (1) :=
+        Interfaces.Unsigned_64'Min (Bytes - Item.Tier_Limit (2), Item.Heap);
       Item.Budget := Item.Tier_Limit (1) + Item.Tier_Limit (2);
-   end Widen_Budget;
+   end Fit_Budget;
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
 

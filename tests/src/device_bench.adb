@@ -16,7 +16,10 @@ package body Device_Bench is
    -- Report --
    ------------
 
-   procedure Report is
+   procedure Report
+     (Formats_Only  : Boolean := False;
+      Format_Rounds : Positive := 5)
+   is
       use type Ada.Calendar.Time;
 
       Held   : Devices.Inventory;
@@ -817,7 +820,7 @@ package body Device_Bench is
          type Values is access N.Real_Array;
 
          Vectors : constant := 128;
-         Seconds : constant Duration := 0.30;
+         Seconds : constant Duration := 0.50;
 
          type Shape is record
             Name    : String (1 .. 10);
@@ -991,7 +994,7 @@ package body Device_Bench is
       --  Absolute seconds rather than a ratio against the processor, which
       --  is what `tests benchmark` prints: a ratio cannot say which side
       --  moved, and the question here is entirely about one side.
-      procedure Formats is
+      procedure Formats (Rounds : Positive) is
          use type N.Element_Count;
          use type Model_Runner.Bytes.Byte_Count;
          use type Model_Runner.Bytes.Byte_Array_Access;
@@ -1051,65 +1054,154 @@ package body Device_Bench is
            new N.Real_Array (0 .. 8 * N.Element_Count (Columns) - 1);
          Got   : constant Values :=
            new N.Real_Array (0 .. 8 * N.Element_Count (Rows) - 1);
+
+         --  Each cell's seconds a product, round by round: every round
+         --  takes every format and width once, so what moves the part's
+         --  clock between rounds moves every cell alike, and the median of
+         --  the rounds is what is said. One pass of a third of a second a
+         --  cell read the same build ten per cent apart from one sitting to
+         --  the next, as much as the changes it was there to judge.
+         Slice : constant Duration := Seconds / Duration (Rounds);
+
+         type Cell_Times is array (1 .. Rounds) of Long_Float;
+         Times : array (Table'Range, Widths'Range) of Cell_Times :=
+           [others => [others => [others => 0.0]]];
+         Taken : array (Table'Range) of Boolean := [others => True];
+
+         function Median (Of_Cell : Cell_Times) return Long_Float is
+            Sorted : Cell_Times := Of_Cell;
+            Held   : Long_Float;
+         begin
+            for I in Sorted'First + 1 .. Sorted'Last loop
+               Held := Sorted (I);
+               for J in reverse Sorted'First .. I - 1 loop
+                  exit when Sorted (J) <= Held;
+                  Sorted (J + 1) := Sorted (J);
+                  Sorted (J) := Held;
+               end loop;
+            end loop;
+            return Sorted ((Sorted'First + Sorted'Last) / 2);
+         end Median;
+
+         function Bytes_Of (Which : Shape) return Model_Runner.Bytes.Byte_Count
+         is (Model_Runner.Bytes.Byte_Count (Columns / Which.Elements)
+             * Model_Runner.Bytes.Byte_Count (Which.Bytes)
+             * Model_Runner.Bytes.Byte_Count (Rows));
       begin
          Asked.all := [others => 0.25];
 
-         for Which of Table loop
-            declare
-               Width : constant Model_Runner.Bytes.Byte_Count :=
-                 Model_Runner.Bytes.Byte_Count (Columns / Which.Elements)
-                 * Model_Runner.Bytes.Byte_Count (Which.Bytes);
-
-               Room : constant Model_Runner.Bytes.Byte_Count :=
-                 Width * Model_Runner.Bytes.Byte_Count (Rows);
-
-               Weights : Model_Runner.Bytes.Byte_Array_Access;
-               Started : Ada.Calendar.Time;
-               Calls   : Natural := 0;
-               Spent   : Duration := 0.0;
-               Ok      : Boolean := True;
-               Halted  : Boolean;
-               First   : Long_Float := 0.0;
-            begin
-               Model_Runner.Bytes.Allocate (Room, Weights);
-               exit when Weights = null;
-
-               --  A pattern rather than zeroes: a block of zeroes has a
-               --  zero scale, and a device that reads one is doing the same
-               --  work as a device that reads any other, but a reader of
-               --  this would rightly ask.
-               for Index in Weights.all'Range loop
-                  Weights.all (Index) :=
-                    Model_Runner.Bytes.Byte ((Long_Long_Integer (Index) * 37) mod 251);
-               end loop;
-
-               for Count of Widths loop
-                  Calls := 0;
-                  Spent := 0.0;
-                  Started := Ada.Calendar.Clock;
-
-                  loop
-                     Products.Multiply
-                       (Engine, Weights.all, 0, Which.Packing, Rows, Columns,
-                        Asked.all (0 .. N.Element_Count (Count * Columns) - 1),
-                        Count,
-                        Got.all (0 .. N.Element_Count (Count * Rows) - 1),
-                        Ok, Halted,
-                        Key => Weights.all (Weights.all'First)'Address);
-                     exit when not Ok;
-                     Calls := Calls + 1;
-                     Spent := Ada.Calendar.Clock - Started;
-                     exit when Spent >= Seconds;
+         --  Every format's weights made and uploaded before any is timed,
+         --  and kept: made a round at a time, the host's filling of a
+         --  hundred megabytes left the part idle long enough to lower its
+         --  clock, and every cell after it began slow -- Q4_K's check of
+         --  four read 650 us where it reads 450.
+         declare
+            type Weight_Set is array (Table'Range)
+              of Model_Runner.Bytes.Byte_Array_Access;
+            Held_Weights : Weight_Set := [others => null];
+         begin
+            for Index in Table'Range loop
+               Model_Runner.Bytes.Allocate
+                 (Bytes_Of (Table (Index)), Held_Weights (Index));
+               if Held_Weights (Index) = null then
+                  Taken (Index) := False;
+               else
+                  --  A pattern rather than zeroes: a block of zeroes has a
+                  --  zero scale, and a device that reads one is doing the
+                  --  same work as a device that reads any other, but a
+                  --  reader of this would rightly ask.
+                  for Byte_At in Held_Weights (Index).all'Range loop
+                     Held_Weights (Index).all (Byte_At) :=
+                       Model_Runner.Bytes.Byte
+                         ((Long_Long_Integer (Byte_At) * 37) mod 251);
                   end loop;
+               end if;
+            end loop;
 
-                  if Ok and then Calls > 0 then
+            for Round in 0 .. Rounds loop
+               for Index in Table'Range loop
+                  if Taken (Index) then
                      declare
-                        Each : constant Long_Float :=
-                          Long_Float (Spent) / Long_Float (Calls);
+                        Which   : Shape renames Table (Index);
+                        Weights : Model_Runner.Bytes.Byte_Array_Access
+                          renames Held_Weights (Index);
+                        Started : Ada.Calendar.Time;
+                        Calls   : Natural;
+                        Spent   : Duration;
+                        Ok      : Boolean := True;
+                        Halted  : Boolean;
+                     begin
+                        for W in Widths'Range loop
+                           declare
+                              Count : constant Positive := Widths (W);
 
-                        --  Nanoseconds an element and gigabytes a second, so
-                        --  that a format which reads fewer bytes and takes
-                        --  longer says so in both directions at once.
+                              procedure Once is
+                              begin
+                                 Products.Multiply
+                                   (Engine, Weights.all, 0, Which.Packing,
+                                    Rows, Columns,
+                                    Asked.all
+                                      (0 .. N.Element_Count (Count * Columns)
+                                            - 1),
+                                    Count,
+                                    Got.all
+                                      (0 .. N.Element_Count (Count * Rows)
+                                            - 1),
+                                    Ok, Halted,
+                                    Key =>
+                                      Weights.all (Weights.all'First)'Address);
+                              end Once;
+                           begin
+                              --  Round nought only uploads and warms each
+                              --  pipeline, and is not counted.
+                              Calls := 0;
+                              Spent := 0.0;
+                              Started := Ada.Calendar.Clock;
+                              loop
+                                 Once;
+                                 exit when not Ok;
+                                 Calls := Calls + 1;
+                                 Spent := Ada.Calendar.Clock - Started;
+                                 exit when Round = 0 or else Spent >= Slice;
+                              end loop;
+
+                              if not Ok then
+                                 Taken (Index) := False;
+                              elsif Round > 0 then
+                                 Times (Index, W) (Round) :=
+                                   Long_Float (Spent) / Long_Float (Calls);
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  end if;
+               end loop;
+            end loop;
+
+            Products.Forget_Matrices (Engine);
+            for Weights of Held_Weights loop
+               Model_Runner.Bytes.Free (Weights);
+            end loop;
+         end;
+
+         for Index in Table'Range loop
+            declare
+               Which : Shape renames Table (Index);
+               Room  : constant Model_Runner.Bytes.Byte_Count := Bytes_Of (Which);
+               First : constant Long_Float := Median (Times (Index, 1));
+            begin
+               if not Taken (Index) then
+                  Ada.Text_IO.Put_Line
+                    ("    " & Which.Name & " the device would not take it");
+               else
+                  for W in Widths'Range loop
+                     declare
+                        Count : constant Positive := Widths (W);
+                        Each  : constant Long_Float := Median (Times (Index, W));
+
+                        --  Nanoseconds an element and gigabytes a second,
+                        --  so that a format which reads fewer bytes and
+                        --  takes longer says so in both directions at once.
                         Cell : constant Long_Float :=
                           Each * 1.0E9
                           / (Long_Float (Rows) * Long_Float (Columns));
@@ -1117,12 +1209,10 @@ package body Device_Bench is
                         Rate : constant Long_Float :=
                           Long_Float (Room) / Each / 1.0E9;
                      begin
-                        if Count = 1 then
-                           First := Each;
-                        end if;
                         Ada.Text_IO.Put_Line
                           ("    " & Which.Name & Positive'Image (Count)
-                           & Duration'Image (Duration (Each)) & " s a product,"
+                           & Duration'Image (Duration (Each))
+                           & " s a product,"
                            & Long_Float'Image (Cell) & " ns an element,"
                            & Long_Float'Image (Rate) & " GB/s,"
                            & Model_Runner.Bytes.Byte_Count'Image (Room / 1024)
@@ -1132,14 +1222,8 @@ package body Device_Bench is
                                    & " times one vector's"
                               else ""));
                      end;
-                  else
-                     Ada.Text_IO.Put_Line
-                       ("    " & Which.Name & " the device would not take it");
-                  end if;
-               end loop;
-
-               Products.Forget_Matrices (Engine);
-               Model_Runner.Bytes.Free (Weights);
+                  end loop;
+               end if;
             end;
          end loop;
       end Formats;
@@ -1257,6 +1341,17 @@ package body Device_Bench is
          return;
       end if;
 
+      if Formats_Only then
+         Ada.Text_IO.Put_Line
+           ("  one, four and eight vectors a product, by format, median of"
+            & Positive'Image (Format_Rounds) & " rounds:");
+         Formats (Format_Rounds);
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
       Ada.Text_IO.Put_Line ("attention, median of" & Natural'Image (Rounds)
                             & " calls a shape:");
 
@@ -1298,7 +1393,7 @@ package body Device_Bench is
       --  token has: no reuse anywhere, so the decode is paid once an element
       --  and amortized over nothing.
       Ada.Text_IO.Put_Line ("  one, four and eight vectors a product, by format:");
-      Formats;
+      Formats (Format_Rounds);
 
       --  And a hundred and twenty-eight vectors a product, at the shapes a
       --  layer asks for, which is what a prompt does.

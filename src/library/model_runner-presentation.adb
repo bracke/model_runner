@@ -1375,6 +1375,9 @@ package body Model_Runner.Presentation is
         (Item, "statistics.context_position",
          T.Image (Long_Long_Integer (Outcome.Final_Position)), Diagnostic);
       Put_Field
+        (Item, "statistics.context_size",
+         T.Image (Long_Long_Integer (Outcome.Context_Size)), Diagnostic);
+      Put_Field
         (Item, "statistics.seed", T.Image (Outcome.Seed), Diagnostic);
       Put_Heading (Item, "statistics.heading.speed", Diagnostic, Gap => True);
       Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns), Diagnostic);

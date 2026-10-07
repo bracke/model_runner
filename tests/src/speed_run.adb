@@ -280,7 +280,8 @@ package body Speed_Run is
 
          L.Prepare
            (Engine, Container, Source, Repack => Repack, Backend => Backend,
-            Threads => Threads, Status => Status, Context => Context);
+            Threads => Threads, Status => Status, Context => Context,
+            Cache => Cache);
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Shards.Close (Source);
@@ -406,7 +407,11 @@ package body Speed_Run is
                   L.Open (Session, Engine, Context => Context,
                           Workers => Where, Cache => Cache, Status => Local,
                           Paged => Paged);
-                  exit when E.Is_Error (Local);
+                  if E.Is_Error (Local) then
+                     Say ("the session would not open: "
+                          & E.Error_Code'Image (Local.Code));
+                     exit;
+                  end if;
 
                   --  After Open, so that what a budget reports is this run
                   --  and not the buffers being made ready for it.
@@ -641,6 +646,12 @@ package body Speed_Run is
          Result.Evaluate := Middle (Evaluates);
          Result.Generate := Middle (Generates);
          Say ("measured");
+      elsif Result.Detail_Up > 0 then
+         --  What stopped it, said where it stopped, rather than written
+         --  over: this said only that a run had not completed, whatever
+         --  the session or the generation had said why.
+         Say ("a run did not complete, nothing published: "
+              & Result.Detail (1 .. Result.Detail_Up));
       else
          Say ("a run did not complete; nothing published");
       end if;

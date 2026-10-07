@@ -185,12 +185,12 @@ package Model_Runner.Backend.Device is
    --  @return Bytes.
    function Heap_Bytes return Interfaces.Unsigned_64;
 
-   --  Let the matrices take Bytes where that is more than the budget the
-   --  device opened with; see Products.Widen_Budget. Nothing with no
-   --  device, or for a budget the caller named.
+   --  Let the matrices take Bytes in place of the budget the device opened
+   --  with; see Products.Fit_Budget. Nothing with no device, or for a
+   --  budget the caller named.
    --
    --  @param Bytes The budget asked for.
-   procedure Widen_Budget (Bytes : Interfaces.Unsigned_64);
+   procedure Fit_Budget (Bytes : Interfaces.Unsigned_64);
 
    --  How many matrices the device is reading where they already are.
    --

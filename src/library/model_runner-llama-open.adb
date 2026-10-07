@@ -25,6 +25,14 @@ begin
    Settings := Source.Settings;
    Capacity := (if Context = 0 then Settings.Context_Length else Context);
 
+   --  And no more than the device's room was counted for, where Prepare
+   --  counted it: the context grows on the device beside the matrices, and
+   --  one let grow past what was set aside for it ran the part out of
+   --  memory in the middle of a conversation.
+   if Context = 0 and then Source.Device_Context > 0 then
+      Capacity := Natural'Min (Capacity, Source.Device_Context);
+   end if;
+
    --  Past the context the model was trained on only where the rotation
    --  was stretched for it, and never past what this session may hold.
    --
