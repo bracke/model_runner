@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with AUnit.Assertions;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
@@ -2407,6 +2408,42 @@ package body Tests.Template_Cases is
                  = E.Template_Variables_Too_Large,
                  "a template holding more text than the pool has was "
                  & "accepted, or refused as something else");
+      end;
+
+      --  And a long message through a template that holds it in a name, as
+      --  most do on its way out: the pool is as long as the output, where
+      --  a fixed sixty-four kilobytes refused a prompt of thirty thousand
+      --  characters.
+      declare
+         type Room_Access is access String;
+         procedure Free is new Ada.Unchecked_Deallocation (String, Room_Access);
+
+         Long   : constant String (1 .. 100_000) := [others => 'y'];
+         Item   : Tmpl.Compiled;
+         Status : E.Error_Info;
+         Talk   : Conv.History;
+         Room   : Room_Access := new String (1 .. 120_000);
+         Last   : Natural;
+      begin
+         Tmpl.Compile
+           (Item,
+            "{% for message in messages %}"
+            & "{% set c = message['content'] %}{{ c }}{% endfor %}",
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the holding template did not compile");
+         Conv.Open (Talk, Status => Status);
+         Conv.Append (Talk, Conv.User_Role, Long, Status);
+         Assert (E.Is_Ok (Status), "a long message was not taken");
+         Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room.all, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "a long message held in a name was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Last = Long'Length and then Room (1 .. Last) = Long,
+                 "a long message held in a name came out as"
+                 & Natural'Image (Last) & " characters");
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+         Free (Room);
       end;
    end Variable_Bounds_Hold;
 

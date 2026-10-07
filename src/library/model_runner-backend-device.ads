@@ -192,6 +192,9 @@ package Model_Runner.Backend.Device is
    --  @param Bytes The budget asked for.
    procedure Fit_Budget (Bytes : Interfaces.Unsigned_64);
 
+   --  Give back every buffer kept for reuse; see Products.Drop_Spares.
+   procedure Drop_Spares;
+
    --  How many matrices the device is reading where they already are.
    --
    --  @return Count taken rather than copied.
@@ -1607,6 +1610,11 @@ package Model_Runner.Backend.Device is
    --  @param MLA_Norm The latent's normalization gain.
    --  @param MLA_Up The latent's up projection, each head's keys' plain
    --    part then its values.
+   --  @param Stream_Feed Whether the dense feed-forward's gate, up and down
+   --    are uploaded for this batch alone rather than kept: a split dense
+   --    model's layer whose feed-forward the processor holds, run whole on
+   --    the device for a batch long enough that the upload is the lesser
+   --    cost.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -1714,7 +1722,8 @@ package Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_Up         : Model_Runner.Tensors.View :=
-        Model_Runner.Tensors.Empty_View);
+        Model_Runner.Tensors.Empty_View;
+      Stream_Feed    : Boolean := False);
 
    --  A gated feed-forward block, whole, in one submission.
    --

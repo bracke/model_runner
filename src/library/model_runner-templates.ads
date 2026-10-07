@@ -211,8 +211,11 @@ package Model_Runner.Templates is
    --  Largest number of distinct names a template may read or assign.
    Max_Variables : constant := 64;
 
-   --  Largest total text a template's variables may hold during one render.
-   Max_Variable_Bytes : constant := 65_536;
+   --  Largest total text a template's variables may hold during one render:
+   --  the prompt's own bound, since what they hold is mostly the messages
+   --  on their way out. It was sixty-four kilobytes, under a fifth of a
+   --  long context.
+   Max_Variable_Bytes : constant := 16 * 1024 * 1024;
 
    --  Largest number of instruction steps one render may perform, across all
    --  loops. Bounds rendering time independently of the message count.

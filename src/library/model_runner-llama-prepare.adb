@@ -2130,6 +2130,9 @@ begin
                                (L.Down.Format, L.Down.Rows, L.Down.Columns)
                   then
                      L.Host_Feed := True;
+                     L.File_Gate := L.Gate;
+                     L.File_Up := L.Up;
+                     L.File_Down := L.Down;
                      Freed := Freed + Bytes_Of (L.Gate) + Bytes_Of (L.Up) + Bytes_Of (L.Down);
                   end if;
                end;

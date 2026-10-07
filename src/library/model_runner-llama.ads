@@ -1519,6 +1519,13 @@ package Model_Runner.Llama is
    --  @return Capacity in tokens.
    function Capacity (Item : Session) return Natural;
 
+   --  The context the device's room was counted for, which a session that
+   --  names none is held to; nought where nothing was counted.
+   --
+   --  @param Item Prepared model.
+   --  @return Positions.
+   function Device_Context (Item : Model) return Natural;
+
    --  Deal a paged session on the device the pages it will need up to
    --  position Upto, now and in one reservation, rather than a batch at a
    --  time as the positions reach them. Each reservation that grows the
@@ -2277,6 +2284,11 @@ private
       --  not take whole, split as a mixture's experts are, its top layers'
       --  gate, up and down left on the host in panels.
       Host_Feed : Boolean := False;
+
+      --  And those three as the file holds them, which the panels replace
+      --  in Gate, Up and Down: what the device uploads to run the layer
+      --  whole over a batch long enough to repay it (Stream_Least).
+      File_Gate, File_Up, File_Down : Model_Runner.Tensors.View;
 
       --  Applied to what a sublayer produced, before it is added back to
       --  the residual, rather than to what it was given. Null for an

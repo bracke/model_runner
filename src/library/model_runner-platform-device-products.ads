@@ -1575,6 +1575,10 @@ package Model_Runner.Platform.Device.Products is
    --    Pair_Rows -- or nought for the matrix alone.
    --  @param Region_At Bytes into that region where this matrix's rows
    --    begin.
+   --  @param Streamed Whether the matrix is uploaded for this run alone,
+   --    into a buffer kept back for the next of its size, rather than kept
+   --    -- as an expert stack is where the device does not hold the
+   --    experts: nothing resident is given back to make room for it.
    procedure Add_Chained_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1589,7 +1593,8 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Rounded   : Boolean := False;
       Region_Rows : Natural := 0;
-      Region_At   : Natural := 0);
+      Region_At   : Natural := 0;
+      Streamed    : Boolean := False);
 
    --  Name a step that combines the two results before it.
    --
@@ -2805,6 +2810,19 @@ package Model_Runner.Platform.Device.Products is
    procedure Fit_Budget
      (Item : in out Engine; Bytes : Interfaces.Unsigned_64);
 
+   --  Give back every buffer kept for reuse: after a batch that streamed
+   --  matrices, whose buffers wait for the next of their size, where the
+   --  tokens that follow stream none.
+   --
+   --  @param Item Engine to empty of spares.
+   procedure Drop_Spares (Item : in out Engine);
+
+   --  The bytes of the buffers kept for reuse.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Bytes.
+   function Spare_Bytes (Item : Engine) return Interfaces.Unsigned_64;
+
    --  The largest buffer this device will read, in bytes.
    --
    --  The device's own answer, and the bound a single matrix has to fit:
@@ -3965,6 +3983,10 @@ private
       Inverts : Boolean := False;
       Listed  : Boolean := False;
       By_Slot : Boolean := False;
+
+      --  A product whose matrix is uploaded for the run and not kept; see
+      --  Add_Chained_Product.
+      Streams : Boolean := False;
 
       --  A biasing step, as Add_Bias describes it: the stack in Base,
       --  Span, At_Byte and Key, Stack slices of Each, added to the

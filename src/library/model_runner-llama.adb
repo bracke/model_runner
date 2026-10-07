@@ -9340,4 +9340,7 @@ package body Model_Runner.Llama is
         and then Weights <= Max_Allocation;
    end Panels_Unasked;
 
+   function Device_Context (Item : Model) return Natural
+   is (Item.Device_Context);
+
 end Model_Runner.Llama;

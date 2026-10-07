@@ -491,6 +491,16 @@ package body Model_Runner.Errors is
       if Code = Framework_Not_Initialized then
          return "diagnostic.hint.not_initialized";
       end if;
+
+      --  A context too short for what was asked of it: a longer one, or
+      --  less asked. The resource hint said a smaller --context-size, which
+      --  is the one thing that makes this worse; and a conversation that
+      --  has filled its context -- a hybrid's, which cannot drop its oldest
+      --  positions, ends exactly here -- starts again in a new one.
+      if Code in Generation_Prompt_Too_Long | Generation_Context_Exhausted
+      then
+         return "diagnostic.hint.context";
+      end if;
       case Recovery (Code) is
          when Recovery_None | Recovery_Terminal =>
             return "";

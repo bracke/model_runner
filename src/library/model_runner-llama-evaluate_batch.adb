@@ -260,9 +260,38 @@ is
        and then Norms_Agree (L)
        and then True);
 
+   --  A split dense model's layer whose feed-forward the processor holds,
+   --  run whole on the device instead for a batch long enough that the
+   --  upload is the lesser cost: its gate, up and down as the file holds
+   --  them, uploaded for the batch and not kept (Stream_Feed). On the
+   --  processor the panels take ThinkingCap's feed-forward at about half a
+   --  millisecond a position a layer; uploaded, the device takes it at
+   --  half that and the upload is a few hundredths of a second a batch.
+   function Streams_Feed (L : Layer) return Boolean
+   is (Source.Split_Feed
+       and then Settings.Experts = 0
+       and then L.Host_Feed
+       and then Count >= Element_Count (Stream_Least)
+       and then T.Is_Present (L.File_Gate)
+       and then T.Is_Present (L.File_Up)
+       and then T.Is_Present (L.File_Down));
+
+   --  Whether the processor runs this layer's feed-forward for this batch.
+   function Hosted (L : Layer) return Boolean
+   is (L.Host_Feed and then not Streams_Feed (L));
+
+   function Feed_Gate (L : Layer) return T.View
+   is (if Streams_Feed (L) then L.File_Gate else L.Gate);
+
+   function Feed_Up (L : Layer) return T.View
+   is (if Streams_Feed (L) then L.File_Up else L.Up);
+
+   function Feed_Down (L : Layer) return T.View
+   is (if Streams_Feed (L) then L.File_Down else L.Down);
+
    function Linear_Layer_Fits (L : Layer) return Boolean
    is (Linear_Front_Fits (L)
-       and then not L.Host_Feed
+       and then not Hosted (L)
        and then (if Settings.Experts > 0 then Mixture_Whole (L)
                  else T.Is_Present (L.Up)));
 
@@ -325,7 +354,7 @@ is
         then Mixture_Whole (L)
         else T.Is_Present (L.Up))
        and then Front_Fits (L, Index)
-       and then not L.Host_Feed
+       and then not Hosted (L)
        and then (Settings.Experts = 0
                  or else (L.Up_Bias = null and then L.Down_Bias = null))
        and then (L.Post_Feed_Norm = null
@@ -348,7 +377,7 @@ is
    function Split_Here (L : Layer) return Boolean
    is (Source.Split_Feed
        and then ((L.Experts /= null and then not Mixture_Whole (L))
-                 or else L.Host_Feed)
+                 or else Hosted (L))
        and then L.Feed_Norm /= null
        and then not Normalizes_After (Settings.Kind)
        and then not Settings.Parallel_Residual
@@ -782,7 +811,7 @@ begin
       --  A dense layer whose feed-forward the processor runs reads its
       --  products there; every other runs where it always has.
       if Source.Split_Feed and then Settings.Experts = 0 then
-         Item.Host_Feed := Source.Layers.all (Index).Host_Feed;
+         Item.Host_Feed := Hosted (Source.Layers.all (Index));
       end if;
 
       if C.Is_Cancelled (Cancel) then
@@ -1237,10 +1266,12 @@ begin
                      Natural (KV_Width), Natural (V_Width),
                      Scale, Settings.Attention_Cap,
                      Current.Linear_Out,
-                     Current.Gate, Current.Up, Current.Down,
+                     Feed_Gate (Current), Feed_Up (Current),
+                     Feed_Down (Current),
                      Gate_Unit (Source),
                      Keys, Values, Acts, Whole_Layer_Done,
                      Positions => Natural (Count),
+                     Stream_Feed => Streams_Feed (Current),
                      Cancel    => Item.Stopping,
                      Carry_In  => Carried,
                      Mirror    => False,
@@ -1299,6 +1330,14 @@ begin
                      Whole_Layer_Done := False;
                   end if;
                   Went_Whole := Whole_Layer_Done;
+
+                  --  A streamed feed-forward the device would not take:
+                  --  the layer's own views are the processor's panels, so
+                  --  the rest of it is the processor's too.
+                  if not Whole_Layer_Done and then Streams_Feed (Current)
+                  then
+                     Item.Host_Feed := True;
+                  end if;
                end if;
             end;
 
@@ -1562,10 +1601,12 @@ begin
                      Natural (KV_Width), Natural (V_Width),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
-                     Current.Gate, Current.Up, Current.Down,
+                     Feed_Gate (Current), Feed_Up (Current),
+                     Feed_Down (Current),
                      Gate_Unit (Source),
                      Keys, Values, Acts, Whole_Layer_Done,
                      Positions => Natural (Count),
+                     Stream_Feed => Streams_Feed (Current),
                      Window    =>
                        (if Settings.Window > 0
                           and then Earliest
@@ -1713,6 +1754,14 @@ begin
                      Whole_Layer_Done := False;
                   end if;
                   Went_Whole := Whole_Layer_Done;
+
+                  --  A streamed feed-forward the device would not take:
+                  --  the layer's own views are the processor's panels, so
+                  --  the rest of it is the processor's too.
+                  if not Whole_Layer_Done and then Streams_Feed (Current)
+                  then
+                     Item.Host_Feed := True;
+                  end if;
                end if;
 
                Deferred (Index) :=
@@ -2253,6 +2302,7 @@ begin
                   --  block through the table.
                   if Item.Held in Exact | Eighth | Fourth
                     and then Settings.Experts = 0
+                    and then not Current.Host_Feed
                     and then T.Is_Present (Current.Gate)
                     and then Current.Feed_Norm /= null
                     and then Current.Out_Bias = null
@@ -2835,6 +2885,14 @@ begin
    --  Every layer's products where they always ran, past the stack.
    if Source.Split_Feed and then Settings.Experts = 0 then
       Item.Host_Feed := False;
+
+      --  The buffers a streamed feed-forward left for the next of its
+      --  size: the tokens after a prompt stream nothing, and holding them
+      --  slowed the generation after a 6,502-token prompt from 3.59 tokens
+      --  a second to 2.81.
+      if Count >= Element_Count (Stream_Least) then
+         Model_Runner.Backend.Device.Drop_Spares;
+      end if;
    end if;
 
    --  The host's own copy of the cache, brought up to date out of the

@@ -5980,6 +5980,17 @@ package body Model_Runner.Platform.Device.Products is
    function Heaps (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Heap + Item.Second_Heap);
 
+   function Spare_Bytes (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Spare_Bytes);
+
+   procedure Drop_Spares (Item : in out Engine) is
+      Gone : Boolean := True;
+   begin
+      while Gone loop
+         Drop_Spare (Item, Gone);
+      end loop;
+   end Drop_Spares;
+
    procedure Fit_Budget
      (Item : in out Engine; Bytes : Interfaces.Unsigned_64) is
    begin
@@ -10209,7 +10220,8 @@ package body Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Rounded   : Boolean := False;
       Region_Rows : Natural := 0;
-      Region_At   : Natural := 0)
+      Region_At   : Natural := 0;
+      Streamed    : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -10236,6 +10248,7 @@ package body Model_Runner.Platform.Device.Products is
          Kept => Kept, Rounded => Rounded,
          Blends => False, Unit => 0, Attends => False,
          Region_Rows => Region_Rows, Region_At => Region_At,
+         Streams => Streamed,
          others => <>);
       Added := True;
    end Add_Chained_Product;
@@ -12646,12 +12659,14 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Buffer, Places (Index).Memory,
                Places (Index).Base, Places (Index).Borrowed, Good, This.Key,
                Pinned => Pinned,
-               Stream => This.Gathers > 0 or else This.Listed,
+               Stream => This.Gathers > 0 or else This.Listed
+                         or else This.Streams,
                Mapped => Places (Index).Mapped,
                Tier => Places (Index).Tier);
             Places (Index).Streamed :=
               Places (Index).Borrowed
-              and then (This.Gathers > 0 or else This.Listed);
+              and then (This.Gathers > 0 or else This.Listed
+                        or else This.Streams);
             if not Good then
                Release_All;
                return;

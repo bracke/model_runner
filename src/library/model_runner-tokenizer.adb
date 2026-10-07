@@ -2096,6 +2096,14 @@ package body Model_Runner.Tokenizer is
                Last := 0;
             end if;
             return;
+         exception
+            --  Given back on the way out too, as long as the text as they
+            --  are; the failure is the body's handler's to report.
+            when others =>
+               Free_Room (Room);
+               Free_Places (Starts);
+               Free_Places (Ends);
+               raise;
          end;
       end if;
 
@@ -2701,6 +2709,13 @@ package body Model_Runner.Tokenizer is
 
          Free_Heap (Heap);
          Free_Worth (Worth);
+      exception
+         --  Given back on the way out too: the handler below this body's
+         --  sees neither, and they are as long as the text.
+         when others =>
+            Free_Heap (Heap);
+            Free_Worth (Worth);
+            raise;
       end;
 
       declare

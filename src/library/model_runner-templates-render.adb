@@ -87,10 +87,31 @@ is
 
    --  Text the template has assigned to names. Sized against the output
    --  rather than fixed, because what goes in here is mostly message
-   --  content on its way out.
+   --  content on its way out -- and on the heap, given back however the
+   --  render ends: bounded at sixty-four kilobytes on the stack, a prompt
+   --  of thirty thousand characters through a template that holds the
+   --  message in a name was refused.
    Pool_Size : constant Natural :=
      Natural'Min (Max_Variable_Bytes, Natural'Max (Target'Length, 1024));
-   Pool      : String (1 .. Pool_Size) := [others => ' '];
+
+   type Pool_Access is access String;
+   procedure Free_Pool is
+     new Ada.Unchecked_Deallocation (String, Pool_Access);
+
+   type Pool_Holder is new Ada.Finalization.Limited_Controlled with record
+      Text : Pool_Access;
+   end record;
+
+   overriding procedure Finalize (Holder : in out Pool_Holder);
+   overriding procedure Finalize (Holder : in out Pool_Holder) is
+   begin
+      Free_Pool (Holder.Text);
+   end Finalize;
+
+   Pool_Held : constant Pool_Holder :=
+     (Ada.Finalization.Limited_Controlled with
+      Text => new String'(1 .. Pool_Size => ' '));
+   Pool      : String renames Pool_Held.Text.all;
    Pool_Used : Natural := 0;
 
    --  Set when the render reaches something the compiler carried through

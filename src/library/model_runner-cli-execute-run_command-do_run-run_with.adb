@@ -137,6 +137,24 @@ begin
 
    Say_Device_Room (Screen, Session);
 
+   --  A context nobody named, held to what the device's room was counted
+   --  for rather than the model's own: said, because a conversation that
+   --  ends there would otherwise end without a reason anybody was given.
+   if Item.Context_Size = 0
+     and then L.Device_Context (Prepared) > 0
+     and then L.Capacity (Session) = L.Device_Context (Prepared)
+     and then L.Capacity (Session) < L.Config (Prepared).Context_Length
+   then
+      Pres.Put_Note
+        (Screen, "cli.note.context_held",
+         [Loc.Named
+            ("value", T.Image (Long_Long_Integer (L.Capacity (Session)))),
+          Loc.Named
+            ("total",
+             T.Image
+               (Long_Long_Integer (L.Config (Prepared).Context_Length)))]);
+   end if;
+
    --  An option that cannot do anything here says so rather than
    --  being accepted and forgotten -- and whether it can is known only
    --  now, once the model has said whether it carries a next-token

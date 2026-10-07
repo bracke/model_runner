@@ -2072,6 +2072,12 @@ package body Tests.Backend_Cases is
       Assert (Device.Describe.Memory_Bytes <= Heaps,
               "the budget was widened past the heaps");
 
+      --  And giving back spares, of which a fitted budget has none, leaves
+      --  it as it was.
+      Device.Drop_Spares;
+      Assert (Device.Describe.Memory_Bytes <= Heaps,
+              "giving back spares changed the budget");
+
       Device.Close;
       Device.Open (Ready, Budget => 16 * 1024);
       Assert (Ready, "the device would not open at a named budget");
@@ -6457,6 +6463,92 @@ package body Tests.Backend_Cases is
       Check (True);
    end The_Gated_Pair_Says_What_Its_Parts_Say;
 
+   --  A product streamed for its run -- a split dense model's
+   --  feed-forward over a long batch -- is computed and not kept: named,
+   --  it would have been resident after, and streamed it is not; its buffer
+   --  waits among the spares for the next of its size, and Drop_Spares
+   --  gives every one back.
+   procedure A_Streamed_Product_Is_Not_Kept
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Width : constant := 64;
+      Tall  : constant := 32;
+
+      Held    : Devices.Inventory;
+      Opened  : Devices.Context;
+      Engine  : Products.Engine;
+      Found   : Boolean;
+      Ready   : Boolean;
+      Steps   : Products.Sequence;
+      Added   : Boolean;
+      Ok      : Boolean;
+      Halted  : Boolean;
+
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+      Matrix   : N.Real_Array (0 .. Tall * Width - 1);
+      Input    : N.Real_Array (0 .. Width - 1);
+      Landing  : N.Real_Array (0 .. 4 * Width - 1) := [others => 0.0];
+
+      function Bytes_Of (Item : N.Real_Array) return B.Byte_Count
+      is (B.Byte_Count (Item'Length) * 4);
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in N.Element_Count range 0 .. Width - 1 loop
+         Identity (Index * Width + Index) := 1.0;
+         Input (Index) := N.Real ((Index * 5) mod 11) / 11.0 - 0.4;
+      end loop;
+      for Index in Matrix'Range loop
+         Matrix (Index) := N.Real ((Index * 3) mod 7) / 7.0 - 0.3;
+      end loop;
+
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Identity (Identity'First)'Address, Bytes_Of (Identity), 0,
+         Products.Values_F32, Width, Width, Added, Kept => False);
+      Assert (Added, "the identity was refused");
+      Products.Add_Chained_Product
+        (Steps, Matrix (Matrix'First)'Address, Bytes_Of (Matrix), 0,
+         Products.Values_F32, Tall, Width, Added,
+         Key => Matrix (Matrix'First)'Address, Streamed => True);
+      Assert (Added, "the streamed product was refused");
+
+      Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
+      Assert (Ok, "the sequence with a streamed product was refused");
+
+      Assert (Products.Resident_Bytes (Engine)
+                < Interfaces.Unsigned_64 (Bytes_Of (Matrix)),
+              "a streamed matrix was kept on the device");
+      Assert (Products.Spare_Bytes (Engine) > 0,
+              "a streamed matrix's buffer was not kept for reuse");
+
+      Products.Drop_Spares (Engine);
+      Assert (Products.Spare_Bytes (Engine) = 0,
+              "the spares were not given back");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Streamed_Product_Is_Not_Kept;
+
    procedure The_Keeper_Spins_While_Asked_And_Stops_After
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10567,6 +10659,10 @@ package body Tests.Backend_Cases is
          "holding the clock does nothing on a closed backend and spins the "
          & "keeper on an open one");
       AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Streamed_Product_Is_Not_Kept'Access,
+         "a product streamed for its run is computed and not kept, and its "
+         & "buffer is given back with the spares");
+      Register_Routine
         (T, The_Keeper_Spins_While_Asked_And_Stops_After'Access,
          "the keeper spins while the engine says it is working, stops soon "
          & "after, and closes without waiting on a round forever");

@@ -571,6 +571,17 @@ package body Model_Runner.Backend.Device is
    function Heap_Bytes return Interfaces.Unsigned_64
    is (if Ready_Now then Products.Heaps (Engine) else 0);
 
+   -----------------
+   -- Drop_Spares --
+   -----------------
+
+   procedure Drop_Spares is
+   begin
+      if Ready_Now then
+         Products.Drop_Spares (Engine);
+      end if;
+   end Drop_Spares;
+
    ----------------
    -- Fit_Budget --
    ----------------
@@ -2586,7 +2597,8 @@ package body Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_Up         : Model_Runner.Tensors.View :=
-        Model_Runner.Tensors.Empty_View)
+        Model_Runner.Tensors.Empty_View;
+      Stream_Feed    : Boolean := False)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -4353,7 +4365,8 @@ package body Model_Runner.Backend.Device is
                  and then Gate.Columns mod (if Q8 then 32 else 256) = 0
                  and then Up.Offset >= Gate.Offset + Gate_Bytes
                  and then Up.Offset - Gate.Offset - Gate_Bytes <= 2**20
-                 and then Gate.Offset >= Gate_Bytes;
+                 and then Gate.Offset >= Gate_Bytes
+                 and then not Stream_Feed;
 
                Pair_At : constant Model_Runner.Bytes.Byte_Count :=
                  (if Paired then Up.Offset - Gate.Offset else 0);
@@ -4410,7 +4423,8 @@ package body Model_Runner.Backend.Device is
                         else At_Offset (Gate.Base, Gate.Offset)),
                      Kept => False,
                      From_Step => Step_Norm_Feed,
-                     Region_Rows => Region, Region_At => Pad);
+                     Region_Rows => Region, Region_At => Pad,
+                     Streamed => Stream_Feed);
                   if not Added then
                      return;
                   end if;
@@ -4430,7 +4444,8 @@ package body Model_Runner.Backend.Device is
                     (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
                      Natural (Up.Rows), Natural (Up.Columns), Added,
                      Key => At_Offset (Up.Base, Up.Offset), Kept => False,
-                     From_Step => Step_Norm_Feed);
+                     From_Step => Step_Norm_Feed,
+                     Streamed => Stream_Feed);
                end if;
             end;
             if not Added then
@@ -4465,7 +4480,8 @@ package body Model_Runner.Backend.Device is
             Products.Add_Chained_Product
               (Steps, Down.Base, Down.Span, Down.Offset, Down_P,
                Natural (Down.Rows), Natural (Down.Columns), Added,
-               Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+               Key => At_Offset (Down.Base, Down.Offset), Kept => False,
+               Streamed => Stream_Feed);
             if not Added then
                return;
             end if;
