@@ -9171,6 +9171,19 @@ package body Model_Runner.Llama is
       Status     : out E.Error_Info)
    is separate;
 
+   ---------------
+   -- Feed_Next --
+   ---------------
+
+   procedure Feed_Next
+     (Item   : in out Session;
+      Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      States : N.Real_Array;
+      First  : Natural;
+      Status : out E.Error_Info)
+   is separate;
+
    --------------------
    -- Evaluate_Token --
    --------------------

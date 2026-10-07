@@ -1267,6 +1267,89 @@ package body Tests.Inference_Cases is
             Assert (not L.Drafts_Next (Live), "a closed session drafts");
          end;
 
+         --  And a prompt fed to the block all at once, for its cache only,
+         --  leaves the cache a position at a time leaves: the draft after
+         --  it is the same. Feed_Next runs only the block's front -- its
+         --  keys and values are all a fed position keeps -- so this is
+         --  what says the rest was not needed.
+         declare
+            Settings : constant L.Configuration := L.Config (Under.Ready);
+            Width    : constant N.Element_Count :=
+              N.Element_Count (Settings.Embedding);
+            Rows     : Model_Runner.Tensors.Real_Array_Access := null;
+            One, All_Of : L.Session;
+            Logits   : Logit_Vector := [others => 0.0];
+            By_One, By_All : Logit_Vector := [others => 0.0];
+            Nothing  : N.Real_Array (1 .. 0);
+            State    : N.Real_Array (0 .. Width - 1);
+            Apart    : N.Real := 0.0;
+            --  The prompt through a fresh session, fed to the block one
+            --  way or the other, and the draft after it.
+            procedure Fed
+              (Into    : in out L.Session;
+               At_Once : Boolean;
+               Drafted : out Logit_Vector) is
+            begin
+               L.Open (Into, Under.Ready, Context => Room, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+               L.Evaluate_Batch
+                 (Into, Under.Ready, Prompt, Logits, States => Rows,
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "the prompt did not evaluate");
+
+               if not At_Once then
+                  for Step in 0 .. Prompt'Length - 2 loop
+                     L.Draft_Next
+                       (Into, Under.Ready, Prompt (Prompt'First + Step + 1),
+                        Rows.all (N.Element_Count (Step) * Width
+                                  .. N.Element_Count (Step) * Width
+                                     + Width - 1),
+                        Step, Nothing, State, Status);
+                     Assert (E.Is_Ok (Status),
+                             "a position was not fed one at a time");
+                  end loop;
+               else
+                  L.Feed_Next
+                    (Into, Under.Ready,
+                     Prompt (Prompt'First + 1 .. Prompt'Last),
+                     Rows.all (0 .. N.Element_Count (Prompt'Length - 1)
+                                    * Width - 1),
+                     0, Status);
+                  Assert (E.Is_Ok (Status),
+                          "the prompt was not fed at once: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Feed_Next
+                    (Into, Under.Ready,
+                     Prompt (Prompt'First + 1 .. Prompt'Last),
+                     Rows.all (0 .. Width - 1), 0, Status);
+                  Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                          "states of the wrong length were fed");
+               end if;
+
+               L.Draft_Next
+                 (Into, Under.Ready, 3, L.Last_State (Into),
+                  Prompt'Length - 1, Drafted, State, Status);
+               Assert (E.Is_Ok (Status), "the block did not draft");
+            end Fed;
+         begin
+            Model_Runner.Tensors.Allocate
+              (N.Element_Count (Prompt'Length) * Width, Rows);
+
+            Fed (One, False, By_One);
+            Fed (All_Of, True, By_All);
+
+            for Index in By_One'Range loop
+               Apart := N.Real'Max (Apart, abs (By_One (Index) - By_All (Index)));
+            end loop;
+            Assert (Apart <= 1.0E-4,
+                    "the block fed a prompt at once drafts" & N.Real'Image (Apart)
+                    & " away from the block fed it a position at a time");
+
+            L.Close (One);
+            L.Close (All_Of);
+            Model_Runner.Tensors.Free (Rows);
+         end;
+
          declare
             procedure Turn
               (From_Next : Boolean;

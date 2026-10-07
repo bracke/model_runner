@@ -2212,6 +2212,29 @@ package Model_Runner.Llama is
       Next_State : out Model_Runner.Numerics.Real_Array;
       Status     : out Model_Runner.Errors.Error_Info);
 
+   --  Run the block past the stack over several positions at once, for
+   --  its cache only: what Draft_Next does with no distribution asked for,
+   --  position First + I taking Tokens (Tokens'First + I) beside row I of
+   --  States, every product over all of them together. A prompt fed to
+   --  the block a position at a time read each of its matrices once a
+   --  position -- ThinkingCap's hundred-token prompt half a second more
+   --  drafted than not.
+   --
+   --  @param Item Open session on a model with a block past its stack.
+   --  @param Source Model it was opened on.
+   --  @param Tokens The token at each position's successor.
+   --  @param States The stack's final state at each position, Embedding
+   --    numbers a row, a row a token.
+   --  @param First The first position written.
+   --  @param Status Success, or what Draft_Next would say.
+   procedure Feed_Next
+     (Item   : in out Session;
+      Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      States : Model_Runner.Numerics.Real_Array;
+      First  : Natural;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Invalidate the cache and the history without releasing memory.
    --
    --  @param Item Session to reset.

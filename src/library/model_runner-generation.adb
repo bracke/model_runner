@@ -648,10 +648,6 @@ package body Model_Runner.Generation is
 
       Next_In     : T.Real_Array_Access := null;
 
-      --  What a position run through the next block only for its cache
-      --  is handed for logits: nothing, which is how the head is skipped.
-      No_Logits : N.Real_Array (1 .. 0);
-
       --  Whether Next_In holds the state a round left for the next, which
       --  a single-token round does not: that one's state is the session's
       --  own last.
@@ -1376,23 +1372,17 @@ package body Model_Runner.Generation is
                      --  the last: at position p it takes the token at
                      --  p + 1 beside the state at p, and the last token's
                      --  successor is what a round will draft.
-                     if E.Is_Ok (Status) then
-                        for Step in Index .. Last - 1 loop
-                           declare
-                              At_Row : constant N.Element_Count :=
-                                N.Element_Count (Step - Index)
-                                * N.Element_Count (Settings.Embedding);
-                           begin
-                              L.Draft_Next
-                                (Session, Source, Tokens.all (Step + 1),
-                                 Rows.all (At_Row
-                                           .. At_Row
-                                              + N.Element_Count
-                                                  (Settings.Embedding) - 1),
-                                 Step - 1, No_Logits, Next_Out.all, Status);
-                              exit when E.Is_Error (Status);
-                           end;
-                        end loop;
+                     --  All of them at once, and only for the block's
+                     --  cache: see Feed_Next.
+                     if E.Is_Ok (Status) and then Last > Index then
+                        L.Feed_Next
+                          (Session, Source, Tokens.all (Index + 1 .. Last),
+                           Rows.all (Rows.all'First
+                                     .. Rows.all'First
+                                        + N.Element_Count (Last - Index)
+                                          * N.Element_Count
+                                              (Settings.Embedding) - 1),
+                           Index - 1, Status);
                      end if;
 
                      T.Free (Rows);
@@ -2160,22 +2150,26 @@ package body Model_Runner.Generation is
                   Width : constant N.Element_Count :=
                     N.Element_Count (Settings.Embedding);
                begin
-                  for Step in 1 .. Verified_Count - 1 loop
-                     declare
-                        At_Row : constant N.Element_Count :=
-                          N.Element_Count (Step - 1) * Width;
-                     begin
-                        L.Draft_Next
-                          (Session, Source, Verified.all (Step + 1),
-                           Next_States.all (At_Row .. At_Row + Width - 1),
-                           Before + Step - 1, No_Logits, Next_Out.all, Local);
-                        if E.Is_Error (Local) then
-                           Conclude (Runtime_Error, Local);
-                           Failed := True;
-                           return;
-                        end if;
-                     end;
-                  end loop;
+                  --  All of them at once, and only for the cache: see
+                  --  Feed_Next.
+                  if Verified_Count > 1 then
+                     L.Feed_Next
+                       (Session, Source,
+                        Verified.all (Verified.all'First + 1
+                                      .. Verified.all'First
+                                         + Verified_Count - 1),
+                        Next_States.all
+                          (Next_States.all'First
+                           .. Next_States.all'First
+                              + N.Element_Count (Verified_Count - 1) * Width
+                              - 1),
+                        Before, Local);
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Failed := True;
+                        return;
+                     end if;
+                  end if;
 
                   --  The last position's state, unless a residual replaced
                   --  the proposal there: the batch's state for that position
