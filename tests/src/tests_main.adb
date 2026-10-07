@@ -2834,8 +2834,27 @@ begin
 
                   --  Named with a value like every other option this command
                   --  takes, so that a reader who saw --repack in the README does
-                  --  not have to guess whether it is a flag here.
-                  Repack      => Mode_Of (Option ("--repack", "none")),
+                  --  not have to guess whether it is a flag here. Unnamed, the
+                  --  layout run takes unasked: the panels on the processor
+                  --  where they fit. This took the file's rows unasked, and
+                  --  TinyLlama IQ4_XS read 24 prompt tokens a second here
+                  --  against run's 500.
+                  Repack      =>
+                    (if Given ("--repack")
+                     then Mode_Of (Option ("--repack", "none"))
+                     elsif Model_Runner.Backend."="
+                             (Backend_Of (Option ("--backend", "cpu")),
+                              Model_Runner.Backend.Backend_CPU)
+                       and then Ada.Directories.Exists (Option ("--model", ""))
+                       and then Model_Runner.Llama.Panels_Unasked
+                                  (Interfaces.Unsigned_64
+                                     (Ada.Directories.Size
+                                        (Option ("--model", ""))),
+                                   Model_Runner.Limits.Default_Model_Limits
+                                     .Max_Allocation_Bytes,
+                                   Model_Runner.Platform.Available_Memory)
+                     then Model_Runner.Llama.To_Rows
+                     else Model_Runner.Llama.No_Repack),
 
                   --  The storage the session keeps its context in, named the way
                   --  the command names it: f32, f16, q8 or q4, and by default

@@ -899,6 +899,21 @@ package Model_Runner.Llama is
          when To_F32    => "f32",
          when To_BF16   => "bf16",
          when To_Rows   => "rows");
+
+   --  Whether a processor run that named no layout takes the panels: the
+   --  processor has their kernels, and a file of this many bytes leaves
+   --  room for them -- the panels held beside the file's cached pages, and
+   --  a margin -- and fits the one allocation they are. What `run` does
+   --  unasked, and what `tests speed` does so its figures are run's.
+   --
+   --  @param Weights The model file's bytes.
+   --  @param Max_Allocation The most one allocation may take.
+   --  @param Available The host memory free now.
+   --  @return True when the panels are the default.
+   function Panels_Unasked
+     (Weights        : Interfaces.Unsigned_64;
+      Max_Allocation : Interfaces.Unsigned_64;
+      Available      : Interfaces.Unsigned_64) return Boolean;
    --  What a caller asks of the rotation, over what the file states.
    --
    --  A model is trained at one context length and its rotation is written

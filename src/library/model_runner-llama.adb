@@ -12,6 +12,7 @@ with Model_Runner.Delta_Rule;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Integers;
+with Model_Runner.GGUF;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Zeroed_Storage;
 
@@ -9306,5 +9307,22 @@ package body Model_Runner.Llama is
       T.Free (Dense);
       T.Free (Out_Row);
    end Rank;
+
+   --------------------
+   -- Panels_Unasked --
+   --------------------
+
+   function Panels_Unasked
+     (Weights        : Interfaces.Unsigned_64;
+      Max_Allocation : Interfaces.Unsigned_64;
+      Available      : Interfaces.Unsigned_64) return Boolean
+   is
+   begin
+      return Model_Runner.Quantization.Integers.Has_Integer_Kernel
+               (Model_Runner.GGUF.Type_Q2_K, Interleaved => True)
+        and then Weights > 0
+        and then Weights + 2 ** 30 <= Available
+        and then Weights <= Max_Allocation;
+   end Panels_Unasked;
 
 end Model_Runner.Llama;

@@ -983,6 +983,9 @@ package body Model_Runner.Platform.Device.Products is
                  (Packing = Packed_IQ4_NL
                   and then Item.NL_Wave_Line /= Null_Handle)
                  or else
+                 (Packing = Packed_MXFP4
+                  and then Item.MX_Wave_Line /= Null_Handle)
+                 or else
                  (Packing = Packed_IQ4_XS
                   and then Item.XS_Wave_Line /= Null_Handle)
                  or else
@@ -1003,6 +1006,7 @@ package body Model_Runner.Platform.Device.Products is
       return Positive
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
+                          | Packed_MXFP4
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
                           | Legacy_Packing
              then Low_Wave_Lanes
@@ -1018,6 +1022,7 @@ package body Model_Runner.Platform.Device.Products is
       return Positive
    is (if Waved (Item, Packing, Count)
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
+                          | Packed_MXFP4
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
                           | Legacy_Packing
              then Low_Wave_Lanes
@@ -1044,12 +1049,19 @@ package body Model_Runner.Platform.Device.Products is
       Short   : Boolean := False) return Positive
    is (if Packing = Packed_Q8_0 and then Count in Multi_Count
        then Q8_Multi_Rows
+       --  And the few-vector walks compiled to land as many (MANY_ROWS in
+       --  compile-shaders.sh): Q2_K's and Q3_K's check of four 18 per cent
+       --  faster at eight rows than at four, the IQ4 formats' 4 to 7; the
+       --  older formats slower, so they keep four.
        elsif Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
+                        | Packed_Q2_K | Packed_Q3_K
+                        | Packed_IQ4_NL | Packed_IQ4_XS | Packed_MXFP4
          and then Count in Many_Count
        then Many_Rows
        elsif Short then Q8_Short_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
-       elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS | Legacy_Packing
+       elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS | Packed_MXFP4
+                        | Legacy_Packing
        then IQ4_Wave_Rows
        elsif Packing in Packed_Q2_K | Packed_Q3_K then Q2K_Wave_Rows
        elsif Packing = Packed_Q8_0 then Q8_Wave_Rows
@@ -1089,6 +1101,8 @@ package body Model_Runner.Platform.Device.Products is
              else Item.Q8_Wave_Line)
        elsif Packing = Packed_IQ4_NL and then Waved (Item, Packing, Count)
        then Item.NL_Wave_Line
+       elsif Packing = Packed_MXFP4 and then Waved (Item, Packing, Count)
+       then Item.MX_Wave_Line
        elsif Packing = Packed_IQ4_XS and then Waved (Item, Packing, Count)
        then Item.XS_Wave_Line
        elsif Packing = Packed_Q2_K and then Waved (Item, Packing, Count)
@@ -2858,6 +2872,8 @@ package body Model_Runner.Platform.Device.Products is
          begin
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl,
                     Item.NL_Wave_Shader);
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4,
+                    Item.MX_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs,
                     Item.XS_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,
@@ -3939,6 +3955,11 @@ package body Model_Runner.Platform.Device.Products is
                   Line (Low_Wave_Lanes, 1, Item.NL_Wave_Line);
                end if;
 
+               if Item.MX_Wave_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.MX_Wave_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.MX_Wave_Line);
+               end if;
+
                if Item.XS_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.XS_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.XS_Wave_Line);
@@ -3967,20 +3988,13 @@ package body Model_Runner.Platform.Device.Products is
                declare
                   procedure Many (Module : Address; Packing : Weight_Packing);
 
-                  --  Two to eight positions, as Q4_K's; but the seven
-                  --  codebook formats two to four, whose walk at eight
-                  --  measured twice the generic row kernel's cost (3.2 to
-                  --  3.8 ms against 1.6 on a 8192 by 4096 matrix) while at
-                  --  four it is half.
+                  --  Two to eight positions, as Q4_K's.
                   procedure Many (Module : Address; Packing : Weight_Packing)
                   is
-                     Most : constant Many_Count :=
-                       (if Packing in Packed_IQ3_S .. Packed_IQ1_M then 4
-                        else Many_Count'Last);
                   begin
                      if Module /= Null_Handle then
                         Request.Stage.Module := Module;
-                        for Count in 2 .. Most loop
+                        for Count in Many_Count loop
                            Line (Low_Wave_Lanes, C.unsigned (Count),
                                  Item.Wave_Multi_Lines (Packing) (Count));
                         end loop;
@@ -3991,6 +4005,7 @@ package body Model_Runner.Platform.Device.Products is
                      Many (Item.Low_Wave_Shaders (Packing), Packing);
                   end loop;
                   Many (Item.NL_Wave_Shader, Packed_IQ4_NL);
+                  Many (Item.MX_Wave_Shader, Packed_MXFP4);
                   Many (Item.XS_Wave_Shader, Packed_IQ4_XS);
                   Many (Item.Q2K_Wave_Shader, Packed_Q2_K);
                   Many (Item.Q3K_Wave_Shader, Packed_Q3_K);
@@ -5192,6 +5207,7 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Q8_Glu_Multi_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.MX_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
       for Packing in Weight_Packing loop
          for Count in Many_Count loop
@@ -5341,6 +5357,7 @@ package body Model_Runner.Platform.Device.Products is
                     "vkDestroyShaderModule");
       end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.MX_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q2K_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");

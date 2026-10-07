@@ -3370,6 +3370,8 @@ private
       --  of sixteen values, IQ4_XS with its sub-block scales beside.
       NL_Wave_Shader : System.Address := System.Null_Address;
       NL_Wave_Line   : System.Address := System.Null_Address;
+      MX_Wave_Shader : System.Address := System.Null_Address;
+      MX_Wave_Line   : System.Address := System.Null_Address;
       XS_Wave_Shader : System.Address := System.Null_Address;
       XS_Wave_Line   : System.Address := System.Null_Address;
 

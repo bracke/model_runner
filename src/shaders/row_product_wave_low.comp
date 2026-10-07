@@ -2013,11 +2013,28 @@ void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
 }
 #endif
 
-#if defined(IQ4_NL) || defined(IQ4_XS)
+#if defined(IQ4_NL) || defined(IQ4_XS) || defined(MXFP4)
+#define TABLE4
+#ifdef MXFP4
+//  MXFP4's sixteen, the E2M1 values at twice their size -- 0, 0.5, 1, 1.5,
+//  2, 3, 4, 6 and the same negated -- as the generic row kernel and the
+//  processor's decoder read them, the scale carrying the halving.
+const float KV4[16] = float[16](
+    0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0,
+    0.0, -1.0, -2.0, -3.0, -4.0, -6.0, -8.0, -12.0);
+
+//  An E8M0 exponent byte as two to the byte less a hundred and
+//  twenty-eight, exactly, as row_product.comp reads it.
+float e8m0_at(uint at) {
+    uint e = byte_at(at);
+    return uintBitsToFloat(e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
+}
+#else
 //  The sixteen values an IQ4 nibble names, ggml's kvalues_iq4nl.
 const float KV4[16] = float[16](
     -127.0, -104.0, -83.0, -65.0, -49.0, -35.0, -22.0, -10.0,
        1.0,   13.0,  25.0,  38.0,  53.0,  69.0,  89.0, 113.0);
+#endif
 
 //  The four bytes of a word, each through the table: their low nibbles
 //  where shift is nought, their high ones where it is four.
@@ -2034,9 +2051,24 @@ vec4 nl4(uint word, uint shift) {
 }
 #endif
 
-#ifdef IQ4_NL
+#if defined(IQ4_NL) || defined(MXFP4)
 const uint BLOCK_ELEMS = 256u;
-const uint BLOCK_BYTES = 144u;
+#ifdef MXFP4
+//  MXFP4 is laid out as IQ4_NL with a one-byte power of two for the
+//  half-precision scale: seventeen bytes a block of thirty-two.
+const uint SUB4 = 17u;
+float scale4(uint b) {
+    return e8m0_at(b);
+}
+#define SUB_BYTES_OF_32
+#else
+const uint SUB4 = 18u;
+float scale4(uint b) {
+    return half_at(b);
+}
+#endif
+const uint BLOCK_BYTES = 8u * SUB4;
+const uint QUANTS4 = SUB4 - 16u;
 
 //  IQ4_NL reads its activations itself: a group of 256 is eight blocks of a
 //  half-precision scale and sixteen bytes of nibbles, element j of a block
@@ -2053,12 +2085,12 @@ float lane_dot_own(uint at, uint lane, uint xg, out float total) {
     uint half_of = lane % 2u;
     total = 0.0;
 
-    uint b = at + block * 18u;
-    uint q0 = quad_at(b + 2u + half_of * 8u);
-    uint q1 = quad_at(b + 6u + half_of * 8u);
+    uint b = at + block * SUB4;
+    uint q0 = quad_at(b + QUANTS4 + half_of * 8u);
+    uint q1 = quad_at(b + QUANTS4 + 4u + half_of * 8u);
     uint xb = xg + block * 8u + half_of * 2u;
 
-    return half_at(b)
+    return scale4(b)
            * (dot(x4[xb],      nl4(q0, 0u)) + dot(x4[xb + 1u], nl4(q1, 0u))
             + dot(x4[xb + 4u], nl4(q0, 4u)) + dot(x4[xb + 5u], nl4(q1, 4u)));
 }
@@ -2070,14 +2102,14 @@ void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
                       out float lift) {
     uint block = lane / 2u;
     uint half_of = lane % 2u;
-    uint b = at + block * 18u;
-    uint q0 = quad_at(b + 2u + half_of * 8u);
-    uint q1 = quad_at(b + 6u + half_of * 8u);
+    uint b = at + block * SUB4;
+    uint q0 = quad_at(b + QUANTS4 + half_of * 8u);
+    uint q1 = quad_at(b + QUANTS4 + 4u + half_of * 8u);
     wv[0] = nl4(q0, 0u);
     wv[1] = nl4(q1, 0u);
     wv[2] = nl4(q0, 4u);
     wv[3] = nl4(q1, 4u);
-    scale = half_at(b);
+    scale = scale4(b);
     lift = 0.0;
 }
 #define WEIGHTS_OWN
@@ -2503,6 +2535,14 @@ void main() {
 #if !defined(GLU) && !defined(Q8_0)
 #define MANY
 layout(constant_id = 1) const uint MULTI = 1u;
+
+//  The rows a workgroup of the few-vector walk lands: the one-vector
+//  walk's, unless the compilation says more -- each vector's activations
+//  are loaded once a group for every row the workgroup takes, which is the
+//  walk's cost past the weights.
+#ifndef MANY_ROWS
+#define MANY_ROWS NUM_ROWS
+#endif
 #endif
 
 #if defined(MANY) && defined(WEIGHTS_OWN)
@@ -2522,7 +2562,7 @@ const uint OWN_STEPS[4] = uint[4](0u, 1u, 4u, 5u);
 //  drafted round's check cost three generated tokens.
 void main_many() {
     uint tid = gl_LocalInvocationID.x;
-#if defined(IQ4_NL) || defined(IQ4_XS)
+#ifdef TABLE4
     if (tid < 16u) {
         kv4[tid] = KV4[tid];
     }
@@ -2559,7 +2599,7 @@ void main_many() {
               : (shape.first + kk) * shape.columns + member * shape.apart;
     }
 
-    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
 #if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
@@ -2567,8 +2607,8 @@ void main_many() {
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif
 
-    float temp[NUM_ROWS][MULTI];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[MANY_ROWS][MULTI];
+    for (uint r = 0u; r < MANY_ROWS; ++r) {
         for (uint k = 0u; k < MULTI; ++k) {
             temp[r][k] = 0.0;
         }
@@ -2588,7 +2628,7 @@ void main_many() {
                                vec4(1.0));
             }
 
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_ROWS; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
                 vec4 wv[4];
@@ -2606,7 +2646,7 @@ void main_many() {
         }
     }
 
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    for (uint r = 0u; r < MANY_ROWS; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < MULTI; ++k) {
             float whole = subgroupAdd(temp[r][k]);
@@ -2617,6 +2657,101 @@ void main_many() {
                               : member * shape.rows * shape.count
                                 + (shape.first + k) * shape.rows + row;
                 y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}
+#elif defined(MANY) && defined(WEIGHTS32)
+//  The codebook formats over a few vectors: a lane's thirty-two weights of
+//  a row decoded once a chunk of up to four vectors and dotted with each.
+//  Past four the vectors go a chunk at a time, the weights decoded again
+//  for the next -- the arrays a chunk holds stay four wide whatever the
+//  count, where one walk eight wide took a check of eight at twice the
+//  generic kernel's cost.
+void main_many() {
+    uint tid = gl_LocalInvocationID.x;
+    load_grid(tid);
+    barrier();
+
+    uint itid = tid & 7u;
+    uint ix = tid >> 3u;
+
+    uint member = gl_WorkGroupID.z;
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint slice = which * shape.stride;
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
+    uint groups = (shape.columns + 255u) / 256u;
+    uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
+
+    for (uint c = 0u; c < MULTI; c += 4u) {
+        uint from_k[4];
+        bool real_k[4];
+        for (uint k = 0u; k < 4u; ++k) {
+            uint kk = min(c + k, run_count - 1u);
+            real_k[k] = c + k < run_count && c + k < MULTI;
+            from_k[k] = listed
+                  ? (shape.routed == LISTED_BY_POSITION
+                       ? route[list_at + run_at + kk] : run_at + kk)
+                    * shape.columns
+                  : (shape.first + kk) * shape.columns + member * shape.apart;
+        }
+
+        float temp[MANY_ROWS][4];
+        for (uint r = 0u; r < MANY_ROWS; ++r) {
+            for (uint k = 0u; k < 4u; ++k) {
+                temp[r][k] = 0.0;
+            }
+        }
+
+        for (uint i = ix; i < groups; i += 8u) {
+            uint col = i * 256u + itid * 32u;
+            if (col < shape.columns) {
+                uint block = col / BLOCK_ELEMS;
+                for (uint r = 0u; r < MANY_ROWS; ++r) {
+                    uint row = min(first_row + r, shape.rows - 1u);
+                    uint at = shape.base + slice + row * span
+                              + block * BLOCK_BYTES;
+                    vec4 wv[8];
+                    lane_weights32(at, itid, wv);
+                    for (uint k = 0u; k < 4u; ++k) {
+                        if (c + k < MULTI) {
+                            uint xb = (from_k[k] + col) >> 2u;
+                            float sum = 0.0;
+                            for (uint e = 0u; e < 8u; ++e) {
+                                sum += dot(x4[xb + e], wv[e]);
+                            }
+                            temp[r][k] += sum;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (uint r = 0u; r < MANY_ROWS; ++r) {
+            uint row = first_row + r;
+            for (uint k = 0u; k < 4u; ++k) {
+                float whole = subgroupAdd(temp[r][k]);
+
+                if (tid == 0u && row < shape.rows && real_k[k]) {
+                    uint out_at = listed
+                                  ? (run_at + c + k) * shape.rows + row
+                                  : member * shape.rows * shape.count
+                                    + (shape.first + c + k) * shape.rows
+                                    + row;
+                    y[out_at] = shape.joins != 0u ? whole + rj[out_at]
+                                                  : whole;
+                }
             }
         }
     }
@@ -2632,7 +2767,7 @@ void main_many() {
 void main_many() {
     uint tid = gl_LocalInvocationID.x;
 
-#if defined(IQ4_NL)
+#ifdef TABLE4
     if (tid < 16u) {
         kv4[tid] = KV4[tid];
     }
@@ -2678,7 +2813,7 @@ void main_many() {
               : (shape.first + kk) * shape.columns + member * shape.apart;
     }
 
-    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
 #if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
@@ -2686,8 +2821,8 @@ void main_many() {
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif
 
-    float temp[NUM_ROWS][MULTI];
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    float temp[MANY_ROWS][MULTI];
+    for (uint r = 0u; r < MANY_ROWS; ++r) {
         for (uint k = 0u; k < MULTI; ++k) {
             temp[r][k] = 0.0;
         }
@@ -2702,7 +2837,7 @@ void main_many() {
             //  row, from the cache, rather than held for all the rows: as
             //  fast at four vectors, and four vectors' held would be a
             //  hundred and twenty-eight registers a lane.
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_ROWS; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
@@ -2720,7 +2855,7 @@ void main_many() {
         }
 #elif defined(OWN_ACTIVATIONS)
         if (i * 256u + (itid / 2u) * 32u < shape.columns) {
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_ROWS; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + i * BLOCK_BYTES;
@@ -2747,7 +2882,7 @@ void main_many() {
                 total[k] = dot(a[k][0] + a[k][1] + a[k][2] + a[k][3],
                                vec4(1.0));
             }
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_ROWS; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
@@ -2771,7 +2906,7 @@ void main_many() {
 #endif
     }
 
-    for (uint r = 0u; r < NUM_ROWS; ++r) {
+    for (uint r = 0u; r < MANY_ROWS; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < MULTI; ++k) {
             float whole = subgroupAdd(temp[r][k]);
@@ -2791,7 +2926,7 @@ void main_many() {
 void main_one() {
     uint tid = gl_LocalInvocationID.x;
 
-#if defined(IQ4_NL) || defined(IQ4_XS)
+#ifdef TABLE4
     if (tid < 16u) {
         kv4[tid] = KV4[tid];
     }

@@ -6659,8 +6659,8 @@ package body Checks is
       --  format from the one source -- the twelve low-bit formats, Q8_0, the
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
       --  against it, and Q8_0's three over several vectors, and its five
-      --  gate-and-up compilations.
-      for Which in 1 .. 30 loop
+      --  gate-and-up compilations, and MXFP4's.
+      for Which in 1 .. 31 loop
          declare
             Found : Boolean;
 
@@ -6699,6 +6699,7 @@ package body Checks is
                   when 28 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Glu_Digest,
                   when 29 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu_Digest,
                   when 30 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu_Digest,
+                  when 31 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;
