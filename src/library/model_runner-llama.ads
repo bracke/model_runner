@@ -1741,8 +1741,16 @@ package Model_Runner.Llama is
    --  which is what their tiles are slow for the want of.
    Streamed_Batch : constant := 2048;
 
+   --  And a split dense model's: half as long. Its answers and streamed
+   --  matrices are device memory the weights give up, and ThinkingCap's
+   --  prompt of 3,972 read in 51.0 s at this length against 49.1 at the
+   --  mixture's, with 0.57 GB more of the model on the device and its
+   --  tokens 3.46 -> 3.55 a second.
+   Dense_Streamed_Batch : constant := 1024;
+
    --  The most one batched call evaluates for this model: Streamed_Batch
-   --  where its mixture is split, Max_Batch otherwise.
+   --  where its mixture is split, Dense_Streamed_Batch where a dense model
+   --  is, Max_Batch otherwise.
    --
    --  @param Item Loaded model.
    --  @return Positions one call takes at most.

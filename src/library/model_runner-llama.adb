@@ -27,7 +27,10 @@ package body Model_Runner.Llama is
    Stream_Least : Positive := Stream_Least_Default;
 
    function Batch_Limit (Item : Model'Class) return Positive
-   is (if Item.Split_Feed then Streamed_Batch else Max_Batch);
+   is (if Item.Split_Feed and then Item.Settings.Experts = 0
+       then Dense_Streamed_Batch
+       elsif Item.Split_Feed then Streamed_Batch
+       else Max_Batch);
 
    procedure Set_Stream_Least (Positions : Positive) is
    begin

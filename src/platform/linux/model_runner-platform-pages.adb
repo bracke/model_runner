@@ -1,3 +1,4 @@
+with Model_Runner.Platform.Mapped_Ranges;
 with Interfaces.C;
 with System.Storage_Elements;
 
@@ -14,6 +15,7 @@ package body Model_Runner.Platform.Pages is
 
    Page        : constant := 4096;
    Huge_Advice : constant := 14;   --  MADV_HUGEPAGE
+   Out_Advice  : constant := 21;   --  MADV_PAGEOUT
 
    function Madvise
      (Start  : System.Address;
@@ -56,5 +58,35 @@ package body Model_Runner.Platform.Pages is
         (Bytes.all (Bytes.all'First)'Address,
          Model_Runner.Bytes.Byte_Count (Bytes.all'Length));
    end Prefer_Large;
+
+   procedure Page_Out
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count)
+   is
+   begin
+      --  A file's mapping only: memory of the process's own given this
+      --  advice goes to swap, which is what it is here to spare.
+      if Length < Page
+        or else not Model_Runner.Platform.Mapped_Ranges.Holds (Start, Length)
+      then
+         return;
+      end if;
+
+      declare
+         First : constant Integer_Address := To_Integer (Start);
+         Last  : constant Integer_Address := First + Integer_Address (Length);
+         Begin_At : constant Integer_Address :=
+           (First + Page - 1) / Page * Page;
+         Whole : constant Integer_Address :=
+           (if Last > Begin_At then (Last - Begin_At) / Page * Page else 0);
+         Answer : Interfaces.C.int;
+      begin
+         if Whole > 0 then
+            Answer := Madvise (To_Address (Begin_At),
+                               Interfaces.C.size_t (Whole), Out_Advice);
+            pragma Unreferenced (Answer);
+         end if;
+      end;
+   end Page_Out;
 
 end Model_Runner.Platform.Pages;

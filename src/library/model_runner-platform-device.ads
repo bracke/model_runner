@@ -224,6 +224,15 @@ package Model_Runner.Platform.Device is
    --  @return Bytes, or zero when the context is not open.
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64;
 
+   --  What the host says the device may take, now, of the heap Memory_Bytes
+   --  names and the second one together: on a part whose memory is the
+   --  host's, less than their size by what the host keeps and what others
+   --  hold. Zero where the host says nothing.
+   --
+   --  @param Item Open context.
+   --  @return Bytes, or zero.
+   function Budget_Bytes (Item : Context) return Interfaces.Unsigned_64;
+
    --  A second heap the device reads weights out of, when it has one.
    --
    --  The kind the weights are uploaded into comes out of one heap, and a
@@ -321,6 +330,9 @@ private
       --  Second_Memory_Bytes describe them.
       Second      : Integer := -1;
       Second_Heap : Interfaces.Unsigned_64 := 0;
+
+      --  As Budget_Bytes describes it.
+      Budget      : Interfaces.Unsigned_64 := 0;
 
       --  Nanoseconds a timestamp tick, as Timestamp_Period describes it.
       Tick        : Float := 0.0;

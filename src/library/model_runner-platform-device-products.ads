@@ -2816,6 +2816,13 @@ package Model_Runner.Platform.Device.Products is
    --  @return Bytes, or zero for a closed engine.
    function Heaps (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  What the host said at the open the device may take of them, or zero
+   --  where it said nothing; see Platform.Device.Budget_Bytes.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Bytes, or zero.
+   function Heap_Budget (Item : Engine) return Interfaces.Unsigned_64;
+
    --  Let the matrices take Bytes, more or less than the budget the engine
    --  opened with: the second heap first, up to all of it, and the first
    --  for the rest, up to all of that. For a caller that has counted what
@@ -3566,6 +3573,7 @@ private
       --  the total says has.
       Second     : Integer := -1;
       Second_Heap : Interfaces.Unsigned_64 := 0;
+      Budget_Heaps : Interfaces.Unsigned_64 := 0;
       Tier_Limit : Tier_Bytes_Array := [others => 0];
       Tier_Kept  : Tier_Bytes_Array := [others => 0];
       Tier_Spare : Tier_Bytes_Array := [others => 0];

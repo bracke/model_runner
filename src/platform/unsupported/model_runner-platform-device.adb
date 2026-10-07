@@ -138,6 +138,9 @@ package body Model_Runner.Platform.Device is
    function Plain_Memory_Kinds (Item : Context) return Interfaces.Unsigned_32
    is (Item.Plain_Kinds);
 
+   function Budget_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Budget);
+
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
 

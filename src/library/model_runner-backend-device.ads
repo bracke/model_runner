@@ -185,6 +185,12 @@ package Model_Runner.Backend.Device is
    --  @return Bytes.
    function Heap_Bytes return Interfaces.Unsigned_64;
 
+   --  What the host said at the open the device may take of those heaps,
+   --  or zero where it said nothing.
+   --
+   --  @return Bytes.
+   function Budget_Bytes return Interfaces.Unsigned_64;
+
    --  Let the matrices take Bytes in place of the budget the device opened
    --  with; see Products.Fit_Budget. Nothing with no device, or for a
    --  budget the caller named.

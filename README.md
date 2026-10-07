@@ -2264,6 +2264,19 @@ device option (`--device-memory`, `--device`, `--device-patience`) says the
 device is wanted and takes it; `--backend cpu` or `--backend device` still
 decides outright.
 
+**A long prompt on a large split model and the driver's patience.** On an
+AMD part the kernel resets the device when it takes one submission for more
+than ten seconds, and a prompt of 14,000 tokens and more on ThinkingCap
+(27B, split) was reset -- "the backend is closed" -- where llama.cpp's
+reading of the same depth was too. With the limit raised the same prompt
+reads whole, its longest submission 2.8 s, so what ran past ten seconds is
+a stall rather than the work. The limit is a module option:
+
+```
+echo 'options amdgpu lockup_timeout=60000' | sudo tee /etc/modprobe.d/amdgpu-timeout.conf
+sudo update-initramfs -u    # then reboot
+```
+
 `--backend device` runs the products on a compute device. On this machine --
 an integrated Radeon sharing a fifteen-watt budget with the processor it
 would otherwise be helping -- against the same TinyLlama-1.1B Q8_0 as

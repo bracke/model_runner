@@ -2040,7 +2040,7 @@ begin
          --  context named is room the matrices give up: more of the model
          --  on the processor, and the run slower but whole.
          Session_Margin  : constant Interfaces.Unsigned_64 := 3 * 2 ** 29;
-         Stream_Margin   : constant Interfaces.Unsigned_64 := 5 * 2 ** 28;
+         Stream_Margin   : constant Interfaces.Unsigned_64 := 2 ** 29;
          State_Slots     : constant := 5;
          Planned_Context : constant := 16_384;
 
@@ -2048,8 +2048,15 @@ begin
          is
             Plan    : Model_Runner.Memory.Session_Plan;
             Planning : E.Error_Info;
+            --  The heaps, or what the host says the device may take of
+            --  them where that is less.
+            Budget  : constant Interfaces.Unsigned_64 :=
+              Model_Runner.Backend.Device.Budget_Bytes;
             Heaps   : constant Interfaces.Unsigned_64 :=
-              Model_Runner.Backend.Device.Heap_Bytes;
+              (if Budget > 0
+               then Interfaces.Unsigned_64'Min
+                      (Budget, Model_Runner.Backend.Device.Heap_Bytes)
+               else Model_Runner.Backend.Device.Heap_Bytes);
             States  : constant Interfaces.Unsigned_64 :=
               (if Hybrid (Item.Settings.Kind)
                then Interfaces.Unsigned_64 (State_Slots)
@@ -2113,6 +2120,11 @@ begin
          --  ThinkingCap's prompt of 4,024 at --context-size 8192 went
          --  1.58 GB past what a short one needed, a third of it cache,
          --  and ran the part out of memory where nothing was left for it.
+         --  Half a gigabyte, now that the room is the host's budget for
+         --  the device rather than its heaps and a dense split's batch is
+         --  Dense_Streamed_Batch: a prompt of 16,215, the whole context,
+         --  peaked at 14.5 GB of the part's 16.4, and with none the 12,529
+         --  of another peaked at 15.0.
          if Room > Stream_Margin and then Total > Room then
             Room := Room - Stream_Margin;
          end if;
@@ -2215,6 +2227,14 @@ begin
 
          Held : constant View_List := To_Panel;
 
+         --  The panel cache's file for this load: the whole model's, or a
+         --  split's own beside it; none where the caller keeps no cache.
+         Panel_File : constant String :=
+           (if Panel_Cache = "" then ""
+            elsif Repack = To_Rows then Panel_Cache
+            elsif Dense_Split then Panel_Cache & ".split"
+            else "");
+
          --  The panel cache's file: a header of Header_Bytes -- a mark,
          --  the layout's version, the panels' bytes and how many matrices
          --  -- and then every matrix's panels in Held's order, as the
@@ -2280,12 +2300,12 @@ begin
                Release (Map);
             end Give_Up;
          begin
-            if not Model_Runner.Panel_Cache.Is_There (Panel_Cache) then
+            if not Model_Runner.Panel_Cache.Is_There (Panel_File) then
                return False;
             end if;
 
             Map := new Files.File_Source;
-            Files.Open (Map.all, Panel_Cache, Files.Mapping_Required,
+            Files.Open (Map.all, Panel_File, Files.Mapping_Required,
                         Status => Ok);
             if E.Is_Error (Ok)
               or else Files.Size (Map.all) /= Header_Bytes + Total
@@ -2400,7 +2420,7 @@ begin
          begin
             Item.Panel_Writer := new Model_Runner.Panel_Cache.Writing;
             Item.Panel_Writer.Start
-              (Panel_Cache, Header (Total),
+              (Panel_File, Header (Total),
                Item.Repacked.all (Item.Repacked.all'First)'Address, Total);
          exception
             when others =>
@@ -2419,9 +2439,12 @@ begin
                       Blocks_Of (Where));
             end loop;
 
-            --  The cache is a whole model's panels; a split's few are
-            --  made afresh.
-            if Repack = To_Rows and then Panel_Cache /= "" and then Map_Panels (Needed) then
+            --  The cache is a whole model's panels, and a split's few are
+            --  kept in a file of their own beside it: made afresh in the
+            --  process's own memory, they were what a host short of memory
+            --  sent to swap -- 3.5 GB of ThinkingCap's -- where pages of a
+            --  file are let go and read again.
+            if Panel_File /= "" and then Map_Panels (Needed) then
                goto Panels_Done;
             end if;
 
@@ -2590,7 +2613,7 @@ begin
                end loop;
             end;
 
-            if Repack = To_Rows and then Panel_Cache /= "" then
+            if Panel_File /= "" then
                Write_Panels (Needed);
             end if;
 

@@ -1025,6 +1025,53 @@ package body Model_Runner.Platform.Device is
                   end;
                end loop;
             end loop;
+
+            --  What the host says the device may take of those heaps now,
+            --  where it says (VK_EXT_memory_budget): less than their size on
+            --  a part whose memory is the host's -- ThinkingCap's room was
+            --  counted from 16.94 GB of heaps on a part that maps 16.4, and
+            --  its long prompts ran the part out. Read once, at the open.
+            declare
+               type Budget_Array is
+                 array (1 .. Max_Memory_Heaps) of Interfaces.Unsigned_64
+                 with Convention => C;
+               type Budget_Properties is record
+                  Kind   : C.unsigned := 1_000_237_000;
+                  Next   : System.Address := System.Null_Address;
+                  Budget : Budget_Array := [others => 0];
+                  Usage  : Budget_Array := [others => 0];
+               end record
+                 with Convention => C;
+               type Properties_Two is record
+                  Kind   : C.unsigned := 1_000_059_006;
+                  Next   : System.Address := System.Null_Address;
+                  Inside : Memory_Properties;
+               end record
+                 with Convention => C;
+
+               Said  : aliased Budget_Properties;
+               Asked : aliased Properties_Two;
+               Query : constant Memory_Query_Call :=
+                 To_Memory
+                   (Entry_Point (From.Handle,
+                                 "vkGetPhysicalDeviceMemoryProperties2"));
+            begin
+               if Query /= null and then Largest > 0 then
+                  Asked.Next := Said'Address;
+                  Query (Physical, Asked'Address);
+                  Item.Budget := Said.Budget (Largest);
+                  if Item.Second >= 0 then
+                     declare
+                        Heap : constant Natural :=
+                          Natural (Room.Kinds (Item.Second + 1).Heap) + 1;
+                     begin
+                        if Heap in Said.Budget'Range then
+                           Item.Budget := Item.Budget + Said.Budget (Heap);
+                        end if;
+                     end;
+                  end if;
+               end if;
+            end;
          end;
       end;
 
@@ -1547,6 +1594,9 @@ package body Model_Runner.Platform.Device is
 
    function Memory_Bytes (Item : Context) return Interfaces.Unsigned_64
    is (Item.Heap);
+
+   function Budget_Bytes (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Budget);
 
    function Second_Kind (Item : Context) return Integer is (Item.Second);
 

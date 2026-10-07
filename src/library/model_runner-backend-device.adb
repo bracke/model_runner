@@ -571,6 +571,9 @@ package body Model_Runner.Backend.Device is
    function Heap_Bytes return Interfaces.Unsigned_64
    is (if Ready_Now then Products.Heaps (Engine) else 0);
 
+   function Budget_Bytes return Interfaces.Unsigned_64
+   is (if Ready_Now then Products.Heap_Budget (Engine) else 0);
+
    -----------------
    -- Drop_Spares --
    -----------------

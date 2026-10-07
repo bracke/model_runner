@@ -35,4 +35,17 @@ package Model_Runner.Platform.Pages is
      (Start  : System.Address;
       Length : Model_Runner.Bytes.Byte_Count);
 
+   --  Tell the host a run of a file's mapping is not wanted again soon, so
+   --  that its pages leave memory now rather than compete with what is:
+   --  weights copied to a device whose memory is the host's own were held
+   --  twice, once in the mapping, and a host short of memory swapped the
+   --  device's pages out to keep them. Advice only: a page read again is
+   --  read from the file as it was. Only the whole pages inside the run.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes in the run; less than a page does nothing.
+   procedure Page_Out
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count);
+
 end Model_Runner.Platform.Pages;

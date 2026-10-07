@@ -1,3 +1,4 @@
+with Model_Runner.Platform.Mapped_Ranges;
 with Ada.Directories;
 
 with Interfaces.C.Strings;
@@ -129,6 +130,7 @@ package body Model_Runner.Platform.Mapping is
          Item.Address := Base_Address;
          Item.Size := File_Size;
          Item.Handle := Long_Long_Integer (Handle);
+         Model_Runner.Platform.Mapped_Ranges.Note (Base_Address, File_Size);
          Available := True;
       end;
    exception
@@ -144,6 +146,7 @@ package body Model_Runner.Platform.Mapping is
    procedure Close (Item : in out Region) is
    begin
       if Item.Address /= System.Null_Address and then Item.Size > 0 then
+         Model_Runner.Platform.Mapped_Ranges.Forget (Item.Address);
          if C_Munmap (Item.Address, Interfaces.C.size_t (Item.Size)) /= 0 then
             null;
          end if;

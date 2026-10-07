@@ -1250,6 +1250,7 @@ package body Tests.Inference_Cases is
 
       declare
          Awake : Boolean;
+         use type Interfaces.Unsigned_64;
       begin
          Model_Runner.Backend.Device.Open (Awake);
          if not Awake then
@@ -1259,6 +1260,14 @@ package body Tests.Inference_Cases is
             B.Free (Image);
             return;
          end if;
+
+         --  What the host says the device may take is no more than its
+         --  heaps hold, where it says anything.
+         Assert (Model_Runner.Backend.Device.Budget_Bytes
+                 <= Model_Runner.Backend.Device.Heap_Bytes,
+                 "the device's budget is more than its heaps:"
+                 & Model_Runner.Backend.Device.Budget_Bytes'Image
+                 & " of" & Model_Runner.Backend.Device.Heap_Bytes'Image);
       end;
 
       declare

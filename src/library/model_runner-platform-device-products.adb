@@ -1,3 +1,4 @@
+with Model_Runner.Platform.Pages;
 with Ada.Environment_Variables;
 with Ada.Real_Time;
 with Ada.Unchecked_Conversion;
@@ -2435,6 +2436,7 @@ package body Model_Runner.Platform.Device.Products is
       --  a public operation that answers exactly this question something
       --  nothing calls.
       Item.Heap := Memory_Bytes (On);
+      Item.Budget_Heaps := Budget_Bytes (On);
       Item.Imports := Takes_Host_Memory (On);
       Item.Import_To := Host_Alignment (On);
       Item.Storage := Storage_Limit (On);
@@ -6023,6 +6025,9 @@ package body Model_Runner.Platform.Device.Products is
    function Heaps (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Heap + Item.Second_Heap);
 
+   function Heap_Budget (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Budget_Heaps);
+
    function Spare_Bytes (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Spare_Bytes);
 
@@ -6666,6 +6671,18 @@ package body Model_Runner.Platform.Device.Products is
                Index_Put (Item, Key, Where);
                Link_Front (Item, Where);
             end;
+
+            --  Kept, so the mapping's copy is not read again: let its
+            --  pages go rather than hold the matrix twice in the host's
+            --  memory, which on a part whose device memory is the host's
+            --  is also the device's. ThinkingCap's split ran a streamed
+            --  layer for 13 to 30 s, its device pages swapped out beside
+            --  eight gigabytes of mapped weights it had already copied.
+            if not Weight_Own then
+               Model_Runner.Platform.Pages.Page_Out
+                 (Weights (Weights'First + At_Byte)'Address,
+                  Model_Runner.Bytes.Byte_Count (Weight_Bytes));
+            end if;
 
             if Weight_Own then
                Item.Taken := Item.Taken + 1;

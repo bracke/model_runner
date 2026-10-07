@@ -20,6 +20,8 @@ with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Mapping;
+with System;
+with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Pages;
 
 with Ada.Directories;
@@ -418,6 +420,77 @@ package body Tests.Accounting_Cases is
       Assert (Model_Runner.Clocks.Rate_Per_Second (0, 1_000_000) = 0.0,
               "no units produced a non-zero rate");
    end Rate_Over_No_Time_Is_Zero;
+
+   --  A file's mapping is noted while it is open, and a run inside it given
+   --  back to the host reads again as it was -- from the file; a run of the
+   --  process's own memory is not a mapping, and the advice leaves it be.
+   procedure A_Mapping_Pages_Out_And_Reads_Again
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package B renames Model_Runner.Bytes;
+      package Map renames Model_Runner.Platform.Mapping;
+      package Ranges renames Model_Runner.Platform.Mapped_Ranges;
+      use type B.Byte_Count;
+
+      Path : constant String := "obj/page-out-test.bin";
+      Size : constant := 256 * 1024;
+
+      Content : constant B.Byte_Array_Access :=
+        new B.Byte_Array'
+          ([for Index in 1 .. B.Byte_Count (Size) =>
+              B.Byte ((Integer (Index) * 13) mod 251)]);
+      Own     : B.Byte_Array_Access := new B.Byte_Array'(Content.all);
+
+      Region    : Map.Region;
+      Available : Boolean;
+      Back      : B.Byte_Array_Access := new B.Byte_Array (1 .. Size);
+      Ok        : Boolean;
+      Base      : System.Address;
+   begin
+      declare
+         use Ada.Streams.Stream_IO;
+         Output : File_Type;
+      begin
+         Create (Output, Out_File, Path);
+         for Byte of Content.all loop
+            Ada.Streams.Stream_Element'Write
+              (Stream (Output), Ada.Streams.Stream_Element (Byte));
+         end loop;
+         Close (Output);
+      end;
+
+      --  Not a mapping: nothing noted holds it, and it is as it was.
+      Assert (not Ranges.Holds (Own.all (1)'Address, Size),
+              "the process's own memory was taken for a mapping");
+      Model_Runner.Platform.Pages.Page_Out (Own.all (1)'Address, Size);
+      Assert (B."=" (Own.all, Content.all),
+              "the process's own memory changed under the advice");
+
+      Map.Open (Region, Path, Available);
+      if Available then
+         Base := Map.Base (Region);
+         if Model_Runner.Platform.Host_Name /= "windows" then
+            Assert (Ranges.Holds (Base, Size),
+                    "an open mapping was not noted");
+            Assert (not Ranges.Holds (Base, Size + 1),
+                    "a run past the mapping was said to be inside it");
+         end if;
+
+         Model_Runner.Platform.Pages.Page_Out (Base, Size);
+         Map.Copy (Region, 0, Back.all, Ok);
+         Assert (Ok and then B."=" (Back.all, Content.all),
+                 "a mapping given back did not read again as it was");
+
+         Map.Close (Region);
+         Assert (not Ranges.Holds (Base, Size),
+                 "a closed mapping is still noted");
+      end if;
+
+      Ada.Directories.Delete_File (Path);
+      B.Free (Own);
+      B.Free (Back);
+   end A_Mapping_Pages_Out_And_Reads_Again;
 
    --  A mapped file reads back exactly what is in it, and refuses the rest.
    --
@@ -1010,6 +1083,10 @@ package body Tests.Accounting_Cases is
         (T, Large_Pages_Leave_A_Buffer_As_It_Was'Access,
          "a buffer asked for large pages holds what it held, and a small or "
          & "absent one is let be");
+      Register_Routine
+        (T, A_Mapping_Pages_Out_And_Reads_Again'Access,
+         "a mapping given back to the host reads again as it was, and the "
+         & "process's own memory is let be");
       Register_Routine
         (T, Core_Count_Keeps_Its_Contract'Access,
          "the core count that sets the worker default keeps its contract");
