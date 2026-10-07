@@ -17,6 +17,15 @@ package Model_Runner.Panel_Cache is
    --  @return True where a file of that name exists.
    function Is_There (Path : String) return Boolean;
 
+   --  Remove all but the newest Count of the cache files whose names begin
+   --  as Prefix's does, in its directory: a split model's panels are kept
+   --  one file to each split, and each is gigabytes. Anything the host
+   --  refuses is left where it is.
+   --
+   --  @param Prefix The path the files' names begin with.
+   --  @param Count How many of the newest to keep.
+   procedure Keep_Newest (Prefix : String; Count : Natural);
+
    --  The panels just written, copied to the cache beside the run rather
    --  than before it: four gigabytes took nine seconds on the first load,
    --  and nothing the run does waits for them. Given the file's path, its

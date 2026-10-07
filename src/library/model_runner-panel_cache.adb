@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
@@ -12,6 +13,59 @@ package body Model_Runner.Panel_Cache is
    --------------
    -- Is_There --
    --------------
+
+   procedure Keep_Newest (Prefix : String; Count : Natural) is
+      use Ada.Directories;
+      use type Ada.Calendar.Time;
+
+      Folder : constant String := Containing_Directory (Prefix);
+      Stem   : constant String := Simple_Name (Prefix);
+
+      type Found is record
+         Name : Ada.Strings.Unbounded.Unbounded_String;
+         When_Made : Ada.Calendar.Time;
+      end record;
+      Most  : constant := 64;
+      List  : array (1 .. Most) of Found;
+      Held  : Natural := 0;
+      Look  : Search_Type;
+      Entry_Of : Directory_Entry_Type;
+   begin
+      Start_Search
+        (Look, Folder, Stem & "*", [Ordinary_File => True, others => False]);
+      while More_Entries (Look) and then Held < Most loop
+         Get_Next_Entry (Look, Entry_Of);
+         Held := Held + 1;
+         List (Held) :=
+           (Ada.Strings.Unbounded.To_Unbounded_String (Full_Name (Entry_Of)),
+            Modification_Time (Entry_Of));
+      end loop;
+      End_Search (Look);
+
+      --  Newest first.
+      for I in 2 .. Held loop
+         for J in reverse 2 .. I loop
+            exit when List (J - 1).When_Made >= List (J).When_Made;
+            declare
+               Swap : constant Found := List (J);
+            begin
+               List (J) := List (J - 1);
+               List (J - 1) := Swap;
+            end;
+         end loop;
+      end loop;
+
+      for I in Count + 1 .. Held loop
+         begin
+            Delete_File (Ada.Strings.Unbounded.To_String (List (I).Name));
+         exception
+            when others => null;
+         end;
+      end loop;
+   exception
+      when others =>
+         null;
+   end Keep_Newest;
 
    function Is_There (Path : String) return Boolean is
    begin

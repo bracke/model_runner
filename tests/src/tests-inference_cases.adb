@@ -6605,6 +6605,100 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Drafting_Shifts_When_The_Room_Runs_Out;
 
+   ----------------------------------------------
+   -- A_Draft_Catches_Up_With_A_Reused_Prefix --
+   ----------------------------------------------
+
+   --  A run that picks up a session's shared prefix drafts from a draft
+   --  session that holds none of it, and says what the target says alone.
+   --
+   --  `run` keeps a saved session and reads only past what it shares with
+   --  the new prompt; the draft session is new each run, so it stood at the
+   --  front while the target stood near the end, and the first round asked
+   --  it to catch up from behind where it was: a range check, on every
+   --  repeated prompt with a draft model.
+   procedure A_Draft_Catches_Up_With_A_Reused_Prefix
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 64);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Live, Alone : L.Session;
+         Second  : aliased L.Session;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         First_Run, Drafted, Plain : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         L.Open (Alone, Under.Ready, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the plain session did not open");
+         L.Open (Second, Under.Ready, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the draft session did not open");
+
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 4;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+         Request.Retain_Text := True;
+
+         --  The conversation so far, undrafted.
+         Gen.Generate
+           (Under.Ready, Live, "abbaabba", Request, Stop, null, null,
+            null, null, null, null, Outcome => First_Run);
+         Assert (not Gen."=" (First_Run.Reason, Gen.Runtime_Error),
+                 "the first run failed");
+
+         --  The next, sharing its front, with a draft that saw none of it.
+         Request.Reuse_Committed_Prefix := True;
+         Request.Draft_Tokens := 3;
+         Request.Max_Tokens := 12;
+         Gen.Generate
+           (Under.Ready, Live, "abbaabbaab", Request, Stop, null, null,
+            null, null, null, null,
+            Draft => Under.Ready'Unchecked_Access,
+            Draft_Session => Second'Unchecked_Access,
+            Outcome => Drafted);
+         Assert (not Gen."=" (Drafted.Reason, Gen.Runtime_Error),
+                 "a drafted run on a reused prefix failed: "
+                 & E.Error_Code'Image (Drafted.Error.Code));
+
+         --  And what the target says reading it all, alone.
+         Request.Reuse_Committed_Prefix := False;
+         Request.Draft_Tokens := 0;
+         Gen.Generate
+           (Under.Ready, Alone, "abbaabbaab", Request, Stop, null, null,
+            null, null, null, null, Outcome => Plain);
+         Assert (Gen.Generated_Text (Drafted) = Gen.Generated_Text (Plain),
+                 "a drafted run on a reused prefix said "
+                 & Gen.Generated_Text (Drafted) & " where the target alone "
+                 & "said " & Gen.Generated_Text (Plain));
+
+         Gen.Release (First_Run);
+         Gen.Release (Drafted);
+         Gen.Release (Plain);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Second);
+         L.Close (Alone);
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end A_Draft_Catches_Up_With_A_Reused_Prefix;
+
    ------------------------------------------------
    -- A_Draft_With_Fewer_Tokens_Keeps_The_Target --
    ------------------------------------------------
@@ -15370,6 +15464,10 @@ package body Tests.Inference_Cases is
         (T, Drafting_Shifts_When_The_Room_Runs_Out'Access,
          "a drafted run drops its oldest positions when the context fills, "
          & "as a run without a draft does");
+      Register_Routine
+        (T, A_Draft_Catches_Up_With_A_Reused_Prefix'Access,
+         "a drafted run on a reused prefix brings its draft up to it and "
+         & "says what the target says alone");
       Register_Routine
         (T, Drafting_Runs_On_A_Device'Access,
          "a drafted run on the device backend says what the device says "

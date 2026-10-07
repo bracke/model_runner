@@ -1371,6 +1371,62 @@ package body Model_Runner.Generation is
             L.Mark_Checkpoint (Session);
          end if;
 
+         --  The draft brought to where the target picks up. The target
+         --  keeps what it shares with the prompt and reads from there; the
+         --  draft kept nothing of the kind, so a run whose saved session
+         --  shared most of its prompt left the draft at the front while
+         --  the target stood at the end, and the first round asked the
+         --  draft to catch up from a point behind it: a range check.
+         --  What the draft holds that agrees is kept, as the target's is,
+         --  and the rest of the shared prefix read into it in batches.
+         if Drafting and then By_Model and then First_Token > 1 then
+            declare
+               Holds : constant Natural := L.Position (Draft_Session.all);
+               Keep  : Natural := 0;
+               Local : E.Error_Info;
+            begin
+               while Keep < Holds and then Keep < First_Token - 1
+                 and then L.Committed_Token (Draft_Session.all, Keep)
+                          = For_Draft (Tokens.all (Keep + 1))
+               loop
+                  Keep := Keep + 1;
+               end loop;
+
+               if Keep < Holds then
+                  Keep := L.Rewind_Point (Draft_Session.all, Keep);
+                  if Keep > 0 then
+                     L.Rewind (Draft_Session.all, Keep, Local);
+                     if E.Is_Error (Local) then
+                        Keep := 0;
+                     end if;
+                  end if;
+                  if Keep = 0 then
+                     L.Reset (Draft_Session.all);
+                  end if;
+               end if;
+
+               while Keep < First_Token - 1 loop
+                  declare
+                     Upto : constant Natural :=
+                       Natural'Min (First_Token - 1, Keep + Span);
+                  begin
+                     L.Evaluate_Batch
+                       (Draft_Session.all, Draft.all,
+                        Draft_Tokens_Of (Tokens.all (Keep + 1 .. Upto)),
+                        Aside.all (Aside.all'First
+                                   .. Aside.all'First + Draft_Words - 1),
+                        Cancel => Cancel, Status => Local);
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Index := Prompt_Count + 1;
+                        exit;
+                     end if;
+                     Keep := Upto;
+                  end;
+               end loop;
+            end;
+         end if;
+
          Prefill_Loop :
          while Index <= Prompt_Count loop
             if C.Is_Cancelled (Cancel) then

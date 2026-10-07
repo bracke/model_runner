@@ -162,6 +162,7 @@ package body Model_Runner.Platform.Device is
    Structure_Queue_Create  : constant := 2;
    Structure_Device_Create : constant := 3;
 
+   Queue_Graphics : constant := 1;
    Queue_Compute : constant := 2;
 
    Memory_Device_Local  : constant := 1;
@@ -851,20 +852,30 @@ package body Model_Runner.Platform.Device is
 
          Families (Physical, Counted'Access, Room'Address);
 
-         for Which in 1 .. Natural'Min (Natural (Counted), Max_Families) loop
-            if Chosen < 0
-              and then (Room (Which).Flags and Queue_Compute) /= 0
-              and then Room (Which).Count > 0
-            then
-               Chosen := Which - 1;
+         --  One without graphics first, where there is one: the driver
+         --  gives a job on a graphics queue far less time before it resets
+         --  the part -- ten seconds against sixty on an AMD one -- and a
+         --  long prompt of a large split model was reset for it, as
+         --  llama.cpp's reading of the same depth was.
+         for Pass in 1 .. 2 loop
+            for Which in 1 .. Natural'Min (Natural (Counted), Max_Families)
+            loop
+               if Chosen < 0
+                 and then (Room (Which).Flags and Queue_Compute) /= 0
+                 and then (Pass = 2
+                           or else (Room (Which).Flags and Queue_Graphics) = 0)
+                 and then Room (Which).Count > 0
+               then
+                  Chosen := Which - 1;
 
-               --  How many queues that family offers, which decides whether
-               --  a second one is a thing this host could have at all. Kept
-               --  rather than acted on: submitting to two is a policy, and
-               --  knowing whether two exist is the question that comes
-               --  first.
-               Item.Queues := Natural (Room (Which).Count);
-            end if;
+                  --  How many queues that family offers, which decides
+                  --  whether a second one is a thing this host could have
+                  --  at all. Kept rather than acted on: submitting to two
+                  --  is a policy, and knowing whether two exist is the
+                  --  question that comes first.
+                  Item.Queues := Natural (Room (Which).Count);
+               end if;
+            end loop;
          end loop;
 
          if Chosen < 0 then

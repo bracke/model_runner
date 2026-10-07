@@ -20,6 +20,7 @@ with Model_Runner.Text;
 with Model_Runner.Bytes;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Mapping;
+with Model_Runner.Panel_Cache;
 with System;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Pages;
@@ -420,6 +421,47 @@ package body Tests.Accounting_Cases is
       Assert (Model_Runner.Clocks.Rate_Per_Second (0, 1_000_000) = 0.0,
               "no units produced a non-zero rate");
    end Rate_Over_No_Time_Is_Zero;
+
+   --  Of a family of cache files the newest are kept and the rest go, and
+   --  a file of another name in the same folder is let be.
+   procedure Only_The_Newest_Panel_Files_Stay
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Folder : constant String := "obj/panel-keep";
+
+      procedure Touch (Name : String) is
+         use Ada.Streams.Stream_IO;
+         F : File_Type;
+      begin
+         Create (F, Out_File, Folder & "/" & Name);
+         Close (F);
+         delay 0.05;
+      end Touch;
+
+      function Here (Name : String) return Boolean
+      is (Ada.Directories.Exists (Folder & "/" & Name));
+   begin
+      if Ada.Directories.Exists (Folder) then
+         Ada.Directories.Delete_Tree (Folder);
+      end if;
+      Ada.Directories.Create_Path (Folder);
+
+      Touch ("m.panels.split-1");
+      Touch ("m.panels.split-2");
+      Touch ("other.panels");
+      Touch ("m.panels.split-3");
+
+      Model_Runner.Panel_Cache.Keep_Newest (Folder & "/m.panels.split", 2);
+
+      Assert (not Here ("m.panels.split-1"),
+              "the oldest of the family was kept");
+      Assert (Here ("m.panels.split-2") and then Here ("m.panels.split-3"),
+              "one of the two newest of the family went");
+      Assert (Here ("other.panels"), "a file of another name went");
+
+      Ada.Directories.Delete_Tree (Folder);
+   end Only_The_Newest_Panel_Files_Stay;
 
    --  A file's mapping is noted while it is open, and a run inside it given
    --  back to the host reads again as it was -- from the file; a run of the
@@ -1083,6 +1125,10 @@ package body Tests.Accounting_Cases is
         (T, Large_Pages_Leave_A_Buffer_As_It_Was'Access,
          "a buffer asked for large pages holds what it held, and a small or "
          & "absent one is let be");
+      Register_Routine
+        (T, Only_The_Newest_Panel_Files_Stay'Access,
+         "of a family of panel cache files the newest are kept and the "
+         & "rest go");
       Register_Routine
         (T, A_Mapping_Pages_Out_And_Reads_Again'Access,
          "a mapping given back to the host reads again as it was, and the "

@@ -2229,11 +2229,13 @@ begin
 
          --  The panel cache's file for this load: the whole model's, or a
          --  split's own beside it; none where the caller keeps no cache.
-         Panel_File : constant String :=
-           (if Panel_Cache = "" then ""
-            elsif Repack = To_Rows then Panel_Cache
-            elsif Dense_Split then Panel_Cache & ".split"
-            else "");
+         function Panel_File (Total : B.Byte_Count) return String
+         is (if Panel_Cache = "" then ""
+             elsif Repack = To_Rows then Panel_Cache
+             elsif Dense_Split
+             then Panel_Cache & ".split-"
+                  & Model_Runner.Text.Trim (B.Byte_Count'Image (Total))
+             else "");
 
          --  The panel cache's file: a header of Header_Bytes -- a mark,
          --  the layout's version, the panels' bytes and how many matrices
@@ -2300,12 +2302,12 @@ begin
                Release (Map);
             end Give_Up;
          begin
-            if not Model_Runner.Panel_Cache.Is_There (Panel_File) then
+            if not Model_Runner.Panel_Cache.Is_There (Panel_File (Total)) then
                return False;
             end if;
 
             Map := new Files.File_Source;
-            Files.Open (Map.all, Panel_File, Files.Mapping_Required,
+            Files.Open (Map.all, Panel_File (Total), Files.Mapping_Required,
                         Status => Ok);
             if E.Is_Error (Ok)
               or else Files.Size (Map.all) /= Header_Bytes + Total
@@ -2420,7 +2422,7 @@ begin
          begin
             Item.Panel_Writer := new Model_Runner.Panel_Cache.Writing;
             Item.Panel_Writer.Start
-              (Panel_File, Header (Total),
+              (Panel_File (Total), Header (Total),
                Item.Repacked.all (Item.Repacked.all'First)'Address, Total);
          exception
             when others =>
@@ -2444,7 +2446,7 @@ begin
             --  process's own memory, they were what a host short of memory
             --  sent to swap -- 3.5 GB of ThinkingCap's -- where pages of a
             --  file are let go and read again.
-            if Panel_File /= "" and then Map_Panels (Needed) then
+            if Panel_File (Needed) /= "" and then Map_Panels (Needed) then
                goto Panels_Done;
             end if;
 
@@ -2613,7 +2615,12 @@ begin
                end loop;
             end;
 
-            if Panel_File /= "" then
+            if Panel_File (Needed) /= "" then
+               --  A split's file for each split, the newest two kept.
+               if Repack /= To_Rows then
+                  Model_Runner.Panel_Cache.Keep_Newest
+                    (Panel_Cache & ".split", 1);
+               end if;
                Write_Panels (Needed);
             end if;
 
