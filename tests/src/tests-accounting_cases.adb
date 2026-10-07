@@ -231,6 +231,27 @@ package body Tests.Accounting_Cases is
       Assert (Kept, "a run asked for large pages by address read back "
               & "otherwise");
 
+      --  And kept in the host's memory: a run of a few pages, inside even a
+      --  runner's small limit on locked memory, is taken on a host that
+      --  locks at all; nought bytes is never taken; and the run reads back
+      --  as it was, locked or not.
+      declare
+         Locked : constant Boolean :=
+           Model_Runner.Platform.Pages.Keep_Resident
+             (Big.all (Big.all'First)'Address, 16 * 1024);
+      begin
+         Assert (Locked or else Model_Runner.Platform.Host_Name /= "linux",
+                 "a few pages were not kept in memory on a host that locks");
+         Assert (not Model_Runner.Platform.Pages.Keep_Resident
+                   (Big.all (Big.all'First)'Address, 0),
+                 "nought bytes were said to be kept");
+      end;
+      Kept := True;
+      for I in Big.all'Range loop
+         Kept := Kept and then Big (I) = B.Byte (I mod 251);
+      end loop;
+      Assert (Kept, "a run kept in memory read back otherwise");
+
       --  A large array from the zeroed pool, which asks for them itself,
       --  is still nought throughout.
       declare

@@ -107,8 +107,11 @@ package Model_Runner.CLI.Interactive is
    --    begin with a slash is Not_A_Command, which is ordinary text.
    function Parse (Line : String) return Parsed_Command;
 
-   --  Largest prompt one turn may accumulate before it is submitted.
-   Max_Turn_Bytes : constant := 65_536;
+   --  Largest prompt one turn may accumulate before it is submitted: the
+   --  prompt's own bound. A turn begins with First_Turn_Bytes of room and
+   --  grows; it was sixty-four kilobytes, under a fifth of a long context.
+   Max_Turn_Bytes   : constant := 16 * 1024 * 1024;
+   First_Turn_Bytes : constant := 65_536;
 
    --  What one line of input did to the turn being built.
    type Line_Effect is
@@ -194,8 +197,8 @@ private
 
    type Text_Access is access String;
 
-   --  Held on the heap rather than inline: a turn is sixty-four kilobytes,
-   --  and the loop that owns one runs on the calling task.
+   --  Held on the heap rather than inline: a turn is sixty-four kilobytes
+   --  and more, and the loop that owns one runs on the calling task.
    type Turn is tagged limited record
       Room : Text_Access := null;
       Used : Natural := 0;

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 114) of Registry_Row :=
+   Registry : constant array (1 .. 115) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -114,6 +114,8 @@ package body Model_Runner.CLI.Options is
        Text ("tool_result_parts")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
+      (Text ("--truncate"), [Command_Embed => True, others => False],
+       Text ("truncate")),
       (Text ("--query"), [Command_Embed => True, others => False],
        Text ("query")),
       (Text ("--system"), [Command_Run => True, others => False], Text ("system")),
@@ -1679,6 +1681,13 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Normalize := False;
+                  elsif Name = "--truncate" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Truncate := True;
 
                   elsif Name = "--raw" then
                      No_Value (Name, Value_Present,

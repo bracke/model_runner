@@ -1,3 +1,4 @@
+with Ada.Finalization;
 with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
@@ -68,6 +69,34 @@ package body Model_Runner.CLI.Interactive is
 
    procedure Free_Text is new Ada.Unchecked_Deallocation (String, Text_Access);
 
+   --  A line as it is read, on the heap and given back however the read
+   --  ends; see the read loop.
+   type Line_Holder is new Ada.Finalization.Limited_Controlled with record
+      Text : Text_Access := null;
+   end record;
+
+   overriding procedure Finalize (Holder : in out Line_Holder);
+   overriding procedure Finalize (Holder : in out Line_Holder) is
+   begin
+      Free_Text (Holder.Text);
+   end Finalize;
+
+   --  Room twice as long, the text kept: a line or a turn longer than the
+   --  room it has, up to Max_Turn_Bytes.
+   procedure Grow (Room : in out Text_Access; Least : Natural) is
+      Size : Natural := Room.all'Length;
+      More : Text_Access;
+   begin
+      while Size < Least loop
+         Size := Natural'Min (2 * Size, Max_Turn_Bytes);
+         exit when Size = Max_Turn_Bytes;
+      end loop;
+      More := new String (1 .. Natural'Max (Size, Least));
+      More (1 .. Room.all'Length) := Room.all;
+      Free_Text (Room);
+      Room := More;
+   end Grow;
+
    ----------
    -- Open --
    ----------
@@ -75,7 +104,7 @@ package body Model_Runner.CLI.Interactive is
    procedure Open (Item : in out Turn; Ok : out Boolean) is
    begin
       Close (Item);
-      Item.Room := new String (1 .. Max_Turn_Bytes);
+      Item.Room := new String (1 .. First_Turn_Bytes);
       Item.Used := 0;
       Ok := True;
    exception
@@ -104,7 +133,31 @@ package body Model_Runner.CLI.Interactive is
       Line   : String;
       Effect : out Line_Effect)
    is
-      Trimmed : constant String := T.Trim (Line);
+      --  The line less its blanks at either end, as T.Trim makes it, but
+      --  a slice rather than a copy: a pasted line may be megabytes, and a
+      --  copy of it on the stack overflowed it.
+      function Blank (C : Character) return Boolean
+      is (C = ' ' or else C = ASCII.HT);
+
+      function Lead return Positive is
+         At_Char : Positive := Line'First;
+      begin
+         while At_Char <= Line'Last and then Blank (Line (At_Char)) loop
+            At_Char := At_Char + 1;
+         end loop;
+         return At_Char;
+      end Lead;
+
+      function Tail return Natural is
+         At_Char : Natural := Line'Last;
+      begin
+         while At_Char >= Line'First and then Blank (Line (At_Char)) loop
+            At_Char := At_Char - 1;
+         end loop;
+         return At_Char;
+      end Tail;
+
+      Trimmed : String renames Line (Lead .. Tail);
    begin
       if Item.Room = null then
          Effect := Too_Long;
@@ -142,13 +195,18 @@ package body Model_Runner.CLI.Interactive is
 
       --  The separator is counted before the line, because the check has to
       --  be the one the copy below performs.
-      if Item.Used + Line'Length + (if Item.Used > 0 then 1 else 0)
-         > Item.Room.all'Length
-      then
-         Item.Used := 0;
-         Effect := Too_Long;
-         return;
-      end if;
+      declare
+         Needed : constant Natural :=
+           Item.Used + Line'Length + (if Item.Used > 0 then 1 else 0);
+      begin
+         if Needed > Max_Turn_Bytes then
+            Item.Used := 0;
+            Effect := Too_Long;
+            return;
+         elsif Needed > Item.Room.all'Length then
+            Grow (Item.Room, Needed);
+         end if;
+      end;
 
       if Item.Used > 0 then
          Item.Used := Item.Used + 1;
@@ -1207,7 +1265,13 @@ package body Model_Runner.CLI.Interactive is
             --  Current_Input is Standard_Input until something says otherwise
             --  -- but a test can, and until it could, nothing exercised this
             --  loop at all.
-            Room : String (1 .. 8192);
+            --  Grown to the line, which a paste may make tens of kilobytes:
+            --  bounded at eight, a pasted paragraph ended the turn it was
+            --  part of.
+            Held_Line : Line_Holder :=
+              (Ada.Finalization.Limited_Controlled with
+               Text => new String (1 .. 8192));
+            Room : Text_Access renames Held_Line.Text;
             Stop : Natural;
 
             --  Whether the line was edited as it was typed, coloured then.
@@ -1255,13 +1319,34 @@ package body Model_Runner.CLI.Interactive is
                           when others                                => Got);
                   begin
                      if Ending = Model_Runner.CLI.Choosers.Unavailable then
-                        Ada.Text_IO.Get_Line (Ada.Text_IO.Current_Input, Room, Stop);
+                        Stop := 0;
+                        loop
+                           Ada.Text_IO.Get_Line
+                             (Ada.Text_IO.Current_Input,
+                              Room (Stop + 1 .. Room'Last), Stop);
+                           exit when Stop < Room'Last;
+                           --  Full: the line's end is the next thing, and
+                           --  read here -- left, it was an empty line, which
+                           --  submits -- or the room grows for the rest.
+                           if Ada.Text_IO.End_Of_Line
+                                (Ada.Text_IO.Current_Input)
+                           then
+                              Ada.Text_IO.Skip_Line
+                                (Ada.Text_IO.Current_Input);
+                              exit;
+                           end if;
+                           exit when Room'Length >= Max_Turn_Bytes;
+                           Grow (Room, 2 * Room'Length);
+                        end loop;
                      elsif Ending = Model_Runner.CLI.Choosers.Ended then
                         raise Ada.Text_IO.End_Error;
                      else
                         Edited := True;
-                        Stop := Natural'Min (Whole'Length, Room'Length);
-                        Room (1 .. Stop) := Whole (Whole'First .. Whole'First + Stop - 1);
+                        if Whole'Length > Room'Length then
+                           Grow (Room, Whole'Length);
+                        end if;
+                        Stop := Whole'Length;
+                        Room (1 .. Stop) := Whole;
                      end if;
                   end;
                   --  Ctrl-L asks for a clear screen, as a shell's line does:
@@ -1305,12 +1390,19 @@ package body Model_Runner.CLI.Interactive is
             --  would be the same turn; treating each as a line would put line
             --  feeds inside what the user typed as one. Neither is worth the
             --  code, so a line this long ends the turn it is part of.
-            if Stop = Room'Length
+            if Stop = Room'Length and then Room'Length >= Max_Turn_Bytes
               and then not Ada.Text_IO.End_Of_Line (Ada.Text_IO.Current_Input)
             then
                Ada.Text_IO.Skip_Line (Ada.Text_IO.Current_Input);
                Taken (Typing);
-               Pres.Report (Screen, E.Make (E.Conversation_Too_Long));
+               declare
+                  Refused : E.Error_Info := E.Make (E.Conversation_Too_Long);
+               begin
+                  E.Add_Integer
+                    (Refused, "limit", Long_Long_Integer (Max_Turn_Bytes),
+                     E.Param_Bytes);
+                  Pres.Report (Screen, Refused);
+               end;
             else
                declare
                   --  Control characters a cooked terminal passes on as they
@@ -1401,7 +1493,16 @@ package body Model_Runner.CLI.Interactive is
                         Submit;
 
                      when Too_Long =>
-                        Pres.Report (Screen, E.Make (E.Conversation_Too_Long));
+                        declare
+                           Refused : E.Error_Info :=
+                             E.Make (E.Conversation_Too_Long);
+                        begin
+                           E.Add_Integer
+                             (Refused, "limit",
+                              Long_Long_Integer (Max_Turn_Bytes),
+                              E.Param_Bytes);
+                           Pres.Report (Screen, Refused);
+                        end;
 
                      when Held =>
                         null;

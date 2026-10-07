@@ -57,4 +57,19 @@ package body Model_Runner.Platform.Pages is
          Model_Runner.Bytes.Byte_Count (Bytes.all'Length));
    end Prefer_Large;
 
+   function Mlock
+     (Start  : System.Address;
+      Length : Interfaces.C.size_t) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "mlock";
+
+   function Keep_Resident
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count) return Boolean
+   is
+      use type Interfaces.C.int;
+   begin
+      return Length > 0
+        and then Mlock (Start, Interfaces.C.size_t (Length)) = 0;
+   end Keep_Resident;
+
 end Model_Runner.Platform.Pages;

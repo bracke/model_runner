@@ -677,6 +677,10 @@ package Model_Runner.CLI.Options is
       --  caller who typed the default.
       Pooling_Named : Boolean := False;
       Normalize  : Boolean := True;
+
+      --  Embed the first positions the model reads where the text is
+      --  longer, rather than refuse it.
+      Truncate   : Boolean := False;
       Locale     : Model_Runner.Text.Bounded;
 
       --  Inspect modes.

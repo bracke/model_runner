@@ -2581,6 +2581,15 @@ begin
                Write_Panels (Needed);
             end if;
 
+            --  A split's panels kept in the host's memory where it allows:
+            --  idle through a long prompt the device runs whole, they were
+            --  sent out to swap and read back at the first generated token.
+            if Dense_Split and then Item.Repacked /= null then
+               Zeroed_Storage.Keep_Resident
+                 (Item.Repacked.all (Item.Repacked.all'First)'Address,
+                  System.Storage_Elements.Storage_Count (Needed));
+            end if;
+
             <<Panels_Done>>
             null;
          end if;

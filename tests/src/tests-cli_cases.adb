@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
@@ -9208,6 +9209,10 @@ package body Tests.CLI_Cases is
    procedure Interactive_Holds_A_Turn
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
+      type Texts is access String;
+      procedure Release_Texts is
+        new Ada.Unchecked_Deallocation (String, Texts);
+
       pragma Unreferenced (T2);
       package I renames Model_Runner.CLI.Interactive;
       use type I.Line_Effect;
@@ -9220,8 +9225,10 @@ package body Tests.CLI_Cases is
       procedure Offer (Line : String; Expected : I.Line_Effect) is
       begin
          I.Offer (Typing, Line, Effect);
+         --  The line's start only: the bound's lines are megabytes.
          Assert (Effect = Expected,
-                 "'" & Line & "' was "
+                 "'" & Line (Line'First .. Natural'Min (Line'Last, Line'First + 39))
+                 & "' was "
                  & I.Line_Effect'Image (Effect) & ", not "
                  & I.Line_Effect'Image (Expected));
       end Offer;
@@ -9271,28 +9278,32 @@ package body Tests.CLI_Cases is
 
       --  The bound. A turn that would pass Max_Turn_Bytes is refused, and
       --  what was pending goes with it: a turn that kept the part that fit
-      --  would send the model half a sentence.
+      --  would send the model half a sentence. The texts are on the heap:
+      --  the bound is the prompt's own, sixteen megabytes, and a turn grows
+      --  to it from the sixty-four kilobytes it begins with -- which every
+      --  case below passes through.
       declare
-         Half : constant String (1 .. I.Max_Turn_Bytes / 2 + 1) :=
-           [others => 'x'];
+         Half : Texts := new String'(1 .. I.Max_Turn_Bytes / 2 + 1 => 'x');
       begin
-         Offer (Half, I.Held);
+         Offer (Half.all, I.Held);
          Assert (I.Pending (Typing)'Length = Half'Length,
                  "the first half was not held");
-         Offer (Half, I.Too_Long);
+         Offer (Half.all, I.Too_Long);
          Assert (I.Pending (Typing) = "",
                  "a refused turn kept the part that fit");
+         Release_Texts (Half);
       end;
 
       --  Exactly the bound fits, and one byte more does not.
       I.Taken (Typing);
       declare
-         Full : constant String (1 .. I.Max_Turn_Bytes) := [others => 'y'];
+         Full : Texts := new String'(1 .. I.Max_Turn_Bytes => 'y');
       begin
-         Offer (Full, I.Held);
+         Offer (Full.all, I.Held);
          Assert (I.Pending (Typing)'Length = I.Max_Turn_Bytes,
                  "a turn of exactly the bound was refused");
          Offer ("z", I.Too_Long);
+         Release_Texts (Full);
       end;
 
       --  And the separator counts against the bound. One byte short of it,
@@ -9302,15 +9313,15 @@ package body Tests.CLI_Cases is
       --  separator passes every case above and overruns here.
       I.Taken (Typing);
       declare
-         Nearly : constant String (1 .. I.Max_Turn_Bytes - 1) :=
-           [others => 'w'];
+         Nearly : Texts := new String'(1 .. I.Max_Turn_Bytes - 1 => 'w');
       begin
-         Offer (Nearly, I.Held);
+         Offer (Nearly.all, I.Held);
          Assert (I.Pending (Typing)'Length = I.Max_Turn_Bytes - 1,
                  "one short of the bound was refused");
          Offer ("z", I.Too_Long);
          Assert (I.Pending (Typing) = "",
                  "a refused turn kept the part that fit");
+         Release_Texts (Nearly);
       end;
 
       I.Close (Typing);
@@ -9468,6 +9479,21 @@ package body Tests.CLI_Cases is
       Assert (Took_A_Turn ("hello" & ASCII.LF & ASCII.LF & "/stats"
                            & ASCII.LF & "/exit" & ASCII.LF),
               "a submitted turn did not complete");
+
+      --  A line longer than the eight kilobytes the loop once read a line
+      --  into is the line it is: a pasted paragraph is one line, and it was
+      --  cut at eight kilobytes without a word. The fixture's context is
+      --  too short to answer either line below, and its refusal says how
+      --  many tokens the prompt was -- so two lines past the old room say
+      --  two different counts only where neither was cut.
+      declare
+         Shorter : constant String (1 .. 9_000) := [others => 'q'];
+         Longer  : constant String (1 .. 12_000) := [others => 'q'];
+      begin
+         Assert (Conversed (Shorter & ASCII.LF & ASCII.LF & "/exit" & ASCII.LF)
+                 /= Conversed (Longer & ASCII.LF & ASCII.LF & "/exit" & ASCII.LF),
+                 "two long lines read as the same prompt: a line was cut");
+      end;
 
       --  A slash on the second line of a turn is text. If it were read as a
       --  command the loop would have left at it, and nothing after would

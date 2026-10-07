@@ -781,6 +781,9 @@ was trained. The vector is scaled to unit length unless `--no-normalize`,
 since the usual thing to do with two of them is compare their directions and
 that is a dot product only when both have length one.
 
+A text longer than the model's context is refused, saying both counts;
+`--truncate` cuts it to the context instead.
+
 The prompt is read as written and no chat template is applied. A template
 turns a text into a turn of a conversation, and an embedding is of the text.
 

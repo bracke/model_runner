@@ -66,4 +66,18 @@ package Model_Runner.Zeroed_Storage is
      (Start  : System.Address;
       Length : System.Storage_Elements.Storage_Count);
 
+   --  Ask the host to keep a block in memory, never sent out to swap,
+   --  where its limit on locked memory allows; nothing otherwise.
+   --
+   --  For a block that sits idle a long while and is wanted at once after:
+   --  a split model's processor panels, idle through a long prompt the
+   --  device runs whole, were swapped out and read back at the first
+   --  generated token, two seconds once on ThinkingCap.
+   --
+   --  @param Start The block's first byte.
+   --  @param Length Bytes from Start; nought asks nothing.
+   procedure Keep_Resident
+     (Start  : System.Address;
+      Length : System.Storage_Elements.Storage_Count);
+
 end Model_Runner.Zeroed_Storage;

@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Limits;
@@ -136,8 +137,16 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             Words    : constant access constant Vocab.Vocabulary :=
               L.Vocabulary (Prepared);
 
-            Tokens : Vocab.Token_Array
-              (1 .. Model_Runner.Limits.Default_Session_Limits.Max_Batch);
+            --  As long as the text can make, so a text longer than the model
+            --  reads is told so below rather than refused by the tokenizer
+            --  for a buffer it did not choose; on the heap, since a text
+            --  may be megabytes.
+            type Token_Room is access Vocab.Token_Array;
+            procedure Free is
+              new Ada.Unchecked_Deallocation (Vocab.Token_Array, Token_Room);
+            Held   : Token_Room :=
+              new Vocab.Token_Array (1 .. Prompt.all'Length + 2);
+            Tokens : Vocab.Token_Array renames Held.all;
             Count  : Natural;
 
             --  Empty where the model has no projection to a distribution,
@@ -315,9 +324,56 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             end if;
 
             if Count = 0 then
+               Free (Held);
                Fail (E.Make (E.CLI_No_Prompt_Available));
                return;
             end if;
+
+            --  Longer than the session reads: the first positions where the
+            --  caller asked for that, with the end marker kept last where
+            --  the model reads whole texts and was given one; refused, with
+            --  how many and what would take it, where not.
+            declare
+               Most : constant Natural := L.Capacity (Session);
+            begin
+               if Count > Most and then Most > 0 then
+                  if Item.Truncate then
+                     declare
+                        use type Vocab.Token_Id;
+                        Ended : constant Boolean :=
+                          not Settings.Causal
+                          and then Vocab.Adds_End (Words.all)
+                          and then Tokens (Count) = Vocab.End_Token (Words.all);
+                     begin
+                        Pres.Put_Note
+                          (Screen, "cli.note.embed_truncated",
+                           [Loc.Named ("value",
+                                       T.Image (Long_Long_Integer (Most))),
+                            Loc.Named ("total",
+                                       T.Image (Long_Long_Integer (Count)))]);
+                        if Ended then
+                           Tokens (Most) := Tokens (Count);
+                        end if;
+                        Count := Most;
+                     end;
+                  else
+                     Pres.Put_Note
+                       (Screen, "cli.note.embed_too_long",
+                        [Loc.Named ("value",
+                                    T.Image (Long_Long_Integer (Most))),
+                         Loc.Named ("total",
+                                    T.Image (Long_Long_Integer (Count)))]);
+                     Condition := E.Make (E.Arch_Context_Too_Large);
+                     E.Add_Integer
+                       (Condition, "requested", Long_Long_Integer (Count));
+                     E.Add_Integer
+                       (Condition, "maximum", Long_Long_Integer (Most));
+                     Free (Held);
+                     Fail (Condition);
+                     return;
+                  end if;
+               end if;
+            end;
 
             --  In batches, as a prompt is read, because that is what the
             --  batched path is for: measured on this machine a matrix

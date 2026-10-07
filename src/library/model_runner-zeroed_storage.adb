@@ -69,4 +69,20 @@ package body Model_Runner.Zeroed_Storage is
         (Start, Model_Runner.Bytes.Byte_Count (Length));
    end Prefer_Large;
 
+   -------------------
+   -- Keep_Resident --
+   -------------------
+
+   procedure Keep_Resident
+     (Start  : System.Address;
+      Length : System.Storage_Elements.Storage_Count)
+   is
+      Kept : constant Boolean :=
+        Model_Runner.Platform.Pages.Keep_Resident
+          (Start, Model_Runner.Bytes.Byte_Count (Length));
+      pragma Unreferenced (Kept);
+   begin
+      null;
+   end Keep_Resident;
+
 end Model_Runner.Zeroed_Storage;
