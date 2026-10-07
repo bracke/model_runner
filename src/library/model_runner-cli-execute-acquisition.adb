@@ -442,7 +442,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Threads      => Selected_Workers (Item),
             Status       => Status,
             Stretch      => Asked_Rotation (Item),
-            Panel_Cache  => Panel_Path);
+            Panel_Cache  => Panel_Path,
+            Context      => Item.Context_Size);
 
          --  A chat format named on the command line replaces the model's
          --  own, and whatever Prepare chose. Nothing here guesses a format

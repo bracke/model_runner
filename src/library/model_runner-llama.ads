@@ -1053,6 +1053,10 @@ package Model_Runner.Llama is
    --    file there whose panels still match the model's is mapped and read
    --    where it lies rather than written again, and a model whose panels
    --    were written afresh writes them there for the next load.
+   --  @param Context Positions the session will hold, as the run named
+   --    them, or nought where it named none: on the device, a dense
+   --    model's room for its matrices is then the device's heaps less that
+   --    context and its states, where it is more than the fixed share.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1068,7 +1072,8 @@ package Model_Runner.Llama is
       Threads  : Positive := 1;
       Status   : out Model_Runner.Errors.Error_Info;
       Stretch  : Rotary_Request := No_Rotary_Request;
-      Panel_Cache : String := "");
+      Panel_Cache : String := "";
+      Context  : Natural := 0);
 
    --  Merge a low-rank adapter into a prepared model's weights.
    --

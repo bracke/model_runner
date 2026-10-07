@@ -14,7 +14,8 @@ procedure Prepare
    Threads  : Positive := 1;
    Status   : out E.Error_Info;
    Stretch  : Rotary_Request := No_Rotary_Request;
-   Panel_Cache : String := "")
+   Panel_Cache : String := "";
+   Context  : Natural := 0)
 is
    Ignored : E.Error_Info;
 
@@ -2015,7 +2016,54 @@ begin
          Held  : constant View_List := Matrices (Item);
          Total : Interfaces.Unsigned_64 := 0;
          Freed : Interfaces.Unsigned_64 := 0;
+
+         --  Where the run named its context, the device's room for the
+         --  matrices is counted rather than assumed: both heaps, less the
+         --  session's context at that length counted at full precision,
+         --  less a ring of the hybrid's states five deep -- a drafted
+         --  round's rewind -- and less Session_Margin for the batch's
+         --  buffers, the driver and the desktop. The fixed share leaves a
+         --  quarter for all of that whatever the context: ThinkingCap at
+         --  1,024 positions generates 64 tokens in 15.4 s where the share
+         --  took 16.8; at 8,192 a 6,502-token prompt runs with the part's
+         --  mapped memory at most 14.8 GB of its 15.3 GiB, where a share of
+         --  seven eighths ran out at the same prompt. Unnamed, the context
+         --  may grow to the model's own and the share stands.
+         Session_Margin : constant Interfaces.Unsigned_64 := 2 ** 30;
+         State_Slots    : constant := 5;
+
+         function Counted_Room return Interfaces.Unsigned_64 is
+            Plan    : Model_Runner.Memory.Session_Plan;
+            Planned : E.Error_Info;
+            Heaps   : constant Interfaces.Unsigned_64 :=
+              Model_Runner.Backend.Device.Heap_Bytes;
+            States  : constant Interfaces.Unsigned_64 :=
+              (if Hybrid (Item.Settings.Kind)
+               then Interfaces.Unsigned_64 (State_Slots)
+                    * Interfaces.Unsigned_64
+                        (State_Room (Item.Settings)
+                         + Conv_Room (Item.Settings)) * 4
+               else 0);
+         begin
+            if Context = 0 or else Heaps = 0 then
+               return 0;
+            end if;
+            Plan_Session (Item, Context, Plan, Planned);
+            if E.Is_Error (Planned)
+              or else Heaps <= Session_Margin + States + Plan.KV_Cache_Bytes
+            then
+               return 0;
+            end if;
+            return Heaps - Session_Margin - States - Plan.KV_Cache_Bytes;
+         end Counted_Room;
+
+         Room : constant Interfaces.Unsigned_64 := Counted_Room;
       begin
+         if Room > Item.Able.Memory_Bytes then
+            Model_Runner.Backend.Device.Widen_Budget (Room);
+            Item.Able := Model_Runner.Backend.Device.Describe;
+         end if;
+
          for Index in Held'Range loop
             declare
                Seen_Before : Boolean := False;

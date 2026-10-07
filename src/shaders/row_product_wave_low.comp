@@ -2543,6 +2543,15 @@ layout(constant_id = 1) const uint MULTI = 1u;
 #ifndef MANY_ROWS
 #define MANY_ROWS NUM_ROWS
 #endif
+
+//  And where the compilation names a count for a check of four or fewer,
+//  that count there: the older formats' walk of eight vectors 4 to 7 per
+//  cent faster at eight rows than at four, and of four vectors slower.
+#ifdef MANY_ROWS_FEW
+const uint MANY_R = MULTI <= 4u ? MANY_ROWS_FEW : MANY_ROWS;
+#else
+const uint MANY_R = MANY_ROWS;
+#endif
 #endif
 
 #if defined(MANY) && defined(WEIGHTS_OWN)
@@ -2599,7 +2608,7 @@ void main_many() {
               : (shape.first + kk) * shape.columns + member * shape.apart;
     }
 
-    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
+    uint first_row = MANY_R * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
 #if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
@@ -2607,8 +2616,8 @@ void main_many() {
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif
 
-    float temp[MANY_ROWS][MULTI];
-    for (uint r = 0u; r < MANY_ROWS; ++r) {
+    float temp[MANY_R][MULTI];
+    for (uint r = 0u; r < MANY_R; ++r) {
         for (uint k = 0u; k < MULTI; ++k) {
             temp[r][k] = 0.0;
         }
@@ -2628,7 +2637,7 @@ void main_many() {
                                vec4(1.0));
             }
 
-            for (uint r = 0u; r < MANY_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_R; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
                 vec4 wv[4];
@@ -2646,7 +2655,7 @@ void main_many() {
         }
     }
 
-    for (uint r = 0u; r < MANY_ROWS; ++r) {
+    for (uint r = 0u; r < MANY_R; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < MULTI; ++k) {
             float whole = subgroupAdd(temp[r][k]);
@@ -2690,7 +2699,7 @@ void main_many() {
         return;
     }
 
-    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
+    uint first_row = MANY_R * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 
@@ -2707,8 +2716,8 @@ void main_many() {
                   : (shape.first + kk) * shape.columns + member * shape.apart;
         }
 
-        float temp[MANY_ROWS][4];
-        for (uint r = 0u; r < MANY_ROWS; ++r) {
+        float temp[MANY_R][4];
+        for (uint r = 0u; r < MANY_R; ++r) {
             for (uint k = 0u; k < 4u; ++k) {
                 temp[r][k] = 0.0;
             }
@@ -2718,7 +2727,7 @@ void main_many() {
             uint col = i * 256u + itid * 32u;
             if (col < shape.columns) {
                 uint block = col / BLOCK_ELEMS;
-                for (uint r = 0u; r < MANY_ROWS; ++r) {
+                for (uint r = 0u; r < MANY_R; ++r) {
                     uint row = min(first_row + r, shape.rows - 1u);
                     uint at = shape.base + slice + row * span
                               + block * BLOCK_BYTES;
@@ -2738,7 +2747,7 @@ void main_many() {
             }
         }
 
-        for (uint r = 0u; r < MANY_ROWS; ++r) {
+        for (uint r = 0u; r < MANY_R; ++r) {
             uint row = first_row + r;
             for (uint k = 0u; k < 4u; ++k) {
                 float whole = subgroupAdd(temp[r][k]);
@@ -2813,7 +2822,7 @@ void main_many() {
               : (shape.first + kk) * shape.columns + member * shape.apart;
     }
 
-    uint first_row = MANY_ROWS * gl_WorkGroupID.x;
+    uint first_row = MANY_R * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
 #if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
@@ -2821,8 +2830,8 @@ void main_many() {
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 #endif
 
-    float temp[MANY_ROWS][MULTI];
-    for (uint r = 0u; r < MANY_ROWS; ++r) {
+    float temp[MANY_R][MULTI];
+    for (uint r = 0u; r < MANY_R; ++r) {
         for (uint k = 0u; k < MULTI; ++k) {
             temp[r][k] = 0.0;
         }
@@ -2837,7 +2846,7 @@ void main_many() {
             //  row, from the cache, rather than held for all the rows: as
             //  fast at four vectors, and four vectors' held would be a
             //  hundred and twenty-eight registers a lane.
-            for (uint r = 0u; r < MANY_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_R; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
@@ -2855,7 +2864,7 @@ void main_many() {
         }
 #elif defined(OWN_ACTIVATIONS)
         if (i * 256u + (itid / 2u) * 32u < shape.columns) {
-            for (uint r = 0u; r < MANY_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_R; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + i * BLOCK_BYTES;
@@ -2882,7 +2891,7 @@ void main_many() {
                 total[k] = dot(a[k][0] + a[k][1] + a[k][2] + a[k][3],
                                vec4(1.0));
             }
-            for (uint r = 0u; r < MANY_ROWS; ++r) {
+            for (uint r = 0u; r < MANY_R; ++r) {
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
@@ -2906,7 +2915,7 @@ void main_many() {
 #endif
     }
 
-    for (uint r = 0u; r < MANY_ROWS; ++r) {
+    for (uint r = 0u; r < MANY_R; ++r) {
         uint row = first_row + r;
         for (uint k = 0u; k < MULTI; ++k) {
             float whole = subgroupAdd(temp[r][k]);

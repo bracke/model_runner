@@ -280,7 +280,7 @@ package body Speed_Run is
 
          L.Prepare
            (Engine, Container, Source, Repack => Repack, Backend => Backend,
-            Threads => Threads, Status => Status);
+            Threads => Threads, Status => Status, Context => Context);
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Shards.Close (Source);

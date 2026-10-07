@@ -180,6 +180,18 @@ package Model_Runner.Backend.Device is
    --  @return Bytes resident.
    function Resident_Bytes return Interfaces.Unsigned_64;
 
+   --  Both heaps the matrices may be held in, whole; zero with no device.
+   --
+   --  @return Bytes.
+   function Heap_Bytes return Interfaces.Unsigned_64;
+
+   --  Let the matrices take Bytes where that is more than the budget the
+   --  device opened with; see Products.Widen_Budget. Nothing with no
+   --  device, or for a budget the caller named.
+   --
+   --  @param Bytes The budget asked for.
+   procedure Widen_Budget (Bytes : Interfaces.Unsigned_64);
+
    --  How many matrices the device is reading where they already are.
    --
    --  @return Count taken rather than copied.

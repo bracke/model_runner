@@ -139,6 +139,13 @@ package Model_Runner.Platform.Device.Products is
    Thin_Rows    : constant := 512;
    Thin_Vectors : constant := 8;
 
+   --  And any number of vectors where the matrix is this few rows: a
+   --  qwen35 linear layer's two projections of forty-eight rows, a
+   --  megabyte that stays in the cache across vectors, which the row kernel
+   --  read again every eight vectors and the binary32 tile gave two
+   --  workgroups.
+   Thin_Matrix_Rows : constant := 64;
+
    --  Most experts a batch's routing is inverted over, which is what
    --  invert.comp keeps counters for in shared memory.
    Max_Experts : constant := 512;
@@ -2780,6 +2787,25 @@ package Model_Runner.Platform.Device.Products is
    --  @return Byte budget for resident matrices.
    function Capacity (Item : Engine) return Interfaces.Unsigned_64;
 
+   --  What both heaps the matrices may be held in add up to, whole: the
+   --  most the device has for the matrices and everything beside them.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Bytes, or zero for a closed engine.
+   function Heaps (Item : Engine) return Interfaces.Unsigned_64;
+
+   --  Let the matrices take Bytes where that is more than the budget the
+   --  engine opened with: the second heap first, up to all of it, and the
+   --  first for the rest, up to all of that. For a caller that has counted
+   --  what else the device will hold -- a session's context and states --
+   --  and found more room than the fixed share assumes. A smaller figure
+   --  changes nothing.
+   --
+   --  @param Item Engine to widen.
+   --  @param Bytes The budget asked for.
+   procedure Widen_Budget
+     (Item : in out Engine; Bytes : Interfaces.Unsigned_64);
+
    --  The largest buffer this device will read, in bytes.
    --
    --  The device's own answer, and the bound a single matrix has to fit:
@@ -3505,6 +3531,7 @@ private
       --  taken from a heap that has room rather than from one that only
       --  the total says has.
       Second     : Integer := -1;
+      Second_Heap : Interfaces.Unsigned_64 := 0;
       Tier_Limit : Tier_Bytes_Array := [others => 0];
       Tier_Kept  : Tier_Bytes_Array := [others => 0];
       Tier_Spare : Tier_Bytes_Array := [others => 0];

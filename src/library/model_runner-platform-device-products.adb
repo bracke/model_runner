@@ -918,7 +918,7 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Thin_Line /= Null_Handle
        and then Packing = Values_F32
        and then Rows <= Thin_Rows
-       and then Count <= Thin_Vectors
+       and then (Count <= Thin_Vectors or else Rows <= Thin_Matrix_Rows)
        and then Columns mod 4 = 0
        and then Base mod 16 = 0);
 
@@ -1052,11 +1052,16 @@ package body Model_Runner.Platform.Device.Products is
        --  And the few-vector walks compiled to land as many (MANY_ROWS in
        --  compile-shaders.sh): Q2_K's and Q3_K's check of four 18 per cent
        --  faster at eight rows than at four, the IQ4 formats' 4 to 7; the
-       --  older formats slower, so they keep four.
+       --  older formats slower at four vectors and faster at eight, so they
+       --  take eight past four (MANY_ROWS_FEW). Sixteen for Q2_K's check of
+       --  four measured the same as eight, alternated.
        elsif Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
                         | Packed_Q2_K | Packed_Q3_K
                         | Packed_IQ4_NL | Packed_IQ4_XS | Packed_MXFP4
          and then Count in Many_Count
+       then Many_Rows
+       elsif Packing in Legacy_Packing and then Count in Many_Count
+         and then Count not in Multi_Count
        then Many_Rows
        elsif Short then Q8_Short_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
@@ -2416,6 +2421,8 @@ package body Model_Runner.Platform.Device.Products is
       --  not an allocation: a model that fits the first heap takes what it
       --  took.
       Item.Second := Second_Kind (On);
+      Item.Second_Heap :=
+        (if Item.Second >= 0 then Second_Memory_Bytes (On) else 0);
 
       declare
          First_Share  : constant Interfaces.Unsigned_64 :=
@@ -5965,6 +5972,37 @@ package body Model_Runner.Platform.Device.Products is
 
    function Capacity (Item : Engine) return Interfaces.Unsigned_64
    is (Item.Budget);
+
+   function Heaps (Item : Engine) return Interfaces.Unsigned_64
+   is (Item.Heap + Item.Second_Heap);
+
+   procedure Widen_Budget
+     (Item : in out Engine; Bytes : Interfaces.Unsigned_64)
+   is
+      Extra : Interfaces.Unsigned_64;
+      Step  : Interfaces.Unsigned_64;
+   begin
+      if Bytes <= Item.Budget then
+         return;
+      end if;
+
+      Extra := Bytes - Item.Budget;
+
+      if Item.Second >= 0 and then Item.Second_Heap > Item.Tier_Limit (2) then
+         Step := Interfaces.Unsigned_64'Min
+           (Extra, Item.Second_Heap - Item.Tier_Limit (2));
+         Item.Tier_Limit (2) := Item.Tier_Limit (2) + Step;
+         Extra := Extra - Step;
+      end if;
+
+      if Extra > 0 and then Item.Heap > Item.Tier_Limit (1) then
+         Step := Interfaces.Unsigned_64'Min
+           (Extra, Item.Heap - Item.Tier_Limit (1));
+         Item.Tier_Limit (1) := Item.Tier_Limit (1) + Step;
+      end if;
+
+      Item.Budget := Item.Tier_Limit (1) + Item.Tier_Limit (2);
+   end Widen_Budget;
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
 

@@ -2032,6 +2032,56 @@ package body Tests.Backend_Cases is
    -- Device_Reads_The_Host_Memory_When_Asked --
    ---------------------------------------------
 
+   --  A budget the device opened with unasked is widened by a caller that
+   --  counted more room, and only widened: a smaller figure changes
+   --  nothing, the widened figure is bounded by the heaps, and a budget the
+   --  caller named is held to. A dense model whose run named its context
+   --  is the caller: it counts the session's context and states against
+   --  both heaps where the fixed share assumed a quarter of them.
+   procedure Device_Widens_An_Unasked_Budget
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Interfaces.Unsigned_64;
+
+      package Device renames Model_Runner.Backend.Device;
+
+      Ready  : Boolean;
+      Before : Interfaces.Unsigned_64;
+      Heaps  : Interfaces.Unsigned_64;
+   begin
+      Device.Close;
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+
+      Before := Device.Describe.Memory_Bytes;
+      Heaps := Device.Heap_Bytes;
+      Assert (Heaps >= Before,
+              "the heaps are less than the share of them the budget is");
+
+      Device.Widen_Budget (Before / 2);
+      Assert (Device.Describe.Memory_Bytes = Before,
+              "a smaller figure narrowed the budget");
+
+      Device.Widen_Budget (Before + (Heaps - Before) / 2);
+      Assert (Device.Describe.Memory_Bytes = Before + (Heaps - Before) / 2,
+              "the budget was not widened to what was asked");
+
+      Device.Widen_Budget (Heaps + 2 ** 30);
+      Assert (Device.Describe.Memory_Bytes <= Heaps,
+              "the budget was widened past the heaps");
+
+      Device.Close;
+      Device.Open (Ready, Budget => 16 * 1024);
+      Assert (Ready, "the device would not open at a named budget");
+      Device.Widen_Budget (Heaps);
+      Assert (Device.Describe.Memory_Bytes = 16 * 1024,
+              "a named budget was widened");
+      Device.Close;
+   end Device_Widens_An_Unasked_Budget;
+
    --  A device asked to read the weights where they lie gets the same
    --  answers as the processor, in every format the shader decodes and
    --  through both of the ways it is asked.
@@ -10390,6 +10440,10 @@ package body Tests.Backend_Cases is
         (T, Device_Reports_What_It_Reads'Access,
          "the device backend claims the formats its shader decodes and no "
          & "others");
+      Register_Routine
+        (T, Device_Widens_An_Unasked_Budget'Access,
+         "a device widens an unasked budget to counted room, never past its "
+         & "heaps and never a named one");
       Register_Routine
         (T, Device_Reads_The_Host_Memory_When_Asked'Access,
          "a device asked to read the weights where they lie gives the same "

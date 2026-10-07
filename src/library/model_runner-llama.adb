@@ -2251,7 +2251,8 @@ package body Model_Runner.Llama is
       Threads  : Positive := 1;
       Status   : out E.Error_Info;
       Stretch  : Rotary_Request := No_Rotary_Request;
-      Panel_Cache : String := "")
+      Panel_Cache : String := "";
+      Context  : Natural := 0)
    is separate;
 
    -----------

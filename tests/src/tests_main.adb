@@ -2781,10 +2781,29 @@ begin
                return 0;
          end Whole;
 
-         --  A count of bytes, which is past what a Natural holds.
+         --  A count of bytes, which is past what a Natural holds, with the
+         --  K, M or G run takes after it. A bare number only, it once
+         --  read "12G" as nothing, and a sitting meant at twelve gigabytes
+         --  measured the default budget.
          function Bytes (Name : String) return Interfaces.Unsigned_64 is
+            use type Interfaces.Unsigned_64;
+            Text : constant String := Option (Name, "");
+            Unit : Interfaces.Unsigned_64 := 1;
+            Last : Natural := Text'Last;
          begin
-            return Interfaces.Unsigned_64'Value (Option (Name, ""));
+            if Text'Length > 0 then
+               case Text (Text'Last) is
+                  when 'K' | 'k' => Unit := 2 ** 10;
+                  when 'M' | 'm' => Unit := 2 ** 20;
+                  when 'G' | 'g' => Unit := 2 ** 30;
+                  when others => null;
+               end case;
+               if Unit /= 1 then
+                  Last := Last - 1;
+               end if;
+            end if;
+            return Interfaces.Unsigned_64'Value (Text (Text'First .. Last))
+              * Unit;
          exception
             when others =>
                return 0;
