@@ -1252,7 +1252,10 @@ from it. Those are lower than the 0.039 and 0.045 this used to
 quote, and the reason is what they measure: the older pair came from timing
 a whole `model_runner run` in the shell -- parsing the model, loading the
 vocabulary, encoding, and refusing the prompt for length -- while these are
-the encode. The 25.5 s is history and needs the commit before the bound; it
+the encode. Taken that way again on 2026-10-07, once the length bound on a
+whole text was gone, they read 0.123 and 0.131 s: the prompt is encoded
+whole now and refused for the context, and the process around it has grown
+(the same sitting read 0.118 and 0.122 before the change). The 25.5 s is history and needs the commit before the bound; it
 is quoted as the reason the bound exists rather than as something to
 reproduce.
 

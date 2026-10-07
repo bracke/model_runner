@@ -43,9 +43,15 @@ package body Model_Runner.Tokenizer is
    --  the normalization rather than on what went into it.
    Max_Normalized : constant := 1024 * 1024;
 
-   --  Largest number of code points a single Encode call will process. The
-   --  merge loop is quadratic in the symbol count, so this bound is what keeps
-   --  a hostile prompt from costing unbounded time.
+   --  Longest piece, in bytes, the byte-pair road will merge: what the
+   --  cutting makes of a word. That merge is quadratic in a piece's length
+   --  and keeps the piece on the stack, so this keeps one hostile word from
+   --  costing unbounded time or the stack; no word of a text anybody writes
+   --  comes near it. It bounded the whole text once, and a prompt of
+   --  sixty-five thousand characters -- some thirteen thousand tokens, a
+   --  third of a long context -- was refused for it; the SentencePiece
+   --  road's merge, the one that was quadratic in the whole text, is a
+   --  logarithm a merge now, and the other roads are linear.
    Max_Symbols : constant := 65_536;
 
    --  How many pieces one word may be spelled from on the WordPiece road.
@@ -1844,14 +1850,6 @@ package body Model_Runner.Tokenizer is
          return;
       end if;
 
-      --  Reject an oversized input before allocating anything for it: the
-      --  symbol limit is a code point count, and counting needs no copy.
-      if Model_Runner.UTF8.Code_Point_Count (Text) > Max_Symbols then
-         Status := E.Make (E.Tokenizer_Input_Too_Long);
-         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
-         return;
-      end if;
-
       --  RWKV's road: the longest piece the text's next bytes begin with,
       --  then the next, to the end -- the answer llama.cpp's walk of a trie
       --  of the pieces gives. A byte no piece begins with is the unknown
@@ -1906,11 +1904,23 @@ package body Model_Runner.Tokenizer is
             --  the letter with it -- so the input's own length is room
             --  enough, and the count of words cannot exceed the count of
             --  code points.
-            Room  : String (1 .. Text'Length * 4);
+            --  On the heap and sized by the text, as the other roads' are:
+            --  on the stack, a text of a few megabytes was past what the
+            --  stack holds, and the word table's fixed bound refused a text
+            --  of sixty-five thousand words that nothing else limits.
+            type Place_Array is array (Positive range <>) of Natural;
+            type Place_Access is access Place_Array;
+            type Room_Access is access String;
+            procedure Free_Places is
+              new Ada.Unchecked_Deallocation (Place_Array, Place_Access);
+            procedure Free_Room is
+              new Ada.Unchecked_Deallocation (String, Room_Access);
+
+            Room  : Room_Access := new String (1 .. Text'Length * 4);
             Held  : Natural := 0;
 
-            Starts : array (1 .. Max_Symbols) of Natural;
-            Ends   : array (1 .. Max_Symbols) of Natural;
+            Starts : Place_Access := new Place_Array (1 .. Text'Length + 1);
+            Ends   : Place_Access := new Place_Array (1 .. Text'Length + 1);
             Words  : Natural := 0;
 
             --  Whether the word being built has anything in it yet, which is
@@ -1952,14 +1962,6 @@ package body Model_Runner.Tokenizer is
                One : constant String := Model_Runner.UTF8.Encode (Code_Point);
             begin
                if not Open then
-                  if Words >= Max_Symbols then
-                     Refused := True;
-                     Status := E.Make (E.Tokenizer_Input_Too_Long);
-                     E.Add_Integer
-                       (Status, "limit", Long_Long_Integer (Max_Symbols));
-                     return;
-                  end if;
-
                   Words := Words + 1;
                   Starts (Words) := Held + 1;
                   Open := True;
@@ -2083,6 +2085,10 @@ package body Model_Runner.Tokenizer is
                   Spell (Room (Starts (Which) .. Ends (Which)));
                end if;
             end loop;
+
+            Free_Room (Room);
+            Free_Places (Starts);
+            Free_Places (Ends);
 
             Last := Produced;
 
@@ -2237,6 +2243,13 @@ package body Model_Runner.Tokenizer is
          begin
             Cutting.Cut (Text, Item.Cutting, Ends, Count);
             for Piece in 1 .. Count loop
+               if Ends (Piece) - From + 1 > Max_Symbols then
+                  Status := E.Make (E.Tokenizer_Input_Too_Long);
+                  E.Add_Integer
+                    (Status, "limit", Long_Long_Integer (Max_Symbols));
+                  Refused := True;
+                  exit;
+               end if;
                Emit (Text (From .. Ends (Piece)));
                From := Ends (Piece) + 1;
                exit when Refused;
@@ -2469,7 +2482,9 @@ package body Model_Runner.Tokenizer is
       declare
          Position : Natural := Working'First;
       begin
-         Symbols := new Symbol_Array (1 .. Max_Symbols);
+         Symbols := new Symbol_Array
+           (1 .. Natural'Max
+                   (1, Model_Runner.UTF8.Code_Point_Count (Working.all)));
 
          while Position <= Working'Last loop
             declare
@@ -2480,13 +2495,6 @@ package body Model_Runner.Tokenizer is
                   then 1
                   else Length);
             begin
-               if Count = Max_Symbols then
-                  Release;
-                  Status := E.Make (E.Tokenizer_Input_Too_Long);
-                  E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
-                  return;
-               end if;
-
                Count := Count + 1;
 
                Symbols (Count) :=
@@ -2530,7 +2538,79 @@ package body Model_Runner.Tokenizer is
       --  only on a strictly greater score, so the leftmost of equals still
       --  wins.
       declare
-         Worth : array (1 .. Max_Symbols) of Float := [others => Float'First];
+         type Worth_Array is array (Positive range <>) of Float;
+         type Worth_Access is access Worth_Array;
+         procedure Free_Worth is
+           new Ada.Unchecked_Deallocation (Worth_Array, Worth_Access);
+
+         Worth : Worth_Access :=
+           new Worth_Array'(1 .. Natural'Max (1, Count) => Float'First);
+
+         --  The pairs worth merging, best first: the highest worth, and
+         --  among equals the leftmost, which is what the scan this
+         --  replaces took. A pair a merge has since changed is still in
+         --  it, and is passed over when it comes up: its worth is no
+         --  longer the one beside its symbol. Every pair's worth is put in
+         --  whenever it is worked out, so the best living pair is always
+         --  in it. A whole-text scan a merge was quadratic in the text,
+         --  and a prompt of sixty-five thousand characters was refused
+         --  for it; this is a logarithm a merge.
+         type Candidate is record
+            W : Float := Float'First;
+            I : Integer := 0;
+         end record;
+         type Candidate_Array is array (Positive range <>) of Candidate;
+         type Candidate_Access is access Candidate_Array;
+         procedure Free_Heap is
+           new Ada.Unchecked_Deallocation (Candidate_Array, Candidate_Access);
+
+         Heap : Candidate_Access :=
+           new Candidate_Array (1 .. 3 * Natural'Max (1, Count) + 1);
+         Held : Natural := 0;
+
+         function Before (A, B : Candidate) return Boolean
+         is (A.W > B.W or else (A.W = B.W and then A.I < B.I));
+
+         procedure Push (Index : Integer) is
+            At_Slot : Natural;
+            Moving  : Candidate;
+         begin
+            if Index < 1 or else Worth (Index) = Float'First then
+               return;
+            end if;
+            Held := Held + 1;
+            At_Slot := Held;
+            Moving := (W => Worth (Index), I => Index);
+            while At_Slot > 1 and then Before (Moving, Heap (At_Slot / 2)) loop
+               Heap (At_Slot) := Heap (At_Slot / 2);
+               At_Slot := At_Slot / 2;
+            end loop;
+            Heap (At_Slot) := Moving;
+         end Push;
+
+         procedure Pop (Top : out Candidate) is
+            Last_One : constant Candidate := Heap (Held);
+            At_Slot  : Positive := 1;
+            Child    : Positive;
+         begin
+            Top := Heap (1);
+            Held := Held - 1;
+            if Held = 0 then
+               return;
+            end if;
+            loop
+               Child := 2 * At_Slot;
+               exit when Child > Held;
+               if Child < Held and then Before (Heap (Child + 1), Heap (Child))
+               then
+                  Child := Child + 1;
+               end if;
+               exit when not Before (Heap (Child), Last_One);
+               Heap (At_Slot) := Heap (Child);
+               At_Slot := Child;
+            end loop;
+            Heap (At_Slot) := Last_One;
+         end Pop;
 
          --  What merging this symbol with the one after it is worth, or
          --  Float'First where there is nothing after it, no vocabulary
@@ -2570,27 +2650,23 @@ package body Model_Runner.Tokenizer is
       begin
          for Index in 1 .. Count loop
             Worth (Index) := Pair_Worth (Index);
+            Push (Index);
          end loop;
 
          loop
             declare
-               Best_Left  : Integer := -1;
-               Best_Score : Float := Float'First;
-               Index      : Integer := (if Count = 0 then -1 else 1);
+               Best_Left : Integer := -1;
+               Top       : Candidate;
             begin
-               while Index >= 1 loop
-                  declare
-                     Next : constant Integer := Symbols (Index).Next;
-                  begin
-                     exit when Next < 1;
-
-                     if Worth (Index) > Best_Score then
-                        Best_Score := Worth (Index);
-                        Best_Left := Index;
-                     end if;
-
-                     Index := Next;
-                  end;
+               while Held > 0 loop
+                  Pop (Top);
+                  if Symbols (Top.I).Alive
+                    and then Symbols (Top.I).Next >= 1
+                    and then Worth (Top.I) = Top.W
+                  then
+                     Best_Left := Top.I;
+                     exit;
+                  end if;
                end loop;
 
                exit when Best_Left < 1;
@@ -2613,13 +2689,18 @@ package body Model_Runner.Tokenizer is
                   --  The two pairs a merge changes: the one this symbol now
                   --  begins, and the one that ends where it begins.
                   Worth (Best_Left) := Pair_Worth (Best_Left);
+                  Push (Best_Left);
                   if Symbols (Best_Left).Previous >= 1 then
                      Worth (Symbols (Best_Left).Previous) :=
                        Pair_Worth (Symbols (Best_Left).Previous);
+                     Push (Symbols (Best_Left).Previous);
                   end if;
                end;
             end;
          end loop;
+
+         Free_Heap (Heap);
+         Free_Worth (Worth);
       end;
 
       declare
@@ -2676,12 +2757,6 @@ package body Model_Runner.Tokenizer is
 
       if not Model_Runner.UTF8.Is_Valid (Text) then
          Status := E.Make (E.Tokenizer_Invalid_UTF8);
-         return;
-      end if;
-
-      if Model_Runner.UTF8.Code_Point_Count (Text) > Max_Symbols then
-         Status := E.Make (E.Tokenizer_Input_Too_Long);
-         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
          return;
       end if;
 
@@ -2763,14 +2838,6 @@ package body Model_Runner.Tokenizer is
 
       if not Model_Runner.UTF8.Is_Valid (Text) then
          Status := E.Make (E.Tokenizer_Invalid_UTF8);
-         return;
-      end if;
-
-      --  Reject an oversized input before allocating anything for it: the
-      --  symbol limit is a code point count, and counting needs no copy.
-      if Model_Runner.UTF8.Code_Point_Count (Text) > Max_Symbols then
-         Status := E.Make (E.Tokenizer_Input_Too_Long);
-         E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Symbols));
          return;
       end if;
 

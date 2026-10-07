@@ -1,3 +1,5 @@
+with Ada.Calendar;
+with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -4912,23 +4914,122 @@ package body Tests.GGUF_Cases is
                     & E.Error_Code'Image (Status.Code));
          end;
 
-         --  Text with more symbols than the merge loop will hold. The bound
-         --  is on code points rather than bytes, so this is the count the
-         --  loop works with rather than the size of the string.
-         --
-         --  Two guards give this answer -- one counting the code points
-         --  before the loop, one stopping the loop when it fills -- and this
-         --  holds the pair rather than either. Measured: disabling either
-         --  alone changes nothing, and disabling both does not merely lose
-         --  the diagnostic, it reaches an internal invariant violation. They
-         --  are load-bearing for more than the message.
+         --  Text past what the merge loop once held. The bound was on the
+         --  whole text, sixty-five thousand code points, because a merge
+         --  rescanned every pair; a prompt of thirteen thousand tokens was
+         --  refused for it. Now the text is held as long as the caller's
+         --  buffer, and a hundred thousand of one letter is a hundred
+         --  thousand tokens.
          declare
-            Long : constant String (1 .. 65_537) := [others => 'a'];
+            type Token_Room is access Vocab.Token_Array;
+            procedure Free is new Ada.Unchecked_Deallocation
+              (Vocab.Token_Array, Token_Room);
+
+            Long : constant String (1 .. 100_000) := [others => 'a'];
+            Room : Token_Room := new Vocab.Token_Array (1 .. 100_000);
          begin
-            Vocab.Encode (Words, Long, False, False, Tokens, Last, Status);
-            Assert (Status.Code = E.Tokenizer_Input_Too_Long,
-                    "text past the symbol limit was encoded: "
+            Vocab.Encode (Words, Long, False, False, Room.all, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "a long text was refused: "
                     & E.Error_Code'Image (Status.Code));
+            Assert (Last = 100_000,
+                    "a long text gave" & Natural'Image (Last) & " tokens");
+            Vocab.Encode (Words, Long, False, False, Tokens, Last, Status);
+            Assert (Status.Code = E.Tokenizer_Buffer_Too_Small,
+                    "a long text past the buffer was not refused for it: "
+                    & E.Error_Code'Image (Status.Code));
+            Free (Room);
+         end;
+
+         --  And a long text that merges throughout, in a time a merge's
+         --  logarithm allows: a vocabulary holding "ab", two hundred
+         --  thousand letters of it, a hundred thousand merges. The scan
+         --  this replaced read every pair a merge -- twenty thousand million
+         --  comparisons here, minutes; the bound below is generous for the
+         --  heap and far short of that.
+         declare
+            Pairs   : Vocab.Vocabulary;
+            Image_2 : B.Byte_Array_Access;
+            Item_2  : Containers.Container;
+            type Token_Room is access Vocab.Token_Array;
+            procedure Free is new Ada.Unchecked_Deallocation
+              (Vocab.Token_Array, Token_Room);
+
+            Text    : String (1 .. 200_000);
+            Room    : Token_Room := new Vocab.Token_Array (1 .. 200_000);
+            Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            use type Ada.Calendar.Time;
+         begin
+            for Index in Text'Range loop
+               Text (Index) := (if Index mod 2 = 1 then 'a' else 'b');
+            end loop;
+
+            Bare (Builder);
+            Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.tokens", G.Value_String, 4);
+            Fixtures.String_Element (Builder, "<unk>");
+            Fixtures.String_Element (Builder, "a");
+            Fixtures.String_Element (Builder, "b");
+            Fixtures.String_Element (Builder, "ab");
+            Fixtures.End_Array (Builder);
+            Fixtures.Build (Builder, Image_2);
+            Parse_Image (Image_2.all, Item_2, Parse);
+            Vocab.Load (Pairs, Item_2, Status => Status);
+            Assert (E.Is_Ok (Status), "the pairing vocabulary did not load");
+
+            Vocab.Encode (Pairs, Text, False, False, Room.all, Last, Status);
+            Assert (E.Is_Ok (Status),
+                    "a long merging text was refused: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (Last = 100_000,
+                    "two hundred thousand letters of ""ab"" gave"
+                    & Natural'Image (Last) & " tokens");
+            Assert (Ada.Calendar.Clock - Started < 10.0,
+                    "a hundred thousand merges took"
+                    & Duration'Image (Ada.Calendar.Clock - Started)
+                    & " s: the merge is scanning the text again");
+
+            Free (Room);
+            Vocab.Close (Pairs);
+            Containers.Close (Item_2);
+            B.Free (Image_2);
+         end;
+
+         --  And between pairs worth the same, the leftmost merges first, as
+         --  the scan took it and as llama.cpp's queue does: "aba" through
+         --  "ab" and "ba" of one score is "ab" then "a", not "a" then "ba".
+         declare
+            use type Vocab.Token_Id;
+
+            Ties    : Vocab.Vocabulary;
+            Image_3 : B.Byte_Array_Access;
+            Item_3  : Containers.Container;
+         begin
+            Bare (Builder);
+            Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.tokens", G.Value_String, 5);
+            Fixtures.String_Element (Builder, "<unk>");
+            Fixtures.String_Element (Builder, "a");
+            Fixtures.String_Element (Builder, "b");
+            Fixtures.String_Element (Builder, "ab");
+            Fixtures.String_Element (Builder, "ba");
+            Fixtures.End_Array (Builder);
+            Fixtures.Build (Builder, Image_3);
+            Parse_Image (Image_3.all, Item_3, Parse);
+            Vocab.Load (Ties, Item_3, Status => Status);
+            Assert (E.Is_Ok (Status), "the tying vocabulary did not load");
+
+            Vocab.Encode (Ties, "aba", False, False, Tokens, Last, Status);
+            Assert (E.Is_Ok (Status) and then Last = 2
+                    and then Tokens (1) = 3 and then Tokens (2) = 1,
+                    "of two pairs worth the same, the leftmost did not merge "
+                    & "first");
+
+            Vocab.Close (Ties);
+            Containers.Close (Item_3);
+            B.Free (Image_3);
          end;
 
          --  And a sound encode still works.

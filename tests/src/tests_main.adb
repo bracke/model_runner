@@ -2193,7 +2193,11 @@ begin
          Item   : Model_Runner.GGUF.Containers.Container;
          Words  : Model_Runner.Tokenizer.Vocabulary;
          Status : E.Error_Info;
-         Tokens : Model_Runner.Tokenizer.Token_Array (1 .. 4096);
+         --  A token is at least a byte, so the prompt's length and the two
+         --  markers are room enough; a fixed four thousand refused a prompt
+         --  of a few pages.
+         Tokens : Model_Runner.Tokenizer.Token_Array
+           (1 .. Prompt'Length + 2);
          Used   : Natural;
       begin
          if Path = "" then

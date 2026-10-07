@@ -9025,7 +9025,8 @@ scaling 6B2668764FB20CAD src/library/model_runner-backend-cpu.adb src/library/mo
 #   RWKV6 files read their shift mixes and bonus as published. The hostile
 #   text runs read 0.10 s for both files before and after, whole process,
 #   the same within the clock's grain; no other figure here is of RWKV.
-tokenizer 09CCEAD59559D890 src/library/model_runner-tokenizer.adb
+# Re-measured 2026-10-07, the tokenizer's bound on a whole text removed (the SentencePiece merge now takes pairs from a heap; the byte-pair road bounds a single word): the covered runs, `model_runner run tests/fixtures/tiny-model.gguf --raw --prompt-file F --max-tokens 1`, twenty apiece timed by the shell, read 0.123 s for sixty thousand 'a' and 0.131 s for sixty thousand '<' -- the text is now encoded whole and refused for the context rather than for its length -- against 0.118 and 0.122 for the commit before, the same sitting; the 0.039 and 0.045 above were a smaller process.
+tokenizer 7685205A8E35C880 src/library/model_runner-tokenizer.adb
 
 # 2026-08-24, what the other runtime costs for the same file. The
 # reference-runtime comparison has always been about agreement -- same
