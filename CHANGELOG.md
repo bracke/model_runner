@@ -7,6 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A split model's long prompt copies the next layer's feed-forward while this one runs:** a dense model the device holds only in part streams its processor layers' feed-forward to the device for a long batch, and copied each when the layer's sequence asked for it, the device waiting. The next layer's is now copied in the background as the mixtures' stacks were. ThinkingCap-Qwen3.8-27B's prompt of 4,000 reads 2-3% faster (80.5-80.7 against 82.4-82.8 tokens a second, three pairs), the same text.
 - **Long prompts read a sixth faster on the device:** the matrix attention kernel held each subgroup's queries in shared memory, a third of what a subgroup takes, and shared memory is what bounds how many subgroups -- how many queries -- read each tile of keys and values. The queries are now held in the instruction's own operands, loaded once, and one map of an accumulator's rows serves every subgroup; a workgroup past 2,048 positions answers 128 queries where it answered 64, for heads up to 128 (a head of 256 keeps 64). Qwen3 8B's prompt of 16,447 reads in 84 s where it took 98 -- 198 tokens a second against 170 -- and Qwen3 8B, Gemma 3 4B and TinyLlama answer the same text.
 
 ### Fixed

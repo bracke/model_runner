@@ -239,6 +239,25 @@ is
            (Source.Layers.all (Index + 1).Gate_Stack,
             Source.Layers.all (Index + 1).Up_Stack,
             Source.Layers.all (Index + 1).Down_Stack);
+
+      --  And a split dense model's: the next layer's feed-forward, where
+      --  it streams (Streams_Feed below), copied while this layer runs
+      --  rather than when the layer's sequence asks for it with the device
+      --  waiting.
+      elsif Source.Split_Feed
+        and then Settings.Experts = 0
+        and then Count
+                 >= Element_Count (Natural'Min (Stream_Least, Feed_Stream_Least))
+        and then Index < Source.Layers.all'Last
+        and then Source.Layers.all (Index + 1).Host_Feed
+        and then T.Is_Present (Source.Layers.all (Index + 1).File_Gate)
+        and then T.Is_Present (Source.Layers.all (Index + 1).File_Up)
+        and then T.Is_Present (Source.Layers.all (Index + 1).File_Down)
+      then
+         Model_Runner.Backend.Device.Prefetch_Stacks
+           (Source.Layers.all (Index + 1).File_Gate,
+            Source.Layers.all (Index + 1).File_Up,
+            Source.Layers.all (Index + 1).File_Down);
       end if;
    end Prefetch_Next;
 
