@@ -2493,6 +2493,17 @@ package Model_Runner.Platform.Device.Products is
       Copy_Upto : Model_Runner.Numerics.Element_Count;
       Ok        : out Boolean);
 
+   --  Whether a matrix copied to the device keeps its file's pages in the
+   --  host's memory rather than letting them go. Let go, the next run
+   --  reads them from the disk again -- 4.2 s of Qwen3 8B's every prompt
+   --  -- and kept, a model that is most of the memory holds itself twice,
+   --  which sent ThinkingCap's device pages to swap. The loader says
+   --  which, by the model's size against the device's.
+   --
+   --  @param Item Engine.
+   --  @param Keep True to keep them.
+   procedure Keep_File_Pages (Item : in out Engine; Keep : Boolean);
+
    --  And back out of it, which is how the host's own copy of the cache is
    --  brought up to date without the device sending it a layer at a time.
    --
@@ -3813,6 +3824,9 @@ private
       Second_Bytes  : Interfaces.Unsigned_64 := 0;
       Second_At     : System.Address := System.Null_Address;
       Use_Second    : Boolean := False;
+
+      --  See Keep_File_Pages.
+      Keep_Pages    : Boolean := False;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond

@@ -13,6 +13,7 @@ procedure Open
 is
    Settings : Configuration;
    Capacity : Natural;
+   Host_Cache : Cache_Precision := Exact;
 begin
    Close (Item);
    Status := E.Success;
@@ -60,9 +61,21 @@ begin
    --  declares 40,960 positions, eighteen gigabytes of cache on a device,
    --  and a run that named none was refused where it could have run.
    --  A context that was named is held to, and refused as it was.
+   --  Planned at what the host will hold: a paged session on the device
+   --  asking for halves holds them (see the storage below), and was
+   --  planned at binary32 -- Steelman-14B at its own 32,768 refused for
+   --  20 GB it would not have taken.
+   Host_Cache := (if Paged
+                    and then Model_Runner.Backend."="
+                               (Source.Able.Kind,
+                                Model_Runner.Backend.Backend_Device)
+                    and then Cache = Halved
+                  then Halved else Exact);
+
    if Context = 0 and then Session_Bounds.Max_Session_Bytes /= 0 then
       loop
-         Plan_Session (Model (Source), Capacity, Item.Plan, Status);
+         Plan_Session (Model (Source), Capacity, Item.Plan, Status,
+                       Cache => Host_Cache);
          if E.Is_Error (Status) then
             return;
          end if;
@@ -75,7 +88,8 @@ begin
       end loop;
    end if;
 
-   Plan_Session (Model (Source), Capacity, Item.Plan, Status);
+   Plan_Session (Model (Source), Capacity, Item.Plan, Status,
+                 Cache => Host_Cache);
    if E.Is_Error (Status) then
       return;
    end if;
@@ -276,7 +290,13 @@ begin
         and then Cache in Exact | Halved
       then
          Model_Runner.Backend.Device.Attend_In_Halves (Cache = Halved);
-         Item.Held := Exact;
+         --  A paged session asking for halves keeps its host copy in
+         --  halves as well: the device's copy is halves, the host's is
+         --  read back from it, and in binary32 it was twice the memory
+         --  for the same numbers -- 13 GB of Steelman-14B's at 32,768,
+         --  more than a session may plan for.
+         Item.Held := (if Cache = Halved and then Item.Paged then Halved
+                       else Exact);
          Item.Device_Halves :=
            Cache = Halved
            and then Model_Runner.Backend.Device.Attends_In_Halves;

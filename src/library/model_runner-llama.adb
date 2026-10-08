@@ -38,10 +38,25 @@ package body Model_Runner.Llama is
       --  alike, and the depth the limit holds whole to (see the spec).
       Even_At : constant := 12_672;
       Held_To : constant := 16_384;
+
+      --  And a split mixture's, whose layers attend one in four and are
+      --  cheaper a position: Qwen3.6's longest submission at 2,048 was
+      --  0.41 s from depth 16,447 and 0.74 from 31,957, about 0.08 s and
+      --  0.021 s a thousand positions, so 1.31 s at 56k.
+      Mixture_Even_At : constant := 3_900;
+      Mixture_Held_To : constant := 56_000;
    begin
-      if not (Item.Split_Feed and then Item.Settings.Experts = 0)
-        or else Depth <= Held_To
-      then
+      if Item.Split_Feed and then Item.Settings.Experts > 0 then
+         if Depth <= Mixture_Held_To then
+            return Batch_Limit (Item);
+         end if;
+         return Positive'Max
+           (64,
+            Streamed_Batch * (Mixture_Even_At + Mixture_Held_To)
+              / (Mixture_Even_At + Depth) / 64 * 64);
+      end if;
+
+      if not Item.Split_Feed or else Depth <= Held_To then
          return Batch_Limit (Item);
       end if;
       return Positive'Max
@@ -3882,6 +3897,13 @@ package body Model_Runner.Llama is
                 Key_Words + Value_Words + Key_Scales + Value_Scales);
    end Packed_Page_Layout;
 
+   --  Whether a session's storage is one the device's whole layer keeps:
+   --  exact, packed, or a paged session's halves, whose device copy is
+   --  the exact cache's.
+   function Device_Held (Item : Session) return Boolean
+   is (Item.Held in Exact | Eighth | Fourth
+       or else (Item.Paged and then Item.Held = Halved));
+
    --  How wide a session's block is, in elements: the exact cache's keys
    --  and values, or the packed cache's words.
    function Block_Span_Of (Item : Session) return Element_Count
@@ -4353,6 +4375,71 @@ package body Model_Runner.Llama is
    --  layer sits at cell P - Origin, in page (cell / Page_Positions) at
    --  (cell mod Page_Positions) inside it, the keys at the page's front
    --  and the values a run of keys in.
+   --  A run of a session's host keys or values into the device's cache
+   --  and back, in whichever storage the host keeps them: binary32 as it
+   --  is, or halves through binary32, which the device takes and gives
+   --  in. A paged session asking for halves keeps them so on the host.
+   procedure Put_Host_Rows
+     (Item   : Session;
+      Where  : Element_Count;
+      From   : Element_Count;
+      Count  : Element_Count;
+      Keys   : Boolean;
+      Ok     : out Boolean) is
+   begin
+      if Item.Held = Halved then
+         declare
+            Rows : Real_Array (0 .. Count - 1);
+         begin
+            for Index in Rows'Range loop
+               Rows (Index) :=
+                 N.To_Real
+                   ((if Keys then Item.Half_Keys.all (From + Index)
+                     else Item.Half_Values.all (From + Index)));
+            end loop;
+            Model_Runner.Backend.Device.Put_Cache (Where, Rows, Ok);
+         end;
+      elsif Keys then
+         Model_Runner.Backend.Device.Put_Cache
+           (Where, Item.Keys.all (From .. From + Count - 1), Ok);
+      else
+         Model_Runner.Backend.Device.Put_Cache
+           (Where, Item.Values.all (From .. From + Count - 1), Ok);
+      end if;
+   end Put_Host_Rows;
+
+   procedure Get_Host_Rows
+     (Item   : in out Session;
+      Where  : Element_Count;
+      Into   : Element_Count;
+      Count  : Element_Count;
+      Keys   : Boolean;
+      Ok     : out Boolean) is
+   begin
+      if Item.Held = Halved then
+         declare
+            Rows : Real_Array (0 .. Count - 1);
+         begin
+            Model_Runner.Backend.Device.Get_Cache (Where, Rows, Ok);
+            if Ok then
+               if Keys then
+                  Model_Runner.Kernels.To_Halves
+                    (Rows, Item.Half_Keys.all (Into .. Into + Count - 1));
+               else
+                  Model_Runner.Kernels.To_Halves
+                    (Rows, Item.Half_Values.all (Into .. Into + Count - 1));
+               end if;
+            end if;
+         end;
+      elsif Keys then
+         Model_Runner.Backend.Device.Get_Cache
+           (Where, Item.Keys.all (Into .. Into + Count - 1), Ok);
+      else
+         Model_Runner.Backend.Device.Get_Cache
+           (Where, Item.Values.all (Into .. Into + Count - 1), Ok);
+      end if;
+   end Get_Host_Rows;
+
    procedure Write_Pages_Layer
      (Item     : Session;
       Layer    : Natural;
@@ -4385,20 +4472,15 @@ package body Model_Runner.Llama is
             Base : constant Element_Count :=
               Item.Pages.all (Natural (First) + Page);
          begin
-            Model_Runner.Backend.Device.Put_Cache
-              (Base,
-               Item.Keys.all
-                 (Keys_Base + Low * KV_Width
-                  .. Keys_Base + (Low + Span) * KV_Width - 1),
-               Written);
+            Put_Host_Rows
+              (Item, Base, Keys_Base + Low * KV_Width, Span * KV_Width,
+               Keys => True, Ok => Written);
 
             if Written then
-               Model_Runner.Backend.Device.Put_Cache
-                 (Base + Element_Count (Page_Positions) * KV_Width,
-                  Item.Values.all
-                    (Vals_Base + Low * V_Width
-                     .. Vals_Base + (Low + Span) * V_Width - 1),
-                  Written);
+               Put_Host_Rows
+                 (Item, Base + Element_Count (Page_Positions) * KV_Width,
+                  Vals_Base + Low * V_Width, Span * V_Width,
+                  Keys => False, Ok => Written);
             end if;
 
             exit when not Written;
@@ -4447,20 +4529,16 @@ package body Model_Runner.Llama is
             Base  : constant Element_Count :=
               Item.Pages.all (Natural (First) + Page);
          begin
-            Model_Runner.Backend.Device.Get_Cache
-              (Base + (Lo - Low) * KV_Width,
-               Item.Keys.all
-                 (Keys_Base + Lo * KV_Width
-                  .. Keys_Base + (Lo + Count) * KV_Width - 1),
-               Read);
+            Get_Host_Rows
+              (Item, Base + (Lo - Low) * KV_Width,
+               Keys_Base + Lo * KV_Width, Count * KV_Width,
+               Keys => True, Ok => Read);
 
             if Read then
-               Model_Runner.Backend.Device.Get_Cache
-                 (Base + P * KV_Width + (Lo - Low) * V_Width,
-                  Item.Values.all
-                    (Vals_Base + Lo * V_Width
-                     .. Vals_Base + (Lo + Count) * V_Width - 1),
-                  Read);
+               Get_Host_Rows
+                 (Item, Base + P * KV_Width + (Lo - Low) * V_Width,
+                  Vals_Base + Lo * V_Width, Count * V_Width,
+                  Keys => False, Ok => Read);
             end if;
 
             exit when not Read;
@@ -5047,7 +5125,7 @@ package body Model_Runner.Llama is
                Base : constant Element_Count := Layer_Keys + Cell * KV_Width;
                V_At : constant Element_Count := Layer_Vals + Cell * V_Width;
             begin
-               if Item.Paged and then Item.Held = Exact then
+               if Item.Paged and then Item.Held in Exact | Halved then
                   --  Out of the pages the layer's positions are scattered
                   --  through, a page at a time, into the host's contiguous
                   --  copy: the same positions the block reads back, found

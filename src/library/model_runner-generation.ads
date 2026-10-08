@@ -238,6 +238,11 @@ package Model_Runner.Generation is
    type Result is record
       Reason           : Completion_Reason := Runtime_Error;
       Prompt_Tokens    : Natural := 0;
+
+      --  Of those, how many a session already held -- a saved context read
+      --  back, or a turn's shared beginning -- and were not read again.
+      --  The prompt rate is of the rest.
+      Reused_Tokens    : Natural := 0;
       Generated_Tokens : Natural := 0;
       Final_Position   : Natural := 0;
 

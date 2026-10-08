@@ -983,7 +983,7 @@ begin
             --  An architecture that turns nothing -- GPT-2 learned a
             --  row a position -- hands over an empty table and the
             --  sequence has no turning step.
-            if Item.Held in Exact | Eighth | Fourth
+            if Device_Held (Item)
               and then Element_Count (Settings.Rotary) <= Head_Size
               and then (((Settings.Experts = 0
                           or else Dense_Among_Experts (Current)
@@ -1871,7 +1871,7 @@ begin
             begin
                --  Paged, the position is in the layer's pages, found
                --  through the page table as the settling reads them.
-               if Item.Paged and then Item.Held = Exact then
+               if Item.Paged and then Item.Held in Exact | Halved then
                   Read_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell_Of (Item, Natural (Index), Reserved), 1, Read);

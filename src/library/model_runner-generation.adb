@@ -1632,6 +1632,7 @@ package body Model_Runner.Generation is
         Model_Runner.Clocks.Rate_Per_Second
           (Interfaces.Unsigned_64 (Prompt_Count - First_Token + 1),
            Outcome.Prefill_Ns);
+      Outcome.Reused_Tokens := First_Token - 1;
 
       --  One round of drafting and checking.
       --

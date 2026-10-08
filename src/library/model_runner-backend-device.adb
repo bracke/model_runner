@@ -596,6 +596,13 @@ package body Model_Runner.Backend.Device is
       end if;
    end Fit_Budget;
 
+   procedure Keep_File_Pages (Keep : Boolean) is
+   begin
+      if Ready_Now then
+         Products.Keep_File_Pages (Engine, Keep);
+      end if;
+   end Keep_File_Pages;
+
    ---------------
    -- Imported --
    ---------------

@@ -1391,7 +1391,7 @@ begin
                       and then Current.Query_Bias = null
                       and then Source.Settings.Kind not in Falcon | Phi2 | Mpt | Command_R
                       and then Source.Settings.Max_Bias = 0.0)
-                     or else (Item.Held in Exact | Eighth | Fourth
+                     or else (Device_Held (Item)
                               and then (Whole_Layer_Fits
                                           (Current, Natural (Index))
                                         or else (Split_Here (Current)
@@ -1526,7 +1526,7 @@ begin
                --  table, as an exact round's are.
                if (Turnable or else Settings.Rotary = 0)
                  and then Resident
-                 and then Item.Held in Exact | Eighth | Fourth
+                 and then Device_Held (Item)
                  and then (((Settings.Experts = 0
                              or else Dense_Among_Experts (Current)
                              or else Mixture_Whole (Current))
@@ -2967,7 +2967,7 @@ begin
                   V_At : constant Element_Count :=
                     Layer_Vals + Cell * V_Width;
                begin
-                  if Item.Paged and then Item.Held = Exact then
+                  if Item.Paged and then Item.Held in Exact | Halved then
                      Read_Pages_Layer
                        (Item, Natural (Index), KV_Width, V_Width,
                         Cell, Count, Read);

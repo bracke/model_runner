@@ -1773,7 +1773,8 @@ package Model_Runner.Llama is
    function Batch_Limit (Item : Model'Class) return Positive;
 
    --  The most one batched call evaluates from Depth on: Batch_Limit, and
-   --  for a split dense model fewer the deeper the batch reads. Each of
+   --  for a split model fewer the deeper the batch reads -- a dense one's
+   --  past 16,384, a mixture's past 56,000. Each of
    --  its layers is one submission over the batch, and the kernel resets a
    --  device that takes one for more than its lockup timeout -- on recent
    --  Linux two seconds a queue, compute among them. ThinkingCap's longest

@@ -198,6 +198,12 @@ package Model_Runner.Backend.Device is
    --  @param Bytes The budget asked for.
    procedure Fit_Budget (Bytes : Interfaces.Unsigned_64);
 
+   --  Whether a matrix copied to the device keeps its file's pages in the
+   --  host's memory: see Products.Keep_File_Pages.
+   --
+   --  @param Keep True to keep them.
+   procedure Keep_File_Pages (Keep : Boolean);
+
    --  Give back every buffer kept for reuse; see Products.Drop_Spares.
    procedure Drop_Spares;
 

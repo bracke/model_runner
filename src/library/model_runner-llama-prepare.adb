@@ -2113,6 +2113,15 @@ begin
 
          Room := Counted_Room (Planned);
 
+         --  The file's pages of what goes to the device are kept where the
+         --  matrices are no more than three fifths of the device's heaps,
+         --  which on a part that shares its memory are half the host's:
+         --  Qwen3 8B's 4.4 GB read its saved prompt back in 1.9 s with
+         --  them and 6.1 without. A larger model gives them back, as
+         --  ThinkingCap's must.
+         Model_Runner.Backend.Device.Keep_File_Pages
+           (Total <= Model_Runner.Backend.Device.Heap_Bytes / 5 * 3);
+
          --  A model the room does not take whole is split, and a long
          --  prompt's batch streams the feed-forward its processor keeps:
          --  that batch's answers and the streamed matrices are room of

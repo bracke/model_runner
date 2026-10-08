@@ -1384,6 +1384,15 @@ package body Model_Runner.Presentation is
       Put_Field
         (Item, "statistics.prompt_tokens",
          T.Image (Long_Long_Integer (Outcome.Prompt_Tokens)), Diagnostic);
+
+      --  A prompt read mostly from a saved context: its rate is of the few
+      --  tokens read, which said 0.11 tokens a second with nothing beside it
+      --  to say why.
+      if Outcome.Reused_Tokens > 0 then
+         Put_Field
+           (Item, "statistics.prompt_reused",
+            T.Image (Long_Long_Integer (Outcome.Reused_Tokens)), Diagnostic);
+      end if;
       Put_Field
         (Item, "statistics.generated_tokens",
          T.Image (Long_Long_Integer (Outcome.Generated_Tokens)), Diagnostic);

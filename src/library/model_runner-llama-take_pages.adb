@@ -16,7 +16,7 @@ begin
      or else not Item.Paged
      or else Item.Owner = null
      or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-     or else Item.Held not in Exact | Eighth | Fourth
+     or else Item.Held not in Exact | Halved | Eighth | Fourth
      or else Item.Pages = null
      --  A cache dealt in blocks and one dealt in pages both grow from
      --  the front of the one buffer, so a device holds one kind or the
@@ -110,7 +110,7 @@ begin
          end loop;
 
          if Write_Tables
-           and then Item.Held = Exact
+           and then Item.Held in Exact | Halved
            and then Sink_Footprint (Item.Owner.Settings) = 0
            and then Whole > Element_Count (Pool_Slots)
          then
@@ -280,7 +280,7 @@ begin
             Copy_Upto => Pages_Taken, Ok => Ok,
             Allow_Copy_Only =>
               Sink_Footprint (Item.Owner.Settings) = 0
-              and then Item.Held = Exact,
+              and then Item.Held in Exact | Halved,
             Front => Page_Front);
          if not Ok then
             return;
@@ -371,7 +371,7 @@ begin
          --  them, so all of them are written back, not the stack alone.
          for Layer in Item.Page_Count.all'Range loop
             if not Linear (Item.Owner.Settings, Layer) then
-               if Item.Held = Exact then
+               if Item.Held in Exact | Halved then
                   Write_Pages_Layer
                     (Item.all, Layer, KV_Width, V_Width,
                      Element_Count (Item.Committed), Written);

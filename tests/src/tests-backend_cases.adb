@@ -2535,6 +2535,11 @@ package body Tests.Backend_Cases is
       Assert (not Ok, "rows past the second copy's room were taken");
 
       Dev.Release_Cache;
+
+      --  Whether a matrix copied over keeps its file's pages is the
+      --  loader's to say, either way, and changes nothing a product reads.
+      Dev.Keep_File_Pages (True);
+      Dev.Keep_File_Pages (False);
       Dev.Close;
    end Second_Copy_Keeps_Its_Rows;
 

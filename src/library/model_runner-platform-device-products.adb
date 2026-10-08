@@ -6795,7 +6795,7 @@ package body Model_Runner.Platform.Device.Products is
             --  is also the device's. ThinkingCap's split ran a streamed
             --  layer for 13 to 30 s, its device pages swapped out beside
             --  eight gigabytes of mapped weights it had already copied.
-            if not Weight_Own then
+            if not Weight_Own and then not Item.Keep_Pages then
                Model_Runner.Platform.Pages.Page_Out
                  (Weights (Weights'First + At_Byte)'Address,
                   Model_Runner.Bytes.Byte_Count (Weight_Bytes));
@@ -8546,6 +8546,11 @@ package body Model_Runner.Platform.Device.Products is
       Item.Cache_Front := 0;
       Item.Copy_Split := False;
    end Release_Cache;
+
+   procedure Keep_File_Pages (Item : in out Engine; Keep : Boolean) is
+   begin
+      Item.Keep_Pages := Keep;
+   end Keep_File_Pages;
 
    --------------------
    -- Reserve_Second --
