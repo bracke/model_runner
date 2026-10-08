@@ -145,6 +145,13 @@ package Model_Runner.Backend.Device is
    --  device, or with one holding nothing.
    procedure Forget_Matrices;
 
+   --  Give back what the device holds of one matrix, which will not be
+   --  asked for again: a feed-forward moved to the processor to make room
+   --  for the cache.
+   --
+   --  @param Weight The matrix.
+   procedure Give_Back (Weight : Model_Runner.Tensors.View);
+
    --  Report whether a device is open and ready.
    --
    --  @return True when Dispatch can succeed.

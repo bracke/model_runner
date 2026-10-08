@@ -2019,6 +2019,21 @@ package body Tests.Backend_Cases is
       Assert (Model_Runner.Backend.Device.Given_Back > 0,
               "a device with room for two of six matrices gave none back");
 
+      --  And each given back by name, as a feed-forward moved to the
+      --  processor is: nothing of them is left, and one asked for again
+      --  is taken again and answers the same.
+      for Which in Held'Range loop
+         Model_Runner.Backend.Device.Give_Back (Views (Which));
+      end loop;
+      Assert (Model_Runner.Backend.Device.Resident = 0,
+              "a matrix given back by name was still held:"
+              & Natural'Image (Model_Runner.Backend.Device.Resident));
+      Model_Runner.Backend.Device.Dispatch (Views (1), Vector, Room, Status);
+      Assert (E.Is_Ok (Status)
+              and then (for all Row in Room.all'Range =>
+                          abs (Room.all (Row) - Wanted (1)) < 1.0E-3),
+              "a matrix given back by name did not answer when asked again");
+
       for Which in Held'Range loop
          B.Free (Held (Which));
       end loop;
@@ -6343,6 +6358,16 @@ package body Tests.Backend_Cases is
                  & Interfaces.Unsigned_64'Image (First) & " ->"
                  & Interfaces.Unsigned_64'Image
                      (Products.Cached_Bytes (Engine)));
+      end;
+
+      --  A matrix the engine never took is given back as nothing: the
+      --  engine holds what it held.
+      declare
+         Before : constant Natural := Products.Resident (Engine);
+      begin
+         Products.Give_Back_Matrix (Engine, Engine'Address);
+         Assert (Products.Resident (Engine) = Before,
+                 "giving back a matrix never taken changed what was held");
       end;
 
       Products.Close (Engine);

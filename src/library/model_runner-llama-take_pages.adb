@@ -66,6 +66,11 @@ begin
       end if;
    end;
 
+   --  Room first, where the device holds feed-forward layers only until
+   --  the cache wants it: those moved to the processor now, before any
+   --  layer of this token or batch has taken its matrices.
+   Make_Room (Item.all, Natural (Element_Count'Min (Upto, Element_Count (Item.Context))));
+
    V_Width := Element_Count (Item.Owner.Settings.KV_Heads
                              * Item.Owner.Settings.Value_Size);
    KV_Width := Page_Row (Item.all) - V_Width;

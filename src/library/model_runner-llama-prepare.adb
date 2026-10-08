@@ -2177,6 +2177,44 @@ begin
                   L.Host_Feed := False;
                end loop;
             end if;
+
+            --  Split for a context's room the cache takes only as it
+            --  fills: where every matrix fits the device beside the
+            --  margins, the split layers stay on the device too, their
+            --  panels built and kept aside, until a session's cache wants
+            --  the room (Make_Room). Steelman-14B named 32,768 positions
+            --  and was split for them before its first token; a short
+            --  conversation generated at 6.6 tokens a second where 4,096
+            --  named read 7.8.
+            declare
+               Budget : constant Interfaces.Unsigned_64 :=
+                 Model_Runner.Backend.Device.Budget_Bytes;
+               Heaps  : constant Interfaces.Unsigned_64 :=
+                 (if Budget > 0
+                  then Interfaces.Unsigned_64'Min
+                         (Budget, Model_Runner.Backend.Device.Heap_Bytes)
+                  else Model_Runner.Backend.Device.Heap_Bytes);
+               Margins : constant Interfaces.Unsigned_64 :=
+                 Session_Margin + Stream_Margin
+                 + (if Hybrid (Item.Settings.Kind)
+                    then Interfaces.Unsigned_64 (State_Slots)
+                         * Interfaces.Unsigned_64
+                             (State_Room (Item.Settings)
+                              + Conv_Room (Item.Settings)) * 4
+                    else 0);
+            begin
+               --  Only where the room was counted here: a budget the caller
+               --  named bounds the matrices itself, and is held to.
+               if Dense_Split
+                 and then Item.Device_Context > 0
+                 and then Item.Settings.Experts = 0
+                 and then Heaps > Margins
+                 and then Total < Heaps - Margins
+               then
+                  Item.Feed_Room := Heaps - Margins;
+                  Item.Feed_Weights := Total;
+               end if;
+            end;
          end if;
       end;
    end if;
@@ -2704,6 +2742,34 @@ begin
             null;
          end if;
       end;
+   end if;
+
+   --  The split layers the device holds until the cache wants their room
+   --  (Feed_Room): their panels set aside, the file's matrices where the
+   --  device reads them, and the matrices' budget the whole model.
+   if Item.Feed_Room > 0 then
+      for L of Item.Layers.all loop
+         if L.Host_Feed and then T.Is_Present (L.File_Gate)
+           and then T.Is_Present (L.File_Up) and then T.Is_Present (L.File_Down)
+         then
+            declare
+               None : T.View;
+            begin
+               L.Panel_Gate := L.Gate;
+               L.Panel_Up := L.Up;
+               L.Panel_Down := L.Down;
+               L.Gate := L.File_Gate;
+               L.Up := L.File_Up;
+               L.Down := L.File_Down;
+               L.File_Gate := None;
+               L.File_Up := None;
+               L.File_Down := None;
+               L.Host_Feed := False;
+            end;
+         end if;
+      end loop;
+      Model_Runner.Backend.Device.Fit_Budget (Item.Feed_Weights);
+      Item.Able := Model_Runner.Backend.Device.Describe;
    end if;
 
    --  Decode the weight matrices once, if that was asked for.

@@ -2941,6 +2941,15 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of matrices taken where they lie.
    function Imported (Item : Engine) return Natural;
 
+   --  Give back every copy the device holds of one matrix, once nothing in
+   --  flight reads it: for a matrix the caller will not ask for again,
+   --  whose room is wanted for something else now rather than when the
+   --  budget next runs short and the least used goes.
+   --
+   --  @param Item The engine.
+   --  @param Key Where the matrix's bytes lie, as it was taken by.
+   procedure Give_Back_Matrix (Item : in out Engine; Key : System.Address);
+
    --  How many matrices have been given back to make room for others.
    --
    --  Zero for a model that fits, and a number that rises with every token

@@ -3756,6 +3756,12 @@ package body Model_Runner.Llama is
    --  @param Ok True when the block is the session's and holds its cache.
    procedure Take_Block (Item : Session_Access; Ok : out Boolean);
 
+   --  Move feed-forward layers the device holds only until the cache wants
+   --  their room to the processor, from the top, until a cache reaching
+   --  Upto positions fits beside what is left (Model.Feed_Room). Nothing
+   --  where the model holds none so.
+   procedure Make_Room (Item : Session; Upto : Natural);
+
    --  Read back whatever the device wrote that the host's copy has not
    --  got. Declared here because a session giving its block back must
    --  settle before the block goes; said where it is written, below.
@@ -7214,6 +7220,113 @@ package body Model_Runner.Llama is
    --  The fewest positions a context nobody named is cut down to.
    Least_Context : constant := 1024;
 
+   --  What the device keeps of a cache that holds every position as
+   --  binary32 or halves, at a capacity: the copy and the tables' front
+   --  for a paged session in halves; the binary32 rows beside them for one
+   --  in binary32 or with sinks; both for a block, unless its binary32
+   --  would not fit one buffer and the model has no sinks, when the copy
+   --  alone. See Session_Needs.
+   function Device_Copy_Bytes
+     (Settings : Configuration;
+      Capacity : Natural;
+      Held     : Cache_Precision;
+      Paged    : Boolean) return Interfaces.Unsigned_64
+   is
+      subtype U64 is Interfaces.Unsigned_64;
+
+      Row   : constant U64 :=
+        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size + Settings.Value_Size);
+      Sinks : constant U64 := U64 (Sink_Footprint (Settings));
+      Cells : U64 := 0;
+   begin
+      for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
+         declare
+            Here : constant U64 := U64 (Layer_Cells (Settings, Capacity, Layer));
+         begin
+            Cells := Cells
+              + (if Paged
+                 then (Here + U64 (Page_Positions) - 1)
+                      / U64 (Page_Positions) * U64 (Page_Positions)
+                 else Here);
+         end;
+      end loop;
+
+      declare
+         Elements : constant U64 := Cells * Row;
+         Front    : constant U64 := (if Paged then U64 (Page_Front) else 0);
+         Bound    : constant U64 := Model_Runner.Backend.Device.Cache_Bound;
+         Tables   : constant U64 := U64 (Model_Runner.Backend.Device.Table_Room);
+      begin
+         return
+           (if Paged
+            then (if Sinks = 0 and then Held = Halved
+                  then Front * 4 + (Front + Elements) * 2
+                  else (Front + Elements + Sinks) * 4 + (Front + Elements) * 2)
+            elsif Sinks = 0 and then Bound > 0
+              and then (Elements + Tables) * 4 > Bound
+            then Elements * 2
+            else (Elements + Tables + Sinks) * 4 + Elements * 2);
+      end;
+   end Device_Copy_Bytes;
+
+   ---------------
+   -- Make_Room --
+   ---------------
+
+   procedure Make_Room (Item : Session; Upto : Natural) is
+      subtype U64 is Interfaces.Unsigned_64;
+      Owner : access Model'Class renames Item.Owner;
+
+      function Bytes_Of (View : T.View) return U64
+      is (U64 (View.Rows) * U64 (T.Row_Bytes (View)));
+   begin
+      if Owner = null
+        or else Owner.Feed_Room = 0
+        or else Owner.Layers = null
+        or else Item.Held not in Exact | Halved
+      then
+         return;
+      end if;
+
+      declare
+         Cache : constant U64 :=
+           Device_Copy_Bytes (Owner.Settings, Upto, Item.Held, Item.Paged);
+      begin
+         --  From the top, as Prepare splits: one layer's feed-forward at a
+         --  time to the processor, its file's matrices given back, until
+         --  the cache and what is left fit.
+         for Index in reverse Owner.Layers.all'Range loop
+            exit when Owner.Feed_Weights + Cache <= Owner.Feed_Room;
+            declare
+               L    : Layer renames Owner.Layers.all (Index);
+               None : T.View;
+            begin
+               if T.Is_Present (L.Panel_Gate) and then not L.Host_Feed then
+                  L.File_Gate := L.Gate;
+                  L.File_Up := L.Up;
+                  L.File_Down := L.Down;
+                  L.Gate := L.Panel_Gate;
+                  L.Up := L.Panel_Up;
+                  L.Down := L.Panel_Down;
+                  L.Panel_Gate := None;
+                  L.Panel_Up := None;
+                  L.Panel_Down := None;
+                  L.Host_Feed := True;
+                  Model_Runner.Backend.Device.Give_Back (L.File_Gate);
+                  Model_Runner.Backend.Device.Give_Back (L.File_Up);
+                  Model_Runner.Backend.Device.Give_Back (L.File_Down);
+                  Owner.Feed_Weights := Owner.Feed_Weights
+                    - U64'Min (Owner.Feed_Weights,
+                               Bytes_Of (L.File_Gate) + Bytes_Of (L.File_Up)
+                               + Bytes_Of (L.File_Down));
+                  Model_Runner.Backend.Device.Fit_Budget (Owner.Feed_Weights);
+                  Owner.Able := Model_Runner.Backend.Device.Describe;
+               end if;
+            end;
+         end loop;
+      end;
+   end Make_Room;
+
    --  What a session planned so holds: the plan, which is the host's
    --  cache at the precision the host keeps it and everything beside it,
    --  and on a device the device's cache too -- an integrated part's
@@ -7273,9 +7386,7 @@ package body Model_Runner.Llama is
       end loop;
 
       declare
-         Elements : constant U64 := Cells * Row;
          Front    : constant U64 := (if Paged then U64 (Page_Front) else 0);
-         Bound    : constant U64 := Model_Runner.Backend.Device.Cache_Bound;
          Tables   : constant U64 := U64 (Model_Runner.Backend.Device.Table_Room);
 
          Device : constant U64 :=
@@ -7288,14 +7399,7 @@ package body Model_Runner.Llama is
                  then Front * 6 + (Plan.KV_Cache_Bytes + Sinks * 4) * 3 / 2
                  else Plan.KV_Cache_Bytes + (Tables + Sinks) * 4 + Widest * Row * 2),
               when Exact | Halved =>
-                (if Paged
-                 then (if Sinks = 0 and then Held = Halved
-                       then Front * 4 + (Front + Elements) * 2
-                       else (Front + Elements + Sinks) * 4 + (Front + Elements) * 2)
-                 elsif Sinks = 0 and then Bound > 0
-                   and then (Elements + Tables) * 4 > Bound
-                 then Elements * 2
-                 else (Elements + Tables + Sinks) * 4 + Elements * 2));
+                Device_Copy_Bytes (Settings, Capacity, Held, Paged));
       begin
          return Plan.Total_Resident + Device;
       end;

@@ -2382,6 +2382,14 @@ private
       --  whole over a batch long enough to repay it (Stream_Least).
       File_Gate, File_Up, File_Down : Model_Runner.Tensors.View;
 
+      --  A layer the device holds whole until the cache wants its room:
+      --  its feed-forward's panels, built at load as a split's are, kept
+      --  here while Gate, Up and Down are the file's and the device runs
+      --  them. Moved to the processor (Make_Room), the panels go into
+      --  Gate, Up and Down and the file's into File_*, as a split layer
+      --  has them from the start. Absent for every other layer.
+      Panel_Gate, Panel_Up, Panel_Down : Model_Runner.Tensors.View;
+
       --  Applied to what a sublayer produced, before it is added back to
       --  the residual, rather than to what it was given. Null for an
       --  architecture that normalizes only on the way in, which is every
@@ -2834,6 +2842,14 @@ private
       --  one opened with more would grow into the matrices' room. Nought
       --  where nothing was counted.
       Device_Context : Natural := 0;
+
+      --  The room the device has for this model's matrices and a
+      --  session's cache together, where some of its feed-forward is held
+      --  there only until the cache wants the room (Panel_Gate); and the
+      --  bytes of matrices it holds within it. Nought where nothing is
+      --  held so.
+      Feed_Room    : Interfaces.Unsigned_64 := 0;
+      Feed_Weights : Interfaces.Unsigned_64 := 0;
 
       --  What has been merged into those weights, as a digest of every
       --  adapter and the scale it was applied at. Zero for a model as its

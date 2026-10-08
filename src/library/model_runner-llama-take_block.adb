@@ -48,6 +48,12 @@ begin
 
    Blocks_Were_Held := False;
 
+   --  A block is the whole context at once: room for it first, where the
+   --  device holds feed-forward layers only until the cache wants it.
+   if not (Item.Seat >= 0 and then Block_Holder (Item.Seat) = Item) then
+      Make_Room (Item.all, Item.Context);
+   end if;
+
    --  Already this session's, which is every call after the first:
    --  there is nothing to ask the device and nothing to write. Stamped
    --  as it goes, so that the block another session takes where every

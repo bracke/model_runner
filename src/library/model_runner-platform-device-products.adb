@@ -6141,6 +6141,9 @@ package body Model_Runner.Platform.Device.Products is
       Gone := True;
    end Drop_Spare;
 
+   --  Give back what one slot holds, and the slot.
+   procedure Give_Back_Slot (Item : in out Engine; Oldest : Natural);
+
    --  Release the matrix least recently multiplied by, so that another can
    --  take its place.
    --
@@ -6203,6 +6206,16 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      Give_Back_Slot (Item, Oldest);
+      Gone := True;
+   end Give_Back_Least;
+
+   --------------------
+   -- Give_Back_Slot --
+   --------------------
+
+   procedure Give_Back_Slot (Item : in out Engine; Oldest : Natural) is
+   begin
       --  Kept rather than given up, where there is room to keep it: the
       --  next matrix taken is very often the same size, and asking the
       --  driver for memory is what this loop cost.
@@ -6247,8 +6260,34 @@ package body Model_Runner.Platform.Device.Products is
       Free_Slot (Item, Oldest);
       Item.Used := Item.Used - 1;
 
-      Gone := True;
-   end Give_Back_Least;
+   end Give_Back_Slot;
+
+   ----------------------
+   -- Give_Back_Matrix --
+   ----------------------
+
+   procedure Give_Back_Matrix (Item : in out Engine; Key : Address) is
+      Look : Natural := Item.Oldest;
+      Next : Natural;
+   begin
+      --  Nothing may be reading it: what is in flight settles first.
+      declare
+         Settled : Boolean;
+      begin
+         Settle (Item, Settled);
+         if not Settled then
+            return;
+         end if;
+      end;
+
+      while Look /= 0 loop
+         Next := Item.Kept (Look).Newer;
+         if Item.Kept (Look).Key = Key and then not Item.Kept (Look).Own then
+            Give_Back_Slot (Item, Look);
+         end if;
+         Look := Next;
+      end loop;
+   end Give_Back_Matrix;
 
    --------------
    -- Resident --

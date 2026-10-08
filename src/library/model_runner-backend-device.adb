@@ -6362,4 +6362,15 @@ package body Model_Runner.Backend.Device is
                      .. Landing.all'First + Wanted - 1);
    end Dispatch_Mixture;
 
+   ---------------
+   -- Give_Back --
+   ---------------
+
+   procedure Give_Back (Weight : Model_Runner.Tensors.View) is
+   begin
+      if Ready_Now then
+         Products.Give_Back_Matrix (Engine, At_Offset (Weight.Base, Weight.Offset));
+      end if;
+   end Give_Back;
+
 end Model_Runner.Backend.Device;
