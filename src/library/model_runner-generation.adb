@@ -1441,7 +1441,12 @@ package body Model_Runner.Generation is
                --  the run instead, or, where the run began the batch and
                --  fits within what the engine takes at once, after it.
                function Batch_End return Natural is
-                  Last : constant Natural := Natural'Min (Index + Span - 1, Prompt_Count);
+                  Last : constant Natural :=
+                    Natural'Min
+                      (Index
+                       + Natural'Min (Span, L.Batch_Limit (Source, Index - 1))
+                       - 1,
+                       Prompt_Count);
                begin
                   if Pictures.Soft = Vocab.No_Token or else Last >= Prompt_Count
                     or else not Is_Soft (Tokens.all (Last))

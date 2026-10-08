@@ -32,6 +32,24 @@ package body Model_Runner.Llama is
        elsif Item.Split_Feed then Streamed_Batch
        else Max_Batch);
 
+   function Batch_Limit (Item : Model'Class; Depth : Natural) return Positive
+   is
+      --  Depth at which the submission's fixed part and its attention take
+      --  alike, and the depth the limit holds whole to (see the spec).
+      Even_At : constant := 12_672;
+      Held_To : constant := 16_384;
+   begin
+      if not (Item.Split_Feed and then Item.Settings.Experts = 0)
+        or else Depth <= Held_To
+      then
+         return Batch_Limit (Item);
+      end if;
+      return Positive'Max
+        (64,
+         Dense_Streamed_Batch * (Even_At + Held_To) / (Even_At + Depth)
+           / 64 * 64);
+   end Batch_Limit;
+
    procedure Set_Stream_Least (Positions : Positive) is
    begin
       Stream_Least := Positions;

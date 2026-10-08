@@ -1756,6 +1756,22 @@ package Model_Runner.Llama is
    --  @return Positions one call takes at most.
    function Batch_Limit (Item : Model'Class) return Positive;
 
+   --  The most one batched call evaluates from Depth on: Batch_Limit, and
+   --  for a split dense model fewer the deeper the batch reads. Each of
+   --  its layers is one submission over the batch, and the kernel resets a
+   --  device that takes one for more than its lockup timeout -- on recent
+   --  Linux two seconds a queue, compute among them. ThinkingCap's longest
+   --  at a thousand and twenty-four positions was 1.17 s from depth 13,312
+   --  and 1.31 s from 16,384, about 0.57 s and 0.045 s a thousand positions
+   --  of depth; at two thousand and forty-eight they ran to 2.8 s and the
+   --  device was reset. The batch is kept to what took 1.31 s, in steps of
+   --  sixty-four positions.
+   --
+   --  @param Item Loaded model.
+   --  @param Depth Positions the session holds before the batch.
+   --  @return Positions one call takes at most from there.
+   function Batch_Limit (Item : Model'Class; Depth : Natural) return Positive;
+
    --  Evaluate several consecutive tokens in one pass.
    --
    --  This is how a prompt is consumed. Every token in the batch shares one

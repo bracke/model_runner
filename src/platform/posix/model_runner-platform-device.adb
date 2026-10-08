@@ -852,11 +852,10 @@ package body Model_Runner.Platform.Device is
 
          Families (Physical, Counted'Access, Room'Address);
 
-         --  One without graphics first, where there is one: the driver
-         --  gives a job on a graphics queue far less time before it resets
-         --  the part -- ten seconds against sixty on an AMD one -- and a
-         --  long prompt of a large split model was reset for it, as
-         --  llama.cpp's reading of the same depth was.
+         --  One without graphics first, where there is one: older AMD
+         --  drivers give a job on a graphics queue far less time before
+         --  they reset the part -- ten seconds against sixty. Recent ones
+         --  give every queue two, which Llama.Batch_Limit keeps under.
          for Pass in 1 .. 2 loop
             for Which in 1 .. Natural'Min (Natural (Counted), Max_Families)
             loop

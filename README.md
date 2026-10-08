@@ -2264,13 +2264,18 @@ device option (`--device-memory`, `--device`, `--device-patience`) says the
 device is wanted and takes it; `--backend cpu` or `--backend device` still
 decides outright.
 
-**The device's work goes to a queue that does not draw.** The driver resets
-the part when one submission runs longer than it allows, and it allows a
-queue that also draws ten seconds where it allows one that only computes
-sixty: a prompt of 14,000 tokens and more on ThinkingCap (27B, split) was
-reset on the first -- "the backend is closed" -- as llama.cpp's reading of
-the same depth was, and read whole with sixty, its longest submission 2.8 s. A device without a compute-only queue is given its general one, and
-there the limit is a module option (`options amdgpu lockup_timeout=60000`).
+**No submission near the driver's limit.** The driver resets the part when
+one submission runs longer than it allows: on recent Linux two seconds on
+every queue (`modinfo amdgpu` says which), on older kernels ten on a queue
+that also draws and sixty on one that only computes -- the engine takes a
+compute-only family where the device has one. A split dense model runs a
+layer a submission over its whole batch, and ThinkingCap (27B, split) at
+2,048 positions a batch ran to 2.8 s from depth 16,384 and was reset --
+"the backend is closed" -- as llama.cpp's reading of the same depth was. At
+1,024 positions the longest is 1.31 s there, and past that depth the batch
+shortens as the attention it reads grows: a prompt of 24,194 tokens kept
+every submission under 1.32 s and read at 52 tokens a second. Raising the
+limit (`options amdgpu lockup_timeout=60000`) is no longer needed for it.
 
 `--backend device` runs the products on a compute device. On this machine --
 an integrated Radeon sharing a fifteen-watt budget with the processor it
