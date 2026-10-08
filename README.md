@@ -2295,6 +2295,17 @@ read the keys half as often too, but held twice the accumulators: 111 s,
 and on heads of 256 a loss. Below that depth sixteen alone stays, as it is
 faster there (3.98 s over a prompt of 1,500 against 4.15 always deep).
 
+Then eight subgroups, for heads up to 128. A subgroup's queries took a
+third of its shared memory, and shared memory is what bounds how many
+subgroups a workgroup has; held in the instruction's own operands instead,
+loaded once, they leave room for twice as many -- 128 queries reading each
+tile of keys and values. Qwen3 8B's prompt of 16,447 now reads in 84 s,
+ahead of llama.cpp's 131, and Steelman-14B's in 159, the same text. Ten
+subgroups fill the shared memory so that one workgroup fits a compute unit and
+read at half the rate; heads of 256 -- Gemma, Qwen3.6, ThinkingCap -- keep
+four, as their accumulators already fill the registers and holding the
+queries there too lost (538 tokens a second against 480).
+
 The device cache is dealt in pages of sixteen positions from a pool of
 65,536, which is one storage buffer of halves for a model of Qwen3 8B's
 width -- 29,127 positions of its 36 layers. A context that would not fit
