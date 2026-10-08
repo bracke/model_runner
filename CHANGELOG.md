@@ -7,6 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A path rooted outside the project is refused on every host:** five checks took a path for one outside the project only where it began with '/', so on Windows C:\x, \x and ..\x passed for paths in it -- a repository argument, a permission's root, a component's root. They ask one question now, Framework.Is_Rooted, which the agent's own path check already answered for every spelling: '/', '\', '~' or a drive letter. And a draft model named in a sidecar by a full Windows path is taken, where it went through Compose and raised.
 - **A context the device cache cannot hold whole no longer sends the whole prompt to the processor:** asked for pages past the pool's 65,536, a session took them a layer at a time until they ran out, leaving the first layers holding a whole prompt's and the last none, and every batch after was refused a page and attended on the host. Qwen3 8B at a context of 34,816 was on course for over half an hour on a prompt of 32k. Pages are now dealt all at once or not at all: the positions the pool holds -- 29,127 for Qwen3 8B -- are read on the device and the rest on the host, and the same prompt reads in 856 s.
 
 ### Removed
