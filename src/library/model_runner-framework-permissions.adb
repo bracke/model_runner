@@ -131,8 +131,10 @@ package body Model_Runner.Framework.Permissions is
             then
                for Root of Parts ((if Equal = 0 then Key else Value), '|') loop
                   if Root'Length > 0
-                    and then (Root (Root'First) = '/'
-                              or else Root = ".." or else Ada.Strings.Fixed.Index (Root, "../") > 0)
+                    and then (Model_Runner.Framework.Is_Rooted (Root)
+                              or else Root = ".."
+                              or else Ada.Strings.Fixed.Index (Root, "../") > 0
+                              or else Ada.Strings.Fixed.Index (Root, "..\") > 0)
                   then
                      return Root & " is outside the project: a root is a path within it, relative to"
                        & " it, as src/ or docs/";
@@ -986,7 +988,13 @@ package body Model_Runner.Framework.Permissions is
          --  A workspace's tree is the project's too: the project's own
          --  directory, above its state, is named as well.
          declare
-            Full    : constant String := Ada.Directories.Full_Name (if Root = "" then "." else Root);
+            --  With the host's separators as '/': Windows' full names are
+            --  spelled with '\', and the state's directory was looked for
+            --  between two '/'.
+            Full    : constant String :=
+              Ada.Strings.Fixed.Translate
+                (Ada.Directories.Full_Name (if Root = "" then "." else Root),
+                 Ada.Strings.Maps.To_Mapping ("\", "/"));
             State   : constant Natural := Ada.Strings.Fixed.Index (Full, "/.model_runner/");
             Project : constant String :=
               (if State > Full'First then Ada.Directories.Simple_Name (Full (Full'First .. State - 1)) else "");
@@ -1102,10 +1110,7 @@ package body Model_Runner.Framework.Permissions is
                    and then Real (Real'First .. Real'First + Base'Length - 1) = Base
                    and then Real (Real'First + Base'Length) in '/' | '\'));
    begin
-      if Path'Length > 0
-        and then (Path (Path'First) in '/' | '\' | '~'
-                  or else (Path'Length > 1 and then Path (Path'First + 1) = ':'))
-      then
+      if Model_Runner.Framework.Is_Rooted (Path) then
          return Outside;
       end if;
       for Index in Path'First .. Path'Last + 1 loop

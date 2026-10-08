@@ -2682,7 +2682,8 @@ package body Model_Runner.Framework.Configurations is
                      Root : constant String := Value (Start .. Index - 1);
                   begin
                      if not Ada.Directories.Exists (Hostkit.Fs.Join (Project, Root))
-                       or else Root (Root'First) = '/' or else Ada.Strings.Fixed.Index (Root, "..") > 0
+                       or else Model_Runner.Framework.Is_Rooted (Root)
+                       or else Ada.Strings.Fixed.Index (Root, "..") > 0
                      then
                         return Root;
                      end if;
@@ -3210,7 +3211,7 @@ package body Model_Runner.Framework.Configurations is
                                   & " follow the level above");
                return;
             elsif Starts (Name, "map.component.") and then Missing_Root (Value) /= ""
-              and then (Missing_Root (Value) (Missing_Root (Value)'First) = '/'
+              and then (Model_Runner.Framework.Is_Rooted (Missing_Root (Value))
                         or else Ada.Strings.Fixed.Index (Missing_Root (Value), "..") > 0)
             then
                declare

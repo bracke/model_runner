@@ -449,7 +449,8 @@ package body Model_Runner.CLI.Repo is
       --  A path out of the project is none of its files.
       if Action in "impact" | "trace" | "deps" | "users" | "refs"
         and then Argument'Length > 0
-        and then (Argument (Argument'First) = '/' or else Ada.Strings.Fixed.Index (Argument, "..") = Argument'First)
+        and then (Model_Runner.Framework.Is_Rooted (Argument)
+                  or else Ada.Strings.Fixed.Index (Argument, "..") = Argument'First)
       then
          Outcome := E.Make (E.Framework_Input_Invalid);
          E.Add_Text (Outcome, "name", "a file of the project");

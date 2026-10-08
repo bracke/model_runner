@@ -4013,6 +4013,16 @@ package body Tests.Framework_Cases is
                  and then Pm.Path_Refusal (Root, "src/new.adb", Writing => True) = ""
                  and then Pm.Path_Refusal (Root, "../x", Writing => False) /= "",
                  "an agent's path into the state or version control was allowed");
+         --  A path rooted outside the project, as any host spells one: a
+         --  check for a leading '/' alone let C:\ and \ through.
+         Assert (Model_Runner.Framework.Is_Rooted ("/etc/passwd")
+                 and then Model_Runner.Framework.Is_Rooted ("\Windows\x")
+                 and then Model_Runner.Framework.Is_Rooted ("C:\Users\x")
+                 and then Model_Runner.Framework.Is_Rooted ("~/x")
+                 and then not Model_Runner.Framework.Is_Rooted ("src/a.adb")
+                 and then not Model_Runner.Framework.Is_Rooted ("")
+                 and then Pm.Path_Refusal (Root, "C:\x", Writing => False) /= "",
+                 "a path rooted outside the project was taken for one in it");
          --  A path is judged as its parts say it, however it is spelled,
          --  and a root holds what lies under it, not what begins like it.
          declare

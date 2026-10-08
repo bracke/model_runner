@@ -77,6 +77,18 @@ package Model_Runner.Framework is
    --  @return The nearest, or an empty string when none is that near.
    function Nearest (Word : String; Among : Name_Lists.Vector) return String;
 
+   --  Whether a path names a place from the root of a machine rather than
+   --  from the project: begun with '/' or '\', or '~', or a drive letter
+   --  and a colon. A project's own paths are none of these on any host; a
+   --  check for a leading '/' alone let Windows' C:\ and \ through.
+   --
+   --  @param Path The path as given.
+   --  @return True when it is rooted outside the project.
+   function Is_Rooted (Path : String) return Boolean
+   is (Path'Length > 0
+       and then (Path (Path'First) in '/' | '\' | '~'
+                 or else (Path'Length > 1 and then Path (Path'First + 1) = ':')));
+
    --  What kind of state an area holds.
    --
    --  Authored state is what people and the harness decided; runtime state
