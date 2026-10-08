@@ -277,6 +277,7 @@ package body Model_Runner.Framework.Files is
       Delete_Directory (Path);
    exception
       when others =>
+         --  As far as it goes: Remove_Tree is the form that says what is left.
          null;
    end Discard_Tree;
 

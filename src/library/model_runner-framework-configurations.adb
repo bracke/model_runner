@@ -753,6 +753,7 @@ package body Model_Runner.Framework.Configurations is
             Ada.Directories.End_Search (Search);
          exception
             when others =>
+               --  A guess at how the tests run: a tree it cannot walk is one it guesses nothing from.
                null;
          end Walk;
       begin

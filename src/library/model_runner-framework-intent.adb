@@ -395,6 +395,7 @@ package body Model_Runner.Framework.Intent is
                end if;
             exception
                when others =>
+                  --  A label read from free text: one that does not parse is no label.
                   null;
             end;
          end loop;

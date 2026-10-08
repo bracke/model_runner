@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
@@ -457,7 +458,14 @@ package body Model_Runner.Framework.Invocations is
          Config : Records.Item;
          Read   : E.Error_Info;
       begin
-         Stores.Read (Item, Config_Area, "resolved", Config, Read);
+         --  Through Configurations, whose fingerprint says it is the one
+         --  resolved: read straight from the store, a damaged one gave no
+         --  limit, and a recursion of children was bounded by nothing.
+         Configurations.Read (Item, Config, Read);
+         if Configurations.Unreadable (Read) then
+            Status := Read;
+            return;
+         end if;
          declare
             Text  : constant String := Records.Get (Config, "scalar.agents.max_invocations");
             Limit : constant Natural :=

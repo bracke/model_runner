@@ -141,6 +141,20 @@ package Model_Runner.Framework.Bootstrap is
    --  @return Their paths within the project, sorted, each once.
    function Documents (Item : Stores.Store; Patterns : String := "") return Name_Lists.Vector;
 
+   --  The same, and the directories it would have looked in and could not
+   --  read: a document there is not among them, and a caller importing
+   --  from what is found says so rather than taking it for all there is.
+   --
+   --  @param Item The store.
+   --  @param Patterns As Documents'.
+   --  @param Found As Documents returns.
+   --  @param Unread The directories, within the project, not read.
+   procedure List_Documents
+     (Item     : Stores.Store;
+      Patterns : String;
+      Found    : out Name_Lists.Vector;
+      Unread   : out Name_Lists.Vector);
+
    --  Apply what was found, making only what the state does not already
    --  hold, and only what the bootstrap policy lets it make: set
    --  bootstrap.propose names the kinds made -- facts, imports,

@@ -164,6 +164,7 @@ package body Model_Runner.Framework.Execution is
                   Ada.Directories.Delete_File (Request);
                exception
                   when others =>
+                     --  Heeded already: Withdrawn is set, and only what it said is unknown.
                      null;
                end;
             end if;

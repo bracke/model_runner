@@ -2786,6 +2786,23 @@ package body Model_Runner.Framework.Bootstrap is
    ---------------
 
    function Documents (Item : Stores.Store; Patterns : String := "") return Name_Lists.Vector is
+      Found  : Name_Lists.Vector;
+      Unread : Name_Lists.Vector;
+   begin
+      List_Documents (Item, Patterns, Found, Unread);
+      return Found;
+   end Documents;
+
+   --------------------
+   -- List_Documents --
+   --------------------
+
+   procedure List_Documents
+     (Item     : Stores.Store;
+      Patterns : String;
+      Found    : out Name_Lists.Vector;
+      Unread   : out Name_Lists.Vector)
+   is
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
       Listed  : Name_Lists.Vector :=
         Items_Of (if Patterns /= "" then Patterns else Records.Get (Settings_Of (Item), "set.bootstrap.sources"));
@@ -2862,7 +2879,9 @@ package body Model_Runner.Framework.Bootstrap is
          end if;
       exception
          when others =>
-            null;
+            if not Unread.Contains ((if Dir = "" then "." else Dir)) then
+               Unread.Append ((if Dir = "" then "." else Dir));
+            end if;
       end Collect;
       --  The directories a directory pattern names, each a path: a * in a
       --  part -- packages/*/docs -- any one directory there.
@@ -2904,7 +2923,9 @@ package body Model_Runner.Framework.Bootstrap is
                   end loop;
                exception
                   when others =>
-                     null;
+                     if not Unread.Contains ((if Done = "" then "." else Done)) then
+                        Unread.Append ((if Done = "" then "." else Done));
+                     end if;
                end;
             end if;
          end Walk;
@@ -2913,6 +2934,8 @@ package body Model_Runner.Framework.Bootstrap is
          return Result;
       end Directories_Of;
    begin
+      Found.Clear;
+      Unread.Clear;
       if Listed.Is_Empty then
          Listed.Append ("*.md");
          Listed.Append ("docs/**/*.md");
@@ -2945,7 +2968,8 @@ package body Model_Runner.Framework.Bootstrap is
       --  Patterns asked about alone: what they find, and nothing more.
       if Patterns /= "" then
          Sorting.Sort (Result);
-         return Result;
+         Found := Result;
+         return;
       end if;
       --  And every document something was read from before -- one named
       --  to /bootstrap outside these, a .rst or a .txt -- while it is there:
@@ -2967,8 +2991,8 @@ package body Model_Runner.Framework.Bootstrap is
          end loop;
       end loop;
       Sorting.Sort (Result);
-      return Result;
-   end Documents;
+      Found := Result;
+   end List_Documents;
 
    --  How alike two texts are, by their words: those they share, of all
    --  either has.
@@ -3207,6 +3231,10 @@ package body Model_Runner.Framework.Bootstrap is
                   return;
                end if;
                Stores.Read (Item, Area_Of (Kind), Known, Kept, Read);
+               if E.Is_Error (Read) then
+                  Status := Read;
+                  return;
+               end if;
                declare
                   Imported : constant String :=
                     (if Records.Get (Kept, "imported_text") /= ""
@@ -3374,6 +3402,10 @@ package body Model_Runner.Framework.Bootstrap is
                Stores.Pending (Change, Area_Of (Kind), Given, Value, Staged);
                if not Staged then
                   Stores.Read (Item, Area_Of (Kind), Given, Value, Read);
+                  if E.Is_Error (Read) then
+                     Status := Read;
+                     return True;
+                  end if;
                   Records.Set_Revision (Value, Records.Revision (Value) + 1);
                end if;
                Records.Set (Value, "source", Field (Next.Source));
@@ -3494,6 +3526,10 @@ package body Model_Runner.Framework.Bootstrap is
                               Read   : E.Error_Info;
                            begin
                               Stores.Read (Item, Area_Of (Kind), Other, Value, Read);
+                              if E.Is_Error (Read) then
+                                 Status := Read;
+                                 return;
+                              end if;
                               Records.Set_Revision (Value, Records.Revision (Value) + 1);
                               Records.Set (Value, "provenance", Provenance);
                               Records.Set (Value, "source", Field (Next.Source));
@@ -3591,6 +3627,10 @@ package body Model_Runner.Framework.Bootstrap is
                            Stores.Pending (Change, Area_Of (Kind), To_String (Best), Value, Staged);
                            if not Staged then
                               Stores.Read (Item, Area_Of (Kind), To_String (Best), Value, Read);
+                              if E.Is_Error (Read) then
+                                 Status := Read;
+                                 return;
+                              end if;
                               Records.Set_Revision (Value, Records.Revision (Value) + 1);
                            end if;
                            Records.Set (Value, "provenance", Provenance);
@@ -3965,6 +4005,7 @@ package body Model_Runner.Framework.Bootstrap is
             end loop;
          exception
             when others =>
+               --  A document that cannot be read again is not taken for one that says nothing now.
                null;
          end;
          --  A document gone altogether, with what was taken up from it: one

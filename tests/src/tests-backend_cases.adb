@@ -6281,7 +6281,7 @@ package body Tests.Backend_Cases is
    --  buffer again to the exact size and copied the whole cache into it at
    --  every step up -- qwen3-8b drafted by qwen3-0.6b spent 2.4 s of 9.4 in
    --  202 of them. Grown with room, a step up is a step into room already
-   --  there.
+   --  there. A first block, which steps up from nothing, is made to size.
    --
    --  Skipped where there is no device.
    procedure A_Cache_Grows_With_Room
@@ -6317,7 +6317,17 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
-      Products.Reserve (Engine, 100_000, 100_000, Ok);
+      --  A first block is made to size: a session's whole context asked
+      --  for at once, with nothing to step up from, held a quarter more
+      --  than anything would write.
+      Products.Reserve (Engine, 50_000, 50_000, Ok);
+      Assert (Ok and then Products.Cached_Bytes (Engine) = 50_000 * 6,
+              "a first block was not made to size:"
+              & Interfaces.Unsigned_64'Image (Products.Cached_Bytes (Engine)));
+      Products.Release_Cache (Engine);
+
+      --  A paged cache, which names its tables' front, grows with room.
+      Products.Reserve (Engine, 100_000, 100_000, Ok, Front => 4_096);
       Assert (Ok, "the first reserve was refused");
 
       declare
@@ -6326,7 +6336,7 @@ package body Tests.Backend_Cases is
          Assert (First >= 400_000, "the first reserve holds less than asked");
 
          --  A page's tables more: into room already there.
-         Products.Reserve (Engine, 100_700, 100_700, Ok);
+         Products.Reserve (Engine, 100_700, 100_700, Ok, Front => 4_096);
          Assert (Ok, "the second reserve was refused");
          Assert (Products.Cached_Bytes (Engine) = First,
                  "a step up of 700 elements made the cache again:"

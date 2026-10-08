@@ -5739,6 +5739,106 @@ package body Checks is
          Dirs.End_Search (Search);
       end;
 
+      --  And in the project state's own code, two more ways a failure goes
+      --  unsaid.
+      --
+      --  A handler that takes every exception and does nothing says why in
+      --  a comment: some are guesses that give up quietly by design, but
+      --  one was a kept copy's pruning, whose caller then said it was done.
+      --
+      --  A record read to be written back tests what the read said before
+      --  it writes: read from damage, it is empty, and written back a
+      --  revision on it is the entity's fields gone.
+      declare
+         use type Dirs.File_Kind;
+         use Ada.Strings.Unbounded;
+
+         Search : Dirs.Search_Type;
+         Item   : Dirs.Directory_Entry_Type;
+      begin
+         Dirs.Start_Search (Search, Path ("src/library"), "model_runner-framework*.adb");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Item);
+            if Dirs.Kind (Item) = Dirs.Ordinary_File then
+               declare
+                  Relative : constant String :=
+                    Hostkit.Fs.Join ("src/library", Dirs.Simple_Name (Item));
+                  Text     : constant String := Contents (Relative);
+                  Lines    : array (1 .. Ada.Strings.Fixed.Count (Text, [1 => ASCII.LF]) + 1) of Unbounded_String;
+                  Count    : Natural := 0;
+                  Start    : Positive := Text'First;
+
+                  function Trimmed (Index : Positive) return String
+                  is (Ada.Strings.Fixed.Trim (To_String (Lines (Index)), Ada.Strings.Both));
+
+                  function Is_Comment (Index : Positive) return Boolean
+                  is (Trimmed (Index)'Length >= 2
+                      and then Trimmed (Index) (Trimmed (Index)'First .. Trimmed (Index)'First + 1) = "--");
+
+                  function Here (Index : Positive) return String
+                  is (Relative & " line" & Natural'Image (Index));
+               begin
+                  for Position in Text'Range loop
+                     if Text (Position) = ASCII.LF then
+                        Count := Count + 1;
+                        Lines (Count) := To_Unbounded_String (Text (Start .. Position - 1));
+                        Start := Position + 1;
+                     end if;
+                  end loop;
+                  Count := Count + 1;
+                  Lines (Count) := To_Unbounded_String (Text (Start .. Text'Last));
+
+                  for Index in 1 .. Count - 1 loop
+                     declare
+                        Line : constant String := Trimmed (Index);
+                     begin
+                        --  when others => / when X : others =>, then null.
+                        if Line'Length >= 14
+                          and then Line (Line'First .. Line'First + 4) = "when "
+                          and then Line (Line'Last - 8 .. Line'Last) = "others =>"
+                          and then Trimmed (Index + 1) = "null;"
+                        then
+                           Result.Performed := Result.Performed + 1;
+                           if not (Index > 1 and then Is_Comment (Index - 1)) then
+                              Fail (Here (Index) & " takes every exception and says nothing of why");
+                           end if;
+                        end if;
+
+                        --  Stores.Read (..., Status); then Set_Revision
+                        --  within the lines after, with no test between.
+                        if Holds (Line, "Stores.Read (") and then Line (Line'Last - 1 .. Line'Last) = ");" then
+                           declare
+                              Comma  : constant Natural :=
+                                Ada.Strings.Fixed.Index (Line, ",", Ada.Strings.Backward);
+                              Status : constant String :=
+                                (if Comma = 0 then ""
+                                 else Ada.Strings.Fixed.Trim (Line (Comma + 1 .. Line'Last - 2), Ada.Strings.Both));
+                              Tested : Boolean := False;
+                           begin
+                              for After in Index + 1 .. Natural'Min (Count, Index + 12) loop
+                                 Tested := Tested
+                                   or else Holds (Trimmed (After), "Is_Error (" & Status & ")")
+                                   or else Holds (Trimmed (After), "Is_Ok (" & Status & ")")
+                                   or else Holds (Trimmed (After), "Unreadable (" & Status & ")");
+                                 if Holds (Trimmed (After), "Set_Revision (") then
+                                    Result.Performed := Result.Performed + 1;
+                                    if not Tested then
+                                       Fail (Here (Index) & " writes back a record without testing its read");
+                                    end if;
+                                    exit;
+                                 end if;
+                                 exit when Holds (Trimmed (After), "Stores.Read (");
+                              end loop;
+                           end;
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end if;
+         end loop;
+         Dirs.End_Search (Search);
+      end;
+
       --  The environment surface is what the README says it is.
       --
       --  Every variable this program reads is an input somebody else can

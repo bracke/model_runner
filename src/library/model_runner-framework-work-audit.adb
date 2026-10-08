@@ -13,6 +13,15 @@ function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector 
       Result.Append (Question & ": " & (if Answer = "" then "(nothing recorded)" else Answer));
    end Say;
 
+   --  A record there and not readable is said as that: its answers below
+   --  read as nothing recorded, which is not what happened.
+   procedure Unless_Read (What : String) is
+   begin
+      if E.Is_Error (Status) and then E."/=" (Status.Code, E.Framework_Not_Found) then
+         Result.Append (What & ": cannot be read (" & E.Error_Code'Image (Status.Code) & ")");
+      end if;
+   end Unless_Read;
+
    --  The fields of a record whose names start with a prefix, as
    --  NAME VALUE, joined; the name without so much of it as Kept says
    --  not to keep.
@@ -77,15 +86,20 @@ function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector 
    end Workspace_Status;
 begin
    Tasks.Definition (Item, Task_Id, Defined, Status);
+   Unless_Read ("its definition");
    Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
+   Unless_Read ("its state");
    if Invocation /= "" then
       Stores.Read (Item, Invocations_Area, Invocation, Call, Status);
+      Unless_Read ("its last call, " & Invocation);
       Stores.Read (Item, Invocations_Area, "manifest." & Records.Get (Call, "context_manifest"),
                    Plan, Status);
+      Unless_Read ("that call's context manifest");
    end if;
    if Records.Get (State, "current_verification") /= "" then
       Stores.Read (Item, Verification_Area, Records.Get (State, "current_verification"),
                    Proof, Status);
+      Unless_Read ("its verification, " & Records.Get (State, "current_verification"));
    end if;
 
    --  The revisions its context read, or, never worked, the one it was

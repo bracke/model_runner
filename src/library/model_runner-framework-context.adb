@@ -651,6 +651,7 @@ package body Model_Runner.Framework.Context is
                      end if;
                   exception
                      when others =>
+                        --  An offer, not a requirement: a file that cannot be read is not offered.
                         null;
                   end;
                   Start := Index + 1;

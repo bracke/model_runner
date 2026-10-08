@@ -8565,6 +8565,13 @@ package body Model_Runner.Platform.Device.Products is
    --  9.4 s run, 12 ms a time, in 202 of them. Made a quarter larger than
    --  asked, where the budget allows, a step up is a step into room
    --  already there; where it does not, it is made to size as before.
+   --
+   --  A first block is made to size: a block is a session's whole context
+   --  asked for at once, and nothing steps up from it unless a second
+   --  session comes, which is a step up and gets the room then. Made a
+   --  quarter larger, a single session's block held a quarter of its
+   --  context again in memory nothing would write -- 705 MB of qwen3-0.6b
+   --  at 8,192 positions.
    procedure Reserve
      (Item            : in out Engine;
       Elements        : Model_Runner.Numerics.Element_Count;
@@ -8588,10 +8595,11 @@ package body Model_Runner.Platform.Device.Products is
       --  Room enough already: the exact call answers at once. A cache kept
       --  as its copy and a front holds no rows in the binary32, so its
       --  room is the copy's.
-      if (Item.Cache_Bytes >= Wanted
-          or else (Item.Copy_Only and then Item.Cache_Front > 0))
-        and then (Item.Copy_Bytes >= Copy_Wanted
-                  or else not Wants_Copy (Item))
+      if ((Item.Cache_Bytes >= Wanted
+           or else (Item.Copy_Only and then Item.Cache_Front > 0))
+          and then (Item.Copy_Bytes >= Copy_Wanted
+                    or else not Wants_Copy (Item)))
+        or else (Front = 0 and then Item.Cache_Bytes = 0 and then Item.Copy_Bytes = 0)
       then
          Reserve_Exact
            (Item, Elements, Copy_Upto, Ok, Allow_Copy_Only, Keys_Upto, Front);

@@ -54,6 +54,7 @@ begin
                   end if;
                exception
                   when others =>
+                     --  A hint for the reason given: a word that is no path is not one.
                      null;
                end;
                Start := Index + 1;

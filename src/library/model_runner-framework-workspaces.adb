@@ -1050,6 +1050,11 @@ package body Model_Runner.Framework.Workspaces is
       Stores.Pending (Change, Workspaces_Area, Id, Value, Staged);
       if not Staged then
          Stores.Read (Item, Workspaces_Area, Id, Value, Status);
+         --  A record there and not readable is left for the consistency
+         --  check to find, not written over with one field of its own.
+         if E.Is_Error (Status) and then E."/=" (Status.Code, E.Framework_Not_Found) then
+            return;
+         end if;
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
       end if;
       Records.Set (Value, "status", State);
@@ -1150,6 +1155,7 @@ package body Model_Runner.Framework.Workspaces is
                      end if;
                   exception
                      when others =>
+                        --  An aid beside the conflict, which is reported whatever happens here.
                         null;
                   end;
                end loop;
@@ -1681,7 +1687,7 @@ package body Model_Runner.Framework.Workspaces is
          end if;
       end loop;
       if Kept_Files (Item, Name).Is_Empty then
-         Files.Discard_Tree (Where);
+         Files.Remove_Tree (Where, Status);
       end if;
    exception
       --  Said, not swallowed: what is left is still a recovery copy -- each

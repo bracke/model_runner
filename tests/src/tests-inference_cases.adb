@@ -13289,9 +13289,9 @@ package body Tests.Inference_Cases is
    --  the claim is that the answer does not know either.
    --
    --  So the run has to be long enough to slide, which is why this one is
-   --  five hundred and sixty positions where the test above is eight: a
-   --  layer holds the window and a batch, a batch is five hundred and
-   --  twelve, and nothing moves until a position passes that. Held against
+   --  nearly six hundred positions where the test above is eight: a layer
+   --  holds the window, a batch of five hundred and twelve and a rewind's
+   --  slack, and nothing moves until a position passes that. Held against
    --  the implementation written from the description, as the window itself
    --  is, because an engine compared only with itself would agree with its
    --  own mistake.
@@ -13308,14 +13308,18 @@ package body Tests.Inference_Cases is
 
       --  Past the window and a batch, so that every layer has slid at least
       --  once by the end and the last position reads across a move.
-      --  Long enough to slide, and no longer. A layer holds the window and
-      --  a batch, so nothing moves until a position passes five hundred and
-      --  fifteen; the last position of this run reads across the rows that
-      --  moved, which is the part a run that stopped later would not touch
-      --  -- a window of three reaches three positions back, and forty of
-      --  them later there is nothing of the move left to be wrong about.
-      Room   : constant := 600;
-      Length : constant := 518;
+      --  Long enough to slide, and no longer. A layer holds the window, a
+      --  batch and the slack a slide keeps for a rewind, so nothing moves
+      --  until a position passes five hundred and seventy-nine; the last
+      --  position of this run reads across the rows that moved, which is
+      --  the part a run that stopped later would not touch -- a window of
+      --  three reaches three positions back, and forty of them later there
+      --  is nothing of the move left to be wrong about. At 518 it had not
+      --  slid since the slack was added, and passed without the move.
+      --  The context is past the layer's room, so the plan is asked about
+      --  a window that saves something.
+      Room   : constant := 704;
+      Length : constant := 582;
 
       Prompt : Vocab.Token_Array (1 .. Length);
 

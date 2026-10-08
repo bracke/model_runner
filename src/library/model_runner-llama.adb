@@ -7072,6 +7072,30 @@ package body Model_Runner.Llama is
       Status : out E.Error_Info)
    is separate;
 
+   --  How many positions a layer holds at a capacity: none for a linear
+   --  layer of the stack, which keeps a state; a window, a batch and the
+   --  slack a slide keeps for a rewind for a layer that slides; the whole
+   --  context otherwise. Open lays the cache out by it and the plans count
+   --  by it, so the two cannot drift: the plan's margin was a batch while
+   --  Open's had the rewind slack beside it, and a windowed model planned
+   --  sixty-four positions a sliding layer short.
+   --
+   --  The margin past the window is a batch, because a batch is written
+   --  before anything reads it and the room has to hold one whole, and
+   --  the slack a slide keeps for a rewind beside it. Not more: what a
+   --  slide costs is a window of rows moved every margin positions, and
+   --  a larger margin would buy fewer slides for a bigger cache, which is
+   --  the trade this refuses.
+   function Layer_Cells
+     (Settings : Configuration;
+      Capacity : Natural;
+      Layer    : Natural) return Natural
+   is (if Layer < Settings.Layers and then Linear (Settings, Layer) then 0
+       elsif Layer < Settings.Layers and then Settings.Window > 0
+         and then Slides (Settings, Layer)
+       then Natural'Min (Capacity, Settings.Window + Max_Batch + Rewind_Slack)
+       else Capacity);
+
    ------------------
    -- Plan_Session --
    ------------------
@@ -7113,16 +7137,8 @@ package body Model_Runner.Llama is
       --  The rule is stated once, here and in Open, and the two are held
       --  together by a test that opens a session and compares what it took
       --  against what this said.
-      Margin : constant Natural := Max_Batch;
-
-      --  A linear layer keeps no cells: its state is counted below. The
-      --  block past the stack keeps a layer's worth, as Open gives it.
       function Cells_Of (Layer : Natural) return Natural
-      is (if Linear (Settings, Layer) and then Layer < Settings.Layers
-          then 0
-          elsif Slides (Settings, Layer)
-          then Natural'Min (Capacity, Settings.Window + Margin)
-          else Capacity);
+      is (Layer_Cells (Settings, Capacity, Layer));
 
       function Positions return Interfaces.Unsigned_64;
 
@@ -7198,31 +7214,91 @@ package body Model_Runner.Llama is
    --  The fewest positions a context nobody named is cut down to.
    Least_Context : constant := 1024;
 
-   --  What a session planned so holds, counting the cache twice on a
-   --  device: the device keeps its own copy of the cache beside the
-   --  host's, and the host's memory is what both come out of on an
-   --  integrated part.
+   --  What a session planned so holds: the plan, which is the host's
+   --  cache at the precision the host keeps it and everything beside it,
+   --  and on a device the device's cache too -- an integrated part's
+   --  memory is the host's, and both come out of it.
    --
-   --  Where the model learned no sinks the device keeps only the
-   --  half-precision copy, not the cache proper, so its half of the count
-   --  is halved -- which is what lets a sinkless model hold a context whose
-   --  two full copies would not fit, the copy split across buffers so no
-   --  one of them is too large.
+   --  The device's is counted as the reserve will make it, buffer by
+   --  buffer. A paged session asking for halves keeps the copy and the
+   --  tables' front; one asking for binary32, or a model with sinks,
+   --  keeps the binary32 rows beside the copy; a block keeps both unless
+   --  its binary32 would not fit one buffer and the model has no sinks,
+   --  when it keeps the copy alone. A packed cache keeps its bytes and
+   --  the room a layer unpacks into. A paged cache is counted at its
+   --  pages: the quarter more the reserve makes as it grows is taken only
+   --  where the device's budget allows, and that budget is its guard.
+   --  Counted as a half of the plan, the
+   --  default paged session -- whose plan is in halves already -- was
+   --  counted at half its device copy, and a block at a third of what it
+   --  took.
    function Session_Needs
-     (Source : Model'Class;
-      Plan   : Mem.Session_Plan) return Interfaces.Unsigned_64
+     (Source   : Model'Class;
+      Plan     : Mem.Session_Plan;
+      Capacity : Natural;
+      Held     : Cache_Precision;
+      Paged    : Boolean) return Interfaces.Unsigned_64
    is
-      Sinkless : constant Boolean := Sink_Footprint (Source.Settings) = 0;
+      subtype U64 is Interfaces.Unsigned_64;
 
-      Device_Cache : constant Interfaces.Unsigned_64 :=
-        (if Model_Runner.Backend."="
-              (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
-         then (if Sinkless
-               then Plan.KV_Cache_Bytes / 2
-               else Plan.KV_Cache_Bytes)
-         else 0);
+      Settings : Configuration renames Source.Settings;
+
+      Row   : constant U64 :=
+        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size + Settings.Value_Size);
+      Sinks : constant U64 := U64 (Sink_Footprint (Settings));
+
+      --  Positions a layer holds, rounded up to the page where paged; the
+      --  widest of them; and the elements of every layer's rows.
+      Cells   : U64 := 0;
+      Widest  : U64 := 0;
    begin
-      return Plan.Total_Resident + Device_Cache;
+      if Model_Runner.Backend."/="
+           (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+      then
+         return Plan.Total_Resident;
+      end if;
+
+      for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
+         declare
+            Held_Here : constant U64 := U64 (Layer_Cells (Settings, Capacity, Layer));
+            Here      : constant U64 :=
+              (if Paged
+               then (Held_Here + U64 (Page_Positions) - 1)
+                    / U64 (Page_Positions) * U64 (Page_Positions)
+               else Held_Here);
+         begin
+            Cells := Cells + Here;
+            Widest := U64'Max (Widest, Held_Here);
+         end;
+      end loop;
+
+      declare
+         Elements : constant U64 := Cells * Row;
+         Front    : constant U64 := (if Paged then U64 (Page_Front) else 0);
+         Bound    : constant U64 := Model_Runner.Backend.Device.Cache_Bound;
+         Tables   : constant U64 := U64 (Model_Runner.Backend.Device.Table_Room);
+
+         Device : constant U64 :=
+           (case Held is
+              when Eighth | Fourth =>
+                --  The packed words in the binary32 buffer: paged, a copy
+                --  of every page beside them and the tables' front in
+                --  both; a block, the room a layer unpacks into.
+                (if Paged
+                 then Front * 6 + (Plan.KV_Cache_Bytes + Sinks * 4) * 3 / 2
+                 else Plan.KV_Cache_Bytes + (Tables + Sinks) * 4 + Widest * Row * 2),
+              when Exact | Halved =>
+                (if Paged
+                 then (if Sinks = 0 and then Held = Halved
+                       then Front * 4 + (Front + Elements) * 2
+                       else (Front + Elements + Sinks) * 4 + (Front + Elements) * 2)
+                 elsif Sinks = 0 and then Bound > 0
+                   and then (Elements + Tables) * 4 > Bound
+                 then Elements * 2
+                 else (Elements + Tables + Sinks) * 4 + Elements * 2));
+      begin
+         return Plan.Total_Resident + Device;
+      end;
    end Session_Needs;
 
    ----------

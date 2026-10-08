@@ -5779,11 +5779,24 @@ package body Model_Runner.CLI.Project_Commands is
          end Named_Here;
          Named : constant Names.Vector := Named_Here;
 
+         --  The directories the policy would have read from and could not:
+         --  said, so what is imported is not taken for all there is.
+         Unread : Names.Vector;
+
+         function Policy_Documents return Names.Vector is
+            Found : Names.Vector;
+         begin
+            Model_Runner.Framework.Bootstrap.List_Documents (Store, "", Found, Unread);
+            return Found;
+         end Policy_Documents;
+
          --  The documents named, or those the bootstrap policy reads.
          Files  : constant Names.Vector :=
-           (if Positional.Is_Empty then Model_Runner.Framework.Bootstrap.Documents (Store)
-            else Named);
+           (if Positional.Is_Empty then Policy_Documents else Named);
       begin
+         for Directory of Unread loop
+            Pres.Put_Note (Screen, "cli.bootstrap.unread", [Loc.Named ("path", Directory)]);
+         end loop;
          --  A pattern that finds nothing is said, not read as a name.
          for Path of Positional loop
             if Ada.Strings.Fixed.Index (Path, "*") > 0 and then Named.Is_Empty then

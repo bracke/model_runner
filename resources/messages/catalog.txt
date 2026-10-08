@@ -730,6 +730,7 @@ en.cli.next.bootstrap_nested = note: {detail} belong to a project of its own bel
 en.cli.next.bootstrap_no_requirement = no requirement was read: a requirement is a line with SHALL, MUST or SHOULD (shall, must or should in lower case count in a list or in a requirements document), or a heading ## REQ-001 Title with its statement under it
 en.cli.next.bootstrap_nothing = nothing in {detail} reads as a requirement, decision or specification: a requirement is a line with SHALL, MUST or SHOULD (shall, must or should in lower case count in a list or in a requirements document), or a heading ## REQ-001 Title with its statement under it
 en.cli.next.bootstrap_retired = {detail}: decision records, {count}, each rejected, deprecated or superseded by its own status, so none is proposed
+en.cli.bootstrap.unread = {path} could not be read: a document in it is not among those read
 en.cli.next.no_documents = no documents to read: bootstrap looks at {detail} -- /reconfigure add set.bootstrap.sources GLOB reads more, and /bootstrap FILE reads one; a requirement is a line with SHALL, MUST or SHOULD (shall, must or should in lower case count in a list or in a requirements document), or a heading ## REQ-001 Title with its statement under it
 en.cli.next.init = next: /bootstrap FILE reads a document's requirements in, /req new TITLE text=... says one, and /task new TITLE kind=KIND makes a task
 en.cli.next.init_documents = next: /bootstrap reads what the documents here say the project must be -- {detail} -- and /task new TITLE kind=KIND makes a task
@@ -2200,6 +2201,7 @@ da.cli.next.bootstrap_nested = bemærk: {detail} hører også til et projekt for
 da.cli.next.bootstrap_no_requirement = intet krav blev læst: et krav er en linje med SHALL, MUST eller SHOULD (shall, must eller should med små bogstaver tæller i en liste eller i et kravdokument), eller en overskrift ## REQ-001 Titel med dens udsagn under
 da.cli.next.bootstrap_nothing = intet i {detail} læses som et krav, en beslutning eller en specifikation: et krav er en linje med SHALL, MUST eller SHOULD (shall, must eller should med små bogstaver tæller i en liste eller i et kravdokument), eller en overskrift ## REQ-001 Titel med dens udsagn under
 da.cli.next.bootstrap_retired = {detail}: beslutningsdokumenter, {count}, hver afvist, forældet eller erstattet ifølge sin egen status, så ingen foreslås
+da.cli.bootstrap.unread = {path} kunne ikke læses: et dokument i den er ikke blandt dem, der blev læst
 da.cli.next.no_documents = ingen dokumenter at læse: bootstrap ser på {detail} -- /reconfigure add set.bootstrap.sources GLOB læser flere, og /bootstrap FIL læser et; et krav er en linje med SHALL, MUST eller SHOULD (shall, must eller should med små bogstaver tæller i en liste eller i et kravdokument), eller en overskrift ## REQ-001 Titel med dens udsagn under
 da.cli.next.init = næste: /bootstrap FIL læser et dokuments krav ind, /req new TITEL text=... siger et, og /task new TITEL kind=ART laver en opgave
 da.cli.next.init_documents = næste: /bootstrap læser hvad dokumenterne her siger projektet skal være -- {detail} -- og /task new TITEL kind=ART laver en opgave
@@ -3431,6 +3433,7 @@ qps.cli.next.bootstrap_nested = ⟦ñóŧé: {detail} béĺóñg ŧó á pŕój�
 qps.cli.next.bootstrap_no_requirement = ⟦ñó ŕéqúíŕéméñŧ wáß ŕéáð: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (ßháĺĺ, múßŧ óŕ ßhóúĺð íñ ĺówéŕ çáßé çóúñŧ íñ á ĺíßŧ óŕ íñ á ŕéqúíŕéméñŧß ðóçúméñŧ), óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.bootstrap_nothing = ⟦ñóŧhíñg íñ {detail} ŕéáðß áß á ŕéqúíŕéméñŧ, ðéçíßíóñ óŕ ßpéçífíçáŧíóñ: á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (ßháĺĺ, múßŧ óŕ ßhóúĺð íñ ĺówéŕ çáßé çóúñŧ íñ á ĺíßŧ óŕ íñ á ŕéqúíŕéméñŧß ðóçúméñŧ), óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.bootstrap_retired = ⟦{detail}: ðéçíßíóñ ŕéçóŕðß, {count}, éáçh ŕéjéçŧéð, ðépŕéçáŧéð óŕ ßúpéŕßéðéð bý íŧß ówñ ßŧáŧúß, ßó ñóñé íß pŕópóßéð⟧
+qps.cli.bootstrap.unread = ⟦{path} çóúĺð ñóŧ bé ŕéáð: á ðóçúméñŧ íñ íŧ íß ñóŧ ámóñg ŧhóßé ŕéáð⟧
 qps.cli.next.no_documents = ⟦ñó ðóçúméñŧß ŧó ŕéáð: bóóŧßŧŕáp ĺóókß áŧ {detail} -- /ŕéçóñfígúŕé áðð ßéŧ.bóóŧßŧŕáp.ßóúŕçéß GLOB ŕéáðß móŕé, áñð /bóóŧßŧŕáp FILE ŕéáðß óñé; á ŕéqúíŕéméñŧ íß á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (ßháĺĺ, múßŧ óŕ ßhóúĺð íñ ĺówéŕ çáßé çóúñŧ íñ á ĺíßŧ óŕ íñ á ŕéqúíŕéméñŧß ðóçúméñŧ), óŕ á héáðíñg ## REQ-001 Ŧíŧĺé wíŧh íŧß ßŧáŧéméñŧ úñðéŕ íŧ⟧
 qps.cli.next.init = ⟦ñéxŧ: /bóóŧßŧŕáp FILE ŕéáðß á ðóçúméñŧ'ß ŕéqúíŕéméñŧß íñ, /ŕéq ñéw ŦIŦLE ŧéxŧ=... ßáýß óñé, áñð /ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk⟧
 qps.cli.next.init_documents = ⟦ñéxŧ: /bóóŧßŧŕáp ŕéáðß wháŧ ŧhé ðóçúméñŧß héŕé ßáý ŧhé pŕójéçŧ múßŧ bé -- {detail} -- áñð /ŧáßk ñéw ŦIŦLE kíñð=KIND mákéß á ŧáßk⟧

@@ -1007,6 +1007,7 @@ package body Model_Runner.Framework.Permissions is
             end loop;
          exception
             when others =>
+               --  A guess at the project-relative path: a name that does not parse is not one.
                null;
          end;
          --  The longest tail of it the project holds -- /x/project/src/a.adb
@@ -1028,6 +1029,7 @@ package body Model_Runner.Framework.Permissions is
                      end if;
                   exception
                      when others =>
+                        --  A guess at the project-relative path: a name that does not parse is not one.
                         null;
                   end;
                end if;

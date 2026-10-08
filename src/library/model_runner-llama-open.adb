@@ -14,6 +14,8 @@ is
    Settings : Configuration;
    Capacity : Natural;
    Host_Cache : Cache_Precision := Exact;
+   On_Device  : Boolean;
+   Will_Page  : Boolean;
 begin
    Close (Item);
    Status := E.Success;
@@ -65,22 +67,27 @@ begin
    --  asking for halves holds them (see the storage below), and was
    --  planned at binary32 -- Steelman-14B at its own 32,768 refused for
    --  20 GB it would not have taken.
-   Host_Cache := (if Paged
-                    and then Model_Runner.Backend."="
-                               (Source.Able.Kind,
-                                Model_Runner.Backend.Backend_Device)
-                    and then Cache = Halved
-                  then Halved else Exact);
+   --  And what the host holds is what Held will say below: off the device
+   --  the precision asked -- halves, or packed -- where it was planned at
+   --  binary32 and a processor session at the default halves was counted
+   --  at twice what it took.
+   On_Device := Model_Runner.Backend."="
+                  (Source.Able.Kind, Model_Runner.Backend.Backend_Device);
+   Will_Page := Paged and then On_Device
+                and then Cache in Exact | Halved | Eighth | Fourth;
+   Host_Cache := (if On_Device and then Cache in Exact | Halved
+                  then (if Cache = Halved and then Will_Page then Halved else Exact)
+                  else Cache);
 
    if Context = 0 and then Session_Bounds.Max_Session_Bytes /= 0 then
       loop
          Plan_Session (Model (Source), Capacity, Item.Plan, Status,
-                       Cache => Host_Cache);
+                       Cache => Host_Cache, Values => Values);
          if E.Is_Error (Status) then
             return;
          end if;
 
-         exit when Session_Needs (Source, Item.Plan)
+         exit when Session_Needs (Source, Item.Plan, Capacity, Host_Cache, Will_Page)
                      <= Session_Bounds.Max_Session_Bytes
            or else Capacity <= Least_Context;
 
@@ -89,7 +96,7 @@ begin
    end if;
 
    Plan_Session (Model (Source), Capacity, Item.Plan, Status,
-                 Cache => Host_Cache);
+                 Cache => Host_Cache, Values => Values);
    if E.Is_Error (Status) then
       return;
    end if;
@@ -119,7 +126,7 @@ begin
    --  What the session holds, against what it may.
    declare
       Needed : constant Interfaces.Unsigned_64 :=
-        Session_Needs (Source, Item.Plan);
+        Session_Needs (Source, Item.Plan, Capacity, Host_Cache, Will_Page);
    begin
       if Session_Bounds.Max_Session_Bytes /= 0
         and then Needed > Session_Bounds.Max_Session_Bytes
@@ -156,23 +163,6 @@ begin
       Room   : Element_Count := 0;
       Keys   : Element_Count := 0;
       Vals   : Element_Count := 0;
-
-      --  How far past the window a layer runs before it slides.
-      --
-      --  A batch, because a batch is written before anything reads it
-      --  and the room has to hold one whole, and the slack a slide keeps
-      --  past the window for a rewind (Rewind_Slack), which the room
-      --  holds beside the batch. Not more: what a slide
-      --  costs is a window of rows moved every margin positions, which
-      --  is a window over a batch of rows for every position written --
-      --  eight of them on gemma2, against the six hundred megabytes of
-      --  weights that position reads. What a larger margin would buy is
-      --  fewer slides and a bigger cache, which is the trade this
-      --  section exists to refuse.
-      Margin : constant Element_Count :=
-        Element_Count (Max_Batch) + Rewind_Slack;
-
-      Windowed : constant Boolean := Settings.Window > 0;
    begin
       --  One entry a layer of the stack, and one more for each block
       --  past it, which attends in full over the same context and
@@ -184,16 +174,9 @@ begin
       Item.Origin := new Cell_Counts (0 .. Layers + Settings.Next_Layers - 1);
 
       for Layer in 0 .. Layers + Settings.Next_Layers - 1 loop
+         --  A linear layer keeps a state instead, below.
          Item.Cells.all (Layer) :=
-           (if Layer < Layers and then Linear (Settings, Layer)
-            --  A linear layer keeps a state instead, below.
-            then 0
-            elsif Layer < Layers and then Windowed
-              and then Slides (Settings, Layer)
-            then Element_Count'Min
-                   (Element_Count (Capacity),
-                    Element_Count (Settings.Window) + Margin)
-            else Element_Count (Capacity));
+           Element_Count (Layer_Cells (Settings, Capacity, Layer));
 
          Item.At_Rows.all (Layer) := Room;
          Item.At_Keys.all (Layer) := Keys;

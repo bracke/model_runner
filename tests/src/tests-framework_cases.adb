@@ -4292,6 +4292,30 @@ package body Tests.Framework_Cases is
                 & "Decision: errors are values." & LF);
       Assert (Bs.Documents (Store) = Model_Runner.Framework.Name_Lists.To_Vector ("notes/io.txt", 1),
               "bootstrap did not read what its policy names, and only that");
+      --  A directory it could not read is said, not taken for empty.
+      declare
+         Closed : constant String := Fresh_Root (Store) & "/docs/closed";
+         Listed : Model_Runner.Framework.Name_Lists.Vector;
+         Unread : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Dirs.Create_Path (Closed);
+         Put_File (Closed & "/hidden.md", "The tool SHALL be found." & LF);
+         Put_File (Fresh_Root (Store) & "/docs/open.md", "The tool SHALL be read." & LF);
+         GNAT.OS_Lib.Set_Non_Readable (Closed);
+         --  Where permissions do not hold -- a superuser -- nothing is
+         --  unreadable, and there is nothing to see.
+         if not GNAT.OS_Lib.Is_Readable_File (Closed) then
+            Bs.List_Documents (Store, "docs/**/*.md", Listed, Unread);
+            Assert (Listed.Contains ("docs/open.md") and then not Listed.Contains ("docs/closed/hidden.md")
+                    and then Unread.Contains ("docs/closed"),
+                    "a directory bootstrap could not read was not said");
+         end if;
+         GNAT.OS_Lib.Set_Readable (Closed);
+         Bs.List_Documents (Store, "docs/**/*.md", Listed, Unread);
+         Assert (Unread.Is_Empty and then Listed.Contains ("docs/closed/hidden.md"),
+                 "a readable directory was said to be unread");
+         Dirs.Delete_Tree (Fresh_Root (Store) & "/docs");
+      end;
       Found := Bs.Scan ("notes/io.txt", Read_Whole (Fresh_Root (Store) & "/notes/io.txt"));
       Bs.Apply (Store, Change, Found, Report, Status);
       S.Commit (Store, Change, Status);
