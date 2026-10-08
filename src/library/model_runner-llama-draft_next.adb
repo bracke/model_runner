@@ -46,6 +46,13 @@ begin
    end if;
 
    declare
+      --  How far back a proposal looks. It is a guess the stack checks,
+      --  so what it attends to is the draft's choice and not the answer's,
+      --  and it attends on the processor: over every position, Qwen3.6's
+      --  three proposals took 118 ms of a round sixteen thousand positions
+      --  in, where at the start of a context they took six.
+      Next_Reach : constant Element_Count := 2_048;
+
       Current : Layer renames Source.Next.all (0);
       --  In the stack's cache where it is exact, in the block's own where
       --  it is not.
@@ -134,7 +141,8 @@ begin
         (Item.Query.all, Keys.all, Values.all,
          Base, V_Base, KV_Width, V_Width, Heads, Head_Size, Value_Size,
          Element_Count (Settings.Group_Size),
-         First => 0, Last => Cell, Scale => Scale,
+         First => (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0),
+         Last => Cell, Scale => Scale,
          Cap => Settings.Attention_Cap, Max_Bias => Settings.Max_Bias,
          Query_At => Cell, Sinks => null,
          From_Head => 0, To_Head => Heads - 1,

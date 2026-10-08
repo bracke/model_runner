@@ -497,6 +497,58 @@ package body Model_Runner.Platform.Device.Products is
    --  Matrix_Wide_Head in its second compilation, and reads the cache
    --  sixteen components at a time, so a head wider than both or not a
    --  multiple of sixteen is not one it can answer.
+   --  Cached positions a batch must attend across for the few-position
+   --  pipeline: it is two workgroups a slice where a model has two groups
+   --  of keys, and shallower than this the scalar kernel's one a head of a
+   --  position was the faster -- Qwen3.6 at 4,000 positions drafted 16.9
+   --  tokens a second with it and 19.9 without.
+   Few_Span : constant := 8_192;
+
+   --  The few-position pipeline for a step of Positions, or none: two to
+   --  eight positions whose heads in a group, times the positions, fill at
+   --  most four subgroups of sixteen rows, out of the half-precision copy,
+   --  causal, and with nothing the few-position mode leaves out -- a
+   --  sliding window, a slope, a sink. See FEW in attention_matrix.comp.
+   function Few_Kernel
+     (Item       : Engine;
+      Positions  : Natural;
+      Heads      : Natural;
+      Group_Size : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Address
+   is
+      Rows : constant Natural := Positions * Natural'Max (1, Group_Size);
+      Many : constant Natural :=
+        (if Rows <= 16 then 1 elsif Rows <= 32 then 2 else 3);
+      Width : constant Natural :=
+        (if Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
+         then 1
+         elsif Head_Size <= Matrix_Mid_Head
+           and then Value_Size <= Matrix_Mid_Head
+         then 2
+         elsif Head_Size <= Matrix_Wide_Head
+           and then Value_Size <= Matrix_Wide_Head
+         then 3
+         elsif Head_Size <= Matrix_Wider_Head
+           and then Value_Size <= Matrix_Wider_Head
+         then 4
+         else 0);
+   begin
+      if Positions not in 2 .. Query_Block - 1
+        or else Group_Size = 0
+        or else Rows > 64
+        or else Heads mod Group_Size /= 0
+        or else Head_Size mod 16 /= 0
+        or else Value_Size mod 16 /= 0
+        or else Width = 0
+        or else Item.Exact_Attention
+        or else Item.Merge_Line = Null_Handle
+      then
+         return Null_Handle;
+      end if;
+      return Item.Few_Attend (Width, Many);
+   end Few_Kernel;
+
    --  The deep pipeline of the kernel Matrix_Kernel would bind for this
    --  shape, or none: the same choice, at Matrix_Deep_Queries a
    --  workgroup.
@@ -4697,6 +4749,53 @@ package body Model_Runner.Platform.Device.Products is
             Request.Stage.Specialized := Null_Handle;
          end;
 
+         --  And for a few positions at once: each width at one, two and
+         --  four subgroups of sixteen rows, the fourth constant set.
+         declare
+            type Four_Entries is array (1 .. 4) of Specialization_Entry
+              with Convention => C;
+            type Four_Values is array (1 .. 4) of C.unsigned
+              with Convention => C;
+
+            Which : aliased constant Four_Entries :=
+              [(Which => 1, At_Was => 0, Span => 4),
+               (Which => 2, At_Was => 4, Span => 4),
+               (Which => 3, At_Was => 8, Span => 4),
+               (Which => 4, At_Was => 12, Span => 4)];
+            Value : aliased Four_Values;
+            Told  : aliased Specialization_Info;
+
+            Modules : constant array (1 .. 4) of Address :=
+              [Item.Attend_Matrix, Item.Attend_Matrix_Mid,
+               Item.Attend_Matrix_Wide, Item.Attend_Matrix_Wider];
+            Subs : constant array (1 .. 3) of C.unsigned := [1, 2, 4];
+         begin
+            Told.Count := 4;
+            Told.Entries := Which'Address;
+            Told.Span := 16;
+            Told.Values := Value'Address;
+            Request.Stage.Specialized := Told'Address;
+
+            for Width in Modules'Range loop
+               for Many in Subs'Range loop
+                  Item.Few_Attend (Width, Many) := Null_Handle;
+                  if Modules (Width) /= Null_Handle then
+                     Value :=
+                       [C.unsigned (Matrix_Queries), Subs (Many),
+                        C."*" (64, Subs (Many)), 1];
+                     Request.Stage.Module := Modules (Width);
+                     if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                                Null_Handle, Made'Access) = 0
+                     then
+                        Item.Few_Attend (Width, Many) := Made;
+                     end if;
+                  end if;
+               end loop;
+            end loop;
+
+            Request.Stage.Specialized := Null_Handle;
+         end;
+
          --  And the unpacking of a packed layer into the copy that
          --  kernel reads, which is worth having only where it is.
          if Item.Unpacker /= Null_Handle
@@ -5470,6 +5569,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Deep_Attend, "vkDestroyPipeline");
+      for Width in Item.Few_Attend'Range (1) loop
+         for Many in Item.Few_Attend'Range (2) loop
+            Give_Back (Item.Few_Attend (Width, Many), "vkDestroyPipeline");
+         end loop;
+      end loop;
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
@@ -12437,6 +12541,30 @@ package body Model_Runner.Platform.Device.Products is
                or else Steps.Items (Which).Inverts
                or else Steps.Items (Which).Blends));
 
+      --  The few-position pipeline an attending step takes, or none; see
+      --  Few_Kernel.
+      function Few_Line (Which : Positive) return Address
+      is (if Steps.Items (Which).Attends
+            and then Steps.Items (Which).Packed.K_Bits = 0
+            and then Steps.Items (Which).Causal
+            and then Steps.Items (Which).Window = 0
+            and then Steps.Items (Which).Sinks = 0
+            and then Model_Runner.Numerics."=" (Steps.Items (Which).Max_Bias, 0.0)
+            and then Steps.Items (Which).Last
+                     >= Steps.Items (Which).First + Few_Span
+            and then not Attends_By_Matrix
+                           (Item, Count, Steps.Items (Which).Head_Size,
+                            Steps.Items (Which).Value_Size)
+            and then Reads_Copy
+                       (Item, Count, Steps.Items (Which).Head_Size,
+                        Steps.Items (Which).Value_Size, False)
+          then Few_Kernel
+                 (Item, Count, Steps.Items (Which).Heads,
+                  Steps.Items (Which).Group_Size,
+                  Steps.Items (Which).Head_Size,
+                  Steps.Items (Which).Value_Size)
+          else Null_Handle);
+
       function Tiled (Which : Positive) return Boolean
       is (Is_Product (Which)
           and then not Steps.Items (Which).Glu
@@ -14581,6 +14709,9 @@ package body Model_Runner.Platform.Device.Products is
                   --  share a cache.
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
+                     (if Few_Line (Index) /= Null_Handle and then Barrier /= null
+                      then Few_Line (Index)
+                      else
                      Attend_Kernel (Item, Count, This.Head_Size,
                                     This.Value_Size, This.Group_Size,
                                     Rounding => False,
@@ -14588,9 +14719,12 @@ package body Model_Runner.Platform.Device.Products is
                                     V_Base => This.V_Base,
                                     KV_Width => This.KV_Width,
                                     V_Width => This.V_Width,
-                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0)));
+                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
 
                   declare
+                     Few : constant Boolean :=
+                       Few_Line (Index) /= Null_Handle and then Barrier /= null;
+
                      Shape : aliased Attention_Constants :=
                        (Heads      => C.unsigned (This.Heads),
                         Head_Size  => C.unsigned (This.Head_Size),
@@ -14702,8 +14836,17 @@ package body Model_Runner.Platform.Device.Products is
                      begin
                         --  The matrix kernel takes its blocks along the
                         --  first axis and its heads along the second; see
-                        --  attention_matrix.comp.
-                        if Attends_By_Matrix
+                        --  attention_matrix.comp. A few at once take a
+                        --  group of heads along the first and a slice of
+                        --  the cache along the second.
+                        if Few then
+                           Dispatch
+                             (Item.Buffer,
+                              C.unsigned
+                                (This.Heads
+                                 / Natural'Max (1, This.Group_Size)),
+                              C.unsigned (Slices), 1);
+                        elsif Attends_By_Matrix
                              (Item, Seated, This.Head_Size, This.Value_Size)
                         then
                            Dispatch (Item.Buffer, Down, Across,
@@ -14717,8 +14860,8 @@ package body Model_Runner.Platform.Device.Products is
                      --  The slices put together, once every one of them
                      --  has left its record: a workgroup a head of a
                      --  position, reading the same result region it
-                     --  writes.
-                     if Slices > 1 then
+                     --  writes. A few at once always leave records.
+                     if Slices > 1 or else Few then
                         declare
                            Merged : aliased Merge_Constants :=
                              (Heads      => C.unsigned (This.Heads),

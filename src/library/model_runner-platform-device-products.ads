@@ -3174,6 +3174,12 @@ private
 
    type Index_Array is array (0 .. Index_Slots - 1) of Natural;
 
+   --  The few-position pipelines, by head width (sixty-four, eighty, a
+   --  hundred and twenty-eight, two hundred and fifty-six) and by
+   --  subgroups a workgroup (one, two, four).
+   type Few_Lines is
+     array (1 .. 4, 1 .. 3) of System.Address;
+
    type Engine is limited record
       --  The instance every entry point this engine uses is found through.
       --  An engine outlives no instance and each names its own.
@@ -3553,6 +3559,10 @@ private
       Matrix_Wide_Deep_Attend : System.Address := System.Null_Address;
       Matrix_Mid_Deep_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Deep_Attend : System.Address := System.Null_Address;
+
+      --  And each of the four for a few positions at once, at one, two
+      --  and four subgroups: see FEW in attention_matrix.comp.
+      Few_Attend : Few_Lines := [others => [others => System.Null_Address]];
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;

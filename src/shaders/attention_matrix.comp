@@ -178,6 +178,18 @@ const uint BC = 64u;
 //  this is how a workgroup answers thirty-two. The host makes the
 //  workgroup SUBS subgroups wide through local_size_x_id 3.
 layout(constant_id = 2) const uint SUBS = 1u;
+
+//  A few positions at once -- a round's proposals, checked together -- in
+//  the place of a block of one head's: a workgroup's rows are those
+//  positions times the heads that share one group of keys and values, so
+//  every key and value is read once for all of them where a workgroup a
+//  head of a position read it for each. A workgroup is a group along the
+//  first axis and a slice of the cache along the second, and leaves its
+//  rows' unnormalized blends, largest scores and sums for merge.comp, as
+//  attention.comp's slices do. Qwen3.6 checking four proposals sixteen
+//  thousand positions in attended 5.3 ms a layer a head a position at a
+//  time, three times what one position took.
+layout(constant_id = 4) const uint FEW = 0u;
 #ifdef WIDER_HEAD
 //  And a third, for Gemma's heads of two hundred and fifty-six, which
 //  attended through attention.comp's scalar tile: twice the registers a
@@ -238,6 +250,40 @@ shared uint rowmap[SUBS * 256];
 //  The weights, in what the instruction reads.
 shared float16_t ps[SUBS * BR * BC];
 
+//  The position a row asks for, clamped onto the batch; whether it is one
+//  of the batch's; the head it asks with; and, a few at once, where its
+//  record goes.
+uint row_slot (uint sub, uint block, uint m) {
+    if (FEW != 0u) {
+        return min ((sub * BR + m) / shape.group_size, shape.positions - 1u);
+    }
+    return min (block * BR + m, shape.positions - 1u);
+}
+
+bool row_real (uint sub, uint block, uint m) {
+    if (FEW != 0u) {
+        return (sub * BR + m) / shape.group_size < shape.positions;
+    }
+    return block * BR + m < shape.positions;
+}
+
+uint row_head (uint sub, uint head, uint m) {
+    if (FEW != 0u) {
+        return gl_WorkGroupID.x * shape.group_size
+               + (sub * BR + m) % shape.group_size;
+    }
+    return head;
+}
+
+uint row_record (uint sub, uint m) {
+    uint p = (sub * BR + m) / shape.group_size;
+    uint h = gl_WorkGroupID.x * shape.group_size
+             + (sub * BR + m) % shape.group_size;
+    return shape.positions * shape.heads * shape.value_size
+           + ((gl_WorkGroupID.y * shape.positions + p) * shape.heads + h)
+             * (shape.value_size + 2u);
+}
+
 void main() {
     //  Blocks of queries along the first axis and heads along the second,
     //  so that the workgroups a part runs at once are one head's blocks
@@ -251,7 +297,7 @@ void main() {
     uint sub   = SUBS == 1u ? 0u : gl_LocalInvocationID.x / 64u;
     uint block = SUBS == 1u ? gl_WorkGroupID.x
                             : gl_WorkGroupID.x * SUBS + sub;
-    uint head  = gl_WorkGroupID.y;
+    uint head  = FEW != 0u ? 0u : gl_WorkGroupID.y;
     uint lane  = SUBS == 1u ? gl_LocalInvocationID.x
                             : gl_LocalInvocationID.x % 64u;
 
@@ -281,13 +327,15 @@ void main() {
     //  one that is goes on, because the others wait for it at every
     //  barrier: its rows are past the batch, and the writes at the end
     //  write them as nothing.
-    if (head >= shape.heads || gl_WorkGroupID.x * SUBS * BR >= reach) {
+    if (FEW != 0u
+        ? gl_WorkGroupID.x * shape.group_size >= shape.heads
+        : head >= shape.heads || gl_WorkGroupID.x * SUBS * BR >= reach) {
         return;
     }
 
     //  A block wholly past the batch: zeros in the copy, and none of the
     //  attending below.
-    if (SUBS == 1u && block * BR >= shape.positions) {
+    if (FEW == 0u && SUBS == 1u && block * BR >= shape.positions) {
         for (uint at = lane; at < BR * shape.value_size; at += 64u) {
             uint r = at / shape.value_size;
             uint c = at % shape.value_size;
@@ -303,7 +351,7 @@ void main() {
         return;
     }
 
-    uint group = head / shape.group_size;
+    uint group = FEW != 0u ? gl_WorkGroupID.x : head / shape.group_size;
     uint dk    = shape.head_size;
     uint dv    = shape.value_size;
     uint col   = lane & 31u;
@@ -335,9 +383,11 @@ void main() {
     //  neither bound needs the rows compared.
     //  Every subgroup of the workgroup walks the same tiles, the union of
     //  all of theirs, so that they meet at the same barriers.
-    uint slot_low  = min (gl_WorkGroupID.x * SUBS * BR, shape.positions - 1u);
-    uint slot_high = min (gl_WorkGroupID.x * SUBS * BR + SUBS * BR - 1u,
-                          shape.positions - 1u);
+    uint slot_low  = FEW != 0u ? 0u
+                     : min (gl_WorkGroupID.x * SUBS * BR, shape.positions - 1u);
+    uint slot_high = FEW != 0u ? shape.positions - 1u
+                     : min (gl_WorkGroupID.x * SUBS * BR + SUBS * BR - 1u,
+                            shape.positions - 1u);
 
     uint last_max = shape.last + (causal != 0u ? slot_high : 0u);
     uint last_low = shape.last + (causal != 0u ? slot_low  : 0u);
@@ -355,6 +405,18 @@ void main() {
         first_min &= ~15u;
     }
 
+    //  A few at once walk their slice of the cache: whole tiles, so the
+    //  slices meet without sharing a position.
+    uint walk_from = first_min;
+    uint walk_to   = last_max;
+    if (FEW != 0u) {
+        uint span  = last_max + 1u - first_min;
+        uint parts = gl_NumWorkGroups.y;
+        uint per   = ((span + parts - 1u) / parts + BC - 1u) / BC * BC;
+        walk_from  = first_min + gl_WorkGroupID.y * per;
+        walk_to    = min (walk_from + per - 1u, last_max);
+    }
+
     //  The queries, in half precision. A row past the end of the batch is
     //  clamped onto the last real one, as attention.comp clamps it, and
     //  dropped at the write. A component to an invocation, walking the
@@ -364,10 +426,11 @@ void main() {
     //  A head wider than the subgroup takes a second component a lane.
     for (uint c = lane; c < dk; c += 64u) {
         for (uint m = 0u; m < BR; m++) {
-            uint slot = min (block * BR + m, shape.positions - 1u);
+            uint slot = row_slot (sub, block, m);
+            uint asks = row_head (sub, head, m);
 
             qs[QS0 + m * DM + c] =
-                float16_t (q[slot * shape.heads * dk + head * dk + c]);
+                float16_t (q[slot * shape.heads * dk + asks * dk + c]);
         }
     }
 
@@ -441,7 +504,7 @@ void main() {
     }
 #endif
 
-    for (uint base = first_min; base <= last_max; base += BC) {
+    for (uint base = walk_from; base <= walk_to; base += BC) {
         barrier();
 
         //  The scores of the tile, as a matrix product read out of the
@@ -505,7 +568,7 @@ void main() {
         [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             uint r = (lane >> 5u) + 2u * i;
 
-            uint slot = min (block * BR + r, shape.positions - 1u);
+            uint slot = row_slot (sub, block, r);
             uint la   = shape.last + (causal != 0u ? slot : 0u);
             uint fi   = shape.first;
 
@@ -630,8 +693,8 @@ void main() {
         uint r = (lane >> 5u) + 2u * i;
 
         if (col == 0u) {
-            rowscale[RS0 + r] = block * BR + r < shape.positions
-                          ? 1.0 / total[i] : 0.0;
+            rowscale[RS0 + r] = row_real (sub, block, r)
+                          ? (FEW != 0u ? 1.0 : 1.0 / total[i]) : 0.0;
         }
     }
     barrier();
@@ -663,7 +726,11 @@ void main() {
                     uint c    = t * 16u + at % 16u;
                     uint slot = block * BR + r;
 
-                    if (c < dv) {
+                    if (FEW != 0u) {
+                        if (c < dv && row_real (sub, block, r)) {
+                            y[row_record (sub, r) + c] = ss[SS0 + at];
+                        }
+                    } else if (c < dv) {
                         uint where = slot * shape.heads * dv + head * dv + c;
 
                         if (slot >= shape.positions) {
@@ -764,7 +831,11 @@ void main() {
             uint c    = ch * 32u + col;
             uint slot = block * BR + r;
 
-            if (c < dv) {
+            if (FEW != 0u) {
+                if (c < dv && row_real (sub, block, r)) {
+                    y[row_record (sub, r) + c] = held[ch][i];
+                }
+            } else if (c < dv) {
                 uint where = slot * shape.heads * dv + head * dv + c;
 
                 if (slot >= shape.positions) {
@@ -780,4 +851,18 @@ void main() {
         }
     }
 #endif
+
+    //  A few at once: each row's largest score and sum after its blend,
+    //  for the merge to weigh the slices by.
+    if (FEW != 0u) {
+        [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+            uint r = (lane >> 5u) + 2u * i;
+
+            if (col == 0u && row_real (sub, block, r)) {
+                uint at = row_record (sub, r);
+                y[at + shape.value_size]      = top[i];
+                y[at + shape.value_size + 1u] = total[i];
+            }
+        }
+    }
 }
