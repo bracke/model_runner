@@ -204,6 +204,28 @@ package Model_Runner.Backend.Device is
    --  @param Keep True to keep them.
    procedure Keep_File_Pages (Keep : Boolean);
 
+   --  Halves into the cache's copy as they are; see
+   --  Products.Put_Cache_Halves. Ok False where the caller must go
+   --  through Put_Cache.
+   --
+   --  @param At_Value Where in the cache's numbering the run begins.
+   --  @param Halves The run.
+   --  @param Ok True when it was moved.
+   procedure Put_Cache_Halves
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean);
+
+   --  And out of it; Ok False where the caller must go through Get_Cache.
+   --
+   --  @param At_Value Where in the cache's numbering the run begins.
+   --  @param Halves The run read.
+   --  @param Ok True when it was read.
+   procedure Get_Cache_Halves
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : out Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean);
+
    --  Give back every buffer kept for reuse; see Products.Drop_Spares.
    procedure Drop_Spares;
 

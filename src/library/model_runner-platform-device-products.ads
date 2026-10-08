@@ -2504,6 +2504,34 @@ package Model_Runner.Platform.Device.Products is
    --  @param Keep True to keep them.
    procedure Keep_File_Pages (Item : in out Engine; Keep : Boolean);
 
+   --  Halves into and out of the cache's copy as they are, where only the
+   --  copy holds those rows -- a paged cache kept as its copy, or the
+   --  second copy -- so a host keeping its own copy in halves moves them
+   --  without a conversion each way. Ok is False where the rows are also
+   --  the cache proper's, and the caller goes through Put_Cache.
+   --
+   --  @param Item Engine.
+   --  @param At_Value Where in the cache's numbering the run begins.
+   --  @param Halves The run.
+   --  @param Ok True when it was moved.
+   procedure Put_Cache_Halves
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean);
+
+   --  And out of it, as they are.
+   --
+   --  @param Item Engine.
+   --  @param At_Value Where in the cache's numbering the run begins.
+   --  @param Halves The run read.
+   --  @param Ok True when it was read.
+   procedure Get_Cache_Halves
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : out Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean);
+
    --  And back out of it, which is how the host's own copy of the cache is
    --  brought up to date without the device sending it a layer at a time.
    --

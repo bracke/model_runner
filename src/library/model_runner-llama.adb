@@ -4388,6 +4388,17 @@ package body Model_Runner.Llama is
       Ok     : out Boolean) is
    begin
       if Item.Held = Halved then
+         --  Straight from the host's halves where the device keeps the
+         --  rows as halves alone, which a paged session's are.
+         Model_Runner.Backend.Device.Put_Cache_Halves
+           (Where,
+            (if Keys then Item.Half_Keys.all (From .. From + Count - 1)
+             else Item.Half_Values.all (From .. From + Count - 1)),
+            Ok);
+         if Ok then
+            return;
+         end if;
+
          declare
             Rows : Real_Array (0 .. Count - 1);
          begin
@@ -4417,6 +4428,17 @@ package body Model_Runner.Llama is
       Ok     : out Boolean) is
    begin
       if Item.Held = Halved then
+         if Keys then
+            Model_Runner.Backend.Device.Get_Cache_Halves
+              (Where, Item.Half_Keys.all (Into .. Into + Count - 1), Ok);
+         else
+            Model_Runner.Backend.Device.Get_Cache_Halves
+              (Where, Item.Half_Values.all (Into .. Into + Count - 1), Ok);
+         end if;
+         if Ok then
+            return;
+         end if;
+
          declare
             Rows : Real_Array (0 .. Count - 1);
          begin

@@ -8552,6 +8552,88 @@ package body Model_Runner.Platform.Device.Products is
       Item.Keep_Pages := Keep;
    end Keep_File_Pages;
 
+   --  Where a run of halves lies in a copy that holds it alone, or
+   --  Null_Address where it is not such a run.
+   function Halves_At
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count) return Address
+   is
+      use type System.Storage_Elements.Integer_Address;
+      Span : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Count) * 2;
+   begin
+      if not Is_Ready (Item) or else Count = 0 then
+         return Null_Handle;
+      elsif At_Value >= Second_Copy then
+         declare
+            From : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (At_Value - Second_Copy) * 2;
+         begin
+            if Item.Second_At = Null_Handle
+              or else From + Span > Item.Second_Bytes
+            then
+               return Null_Handle;
+            end if;
+            return System.Storage_Elements.To_Address
+              (System.Storage_Elements.To_Integer (Item.Second_At)
+               + System.Storage_Elements.Integer_Address (From));
+         end;
+      elsif Item.Cache_Front > 0
+        and then not Item.Copy_Split
+        and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front
+        and then Item.Copy_At /= Null_Handle
+        and then Interfaces.Unsigned_64 (At_Value) * 2 + Span <= Item.Copy_Bytes
+      then
+         return System.Storage_Elements.To_Address
+           (System.Storage_Elements.To_Integer (Item.Copy_At)
+            + System.Storage_Elements.Integer_Address
+                (Interfaces.Unsigned_64 (At_Value) * 2));
+      else
+         return Null_Handle;
+      end if;
+   end Halves_At;
+
+   procedure Put_Cache_Halves
+     (Item     : in out Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+      Where : constant Address :=
+        Halves_At (Item, At_Value, Halves'Length);
+   begin
+      Ok := Where /= Null_Handle;
+      if Ok then
+         declare
+            Room : Model_Runner.Numerics.Half_Array (Halves'Range)
+              with Import, Address => Where;
+         begin
+            Room := Halves;
+         end;
+      end if;
+   end Put_Cache_Halves;
+
+   procedure Get_Cache_Halves
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : out Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean)
+   is
+      Where : constant Address :=
+        Halves_At (Item, At_Value, Halves'Length);
+   begin
+      Ok := Where /= Null_Handle;
+      if Ok then
+         declare
+            Room : Model_Runner.Numerics.Half_Array (Halves'Range)
+              with Import, Address => Where;
+         begin
+            Halves := Room;
+         end;
+      end if;
+   end Get_Cache_Halves;
+
    --------------------
    -- Reserve_Second --
    --------------------

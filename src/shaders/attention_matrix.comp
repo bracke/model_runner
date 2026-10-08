@@ -245,10 +245,15 @@ void main() {
     //  picture's twenty-one megabytes of keys and values at once, read
     //  again from memory for every sixteen queries, where one head's are a
     //  megabyte and a half and stay in the second-level cache.
-    uint sub   = gl_LocalInvocationID.x / 64u;
-    uint block = gl_WorkGroupID.x * SUBS + sub;
+    //  One subgroup is subgroup nought and its lane the invocation, said
+    //  so rather than worked out: a head of 256 attended 3% slower with
+    //  the division left for the compiler to see through.
+    uint sub   = SUBS == 1u ? 0u : gl_LocalInvocationID.x / 64u;
+    uint block = SUBS == 1u ? gl_WorkGroupID.x
+                            : gl_WorkGroupID.x * SUBS + sub;
     uint head  = gl_WorkGroupID.y;
-    uint lane  = gl_LocalInvocationID.x % 64u;
+    uint lane  = SUBS == 1u ? gl_LocalInvocationID.x
+                            : gl_LocalInvocationID.x % 64u;
 
     //  This subgroup's part of the shared memory.
     uint QS0 = sub * BR * DM;

@@ -2534,6 +2534,22 @@ package body Tests.Backend_Cases is
       Dev.Put_Cache (Dev.Second_Copy + 2_000_000, Rows, Ok);
       Assert (not Ok, "rows past the second copy's room were taken");
 
+      --  And halves moved as they are, which the second copy holds alone.
+      declare
+         use type N.Half;
+         Put  : N.Half_Array (0 .. 3);
+         Back : N.Half_Array (0 .. 3) := [others => 0];
+      begin
+         for Index in Put'Range loop
+            Put (Index) := N.To_Half (Rows (Index));
+         end loop;
+         Dev.Put_Cache_Halves (Dev.Second_Copy + 100, Put, Ok);
+         Assert (Ok, "the second copy would not take halves as they are");
+         Dev.Get_Cache_Halves (Dev.Second_Copy + 100, Back, Ok);
+         Assert (Ok and then (for all I in Put'Range => Back (I) = Put (I)),
+                 "the halves the second copy gave back are not those put");
+      end;
+
       Dev.Release_Cache;
 
       --  Whether a matrix copied over keeps its file's pages is the

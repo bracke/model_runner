@@ -596,6 +596,28 @@ package body Model_Runner.Backend.Device is
       end if;
    end Fit_Budget;
 
+   procedure Put_Cache_Halves
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean) is
+   begin
+      Ok := False;
+      if Ready_Now then
+         Products.Put_Cache_Halves (Engine, At_Value, Halves, Ok);
+      end if;
+   end Put_Cache_Halves;
+
+   procedure Get_Cache_Halves
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Halves   : out Model_Runner.Numerics.Half_Array;
+      Ok       : out Boolean) is
+   begin
+      Ok := False;
+      if Ready_Now then
+         Products.Get_Cache_Halves (Engine, At_Value, Halves, Ok);
+      end if;
+   end Get_Cache_Halves;
+
    procedure Keep_File_Pages (Keep : Boolean) is
    begin
       if Ready_Now then
