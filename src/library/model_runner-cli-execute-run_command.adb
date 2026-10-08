@@ -677,6 +677,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
    Next_Draft_Share  : constant Float := 0.25;
    Next_Draft_Bytes  : constant Float := 2.0 * 1024.0 ** 3;
    Next_Draft_Tokens : constant := 3;
+   Split_Next_Draft_Tokens : constant := 4;
 
    --  Proposals a round for a draft the run found in the model store:
    --  three read best for Steelman-14B with Qwen2.5-Coder-0.5B, 12.75

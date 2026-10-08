@@ -1481,6 +1481,16 @@ begin
             Request.Draft_Tokens :=
               (if Request.Draft_From_Next
                  and then not Item.Draft_Tokens_Set
+                 and then L.Batch_Limit (Prepared)
+                          = L.Dense_Streamed_Batch
+               --  A split dense model's round streams its feed-forward
+               --  once for every proposal it checks, so a longer round
+               --  pays where on a model the device holds it did not:
+               --  ThinkingCap 7.80 -> 7.93 tokens a second at four over
+               --  three, and 6.39 -> 6.82 four thousand positions in.
+               then Split_Next_Draft_Tokens
+               elsif Request.Draft_From_Next
+                 and then not Item.Draft_Tokens_Set
                then Next_Draft_Tokens
                elsif Auto_Drafted then Store_Draft_Tokens
                --  A named draft model starts where a found one does
