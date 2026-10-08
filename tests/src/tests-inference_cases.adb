@@ -1,3 +1,7 @@
+with System.Storage_Elements;
+with Model_Runner.Zeroed_Storage;
+with Model_Runner.Platform.Pages;
+with Model_Runner.Platform.Mapping;
 with Model_Runner.Panel_Cache;
 with Model_Runner.GGUF;
 with System;
@@ -2937,6 +2941,109 @@ package body Tests.Inference_Cases is
 
       D.Delete_Tree (Folder);
    end Caches_Are_Kept_To_Their_Bound;
+
+   --  A panel file is built where it will be read: made with its header,
+   --  mapped for writing, written through the mapping, named, and what is
+   --  read back from it is what was written. A mapping of a file may be
+   --  told its next reads are scattered, and is read the same either way.
+   procedure A_Panel_File_Is_Built_In_Place
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package D renames Ada.Directories;
+      package Map renames Model_Runner.Platform.Mapping;
+      use type System.Address;
+      use type Interfaces.Unsigned_8;
+      use type Ada.Directories.File_Size;
+
+      Path   : constant String :=
+        D.Compose (D.Current_Directory, "panel-build-test.panels");
+      Header : constant String := "MRPANELS test header";
+      Total  : constant B.Byte_Count := 3 * 4096 + 7;
+   begin
+      if D.Exists (Path) then
+         D.Delete_File (Path);
+      end if;
+
+      declare
+         Built  : Model_Runner.Panel_Cache.Building;
+         Panels : System.Address;
+         Ok     : Boolean;
+      begin
+         Model_Runner.Panel_Cache.Begin_Build
+           (Built, Path, Header, Total, Panels, Ok);
+         if not Map.Is_Supported or else not Ok then
+            --  A host without a writable mapping builds in memory, as it
+            --  did; nothing is left behind.
+            Assert (not D.Exists (Path & ".part"),
+                    "a refused build left its file");
+            return;
+         end if;
+         Assert (Panels /= System.Null_Address, "no panels to build into");
+
+         declare
+            Into : B.Byte_Array (1 .. Total)
+              with Import, Address => Panels;
+         begin
+            for Index in Into'Range loop
+               Into (Index) := B.Byte (Index mod 251);
+            end loop;
+         end;
+
+         Model_Runner.Panel_Cache.Finish (Built, Ok);
+         Assert (Ok, "the built file was not named");
+         Model_Runner.Panel_Cache.Release (Built);
+      end;
+
+      Assert (D.Exists (Path) and then not D.Exists (Path & ".part"),
+              "the built file is not where it was named");
+      Assert (B.Byte_Count (D.Size (Path)) = 4096 + Total,
+              "the built file is" & D.File_Size'Image (D.Size (Path))
+              & " bytes long");
+
+      --  Read back, and told it is read here and there.
+      declare
+         Region : Map.Region;
+         Ok     : Boolean;
+      begin
+         Map.Open (Region, Path, Ok);
+         Assert (Ok, "the built file would not map");
+         Model_Runner.Platform.Pages.Expect_Scattered
+           (Map.Base (Region), Map.Length (Region), Scattered => True);
+         Model_Runner.Zeroed_Storage.Expect_Scattered
+           (Map.Base (Region),
+            System.Storage_Elements.Storage_Count (Map.Length (Region)),
+            Scattered => False);
+         declare
+            Whole : B.Byte_Array (1 .. Map.Length (Region))
+              with Import, Address => Map.Base (Region);
+            Text  : String (1 .. Header'Length)
+              with Import, Address => Map.Base (Region);
+         begin
+            Assert (Text = Header, "the header is not the file's first bytes");
+            for Index in 1 .. Total loop
+               Assert (Whole (4096 + Index) = B.Byte (Index mod 251),
+                       "byte" & Index'Image & " is not what was written");
+               exit when Whole (4096 + Index) /= B.Byte (Index mod 251);
+            end loop;
+         end;
+         Map.Close (Region);
+      end;
+
+      --  A file mapped for writing directly: grown to the size asked.
+      declare
+         Region : Map.Region;
+         Ok     : Boolean;
+      begin
+         Map.Open_Writable (Region, Path, 4096, Ok);
+         Assert (Ok and then Map.Length (Region) = 4096,
+                 "a file was not mapped for writing at the size asked");
+         Map.Close (Region);
+         Assert (D.Size (Path) = 4096, "the file was not cut to the size");
+      end;
+
+      D.Delete_File (Path);
+   end A_Panel_File_Is_Built_In_Place;
 
    --  Evaluation refuses arguments it cannot serve.
    --
@@ -8919,6 +9026,102 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end A_Shifted_Context_Saves_And_Restores;
+
+   --  A saved context whose keys and values are halves -- a session that
+   --  holds them so, as a device keeping its cache in halves gives them
+   --  back -- is written two bytes an element rather than four, and read
+   --  back it answers as the session it was taken from. And a session's
+   --  skipped positions, what a draft reading only the end of a prompt is
+   --  behind the text by, are none again once it is reset.
+   procedure A_Context_Of_Halves_Saves_Narrow
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type L.Cache_Precision;
+
+      Image : B.Byte_Array_Access;
+      Whole : constant array (1 .. 6) of Vocab.Token_Id := [4, 5, 6, 7, 8, 9];
+      Next  : constant Vocab.Token_Id := 10;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Straight, Restored : Logit_Vector := [others => 0.0];
+         Status : E.Error_Info;
+
+         Narrow, Wide : B.Byte_Array_Access;
+      begin
+         Start (Under);
+
+         for Cache in L.Exact .. L.Halved loop
+            declare
+               Live : L.Session;
+            begin
+               L.Open (Live, Under.Ready, Cache => Cache, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+
+               for Token of Whole loop
+                  L.Evaluate (Live, Under.Ready, Token, Straight,
+                              Status => Status);
+                  Assert (E.Is_Ok (Status), "evaluation failed");
+               end loop;
+
+               if Cache = L.Halved then
+                  L.Snapshot (Live, Under.Ready, Narrow, Status);
+                  L.Evaluate (Live, Under.Ready, Next, Straight,
+                              Status => Status);
+               else
+                  L.Snapshot (Live, Under.Ready, Wide, Status);
+               end if;
+               Assert (E.Is_Ok (Status), "the context was not written out");
+               L.Close (Live);
+            end;
+         end loop;
+
+         --  Only the caches shrink, by half: everything else is the same.
+         Assert (Narrow'Length < Wide'Length,
+                 "a context of halves was written"
+                 & Narrow'Length'Image & " bytes against"
+                 & Wide'Length'Image & " for an exact one");
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Cache => L.Halved, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            L.Adopt (Live, Under.Ready, Narrow.all, Status);
+            Assert (E.Is_Ok (Status),
+                    "a context of halves would not be read back: "
+                    & E.Error_Code'Image (Status.Code));
+
+            L.Evaluate (Live, Under.Ready, Next, Restored, Status => Status);
+            Assert (E.Is_Ok (Status), "the continuation failed");
+
+            L.Reset (Live);
+            L.Set_Skipped (Live, 5);
+            Assert (L.Skipped (Live) = 5, "a session's skip was not kept");
+            L.Reset (Live);
+            Assert (L.Skipped (Live) = 0,
+                    "a reset session still skips positions");
+            L.Close (Live);
+         end;
+
+         B.Free (Narrow);
+         B.Free (Wide);
+
+         for Index in Straight'Range loop
+            Assert (Straight (Index) = Restored (Index),
+                    "a context of halves read back answers differently at"
+                    & N.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      B.Free (Image);
+   end A_Context_Of_Halves_Saves_Narrow;
 
    ---------------------------------------
    -- Shifting_Moves_The_Positions --
@@ -15441,6 +15644,10 @@ package body Tests.Inference_Cases is
          "panels are kept between loads: mapped from the cache and answering "
          & "the same, and a cache that no longer matches written afresh");
       Register_Routine
+        (T, A_Panel_File_Is_Built_In_Place'Access,
+         "a panel file is built in place through a writable mapping and "
+         & "reads back what was written");
+      Register_Routine
         (T, Caches_Are_Kept_To_Their_Bound'Access,
          "a cache directory is kept to its bound, the files used longest "
          & "ago going first");
@@ -15467,6 +15674,10 @@ package body Tests.Inference_Cases is
         (T, Refused_Generation_Names_Its_Reason'Access,
          "a generation the engine refuses is reported with the code it "
          & "refused with, not as a bare failure");
+      Register_Routine
+        (T, A_Context_Of_Halves_Saves_Narrow'Access,
+         "a context of halves is written two bytes an element and read "
+         & "back answers the same; a reset session skips nothing");
       Register_Routine
         (T, A_Shifted_Context_Saves_And_Restores'Access,
          "a context that has been shifted can be written out and read back "

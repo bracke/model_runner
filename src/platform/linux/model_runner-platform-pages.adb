@@ -16,6 +16,8 @@ package body Model_Runner.Platform.Pages is
    Page        : constant := 4096;
    Huge_Advice : constant := 14;   --  MADV_HUGEPAGE
    Out_Advice  : constant := 21;   --  MADV_PAGEOUT
+   Random_Advice : constant := 1;  --  MADV_RANDOM
+   Normal_Advice : constant := 0;  --  MADV_NORMAL
 
    function Madvise
      (Start  : System.Address;
@@ -88,5 +90,35 @@ package body Model_Runner.Platform.Pages is
          end if;
       end;
    end Page_Out;
+
+   procedure Expect_Scattered
+     (Start     : System.Address;
+      Length    : Model_Runner.Bytes.Byte_Count;
+      Scattered : Boolean)
+   is
+   begin
+      if Length < Page
+        or else not Model_Runner.Platform.Mapped_Ranges.Holds (Start, Length)
+      then
+         return;
+      end if;
+
+      declare
+         First : constant Integer_Address := To_Integer (Start);
+         Last  : constant Integer_Address := First + Integer_Address (Length);
+         Begin_At : constant Integer_Address :=
+           (First + Page - 1) / Page * Page;
+         Whole : constant Integer_Address :=
+           (if Last > Begin_At then (Last - Begin_At) / Page * Page else 0);
+         Answer : Interfaces.C.int;
+      begin
+         if Whole > 0 then
+            Answer := Madvise
+              (To_Address (Begin_At), Interfaces.C.size_t (Whole),
+               (if Scattered then Random_Advice else Normal_Advice));
+            pragma Unreferenced (Answer);
+         end if;
+      end;
+   end Expect_Scattered;
 
 end Model_Runner.Platform.Pages;

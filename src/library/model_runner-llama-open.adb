@@ -698,6 +698,7 @@ begin
    --  the session runs.
    Item.Arithmetic := Workers_CPU.Integer_Activation_Roles;
    Item.Context := Capacity;
+   Item.Skipped_Count := 0;
    Item.Committed := 0;
    Item.Current := Ready;
    Source.Sessions := Source.Sessions + 1;

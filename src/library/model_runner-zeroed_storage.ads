@@ -66,4 +66,15 @@ package Model_Runner.Zeroed_Storage is
      (Start  : System.Address;
       Length : System.Storage_Elements.Storage_Count);
 
+   --  Platform.Pages.Expect_Scattered, for a caller that holds a model's
+   --  mapping: a few bytes read across it, or reading as usual again.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes from Start.
+   --  @param Scattered True before the scattered reads, False after.
+   procedure Expect_Scattered
+     (Start     : System.Address;
+      Length    : System.Storage_Elements.Storage_Count;
+      Scattered : Boolean);
+
 end Model_Runner.Zeroed_Storage;

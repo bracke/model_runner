@@ -1522,6 +1522,22 @@ package Model_Runner.Llama is
    --  @return Committed position count.
    function Position (Item : Session) return Natural;
 
+   --  How many leading positions of the text this session was never given:
+   --  a draft reads only the end of a long prompt, and its position N is
+   --  the text's N + Skipped. Zero after Open and after Reset.
+   --
+   --  @param Item Session to inspect.
+   --  @return Positions of the text before this session's first.
+   function Skipped (Item : Session) return Natural;
+
+   --  Say how many leading positions of the text the session skips. Only
+   --  for a session that holds nothing yet.
+   --
+   --  @param Item Session, empty.
+   --  @param Count Positions of the text before its first.
+   procedure Set_Skipped (Item : in out Session; Count : Natural)
+     with Pre => Position (Item) = 0;
+
    --  Context capacity of a session.
    --
    --  @param Item Session to inspect.
@@ -2646,6 +2662,14 @@ private
    --  The copy of fresh panels to the cache, while it runs.
    type Panel_Writing_Access is access Model_Runner.Panel_Cache.Writing;
 
+   --  See Model.Samples.
+   type Sample_Holder is record
+      Taken : Boolean := False;
+      Count : Model_Runner.Bytes.Byte_Count := 0;
+      Bytes : Model_Runner.Bytes.Byte_Array (1 .. 4_097) := [others => 0];
+   end record;
+   type Sample_Access is access Sample_Holder;
+
    type Model is limited new Ada.Finalization.Limited_Controlled with record
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
@@ -2664,6 +2688,11 @@ private
       Weights_Base : System.Address := System.Null_Address;
       Weights_Span : Model_Runner.Bytes.Byte_Count := 0;
       Weights_Held : Boolean := False;
+
+      --  The bytes Fingerprint samples across the weights, read once a
+      --  load; see there. A holder rather than fields, because the
+      --  fingerprint is asked of a model it may not change.
+      Samples     : Sample_Access := new Sample_Holder;
 
       --  The decoded copy of the weight matrices, when one was asked for.
       --  Every matrix view then refers into this instead of into the file's
@@ -2847,6 +2876,9 @@ private
    type Choice_Access is access Choice_List;
 
    type Session is limited new Ada.Finalization.Limited_Controlled with record
+      --  See Skipped.
+      Skipped_Count : Natural := 0;
+
       --  The token for the call in progress, or null between calls.
       --
       --  Held here rather than passed, and that is a deliberate choice with

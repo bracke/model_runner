@@ -27,4 +27,14 @@ package body Model_Runner.Platform.Pages is
       null;
    end Page_Out;
 
+   procedure Expect_Scattered
+     (Start     : System.Address;
+      Length    : Model_Runner.Bytes.Byte_Count;
+      Scattered : Boolean)
+   is
+      pragma Unreferenced (Start, Length, Scattered);
+   begin
+      null;
+   end Expect_Scattered;
+
 end Model_Runner.Platform.Pages;

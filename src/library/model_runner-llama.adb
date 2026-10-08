@@ -1223,6 +1223,9 @@ package body Model_Runner.Llama is
       Item.Weights_Base := System.Null_Address;
       Item.Weights_Span := 0;
       Item.Weights_Held := False;
+      if Item.Samples /= null then
+         Item.Samples.Taken := False;
+      end if;
    end Release_Weights;
 
    --  The feed-forward gate this architecture was trained with.
@@ -6762,6 +6765,13 @@ package body Model_Runner.Llama is
    --  before this is refused by version, as it always was.
    Session_Version : constant := 2;
 
+   --  Added to a saved session's precision word where its caches are
+   --  written as halves, two bytes an element: what an exact session on a
+   --  device that keeps its cache in halves holds is a half already, and
+   --  four bytes of it was twice the file. A reader from before this
+   --  refuses such a file as another precision.
+   Narrow_Elements : constant := 64;
+
    ------------------
    -- Fingerprint --
    ------------------
@@ -6812,23 +6822,49 @@ package body Model_Runner.Llama is
       if Item.Weights_Base /= System.Null_Address then
          Mix (Interfaces.Unsigned_64 (Item.Weights_Span));
 
-         declare
-            --  Through the weights wherever they are: the copy when there
-            --  is one, the file's own pages when there is not. Reading the
-            --  arena directly was what this did, and the arena is null for
-            --  a model that was never copied.
-            Held : B.Byte_Array (1 .. Item.Weights_Span)
-              with Import, Address => Item.Weights_Base;
+         --  Sampled once a load: a saved session read at the start of a
+         --  run and one written at its end ask the same.
+         if Item.Samples /= null and then not Item.Samples.Taken then
+            declare
+               --  Through the weights wherever they are: the copy when
+               --  there is one, the file's own pages when there is not.
+               --  Reading the arena directly was what this did, and the
+               --  arena is null for a model that was never copied.
+               Held : B.Byte_Array (1 .. Item.Weights_Span)
+                 with Import, Address => Item.Weights_Base;
 
-            Step : constant B.Byte_Count :=
-              B.Byte_Count'Max (1, Item.Weights_Span / 4096);
-            At_Byte : B.Byte_Count := 0;
-         begin
-            while At_Byte < Item.Weights_Span loop
-               Mix (Interfaces.Unsigned_64 (Held (Held'First + At_Byte)));
-               At_Byte := At_Byte + Step;
-            end loop;
-         end;
+               Step : constant B.Byte_Count :=
+                 B.Byte_Count'Max (1, Item.Weights_Span / 4096);
+               At_Byte : B.Byte_Count := 0;
+               Count   : B.Byte_Count := 0;
+            begin
+               --  A page apiece and not the pages around it: the file's
+               --  pages a device holds have gone back, and read as a
+               --  mapping usually is, these four thousand bytes read half
+               --  a gigabyte and took Qwen3 8B's saved session 14 s.
+               Model_Runner.Zeroed_Storage.Expect_Scattered
+                 (Item.Weights_Base,
+                  System.Storage_Elements.Storage_Count (Item.Weights_Span),
+                  Scattered => True);
+               while At_Byte < Item.Weights_Span
+                 and then Count < Item.Samples.Bytes'Length
+               loop
+                  Count := Count + 1;
+                  Item.Samples.Bytes (Count) := Held (Held'First + At_Byte);
+                  At_Byte := At_Byte + Step;
+               end loop;
+               Model_Runner.Zeroed_Storage.Expect_Scattered
+                 (Item.Weights_Base,
+                  System.Storage_Elements.Storage_Count (Item.Weights_Span),
+                  Scattered => False);
+               Item.Samples.Count := Count;
+               Item.Samples.Taken := True;
+            end;
+         end if;
+
+         for Index in 1 .. Item.Samples.Count loop
+            Mix (Interfaces.Unsigned_64 (Item.Samples.Bytes (Index)));
+         end loop;
       end if;
 
       return Digest;
@@ -7326,6 +7362,13 @@ package body Model_Runner.Llama is
 
    function Position (Item : Session) return Natural is (Item.Committed);
 
+   function Skipped (Item : Session) return Natural is (Item.Skipped_Count);
+
+   procedure Set_Skipped (Item : in out Session; Count : Natural) is
+   begin
+      Item.Skipped_Count := Count;
+   end Set_Skipped;
+
    --------------
    -- Capacity --
    --------------
@@ -7641,6 +7684,8 @@ package body Model_Runner.Llama is
 
    procedure Reset (Item : in out Session) is
    begin
+      Item.Skipped_Count := 0;
+
       --  A context dropped is a context nothing will read, so the
       --  device owes the host nothing for it.
       Item.Owed_Count := 0;

@@ -69,4 +69,13 @@ package body Model_Runner.Zeroed_Storage is
         (Start, Model_Runner.Bytes.Byte_Count (Length));
    end Prefer_Large;
 
+   procedure Expect_Scattered
+     (Start     : System.Address;
+      Length    : System.Storage_Elements.Storage_Count;
+      Scattered : Boolean) is
+   begin
+      Model_Runner.Platform.Pages.Expect_Scattered
+        (Start, Model_Runner.Bytes.Byte_Count (Length), Scattered);
+   end Expect_Scattered;
+
 end Model_Runner.Zeroed_Storage;

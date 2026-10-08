@@ -1,7 +1,6 @@
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
-with Ada.Strings.Unbounded;
 with System.Storage_Elements;
 with Model_Runner.Platform;
 
@@ -84,6 +83,114 @@ package body Model_Runner.Panel_Cache is
    begin
       Model_Runner.Platform.Mark_Used (Path);
    end Mark_Used;
+
+   Header_Size : constant := 4096;
+
+   -----------------
+   -- Begin_Build --
+   -----------------
+
+   procedure Begin_Build
+     (Item   : in out Building;
+      Path   : String;
+      Header : String;
+      Total  : B.Byte_Count;
+      Panels : out System.Address;
+      Ok     : out Boolean)
+   is
+      use Ada.Streams.Stream_IO;
+      Part  : constant String := Path & ".part";
+      Out_F : File_Type;
+      Head  : Ada.Streams.Stream_Element_Array (1 .. Header_Size) :=
+        [others => 0];
+   begin
+      Panels := System.Null_Address;
+      Ok := False;
+      Item.Path := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+
+      if Header'Length > Header_Size then
+         return;
+      end if;
+
+      Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
+      for Index in Header'Range loop
+         Head (Ada.Streams.Stream_Element_Offset (Index - Header'First + 1)) :=
+           Character'Pos (Header (Index));
+      end loop;
+      Create (Out_F, Out_File, Part);
+      Write (Out_F, Head);
+      Close (Out_F);
+
+      Model_Runner.Platform.Mapping.Open_Writable
+        (Item.Region, Part, Header_Size + Total, Ok);
+      if not Ok then
+         Ada.Directories.Delete_File (Part);
+         return;
+      end if;
+
+      Panels :=
+        System.Storage_Elements.To_Address
+          (System.Storage_Elements.To_Integer
+             (Model_Runner.Platform.Mapping.Base (Item.Region))
+           + Header_Size);
+   exception
+      when others =>
+         if Is_Open (Out_F) then
+            Close (Out_F);
+         end if;
+         Abandon (Item);
+         Panels := System.Null_Address;
+         Ok := False;
+   end Begin_Build;
+
+   ------------
+   -- Finish --
+   ------------
+
+   procedure Finish (Item : in out Building; Ok : out Boolean) is
+      Path : constant String := Ada.Strings.Unbounded.To_String (Item.Path);
+   begin
+      Ok := False;
+      if Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+      Ada.Directories.Rename (Path & ".part", Path);
+      Ok := True;
+
+      Model_Runner.Platform.Trim_Directory
+        (Ada.Directories.Containing_Directory (Path), "*.panels*",
+         Model_Runner.Platform.Panel_Cache_Most, Keep => Path);
+   exception
+      when others =>
+         Abandon (Item);
+         Ok := False;
+   end Finish;
+
+   -------------
+   -- Release --
+   -------------
+
+   procedure Release (Item : in out Building) is
+   begin
+      Model_Runner.Platform.Mapping.Close (Item.Region);
+   end Release;
+
+   -------------
+   -- Abandon --
+   -------------
+
+   procedure Abandon (Item : in out Building) is
+      Part : constant String :=
+        Ada.Strings.Unbounded.To_String (Item.Path) & ".part";
+   begin
+      Model_Runner.Platform.Mapping.Close (Item.Region);
+      if Part /= ".part" and then Ada.Directories.Exists (Part) then
+         Ada.Directories.Delete_File (Part);
+      end if;
+   exception
+      when others =>
+         null;
+   end Abandon;
 
    -------------
    -- Writing --

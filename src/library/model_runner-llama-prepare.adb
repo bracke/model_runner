@@ -2185,6 +2185,12 @@ begin
       declare
          Needed : B.Byte_Count := 0;
 
+         --  The cache file a split's panels are built in, whether they
+         --  are, and where the panels are built either way.
+         Built     : Model_Runner.Panel_Cache.Building;
+         Into_File : Boolean := False;
+         Target_At : System.Address := System.Null_Address;
+
          --  The lookup tables are left alone. A row of a panel is a
          --  gather, and these three are read a row at a time and
          --  multiplied by nothing: interleaving them would pay the
@@ -2289,7 +2295,9 @@ begin
          --  otherwise, or of another file at the same path, fails that and
          --  is written afresh. False where anything is off; the views are
          --  then as they were.
-         function Map_Panels (Total : B.Byte_Count) return Boolean is
+         function Map_Panels
+           (Total : B.Byte_Count; Verify : Boolean := True) return Boolean
+         is
             Map : Panel_Map_Access;
             Ok  : E.Error_Info;
 
@@ -2328,6 +2336,7 @@ begin
             end;
 
             for Which in Held'Range loop
+               exit when not Verify;
                declare
                   Where : constant View_Access := Held (Which);
                   Size  : constant B.Byte_Count :=
@@ -2451,38 +2460,62 @@ begin
                goto Panels_Done;
             end if;
 
-            Mem.Check_Allocation
-              (Item.Accounting, Mem.Converted_Weights,
-               Interfaces.Unsigned_64 (Needed), Status);
-            if E.Is_Error (Status) then
-               Fail (Status);
-               return;
+            --  A split's panels are built in their cache file, where the
+            --  host can write them back and let them go; a whole model's,
+            --  and any the file cannot take, in the process's own memory
+            --  and written out beside the run.
+            if Panel_File (Needed) /= "" and then Repack /= To_Rows then
+               --  A split's file for each split, the newest four kept: a
+               --  context is a split, and three a user moves between were
+               --  built afresh at each, the bound on the cache's whole size
+               --  keeping what that costs.
+               Model_Runner.Panel_Cache.Keep_Newest
+                 (Panel_Cache & ".split", 3);
+               Model_Runner.Panel_Cache.Begin_Build
+                 (Built, Panel_File (Needed), Header (Needed), Needed,
+                  Target_At, Into_File);
             end if;
 
-            --  Not zeroed here: a zeroing pass on one task touched every
-            --  page of the copy before the team began, a third of the
-            --  rewrite's time. Each matrix's panels are cleared by the
-            --  task that writes them, beside where they are written.
-            begin
-               Item.Repacked := new B.Byte_Array (1 .. Needed);
-            exception
-               when Storage_Error =>
-                  Item.Repacked := null;
-            end;
-            if Item.Repacked = null then
-               Fail (E.Make (E.Memory_Allocation_Failed));
-               return;
-            end if;
+            if not Into_File then
+               Mem.Check_Allocation
+                 (Item.Accounting, Mem.Converted_Weights,
+                  Interfaces.Unsigned_64 (Needed), Status);
+               if E.Is_Error (Status) then
+                  Fail (Status);
+                  return;
+               end if;
 
-            Mem.Record_Allocation
-              (Item.Accounting, Mem.Converted_Weights,
-               Interfaces.Unsigned_64 (Needed));
+               --  Not zeroed here: a zeroing pass on one task touched every
+               --  page of the copy before the team began, a third of the
+               --  rewrite's time. Each matrix's panels are cleared by the
+               --  task that writes them, beside where they are written.
+               begin
+                  Item.Repacked := new B.Byte_Array (1 .. Needed);
+               exception
+                  when Storage_Error =>
+                     Item.Repacked := null;
+               end;
+               if Item.Repacked = null then
+                  Fail (E.Make (E.Memory_Allocation_Failed));
+                  return;
+               end if;
+
+               Mem.Record_Allocation
+                 (Item.Accounting, Mem.Converted_Weights,
+                  Interfaces.Unsigned_64 (Needed));
+               Target_At := Item.Repacked.all (1)'Address;
+            end if;
             Mem.Record_Conversion
               (Item.Accounting, Interfaces.Unsigned_64 (Needed));
 
             declare
                Bases : array (Held'Range) of B.Byte_Count :=
                  [others => 0];
+
+               --  Where the panels are built: the cache file's pages, or
+               --  the copy in the process's memory.
+               Whole : B.Byte_Array (1 .. Needed)
+                 with Import, Address => Target_At;
 
                --  The same queue the decoding pass uses and for the same
                --  reason: the matrices differ by a factor of ten in size
@@ -2523,18 +2556,17 @@ begin
 
                   Source : B.Byte_Array (1 .. Where.all.Span)
                     with Import, Address => Where.all.Base;
-                  First : constant B.Byte_Index :=
-                    Item.Repacked.all'First + Bases (Which);
+                  First : constant B.Byte_Index := Whole'First + Bases (Which);
                   Size  : constant B.Byte_Count :=
                     Model_Runner.Quantization.Interleave.Panel_Bytes
                       (Where.all.Format, Where.all.Rows, Blocks_Of (Where));
                begin
-                  Item.Repacked.all (First .. First + Size - 1) := [others => 0];
+                  Whole (First .. First + Size - 1) := [others => 0];
                   Model_Runner.Quantization.Interleave.Build
                     (Format => Where.all.Format,
                      Source => Source,
                      From   => Where.all.Offset,
-                     Target => Item.Repacked.all,
+                     Target => Whole,
                      Into   => Bases (Which),
                      Rows   => Where.all.Rows,
                      Blocks => Blocks_Of (Where),
@@ -2589,10 +2621,49 @@ begin
                   Trouble : constant E.Error_Info := Shared.Reason;
                begin
                   if E.Is_Error (Trouble) then
+                     if Into_File then
+                        Model_Runner.Panel_Cache.Abandon (Built);
+                     end if;
                      Fail (Trouble);
                      return;
                   end if;
                end;
+
+               --  Built in the file: named, and mapped again for reading
+               --  as a later load maps it, without the comparison a later
+               --  load makes, since these are the bytes it would compare.
+               --  Where that fails the panels are copied into the
+               --  process's memory and go on from there, as before.
+               if Into_File then
+                  declare
+                     Named : Boolean;
+                  begin
+                     Model_Runner.Panel_Cache.Finish (Built, Named);
+                     if Named and then Map_Panels (Needed, Verify => False)
+                     then
+                        Model_Runner.Panel_Cache.Release (Built);
+                        goto Panels_Done;
+                     end if;
+
+                     begin
+                        Item.Repacked := new B.Byte_Array (1 .. Needed);
+                     exception
+                        when Storage_Error =>
+                           Item.Repacked := null;
+                     end;
+                     if Item.Repacked = null then
+                        Model_Runner.Panel_Cache.Abandon (Built);
+                        Fail (E.Make (E.Memory_Allocation_Failed));
+                        return;
+                     end if;
+                     Item.Repacked.all := Whole;
+                     Mem.Record_Allocation
+                       (Item.Accounting, Mem.Converted_Weights,
+                        Interfaces.Unsigned_64 (Needed));
+                     Model_Runner.Panel_Cache.Release (Built);
+                     Into_File := Named;
+                  end;
+               end if;
 
                for Index in Held'Range loop
                   declare
@@ -2616,12 +2687,7 @@ begin
                end loop;
             end;
 
-            if Panel_File (Needed) /= "" then
-               --  A split's file for each split, the newest two kept.
-               if Repack /= To_Rows then
-                  Model_Runner.Panel_Cache.Keep_Newest
-                    (Panel_Cache & ".split", 1);
-               end if;
+            if Panel_File (Needed) /= "" and then not Into_File then
                Write_Panels (Needed);
             end if;
 

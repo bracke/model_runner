@@ -62,7 +62,37 @@ is
       return Value;
    end Get_Bits;
 
-   --  One run of the cache, into whichever storage the session holds.
+   --  Whether the file holds the caches as halves, two bytes an element,
+   --  rather than four: what the precision word says past its sixty-four.
+   Narrow : Boolean := False;
+
+   --  One element of a cache, as the four bytes a wide file holds it in:
+   --  a narrow file's half widened to the binary32 it stands for, or kept
+   --  as its bits where the session holds halves.
+   function Get_Element return Interfaces.Unsigned_32 is
+      Ok   : Boolean;
+      Bits : Interfaces.Unsigned_16;
+   begin
+      if not Narrow then
+         return Get_Bits;
+      end if;
+
+      if Trouble then
+         return 0;
+      end if;
+
+      Bits := B.Get_U16 (From, At_Byte, Ok);
+      if not Ok then
+         Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
+         return 0;
+      end if;
+      At_Byte := At_Byte + 2;
+
+      return (if Item.Held = Halved
+              then Interfaces.Unsigned_32 (Bits)
+              else N.Bits (N.To_Real (N.Half (Bits))));
+   end Get_Element;
+
    --  One run of the cache, into whichever storage the session holds. A
    --  byte cache is filled a row at a time rather than an element at a
    --  time, because the scale a row is written with is the largest
@@ -73,9 +103,48 @@ is
       Width : constant Element_Count :=
         (if Keys then KV_Width else V_Width);
    begin
+      --  A narrow file into an exact session, a run at once: the halves
+      --  read where they lie in the file and widened in one loop. An
+      --  element at a time, through the readers above, was most of what
+      --  reading a saved session of 0.6 GB took.
+      if Narrow and then Item.Held = Exact and then not Trouble then
+         if At_Byte + B.Byte_Count (Count) * 2 > From'Length then
+            Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
+            return;
+         end if;
+
+         declare
+            Halves : N.Half_Array (0 .. Count - 1)
+              with Import, Address => From (From'First + At_Byte)'Address;
+            Finite : Boolean := True;
+
+            procedure Widen (Into : in out N.Real_Array) is
+            begin
+               for Index in 0 .. Count - 1 loop
+                  Into (First + Index) := N.To_Real (Halves (Index));
+               end loop;
+               for Index in 0 .. Count - 1 loop
+                  Finite := Finite and then N.Is_Finite (Into (First + Index));
+               end loop;
+            end Widen;
+         begin
+            if Keys then
+               Widen (Item.Keys.all);
+            else
+               Widen (Item.Values.all);
+            end if;
+            if not Finite then
+               Refuse (E.Lifecycle_Cache_Unreadable, "not a number");
+               return;
+            end if;
+         end;
+         At_Byte := At_Byte + B.Byte_Count (Count) * 2;
+         return;
+      end if;
+
       for Index in 0 .. Count - 1 loop
          declare
-            Bits : constant Interfaces.Unsigned_32 := Get_Bits;
+            Bits : constant Interfaces.Unsigned_32 := Get_Element;
          begin
             exit when Trouble;
 
@@ -206,8 +275,10 @@ begin
          Refuse (E.Lifecycle_Cache_Mismatched, "another context");
       end if;
 
+      Narrow := Packed >= Narrow_Elements;
+
       if not Trouble
-        and then Packed
+        and then Packed mod Narrow_Elements
                  /= Interfaces.Unsigned_64
                       (Cache_Precision'Pos (Item.Held)
                        + (if Item.Held_Values /= Item.Held

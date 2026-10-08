@@ -64,8 +64,9 @@
 #extension GL_EXT_shader_16bit_storage : require
 
 //  One subgroup, and the host has established that a subgroup here is
-//  sixty-four invocations, as it has for the matrix product.
-layout(local_size_x = 64) in;
+//  sixty-four invocations, as it has for the matrix product -- or, for
+//  the deep pipeline of a head of 256, SUBS of them: see SUBS below.
+layout(local_size_x = 64, local_size_x_id = 3) in;
 
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
@@ -164,14 +165,19 @@ uint place_of (uint pos, uint offset, uint width) {
 //  Query positions a workgroup answers, cached positions a tile holds, and
 //  the widest head this compilation stages. All three are multiples of the
 //  instruction's sixteen.
-//  Sixteen queries a workgroup, or thirty-two where the host makes the
-//  pipeline deep: a block of sixteen reads a head's keys and values again
-//  for every sixteen queries, and past a couple of thousand cached
-//  positions that reading is the kernel's time. Qwen3 8B's prompt of
-//  16,447 attended 121 ms a layer at sixteen and 58 at thirty-two; over
-//  a prompt of 1,500 sixteen is the faster, 3.9 ms against 5.9.
+//  Sixteen queries a subgroup. The host may specialize more, but thirty-
+//  two held twice the accumulators and was the slower way to answer more
+//  a workgroup: see SUBS.
 layout(constant_id = 1) const uint BR = 16u;
 const uint BC = 64u;
+
+//  Subgroups a workgroup, each answering its own BR queries with its own
+//  registers and shared memory, all of them walking the same tiles of keys
+//  and values in step, so that what one reads the others find in the
+//  cache. Where BR at thirty-two is too many registers -- a head of 256 --
+//  this is how a workgroup answers thirty-two. The host makes the
+//  workgroup SUBS subgroups wide through local_size_x_id 3.
+layout(constant_id = 2) const uint SUBS = 1u;
 #ifdef WIDER_HEAD
 //  And a third, for Gemma's heads of two hundred and fifty-six, which
 //  attended through attention.comp's scalar tile: twice the registers a
@@ -218,19 +224,19 @@ layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 
 //  The queries, once, in half precision. The only thing staged: they come
 //  in binary32 and every tile reads them.
-shared float16_t qs[BR * DM];
+shared float16_t qs[SUBS * BR * DM];
 
 //  The scores of a tile, and at the very end the answer on its way out of
 //  the cooperative matrices, sixteen components at a time.
-shared float ss[BR * BC];
+shared float ss[SUBS * BR * BC];
 
 //  Each row's rescale for the tile, and at the end its reciprocal total;
 //  and which row each element of an accumulator is, found once.
-shared float rowscale[BR];
-shared uint rowmap[256];
+shared float rowscale[SUBS * BR];
+shared uint rowmap[SUBS * 256];
 
 //  The weights, in what the instruction reads.
-shared float16_t ps[BR * BC];
+shared float16_t ps[SUBS * BR * BC];
 
 void main() {
     //  Blocks of queries along the first axis and heads along the second,
@@ -239,9 +245,17 @@ void main() {
     //  picture's twenty-one megabytes of keys and values at once, read
     //  again from memory for every sixteen queries, where one head's are a
     //  megabyte and a half and stay in the second-level cache.
-    uint block = gl_WorkGroupID.x;
+    uint sub   = gl_LocalInvocationID.x / 64u;
+    uint block = gl_WorkGroupID.x * SUBS + sub;
     uint head  = gl_WorkGroupID.y;
-    uint lane  = gl_LocalInvocationID.x;
+    uint lane  = gl_LocalInvocationID.x % 64u;
+
+    //  This subgroup's part of the shared memory.
+    uint QS0 = sub * BR * DM;
+    uint SS0 = sub * BR * BC;
+    uint PS0 = sub * BR * BC;
+    uint RS0 = sub * BR;
+    uint RM0 = sub * 256u;
 
     //  Whether a position sees only what precedes it, and how many
     //  positions the half-precision copy is to hold -- the batch rounded up
@@ -258,13 +272,17 @@ void main() {
 
     uint reach = halved && room > shape.positions ? room : shape.positions;
 
-    if (head >= shape.heads || block * BR >= reach) {
+    //  A workgroup wholly past what it answers for. A subgroup of a wider
+    //  one that is goes on, because the others wait for it at every
+    //  barrier: its rows are past the batch, and the writes at the end
+    //  write them as nothing.
+    if (head >= shape.heads || gl_WorkGroupID.x * SUBS * BR >= reach) {
         return;
     }
 
     //  A block wholly past the batch: zeros in the copy, and none of the
     //  attending below.
-    if (block * BR >= shape.positions) {
+    if (SUBS == 1u && block * BR >= shape.positions) {
         for (uint at = lane; at < BR * shape.value_size; at += 64u) {
             uint r = at / shape.value_size;
             uint c = at % shape.value_size;
@@ -310,8 +328,11 @@ void main() {
     //  The union of the block's windows, which is what the tiles walk. The
     //  first row's is the earliest and the last row's is the latest, so
     //  neither bound needs the rows compared.
-    uint slot_low  = min (block * BR, shape.positions - 1u);
-    uint slot_high = min (block * BR + BR - 1u, shape.positions - 1u);
+    //  Every subgroup of the workgroup walks the same tiles, the union of
+    //  all of theirs, so that they meet at the same barriers.
+    uint slot_low  = min (gl_WorkGroupID.x * SUBS * BR, shape.positions - 1u);
+    uint slot_high = min (gl_WorkGroupID.x * SUBS * BR + SUBS * BR - 1u,
+                          shape.positions - 1u);
 
     uint last_max = shape.last + (causal != 0u ? slot_high : 0u);
     uint last_low = shape.last + (causal != 0u ? slot_low  : 0u);
@@ -340,7 +361,7 @@ void main() {
         for (uint m = 0u; m < BR; m++) {
             uint slot = min (block * BR + m, shape.positions - 1u);
 
-            qs[m * DM + c] =
+            qs[QS0 + m * DM + c] =
                 float16_t (q[slot * shape.heads * dk + head * dk + c]);
         }
     }
@@ -392,15 +413,15 @@ void main() {
         for (int e = 0; e < probe.length(); ++e) {
             probe[e] = float (lane * many + uint (e));
         }
-        coopMatStore (probe, ss, 0u, 16u,
+        coopMatStore (probe, ss, SS0 + 0u, 16u,
                       gl_CooperativeMatrixLayoutRowMajor);
         barrier();
         for (uint at = lane; at < 256u; at += 64u) {
-            rowmap[uint (ss[at])] = at / 16u;
+            rowmap[RM0 + uint (ss[SS0 + at])] = at / 16u;
         }
         barrier();
         for (uint e = 0u; e < 8u; ++e) {
-            mine_rows[e] = e < many ? rowmap[lane * many + e] : 0u;
+            mine_rows[e] = e < many ? rowmap[RM0 + lane * many + e] : 0u;
         }
     }
 #else
@@ -442,7 +463,7 @@ void main() {
                     km[BC / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    coopMatLoad (qm[m], qs, m * 16u * DM + d0, DM,
+                    coopMatLoad (qm[m], qs, QS0 + m * 16u * DM + d0, DM,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -464,7 +485,7 @@ void main() {
 
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
-                    coopMatStore (sacc[m][n], ss, m * 16u * BC + n * 16u, BC,
+                    coopMatStore (sacc[m][n], ss, SS0 + m * 16u * BC + n * 16u, BC,
                                   gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
@@ -499,7 +520,7 @@ void main() {
                 float score = -1.0 / 0.0;
 
                 if (step >= fi && step <= la) {
-                    score = ss[r * BC + at] * shape.scale;
+                    score = ss[SS0 + r * BC + at] * shape.scale;
 
                     if (slope > 0.0) {
                         uint asking =
@@ -530,7 +551,7 @@ void main() {
             [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
                 float w = empty ? 0.0 : exp (mine[c] - raised);
 
-                ps[r * BC + c * 32u + col] = float16_t (w);
+                ps[PS0 + r * BC + c * 32u + col] = float16_t (w);
                 run += w;
             }
 
@@ -539,7 +560,7 @@ void main() {
 
 #ifdef IN_PLACE
             if (col == 0u) {
-                rowscale[r] = carry[i];
+                rowscale[RS0 + r] = carry[i];
             }
 #endif
         }
@@ -554,7 +575,7 @@ void main() {
 
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 for (uint e = 0u; e < 8u; ++e) {
-                    scale_of[m][e] = rowscale[m * 16u + mine_rows[e]];
+                    scale_of[m][e] = rowscale[RS0 + m * 16u + mine_rows[e]];
                 }
             }
 
@@ -573,7 +594,7 @@ void main() {
                         gl_MatrixUseA> pm[BR / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
+                    coopMatLoad (pm[m], ps, PS0 + m * 16u * BC + n0, BC,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -604,7 +625,7 @@ void main() {
         uint r = (lane >> 5u) + 2u * i;
 
         if (col == 0u) {
-            rowscale[r] = block * BR + r < shape.positions
+            rowscale[RS0 + r] = block * BR + r < shape.positions
                           ? 1.0 / total[i] : 0.0;
         }
     }
@@ -614,7 +635,7 @@ void main() {
 
     [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
         for (uint e = 0u; e < 8u; ++e) {
-            final_of[m][e] = rowscale[m * 16u + mine_rows[e]];
+            final_of[m][e] = rowscale[RS0 + m * 16u + mine_rows[e]];
         }
     }
 
@@ -628,7 +649,7 @@ void main() {
                     pacc[m][t][e] *= final_of[m][e];
                 }
 
-                coopMatStore (pacc[m][t], ss, 0u, 16u,
+                coopMatStore (pacc[m][t], ss, SS0 + 0u, 16u,
                               gl_CooperativeMatrixLayoutRowMajor);
                 barrier();
 
@@ -645,9 +666,9 @@ void main() {
                                 hb[where] = float16_t (0.0);
                             }
                         } else if (halved) {
-                            hb[where] = float16_t (ss[at]);
+                            hb[where] = float16_t (ss[SS0 + at]);
                         } else {
-                            y[where] = ss[at];
+                            y[where] = ss[SS0 + at];
                         }
                     }
                 }
@@ -680,7 +701,7 @@ void main() {
                         gl_MatrixUseA> pm[BR / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    coopMatLoad (pm[m], ps, m * 16u * BC + n0, BC,
+                    coopMatLoad (pm[m], ps, PS0 + m * 16u * BC + n0, BC,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -723,7 +744,7 @@ void main() {
                         uint r = (lane >> 5u) + 2u * i;
 
                         held[ch][i] = held[ch][i] * carry[i]
-                                      + ss[r * DM + ch * 32u + col];
+                                      + ss[SS0 + r * DM + ch * 32u + col];
                     }
                 }
             }

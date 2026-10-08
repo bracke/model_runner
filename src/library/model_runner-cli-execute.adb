@@ -29,30 +29,34 @@ package body Model_Runner.CLI.Execute is
       use Ada.Streams;
 
       --  A saved context runs to many megabytes, so the bytes are written
-      --  a chunk at a time from a fixed buffer rather than copied whole
-      --  onto the stack, which a large snapshot would overflow.
-      Chunk : constant := 64 * 1024;
+      --  a piece at a time straight from where they are, rather than
+      --  copied whole onto the stack -- which a large snapshot would
+      --  overflow -- or a byte at a time into a buffer, which took a
+      --  saved session of 1.2 GB seconds before the disk saw any of it.
+      Chunk : constant := 64 * 1024 * 1024;
 
-      Handle : Ada.Streams.Stream_IO.File_Type;
-      Block  : Stream_Element_Array (1 .. Chunk);
-      At_Byte : Stream_Element_Offset := 0;
+      use type Model_Runner.Bytes.Byte_Count;
+
+      Handle  : Ada.Streams.Stream_IO.File_Type;
+      Done    : Model_Runner.Bytes.Byte_Count := 0;
    begin
       Status := E.Success;
 
       begin
          Ada.Streams.Stream_IO.Create
            (Handle, Ada.Streams.Stream_IO.Out_File, Path);
-         for Value of Data loop
-            At_Byte := At_Byte + 1;
-            Block (At_Byte) := Stream_Element (Value);
-            if At_Byte = Block'Last then
-               Ada.Streams.Stream_IO.Write (Handle, Block);
-               At_Byte := 0;
-            end if;
+         while Done < Data'Length loop
+            declare
+               Size  : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count'Min (Chunk, Data'Length - Done);
+               Piece : Stream_Element_Array
+                 (1 .. Stream_Element_Offset (Size))
+                 with Import, Address => Data (Data'First + Done)'Address;
+            begin
+               Ada.Streams.Stream_IO.Write (Handle, Piece);
+               Done := Done + Size;
+            end;
          end loop;
-         if At_Byte > 0 then
-            Ada.Streams.Stream_IO.Write (Handle, Block (1 .. At_Byte));
-         end if;
          Ada.Streams.Stream_IO.Close (Handle);
       exception
          when others =>

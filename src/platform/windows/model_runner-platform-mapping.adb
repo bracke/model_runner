@@ -258,4 +258,15 @@ package body Model_Runner.Platform.Mapping is
       Ok := True;
    end Copy;
 
+   procedure Open_Writable
+     (Item      : in out Region;
+      Path      : String;
+      Size      : Model_Runner.Bytes.Byte_Count;
+      Available : out Boolean)
+   is
+      pragma Unreferenced (Item, Path, Size);
+   begin
+      Available := False;
+   end Open_Writable;
+
 end Model_Runner.Platform.Mapping;

@@ -48,4 +48,19 @@ package Model_Runner.Platform.Pages is
      (Start  : System.Address;
       Length : Model_Runner.Bytes.Byte_Count);
 
+   --  Tell the host the next reads of a run of a file's mapping are a few
+   --  scattered bytes, or that they are not any more. A fault on a mapping
+   --  read as it usually is reads the pages around it as well; a sample
+   --  of four thousand bytes across a model whose pages had gone back
+   --  read half a gigabyte from the file for them and took 14 s. Advice
+   --  only, and only the whole pages inside the run.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes in the run; less than a page does nothing.
+   --  @param Scattered True before the scattered reads, False after.
+   procedure Expect_Scattered
+     (Start     : System.Address;
+      Length    : Model_Runner.Bytes.Byte_Count;
+      Scattered : Boolean);
+
 end Model_Runner.Platform.Pages;

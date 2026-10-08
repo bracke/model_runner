@@ -487,6 +487,13 @@ package body Model_Runner.Generation is
       Prompt_Count : Natural := 0;
       First_Token  : Positive := 1;
 
+      --  Leading positions of the text the draft never read, which its
+      --  positions are behind the target's by; see L.Skipped.
+      Skip : Natural := 0;
+
+      --  How much of a prompt's end a draft reads when it starts afresh.
+      Draft_Reads : constant := 1_024;
+
       --  Drafting. On only when there is a draft model and a session on it,
       --  a count of tokens to propose, greedy sampling and no grammar --
       --  the last two because they are what makes "the same text as without
@@ -1388,15 +1395,18 @@ package body Model_Runner.Generation is
          --  draft to catch up from a point behind it: a range check.
          --  What the draft holds that agrees is kept, as the target's is,
          --  and the rest of the shared prefix read into it in batches.
-         if Drafting and then By_Model and then First_Token > 1 then
+         if Drafting and then By_Model then
             declare
                Holds : constant Natural := L.Position (Draft_Session.all);
                Keep  : Natural := 0;
+               From  : Positive;
                Local : E.Error_Info;
             begin
-               while Keep < Holds and then Keep < First_Token - 1
+               Skip := L.Skipped (Draft_Session.all);
+               while Keep < Holds
+                 and then Keep + Skip < First_Token - 1
                  and then L.Committed_Token (Draft_Session.all, Keep)
-                          = For_Draft (Tokens.all (Keep + 1))
+                          = For_Draft (Tokens.all (Keep + Skip + 1))
                loop
                   Keep := Keep + 1;
                end loop;
@@ -1414,14 +1424,26 @@ package body Model_Runner.Generation is
                   end if;
                end if;
 
-               while Keep < First_Token - 1 loop
+               --  A draft that holds nothing reads the end of the prompt
+               --  alone: what it proposes from is the last of the text,
+               --  and reading the whole of a long one cost it as much as
+               --  a sixth of the target's own reading. See Draft_Reads.
+               if L.Position (Draft_Session.all) = 0 then
+                  Skip := (if Prompt_Count > Draft_Reads
+                           then Prompt_Count - Draft_Reads else 0);
+                  L.Set_Skipped (Draft_Session.all, Skip);
+                  Keep := 0;
+               end if;
+
+               From := Keep + Skip + 1;
+               while From <= First_Token - 1 loop
                   declare
                      Upto : constant Natural :=
-                       Natural'Min (First_Token - 1, Keep + Span);
+                       Natural'Min (First_Token - 1, From + Span - 1);
                   begin
                      L.Evaluate_Batch
                        (Draft_Session.all, Draft.all,
-                        Draft_Tokens_Of (Tokens.all (Keep + 1 .. Upto)),
+                        Draft_Tokens_Of (Tokens.all (From .. Upto)),
                         Aside.all (Aside.all'First
                                    .. Aside.all'First + Draft_Words - 1),
                         Cancel => Cancel, Status => Local);
@@ -1430,7 +1452,7 @@ package body Model_Runner.Generation is
                         Index := Prompt_Count + 1;
                         exit;
                      end if;
-                     Keep := Upto;
+                     From := Upto + 1;
                   end;
                end loop;
             end;
@@ -1566,13 +1588,14 @@ package body Model_Runner.Generation is
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
-               if Drafting and then By_Model then
+               if Drafting and then By_Model and then Last > Skip then
                   declare
                      Local : E.Error_Info;
                   begin
                      L.Evaluate_Batch
                        (Draft_Session.all, Draft.all,
-                        Draft_Tokens_Of (Tokens.all (Index .. Last)),
+                        Draft_Tokens_Of
+                          (Tokens.all (Natural'Max (Index, Skip + 1) .. Last)),
                         Aside.all (Aside.all'First
                                    .. Aside.all'First + Draft_Words - 1),
                         Cancel => Cancel, Status => Local);
@@ -1735,8 +1758,13 @@ package body Model_Runner.Generation is
                end if;
 
                if By_Model then
+                  --  The draft's text begins Skip in: what the target
+                  --  keeps before Skip the draft never held, and the
+                  --  positions shifted out are the same ones of the text.
                   L.Shift
-                    (Draft_Session.all, Draft.all, Item.Context_Keep,
+                    (Draft_Session.all, Draft.all,
+                     (if Item.Context_Keep > Skip
+                      then Item.Context_Keep - Skip else 0),
                      Item.Context_Shift, Moved);
                   if E.Is_Error (Moved) then
                      return;
@@ -2233,7 +2261,7 @@ package body Model_Runner.Generation is
                L.Rewind
                  (Draft_Session.all,
                   Natural'Min (L.Position (Draft_Session.all),
-                               Before + Accepted),
+                               Before + Accepted - Skip),
                   Local);
                if E.Is_Error (Local) then
                   Conclude (Runtime_Error, Local);
@@ -2255,12 +2283,12 @@ package body Model_Runner.Generation is
             --  proposals, which is four more than a disagreement and two
             --  fewer than the truth.
             while By_Model
-              and then L.Position (Draft_Session.all)
+              and then L.Position (Draft_Session.all) + Skip
                        < Before + Verified_Count
             loop
                declare
                   Step : constant Natural :=
-                    L.Position (Draft_Session.all) - Before + 1;
+                    L.Position (Draft_Session.all) + Skip - Before + 1;
                begin
                   L.Evaluate
                     (Draft_Session.all, Draft.all,

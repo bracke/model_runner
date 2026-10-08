@@ -44,6 +44,22 @@ package Model_Runner.Platform.Mapping is
       Path      : String;
       Available : out Boolean);
 
+   --  Map a file that exists, grown or cut to Size first, for reading and
+   --  writing, shared: what is written into the mapping is the file's,
+   --  and goes to the disk when the host writes it back rather than when
+   --  the writer does. Released by Close as a read-only one is. A host
+   --  that does not offer it says so and maps nothing.
+   --
+   --  @param Item Region to fill in.
+   --  @param Path File to map; it must exist.
+   --  @param Size Bytes the file holds and the mapping covers.
+   --  @param Available True when the file was mapped.
+   procedure Open_Writable
+     (Item      : in out Region;
+      Path      : String;
+      Size      : Model_Runner.Bytes.Byte_Count;
+      Available : out Boolean);
+
    --  Release a mapping. Idempotent and never raises.
    --
    --  @param Item Region to release.

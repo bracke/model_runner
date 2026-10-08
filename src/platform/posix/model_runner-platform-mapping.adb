@@ -33,6 +33,19 @@ package body Model_Runner.Platform.Mapping is
    PROT_READ : constant Interfaces.C.int := 1;
    MAP_PRIVATE : constant Interfaces.C.int := 2;
 
+   --  And for a mapping written through, three more that the two hosts
+   --  agree on as well: O_RDWR 2, PROT_WRITE 2, MAP_SHARED 1. The file is
+   --  made by the caller rather than here, because O_CREAT is the flag the
+   --  two spell differently.
+   O_RDWR     : constant Interfaces.C.int := 2;
+   PROT_WRITE : constant Interfaces.C.int := 2;
+   MAP_SHARED : constant Interfaces.C.int := 1;
+
+   function C_Ftruncate
+     (Handle : Interfaces.C.int;
+      Length : Interfaces.C.long) return Interfaces.C.int
+   with Import, Convention => C, External_Name => "ftruncate";
+
    function C_Open
      (Path  : Interfaces.C.Strings.chars_ptr;
       Flags : Interfaces.C.int) return Interfaces.C.int
@@ -216,5 +229,74 @@ package body Model_Runner.Platform.Mapping is
       end;
       Ok := True;
    end Copy;
+
+   -------------------
+   -- Open_Writable --
+   -------------------
+
+   procedure Open_Writable
+     (Item      : in out Region;
+      Path      : String;
+      Size      : Model_Runner.Bytes.Byte_Count;
+      Available : out Boolean)
+   is
+   begin
+      Available := False;
+      Close (Item);
+
+      if Path = "" or else Size = 0 or else Size > Max_Mapped_Bytes
+        or else not Ada.Directories.Exists (Path)
+      then
+         return;
+      end if;
+
+      declare
+         C_Path : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String (Path);
+         Handle : Interfaces.C.int;
+         Base_Address : System.Address;
+      begin
+         Handle := C_Open (C_Path, O_RDWR);
+         Interfaces.C.Strings.Free (C_Path);
+
+         if Handle < 0 then
+            return;
+         end if;
+
+         if C_Ftruncate (Handle, Interfaces.C.long (Size)) /= 0 then
+            if C_Close (Handle) /= 0 then
+               null;
+            end if;
+            return;
+         end if;
+
+         Base_Address :=
+           C_Mmap
+             (Address => System.Null_Address,
+              Length  => Interfaces.C.size_t (Size),
+              Protect => PROT_READ + PROT_WRITE,
+              Flags   => MAP_SHARED,
+              Handle  => Handle,
+              Offset  => 0);
+
+         if Base_Address = Map_Failed or else Base_Address = System.Null_Address
+         then
+            if C_Close (Handle) /= 0 then
+               null;
+            end if;
+            return;
+         end if;
+
+         Item.Address := Base_Address;
+         Item.Size := Size;
+         Item.Handle := Long_Long_Integer (Handle);
+         Model_Runner.Platform.Mapped_Ranges.Note (Base_Address, Size);
+         Available := True;
+      end;
+   exception
+      when others =>
+         Close (Item);
+         Available := False;
+   end Open_Writable;
 
 end Model_Runner.Platform.Mapping;

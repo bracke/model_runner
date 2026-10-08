@@ -498,10 +498,8 @@ package body Model_Runner.Platform.Device.Products is
    --  sixteen components at a time, so a head wider than both or not a
    --  multiple of sixteen is not one it can answer.
    --  The deep pipeline of the kernel Matrix_Kernel would bind for this
-   --  shape, or none: the same choice, at thirty-two queries a workgroup,
-   --  among the three narrower. A head of 256 at thirty-two holds twice
-   --  sixteen accumulators and lost: Gemma 3 4B's prompt of 16,447 read
-   --  in 35.8 s against 34.8.
+   --  shape, or none: the same choice, at Matrix_Deep_Queries a
+   --  workgroup.
    function Deep_Kernel
      (Item       : Engine;
       Positions  : Natural;
@@ -522,6 +520,9 @@ package body Model_Runner.Platform.Device.Products is
        elsif Head_Size <= Matrix_Wide_Head
          and then Value_Size <= Matrix_Wide_Head
        then Item.Matrix_Wide_Deep_Attend
+       elsif Head_Size <= Matrix_Wider_Head
+         and then Value_Size <= Matrix_Wider_Head
+       then Item.Matrix_Wider_Deep_Attend
        else Null_Handle);
 
    function Matrix_Kernel
@@ -4640,12 +4641,27 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
-         --  And the three narrower again at thirty-two queries a
-         --  workgroup, told through the shader's specialization constant.
+         --  And each of the four again for a batch attending far:
+         --  Matrix_Queries a subgroup, as the plain pipeline answers, and
+         --  Matrix_Deep_Queries a workgroup, its subgroups reading the
+         --  same keys and values in step. Thirty-two queries a subgroup
+         --  had read them less often too, but held twice the registers:
+         --  Qwen3 8B's prompt of 16,447 read in 111 s that way, 101 this,
+         --  and a head of 256 lost by it where this gains.
          declare
-            Which : aliased Specialization_Entry :=
-              (Which => 1, At_Was => 0, Span => 4);
-            Value : aliased C.unsigned := Matrix_Deep_Queries;
+            type Three_Entries is array (1 .. 3) of Specialization_Entry
+              with Convention => C;
+            type Three_Values is array (1 .. 3) of C.unsigned
+              with Convention => C;
+
+            Which : aliased constant Three_Entries :=
+              [(Which => 1, At_Was => 0, Span => 4),
+               (Which => 2, At_Was => 4, Span => 4),
+               (Which => 3, At_Was => 8, Span => 4)];
+            Value : aliased constant Three_Values :=
+              [C.unsigned (Matrix_Queries),
+               C.unsigned (Matrix_Deep_Queries / Matrix_Queries),
+               C.unsigned (64 * Matrix_Deep_Queries / Matrix_Queries)];
             Told  : aliased Specialization_Info;
 
             procedure Deep (Module : Address; Line : out Address) is
@@ -4661,15 +4677,16 @@ package body Model_Runner.Platform.Device.Products is
                end if;
             end Deep;
          begin
-            Told.Count := 1;
+            Told.Count := 3;
             Told.Entries := Which'Address;
-            Told.Span := 4;
+            Told.Span := 12;
             Told.Values := Value'Address;
             Request.Stage.Specialized := Told'Address;
 
             Deep (Item.Attend_Matrix, Item.Matrix_Deep_Attend);
             Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
             Deep (Item.Attend_Matrix_Mid, Item.Matrix_Mid_Deep_Attend);
+            Deep (Item.Attend_Matrix_Wider, Item.Matrix_Wider_Deep_Attend);
 
             Request.Stage.Specialized := Null_Handle;
          end;
@@ -5430,6 +5447,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Deep_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Wider_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");

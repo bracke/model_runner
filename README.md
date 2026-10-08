@@ -2286,13 +2286,14 @@ positions that reading was the time, and it grew faster than the depth:
 Qwen3 8B's prompt of 16,447 spent 79% of each layer attending, 121 ms
 against 30 ms for every product together, and read in 182 s where
 llama.cpp takes 131. Where a batch attends across 2,048 positions or more,
-the same kernel now answers thirty-two queries a workgroup -- the same words
-specialized, so the answers do not change -- and reads the keys and values
-half as often: 58 ms a layer, and the prompt in 111 s; Steelman-14B's in
-197 s where it took 338. Below that depth sixteen stays, as it is faster
-there (3.9 ms a layer against 5.9 over a prompt of 1,500), and heads of
-256 keep sixteen throughout, where thirty-two held twice the accumulators
-and lost (Gemma 3 4B, 35.8 s against 34.8).
+the same kernel -- the same words specialized, so the answers do not
+change -- runs four subgroups of sixteen a workgroup, walking the same
+tiles of keys and values in step so that what one reads the others find in
+the cache: the prompt in 101 s, Steelman-14B's in 197 where it took 338,
+ThinkingCap's in 206 where it took 274. Thirty-two queries in one subgroup
+read the keys half as often too, but held twice the accumulators: 111 s,
+and on heads of 256 a loss. Below that depth sixteen alone stays, as it is
+faster there (3.98 s over a prompt of 1,500 against 4.15 always deep).
 
 The device cache is dealt in pages of sixteen positions from a pool of
 65,536, which is one storage buffer of halves for a model of Qwen3 8B's
