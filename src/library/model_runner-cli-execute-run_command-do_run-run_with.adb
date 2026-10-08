@@ -475,6 +475,9 @@ begin
          Kept : Files.File_Source;
       begin
          Files.Open (Kept, Load_Path, Status => Condition);
+         if Auto and then not E.Is_Error (Condition) then
+            Model_Runner.Platform.Mark_Used (Load_Path);
+         end if;
          if E.Is_Error (Condition) then
             if not Auto then
                Fail (Condition);
@@ -1707,6 +1710,15 @@ begin
                Model_Runner.Platform.Ensure_Parent_Directory (Save_Path);
                Write_File (Save_Path, Room.all, Condition);
                Model_Runner.Bytes.Free (Room);
+
+               --  The cache kept to its bound, the file just written
+               --  whatever its size.
+               if Auto and then not E.Is_Error (Condition) then
+                  Model_Runner.Platform.Trim_Directory
+                    (Model_Runner.Platform.Cache_Directory, "*.kv",
+                     Model_Runner.Platform.Prefill_Cache_Most,
+                     Keep => Save_Path);
+               end if;
 
                if E.Is_Error (Condition) and then not Auto then
                   Fail (Condition);

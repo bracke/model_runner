@@ -84,6 +84,29 @@ begin
       return;
    end if;
 
+   --  All the pages asked for or none: dealt a layer at a time until the
+   --  slots ran out, a reach past the pool's cap left the first layers
+   --  holding pages for the whole of it and the last none, and every
+   --  batch after that was refused a page and attended on the host.
+   --  Qwen3 8B, at a context of 34,816 its keys and values asked for
+   --  ahead, read a prompt of 32k at seven tokens a second.
+   declare
+      More : Element_Count := 0;
+   begin
+      for Layer in 0 .. Item.Page_Count.all'Last loop
+         if not Linear (Item.Owner.Settings, Layer) then
+            More := More
+              + Element_Count'Max
+                  (0, Pages_Wanted (Item.all, Layer, Upto)
+                      - Item.Page_Count.all (Layer));
+         end if;
+      end loop;
+
+      if More > Element_Count (Page_Cap - Pages_In_Use) then
+         return;
+      end if;
+   end;
+
    --  Each layer up to the page its highest new position reaches. A
    --  page is a slot at the front the buffer has not dealt, and taking
    --  it may grow how far the buffer is dealt and so the reserve.

@@ -497,12 +497,44 @@ package body Model_Runner.Platform.Device.Products is
    --  Matrix_Wide_Head in its second compilation, and reads the cache
    --  sixteen components at a time, so a head wider than both or not a
    --  multiple of sixteen is not one it can answer.
-   function Matrix_Kernel
+   --  The deep pipeline of the kernel Matrix_Kernel would bind for this
+   --  shape, or none: the same choice, at thirty-two queries a workgroup,
+   --  among the three narrower. A head of 256 at thirty-two holds twice
+   --  sixteen accumulators and lost: Gemma 3 4B's prompt of 16,447 read
+   --  in 35.8 s against 34.8.
+   function Deep_Kernel
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural) return Address
    is (if Item.Exact_Attention
+         or else Positions
+                 < (if Item.Copy_Only then Query_Block else Matrix_Queries)
+         or else Head_Size mod 16 /= 0
+         or else Value_Size mod 16 /= 0
+       then Null_Handle
+       elsif Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
+       then Item.Matrix_Deep_Attend
+       elsif Head_Size <= Matrix_Mid_Head
+         and then Value_Size <= Matrix_Mid_Head
+         and then Item.Matrix_Mid_Attend /= Null_Handle
+       then Item.Matrix_Mid_Deep_Attend
+       elsif Head_Size <= Matrix_Wide_Head
+         and then Value_Size <= Matrix_Wide_Head
+       then Item.Matrix_Wide_Deep_Attend
+       else Null_Handle);
+
+   function Matrix_Kernel
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Span       : Natural := 0) return Address
+   is (if Span >= Deep_Span
+         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+                  /= Null_Handle
+       then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+       elsif Item.Exact_Attention
          --  A cache kept as its copy has no binary32 rows for the tiled
          --  kernel that takes eight to fifteen queries otherwise, so the
          --  matrix kernel takes them, a block part empty -- as it takes the
@@ -719,7 +751,7 @@ package body Model_Runner.Platform.Device.Products is
       Span       : Natural := Bundle_Least) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
-       then Matrix_Kernel (Item, Positions, Head_Size, Value_Size)
+       then Matrix_Kernel (Item, Positions, Head_Size, Value_Size, Span)
        elsif not Rounding
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
@@ -898,8 +930,16 @@ package body Model_Runner.Platform.Device.Products is
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural;
-      Rounding   : Boolean := False) return C.unsigned
+      Rounding   : Boolean := False;
+      Span       : Natural := 0) return C.unsigned
    is (if not Rounding
+         and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
+         and then Span >= Deep_Span
+         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+                  /= Null_Handle
+       then C.unsigned
+              ((Positions + Matrix_Deep_Queries - 1) / Matrix_Deep_Queries)
+       elsif not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then C.unsigned ((Positions + Matrix_Queries - 1) / Matrix_Queries)
        elsif not Rounding
@@ -4600,6 +4640,40 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         --  And the three narrower again at thirty-two queries a
+         --  workgroup, told through the shader's specialization constant.
+         declare
+            Which : aliased Specialization_Entry :=
+              (Which => 1, At_Was => 0, Span => 4);
+            Value : aliased C.unsigned := Matrix_Deep_Queries;
+            Told  : aliased Specialization_Info;
+
+            procedure Deep (Module : Address; Line : out Address) is
+            begin
+               Line := Null_Handle;
+               if Module /= Null_Handle then
+                  Request.Stage.Module := Module;
+                  if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                             Null_Handle, Made'Access) = 0
+                  then
+                     Line := Made;
+                  end if;
+               end if;
+            end Deep;
+         begin
+            Told.Count := 1;
+            Told.Entries := Which'Address;
+            Told.Span := 4;
+            Told.Values := Value'Address;
+            Request.Stage.Specialized := Told'Address;
+
+            Deep (Item.Attend_Matrix, Item.Matrix_Deep_Attend);
+            Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
+            Deep (Item.Attend_Matrix_Mid, Item.Matrix_Mid_Deep_Attend);
+
+            Request.Stage.Specialized := Null_Handle;
+         end;
+
          --  And the unpacking of a packed layer into the copy that
          --  kernel reads, which is worth having only where it is.
          if Item.Unpacker /= Null_Handle
@@ -5353,6 +5427,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Mid_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
@@ -14282,7 +14359,10 @@ package body Model_Runner.Platform.Device.Products is
                         Down   : constant C.unsigned :=
                           Attend_Groups
                             (Item, Seated, This.Head_Size, This.Value_Size,
-                             Rounding => False);
+                             Rounding => False,
+                             Span => (if This.Last >= This.First
+                                      then This.Last - This.First + 1
+                                      else 0));
                      begin
                         --  The matrix kernel takes its blocks along the
                         --  first axis and its heads along the second; see

@@ -170,6 +170,14 @@ package Model_Runner.Platform.Device.Products is
    --  instruction's own tile is.
    Matrix_Queries : constant := 16;
 
+   --  And the deep pipelines' thirty-two, taken where a batch attends
+   --  across Deep_Span cached positions or more: there the sixteen read a
+   --  head's keys and values twice as often, and that was the time. At a
+   --  prompt of 4,000 the two are level; Qwen3 8B's 16,447 read in 113 s
+   --  at thirty-two where sixteen took 182.
+   Matrix_Deep_Queries : constant := 32;
+   Deep_Span           : constant := 2_048;
+
    --  The widest head that kernel takes, which is what the shared memory
    --  its queries are staged into is sized for; and the widest its second
    --  compilation takes, for the models whose heads are a hundred and
@@ -3475,6 +3483,12 @@ private
       Matrix_Wide_Attend : System.Address := System.Null_Address;
       Matrix_Mid_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Attend : System.Address := System.Null_Address;
+
+      --  The three narrower at Matrix_Deep_Queries, for a batch attending
+      --  far.
+      Matrix_Deep_Attend : System.Address := System.Null_Address;
+      Matrix_Wide_Deep_Attend : System.Address := System.Null_Address;
+      Matrix_Mid_Deep_Attend : System.Address := System.Null_Address;
       Norm_Line   : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;

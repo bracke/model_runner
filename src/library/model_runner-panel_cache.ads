@@ -17,6 +17,12 @@ package Model_Runner.Panel_Cache is
    --  @return True where a file of that name exists.
    function Is_There (Path : String) return Boolean;
 
+   --  Mark a panel cache file used now, so the cache's bound lets files
+   --  nobody has mapped for longer go first.
+   --
+   --  @param Path The file just mapped.
+   procedure Mark_Used (Path : String);
+
    --  Remove all but the newest Count of the cache files whose names begin
    --  as Prefix's does, in its directory: a split model's panels are kept
    --  one file to each split, and each is gigabytes. Anything the host

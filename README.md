@@ -2276,6 +2276,29 @@ layer a submission over its whole batch, and ThinkingCap (27B, split) at
 shortens as the attention it reads grows: a prompt of 24,194 tokens kept
 every submission under 1.32 s and read at 52 tokens a second. Raising the
 limit (`options amdgpu lockup_timeout=60000`) is no longer needed for it.
+A model the device holds whole stays well inside it: Qwen3 8B's longest
+layer was under a second at depth 29,000, a batch of 512.
+
+**A long prompt's attention.** The matrix attention answers sixteen queries
+of a head a workgroup, and each workgroup reads the head's keys and values
+from the first cached position to its own. Past a couple of thousand
+positions that reading was the time, and it grew faster than the depth:
+Qwen3 8B's prompt of 16,447 spent 79% of each layer attending, 121 ms
+against 30 ms for every product together, and read in 182 s where
+llama.cpp takes 131. Where a batch attends across 2,048 positions or more,
+the same kernel now answers thirty-two queries a workgroup -- the same words
+specialized, so the answers do not change -- and reads the keys and values
+half as often: 58 ms a layer, and the prompt in 111 s; Steelman-14B's in
+197 s where it took 338. Below that depth sixteen stays, as it is faster
+there (3.9 ms a layer against 5.9 over a prompt of 1,500), and heads of
+256 keep sixteen throughout, where thirty-two held twice the accumulators
+and lost (Gemma 3 4B, 35.8 s against 34.8).
+
+The device cache is dealt in pages of sixteen positions from a pool of
+65,536, which is one storage buffer of halves for a model of Qwen3 8B's
+width -- 29,127 positions of its 36 layers. A context asked for past that
+reads the positions the pool holds on the device and the rest on the
+host; it used to read every one of them on the host.
 
 `--backend device` runs the products on a compute device. On this machine --
 an integrated Radeon sharing a fifteen-watt budget with the processor it

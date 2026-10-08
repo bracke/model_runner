@@ -1,3 +1,5 @@
+with Ada.Calendar;
+with Ada.Calendar.Formatting;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Directories;
@@ -379,6 +381,115 @@ package body Model_Runner.Platform is
       when others =>
          return "";
    end Panel_File;
+
+   ---------------
+   -- Mark_Used --
+   ---------------
+
+   procedure Mark_Used (Path : String) is
+      use type Ada.Calendar.Time;
+
+      Now : constant Long_Long_Integer :=
+        Long_Long_Integer
+          (Ada.Calendar.Clock
+           - Ada.Calendar.Formatting.Time_Of
+               (1970, 1, 1, 0, 0, 0, Time_Zone => 0));
+   begin
+      --  Not set is no worse than before: the file is merely trimmed as
+      --  if it had not been used.
+      if Path /= ""
+        and then not Hostkit.Metadata.Set_File_Times (Path, Now, Now)
+      then
+         return;
+      end if;
+   exception
+      when others =>
+         null;
+   end Mark_Used;
+
+   --------------------
+   -- Trim_Directory --
+   --------------------
+
+   procedure Trim_Directory
+     (Folder  : String;
+      Pattern : String;
+      Most    : Long_Long_Integer;
+      Keep    : String := "")
+   is
+      use Ada.Directories;
+      use type Ada.Calendar.Time;
+
+      type Found is record
+         Name : Ada.Strings.Unbounded.Unbounded_String;
+         Used : Ada.Calendar.Time;
+         Size : Long_Long_Integer;
+      end record;
+
+      Most_Files : constant := 4_096;
+      List  : array (1 .. Most_Files) of Found;
+      Held  : Natural := 0;
+      Total : Long_Long_Integer := 0;
+      Look  : Search_Type;
+      Item  : Directory_Entry_Type;
+   begin
+      if Folder = "" or else not Exists (Folder) then
+         return;
+      end if;
+
+      Start_Search
+        (Look, Folder, Pattern, [Ordinary_File => True, others => False]);
+      while More_Entries (Look) and then Held < Most_Files loop
+         Get_Next_Entry (Look, Item);
+         declare
+            Name : constant String := Full_Name (Item);
+         begin
+            if Name'Length < 5
+              or else Name (Name'Last - 4 .. Name'Last) /= ".part"
+            then
+               Held := Held + 1;
+               List (Held) :=
+                 (Ada.Strings.Unbounded.To_Unbounded_String (Name),
+                  Modification_Time (Item),
+                  Long_Long_Integer (Size (Item)));
+               Total := Total + List (Held).Size;
+            end if;
+         end;
+      end loop;
+      End_Search (Look);
+
+      --  Used longest ago first.
+      for I in 2 .. Held loop
+         for J in reverse 2 .. I loop
+            exit when List (J - 1).Used <= List (J).Used;
+            declare
+               Swap : constant Found := List (J);
+            begin
+               List (J) := List (J - 1);
+               List (J - 1) := Swap;
+            end;
+         end loop;
+      end loop;
+
+      for I in 1 .. Held loop
+         exit when Total <= Most;
+         declare
+            Name : constant String :=
+              Ada.Strings.Unbounded.To_String (List (I).Name);
+         begin
+            if Name /= Keep then
+               Delete_File (Name);
+               Total := Total - List (I).Size;
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+      end loop;
+   exception
+      when others =>
+         null;
+   end Trim_Directory;
 
    ---------------------
    -- Data_Directory --

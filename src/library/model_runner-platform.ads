@@ -101,6 +101,38 @@ package Model_Runner.Platform is
    --  @return The path, or an empty string when there is no directory.
    function Panel_File (Key : String) return String;
 
+   --  The most the prefill cache and the panel cache each keep, in bytes.
+   --  Neither was bounded: a run wrote its context and a load its panels,
+   --  each to a file of its own, and on the machine this was built on the
+   --  two had grown to 51 and 73 GB.
+   Prefill_Cache_Most : constant := 8 * 1024 ** 3;
+   Panel_Cache_Most   : constant := 40 * 1024 ** 3;
+
+   --  Mark a cache file used now, so Trim_Directory keeps it before files
+   --  nobody has read for longer. Its modification time is what says so:
+   --  a file read through a mapping changes no other time this sees.
+   --  Nothing happens where the host will not set it.
+   --
+   --  @param Path The cache file.
+   procedure Mark_Used (Path : String);
+
+   --  Delete the files of Folder named by Pattern that were used longest
+   --  ago, until those left hold at most Most bytes, never Keep. Only the
+   --  cache's own names, because a panel file may be named into any
+   --  directory. A file being written beside its final name ends in
+   --  ".part" and is not counted or deleted. A file that will not go is
+   --  passed over.
+   --
+   --  @param Folder The cache directory.
+   --  @param Pattern The cache files' names, as Ada.Directories reads one.
+   --  @param Most Bytes those files may keep.
+   --  @param Keep A file kept whatever its age, or empty.
+   procedure Trim_Directory
+     (Folder  : String;
+      Pattern : String;
+      Most    : Long_Long_Integer;
+      Keep    : String := "");
+
    --  Directory searched for a model named without a path.
    --
    --  MODEL_RUNNER_MODELS overrides it. Otherwise it is

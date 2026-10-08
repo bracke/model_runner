@@ -2447,6 +2447,7 @@ begin
             --  sent to swap -- 3.5 GB of ThinkingCap's -- where pages of a
             --  file are let go and read again.
             if Panel_File (Needed) /= "" and then Map_Panels (Needed) then
+               Model_Runner.Panel_Cache.Mark_Used (Panel_File (Needed));
                goto Panels_Done;
             end if;
 

@@ -2870,6 +2870,74 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Panels_Are_Kept_Between_Loads;
 
+   --  A cache directory is kept to its bound: the files used longest ago
+   --  go first, a file marked used is kept before them, the file named to
+   --  keep stays whatever its age, and nothing but the cache's own names
+   --  is counted or deleted.
+   procedure Caches_Are_Kept_To_Their_Bound
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package D renames Ada.Directories;
+
+      Folder : constant String :=
+        D.Compose (D.Current_Directory, "cache-trim-test");
+
+      function Named (Name : String) return String
+      is (D.Compose (Folder, Name));
+
+      procedure Write (Name : String; Bytes : Positive) is
+         use Ada.Streams.Stream_IO;
+         F   : File_Type;
+         Raw : constant Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Bytes)) := [others => 7];
+      begin
+         Create (F, Out_File, Named (Name));
+         Write (F, Raw);
+         Close (F);
+      end Write;
+   begin
+      if D.Exists (Folder) then
+         D.Delete_Tree (Folder);
+      end if;
+      D.Create_Directory (Folder);
+
+      --  Oldest first, a second apart, which is what a time on a file
+      --  tells apart; then the oldest marked used, so it is the newest.
+      Write ("a.kv", 100);
+      Model_Runner.Platform.Mark_Used (Named ("a.kv"));
+      delay 1.1;
+      Write ("b.kv", 100);
+      Model_Runner.Platform.Mark_Used (Named ("b.kv"));
+      delay 1.1;
+      Write ("c.kv", 100);
+      Write ("other.txt", 100);
+      Write ("d.kv.part", 100);
+      Model_Runner.Platform.Mark_Used (Named ("c.kv"));
+      delay 1.1;
+      Model_Runner.Platform.Mark_Used (Named ("a.kv"));
+
+      --  Room for two: b, used longest ago, goes.
+      Model_Runner.Platform.Trim_Directory (Folder, "*.kv", 200);
+      Assert (not D.Exists (Named ("b.kv")),
+              "the file used longest ago was kept");
+      Assert (D.Exists (Named ("a.kv")) and then D.Exists (Named ("c.kv")),
+              "a file used since was deleted");
+
+      --  Room for none, but a named one stays; the other names are not
+      --  the cache's.
+      Model_Runner.Platform.Trim_Directory
+        (Folder, "*.kv", 0, Keep => Named ("c.kv"));
+      Assert (not D.Exists (Named ("a.kv")), "a file past the bound was kept");
+      Assert (D.Exists (Named ("c.kv")), "the file named to keep went");
+      Assert (D.Exists (Named ("other.txt")),
+              "a file not of the cache's names was deleted");
+      Assert (D.Exists (Named ("d.kv.part")),
+              "a file being written was deleted");
+
+      D.Delete_Tree (Folder);
+   end Caches_Are_Kept_To_Their_Bound;
+
    --  Evaluation refuses arguments it cannot serve.
    --
    --  These are the checks at the top of both evaluation entries: that the
@@ -15372,6 +15440,10 @@ package body Tests.Inference_Cases is
         (T, Panels_Are_Kept_Between_Loads'Access,
          "panels are kept between loads: mapped from the cache and answering "
          & "the same, and a cache that no longer matches written afresh");
+      Register_Routine
+        (T, Caches_Are_Kept_To_Their_Bound'Access,
+         "a cache directory is kept to its bound, the files used longest "
+         & "ago going first");
       Register_Routine
         (T, Evaluation_Refuses_Arguments_It_Cannot_Serve'Access,
          "evaluation refuses arguments it cannot serve");

@@ -3,6 +3,7 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with System.Storage_Elements;
+with Model_Runner.Platform;
 
 package body Model_Runner.Panel_Cache is
 
@@ -74,6 +75,15 @@ package body Model_Runner.Panel_Cache is
       when others =>
          return False;
    end Is_There;
+
+   ---------------
+   -- Mark_Used --
+   ---------------
+
+   procedure Mark_Used (Path : String) is
+   begin
+      Model_Runner.Platform.Mark_Used (Path);
+   end Mark_Used;
 
    -------------
    -- Writing --
@@ -152,6 +162,11 @@ package body Model_Runner.Panel_Cache is
             Ada.Directories.Delete_File (Path);
          end if;
          Ada.Directories.Rename (Part, Path);
+
+         --  The cache kept to its bound, these panels whatever their size.
+         Model_Runner.Platform.Trim_Directory
+           (Ada.Directories.Containing_Directory (Path), "*.panels*",
+            Model_Runner.Platform.Panel_Cache_Most, Keep => Path);
       exception
          when others =>
             if Is_Open (Out_F) then

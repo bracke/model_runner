@@ -5,6 +5,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A context the device cache cannot hold whole no longer sends the whole prompt to the processor:** asked for pages past the pool's 65,536, a session took them a layer at a time until they ran out, leaving the first layers holding a whole prompt's and the last none, and every batch after was refused a page and attended on the host. Qwen3 8B at a context of 34,816 was on course for over half an hour on a prompt of 32k. Pages are now dealt all at once or not at all: the positions the pool holds -- 29,127 for Qwen3 8B -- are read on the device and the rest on the host, and the same prompt reads in 856 s.
+
 ### Removed
 
 - **Outside programs as the agent:** `work.agent` -- a script or another
@@ -18,6 +22,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A long prompt's attention half as long on the device:** where a batch attends across 2,048 cached positions or more, the matrix attention takes thirty-two queries a workgroup rather than sixteen, reading a head's keys and values half as often. Qwen3 8B's prompt of 16,447 reads in 111 s where it took 182 (llama.cpp 131), Steelman-14B's in 197 where it took 338; the answers are the same, and a shorter prompt keeps the sixteen it was faster at. Heads of 256 keep sixteen throughout: thirty-two lost there.
+- **The caches keep to a bound:** the prefill cache keeps 8 GiB and the panel cache 40 GiB, the files used longest ago going first; a cache file read marks itself used. Neither was bounded, and on the machine this was built on they had grown to 51 and 73 GB.
 - **A context too short names the one that fits:** a prompt past the context, or a prompt and its --max-tokens past it, is answered with the --context-size that holds them ("--context-size 499 holds the prompt and the --max-tokens asked for") rather than only "a larger" one.
 - **A split dense model's long prompt stays within the driver's limit:** past depth 16,384 its batch shortens as the attention it reads grows -- 960 positions from 17,408, 832 from 21,056 -- so no layer's submission runs past what took 1.31 s at 1,024. The kernel's default lockup timeout is two seconds on every queue on recent Linux; ThinkingCap at 2,048 a batch had run to 2.8 s and been reset. A prompt of 24,194 tokens kept every submission under 1.32 s, read at 52 tokens a second.
 - **A run says when a product missed its fast kernel:** `--show-stats` adds a note where a quantized product's shares went to the floating-point path because no integer kernel took them ("62656 of 67656" for a Q4_1 model left in its rows), and one where a prompt's batched products went to the device's row kernel because its matrix tile refused them -- the shape of the two slow paths Falcon-7B and Q8_0 were found on. Nothing is said when every product took its kernel.

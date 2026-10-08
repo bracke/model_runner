@@ -164,7 +164,13 @@ uint place_of (uint pos, uint offset, uint width) {
 //  Query positions a workgroup answers, cached positions a tile holds, and
 //  the widest head this compilation stages. All three are multiples of the
 //  instruction's sixteen.
-const uint BR = 16u;
+//  Sixteen queries a workgroup, or thirty-two where the host makes the
+//  pipeline deep: a block of sixteen reads a head's keys and values again
+//  for every sixteen queries, and past a couple of thousand cached
+//  positions that reading is the kernel's time. Qwen3 8B's prompt of
+//  16,447 attended 121 ms a layer at sixteen and 58 at thirty-two; over
+//  a prompt of 1,500 sixteen is the faster, 3.9 ms against 5.9.
+layout(constant_id = 1) const uint BR = 16u;
 const uint BC = 64u;
 #ifdef WIDER_HEAD
 //  And a third, for Gemma's heads of two hundred and fifty-six, which
@@ -262,6 +268,10 @@ void main() {
         for (uint at = lane; at < BR * shape.value_size; at += 64u) {
             uint r = at / shape.value_size;
             uint c = at % shape.value_size;
+
+            if (block * BR + r >= reach) {
+                continue;
+            }
 
             hb[(block * BR + r) * shape.heads * shape.value_size
                + head * shape.value_size + c] = float16_t (0.0);
@@ -540,17 +550,19 @@ void main() {
         //  What this tile weighs, every component at once, added into
         //  the answer after the answer is rescaled.
         {
-            float scale_of[8];
+            float scale_of[BR / 16u][8];
 
-            for (uint e = 0u; e < 8u; ++e) {
-                scale_of[e] = rowscale[mine_rows[e]];
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                for (uint e = 0u; e < 8u; ++e) {
+                    scale_of[m][e] = rowscale[m * 16u + mine_rows[e]];
+                }
             }
 
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
                     if (t * 16u < dv) {
                         for (int e = 0; e < pacc[m][t].length(); ++e) {
-                            pacc[m][t][e] *= scale_of[e];
+                            pacc[m][t][e] *= scale_of[m][e];
                         }
                     }
                 }
@@ -598,10 +610,12 @@ void main() {
     }
     barrier();
 
-    float final_of[8];
+    float final_of[BR / 16u][8];
 
-    for (uint e = 0u; e < 8u; ++e) {
-        final_of[e] = rowscale[mine_rows[e]];
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        for (uint e = 0u; e < 8u; ++e) {
+            final_of[m][e] = rowscale[m * 16u + mine_rows[e]];
+        }
     }
 
     //  And out sixteen components at a time, through the scores' room,
@@ -611,7 +625,7 @@ void main() {
         [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
             if (t * 16u < dv) {
                 for (int e = 0; e < pacc[m][t].length(); ++e) {
-                    pacc[m][t][e] *= final_of[e];
+                    pacc[m][t][e] *= final_of[m][e];
                 }
 
                 coopMatStore (pacc[m][t], ss, 0u, 16u,
@@ -627,7 +641,7 @@ void main() {
                         uint where = slot * shape.heads * dv + head * dv + c;
 
                         if (slot >= shape.positions) {
-                            if (halved) {
+                            if (halved && slot < reach) {
                                 hb[where] = float16_t (0.0);
                             }
                         } else if (halved) {
@@ -728,7 +742,7 @@ void main() {
                 uint where = slot * shape.heads * dv + head * dv + c;
 
                 if (slot >= shape.positions) {
-                    if (halved) {
+                    if (halved && slot < reach) {
                         hb[where] = float16_t (0.0);
                     }
                 } else if (halved) {
