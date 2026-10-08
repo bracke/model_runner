@@ -9869,6 +9869,27 @@ package body Tests.CLI_Cases is
          Assert (Refusal ([1 .. 200 => 'a']) = E.Generation_Prompt_Too_Long,
                  "a prompt past the context was accepted");
 
+         --  And it names the context that would hold the request: the
+         --  prompt and the tokens asked for, which the hint passes on.
+         declare
+            Total  : Long_Long_Integer := -1;
+            Prompt : Long_Long_Integer := -1;
+         begin
+            for Index in 1 .. Outcome.Error.Parameter_Total loop
+               if T.To_String (Outcome.Error.Parameters (Index).Name) = "total"
+               then
+                  Total := Outcome.Error.Parameters (Index).Int_Value;
+               elsif T.To_String (Outcome.Error.Parameters (Index).Name)
+                     = "prompt"
+               then
+                  Prompt := Outcome.Error.Parameters (Index).Int_Value;
+               end if;
+            end loop;
+            Assert (Prompt > 16 and then Total = Prompt + 4,
+                    "the refusal named" & Total'Image & " for a prompt of"
+                    & Prompt'Image & " and four tokens");
+         end;
+
          --  And a request the engine accepts, so none of the above can come
          --  from an engine that refuses whatever it is given.
          Assert (Refusal ("ab") = E.No_Error,

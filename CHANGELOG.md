@@ -18,6 +18,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A context too short names the one that fits:** a prompt past the context, or a prompt and its --max-tokens past it, is answered with the --context-size that holds them ("--context-size 499 holds the prompt and the --max-tokens asked for") rather than only "a larger" one.
 - **A split dense model's long prompt stays within the driver's limit:** past depth 16,384 its batch shortens as the attention it reads grows -- 960 positions from 17,408, 832 from 21,056 -- so no layer's submission runs past what took 1.31 s at 1,024. The kernel's default lockup timeout is two seconds on every queue on recent Linux; ThinkingCap at 2,048 a batch had run to 2.8 s and been reset. A prompt of 24,194 tokens kept every submission under 1.32 s, read at 52 tokens a second.
 - **A run says when a product missed its fast kernel:** `--show-stats` adds a note where a quantized product's shares went to the floating-point path because no integer kernel took them ("62656 of 67656" for a Q4_1 model left in its rows), and one where a prompt's batched products went to the device's row kernel because its matrix tile refused them -- the shape of the two slow paths Falcon-7B and Q8_0 were found on. Nothing is said when every product took its kernel.
 - **The session's project commands run from the shell:** `model_runner req`,

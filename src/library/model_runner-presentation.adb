@@ -1262,6 +1262,22 @@ package body Model_Runner.Presentation is
                          [Loc.Named ("name", Model_Runner.Text.To_String (Item.Command))]);
             elsif Hint = "diagnostic.hint.usage" and then Item.Session then
                Put_Note (Item, "diagnostic.hint.usage_session");
+            elsif Hint = "diagnostic.hint.context"
+              and then (for some Index in 1 .. Condition.Parameter_Total =>
+                          T.To_String (Condition.Parameters (Index).Name)
+                          = "total")
+            then
+               --  The size that holds the request, where the error says.
+               for Index in 1 .. Condition.Parameter_Total loop
+                  if T.To_String (Condition.Parameters (Index).Name) = "total"
+                  then
+                     Put_Note
+                       (Item, "diagnostic.hint.context_total",
+                        [Loc.Named
+                           ("total",
+                            T.Image (Condition.Parameters (Index).Int_Value))]);
+                  end if;
+               end loop;
             elsif Hint /= "" then
                Put_Note (Item, Hint);
             end if;

@@ -1195,6 +1195,11 @@ package body Model_Runner.Generation is
          Available : constant Natural :=
            L.Capacity (Session) - L.Position (Session);
          Remaining : constant Natural := Prompt_Count - First_Token + 1;
+         --  The context that holds what was asked: the hint names it.
+         Holds_All : constant Long_Long_Integer :=
+           Long_Long_Integer (L.Position (Session))
+           + Long_Long_Integer (Remaining)
+           + Long_Long_Integer (Item.Max_Tokens);
       begin
          if Remaining > Available then
             Status := E.Make (E.Generation_Prompt_Too_Long);
@@ -1204,6 +1209,8 @@ package body Model_Runner.Generation is
             E.Add_Integer
               (Status, "available", Long_Long_Integer (Available),
                E.Param_Tokens);
+            E.Add_Integer
+              (Status, "total", Holds_All, E.Param_Tokens);
             Conclude (Runtime_Error, Status);
             Cleanup;
             return;
@@ -1226,6 +1233,8 @@ package body Model_Runner.Generation is
             E.Add_Integer
               (Status, "available", Long_Long_Integer (Available),
                E.Param_Tokens);
+            E.Add_Integer
+              (Status, "total", Holds_All, E.Param_Tokens);
             Conclude (Runtime_Error, Status);
             Cleanup;
             return;
