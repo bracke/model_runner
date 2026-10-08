@@ -504,6 +504,25 @@ package body Model_Runner.Platform.Device.Products is
    --  tokens a second with it and 19.9 without.
    Few_Span : constant := 8_192;
 
+   --  How many slices a few positions at once cut the cache into: enough
+   --  that the groups times the slices keep the part busy -- Few_Busy
+   --  workgroups -- but none shorter than Slice_Least positions and no more
+   --  than Few_Most_Slices. The scalar kernel's slices are held to
+   --  Merged_Rows records between the heads, which left a model with two
+   --  groups of keys sixteen workgroups.
+   Few_Busy        : constant := 48;
+   Few_Most_Slices : constant := 32;
+
+   function Few_Slices (Groups : Natural; Span : Natural) return Natural
+   is (Natural'Max
+         (1,
+          Natural'Min
+            (Few_Most_Slices,
+             Natural'Min
+               (Span / Slice_Least,
+                (Few_Busy + Natural'Max (1, Groups) - 1)
+                / Natural'Max (1, Groups)))));
+
    --  The few-position pipeline for a step of Positions, or none: two to
    --  eight positions whose heads in a group, times the positions, fill at
    --  most four subgroups of sixteen rows, out of the half-precision copy,
@@ -12719,7 +12738,9 @@ package body Model_Runner.Platform.Device.Products is
             --  Slice_Limit whatever was cut, and a prompt's batch of 2,048
             --  on ThinkingCap held 812 MB for records nothing wrote.
             Most_Slices : constant Natural :=
-              (if This.Attends and then Item.Merge_Line /= Null_Handle
+              (if This.Attends and then Few_Line (Index) /= Null_Handle
+               then Few_Most_Slices
+               elsif This.Attends and then Item.Merge_Line /= Null_Handle
                then Natural'Min
                       (Attend_Slices
                          (Item, Count, This.Head_Size, This.Value_Size,
@@ -14811,6 +14832,10 @@ package body Model_Runner.Platform.Device.Products is
                      --  Merged_Rows partial answers between the heads.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
+                        elsif Few
+                        then Few_Slices
+                               (This.Heads / Natural'Max (1, This.Group_Size),
+                                This.Last - This.First + 1)
                         else Natural'Min
                                (Attend_Slices
                                   (Item, Count, This.Head_Size,

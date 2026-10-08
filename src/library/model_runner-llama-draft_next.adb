@@ -20,6 +20,43 @@ is
    V_Width  : constant Element_Count := KV_Heads * Value_Size;
    Layer_Index : constant Natural := Settings.Layers;
    Scale : constant Real := Score_Scale (Settings);
+
+   --  The block's attention a share of heads a worker: it reads every
+   --  position the block holds, which sixteen thousand in was 39 ms a
+   --  proposal on one core.
+   type Next_Share is limited new Workers_CPU.Task_Item with record
+      Keys   : Model_Runner.Tensors.Real_Array_Access := null;
+      Values : Model_Runner.Tensors.Real_Array_Access := null;
+      Base, V_Base, First, Cell : Element_Count := 0;
+      Ok     : Boolean := True;
+   end record;
+
+   overriding procedure Run
+     (Share : in out Next_Share;
+      From  : Element_Count;
+      To    : Element_Count);
+
+   overriding procedure Run
+     (Share : in out Next_Share;
+      From  : Element_Count;
+      To    : Element_Count)
+   is
+      Fine : Boolean;
+   begin
+      Blend_Exact
+        (Item.Query.all, Share.Keys.all, Share.Values.all,
+         Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
+         Value_Size, Element_Count (Settings.Group_Size),
+         First => Share.First, Last => Share.Cell, Scale => Scale,
+         Cap => Settings.Attention_Cap, Max_Bias => Settings.Max_Bias,
+         Query_At => Share.Cell, Sinks => null,
+         From_Head => From, To_Head => To,
+         Score_Room => Item.Score_Room, Scores => Item.Scores.all,
+         Target => Item.Attention.all, Ok => Fine);
+      if not Fine then
+         Share.Ok := False;
+      end if;
+   end Run;
 begin
    Status := E.Success;
    Logits := [others => 0.0];
@@ -137,17 +174,22 @@ begin
          Values.all (V_Slot + Offset) := Item.Value_Row.all (Offset);
       end loop;
 
-      Blend_Exact
-        (Item.Query.all, Keys.all, Values.all,
-         Base, V_Base, KV_Width, V_Width, Heads, Head_Size, Value_Size,
-         Element_Count (Settings.Group_Size),
-         First => (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0),
-         Last => Cell, Scale => Scale,
-         Cap => Settings.Attention_Cap, Max_Bias => Settings.Max_Bias,
-         Query_At => Cell, Sinks => null,
-         From_Head => 0, To_Head => Heads - 1,
-         Score_Room => Item.Score_Room, Scores => Item.Scores.all,
-         Target => Item.Attention.all, Ok => Usable);
+      declare
+         Share  : aliased Next_Share;
+         Shared : E.Error_Info;
+      begin
+         Share.Keys := Keys;
+         Share.Values := Values;
+         Share.Base := Base;
+         Share.V_Base := V_Base;
+         Share.First :=
+           (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0);
+         Share.Cell := Cell;
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Heads, Share'Unchecked_Access, Shared,
+            Cost => Heads * (Cell - Share.First + 1) * Head_Size);
+         Usable := Share.Ok and then E.Is_Ok (Shared);
+      end;
 
       if not Usable then
          Status := E.Make (E.Tensor_Non_Finite_Value);
