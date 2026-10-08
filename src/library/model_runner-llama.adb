@@ -7289,12 +7289,21 @@ package body Model_Runner.Llama is
       end if;
 
       declare
-         --  What the cache will take at Upto, or what the device already
-         --  holds for it where that is more: a reserve only grows, and a
-         --  cache grown for a long conversation is still there after it.
+         --  What the cache will take at Upto, and what the device holds
+         --  for it now: a reserve only grows, and a cache grown for a long
+         --  conversation is still there after it.
+         Need : constant U64 :=
+           Device_Copy_Bytes (Owner.Settings, Upto, Item.Held, Item.Paged);
+         Held : constant U64 := Model_Runner.Backend.Device.Cached_Bytes;
+
+         --  And what a step up holds while it is made: the old cache and
+         --  the new, with its room to grow, until the old is copied and
+         --  given back. Counted as the cache, a step past the room would
+         --  have failed its allocation and left the session attending on
+         --  the processor; a layer goes first instead.
          Cache : constant U64 :=
-           U64'Max (Device_Copy_Bytes (Owner.Settings, Upto, Item.Held, Item.Paged),
-                    Model_Runner.Backend.Device.Cached_Bytes);
+           (if Need > Held then Held + Need + U64'Min (Need / 4, 2 ** 29)
+            else Held);
 
          --  Room a layer must leave to come back, so that one coming back
          --  is not the next to go.
@@ -7314,7 +7323,10 @@ package body Model_Runner.Llama is
                   else 0);
             begin
                if Size > 0 then
-                  exit when Owner.Feed_Weights + Cache + Size + Slack > Owner.Feed_Room;
+                  --  Room for the cache held now and a step's copy of it,
+                  --  so that a layer back is not the next step's to send.
+                  exit when Owner.Feed_Weights + Size + Held * 2 + Slack
+                              > Owner.Feed_Room;
                   L.Panel_Gate := L.Gate;
                   L.Panel_Up := L.Up;
                   L.Panel_Down := L.Down;
