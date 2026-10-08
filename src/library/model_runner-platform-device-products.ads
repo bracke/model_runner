@@ -180,6 +180,11 @@ package Model_Runner.Platform.Device.Products is
    --  Deep_Span sixteen is the faster, 3.98 s over a prompt of 1,500
    --  against 4.15 always deep.
    Matrix_Deep_Queries : constant := 64;
+
+   --  And for a head no wider than Matrix_Wide_Head, which holds its
+   --  queries in registers (attention_matrix.comp's QREG) and so has the
+   --  shared memory for twice the subgroups.
+   Matrix_Deep_Queries_Held : constant := 128;
    Deep_Span           : constant := 2_048;
 
    --  The widest head that kernel takes, which is what the shared memory

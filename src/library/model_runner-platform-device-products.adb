@@ -997,6 +997,11 @@ package body Model_Runner.Platform.Device.Products is
               (Slice_Limit,
                (Last - First + Slice_Least) / Slice_Least));
 
+   --  Queries a deep workgroup answers for a head of this shape.
+   function Deep_Queries (Head_Size, Value_Size : Natural) return Natural
+   is (if Head_Size <= Matrix_Wide_Head and then Value_Size <= Matrix_Wide_Head
+       then Matrix_Deep_Queries_Held else Matrix_Deep_Queries);
+
    function Attend_Groups
      (Item       : Engine;
       Positions  : Natural;
@@ -1010,7 +1015,8 @@ package body Model_Runner.Platform.Device.Products is
          and then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
                   /= Null_Handle
        then C.unsigned
-              ((Positions + Matrix_Deep_Queries - 1) / Matrix_Deep_Queries)
+              ((Positions + Deep_Queries (Head_Size, Value_Size) - 1)
+               / Deep_Queries (Head_Size, Value_Size))
        elsif not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then C.unsigned ((Positions + Matrix_Queries - 1) / Matrix_Queries)
@@ -4737,6 +4743,10 @@ package body Model_Runner.Platform.Device.Products is
                (Which => 3, At_Was => 8, Span => 4)];
             Value : aliased constant Three_Values :=
               [C.unsigned (Matrix_Queries),
+               C.unsigned (Matrix_Deep_Queries_Held / Matrix_Queries),
+               C.unsigned (64 * Matrix_Deep_Queries_Held / Matrix_Queries)];
+            Wider : aliased constant Three_Values :=
+              [C.unsigned (Matrix_Queries),
                C.unsigned (Matrix_Deep_Queries / Matrix_Queries),
                C.unsigned (64 * Matrix_Deep_Queries / Matrix_Queries)];
             Told  : aliased Specialization_Info;
@@ -4763,6 +4773,7 @@ package body Model_Runner.Platform.Device.Products is
             Deep (Item.Attend_Matrix, Item.Matrix_Deep_Attend);
             Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
             Deep (Item.Attend_Matrix_Mid, Item.Matrix_Mid_Deep_Attend);
+            Told.Values := Wider'Address;
             Deep (Item.Attend_Matrix_Wider, Item.Matrix_Wider_Deep_Attend);
 
             Request.Stage.Specialized := Null_Handle;

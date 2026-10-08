@@ -5,6 +5,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Long prompts read a sixth faster on the device:** the matrix attention kernel held each subgroup's queries in shared memory, a third of what a subgroup takes, and shared memory is what bounds how many subgroups -- how many queries -- read each tile of keys and values. The queries are now held in the instruction's own operands, loaded once, and one map of an accumulator's rows serves every subgroup; a workgroup past 2,048 positions answers 128 queries where it answered 64, for heads up to 128 (a head of 256 keeps 64). Qwen3 8B's prompt of 16,447 reads in 84 s where it took 98 -- 198 tokens a second against 170 -- and Qwen3 8B, Gemma 3 4B and TinyLlama answer the same text.
+
 ### Fixed
 
 - **A long context named no longer slows a short conversation:** a model the device could hold whole, but not beside the cache of the context named, was split before its first token -- its top layers' feed-forward on the processor for room the cache takes only as it fills. Steelman-14B at --context-size 32768 generated 6.6 tokens a second where 4,096 named read 7.8. Those layers now stay on the device, their processor panels built at load and kept aside, and move to the processor one at a time, from the top, only when the cache grows into their room -- their device copies given back (Backend.Device.Give_Back). At 32,768 named a short conversation reads 7.85 tokens a second, level with 4,096, the same text. And they come back: where the cache the device holds leaves a layer's room and half a gigabyte beside it -- after a long conversation's cache is given back -- the layers that made room return to the device, the last to go the first back. --show-stats says how many matrices moved (matrices moved to the processor). A step up of the device's cache counts what it holds while it is made -- the old cache and the new until the copy is done -- so a step past the room moves a layer first, where it failed its allocation and left the session attending on the processor.

@@ -236,7 +236,20 @@ layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 
 //  The queries, once, in half precision. The only thing staged: they come
 //  in binary32 and every tile reads them.
+//
+//  Held in the instruction's own operands instead (QREG) where a head is
+//  no wider than a hundred and twenty-eight: loaded once, through the
+//  weights' room a tile at a time, and read from registers every tile.
+//  The staged copy was a third of a subgroup's shared memory, and shared
+//  memory is what bounds how many subgroups a workgroup has -- how many
+//  queries read each tile of keys and values. A head of 256 keeps it: its
+//  accumulators already fill the registers.
+#ifndef WIDER_HEAD
+#define QREG
+#endif
+#ifndef QREG
 shared float16_t qs[SUBS * BR * DM];
+#endif
 
 //  The scores of a tile, and at the very end the answer on its way out of
 //  the cooperative matrices, sixteen components at a time.
@@ -245,7 +258,7 @@ shared float ss[SUBS * BR * BC];
 //  Each row's rescale for the tile, and at the end its reciprocal total;
 //  and which row each element of an accumulator is, found once.
 shared float rowscale[SUBS * BR];
-shared uint rowmap[SUBS * 256];
+shared uint rowmap[256];
 
 //  The weights, in what the instruction reads.
 shared float16_t ps[SUBS * BR * BC];
@@ -302,11 +315,15 @@ void main() {
                             : gl_LocalInvocationID.x % 64u;
 
     //  This subgroup's part of the shared memory.
+#ifndef QREG
     uint QS0 = sub * BR * DM;
+#endif
     uint SS0 = sub * BR * BC;
     uint PS0 = sub * BR * BC;
     uint RS0 = sub * BR;
-    uint RM0 = sub * 256u;
+    //  One map for every subgroup: it is the order of the instruction's
+    //  elements, the same for every matrix of the type.
+    uint RM0 = 0u;
 
     //  Whether a position sees only what precedes it, and how many
     //  positions the half-precision copy is to hold -- the batch rounded up
@@ -424,6 +441,35 @@ void main() {
     //  constant to get the row back, and an integer division by a value
     //  the compiler cannot see is a long sequence.
     //  A head wider than the subgroup takes a second component a lane.
+#ifdef QREG
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+        qreg[BR / 16u][DM / 16u];
+
+    //  Sixty-four components a turn through this subgroup's room for
+    //  weights, which nothing uses yet; past the head, nought.
+    [[unroll]] for (uint ch = 0u; ch < DM; ch += BC) {
+        for (uint m = 0u; m < BR; m++) {
+            uint slot = row_slot (sub, block, m);
+            uint asks = row_head (sub, head, m);
+            uint c    = ch + lane;
+
+            ps[PS0 + m * BC + lane] =
+                c < dk ? float16_t (q[slot * shape.heads * dk + asks * dk + c])
+                       : float16_t (0.0);
+        }
+        barrier();
+        [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+            [[unroll]] for (uint t = 0u; t < BC / 16u; t++) {
+                if (ch / 16u + t < DM / 16u) {
+                    coopMatLoad (qreg[m][ch / 16u + t], ps,
+                                 PS0 + m * 16u * BC + t * 16u, BC,
+                                 gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+        }
+        barrier();
+    }
+#else
     for (uint c = lane; c < dk; c += 64u) {
         for (uint m = 0u; m < BR; m++) {
             uint slot = row_slot (sub, block, m);
@@ -433,6 +479,7 @@ void main() {
                 float16_t (q[slot * shape.heads * dk + asks * dk + c]);
         }
     }
+#endif
 
     //  A row's largest score so far, the sum of its weights, and what the
     //  last tile rescaled them by. They belong to the thirty-two
@@ -524,15 +571,27 @@ void main() {
                 }
             }
 
+#ifdef QREG
+            [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+                uint d0 = t * 16u;
+                if (d0 >= dk) {
+                    break;
+                }
+#else
             for (uint d0 = 0u; d0 < dk; d0 += 16u) {
+#endif
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
                     qm[BR / 16u];
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
                     km[BC / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+#ifdef QREG
+                    qm[m] = qreg[m][t];
+#else
                     coopMatLoad (qm[m], qs, QS0 + m * 16u * DM + d0, DM,
                                  gl_CooperativeMatrixLayoutRowMajor);
+#endif
                 }
 
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
