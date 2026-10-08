@@ -205,7 +205,6 @@ package body Model_Runner.Framework.Authority is
       end From_Register;
 
       Config : Records.Item;
-      Status : E.Error_Info;
 
       --  The settings a statement can be about; inputs and files are
       --  what the project is, not rules about how it is made. A fact a
@@ -244,46 +243,44 @@ package body Model_Runner.Framework.Authority is
 
       --  The configuration's settings, each its own subject by the field
       --  it is kept in, so a decision about one names that field.
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Ok (Status) then
-         for Index in 1 .. Records.Field_Count (Config) loop
-            declare
-               Field : constant String := Records.Field_Name (Config, Index);
-            begin
-               --  A baseline's subject is what follows its level.
-               if Starts (Field, "baseline.project.") or else Starts (Field, "baseline.language.") then
-                  declare
-                     Project : constant Boolean := Starts (Field, "baseline.project.");
-                     Rest    : constant String :=
-                       Field (Field'First + (if Project then 17 else 18) .. Field'Last);
-                  begin
-                     Append
-                       (Result,
-                        (Standing  => (if Project then Project_Baseline else Language_Baseline),
-                         Source    => To_Unbounded_String ("CONFIG"),
-                         Subject   => To_Unbounded_String (Rest),
-                         Value     => To_Unbounded_String (Records.Get (Config, Field)),
-                         Overrides => Null_Unbounded_String));
-                  end;
+      Config := Configurations.Required (Item);
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Field : constant String := Records.Field_Name (Config, Index);
+         begin
+            --  A baseline's subject is what follows its level.
+            if Starts (Field, "baseline.project.") or else Starts (Field, "baseline.language.") then
+               declare
+                  Project : constant Boolean := Starts (Field, "baseline.project.");
+                  Rest    : constant String :=
+                    Field (Field'First + (if Project then 17 else 18) .. Field'Last);
+               begin
+                  Append
+                    (Result,
+                     (Standing  => (if Project then Project_Baseline else Language_Baseline),
+                      Source    => To_Unbounded_String ("CONFIG"),
+                      Subject   => To_Unbounded_String (Rest),
+                      Value     => To_Unbounded_String (Records.Get (Config, Field)),
+                      Overrides => Null_Unbounded_String));
+               end;
+            end if;
+            for Prefix of Governed loop
+               if Field'Length > Prefix'Length
+                 and then Field (Field'First .. Field'First + Prefix'Length - 1)
+                            = Prefix.all
+               then
+                  Append
+                    (Result,
+                     (Standing  => Resolved_Configuration,
+                      Source    => To_Unbounded_String ("CONFIG"),
+                      Subject   => To_Unbounded_String (Field),
+                      Value     => To_Unbounded_String
+                                     (Records.Get (Config, Field)),
+                      Overrides => Null_Unbounded_String));
                end if;
-               for Prefix of Governed loop
-                  if Field'Length > Prefix'Length
-                    and then Field (Field'First .. Field'First + Prefix'Length - 1)
-                               = Prefix.all
-                  then
-                     Append
-                       (Result,
-                        (Standing  => Resolved_Configuration,
-                         Source    => To_Unbounded_String ("CONFIG"),
-                         Subject   => To_Unbounded_String (Field),
-                         Value     => To_Unbounded_String
-                                        (Records.Get (Config, Field)),
-                         Overrides => Null_Unbounded_String));
-                  end if;
-               end loop;
-            end;
-         end loop;
-      end if;
+            end loop;
+         end;
+      end loop;
       return Result;
    end Gather;
 

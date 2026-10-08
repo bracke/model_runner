@@ -1445,6 +1445,8 @@ package body Tests.Framework_Cases is
 
       S.Open (Store, Project, Report, Status);
       Assert (E.Is_Ok (Status), "an initialized project did not reopen");
+      Assert (R.Get (Cf.Required (Store), "template_id") = "app",
+              "a configuration that reads was not handed out whole");
       Cf.Read (Store, Config, Status);
       Assert (E.Is_Ok (Status) and then R.Revision (Config) = 1
               and then R.Get (Config, "template_id") = "app"
@@ -1471,6 +1473,32 @@ package body Tests.Framework_Cases is
       Cf.Read (Store, Config, Status);
       Assert (Status.Code = E.Framework_Integrity_Failed,
               "a configuration that no longer matches its fingerprint was read");
+
+      --  And it is not taken as empty: what wants a value is refused one,
+      --  where it would have gone on with every setting at its default,
+      --  and the project's consistency says so.
+      declare
+         Raised : Boolean := False;
+         Taken  : R.Item;
+      begin
+         begin
+            Taken := Cf.Required (Store);
+         exception
+            when Cf.Configuration_Unavailable =>
+               Raised := True;
+         end;
+         Assert (Raised and then R.Field_Count (Taken) = 0,
+                 "a configuration that cannot be read was handed out as defaults");
+      end;
+      declare
+         package Cn renames Model_Runner.Framework.Consistency;
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+      begin
+         Assert ((for some Index in 1 .. Cn.Length (Findings) =>
+                    Cn."=" (Cn.Element (Findings, Index).Kind, Cn.Schema_Mismatch)
+                    and then To_String (Cn.Element (Findings, Index).Subject) = "configuration"),
+                 "a configuration that cannot be read was not found wanting");
+      end;
       S.Close (Store);
    end Initialized_Project_Outlives_Template;
 
@@ -9517,10 +9545,46 @@ package body Tests.Framework_Cases is
                   Assert (Model_Runner.Framework.Workspaces.Changed_Since_Kept
                             (Kept_Store, Copies.First_Element).Contains ("src/kept.txt"),
                           "a file the project holds otherwise was not said to have changed");
+                  --  However many recovery copies there are, the next gets a
+                  --  name none has: past a thousand it once got the first
+                  --  one's, and the restore wrote into it.
+                  declare
+                     Runtime : constant String := S.Root (Kept_Store) & "/runtime";
+                     Base    : constant String := "before-restore-" & Copies.First_Element;
+                     function Numbered (Number : Positive) return String
+                     is (Base & "-" & Ada.Strings.Fixed.Trim (Number'Image, Ada.Strings.Both));
+                  begin
+                     Dirs.Create_Path (Runtime & "/" & Base);
+                     for Number in 2 .. 999 loop
+                        Dirs.Create_Path (Runtime & "/" & Numbered (Number));
+                     end loop;
+                     Assert (Model_Runner.Framework.Workspaces.Replaced_Copy (Kept_Store, Copies.First_Element)
+                               = Numbered (1000),
+                             "a recovery copy past the thousandth was named as one there is: "
+                             & Model_Runner.Framework.Workspaces.Replaced_Copy (Kept_Store, Copies.First_Element));
+                     Dirs.Delete_Directory (Runtime & "/" & Base);
+                     for Number in 2 .. 999 loop
+                        Dirs.Delete_Directory (Runtime & "/" & Numbered (Number));
+                     end loop;
+                  end;
                   declare
                      Aside : constant String :=
                        Model_Runner.Framework.Workspaces.Replaced_Copy (Kept_Store, Copies.First_Element);
                   begin
+                     --  Put back but not marked so is not put back: a restore
+                     --  whose mark cannot be written says it failed.
+                     declare
+                        Mark : constant String :=
+                          S.Root (Kept_Store) & "/runtime/" & Copies.First_Element & "/.restored";
+                     begin
+                        Dirs.Create_Path (Mark);
+                        Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
+                        Assert (E.Is_Error (Got)
+                                and then not Model_Runner.Framework.Workspaces.Was_Restored
+                                               (Kept_Store, Copies.First_Element),
+                                "a restore whose mark was not written was said to be done");
+                        Dirs.Delete_Directory (Mark);
+                     end;
                      Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
                      Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
                              "what a restore overwrote was not kept aside");
@@ -9532,10 +9596,11 @@ package body Tests.Framework_Cases is
                              "a kept copy was not put back, or not marked so");
                      --  Pruned, a copy keeps what the project has otherwise,
                      --  and nothing it holds just so.
-                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Aside);
-                     Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
+                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Aside, Status);
+                     Assert (Model_Runner.Errors.Is_Ok (Status)
+                             and then Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
                              "a copy holding what the project has otherwise was pruned");
-                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Copies.First_Element);
+                     Model_Runner.Framework.Workspaces.Prune_Kept (Kept_Store, Copies.First_Element, Status);
                      Assert (not Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store)
                                    .Contains (Copies.First_Element),
                              "a copy holding only what the project has was kept");

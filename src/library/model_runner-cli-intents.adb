@@ -643,9 +643,8 @@ package body Model_Runner.CLI.Intents is
                Setting : constant String :=
                  Governed (Governed'First .. Ada.Strings.Fixed.Index (Governed, " = ") - 1);
                Config  : Model_Runner.Framework.Records.Item;
-               Read    : E.Error_Info;
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                --  Another decision governing it still: that one says.
                for Other of Nt.List (Store, Nt.Decision, "accepted") loop
                   if Other /= Id
@@ -2306,7 +2305,6 @@ package body Model_Runner.CLI.Intents is
          if E.Is_Ok (Status) then
             declare
                Config  : Model_Runner.Framework.Records.Item;
-               Read    : E.Error_Info;
                Near    : Unbounded_String;
                Ending_In : Unbounded_String;
 
@@ -2343,7 +2341,7 @@ package body Model_Runner.CLI.Intents is
                   return (if Count = 1 then To_String (Found) else Word (3));
                end Whole_Name;
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                declare
                   Setting : constant String := Whole_Name;
                begin

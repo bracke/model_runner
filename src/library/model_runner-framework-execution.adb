@@ -44,13 +44,8 @@ package body Model_Runner.Framework.Execution is
 
    function Policy_Of (Item : Stores.Store) return Policy is
       Config : Records.Item;
-      Status : E.Error_Info;
-      Result : Policy;
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Error (Status) then
-         return Result;
-      end if;
+      Config := Configurations.Required (Item);
       return Policy_From (Config);
    end Policy_Of;
 

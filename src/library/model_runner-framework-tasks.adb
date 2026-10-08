@@ -168,11 +168,8 @@ package body Model_Runner.Framework.Tasks is
    end Joined;
 
    function Config (Item : Stores.Store) return Records.Item is
-      Value  : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Value, Status);
-      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+      return Configurations.Required (Item);
    end Config;
 
    ---------------
@@ -2108,9 +2105,8 @@ package body Model_Runner.Framework.Tasks is
 
    function Components (Item : Stores.Store) return Name_Lists.Vector is
       Settings : Records.Item;
-      Status   : E.Error_Info;
    begin
-      Configurations.Read (Item, Settings, Status);
+      Settings := Configurations.Required (Item);
       return Components_Of (Settings);
    end Components;
 

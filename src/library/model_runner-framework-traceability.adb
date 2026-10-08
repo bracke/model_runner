@@ -710,13 +710,13 @@ package body Model_Runner.Framework.Traceability is
 
    function Select_Tests (Item : Stores.Store; From : Impact) return Selection is
       Config  : Records.Item;
-      Status  : E.Error_Info;
       Result  : Selection;
       Narrow  : Boolean;
       Doubt   : Boolean := False;
       Partial : Boolean := False;
    begin
-      Configurations.Read (Item, Config, Status);
+      --  The escalation policy is the configuration's, never a default's.
+      Config := Configurations.Required (Item);
       Narrow := Records.Get (Config, "scalar.verification.escalation") = "narrow";
 
       for Next of From.Items loop

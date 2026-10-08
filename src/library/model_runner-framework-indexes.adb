@@ -141,27 +141,29 @@ package body Model_Runner.Framework.Indexes is
 
       Lines.Clear;
       Configurations.Read (Item, Config, Read);
-      if E.Is_Ok (Read) then
-         --  A component, and how many tasks are its.
-         for Name of Lines_Of (Records.Get (Config, "set.components")) loop
-            declare
-               Held : Natural := 0;
-            begin
-               for Id of Tasks.List (Item) loop
-                  declare
-                     Defined : Records.Item;
-                     Got     : E.Error_Info;
-                  begin
-                     Tasks.Definition (Item, Id, Defined, Got);
-                     if Records.Get (Defined, "component") = Name then
-                        Held := Held + 1;
-                     end if;
-                  end;
-               end loop;
-               Lines.Append (Name & Tab & Image (Held));
-            end;
-         end loop;
+      if Configurations.Unreadable (Read) then
+         Status := Read;
+         return;
       end if;
+      --  A component, and how many tasks are its.
+      for Name of Lines_Of (Records.Get (Config, "set.components")) loop
+         declare
+            Held : Natural := 0;
+         begin
+            for Id of Tasks.List (Item) loop
+               declare
+                  Defined : Records.Item;
+                  Got     : E.Error_Info;
+               begin
+                  Tasks.Definition (Item, Id, Defined, Got);
+                  if Records.Get (Defined, "component") = Name then
+                     Held := Held + 1;
+                  end if;
+               end;
+            end loop;
+            Lines.Append (Name & Tab & Image (Held));
+         end;
+      end loop;
       Keep (Components_Index, Lines);
 
       Lines.Clear;

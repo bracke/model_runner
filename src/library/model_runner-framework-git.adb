@@ -32,7 +32,12 @@ package body Model_Runner.Framework.Git is
       Held   : Unbounded_String;
    begin
       Written := False;
+      --  The policy file is written from the configuration or not at all.
       Configurations.Read (Item, Config, Read);
+      if Configurations.Unreadable (Read) then
+         Status := Read;
+         return;
+      end if;
       declare
          Policy : constant String :=
            (if Records.Get (Config, "scalar.repository.state_policy") = ""

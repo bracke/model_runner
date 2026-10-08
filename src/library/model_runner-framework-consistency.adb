@@ -91,6 +91,22 @@ package body Model_Runner.Framework.Consistency is
          return Result;
       end if;
 
+      --  The configuration first: the checks below judge the project by
+      --  it, and judged by defaults in its place they would say nothing of
+      --  this project. One that cannot be read -- or no longer matches its
+      --  fingerprint, which a record's schema does not see -- is the one
+      --  finding, and nothing is judged by it.
+      declare
+         Config : Records.Item;
+         Read   : E.Error_Info;
+      begin
+         Configurations.Read (Item, Config, Read);
+         if Configurations.Unreadable (Read) then
+            Found (Schema_Mismatch, "configuration", Detail_Of (Read));
+            return Result;
+         end if;
+      end;
+
       --  Every record keeps to its schema, and no two authoritative ones
       --  claim one entity.
       for Where in Area loop
@@ -280,7 +296,6 @@ package body Model_Runner.Framework.Consistency is
       --  ruling says -- said, with what makes it hold.
       declare
          Config : Records.Item;
-         Read   : E.Error_Info;
          Known  : constant Name_Lists.Vector := Configurations.Known_Names;
 
          --  A setting's whole name, as the configuration knows it.
@@ -371,144 +386,142 @@ package body Model_Runner.Framework.Consistency is
             end;
          end Judge;
       begin
-         Configurations.Read (Item, Config, Read);
-         if E.Is_Ok (Read) then
-            for Id of Intent.List (Item, Intent.Decision) loop
-               declare
-                  Rule  : constant String := Intent.Governs (Item, Intent.Decision, Id);
-                  Equal : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
-                  Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
-               begin
-                  if Intent.State_Of (Item, Intent.Decision, Id) = "accepted" and then Equal > 0 then
-                     Judge (Id, Rule (Rule'First .. Equal - 1),
-                            Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
-                     --  A ruling on a kind the project has not: it rules nothing.
+         Config := Configurations.Required (Item);
+         for Id of Intent.List (Item, Intent.Decision) loop
+            declare
+               Rule  : constant String := Intent.Governs (Item, Intent.Decision, Id);
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
+               Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
+            begin
+               if Intent.State_Of (Item, Intent.Decision, Id) = "accepted" and then Equal > 0 then
+                  Judge (Id, Rule (Rule'First .. Equal - 1),
+                         Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
+                  --  A ruling on a kind the project has not: it rules nothing.
+                  declare
+                     Subject : constant String := Whole (Rule (Rule'First .. Equal - 1));
+                     Rest    : constant String :=
+                       (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
+                        then Subject (Subject'First + 20 .. Subject'Last)
+                        elsif Ada.Strings.Fixed.Index (Subject, "scalar.task.") = Subject'First
+                          and then Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".") > 0
+                        then Subject (Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".")
+                                      + 1 .. Subject'Last)
+                        else "");
+                     Kind    : constant String :=
+                       (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
+                          and then Ada.Strings.Fixed.Index (Rest, ".") > 0
+                        then Rest (Rest'First .. Ada.Strings.Fixed.Index (Rest, ".") - 1)
+                        else Rest);
+                  begin
+                     if Kind /= "" and then not Tasks.Kinds (Item).Contains (Kind) then
+                        Found (Unapplied_Ruling, Subject,
+                               Id & " rules " & Subject & ", and " & Kind & " is no kind of task the project has:"
+                               & " it rules nothing -- /decision govern " & Id & " " & Subject
+                               & " none takes it off");
+                     end if;
+                  end;
+                  --  A kind's own limit above the agents' limit ruled:
+                  --  the kind's is what its tasks run with, past the
+                  --  ruling.
+                  for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"])
+                  loop
                      declare
-                        Subject : constant String := Whole (Rule (Rule'First .. Equal - 1));
-                        Rest    : constant String :=
-                          (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
-                           then Subject (Subject'First + 20 .. Subject'Last)
-                           elsif Ada.Strings.Fixed.Index (Subject, "scalar.task.") = Subject'First
-                             and then Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".") > 0
-                           then Subject (Ada.Strings.Fixed.Index (Subject (Subject'First + 12 .. Subject'Last), ".")
-                                         + 1 .. Subject'Last)
-                           else "");
-                        Kind    : constant String :=
-                          (if Ada.Strings.Fixed.Index (Subject, "map.permission.kind.") = Subject'First
-                             and then Ada.Strings.Fixed.Index (Rest, ".") > 0
-                           then Rest (Rest'First .. Ada.Strings.Fixed.Index (Rest, ".") - 1)
-                           else Rest);
+                        Ruled : constant String :=
+                          Ada.Strings.Fixed.Trim
+                            (Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)), Ada.Strings.Both);
+                        Lead  : constant String := "scalar.task." & Limit & ".";
                      begin
-                        if Kind /= "" and then not Tasks.Kinds (Item).Contains (Kind) then
-                           Found (Unapplied_Ruling, Subject,
-                                  Id & " rules " & Subject & ", and " & Kind & " is no kind of task the project has:"
-                                  & " it rules nothing -- /decision govern " & Id & " " & Subject
-                                  & " none takes it off");
+                        if Whole (Rule (Rule'First .. Equal - 1)) = "scalar.agents." & Limit
+                          and then Ruled'Length in 1 .. 9 and then (for all C of Ruled => C in '0' .. '9')
+                        then
+                           for Index in 1 .. Records.Field_Count (Config) loop
+                              declare
+                                 Field : constant String := Records.Field_Name (Config, Index);
+                                 Own   : constant String := Records.Get (Config, Field);
+                              begin
+                                 if Field'Length > Lead'Length
+                                   and then Field (Field'First .. Field'First + Lead'Length - 1) = Lead
+                                   and then Own'Length in 1 .. 9 and then (for all C of Own => C in '0' .. '9')
+                                   and then Natural'Value (Own) > Natural'Value (Ruled)
+                                 then
+                                    Found (Unapplied_Ruling, "scalar.agents." & Limit,
+                                           Id & " rules agents." & Limit & " = " & Ruled & ", and "
+                                           & Field (Field'First + 7 .. Field'Last) & " = " & Own
+                                           & " goes past it: the kind's own limit is what its tasks run with"
+                                           & " -- /reconfigure " & Field (Field'First + 7 .. Field'Last) & "="
+                                           & Ruled & " keeps to the ruling");
+                                 end if;
+                              end;
+                           end loop;
                         end if;
                      end;
-                     --  A kind's own limit above the agents' limit ruled:
-                     --  the kind's is what its tasks run with, past the
-                     --  ruling.
-                     for Limit of Name_Lists.Vector'(["max_seconds", "max_tool_calls", "max_steps", "token_budget"])
-                     loop
+                  end loop;
+               end if;
+            end;
+         end loop;
+         for Line of Authority.Standing_Instructions (Item) loop
+            declare
+               Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+               Equal : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+            begin
+               if Colon > 0 and then Equal > Colon then
+                  Judge (Line (Line'First .. Colon - 1), Line (Colon + 2 .. Equal - 1),
+                         Line (Equal + 1 .. Line'Last));
+                  --  An instruction on a limit is told to the agent, not
+                  --  applied: the configuration's value -- or a kind's
+                  --  own -- saying otherwise is what runs, and said.
+                  declare
+                     Id   : constant String := Line (Line'First .. Colon - 1);
+                     Name : constant String :=
+                       Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
+                     Said : constant String :=
+                       Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
+                  begin
+                     if Name /= "" and then Records.Has (Config, Name)
+                       and then Records.Get (Config, Name) /= Said
+                     then
+                        Found (Unapplied_Ruling, Name,
+                               Id & " says " & Name & " = " & Said & ", and the configuration has "
+                               & Records.Get (Config, Name) & ", which is what runs: an instruction is told"
+                               & " to the agent, not applied -- /reconfigure " & Name & "=" & Said
+                               & " makes it hold");
+                     end if;
+                     --  A kind's own limit is its own: a ruling on the
+                     --  agents' default does not reach it, and is not
+                     --  held against it.
+                  end;
+                  --  An instruction and an accepted decision on one setting,
+                  --  saying different things: which holds is a person's.
+                  declare
+                     Id      : constant String := Line (Line'First .. Colon - 1);
+                     Name    : constant String :=
+                       Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
+                     Said    : constant String :=
+                       Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
+                  begin
+                     for Dec of Intent.List (Item, Intent.Decision) loop
                         declare
-                           Ruled : constant String :=
-                             Ada.Strings.Fixed.Trim
-                               (Rule (Equal + 3 .. (if Over = 0 then Rule'Last else Over - 1)), Ada.Strings.Both);
-                           Lead  : constant String := "scalar.task." & Limit & ".";
+                           Rule  : constant String := Intent.Governs (Item, Intent.Decision, Dec);
+                           Eq    : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
+                           Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
+                           Value : constant String :=
+                             (if Eq = 0 then "" else Rule (Eq + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
                         begin
-                           if Whole (Rule (Rule'First .. Equal - 1)) = "scalar.agents." & Limit
-                             and then Ruled'Length in 1 .. 9 and then (for all C of Ruled => C in '0' .. '9')
+                           if Name /= "" and then Intent.State_Of (Item, Intent.Decision, Dec) = "accepted"
+                             and then Eq > 0 and then Whole (Rule (Rule'First .. Eq - 1)) = Name
+                             and then Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) /= Said
                            then
-                              for Index in 1 .. Records.Field_Count (Config) loop
-                                 declare
-                                    Field : constant String := Records.Field_Name (Config, Index);
-                                    Own   : constant String := Records.Get (Config, Field);
-                                 begin
-                                    if Field'Length > Lead'Length
-                                      and then Field (Field'First .. Field'First + Lead'Length - 1) = Lead
-                                      and then Own'Length in 1 .. 9 and then (for all C of Own => C in '0' .. '9')
-                                      and then Natural'Value (Own) > Natural'Value (Ruled)
-                                    then
-                                       Found (Unapplied_Ruling, "scalar.agents." & Limit,
-                                              Id & " rules agents." & Limit & " = " & Ruled & ", and "
-                                              & Field (Field'First + 7 .. Field'Last) & " = " & Own
-                                              & " goes past it: the kind's own limit is what its tasks run with"
-                                              & " -- /reconfigure " & Field (Field'First + 7 .. Field'Last) & "="
-                                              & Ruled & " keeps to the ruling");
-                                    end if;
-                                 end;
-                              end loop;
+                              Found (Conflicting_Authority, Name,
+                                     Id & " says " & Said & " and " & Dec & " rules " & Value
+                                     & "; /instruct withdraw " & Id & " leaves the decision, or /decision govern "
+                                     & Dec & " " & Name & " " & Said & " makes them agree");
                            end if;
                         end;
                      end loop;
-                  end if;
-               end;
-            end loop;
-            for Line of Authority.Standing_Instructions (Item) loop
-               declare
-                  Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
-                  Equal : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
-               begin
-                  if Colon > 0 and then Equal > Colon then
-                     Judge (Line (Line'First .. Colon - 1), Line (Colon + 2 .. Equal - 1),
-                            Line (Equal + 1 .. Line'Last));
-                     --  An instruction on a limit is told to the agent, not
-                     --  applied: the configuration's value -- or a kind's
-                     --  own -- saying otherwise is what runs, and said.
-                     declare
-                        Id   : constant String := Line (Line'First .. Colon - 1);
-                        Name : constant String :=
-                          Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
-                        Said : constant String :=
-                          Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
-                     begin
-                        if Name /= "" and then Records.Has (Config, Name)
-                          and then Records.Get (Config, Name) /= Said
-                        then
-                           Found (Unapplied_Ruling, Name,
-                                  Id & " says " & Name & " = " & Said & ", and the configuration has "
-                                  & Records.Get (Config, Name) & ", which is what runs: an instruction is told"
-                                  & " to the agent, not applied -- /reconfigure " & Name & "=" & Said
-                                  & " makes it hold");
-                        end if;
-                        --  A kind's own limit is its own: a ruling on the
-                        --  agents' default does not reach it, and is not
-                        --  held against it.
-                     end;
-                     --  An instruction and an accepted decision on one setting,
-                     --  saying different things: which holds is a person's.
-                     declare
-                        Id      : constant String := Line (Line'First .. Colon - 1);
-                        Name    : constant String :=
-                          Whole (Ada.Strings.Fixed.Trim (Line (Colon + 2 .. Equal - 1), Ada.Strings.Both));
-                        Said    : constant String :=
-                          Ada.Strings.Fixed.Trim (Line (Equal + 1 .. Line'Last), Ada.Strings.Both);
-                     begin
-                        for Dec of Intent.List (Item, Intent.Decision) loop
-                           declare
-                              Rule  : constant String := Intent.Governs (Item, Intent.Decision, Dec);
-                              Eq    : constant Natural := Ada.Strings.Fixed.Index (Rule, " = ");
-                              Over  : constant Natural := Ada.Strings.Fixed.Index (Rule, " (over ");
-                              Value : constant String :=
-                                (if Eq = 0 then "" else Rule (Eq + 3 .. (if Over = 0 then Rule'Last else Over - 1)));
-                           begin
-                              if Name /= "" and then Intent.State_Of (Item, Intent.Decision, Dec) = "accepted"
-                                and then Eq > 0 and then Whole (Rule (Rule'First .. Eq - 1)) = Name
-                                and then Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) /= Said
-                              then
-                                 Found (Conflicting_Authority, Name,
-                                        Id & " says " & Said & " and " & Dec & " rules " & Value
-                                        & "; /instruct withdraw " & Id & " leaves the decision, or /decision govern "
-                                        & Dec & " " & Name & " " & Said & " makes them agree");
-                              end if;
-                           end;
-                        end loop;
-                     end;
-                  end if;
-               end;
-            end loop;
-         end if;
+                  end;
+               end if;
+            end;
+         end loop;
       end;
 
       --  A task its own permissions leave asking for more than its kind
@@ -546,7 +559,7 @@ package body Model_Runner.Framework.Consistency is
                      Got    : E.Error_Info;
                      Result : Permissions.Permission_Set := Of_Kind;
                   begin
-                     Configurations.Read (Item, Config, Got);
+                     Config := Configurations.Required (Item);
                      for One in Permissions.Capability loop
                         declare
                            Field : constant String :=
@@ -1147,7 +1160,7 @@ package body Model_Runner.Framework.Consistency is
             Got      : E.Error_Info;
             Config   : Records.Item;
          begin
-            Configurations.Read (Item, Config, Got);
+            Config := Configurations.Required (Item);
             Tasks.Definition (Item, Id, Defined, Got);
             declare
                Gates : constant Name_Lists.Vector :=

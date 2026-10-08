@@ -3850,6 +3850,31 @@ package body Model_Runner.Framework.Configurations is
       end if;
    end Read;
 
+   ----------------
+   -- Unreadable --
+   ----------------
+
+   function Unreadable (Status : Model_Runner.Errors.Error_Info) return Boolean
+   is (E.Is_Error (Status) and then E."/=" (Status.Code, E.Framework_Not_Found));
+
+   --------------
+   -- Required --
+   --------------
+
+   function Required (Item : Stores.Store) return Records.Item is
+      Value  : Records.Item;
+      None   : Records.Item;
+      Status : E.Error_Info;
+   begin
+      Read (Item, Value, Status);
+      if Unreadable (Status) then
+         raise Configuration_Unavailable
+           with "the project's configuration cannot be read: "
+                & E.Error_Code'Image (Status.Code);
+      end if;
+      return (if E.Is_Error (Status) then None else Value);
+   end Required;
+
    -------------
    -- Recover --
    -------------

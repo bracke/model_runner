@@ -359,7 +359,7 @@ package body Model_Runner.CLI.Completion is
                      Got    : E.Error_Info;
                   begin
                      Model_Runner.Framework.Configurations.Read (Store, Config, Got);
-                     for Index in 1 .. R.Field_Count (Config) loop
+                     for Index in 1 .. (if E.Is_Ok (Got) then R.Field_Count (Config) else 0) loop
                         if Ada.Strings.Fixed.Index (R.Field_Name (Config, Index), "profile.") = 1 then
                            Offer (Current (Current'First .. Ada.Strings.Fixed.Index (Current, "=profiles=") + 9)
                                   & R.Field_Name (Config, Index) (R.Field_Name (Config, Index)'First + 8

@@ -209,13 +209,9 @@ package body Model_Runner.Framework.Permissions is
       Present : out Boolean) return Permission_Set
    is
       Config : Records.Item;
-      Status : E.Error_Info;
    begin
       Present := False;
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Error (Status) then
-         return Nothing;
-      end if;
+      Config := Configurations.Required (Item);
       return Level_Of (Config, Level, Present);
    end Level_Of;
 

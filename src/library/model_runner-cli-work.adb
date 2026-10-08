@@ -814,7 +814,7 @@ package body Model_Runner.CLI.Work is
          Fail (Outcome);
          return;
       end if;
-      Model_Runner.Framework.Configurations.Read (Store, Config, Outcome);
+      Config := Model_Runner.Framework.Configurations.Required (Store);
       --  A profile it names is one the configuration has.
       if Given.Contains ("profile") and then Given ("profile") /= "default"
         and then not R.Has (Config, "map.model." & Given ("profile"))
@@ -1467,7 +1467,15 @@ package body Model_Runner.CLI.Work is
             --  said -- an edit not committed is not lost without a word. A
             --  file the project still holds just so was not written over.
             if Length (Done.Workspace_Id) = 0 then
-               Model_Runner.Framework.Workspaces.Prune_Kept (Store, "overwritten-" & To_String (Chosen));
+               declare
+                  Pruned : Model_Runner.Errors.Error_Info;
+               begin
+                  Model_Runner.Framework.Workspaces.Prune_Kept
+                    (Store, "overwritten-" & To_String (Chosen), Pruned);
+                  if Model_Runner.Errors.Is_Error (Pruned) then
+                     Pres.Report (Screen, Pruned);
+                  end if;
+               end;
             end if;
             if Length (Done.Workspace_Id) = 0
               and then Model_Runner.Framework.Workspaces.Kept_Copies (Store).Contains

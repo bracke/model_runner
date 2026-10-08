@@ -121,7 +121,13 @@ begin
             elsif Capability = "write_source" and then not Permissions.Allows (Allowed, Permissions.Read_Source)
             then "read_source" else "");
       begin
+         --  The permissions read nothing from a configuration that cannot
+         --  be read, so that is the reason, not a hint built from defaults.
          Configurations.Read (Item, Config, Got);
+         if Configurations.Unreadable (Got) then
+            return "the project's configuration cannot be read ("
+              & E.Error_Code'Image (Got.Code) & ")";
+         end if;
          for Index in 1 .. Records.Field_Count (Config) loop
             Kind_Named := Kind_Named
               or else Ada.Strings.Fixed.Index (Records.Field_Name (Config, Index),

@@ -22,11 +22,8 @@ package body Model_Runner.Framework.Orchestration is
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
    function Config (Item : Stores.Store) return Records.Item is
-      Value  : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Value, Status);
-      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+      return Configurations.Required (Item);
    end Config;
 
    -----------

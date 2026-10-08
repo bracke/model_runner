@@ -5661,6 +5661,84 @@ package body Checks is
          Interprets_Only ("model_runner-kernels.adb");
       end;
 
+      --  A project's configuration, once it has one, is read or it is not.
+      --
+      --  Initializing a project writes its configuration, so one that will
+      --  not read afterwards is damage, not absence. A read whose status
+      --  nobody looks at goes on with an empty record, and every setting
+      --  then reads as its default: an isolated project run in place, a
+      --  workspace limit taken as none, a policy written back from what
+      --  the project never chose. That was a dozen places at once before
+      --  this check went looking.
+      --
+      --  So each Configurations.Read tests the status it was handed within
+      --  the few lines after it, and code that wants a value and has no
+      --  status to give back says Configurations.Required instead, which
+      --  raises when the read fails.
+      declare
+         use type Dirs.File_Kind;
+
+         Call   : constant String := "Configurations.Read (";
+         Search : Dirs.Search_Type;
+         Item   : Dirs.Directory_Entry_Type;
+      begin
+         Dirs.Start_Search (Search, Path ("src/library"), "*.adb");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Item);
+            if Dirs.Kind (Item) = Dirs.Ordinary_File
+              and then Dirs.Simple_Name (Item) /= "model_runner-framework-configurations.adb"
+            then
+               declare
+                  Relative : constant String :=
+                    Hostkit.Fs.Join ("src/library", Dirs.Simple_Name (Item));
+                  Text     : constant String := Contents (Relative);
+                  From     : Natural := Text'First;
+                  At_Call  : Natural;
+               begin
+                  loop
+                     At_Call := Ada.Strings.Fixed.Index (Text (From .. Text'Last), Call);
+                     exit when At_Call = 0;
+                     Result.Performed := Result.Performed + 1;
+                     declare
+                        Close  : constant Natural :=
+                          Ada.Strings.Fixed.Index (Text (At_Call .. Text'Last), ");");
+                        Comma  : constant Natural :=
+                          (if Close = 0 then 0
+                           else Ada.Strings.Fixed.Index
+                                  (Text (At_Call .. Close), ",", Ada.Strings.Backward));
+                        Status : constant String :=
+                          (if Comma = 0 then ""
+                           else Ada.Strings.Fixed.Trim (Text (Comma + 1 .. Close - 1), Ada.Strings.Both));
+                        Last   : Natural := (if Close = 0 then Text'Last else Close);
+                     begin
+                        --  The five lines after it.
+                        for Line in 1 .. 6 loop
+                           exit when Last >= Text'Last;
+                           Last := Ada.Strings.Fixed.Index (Text (Last + 1 .. Text'Last), [1 => ASCII.LF]);
+                           if Last = 0 then
+                              Last := Text'Last;
+                           end if;
+                        end loop;
+                        if Status = ""
+                          or else not (Holds (Text (At_Call .. Last), "Is_Error (" & Status & ")")
+                                       or else Holds (Text (At_Call .. Last), "Is_Ok (" & Status & ")")
+                                       or else Holds (Text (At_Call .. Last), "Unreadable (" & Status & ")"))
+                        then
+                           Fail (Relative & " line"
+                                 & Natural'Image (Ada.Strings.Fixed.Count
+                                                    (Text (Text'First .. At_Call), [1 => ASCII.LF]) + 1)
+                                 & " reads the configuration without testing what the read said");
+                        end if;
+                        From := (if Close = 0 then Text'Last else Close);
+                     end;
+                     exit when From >= Text'Last;
+                  end loop;
+               end;
+            end if;
+         end loop;
+         Dirs.End_Search (Search);
+      end;
+
       --  The environment surface is what the README says it is.
       --
       --  Every variable this program reads is an input somebody else can

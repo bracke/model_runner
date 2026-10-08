@@ -270,7 +270,12 @@ package Model_Runner.Framework.Workspaces is
    --
    --  @param Item The store.
    --  @param Name The copy.
-   procedure Prune_Kept (Item : Stores.Store; Name : String);
+   --  @param Status A failure part of the way, which leaves a copy that
+   --    still holds every file it had that the project has otherwise.
+   procedure Prune_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Remove a kept copy.
    --

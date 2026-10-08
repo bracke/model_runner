@@ -60,17 +60,13 @@ package body Model_Runner.Framework.Context is
 
    function Profile (Item : Stores.Store; Id : String) return Model_Profile is
       Config : Records.Item;
-      Status : E.Error_Info;
       Result : Model_Profile :=
         (Id             => To_Unbounded_String (if Id = "" then "default" else Id),
          Provider       => To_Unbounded_String ("local"),
          Resource_Class => To_Unbounded_String ("local"),
          others         => <>);
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Error (Status) then
-         return Result;
-      end if;
+      Config := Configurations.Required (Item);
 
       declare
          Chosen : constant String :=
@@ -134,11 +130,10 @@ package body Model_Runner.Framework.Context is
 
    function Within_Configured (Item : Stores.Store; Session : Model_Profile) return Model_Profile is
       Config : Records.Item;
-      Status : E.Error_Info;
       Result : Model_Profile := Session;
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Error (Status) or else Records.Get (Config, "scalar.model.default") = "" then
+      Config := Configurations.Required (Item);
+      if Records.Get (Config, "scalar.model.default") = "" then
          return Session;
       end if;
       declare
@@ -424,13 +419,16 @@ package body Model_Runner.Framework.Context is
       Result.Generation := To_Unbounded_String (Records.Get (View, "runtime.generation"));
       Component := To_Unbounded_String (Records.Get (View, "definition.component"));
 
+      --  The project's rules, policy and reserves come from here: a
+      --  context built without them is one for some other project.
       Configurations.Read (Item, Config, Status);
-      if E.Is_Ok (Status) then
-         Result.Config_Revision := Records.Revision (Config);
-         Result.Config_Fingerprint :=
-           To_Unbounded_String (Records.Get (Config, "configuration_fingerprint"));
+      if Configurations.Unreadable (Status) then
+         return;
       end if;
       Status := E.Success;
+      Result.Config_Revision := Records.Revision (Config);
+      Result.Config_Fingerprint :=
+        To_Unbounded_String (Records.Get (Config, "configuration_fingerprint"));
 
       --  Room for the answer the task's kind needs: scalar
       --  task.output_reserve.KIND, where it asks for more or less than the
@@ -917,15 +915,19 @@ package body Model_Runner.Framework.Context is
          View : Records.Item;
       begin
          Tasks.Effective (Item, Task_Id, View, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
          Result.Generation := To_Unbounded_String (Records.Get (View, "runtime.generation"));
       end;
       Configurations.Read (Item, Config, Status);
-      if E.Is_Ok (Status) then
-         Result.Config_Revision := Records.Revision (Config);
-         Result.Config_Fingerprint :=
-           To_Unbounded_String (Records.Get (Config, "configuration_fingerprint"));
+      if Configurations.Unreadable (Status) then
+         return;
       end if;
       Status := E.Success;
+      Result.Config_Revision := Records.Revision (Config);
+      Result.Config_Fingerprint :=
+        To_Unbounded_String (Records.Get (Config, "configuration_fingerprint"));
 
       --  The child's rules, the task it helps with and what it is asked:
       --  nothing of the conversation it was asked from.

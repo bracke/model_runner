@@ -2777,11 +2777,8 @@ package body Model_Runner.Framework.Bootstrap is
 
    --  The resolved configuration, or an empty one.
    function Settings_Of (Item : Stores.Store) return Records.Item is
-      Value  : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Value, Status);
-      return (if E.Is_Ok (Status) then Value else Records.Create ("", 1, "", 0));
+      return Configurations.Required (Item);
    end Settings_Of;
 
    ---------------

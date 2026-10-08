@@ -150,12 +150,11 @@ package body Model_Runner.Framework.Intent is
 
    function Counts_As (Item : Stores.Store; State : String) return String is
       Config : Records.Item;
-      Read   : E.Error_Info;
    begin
       if State = "" or else Core_Requirement_States.Contains (State) then
          return State;
       end if;
-      Configurations.Read (Item, Config, Read);
+      Config := Configurations.Required (Item);
       declare
          Meaning : constant String := Records.Get (Config, "map.requirement.state." & State);
          Stop    : constant Natural := Ada.Strings.Fixed.Index (Meaning, ",");
@@ -177,17 +176,13 @@ package body Model_Runner.Framework.Intent is
    is
       Result : Transitions.Machine := Machine_Of (Kind);
       Config : Records.Item;
-      Read   : E.Error_Info;
       Prefix : constant String := "map.requirement.state.";
       Known  : Name_Lists.Vector := Core_Requirement_States;
    begin
       if Kind /= Requirement then
          return Result;
       end if;
-      Configurations.Read (Item, Config, Read);
-      if E.Is_Error (Read) then
-         return Result;
-      end if;
+      Config := Configurations.Required (Item);
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
             Name : constant String := Records.Field_Name (Config, Index);
@@ -847,6 +842,10 @@ package body Model_Runner.Framework.Intent is
                Read   : E.Error_Info;
             begin
                Configurations.Read (Item, Config, Read);
+               if Configurations.Unreadable (Read) then
+                  Status := Read;
+                  return;
+               end if;
                declare
                   After_Text     : constant String :=
                     Records.Get (Config, "scalar.requirement.after_text_change");

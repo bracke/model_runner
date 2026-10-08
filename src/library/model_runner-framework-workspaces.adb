@@ -246,7 +246,13 @@ package body Model_Runner.Framework.Workspaces is
          Got    : E.Error_Info;
          Active : Natural := 0;
       begin
+         --  No limit read is no limit known, not none: unread, the
+         --  workspace is not made.
          Configurations.Read (Item, Config, Got);
+         if Configurations.Unreadable (Got) then
+            Status := Got;
+            return;
+         end if;
          declare
             Limit_Text : constant String := Records.Get (Config, "scalar.work.max_workspaces");
             Limit      : constant Natural :=
@@ -1524,8 +1530,10 @@ package body Model_Runner.Framework.Workspaces is
    Restored_Mark : constant String := ".restored";
 
    function Was_Restored (Item : Stores.Store; Name : String) return Boolean
-   is (Is_Kept_Name (Name) and then Dirs.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name),
-                                                                  Restored_Mark)));
+   is (Is_Kept_Name (Name)
+       and then Dirs.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark))
+       and then Dirs."=" (Dirs.Kind (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark)),
+                         Dirs.Ordinary_File));
 
    ------------------
    -- Restore_Kept --
@@ -1569,7 +1577,10 @@ package body Model_Runner.Framework.Workspaces is
       elsif not Dirs.Exists (Hostkit.Fs.Join (Runtime_Of (Item), Base)) then
          return Base;
       end if;
-      for Number in 2 .. 999 loop
+      --  A number no copy has, however many there are: a ceiling here
+      --  handed back Base, which is taken, and the next restore wrote into
+      --  a recovery copy that was already someone's.
+      for Number in 2 .. Natural'Last loop
          declare
             Numbered : constant String := Base & "-" & Ada.Strings.Fixed.Trim (Number'Image, Ada.Strings.Both);
          begin
@@ -1578,7 +1589,7 @@ package body Model_Runner.Framework.Workspaces is
             end if;
          end;
       end loop;
-      return Base;
+      raise Program_Error with "no free name for a recovery copy of " & Name;
    end Replaced_Copy;
 
    procedure Restore_Kept
@@ -1622,10 +1633,19 @@ package body Model_Runner.Framework.Workspaces is
       end loop;
       --  Marked as put back, for what is said of the task afterwards; the
       --  copy that took what the project held is not put back any more.
+      --  The mark is part of putting it back: what is said of the task,
+      --  and what a later restore swaps, read it. Not written, the restore
+      --  is not done, whatever the files say.
       declare
-         Ignored : E.Error_Info;
+         Marked : E.Error_Info;
       begin
-         Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Ignored);
+         Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Marked);
+         if E.Is_Error (Marked) then
+            Status := Marked;
+            E.Add_Text (Status, "detail",
+                        "the files of " & Name & " were put back but not marked so");
+            return;
+         end if;
          if Dirs.Exists (Hostkit.Fs.Join (Aside, Restored_Mark)) then
             Dirs.Delete_File (Hostkit.Fs.Join (Aside, Restored_Mark));
          end if;
@@ -1642,11 +1662,16 @@ package body Model_Runner.Framework.Workspaces is
    -- Prune_Kept --
    ----------------
 
-   procedure Prune_Kept (Item : Stores.Store; Name : String) is
+   procedure Prune_Kept
+     (Item   : Stores.Store;
+      Name   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Project : constant String := Dirs.Containing_Directory (Stores.Root (Item));
       Where   : constant String := Hostkit.Fs.Join (Runtime_Of (Item), Name);
       Differs : constant Name_Lists.Vector := Changed_Since_Kept (Item, Name);
    begin
+      Status := E.Success;
       if not Is_Kept_Name (Name) or else not Dirs.Exists (Where) then
          return;
       end if;
@@ -1659,8 +1684,13 @@ package body Model_Runner.Framework.Workspaces is
          Files.Discard_Tree (Where);
       end if;
    exception
-      when others =>
-         null;
+      --  Said, not swallowed: what is left is still a recovery copy -- each
+      --  file taken out was the project's own just so -- but the caller
+      --  says what it holds, and must not say it from what it meant to do.
+      when Occurrence : others =>
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "name", Name);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Message (Occurrence));
    end Prune_Kept;
 
    ---------------

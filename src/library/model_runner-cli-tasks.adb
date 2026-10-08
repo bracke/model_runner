@@ -123,9 +123,8 @@ package body Model_Runner.CLI.Tasks is
    --  the kind where it names any, the project where it does not.
    function Giver (Store : Model_Runner.Framework.Stores.Store; Kind : String) return String is
       Config : Model_Runner.Framework.Records.Item;
-      Read   : E.Error_Info;
    begin
-      Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+      Config := Model_Runner.Framework.Configurations.Required (Store);
       for Index in 1 .. Model_Runner.Framework.Records.Field_Count (Config) loop
          if Ada.Strings.Fixed.Index
               (Model_Runner.Framework.Records.Field_Name (Config, Index), "map.permission.kind." & Kind & ".") = 1
@@ -337,9 +336,8 @@ package body Model_Runner.CLI.Tasks is
       --  A profile as the configuration writes it.
       function Profile_Text (Name : String) return String is
          Config : R.Item;
-         Read   : E.Error_Info;
       begin
-         Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+         Config := Model_Runner.Framework.Configurations.Required (Store);
          return R.Get (Config, "profile." & Name);
       end Profile_Text;
 
@@ -3942,10 +3940,9 @@ package body Model_Runner.CLI.Tasks is
                Kind    : constant String := R.Get (View, "definition.kind");
                Own     : constant String := R.Get (View, "definition.permissions");
                Config  : R.Item;
-               Read    : E.Error_Info;
                Named   : Boolean := False;
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                for Index in 1 .. R.Field_Count (Config) loop
                   Named := Named
                     or else Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
@@ -4008,11 +4005,10 @@ package body Model_Runner.CLI.Tasks is
             --  setting it comes from, as that is what stops a run.
             declare
                Config  : R.Item;
-               Read    : E.Error_Info;
                Kind    : constant String := R.Get (View, "definition.kind");
                Seconds : constant Natural := Model_Runner.Framework.Work.Time_Allowed (Store, Argument);
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                Grouped ("  " & "limits",
                         T.Image (Long_Long_Integer (Seconds))
                         & (if Seconds = 1 then " second (" else " seconds (")
@@ -4240,9 +4236,8 @@ package body Model_Runner.CLI.Tasks is
          --  A profile it names is one the configuration has, as /work's.
          declare
             Config : R.Item;
-            Got    : E.Error_Info;
          begin
-            Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+            Config := Model_Runner.Framework.Configurations.Required (Store);
             if Profile_Given not in "" | "default" and then not R.Has (Config, "map.model." & Profile_Given) then
                Outcome := E.Make (E.Framework_Input_Invalid);
                E.Add_Text (Outcome, "name", "profile");

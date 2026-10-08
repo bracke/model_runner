@@ -252,6 +252,33 @@ package Model_Runner.Framework.Configurations is
       Value  : out Records.Item;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  A project's configuration that could not be read, where the caller
+   --  has no status to say so through. Raised, not answered with defaults:
+   --  every initialized project has a configuration -- Initialize writes
+   --  one -- so one that cannot be read is the project's integrity failing,
+   --  and a decision taken from defaults in its place would be a decision
+   --  for some other project. The message names the failure.
+   Configuration_Unavailable : exception;
+
+   --  Whether a read's status says the configuration is there but cannot
+   --  be read. One that is not there at all is a project not configured
+   --  yet, whose settings are their defaults; one that is there and will
+   --  not read is damage.
+   --
+   --  @param Status What Read said.
+   --  @return True for any failure but Framework_Not_Found.
+   function Unreadable (Status : Model_Runner.Errors.Error_Info) return Boolean;
+
+   --  The project's configuration, for a caller that answers with a value
+   --  rather than a status. Every caller with a status reads it with Read
+   --  and returns its failure where it is Unreadable; this is for the rest.
+   --
+   --  @param Item The store.
+   --  @return The configuration, empty where there is none yet.
+   --  @exception Configuration_Unavailable When it is there and cannot be
+   --    read.
+   function Required (Item : Stores.Store) return Records.Item;
+
    --  Put the configuration right from its history, where it cannot be
    --  read or no longer matches its fingerprint: the newest revision the
    --  history keeps that does, made current again.

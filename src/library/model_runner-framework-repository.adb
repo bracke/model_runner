@@ -343,7 +343,6 @@ package body Model_Runner.Framework.Repository is
 
    function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector is
       Config : Records.Item;
-      Read   : E.Error_Info;
       Result : Name_Lists.Vector;
 
       --  Whether the word from From on says NAME=VALUE: the roots end
@@ -359,7 +358,7 @@ package body Model_Runner.Framework.Repository is
          return False;
       end Setting_At;
    begin
-      Configurations.Read (Item, Config, Read);
+      Config := Configurations.Required (Item);
       declare
          Text  : constant String := Records.Get (Config, "map.component." & Component);
          Mark  : constant Natural := Ada.Strings.Fixed.Index (Text, "roots=");
@@ -434,35 +433,31 @@ package body Model_Runner.Framework.Repository is
 
       Mine   : constant Integer := Closeness (Component);
       Config : Records.Item;
-      Read   : E.Error_Info;
    begin
       if Mine < 0 then
          return False;
       end if;
       --  Where roots overlap, the file is the component's whose root holds
       --  it most closely: src/proc is proc's, not src's.
-      Configurations.Read (Item, Config, Read);
-      if E.Is_Ok (Read) then
-         for Index in 1 .. Records.Field_Count (Config) loop
-            declare
-               Field : constant String := Records.Field_Name (Config, Index);
-            begin
-               if Field'Length > 14 and then Field (Field'First .. Field'First + 13) = "map.component."
-                 and then Field (Field'First + 14 .. Field'Last) /= Component
-                 and then Closeness (Field (Field'First + 14 .. Field'Last)) > Mine
-               then
-                  return False;
-               end if;
-            end;
-         end loop;
-      end if;
+      Config := Configurations.Required (Item);
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Field : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Field'Length > 14 and then Field (Field'First .. Field'First + 13) = "map.component."
+              and then Field (Field'First + 14 .. Field'Last) /= Component
+              and then Closeness (Field (Field'First + 14 .. Field'Last)) > Mine
+            then
+               return False;
+            end if;
+         end;
+      end loop;
       return True;
    end In_Component;
 
    function Roots_Of (Item : Stores.Store) return Roots is
       Result : Roots := Default_Roots;
       Config : Records.Item;
-      Status : E.Error_Info;
 
       procedure Take (Name : String; Into : in out Name_Lists.Vector) is
          Given : constant Name_Lists.Vector :=
@@ -473,13 +468,11 @@ package body Model_Runner.Framework.Repository is
          end if;
       end Take;
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Ok (Status) then
-         Take ("skip", Result.Skip);
-         Take ("tests", Result.Tests);
-         Take ("documentation", Result.Documentation);
-         Take ("generated", Result.Generated);
-      end if;
+      Config := Configurations.Required (Item);
+      Take ("skip", Result.Skip);
+      Take ("tests", Result.Tests);
+      Take ("documentation", Result.Documentation);
+      Take ("generated", Result.Generated);
       return Result;
    end Roots_Of;
 

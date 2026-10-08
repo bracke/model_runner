@@ -222,27 +222,24 @@ package body Model_Runner.Framework.Work is
    --  A scalar of the configuration.
    function Scalar (Item : Stores.Store; Name : String) return String is
       Config : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Config, Status);
+      Config := Configurations.Required (Item);
       return Records.Get (Config, "scalar." & Name);
    end Scalar;
 
    --  A setting of the configuration's work.
    function Work_Setting (Item : Stores.Store; Name : String) return String is
       Config : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Config, Status);
+      Config := Configurations.Required (Item);
       return Records.Get (Config, "scalar.work." & Name);
    end Work_Setting;
 
    --  How long an agent holds its task before it must have finished.
    function Lease_Seconds (Item : Stores.Store) return Positive is
       Config : Records.Item;
-      Status : E.Error_Info;
    begin
-      Configurations.Read (Item, Config, Status);
+      Config := Configurations.Required (Item);
       declare
          Text : constant String := Records.Get (Config, "scalar.work.lease");
       begin

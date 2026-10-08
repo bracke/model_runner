@@ -33,20 +33,17 @@ package body Model_Runner.Framework.Agents is
 
    function Limits_Of (Item : Stores.Store) return Limits is
       Config : Records.Item;
-      Status : E.Error_Info;
       Result : Limits;
    begin
-      Configurations.Read (Item, Config, Status);
-      if E.Is_Ok (Status) then
-         Result.Max_Depth :=
-           Number (Records.Get (Config, "scalar.agents.max_depth"), Result.Max_Depth);
-         Result.Max_Children :=
-           Number (Records.Get (Config, "scalar.agents.max_children"), Result.Max_Children);
-         Result.Max_Active :=
-           Number (Records.Get (Config, "scalar.agents.max_active"), Result.Max_Active);
-         Result.Token_Budget :=
-           Number (Records.Get (Config, "scalar.agents.token_budget"), Result.Token_Budget);
-      end if;
+      Config := Configurations.Required (Item);
+      Result.Max_Depth :=
+        Number (Records.Get (Config, "scalar.agents.max_depth"), Result.Max_Depth);
+      Result.Max_Children :=
+        Number (Records.Get (Config, "scalar.agents.max_children"), Result.Max_Children);
+      Result.Max_Active :=
+        Number (Records.Get (Config, "scalar.agents.max_active"), Result.Max_Active);
+      Result.Token_Budget :=
+        Number (Records.Get (Config, "scalar.agents.token_budget"), Result.Token_Budget);
       return Result;
    end Limits_Of;
 

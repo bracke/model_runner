@@ -2698,7 +2698,7 @@ package body Model_Runner.CLI.Project_Commands is
 
          Ready : Natural := 0;
       begin
-         Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+         Config := Model_Runner.Framework.Configurations.Required (Store);
          --  In groups, each under its title, as /task show has a task: the
          --  project, its registers, its tasks, its checks, its agents, and
          --  what needs a person.
@@ -5296,7 +5296,6 @@ package body Model_Runner.CLI.Project_Commands is
       --  The project's verification, now, for no task in particular.
       procedure Check (Store : in out S.Store) is
          Config   : R.Item;
-         Read     : E.Error_Info;
          Change   : S.Transaction;
       begin
          --  A requirement: the tasks serving it verified again, the
@@ -5461,7 +5460,7 @@ package body Model_Runner.CLI.Project_Commands is
             return;
          end if;
 
-         Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+         Config := Model_Runner.Framework.Configurations.Required (Store);
          declare
             --  The profiles to run: the one named; for full, those the
             --  configuration's list verification.full names; otherwise the
@@ -5856,10 +5855,9 @@ package body Model_Runner.CLI.Project_Commands is
          if Files.Is_Empty then
             declare
                Config : R.Item;
-               Got    : E.Error_Info;
                Shown  : Unbounded_String;
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                for One of Model_Runner.Framework.Lines_Of
                  (Ada.Strings.Fixed.Translate (R.Get (Config, "set.bootstrap.sources"),
                                                Ada.Strings.Maps.To_Mapping (", ", [ASCII.LF, ASCII.LF])))
@@ -5880,9 +5878,8 @@ package body Model_Runner.CLI.Project_Commands is
             Numbered : Names.Vector;
             Accepting : Boolean := True;
             Config    : R.Item;
-            Read      : E.Error_Info;
          begin
-            Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+            Config := Model_Runner.Framework.Configurations.Required (Store);
             for Index in 1 .. Bt.Length (Found) loop
                declare
                   One : constant Bt.Output := Bt.Element (Found, Index);
@@ -7793,7 +7790,6 @@ package body Model_Runner.CLI.Project_Commands is
             --  harness reads.
             function Known_Subjects return Names.Vector is
                Config : R.Item;
-               Read   : E.Error_Info;
                Result : Names.Vector;
 
                procedure Add (Name : String) is
@@ -7817,7 +7813,7 @@ package body Model_Runner.CLI.Project_Commands is
                   end if;
                end Add;
             begin
-               Model_Runner.Framework.Configurations.Read (Store, Config, Read);
+               Config := Model_Runner.Framework.Configurations.Required (Store);
                for Index in 1 .. R.Field_Count (Config) loop
                   Add (R.Field_Name (Config, Index));
                end loop;

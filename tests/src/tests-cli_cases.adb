@@ -4418,7 +4418,7 @@ package body Tests.CLI_Cases is
            Traced ("run " & Model & " --nope", Expect => 2);
          Too_Small  : constant String :=
            Traced ("run " & Model & " --prompt hi --max-tokens 1"
-                   & " --memory-limit 20000", Expect => 5);
+                   & " --memory-limit 15000", Expect => 5);
          Missing    : constant String :=
            Traced ("run obj/absent-model.gguf --prompt hi", Expect => 6);
       begin
@@ -4907,6 +4907,9 @@ package body Tests.CLI_Cases is
       --  need and below what the session needs has to be refused: before
       --  --memory-limit bounded the session, that run succeeded and the
       --  caller was given a session of whatever size it liked.
+      --  Below the least any backend's session needs: a paged session on
+      --  the device holds halves, 18,509 bytes here to the processor's
+      --  23,015, and a limit of 20,000 sat between them.
       declare
          Path   : constant String := "obj/memory-model.gguf";
          Source : Fixed_Arguments;
@@ -4922,7 +4925,7 @@ package body Tests.CLI_Cases is
          Add (Source, "--max-tokens");
          Add (Source, "1");
          Add (Source, "--memory-limit");
-         Add (Source, "20000");
+         Add (Source, "15000");
 
          Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, "obj/memory.txt");
          Ada.Text_IO.Set_Error (Handle);
