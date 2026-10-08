@@ -3760,7 +3760,7 @@ package body Model_Runner.Llama is
    --  their room to the processor, from the top, until a cache reaching
    --  Upto positions fits beside what is left (Model.Feed_Room). Nothing
    --  where the model holds none so.
-   procedure Make_Room (Item : Session; Upto : Natural);
+   procedure Room_For_Cache (Item : Session; Upto : Natural);
 
    --  Read back whatever the device wrote that the host's copy has not
    --  got. Declared here because a session giving its block back must
@@ -7269,11 +7269,11 @@ package body Model_Runner.Llama is
       end;
    end Device_Copy_Bytes;
 
-   ---------------
-   -- Make_Room --
-   ---------------
+   --------------------
+   -- Room_For_Cache --
+   --------------------
 
-   procedure Make_Room (Item : Session; Upto : Natural) is
+   procedure Room_For_Cache (Item : Session; Upto : Natural) is
       subtype U64 is Interfaces.Unsigned_64;
       Owner : access Model'Class renames Item.Owner;
 
@@ -7289,9 +7289,49 @@ package body Model_Runner.Llama is
       end if;
 
       declare
+         --  What the cache will take at Upto, or what the device already
+         --  holds for it where that is more: a reserve only grows, and a
+         --  cache grown for a long conversation is still there after it.
          Cache : constant U64 :=
-           Device_Copy_Bytes (Owner.Settings, Upto, Item.Held, Item.Paged);
+           U64'Max (Device_Copy_Bytes (Owner.Settings, Upto, Item.Held, Item.Paged),
+                    Model_Runner.Backend.Device.Cached_Bytes);
+
+         --  Room a layer must leave to come back, so that one coming back
+         --  is not the next to go.
+         Slack : constant U64 := 2 ** 29;
       begin
+         --  Back to the device, lowest first -- the last that went -- where
+         --  the cache the device holds now leaves its room and the slack:
+         --  after a long conversation the cache is given back, and the
+         --  layers that made room for it need not stay on the processor.
+         for Index in Owner.Layers.all'Range loop
+            declare
+               L    : Layer renames Owner.Layers.all (Index);
+               None : T.View;
+               Size : constant U64 :=
+                 (if L.Host_Feed and then T.Is_Present (L.File_Gate)
+                  then Bytes_Of (L.File_Gate) + Bytes_Of (L.File_Up) + Bytes_Of (L.File_Down)
+                  else 0);
+            begin
+               if Size > 0 then
+                  exit when Owner.Feed_Weights + Cache + Size + Slack > Owner.Feed_Room;
+                  L.Panel_Gate := L.Gate;
+                  L.Panel_Up := L.Up;
+                  L.Panel_Down := L.Down;
+                  L.Gate := L.File_Gate;
+                  L.Up := L.File_Up;
+                  L.Down := L.File_Down;
+                  L.File_Gate := None;
+                  L.File_Up := None;
+                  L.File_Down := None;
+                  L.Host_Feed := False;
+                  Owner.Feed_Weights := Owner.Feed_Weights + Size;
+                  Model_Runner.Backend.Device.Fit_Budget (Owner.Feed_Weights);
+                  Owner.Able := Model_Runner.Backend.Device.Describe;
+               end if;
+            end;
+         end loop;
+
          --  From the top, as Prepare splits: one layer's feed-forward at a
          --  time to the processor, its file's matrices given back, until
          --  the cache and what is left fit.
@@ -7325,7 +7365,7 @@ package body Model_Runner.Llama is
             end;
          end loop;
       end;
-   end Make_Room;
+   end Room_For_Cache;
 
    --  What a session planned so holds: the plan, which is the host's
    --  cache at the precision the host keeps it and everything beside it,

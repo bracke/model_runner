@@ -8621,10 +8621,16 @@ package body Model_Runner.Platform.Device.Products is
       Front           : Model_Runner.Numerics.Element_Count := 0)
    is
 
+      --  A quarter more, up to 2 ** 27 elements -- half a gigabyte of
+      --  binary32, a quarter of halves. A quarter of a long context's cache
+      --  is gigabytes nothing writes: Steelman-14B's at 32,768 held 1.6 GB
+      --  of copy past its last page. Past the cap a step up comes every
+      --  few hundred positions, and costs a copy of the cache the device
+      --  makes in milliseconds.
       function Roomier
         (Count : Model_Runner.Numerics.Element_Count)
          return Model_Runner.Numerics.Element_Count
-      is (Count + Count / 4);
+      is (Count + Model_Runner.Numerics.Element_Count'Min (Count / 4, 2 ** 27));
 
       Wanted      : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64 (Elements) * 4;

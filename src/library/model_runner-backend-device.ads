@@ -152,6 +152,11 @@ package Model_Runner.Backend.Device is
    --  @param Weight The matrix.
    procedure Give_Back (Weight : Model_Runner.Tensors.View);
 
+   --  How many matrices Give_Back was asked to give back this run.
+   --
+   --  @return The count.
+   function Moved_Over return Natural;
+
    --  Report whether a device is open and ready.
    --
    --  @return True when Dispatch can succeed.

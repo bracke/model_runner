@@ -595,6 +595,9 @@ package Model_Runner.Presentation is
    --    others. Anything above zero says the model does not fit and is being
    --    uploaded again as it is wanted, which is the difference between a
    --    device that is computing and one that is being fed.
+   --  @param Moved_Over How many matrices the device held until the cache
+   --    wanted their room, and gave back as their layers moved to the
+   --    processor. Said only where there were any.
    --  @param Cached_Bytes How many bytes of context the device is holding.
    --    Zero says it holds none, which is a different thing from holding no
    --    weights: a device with the model and not the context computes the
@@ -631,6 +634,7 @@ package Model_Runner.Presentation is
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
+      Moved_Over     : Natural := 0;
       Cached_Bytes   : Interfaces.Unsigned_64 := 0;
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;

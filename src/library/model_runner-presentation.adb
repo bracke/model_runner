@@ -1353,6 +1353,7 @@ package body Model_Runner.Presentation is
       Imported       : Natural := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Given_Back     : Natural := 0;
+      Moved_Over     : Natural := 0;
       Cached_Bytes   : Interfaces.Unsigned_64 := 0;
       State_Bytes    : Interfaces.Unsigned_64 := 0;
       Layers_Whole   : Natural := 0;
@@ -1484,6 +1485,11 @@ package body Model_Runner.Presentation is
          Put_Field
            (Item, "statistics.given_back",
             T.Image (Long_Long_Integer (Given_Back)), Diagnostic, (if Given_Back > 0 then Pending else Plain));
+         if Moved_Over > 0 then
+            Put_Field
+              (Item, "statistics.moved_over",
+               T.Image (Long_Long_Integer (Moved_Over)), Diagnostic);
+         end if;
 
          --  And whether the context is there as well as the weights. A
          --  device holding one and not the other attends on the processor,

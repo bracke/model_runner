@@ -2022,9 +2022,15 @@ package body Tests.Backend_Cases is
       --  And each given back by name, as a feed-forward moved to the
       --  processor is: nothing of them is left, and one asked for again
       --  is taken again and answers the same.
-      for Which in Held'Range loop
-         Model_Runner.Backend.Device.Give_Back (Views (Which));
-      end loop;
+      declare
+         Moved_Before : constant Natural := Model_Runner.Backend.Device.Moved_Over;
+      begin
+         for Which in Held'Range loop
+            Model_Runner.Backend.Device.Give_Back (Views (Which));
+         end loop;
+         Assert (Model_Runner.Backend.Device.Moved_Over = Moved_Before + Held'Length,
+                 "a matrix given back by name was not counted");
+      end;
       Assert (Model_Runner.Backend.Device.Resident = 0,
               "a matrix given back by name was still held:"
               & Natural'Image (Model_Runner.Backend.Device.Resident));

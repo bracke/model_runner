@@ -1765,6 +1765,7 @@ begin
                Resident_Bytes =>
                  Model_Runner.Backend.Device.Resident_Bytes,
                Given_Back     => Model_Runner.Backend.Device.Given_Back,
+               Moved_Over     => Model_Runner.Backend.Device.Moved_Over,
                Cached_Bytes   =>
                  Model_Runner.Backend.Device.Cached_Bytes,
                State_Bytes    =>

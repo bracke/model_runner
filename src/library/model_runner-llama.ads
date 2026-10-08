@@ -2385,7 +2385,7 @@ private
       --  A layer the device holds whole until the cache wants its room:
       --  its feed-forward's panels, built at load as a split's are, kept
       --  here while Gate, Up and Down are the file's and the device runs
-      --  them. Moved to the processor (Make_Room), the panels go into
+      --  them. Moved to the processor (Room_For_Cache), the panels go into
       --  Gate, Up and Down and the file's into File_*, as a split layer
       --  has them from the start. Absent for every other layer.
       Panel_Gate, Panel_Up, Panel_Down : Model_Runner.Tensors.View;

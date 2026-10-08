@@ -6366,8 +6366,13 @@ package body Model_Runner.Backend.Device is
    -- Give_Back --
    ---------------
 
+   Moved_Count : Natural := 0;
+
+   function Moved_Over return Natural is (Moved_Count);
+
    procedure Give_Back (Weight : Model_Runner.Tensors.View) is
    begin
+      Moved_Count := Moved_Count + 1;
       if Ready_Now then
          Products.Give_Back_Matrix (Engine, At_Offset (Weight.Base, Weight.Offset));
       end if;

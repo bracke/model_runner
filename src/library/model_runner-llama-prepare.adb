@@ -2079,6 +2079,10 @@ begin
 
          Planned : Natural := Context;
          Room    : Interfaces.Unsigned_64 := 0;
+
+         --  Whether the matrices' budget is the room counted here, rather
+         --  than one the caller named.
+         Counted_Here : Boolean := False;
       begin
          for Index in Held'Range loop
             declare
@@ -2143,7 +2147,31 @@ begin
             Item.Able := Model_Runner.Backend.Device.Describe;
             if Item.Able.Memory_Bytes = Room then
                Item.Device_Context := Planned;
+               Counted_Here := True;
             end if;
+         end if;
+
+         --  A budget the caller named is the weights', and is held to;
+         --  what is left of the device beside it is the cache's. A context
+         --  nobody named is the longest halving of the model's own whose
+         --  cache fits there, where it was the model's own whatever the
+         --  weights had taken: Steelman-14B's 32,768 beside a named 14 GB
+         --  was more than the part has.
+         if Item.Device_Context = 0
+           and then Context = 0
+           and then Item.Able.Memory_Bytes > 0
+         then
+            declare
+               Weights : constant Interfaces.Unsigned_64 := Item.Able.Memory_Bytes;
+               Asked   : Natural := Item.Settings.Context_Length;
+            begin
+               while Asked > Planned_Context
+                 and then Counted_Room (Asked) < Weights
+               loop
+                  Asked := Natural'Max (Planned_Context, Asked / 2);
+               end loop;
+               Item.Device_Context := Asked;
+            end;
          end if;
 
          if Total > Item.Able.Memory_Bytes then
@@ -2182,7 +2210,7 @@ begin
             --  fills: where every matrix fits the device beside the
             --  margins, the split layers stay on the device too, their
             --  panels built and kept aside, until a session's cache wants
-            --  the room (Make_Room). Steelman-14B named 32,768 positions
+            --  the room (Room_For_Cache). Steelman-14B named 32,768 positions
             --  and was split for them before its first token; a short
             --  conversation generated at 6.6 tokens a second where 4,096
             --  named read 7.8.
@@ -2206,7 +2234,7 @@ begin
                --  Only where the room was counted here: a budget the caller
                --  named bounds the matrices itself, and is held to.
                if Dense_Split
-                 and then Item.Device_Context > 0
+                 and then Counted_Here
                  and then Item.Settings.Experts = 0
                  and then Heaps > Margins
                  and then Total < Heaps - Margins
