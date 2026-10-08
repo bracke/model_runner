@@ -1,3 +1,4 @@
+with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
 with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
@@ -2682,13 +2683,22 @@ package body Tests.CLI_Cases is
             Closed : constant String := Root & "/closed-init";
             Errors : constant Natural := Model_Runner.Presentation.Errors_Reported (Screen);
             Was    : constant String := Ada.Directories.Current_Directory;
+            Went_In : Boolean := True;
          begin
             Ada.Directories.Create_Path (Closed);
             GNAT.OS_Lib.Set_Non_Readable (Closed);
-            Ada.Directories.Set_Directory (Closed);
+            --  A host that will not even enter a directory it may not
+            --  read -- Windows, where unreadable is a refusal to list and
+            --  to enter alike -- cannot stage the case, and says nothing.
+            begin
+               Ada.Directories.Set_Directory (Closed);
+            exception
+               when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+                  Went_In := False;
+            end;
             --  Where permissions do not hold -- a superuser -- it can be
             --  read, and there is nothing to see.
-            if not GNAT.OS_Lib.Is_Readable_File (".") then
+            if Went_In and then not GNAT.OS_Lib.Is_Readable_File (".") then
                Model_Runner.CLI.Project_Commands.Run_Without_Model ("/init", Screen, Status);
                Assert (Model_Runner.Presentation.Errors_Reported (Screen) > Errors
                        and then Status = Model_Runner.Errors.Exit_Status

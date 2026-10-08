@@ -7132,10 +7132,14 @@ package body Tests.Inference_Cases is
            (Model, Ada.Directories.Full_Name (Store));
       end Named;
 
+      --  Joined as the host joins them, which is how Paired names what it
+      --  found: with a '/' written in, Windows' answer read as another.
       Beside  : constant String :=
-        Ada.Directories.Full_Name (Folder) & "/near.gguf";
+        Ada.Directories.Compose (Ada.Directories.Full_Name (Folder),
+                                 "near.gguf");
       In_Store : constant String :=
-        Ada.Directories.Full_Name (Store) & "/far.gguf";
+        Ada.Directories.Compose (Ada.Directories.Full_Name (Store),
+                                 "far.gguf");
    begin
       Fresh (Folder);
       Fresh (Store);

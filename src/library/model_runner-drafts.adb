@@ -1,3 +1,4 @@
+with Ada.Directories.Hierarchical_File_Names;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 
@@ -169,9 +170,11 @@ package body Model_Runner.Drafts is
                         (Ada.Directories.Kind (Path),
                          Ada.Directories.Ordinary_File));
 
-         --  The draft a name names, or nothing.
+         --  The draft a name names, or nothing. A full name as the host
+         --  spells one: a leading '/' alone missed Windows' drive letters,
+         --  and a full name handed to Compose raises.
          function Resolved (Named : String) return String
-         is (if Named (Named'First) = '/'
+         is (if Ada.Directories.Hierarchical_File_Names.Is_Full_Name (Named)
              then (if Here (Named) then Named else "")
              elsif Here (Ada.Directories.Compose (Folder, Named))
              then Ada.Directories.Compose (Folder, Named)
