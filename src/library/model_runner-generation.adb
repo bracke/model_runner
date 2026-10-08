@@ -571,6 +571,49 @@ package body Model_Runner.Generation is
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
 
+      --  Whether drafting is paying, timed rather than assumed: a stretch
+      --  of drafted rounds, then a few with nothing proposed -- the
+      --  sampled token checked alone, which is a plain step that keeps
+      --  every draft in step -- and the faster of the two kept for a while
+      --  before both are timed again. Qwen3.6 drafting from its next-token
+      --  block made 23.8 tokens a second where it made 16.8 without at the
+      --  start of a context, and 7.6 where it made 12.7 sixteen thousand
+      --  positions in: a round's attention reads the context once a
+      --  position, and its proposals are kept less often that deep.
+      Paused        : Boolean := False;
+      Probing       : Boolean := False;
+      Phase_Left    : Natural := 0;
+      Drafted_Ns    : Model_Runner.Clocks.Nanoseconds := 0;
+      Drafted_Made  : Natural := 0;
+      Plain_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
+      Plain_Made    : Natural := 0;
+
+      --  Tokens drafted before plain steps are timed against them, the
+      --  plain steps that time them, how long plain steps go on once they
+      --  were the faster, and how long drafting goes on once it was.
+      Draft_Window : constant := 16;
+      Probe_Window : constant := 4;
+      Draft_Hold   : constant := 96;
+
+      --  How long plain steps go on once they were the faster: doubled
+      --  each time they are again, since a context only grows deeper, and
+      --  back to its least once drafting is the faster.
+      Plain_Least  : constant := 64;
+      Plain_Most   : constant := 1_024;
+      Plain_Hold   : Natural := Plain_Least;
+
+      --  The first rounds of a reply are not timed: they bear what the
+      --  first use of the kernels and the tables costs, and Qwen3.6's
+      --  first sixteen drafted tokens took 1.02 s against 0.61 for the
+      --  next sixteen, which made plain steps look the faster.
+      Untimed : Natural := 8;
+
+      --  Where the timing begins: before it drafting has won wherever it
+      --  was measured -- a round's attention reads few positions there --
+      --  and timing it would cost the plain steps it takes, a few in a
+      --  hundred.
+      Guard_From : constant := 4_096;
+
       --  The share of proposals kept so far, in per cent, below which a
       --  rejected round shortens past the length asked for.
       Shrink_Below : constant := 55;
@@ -1816,7 +1859,7 @@ package body Model_Runner.Generation is
                   Next_In.all := L.Last_State (Session);
                end if;
 
-               for Step in 1 .. Round_Draft loop
+               for Step in 1 .. (if Paused then 0 else Round_Draft) loop
                   exit when Before + Step - 2 >= L.Capacity (Session);
 
                   L.Draft_Next
@@ -1877,16 +1920,18 @@ package body Model_Runner.Generation is
                declare
                   Given : Natural;
                begin
-                  Lookup.Propose
-                    (Said.all (1 .. Said_Count),
-                     Proposed.all (2 .. Largest_Draft + 1), Given);
-                  Count := Count + Given;
+                  if not Paused then
+                     Lookup.Propose
+                       (Said.all (1 .. Said_Count),
+                        Proposed.all (2 .. Largest_Draft + 1), Given);
+                     Count := Count + Given;
+                  end if;
                end;
             else
                --  And what the draft would say after it, and after that, and
                --  so on. Each proposal costs the draft a pass; a draft as
                --  large as the target would cost exactly what it saves.
-               for Step in 1 .. Round_Draft loop
+               for Step in 1 .. (if Paused then 0 else Round_Draft) loop
                   L.Evaluate
                     (Draft_Session.all, Draft.all,
                      For_Draft (Proposed.all (Count)),
@@ -2516,9 +2561,78 @@ package body Model_Runner.Generation is
                         declare
                            Made : Natural;
                            Gave : Boolean;
+                           Began : constant Model_Runner.Clocks.Nanoseconds :=
+                             Model_Runner.Clocks.Read (Time);
+                           Took  : Model_Runner.Clocks.Nanoseconds;
+                           use type Model_Runner.Clocks.Nanoseconds;
                         begin
                            Draft_Round (Made, Gave);
                            exit Decode_Loop when Gave;
+
+                           Took := Model_Runner.Clocks.Elapsed
+                             (Began, Model_Runner.Clocks.Read (Time));
+                           if L.Position (Session) < Guard_From then
+                              null;
+                           elsif Untimed > 0 then
+                              Untimed :=
+                                Untimed - Natural'Min (Untimed, Verified_Count);
+                           elsif Paused then
+                              Plain_Ns := Plain_Ns + Took;
+                              Plain_Made := Plain_Made + Verified_Count;
+                           else
+                              Drafted_Ns := Drafted_Ns + Took;
+                              Drafted_Made := Drafted_Made + Verified_Count;
+                           end if;
+                           Phase_Left :=
+                             Phase_Left - Natural'Min (Phase_Left, Verified_Count);
+
+                           --  What comes next, once this stretch is spent.
+                           if L.Position (Session) < Guard_From then
+                              null;
+                           elsif Phase_Left = 0 then
+                              if not Paused and then not Probing then
+                                 --  Drafted long enough: time plain steps.
+                                 if Drafted_Made >= Draft_Window then
+                                    Paused := True;
+                                    Probing := True;
+                                    Phase_Left := Probe_Window;
+                                 end if;
+                              elsif Probing then
+                                 --  Both timed: keep the faster.
+                                 Probing := False;
+                                 declare
+                                    Plain_Wins : constant Boolean :=
+                                      Plain_Made > 0 and then Drafted_Made > 0
+                                      and then Long_Float (Plain_Made)
+                                               * Long_Float (Drafted_Ns)
+                                               > 1.05 * Long_Float (Drafted_Made)
+                                                 * Long_Float (Plain_Ns);
+                                 begin
+                                    Paused := Plain_Wins;
+                                    Phase_Left :=
+                                      (if Plain_Wins then Plain_Hold
+                                       else Draft_Hold);
+                                    Plain_Hold :=
+                                      (if Plain_Wins
+                                       then Natural'Min (2 * Plain_Hold,
+                                                         Plain_Most)
+                                       else Plain_Least);
+                                 end;
+                                 --  Timed afresh after the stretch, the
+                                 --  context deeper by then.
+                                 Drafted_Ns := 0;
+                                 Drafted_Made := 0;
+                                 Plain_Ns := 0;
+                                 Plain_Made := 0;
+                              else
+                                 --  A held stretch spent: time both again.
+                                 Paused := False;
+                                 Drafted_Ns := 0;
+                                 Drafted_Made := 0;
+                                 Plain_Ns := 0;
+                                 Plain_Made := 0;
+                              end if;
+                           end if;
                         end;
                      end if;
 

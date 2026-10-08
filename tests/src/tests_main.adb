@@ -2856,7 +2856,10 @@ begin
          declare
             --  One measurement of one prompt, with every other option as
             --  the command was given it.
-            procedure Measure (Prompt : String; Into : out Speed_Run.Report)
+            procedure Measure
+              (Prompt   : String;
+               Into     : out Speed_Run.Report;
+               Timeline : Boolean := Given ("--device-timeline"))
             is
             begin
                Speed_Run.Run
@@ -2932,7 +2935,7 @@ begin
                   Draft_Next  => Given ("--draft-next"),
                   Repeats     => Number ("--repeats", 3),
                   Budget      => Given ("--budget"),
-                  Timeline    => Given ("--device-timeline"),
+                  Timeline    => Timeline,
                   Context     => Whole ("--context-size"),
                   Device_Bytes => Bytes ("--device-memory"),
 
@@ -2961,6 +2964,35 @@ begin
                   Result);
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+
+               --  A timeline waits on every submission before the next,
+               --  so it says what each step costs and nothing of how they
+               --  overlap: a change that cost Gemma 3 4B a sixth of its
+               --  prompt by making the host wait read level under it. The
+               --  same run again without, and a word where the two differ.
+               if Given ("--device-timeline") and then Result.Ran then
+                  declare
+                     Plain : Speed_Run.Report;
+                  begin
+                     Measure
+                       (Option ("--prompt-file",
+                                "../tests/fixtures/speed-prompt-short.txt"),
+                        Plain, Timeline => False);
+                     if Plain.Ran
+                       and then abs (Result.Wall - Plain.Wall)
+                                > Plain.Wall / 10
+                     then
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "without the timeline the same run took"
+                           & Duration'Image (Plain.Wall)
+                           & " s against" & Duration'Image (Result.Wall)
+                           & " s with it; the steps above do not account"
+                           & " for the difference -- overlap, waiting or a"
+                           & " colder first run");
+                     end if;
+                  end;
+               end if;
             else
                --  Every prompt file of a directory, in the order of their
                --  names, each reported as one prompt is and the lot pooled:
