@@ -533,6 +533,21 @@ package Model_Runner.Backend.Device is
       Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
       Front           : Model_Runner.Numerics.Element_Count := 0);
 
+   --  The second copy of a paged cache, for the layers whose pages one
+   --  storage buffer does not hold: the cache's numbering at or past
+   --  Second_Copy is its, and a page table named with Second_Table added
+   --  is read against it. See Platform.Device.Products.
+   Second_Copy  : constant := 2 ** 32;
+   Second_Table : constant := 2 ** 30;
+
+   --  Make the second copy hold Copy_Upto halves from its front.
+   --
+   --  @param Copy_Upto Halves it must hold.
+   --  @param Ok True when it does.
+   procedure Reserve_Second_Cache
+     (Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean);
+
    --  How many bytes one storage buffer may hold here, which is what
    --  bounds a session's context: the cache is one buffer, binary32 with
    --  a half-precision copy after it, and a context past the bound is

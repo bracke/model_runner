@@ -2482,6 +2482,62 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Resident_Cache_Attends_As_A_Host_Does;
 
+   --  A paged cache's second copy, for the layers one storage buffer of
+   --  halves does not hold: room made for it, rows put past Second_Copy
+   --  read back as they went in, and still there once it has grown.
+   procedure Second_Copy_Keeps_Its_Rows
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Dev renames Model_Runner.Backend.Device;
+
+      Ready, Ok : Boolean;
+
+      --  Halves exactly, so what comes back is what went in.
+      Rows : constant N.Real_Array (0 .. 7) :=
+        [0.5, -1.25, 2.0, 0.0, 3.5, -0.75, 1.0, 64.0];
+      At_Row : constant N.Element_Count := Dev.Second_Copy + 40;
+
+      procedure Read_Back (What : String) is
+         Read : N.Real_Array (Rows'Range) := [others => 9.0];
+      begin
+         Dev.Get_Cache (At_Row, Read, Ok);
+         Assert (Ok, "the second copy would not give its rows back " & What);
+         for Index in Rows'Range loop
+            Assert (Read (Index) = Rows (Index),
+                    "row" & Index'Image & " of the second copy came back as"
+                    & Read (Index)'Image & " " & What);
+         end loop;
+      end Read_Back;
+   begin
+      Dev.Close;
+      Dev.Open (Ready, Share_Host => False);
+      if not Ready then
+         return;
+      end if;
+
+      Dev.Reserve_Second_Cache (64, Ok);
+      if not Ok then
+         Dev.Close;
+         return;
+      end if;
+
+      Dev.Put_Cache (At_Row, Rows, Ok);
+      Assert (Ok, "the second copy would not take rows in its room");
+      Read_Back ("as put");
+
+      Dev.Reserve_Second_Cache (1_048_576, Ok);
+      Assert (Ok, "the second copy would not grow");
+      Read_Back ("after it grew");
+
+      --  Past its room is refused rather than written.
+      Dev.Put_Cache (Dev.Second_Copy + 2_000_000, Rows, Ok);
+      Assert (not Ok, "rows past the second copy's room were taken");
+
+      Dev.Release_Cache;
+      Dev.Close;
+   end Second_Copy_Keeps_Its_Rows;
+
    -----------------------------------------------
    -- Recorded_Attention_Says_What_A_Call_Says --
    -----------------------------------------------
@@ -10707,6 +10763,10 @@ package body Tests.Backend_Cases is
         (T, Default_Team_Leaves_A_Share'Access,
          "the default worker count leaves a share for the task that submits "
          & "the job, on every machine size");
+      Register_Routine
+        (T, Second_Copy_Keeps_Its_Rows'Access,
+         "a paged cache's second copy keeps the rows put into it, as it "
+         & "grows too");
       Register_Routine
         (T, Resident_Cache_Attends_As_A_Host_Does'Access,
          "a cache a device holds is written and attended to, and says what "

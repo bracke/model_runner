@@ -3039,8 +3039,16 @@ package body Model_Runner.Llama is
    --  Who holds each page slot of the cache, and how far into the buffer
    --  pages have been dealt -- what Block_Taken is for a cache in blocks.
    --  Slot I is the elements [I * Page_Elements, (I + 1) * Page_Elements).
+   --
+   --  Two pools of Page_Cap slots: the first's pages are in the device's
+   --  copy, the second's -- slots from Page_Cap on -- in its second copy,
+   --  numbered from Second_Copy. One storage buffer of halves held 29,127
+   --  positions of Qwen3 8B's 36 layers; a session whose context would not
+   --  fit one keeps its later layers' pages in the second (see
+   --  Second_From), and a layer's pages are all in one pool, since a step
+   --  reads one copy.
    Page_Cap : constant := 65_536;
-   Page_Owner : array (0 .. Page_Cap - 1) of Session_Access :=
+   Page_Owner : array (0 .. 2 * Page_Cap - 1) of Session_Access :=
      [others => null];
    Pages_Taken : Element_Count := 0;
 
@@ -3051,7 +3059,38 @@ package body Model_Runner.Llama is
    --  buffer with every row under them; at the front they stay where they
    --  are, and a cache whose rows are read only as halves keeps this front
    --  and the copy and nothing else.
-   Page_Front : constant Element_Count := Element_Count (Page_Cap) + 4_096;
+   Page_Front : constant Element_Count :=
+     Element_Count (2 * Page_Cap) + 4_096;
+
+   --  And how far the second copy is dealt, in its own numbering past
+   --  Second_Copy; nought where it holds none.
+   Second_Copy : constant Element_Count :=
+     Model_Runner.Backend.Device.Second_Copy;
+   Pages_Taken_Second : Element_Count := 0;
+
+   --  The slots of a pool a buffer of halves can hold: Page_Cap, or fewer
+   --  where a page is wide enough that Page_Cap of them, past the front,
+   --  would be past what one storage buffer holds.
+   function Pool_Slots return Natural
+   is (if Page_Elements = 0 then Page_Cap
+       else Natural'Min
+              (Page_Cap,
+               Natural ((Element_Count (2) ** 31 - Page_Front)
+                        / Page_Elements)));
+
+   --  Where a slot's page begins in the cache's numbering.
+   function Slot_Base (Slot : Natural) return Element_Count
+   is (if Slot < Page_Cap
+       then Page_Front + Element_Count (Slot) * Page_Elements
+       else Second_Copy + Page_Front
+            + Element_Count (Slot - Page_Cap) * Page_Elements);
+
+   --  And the slot a page beginning there is.
+   function Base_Slot (Base : Element_Count) return Natural
+   is (if Base >= Second_Copy
+       then Page_Cap + Natural ((Base - Second_Copy - Page_Front)
+                                / Page_Elements)
+       else Natural ((Base - Page_Front) / Page_Elements));
 
    --  Whose page tables are at the front of the pool, and where the front
    --  was when they were written. Every paged session writes its tables
@@ -4618,11 +4657,9 @@ package body Model_Runner.Llama is
          for Page in 0 .. Natural (Item.Page_Count.all (Layer)) - 1 loop
             declare
                Slot : constant Natural :=
-                 Natural
-                   ((Item.Pages.all
-                       (Natural (Item.Page_First.all (Layer)) + Page)
-                     - Page_Front)
-                    / Page_Elements);
+                 Base_Slot
+                   (Item.Pages.all
+                      (Natural (Item.Page_First.all (Layer)) + Page));
             begin
                if Slot in Page_Owner'Range
                  and then Page_Owner (Slot) = Item
@@ -4640,13 +4677,22 @@ package body Model_Runner.Llama is
       Item.Paged_In := False;
       Item.Paged_Upto := 0;
 
+      Item.Second_From := Natural'Last;
+
       Pages_Taken := 0;
+      Pages_Taken_Second := 0;
       for Slot in Page_Owner'Range loop
          if Page_Owner (Slot) /= null then
-            Pages_Taken :=
-              Element_Count'Max
-                (Pages_Taken,
-                 Page_Front + Element_Count (Slot + 1) * Page_Elements);
+            if Slot < Page_Cap then
+               Pages_Taken :=
+                 Element_Count'Max
+                   (Pages_Taken, Slot_Base (Slot) + Page_Elements);
+            else
+               Pages_Taken_Second :=
+                 Element_Count'Max
+                   (Pages_Taken_Second,
+                    Slot_Base (Slot) + Page_Elements - Second_Copy);
+            end if;
          end if;
       end loop;
    end Release_Session_Pages;

@@ -2947,6 +2947,11 @@ private
       --  hold a base. Paged_In is true once any page is held.
       Paged      : Boolean := False;
       Paged_In   : Boolean := False;
+
+      --  The first layer whose pages are in the device's second copy, or
+      --  Natural'Last for none: decided when a session takes its first
+      --  pages, by whether its context would fit one copy.
+      Second_From : Natural := Natural'Last;
       Pages      : Cell_Counts_Access := null;
       Page_First : Cell_Counts_Access := null;
       Page_Count : Cell_Counts_Access := null;

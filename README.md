@@ -2297,9 +2297,13 @@ faster there (3.98 s over a prompt of 1,500 against 4.15 always deep).
 
 The device cache is dealt in pages of sixteen positions from a pool of
 65,536, which is one storage buffer of halves for a model of Qwen3 8B's
-width -- 29,127 positions of its 36 layers. A context asked for past that
-reads the positions the pool holds on the device and the rest on the
-host; it used to read every one of them on the host.
+width -- 29,127 positions of its 36 layers. A context that would not fit
+one keeps its later layers' pages in a second copy, a second storage
+buffer that the steps of those layers read and write instead: Qwen3 8B's
+prompt of 31,956 at a context of 34,816 reads in 293 s with every layer on
+the device, and generates at 6.8 tokens a second there. Before, the
+positions past the first copy attended on the host -- 856 s and 2.9 tokens
+a second -- and before that, every one of them did.
 
 `--backend device` runs the products on a compute device. On this machine --
 an integrated Radeon sharing a fifteen-watt budget with the processor it

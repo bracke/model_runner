@@ -78,10 +78,57 @@ begin
    if Item.Paged_In
      and then Upto <= Element_Count (Item.Paged_Upto)
      and then Tables_Of = Item
-     and then Tables_Front = Pages_Taken
+     and then Tables_Front = Pages_Taken + Pages_Taken_Second
    then
       Ok := True;
       return;
+   end if;
+
+   --  Whether this session's later layers keep their pages in the second
+   --  copy: decided at its first pages, by whether its whole context would
+   --  fit one copy's slots. Only an exact sinkless session, which keeps
+   --  its rows as the copy alone; the layers split by how many hold pages,
+   --  half and half.
+   if not Item.Paged_In
+     and then (for all Layer in Item.Page_Count.all'Range =>
+                 Item.Page_Count.all (Layer) = 0)
+   then
+      Item.Second_From := Natural'Last;
+
+      declare
+         Whole  : Element_Count := 0;
+         Paging : Natural := 0;
+      begin
+         for Layer in 0 .. Item.Page_Count.all'Last loop
+            if not Linear (Item.Owner.Settings, Layer) then
+               Whole := Whole
+                 + Pages_Wanted
+                     (Item.all, Layer,
+                      Element_Count (Natural'Max (1, Item.Context)) - 1);
+               Paging := Paging + 1;
+            end if;
+         end loop;
+
+         if Write_Tables
+           and then Item.Held = Exact
+           and then Sink_Footprint (Item.Owner.Settings) = 0
+           and then Whole > Element_Count (Pool_Slots)
+         then
+            declare
+               Seen : Natural := 0;
+            begin
+               for Layer in 0 .. Item.Page_Count.all'Last loop
+                  if not Linear (Item.Owner.Settings, Layer) then
+                     Seen := Seen + 1;
+                     if Seen > Paging / 2 then
+                        Item.Second_From := Layer;
+                        exit;
+                     end if;
+                  end if;
+               end loop;
+            end;
+         end if;
+      end;
    end if;
 
    --  All the pages asked for or none: dealt a layer at a time until the
@@ -89,20 +136,43 @@ begin
    --  holding pages for the whole of it and the last none, and every
    --  batch after that was refused a page and attended on the host.
    --  Qwen3 8B, at a context of 34,816 its keys and values asked for
-   --  ahead, read a prompt of 32k at seven tokens a second.
+   --  ahead, read a prompt of 32k at seven tokens a second. Each pool
+   --  against its own slots.
    declare
-      More : Element_Count := 0;
+      More, More_Second : Element_Count := 0;
+      Held_First, Held_Second : Natural := 0;
    begin
       for Layer in 0 .. Item.Page_Count.all'Last loop
          if not Linear (Item.Owner.Settings, Layer) then
-            More := More
-              + Element_Count'Max
-                  (0, Pages_Wanted (Item.all, Layer, Upto)
-                      - Item.Page_Count.all (Layer));
+            declare
+               Extra : constant Element_Count :=
+                 Element_Count'Max
+                   (0, Pages_Wanted (Item.all, Layer, Upto)
+                       - Item.Page_Count.all (Layer));
+            begin
+               if Layer >= Item.Second_From then
+                  More_Second := More_Second + Extra;
+               else
+                  More := More + Extra;
+               end if;
+            end;
          end if;
       end loop;
 
-      if More > Element_Count (Page_Cap - Pages_In_Use) then
+      for Slot in Page_Owner'Range loop
+         if Page_Owner (Slot) /= null then
+            if Slot < Page_Cap then
+               Held_First := Held_First + 1;
+            else
+               Held_Second := Held_Second + 1;
+            end if;
+         end if;
+      end loop;
+
+      if More > Element_Count (Pool_Slots - Natural'Min (Pool_Slots, Held_First))
+        or else More_Second
+                > Element_Count (Pool_Slots - Natural'Min (Pool_Slots, Held_Second))
+      then
          return;
       end if;
    end;
@@ -119,14 +189,17 @@ begin
          begin
             while Item.Page_Count.all (Layer) < Want loop
                declare
-                  Slot : Natural := 0;
+                  Low  : constant Natural :=
+                    (if Layer >= Item.Second_From then Page_Cap else 0);
+                  High : constant Natural := Low + Pool_Slots;
+                  Slot : Natural := Low;
                begin
-                  while Slot < Page_Cap and then Page_Owner (Slot) /= null
+                  while Slot < High and then Page_Owner (Slot) /= null
                   loop
                      Slot := Slot + 1;
                   end loop;
 
-                  if Slot >= Page_Cap then
+                  if Slot >= High then
                      --  No slot free: what has been dealt stays, and the
                      --  layer holds fewer pages than it wanted, which the
                      --  caller reads as the cache being full.
@@ -137,14 +210,19 @@ begin
                   Pages_In_Use := Pages_In_Use + 1;
                   Item.Pages.all
                     (Natural (First) + Natural (Item.Page_Count.all (Layer)))
-                    := Page_Front + Element_Count (Slot) * Page_Elements;
+                    := Slot_Base (Slot);
                   Item.Page_Count.all (Layer) :=
                     Item.Page_Count.all (Layer) + 1;
-                  Pages_Taken :=
-                    Element_Count'Max
-                      (Pages_Taken,
-                       Page_Front
-                       + Element_Count (Slot + 1) * Page_Elements);
+                  if Slot < Page_Cap then
+                     Pages_Taken :=
+                       Element_Count'Max
+                         (Pages_Taken, Slot_Base (Slot) + Page_Elements);
+                  else
+                     Pages_Taken_Second :=
+                       Element_Count'Max
+                         (Pages_Taken_Second,
+                          Slot_Base (Slot) + Page_Elements - Second_Copy);
+                  end if;
                end;
             end loop;
          end;
@@ -169,8 +247,14 @@ begin
          Where : Element_Count := 0;
          Words : Natural := 0;
       begin
+         --  A layer whose pages are in the second copy names its table
+         --  with Second_Table added, which is how the step that reads it
+         --  knows which copy to read.
          for Layer in Item.Page_Count.all'Range loop
-            Item.Page_Table_At.all (Layer) := Where;
+            Item.Page_Table_At.all (Layer) :=
+              Where
+              + (if Layer >= Item.Second_From
+                 then Model_Runner.Backend.Device.Second_Table else 0);
             if not Linear (Item.Owner.Settings, Layer) then
                declare
                   Count : constant Natural :=
@@ -202,6 +286,14 @@ begin
             return;
          end if;
 
+         if Pages_Taken_Second > 0 then
+            Model_Runner.Backend.Device.Reserve_Second_Cache
+              (Pages_Taken_Second, Ok);
+            if not Ok then
+               return;
+            end if;
+         end if;
+
          declare
             Table : Model_Runner.Backend.Device.Word_List
                       (1 .. Natural'Max (Words, 1));
@@ -214,12 +306,14 @@ begin
                      Held  : constant Element_Count :=
                        Item.Page_Count.all (Layer);
                      Off   : constant Natural :=
-                       Natural (Item.Page_Table_At.all (Layer));
+                       Natural (Item.Page_Table_At.all (Layer)
+                                mod Model_Runner.Backend.Device.Second_Table);
                   begin
                      --  The layer's pages, and the padding a masked
                      --  over-read reads, each pointing at a real page.
                      for Page in 0 .. Natural (Held) + Page_Table_Pad - 1
                      loop
+                        --  A page's base in its own copy's numbering.
                         Table (Off + Page + 1) :=
                           Natural
                             (Item.Pages.all
@@ -227,7 +321,8 @@ begin
                                   (First
                                    + Element_Count'Min
                                        (Element_Count (Page),
-                                        Element_Count'Max (Held, 1) - 1))));
+                                        Element_Count'Max (Held, 1) - 1)))
+                             mod Second_Copy);
                      end loop;
                   end;
                end if;
@@ -238,7 +333,7 @@ begin
                return;
             end if;
             Tables_Of := Item;
-            Tables_Front := Pages_Taken;
+            Tables_Front := Pages_Taken + Pages_Taken_Second;
          end;
       end;
    else

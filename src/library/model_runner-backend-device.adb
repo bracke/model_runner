@@ -1088,6 +1088,18 @@ package body Model_Runner.Backend.Device is
                         Keys_Upto => Keys_Upto, Front => Front);
    end Reserve_Cache;
 
+   procedure Reserve_Second_Cache
+     (Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Reserve_Second (Engine, Copy_Upto, Ok);
+   end Reserve_Second_Cache;
+
    -------------------
    -- Release_Cache --
    -------------------

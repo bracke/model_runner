@@ -2473,6 +2473,26 @@ package Model_Runner.Platform.Device.Products is
       Values   : Model_Runner.Numerics.Real_Array;
       Ok       : out Boolean);
 
+   --  A paged cache whose copy is past what one storage buffer holds keeps
+   --  some of its layers' pages in a second copy: the halves at or past
+   --  Second_Copy in the numbering Put_Cache and Get_Cache take are the
+   --  second copy's, from its front. A step whose page table is named
+   --  with Second_Table added reads and writes the second copy where it
+   --  would the first. Qwen3 8B's 36 layers held 29,127 positions in one.
+   Second_Copy  : constant := 2 ** 32;
+   Second_Table : constant := 2 ** 30;
+
+   --  Make the second copy hold at least Copy_Upto halves, keeping what it
+   --  holds.
+   --
+   --  @param Item Engine.
+   --  @param Copy_Upto Halves the second copy must hold, from its front.
+   --  @param Ok True when it does.
+   procedure Reserve_Second
+     (Item      : in out Engine;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean);
+
    --  And back out of it, which is how the host's own copy of the cache is
    --  brought up to date without the device sending it a layer at a time.
    --
@@ -3785,6 +3805,14 @@ private
       Copy_Values_Bytes  : Interfaces.Unsigned_64 := 0;
       Copy_Values_At     : System.Address := System.Null_Address;
       Copy_Keys_Halves   : Interfaces.Unsigned_64 := 0;
+
+      --  The second copy of a paged cache; see Second_Copy. Use_Second
+      --  says the step whose descriptors are being written reads it.
+      Second_Buffer : System.Address := System.Null_Address;
+      Second_Memory : System.Address := System.Null_Address;
+      Second_Bytes  : Interfaces.Unsigned_64 := 0;
+      Second_At     : System.Address := System.Null_Address;
+      Use_Second    : Boolean := False;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond

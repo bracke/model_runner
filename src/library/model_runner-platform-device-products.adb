@@ -1341,7 +1341,11 @@ package body Model_Runner.Platform.Device.Products is
    --  reads the copy is given something rather than nothing: the vector
    --  buffer, as the halves above are.
    function Copy_Descriptor (Item : Engine) return Buffer_Info
-   is (if Item.Copy_Buffer /= Null_Handle
+   is (if Item.Use_Second and then Item.Second_Buffer /= Null_Handle
+       then (Buffer => Item.Second_Buffer,
+             Offset => 0,
+             Extent => Item.Second_Bytes)
+       elsif Item.Copy_Buffer /= Null_Handle
        then (Buffer => Item.Copy_Buffer,
              Offset => 0,
              Extent => Item.Copy_Bytes)
@@ -1356,7 +1360,9 @@ package body Model_Runner.Platform.Device.Products is
    --  global base is the same bytes as reading the keys' binding was. A
    --  dispatch that reads no values is still given something valid.
    function Values_Copy_Descriptor (Item : Engine) return Buffer_Info
-   is (if Item.Copy_Split and then Item.Copy_Values_Buffer /= Null_Handle
+   is (if Item.Use_Second and then Item.Second_Buffer /= Null_Handle
+       then Copy_Descriptor (Item)
+       elsif Item.Copy_Split and then Item.Copy_Values_Buffer /= Null_Handle
        then (Buffer => Item.Copy_Values_Buffer,
              Offset => 0,
              Extent => Item.Copy_Values_Bytes)
@@ -5261,6 +5267,22 @@ package body Model_Runner.Platform.Device.Products is
          Item.Copy_Values_At := Null_Handle;
       end;
 
+      if Item.Second_At /= Null_Handle
+        and then Item.Logical /= Null_Handle
+      then
+         declare
+            Unmap : constant Unmap_Call :=
+              To_Unmap (Point ("vkUnmapMemory"));
+         begin
+            if Unmap /= null then
+               Unmap (Item.Logical, Item.Second_Memory);
+            end if;
+         end;
+      end if;
+      Item.Second_At := Null_Handle;
+      Give_Back_Buffer (Item, Item.Second_Buffer, Item.Second_Memory);
+      Item.Second_Bytes := 0;
+
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
       Give_Back_Buffer
@@ -8475,6 +8497,7 @@ package body Model_Runner.Platform.Device.Products is
    begin
       if Item.Cache_Buffer = Null_Handle
         and then Item.Copy_Buffer = Null_Handle
+        and then Item.Second_Buffer = Null_Handle
       then
          return;
       end if;
@@ -8498,11 +8521,18 @@ package body Model_Runner.Platform.Device.Products is
          if Item.Copy_Values_At /= Null_Handle then
             Unmap (Item.Logical, Item.Copy_Values_Memory);
          end if;
+
+         if Item.Second_At /= Null_Handle then
+            Unmap (Item.Logical, Item.Second_Memory);
+         end if;
       end if;
 
       Item.Cache_At := Null_Handle;
       Item.Copy_At := Null_Handle;
       Item.Copy_Values_At := Null_Handle;
+      Item.Second_At := Null_Handle;
+      Give_Back_Buffer (Item, Item.Second_Buffer, Item.Second_Memory);
+      Item.Second_Bytes := 0;
 
       Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
       Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
@@ -8516,6 +8546,137 @@ package body Model_Runner.Platform.Device.Products is
       Item.Cache_Front := 0;
       Item.Copy_Split := False;
    end Release_Cache;
+
+   --------------------
+   -- Reserve_Second --
+   --------------------
+
+   procedure Reserve_Second
+     (Item      : in out Engine;
+      Copy_Upto : Model_Runner.Numerics.Element_Count;
+      Ok        : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      Wanted : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Copy_Upto) * 2;
+
+      Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
+      Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+
+      Was_Buffer : Address := Item.Second_Buffer;
+      Was_Memory : Address := Item.Second_Memory;
+      Was_At     : constant Address := Item.Second_At;
+      Was_Bytes  : constant Interfaces.Unsigned_64 := Item.Second_Bytes;
+
+      New_Buffer, New_Memory : Address := Null_Handle;
+      Where : aliased Address := Null_Handle;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item) or else Map = null or else Unmap = null then
+         return;
+      end if;
+
+      if Item.Second_Bytes >= Wanted then
+         Ok := True;
+         return;
+      end if;
+
+      --  As one storage buffer: past that the kernels could not read it.
+      if Over_Limit (Item, Wanted) then
+         return;
+      end if;
+
+      Take (Item, Wanted, New_Buffer, New_Memory, Ok);
+      if not Ok then
+         return;
+      end if;
+      if Map (Item.Logical, New_Memory, 0, Wanted, 0, Where'Access) /= 0 then
+         Give_Back_Buffer (Item, New_Buffer, New_Memory);
+         Ok := False;
+         return;
+      end if;
+
+      --  Zeroed and what the old one held carried over, by the device,
+      --  as the first copy is when it grows; see Reserve_Exact.
+      declare
+         Reset_Buffer : constant Reset_Buffer_Call :=
+           To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+         Start : constant Begin_Call :=
+           To_Begin (Point ("vkBeginCommandBuffer"));
+         Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+         Fill  : constant Fill_Call := To_Fill (Point ("vkCmdFillBuffer"));
+         Copy_Buffer : constant Copy_Buffer_Call :=
+           To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+         Barrier : constant Barrier_Call :=
+           To_Barrier (Point ("vkCmdPipelineBarrier"));
+
+         Began : aliased Command_Begin_Info;
+         Good, Cancelled : Boolean;
+      begin
+         Settle (Item, Good);
+
+         if not Good
+           or else Reset_Buffer = null or else Start = null
+           or else Stop = null or else Fill = null
+           or else Copy_Buffer = null or else Barrier = null
+           or else Reset_Buffer (Item.Buffer, 0) /= 0
+           or else Opened (Item.Buffer, Start, Began'Address) /= 0
+         then
+            Unmap (Item.Logical, New_Memory);
+            Give_Back_Buffer (Item, New_Buffer, New_Memory);
+            Ok := False;
+            return;
+         end if;
+
+         Fill (Item.Buffer, New_Buffer, 0, Wanted, 0);
+
+         if Was_Buffer /= Null_Handle and then Was_Bytes > 0 then
+            declare
+               Wall : aliased Memory_Barrier :=
+                 (Wrote  => Access_Transfer_Write,
+                  Reads  => C.unsigned (Access_Transfer_Read
+                                        + Access_Transfer_Write),
+                  others => <>);
+               Halves : aliased Copy_Region :=
+                 (From => 0, Into => 0, Span => Was_Bytes);
+            begin
+               Barrier (Item.Buffer, Pipeline_Stage_Transfer,
+                        Pipeline_Stage_Transfer, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+               Copy_Buffer (Item.Buffer, Was_Buffer, New_Buffer, 1,
+                            Halves'Address);
+            end;
+         end if;
+
+         if Stop (Item.Buffer) /= 0 then
+            Unmap (Item.Logical, New_Memory);
+            Give_Back_Buffer (Item, New_Buffer, New_Memory);
+            Ok := False;
+            return;
+         end if;
+
+         Submit_And_Wait (Item, Good, Cancelled, null);
+         if not Good then
+            Unmap (Item.Logical, New_Memory);
+            Give_Back_Buffer (Item, New_Buffer, New_Memory);
+            Ok := False;
+            return;
+         end if;
+      end;
+
+      if Was_At /= Null_Handle then
+         Unmap (Item.Logical, Was_Memory);
+      end if;
+      Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
+
+      Item.Second_Buffer := New_Buffer;
+      Item.Second_Memory := New_Memory;
+      Item.Second_At := Where;
+      Item.Second_Bytes := Wanted;
+      Ok := True;
+   end Reserve_Second;
 
    ---------------
    -- Put_Cache --
@@ -8548,6 +8709,37 @@ package body Model_Runner.Platform.Device.Products is
         and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front;
    begin
       Ok := False;
+
+      --  The second copy's rows: halves alone, as a copy-only cache's are.
+      if At_Value >= Second_Copy then
+         declare
+            From : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (At_Value - Second_Copy);
+         begin
+            if not Is_Ready (Item)
+              or else Item.Second_At = Null_Handle
+              or else Values'Length = 0
+              or else (From + Interfaces.Unsigned_64 (Values'Length)) * 2
+                      > Item.Second_Bytes
+            then
+               return;
+            end if;
+
+            declare
+               Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+                 with Import,
+                      Address =>
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Item.Second_At)
+                           + System.Storage_Elements.Integer_Address
+                               (From * 2));
+            begin
+               Halve (Values, Halves);
+            end;
+            Ok := True;
+            return;
+         end;
+      end if;
 
       if not Is_Ready (Item)
         or else Values'Length = 0
@@ -9149,6 +9341,40 @@ package body Model_Runner.Platform.Device.Products is
         Interfaces.Unsigned_64 (Values'Length) * 4;
    begin
       Ok := False;
+
+      --  The second copy's rows, from its halves.
+      if At_Value >= Second_Copy then
+         declare
+            From : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (At_Value - Second_Copy);
+         begin
+            if not Is_Ready (Item)
+              or else Item.Second_At = Null_Handle
+              or else Values'Length = 0
+              or else (From + Interfaces.Unsigned_64 (Values'Length)) * 2
+                      > Item.Second_Bytes
+            then
+               return;
+            end if;
+
+            declare
+               Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+                 with Import,
+                      Address =>
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Item.Second_At)
+                           + System.Storage_Elements.Integer_Address
+                               (From * 2));
+            begin
+               for Index in Values'Range loop
+                  Values (Index) :=
+                    Model_Runner.Numerics.To_Real (Halves (Index));
+               end loop;
+            end;
+            Ok := True;
+            return;
+         end;
+      end if;
 
       --  Rows past the front of a cache kept as its copy and a front are in
       --  the copy alone, and come back from its halves -- the values the
@@ -13179,6 +13405,10 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          for Index in 1 .. Steps.Held loop
+            --  A step of a layer whose pages are in the second copy reads
+            --  and writes that one where it would the first.
+            Item.Use_Second := Steps.Items (Index).Pages_At >= Second_Table;
+
             if Steps.Items (Index).Attends then
                --  The cache the engine holds, the queries where the
                --  activation was written, and this step's own share of the
@@ -13644,6 +13874,7 @@ package body Model_Runner.Platform.Device.Products is
 
             <<Next_Set>>
          end loop;
+         Item.Use_Second := False;
       end;
 
       --  Every product in one command buffer. They read the same activation
@@ -14202,7 +14433,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  A cache in pages, from the step's own fields,
                         --  which Add_Attention carries as it does for the
                         --  exact kernels. Zero shift is a cache in blocks.
-                        Pages_At       => C.unsigned (This.Pages_At),
+                        Pages_At       => C.unsigned (This.Pages_At mod Second_Table),
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position));
 
@@ -14342,7 +14573,7 @@ package body Model_Runner.Platform.Device.Products is
                         Max_Bias   => C.C_float (This.Max_Bias),
                         Table_At   => 0,
                         Sinks_At   => C.unsigned (This.Sinks),
-                        Pages_At   => C.unsigned (This.Pages_At),
+                        Pages_At   => C.unsigned (This.Pages_At mod Second_Table),
                         Page_Shift => C.unsigned (This.Page_Shift));
 
                      Across : constant C.unsigned :=
@@ -14682,7 +14913,7 @@ package body Model_Runner.Platform.Device.Products is
                                 then Item.Copy_Keys_Halves
                                 else 0)),
                         V_Stride  => C.unsigned (This.V_Stride),
-                        Pages_At       => C.unsigned (This.Pages_At),
+                        Pages_At       => C.unsigned (This.Pages_At mod Second_Table),
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position),
                         Src_Stride     => C.unsigned (This.Reads_Stride),
