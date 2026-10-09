@@ -8,19 +8,20 @@ with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 
-with Hostkit.Process;
+with Model_Runner.Processes;
 
 with Http_Client.Clients;
 with Http_Client.Errors;
 
 with Model_Runner.Cancellation;
+with Model_Runner.Agent_Runtime;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.RTF;
-with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Text_Util;
 with Model_Runner.UTF8;
 
@@ -47,7 +48,7 @@ package body Model_Runner.Tools.Builtin is
    --  The tools that take a path in the tree, and of them those that write.
    function File_Tool (Named : String) return Boolean is
      (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
-              | "search_file" | "search_code");
+              | "search_file" | "search_code" | "find");
    function Writes (Named : String) return Boolean is
      (Named in "write_file" | "edit_file");
 
@@ -59,145 +60,24 @@ package body Model_Runner.Tools.Builtin is
    --  tool cannot be described in one place and not the other.
    ---------------------------------------------------------------------------
 
-   package Sc renames Model_Runner.Tools.Schemas;
+   package Rg renames Model_Runner.Tools.Registry;
 
-   --  The file tools, each written once for every runner that offers it.
-   Read_Body : constant String :=
-     Sc.Definition ("read_file", "Read a text file and return its contents, and its revision after them.",
-                    [Sc.Text ("path")]);
-   Write_Body : constant String :=
-     Sc.Definition ("write_file", "Write text to a file, replacing it: for a new file, or one rewritten"
-                    & " whole -- edit_file changes part of one.",
-                    [Sc.Text ("path"), Sc.Text ("content")]);
-   List_Body : constant String :=
-     Sc.Definition ("list_directory", "List the entries of a directory.", [Sc.Text ("path")]);
+   --  The definitions, from the registry: the four pure tools the eval
+   --  offers, and every built-in one.
+   function Definitions_Text return String is
+     (Rg.Offered ([Rg.Facts => True, others => False]));
 
-   --  The tools that change a file in place and read part of one or of a
-   --  tree.
-   Edit_Body : constant String :=
-     Sc.Definition
-       ("edit_file",
-        "Replace one exact passage of a file with new text -- the way to change part of a file"
-        & " without writing it all out. old_text must be in the file exactly once, as it is now;"
-        & " give revision, from read_file, to be refused if the file changed since you read it.",
-        [Sc.Text ("path"), Sc.Text ("old_text"), Sc.Text ("new_text"),
-         Sc.Text ("revision", Required => False)]);
-   Range_Body : constant String :=
-     Sc.Definition
-       ("read_range", "Read lines first_line to last_line of a file, numbered (last_line 0: to the end).",
-        [Sc.Text ("path"), Sc.Whole_Number ("first_line"), Sc.Whole_Number ("last_line", Required => False)]);
-   Search_File_Body : constant String :=
-     Sc.Definition
-       ("search_file", "Find the lines of a file that hold a text, with their numbers.",
-        [Sc.Text ("path"), Sc.Text ("pattern")]);
-   Search_Code_Body : constant String :=
-     Sc.Definition
-       ("search_code", "Find the lines that hold a text in every source file under a folder"
-        & " (path; the whole tree when not given), as path:line.",
-        [Sc.Text ("pattern"), Sc.Text ("path", Required => False)]);
-   Editing_Bodies : constant String :=
-     Edit_Body & ", " & Range_Body & ", " & Search_File_Body & ", " & Search_Code_Body;
-
-   function Definition_Of (Named : String) return String is
-     (if Named = "read_file" then Read_Body
-      elsif Named = "write_file" then Write_Body
-      elsif Named = "list_directory" then List_Body
-      elsif Named = "edit_file" then Edit_Body
-      elsif Named = "read_range" then Range_Body
-      elsif Named = "search_file" then Search_File_Body
-      elsif Named = "search_code" then Search_Code_Body
-      else "");
-
-   Pure_Body : constant String :=
-     Sc.Definition
-       ("calculator", "Evaluate a binary arithmetic operation on two integers.",
-        [Sc.Whole_Number ("a"), Sc.Text ("op", Choices => ["+", "-", "*", "/"]),
-         Sc.Whole_Number ("b")])
-     & ", "
-     & Sc.Definition ("string_length", "Return the number of characters in a string.",
-                      [Sc.Text ("text")])
-     & ", "
-     & Sc.Definition ("reverse_text", "Return a string with its characters reversed.",
-                      [Sc.Text ("text")])
-     & ", "
-     & Sc.Definition
-         ("lookup", "Look up a fact by its key.",
-          [Sc.Text ("key",
-                    Choices => ["capital_of_france", "speed_of_light", "ada_year"])]);
-
-   More_Body : constant String :=
-     Sc.Definition ("base64_encode", "Encode a string as base64.", [Sc.Text ("text")])
-     & ", "
-     & Sc.Definition ("base64_decode", "Decode a base64 string.", [Sc.Text ("text")])
-     & ", "
-     & Sc.Definition ("now", "Return the current local date and time.", Sc.No_Parameters)
-     & ", "
-     & Sc.Definition ("memory_put", "Remember a value under a key for later.",
-                      [Sc.Text ("key"), Sc.Text ("value")])
-     & ", "
-     & Sc.Definition ("memory_get", "Recall the value remembered under a key.",
-                      [Sc.Text ("key")])
-     & ", "
-     & Read_Body & ", " & Write_Body & ", " & List_Body
-     & ", "
-     & Editing_Bodies
-     & ", "
-     & Sc.Definition
-         ("retrieve",
-          "Search a folder of text files for the passages most relevant "
-          & "to a query, ranked.",
-          [Sc.Text ("folder"), Sc.Text ("query")])
-     & ", "
-     & Sc.Definition ("shell", "Run a shell command and return its output.",
-                      [Sc.Text ("command")])
-     & ", "
-     & Sc.Definition ("run_python", "Run Python 3 source and return its output.",
-                      [Sc.Text ("code")])
-     & ", "
-     & Sc.Definition ("http_get", "Fetch a URL over HTTP and return the body.",
-                      [Sc.Text ("url")])
-     & ", "
-     & Sc.Definition ("web_search", "Search the web and return the results page.",
-                      [Sc.Text ("query")])
-     & ", "
-     & Sc.Definition ("sql", "Run a query against a SQLite database file.",
-                      [Sc.Text ("database"), Sc.Text ("query")]);
-
-   Delegate_Body : constant String :=
-     Sc.Definition
-         ("delegate",
-          "Hand a self-contained subtask to a fresh sub-agent that has "
-          & "the same tools and a budget of its own, and get back only its "
-          & "final answer. Use it to keep the detail of a large job out of "
-          & "your own context: describe the whole subtask in one task "
-          & "string, as the sub-agent starts with no memory of this "
-          & "conversation.",
-          [Sc.Text ("task")]);
-
-   Ask_Body : constant String :=
-     Sc.Definition
-         ("ask_user",
-          "Ask the user a question and get back what they type. Use it "
-          & "when the task is ambiguous, a choice is the user's to make, or "
-          & "you need something only the user knows -- not for what a tool "
-          & "or your own reasoning can settle.",
-          [Sc.Text ("question")]);
-
-   Definitions     : constant String := "[" & Pure_Body & "]";
-   All_Definitions : constant String :=
-     "[" & Pure_Body & ", " & More_Body & ", " & Delegate_Body & ", " & Ask_Body & "]";
-
-   function Definitions_Text return String is (Definitions);
-   function All_Definitions_Text return String is (All_Definitions);
+   function All_Definitions_Text return String is
+     (Rg.Offered ([Rg.Project_Graph | Rg.Project_Checks => False, others => True]));
 
    ------------------
    -- Offered_Text --
    ------------------
 
    function Offered_Text (Self : Instance) return String is
-     ("[" & Pure_Body & ", " & More_Body
-      & (if Self.Sub /= null then ", " & Delegate_Body else "")
-      & (if Self.Asker /= null then ", " & Ask_Body else "") & "]");
+     (Rg.Offered
+        (Model_Runner.Agent_Runtime.Run_Capabilities
+           (May_Delegate => Self.Sub /= null, May_Ask => Self.Asker /= null)));
 
    ---------------------------------------------------------------------------
    --  Reading arguments (a walk over the top level of one JSON object)
@@ -1030,19 +910,15 @@ package body Model_Runner.Tools.Builtin is
    function Capture
      (Program : String; Args : GNAT.OS_Lib.Argument_List) return Reply
    is
-      use type GNAT.OS_Lib.String_Access;
       package Tr renames Model_Runner.Tools.Runner;
-      Prog : GNAT.OS_Lib.String_Access :=
-        GNAT.OS_Lib.Locate_Exec_On_Path (Program);
-      Path : GNAT.OS_Lib.String_Access;
-      FD   : GNAT.OS_Lib.File_Descriptor;
-      Words : Hostkit.String_Vectors.Vector;
+      package Pr renames Model_Runner.Processes;
 
       --  The run's own limits, as the task running the call entered them:
       --  its cancellation, and its deadline where that comes before the
       --  tool's own. A process outliving either is stopped with its group.
       Context : constant Tr.Tool_Context := Tr.Entered_Context;
       Allowed : constant Duration := Tr.Time_Left (Context, Tool_Timeout);
+      Asked   : Pr.Request;
 
       procedure Release is
       begin
@@ -1053,7 +929,6 @@ package body Model_Runner.Tools.Builtin is
                GNAT.OS_Lib.Free (Item);
             end;
          end loop;
-         GNAT.OS_Lib.Free (Prog);
       end Release;
 
       function Seconds (Span : Duration) return String is
@@ -1062,59 +937,39 @@ package body Model_Runner.Tools.Builtin is
          return Raw (Raw'First + 1 .. Raw'Last);
       end Seconds;
    begin
-      if Prog = null then
-         Release;
-         return Failure ("'" & Program & "' is not installed on this machine");
-      end if;
       if Tr.Stopped (Context) then
          Release;
          return (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
                  then Halted_By (Tr.Cancelled, "the run was cancelled before '" & Program & "' started")
                  else Halted_By (Tr.Timed_Out, "the run's time ran out before '" & Program & "' started"));
       end if;
+      Asked.Program := U.To_Unbounded_String (Program);
       for A of Args loop
-         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (A.all));
+         Asked.Arguments.Append (U.To_Unbounded_String (A.all));
       end loop;
-
-      GNAT.OS_Lib.Create_Temp_File (FD, Path);
-      GNAT.OS_Lib.Close (FD);
+      Release;
+      Asked.Limit := Duration'Max (0.001, Allowed);
+      Asked.Cancelled := Tr.Stop_Now'Access;
 
       declare
-         Happened : constant Hostkit.Process.Process_Outcome :=
-           Hostkit.Process.Run_Captured
-             (Program     => Prog.all,
-              Arguments   => Words,
-              Stdout_Path => Path.all,
-              Stderr_Path => Path.all,
-              Timeout_Ms  => Natural'Max (1, Natural (Allowed * 1000)),
-              Cancelled   => Tr.Stop_Now'Access,
-              Whole_Group => True);
-         Output : constant Reply :=
-           (if Happened.Started then Read_Capped (Path.all) else Said (""));
-         Gone : Boolean;
+         Ran  : constant Pr.Result := Pr.Run (Asked);
+         Text : constant String := Pr.Told (Ran, "'" & Program & "'");
       begin
-         GNAT.OS_Lib.Delete_File (Path.all, Gone);
-         GNAT.OS_Lib.Free (Path);
-         Release;
-         if not Happened.Started then
-            return Failure ("could not run '" & Program & "'");
-         elsif Happened.Timed_Out
-           and then Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
-         then
+         if not Ran.Started then
+            return Failure ("'" & Program & "' is not installed on this machine, or would not run");
+         elsif Ran.Stopped and then Model_Runner.Cancellation.Is_Cancelled (Context.Cancel) then
             return Halted_By (Tr.Cancelled, "'" & Program & "' was stopped: the run was cancelled");
-         elsif Happened.Timed_Out and then Allowed < Tool_Timeout then
+         elsif Ran.Stopped and then Allowed < Tool_Timeout then
             return Halted_By (Tr.Timed_Out, "'" & Program & "' was stopped when the run's time ran out, after "
                               & Seconds (Allowed) & " seconds");
-         elsif Happened.Timed_Out then
+         elsif Ran.Stopped then
             return Halted_By (Tr.Timed_Out, "'" & Program & "' did not finish within "
                               & Seconds (Tool_Timeout) & " seconds and was stopped");
-         elsif Output.Failed then
-            return Output;
-         elsif Output.Text = "" then
-            return Said ("(the command produced no output)");
-         else
-            return Output;
          end if;
+         --  A failure with its exit status and what it said on its
+         --  standard error; an answer as it printed it.
+         return (Length => Text'Length, Failed => not Pr.Succeeded (Ran), Changed => False,
+                 Halted => Tr.Answered, Truncated => Ran.Truncated, Tokens => 0, Text => Text);
       end;
    end Capture;
 
@@ -1125,8 +980,11 @@ package body Model_Runner.Tools.Builtin is
    function Confinement (Named, Args : String) return String is
       package Pm renames Model_Runner.Framework.Permissions;
       package Env renames Ada.Environment_Variables;
-      Have : Boolean;
-      Path : constant String := Text_Argument (Args, "path", Have);
+      Have  : Boolean;
+      Given : constant String := Text_Argument (Args, "path", Have);
+      --  A search of no path is of the whole tree.
+      Path  : constant String :=
+        (if not Have and then Named in "find" | "search_code" then "." else Given);
    begin
       if not Env.Exists (Pm.Agent_Root_Variable) then
          return "";
@@ -1174,8 +1032,11 @@ package body Model_Runner.Tools.Builtin is
    is
       package Pm renames Model_Runner.Framework.Permissions;
       package Env renames Ada.Environment_Variables;
-      Have : Boolean;
-      Path : constant String := Text_Argument (Args, "path", Have);
+      Have  : Boolean;
+      Given : constant String := Text_Argument (Args, "path", Have);
+      --  A search of no path is of the whole tree.
+      Path  : constant String :=
+        (if not Have and then Named in "find" | "search_code" then "." else Given);
    begin
       if not Env.Exists (Pm.Agent_Root_Variable) then
          return Pm.Path_Allowed;
@@ -1447,9 +1308,42 @@ package body Model_Runner.Tools.Builtin is
          return Failure ("could not list the directory");
    end List_Directory;
 
+   --  find, by its kind: text in a file or a tree here; what asks a
+   --  project's graph only where a project's work runs it.
+   function Find (Args : String) return Reply is
+      Have_K, Have_Q, Have_P : Boolean;
+      Kind  : constant String := Text_Argument (Args, "kind", Have_K);
+      Query : constant String := Text_Argument (Args, "query", Have_Q);
+      Path  : constant String := Text_Argument (Args, "path", Have_P);
+      Where : constant String := (if Have_P and then Path /= "" then Path else ".");
+   begin
+      if not (Have_K and then Have_Q) then
+         return Failure ("find needs a kind and a query");
+      elsif Rg.Graph_Finding (Kind) then
+         return Failure ("find " & Kind & " asks a project's graph, which is not here; find text searches");
+      elsif Kind /= "text" then
+         return Failure ("find takes kind text" & " -- not " & Kind);
+      elsif Ada.Directories.Exists (Where)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Where), Ada.Directories.Ordinary_File)
+      then
+         return As_Reply (Model_Runner.Tools.Editing.Search_File (Where, Query));
+      end if;
+      return As_Reply (Model_Runner.Tools.Editing.Search_Code (Where, Query));
+   end Find;
+
+   --  A file read whole, or by its lines where it is asked for some.
+   function Read_Any (Args : String) return Reply is
+      First : Long_Long_Integer;
+      Have  : Boolean;
+   begin
+      Integer_Argument (Args, "first_line", First, Have);
+      return (if Have then Read_Range (Args) else Read_File (Args));
+   end Read_Any;
+
    --  A tool that takes a path in the tree, answered.
    function File_Answer (Named, Args : String) return Reply is
-     (if Named = "read_file" then Read_File (Args)
+     (if Named = "read_file" then Read_Any (Args)
+      elsif Named = "find" then Find (Args)
       elsif Named = "write_file" then Write_File (Args)
       elsif Named = "list_directory" then List_Directory (Args)
       elsif Named = "edit_file" then Edit_File (Args)
@@ -1599,8 +1493,17 @@ package body Model_Runner.Tools.Builtin is
    function Delegate
      (Self : in out Instance; Args : String) return Reply
    is
-      Have : Boolean;
-      Job  : constant String := Text_Argument (Args, "task", Have);
+      package Rt renames Model_Runner.Agent_Runtime;
+      Have  : Boolean;
+      --  The contract a /work helper is given: task, role, need, the files
+      --  it starts from and must write, and when it is done -- put to it in
+      --  the same brief, and its outputs checked after.
+      Asked : constant Rt.Contract := Rt.Contract_Of (Args, Have);
+      Job   : constant String :=
+        (if U.Length (Asked.Role) = 0 then Rt.Brief (Asked)
+         else "Your role: " & U.To_String (Asked.Role) & ASCII.LF & Rt.Brief (Asked));
+      Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Asked);
+      Before  : constant Rt.Paths.Vector := Rt.Prints (Outputs);
    begin
       if not Have then
          return Failure ("delegate needs a task string");
@@ -1639,6 +1542,15 @@ package body Model_Runner.Tools.Builtin is
                if Last < Buffer'First then
                   return Spent (Failure ("the sub-agent ended without an answer, after " & Took));
                end if;
+               --  What it was to write and did not: failed, whatever it said.
+               declare
+                  Missing : constant String := Rt.Unwritten (Outputs, Before);
+               begin
+                  if Missing /= "" then
+                     return Spent (Failure ("the sub-agent did not write " & Missing & ", which it was to"
+                                            & ASCII.LF & Buffer (Buffer'First .. Last)));
+                  end if;
+               end;
                return Spent (Said (Buffer (Buffer'First .. Last)));
             when Cancelled =>
                return Spent (Halted_By (Tr.Cancelled, "the sub-agent was stopped: the run was cancelled"));
@@ -2210,17 +2122,7 @@ package body Model_Runner.Tools.Builtin is
    is
       pragma Unreferenced (Self);
    begin
-      if Named = "now" then
-         return Model_Runner.Tools.Runner.Varies;
-      elsif Named in "calculator" | "string_length" | "reverse_text" | "lookup"
-                   | "base64_encode" | "base64_decode" | "memory_get"
-                   | "read_file" | "list_directory" | "http_get" | "web_search"
-                   | "read_range" | "search_file" | "search_code"
-                   | "retrieve" | "ask_user"
-      then
-         return Model_Runner.Tools.Runner.Reads;
-      end if;
-      return Model_Runner.Tools.Runner.Changes;
+      return Rg.Kind_Of (Named);
    end Kind;
 
    overriding function Parallel_Safe
@@ -2233,7 +2135,7 @@ package body Model_Runner.Tools.Builtin is
       end if;
       return Named in "calculator" | "string_length" | "reverse_text"
           | "lookup" | "base64_encode" | "base64_decode" | "now"
-          | "read_file" | "list_directory" | "read_range" | "search_file" | "search_code"
+          | "read_file" | "list_directory" | "read_range" | "search_file" | "search_code" | "find"
           | "http_get" | "web_search"
         or else (Named = "retrieve" and then Self.Embed = null);
    end Parallel_Safe;

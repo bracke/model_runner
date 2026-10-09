@@ -530,7 +530,10 @@ package body Model_Runner.Agent is
                (Cancel      => Cancel,
                 Deadline    => Deadline,
                 Tokens_Left => (if Max_Total_Tokens = 0 then Natural'Last
-                                else Max_Total_Tokens - Spent)));
+                                else Max_Total_Tokens - Spent),
+                --  As deep as the runner was made for: a helper's runner
+                --  is handed its depth before its loop starts.
+                Depth       => Model_Runner.Tools.Runner.Context_Of (Executor).Depth));
 
             --  Decide, run and report the turn's calls. The decisions --
             --  dedup and approval -- and every result appended stay on this

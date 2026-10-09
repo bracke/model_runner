@@ -20,7 +20,8 @@ with Model_Runner.Grammar;
 with Model_Runner.Schema;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
-with Hostkit.Process;
+
+with Model_Runner.Processes;
 
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
@@ -37,9 +38,9 @@ with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 with Model_Runner.CLI.Pictures;
 with Model_Runner.Agent;
+with Model_Runner.Agent_Runtime;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Runner;
-with GNAT.OS_Lib;
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Execute.Acquisition;
@@ -468,6 +469,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
    protected type Session_Leaser (Count : Positive) is
       procedure Open (Ready : Natural);
       entry Acquire (Slot : out Positive);
+      --  A free session, or nought where none is: a helper's helper does
+      --  not wait on a session its own parent holds.
+      procedure Try_Acquire (Slot : out Natural);
       procedure Release (Slot : Positive);
    private
       Available  : Availability (1 .. Count) := [others => False];
@@ -495,6 +499,19 @@ package body Model_Runner.CLI.Execute.Run_Command is
             end if;
          end loop;
       end Acquire;
+
+      procedure Try_Acquire (Slot : out Natural) is
+      begin
+         Slot := 0;
+         for I in Available'Range loop
+            if Available (I) then
+               Available (I) := False;
+               Free_Count    := Free_Count - 1;
+               Slot          := I;
+               exit;
+            end if;
+         end loop;
+      end Try_Acquire;
 
       procedure Release (Slot : Positive) is
       begin
@@ -531,6 +548,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
         --  The system prompt each sub-agent is opened with, read from a file
         --  where the caller gave one; null for the built-in one below.
         System_Text : Opt.Text_Access := null;
+
+        --  How deep helpers may go: a helper below this depth is given a
+        --  delegator of its own, as a /work agent is where its permissions
+        --  let it make children.
+        Max_Depth : Natural := 1;
      end record;
 
    --  Two subtasks may overlap when the pool holds more than one open
@@ -574,12 +596,12 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Seconds : constant Duration :=
         (if Timed then Tr.Time_Left (Context, Duration (86_400)) else 0.0);
 
+      --  What a helper is told of itself and how to work and report: the
+      --  same rules a /work helper is given, where the caller named no file.
       System_Prompt : constant String :=
         (if Self.System_Text /= null then Self.System_Text.all
-         else "You are a sub-agent handed one self-contained task. Use the "
-         & "tools to complete it, then reply with a direct, complete answer "
-         & "that stands on its own -- the caller sees only your final answer, "
-         & "not your steps, and you keep no memory of it once you answer.");
+         else Model_Runner.Agent_Runtime.Helper_Opening ("") & ASCII.LF & ASCII.LF
+              & Model_Runner.Agent_Runtime.Helper_Rules);
    begin
       Last   := Result'First - 1;
       Status := E.Success;
@@ -597,8 +619,26 @@ package body Model_Runner.CLI.Execute.Run_Command is
          return;
       end if;
 
-      --  Take a session of our own; wait if every one is busy.
-      Self.Leases.Acquire (Slot);
+      --  Take a session of our own: the run's own helper waits for one; a
+      --  helper's helper takes one free or is not made, for the session it
+      --  would wait on may be its parent's.
+      if Context.Depth = 0 then
+         Self.Leases.Acquire (Slot);
+      else
+         declare
+            Got : Natural;
+         begin
+            Self.Leases.Try_Acquire (Got);
+            if Got = 0 then
+               Ended := (State  => Bi.Failed,
+                         Reason => Ada.Strings.Unbounded.To_Unbounded_String
+                                     ("no session was free for a helper this deep"),
+                         others => <>);
+               return;
+            end if;
+            Slot := Got;
+         end;
+      end if;
 
       declare
          Sub_Msgs   : Conv.History;
@@ -607,8 +647,13 @@ package body Model_Runner.CLI.Execute.Run_Command is
          Loop_Out   : Model_Runner.Agent.Outcome;
          Cond       : E.Error_Info;
       begin
-         --  Offered what its runner can run: it has no delegator and no one
-         --  to ask, so neither delegate nor ask_user is put to it.
+         --  Its depth, and a delegator of its own where helpers may go deeper
+         --  than it -- the same bound for every helper, not whether one was
+         --  made; then offered what its runner can run.
+         Sub_Runner.Set_Context ((Depth => Context.Depth + 1, others => <>));
+         if Context.Depth + 1 < Self.Max_Depth then
+            Sub_Runner.Use_Delegator (Self'Unchecked_Access);
+         end if;
          Model_Runner.Tools.Read (Sub_Tools, Sub_Runner.Offered_Text, Cond);
          if E.Is_Error (Cond) then
             Status := Cond;
@@ -623,9 +668,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                   Status := Cond;
                else
                   --  Clear the session so the task starts from nothing, no
-                  --  earlier subtask's state leaking in. Sub_Runner is left
-                  --  with no delegator, so it declines a delegate call:
-                  --  delegation goes one level deep and no further.
+                  --  earlier subtask's state leaking in.
                   L.Reset (Self.Sessions (Slot));
                   Model_Runner.Agent.Run
                     (Source           => Self.Src.all,
@@ -725,138 +768,66 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info)
    is
-      use type GNAT.OS_Lib.String_Access;
-      Program : GNAT.OS_Lib.String_Access :=
-        GNAT.OS_Lib.Locate_Exec_On_Path (Self.Command.all);
-      Args    : GNAT.OS_Lib.Argument_List :=
-        [1 => new String'(Named), 2 => new String'(Arguments)];
-      Handle  : GNAT.OS_Lib.File_Descriptor;
-      Path    : GNAT.OS_Lib.String_Access;
-      Ran     : Boolean := False;
-      Code    : Integer := -1;
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Ada.Real_Time.Time;
+      use type Tr.Answer_Kind;
+      Context : constant Tr.Tool_Context := Tr.Context_Of (Self);
+      Asked   : Model_Runner.Processes.Request;
 
-      --  Put a short text into the result, in place of an answer.
-      procedure Note (Text : String) is
+      --  Put a text into the result, as much as fits, said where it is cut.
+      procedure Put (Text : String) is
+         Cut  : constant String :=
+           ASCII.LF & "(the tool command's output was cut here: it printed more than a tool's answer holds)";
+         Fits : constant Boolean := Text'Length <= Result'Length;
+         Take : constant Natural :=
+           (if Fits then Text'Length else Natural'Max (0, Result'Length - Cut'Length));
       begin
-         Last := 0;
-         if Text'Length <= Result'Length then
-            Result (Result'First .. Result'First + Text'Length - 1) := Text;
-            Last := Result'First + Text'Length - 1;
+         Result (Result'First .. Result'First + Take - 1) := Text (Text'First .. Text'First + Take - 1);
+         Last := Result'First + Take - 1;
+         if not Fits and then Result'Length >= Cut'Length then
+            Result (Last + 1 .. Last + Cut'Length) := Cut;
+            Last := Last + Cut'Length;
+            Outcome.Truncated := True;
          end if;
-      end Note;
+      end Put;
    begin
       Status := Model_Runner.Errors.Success;
-      Outcome := Model_Runner.Tools.Runner.Done;
-      Last := 0;
+      Outcome := Tr.Done;
+      Last := Result'First - 1;
 
-      if Program = null then
-         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
-         Note ("error: tool command not found on the path: "
-               & Self.Command.all);
-         for A of Args loop
-            GNAT.OS_Lib.Free (A);
-         end loop;
-         return;
-      end if;
+      --  The program, given the function's name and its arguments, run
+      --  within the run's limits -- its cancellation, and its deadline
+      --  where it has one -- with its group stopped at either.
+      Asked.Program := Ada.Strings.Unbounded.To_Unbounded_String (Self.Command.all);
+      Asked.Arguments.Append (Ada.Strings.Unbounded.To_Unbounded_String (Named));
+      Asked.Arguments.Append (Ada.Strings.Unbounded.To_Unbounded_String (Arguments));
+      Asked.Limit :=
+        (if Context.Deadline = Ada.Real_Time.Time_Last then 0.0
+         else Duration'Max (0.001, Tr.Time_Left (Context, Duration (86_400))));
+      Tr.Enter (Context);
+      Asked.Cancelled := Tr.Stop_Now'Access;
 
-      GNAT.OS_Lib.Create_Temp_File (Handle, Path);
-      GNAT.OS_Lib.Close (Handle);
-
-      --  Within the run's limits: its cancellation, and its deadline where
-      --  it has one. A program that hangs is stopped with its group then,
-      --  where it used to hang the run with it.
       declare
-         package Tr renames Model_Runner.Tools.Runner;
-         use type Ada.Real_Time.Time;
-         Context : constant Tr.Tool_Context := Tr.Context_Of (Self);
-         Words   : Hostkit.String_Vectors.Vector;
-         Happened : Hostkit.Process.Process_Outcome;
+         Ran : constant Model_Runner.Processes.Result := Model_Runner.Processes.Run (Asked);
       begin
-         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Named));
-         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Arguments));
-         Tr.Enter (Context);
-         Happened := Hostkit.Process.Run_Captured
-           (Program     => Program.all,
-            Arguments   => Words,
-            Stdout_Path => Path.all,
-            Timeout_Ms  =>
-              (if Context.Deadline = Ada.Real_Time.Time_Last then 0
-               else Natural'Max (1, Natural (Tr.Time_Left (Context, Duration (86_400)) * 1000))),
-            Cancelled   => Tr.Stop_Now'Access,
-            Whole_Group => True);
-         Ran := Happened.Started and then not Happened.Timed_Out;
-         Code := Happened.Exit_Status;
-         if Happened.Timed_Out then
+         if not Ran.Started then
+            Outcome.Answer := Tr.Failed;
+            Put ("error: tool command not found on the path, or it would not run: " & Self.Command.all);
+         elsif Ran.Stopped then
             Outcome.Answer :=
-              (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
-               then Tr.Cancelled else Tr.Timed_Out);
-            Note ("error: the tool command was stopped: "
-                  & (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
-                     then "the run was cancelled" else "the run's time ran out"));
+              (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel) then Tr.Cancelled else Tr.Timed_Out);
+            Put ("error: the tool command was stopped: "
+                 & (if Outcome.Answer = Tr.Cancelled then "the run was cancelled" else "the run's time ran out"));
+         else
+            --  Its exit status and what it said on its standard error where
+            --  it failed -- what the model needs to put it right.
+            if not Model_Runner.Processes.Succeeded (Ran) then
+               Outcome.Answer := Tr.Failed;
+            end if;
+            Outcome.Truncated := Ran.Truncated;
+            Put (Model_Runner.Processes.Told (Ran, "the tool command"));
          end if;
       end;
-
-      if Ran and then Code = 0 then
-         declare
-            File  : Ada.Text_IO.File_Type;
-            --  Room kept at the end for saying the output was cut.
-            Cut   : constant String := ASCII.LF & "(the tool command's output was cut here: it printed more"
-              & " than a tool's answer holds)";
-            Room  : constant Natural := Result'Last - Cut'Length;
-            Fill  : Natural := Result'First - 1;
-            First : Boolean := True;
-         begin
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path.all);
-            while not Ada.Text_IO.End_Of_File (File) loop
-               declare
-                  Line : constant String := Ada.Text_IO.Get_Line (File);
-                  Gap  : constant Natural := (if First then 0 else 1);
-               begin
-                  --  Past what fits: said, not dropped without a word.
-                  if Fill + Gap + Line'Length > Room then
-                     Result (Fill + 1 .. Fill + Cut'Length) := Cut;
-                     Fill := Fill + Cut'Length;
-                     Outcome.Truncated := True;
-                     exit;
-                  end if;
-                  if not First then
-                     Fill := Fill + 1;
-                     Result (Fill) := ASCII.LF;
-                  end if;
-                  Result (Fill + 1 .. Fill + Line'Length) := Line;
-                  Fill := Fill + Line'Length;
-                  First := False;
-               end;
-            end loop;
-            Ada.Text_IO.Close (File);
-
-            if Fill >= Result'First then
-               Last := Fill;
-            else
-               --  The program said nothing. The model still needs a turn,
-               --  and an empty one is not a valid message.
-               Note ("(the tool command produced no output)");
-            end if;
-         exception
-            when others =>
-               Outcome.Answer := Model_Runner.Tools.Runner.Failed;
-               Note ("error: could not read the tool command's output");
-         end;
-      elsif Model_Runner.Tools.Runner."=" (Outcome.Answer, Model_Runner.Tools.Runner.Answered) then
-         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
-         Note ("error: the tool command failed");
-      end if;
-
-      declare
-         Gone : Boolean;
-      begin
-         GNAT.OS_Lib.Delete_File (Path.all, Gone);
-      end;
-      GNAT.OS_Lib.Free (Path);
-      GNAT.OS_Lib.Free (Program);
-      for A of Args loop
-         GNAT.OS_Lib.Free (A);
-      end loop;
    end Run;
 
    ---------------------------------------------------------------------------

@@ -135,6 +135,21 @@ package Model_Runner.CLI.Project_Commands is
    --  @return Whether it runs mid-message.
    function Runs_Mid_Message (Word : String) return Boolean;
 
+   --  The project's revision here, or nought where there is no project.
+   --
+   --  @return The revision.
+   function Project_Revision return Natural;
+
+   --  What changed in the project here since a revision, as a note to put
+   --  before the session model's next turn -- the tasks moved, the runs
+   --  made, the files a run changed -- so a conversation about the project
+   --  does not go on from what it no longer is. Not the project's state:
+   --  the store is that; this says only that it moved, and how.
+   --
+   --  @param Seen The revision the conversation last saw; moved to now.
+   --  @return The note, or "" where nothing changed.
+   function Changes_Since (Seen : in out Natural) return String;
+
    --  One help line for each command.
    --
    --  @param Screen Where to write.

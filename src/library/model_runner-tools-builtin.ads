@@ -38,14 +38,6 @@ package Model_Runner.Tools.Builtin is
    --  @return A JSON array of function definitions.
    function All_Definitions_Text return String;
 
-   --  One file tool's definition -- read_file, write_file, list_directory,
-   --  edit_file, read_range, search_file, search_code -- as every runner
-   --  offering it describes it.
-   --
-   --  @param Named The tool.
-   --  @return Its definition; "" for another name.
-   function Definition_Of (Named : String) return String;
-
    --  Something that turns a text into one vector, for the retrieve tool's
    --  semantic ranking. A caller that has a model loaded supplies one (see
    --  Use_Embedder); with it, retrieve ranks a folder's passages by how close

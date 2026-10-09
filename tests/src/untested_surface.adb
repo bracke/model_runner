@@ -140,7 +140,6 @@ package body Untested_Surface is
          | "Do_Embed"
          | "Free_Reals"
          | "Free_Text"
-         | "Read_File"
          | "Read_Standard_Input"
          | "Say_Device_Room"
          | "Do_Run"

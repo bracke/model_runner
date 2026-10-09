@@ -267,6 +267,7 @@ package Model_Runner.Framework.Stores is
    --  @param Number The number, from 1.
    --  @param Status Framework_Identifier_Invalid when the namespace and key
    --    do not make an identifier.
+
    procedure Allocate_Number
      (Item      : Store;
       Change    : in out Transaction;
@@ -274,6 +275,14 @@ package Model_Runner.Framework.Stores is
       Key       : String;
       Number    : out Natural;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The last number a namespace handed out, without handing out another:
+   --  nought where it has handed out none.
+   --
+   --  @param Item The store.
+   --  @param Namespace The namespace, as EVT.
+   --  @return The number.
+   function Last_Number (Item : Store; Namespace : String) return Natural;
 
    --  The identifier of a transaction: TXN- and nine digits, handed out
    --  the first time it is asked for and the same afterwards, until the

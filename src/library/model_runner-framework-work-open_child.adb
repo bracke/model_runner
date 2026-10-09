@@ -114,8 +114,7 @@ begin
    begin
       Framework.Context.Build_Brief
         (Host.Item.all, To_String (Host.Task_Id), Host.Model,
-         "You are helping an agent with one part of its task, as its " & Named
-         & ". You cannot see its conversation, and it will see only your report.",
+         Model_Runner.Agent_Runtime.Helper_Opening (Named),
          Brief, Made, Read, Instructions => Child_Instructions & Child_Allowed);
       if E.Is_Ok (Read) then
          Framework.Context.Keep (Host.Item.all, Change, Made, Read);

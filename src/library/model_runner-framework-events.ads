@@ -127,6 +127,14 @@ package Model_Runner.Framework.Events is
       Id      : out Ada.Strings.Unbounded.Unbounded_String;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  The project's revision: the number of the last event, which every
+   --  change of the project's state writes one of. Two readings that agree
+   --  saw the same state; a later one that is higher saw it move.
+   --
+   --  @param Item The store.
+   --  @return The revision; nought before any event.
+   function Revision (Item : Stores.Store) return Natural;
+
    --  The committed events numbered after a point, in order.
    --
    --  @param Item The store.

@@ -361,6 +361,11 @@ package Model_Runner.CLI.Options is
       --  that many worker tasks.
       Max_Parallel : Natural := 1;
 
+      --  How deep helpers may go: a helper's helper is depth two. One, the
+      --  default, lets the agent make helpers that make none; nought makes
+      --  none at all.
+      Delegate_Depth : Natural := 1;
+
       --  Whether to ask before each tool call the agent would run. With it,
       --  the program prints the call and waits on standard input: a line
       --  starting y runs it, n declines it and tells the model, and q or an

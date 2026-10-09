@@ -38,6 +38,15 @@ package body Model_Runner.Framework.Events is
       return Result;
    end Kind_Name;
 
+   --------------
+   -- Revision --
+   --------------
+
+   function Revision (Item : Stores.Store) return Natural is
+   begin
+      return Stores.Last_Number (Item, "EVT");
+   end Revision;
+
    ----------
    -- Emit --
    ----------

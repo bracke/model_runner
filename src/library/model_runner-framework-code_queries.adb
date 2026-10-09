@@ -5,6 +5,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Framework.Traceability;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Schemas;
 
 package body Model_Runner.Framework.Code_Queries is
 
@@ -220,5 +221,30 @@ package body Model_Runner.Framework.Code_Queries is
               then "nothing in the project's graph for " & Given
               else To_String (Said));
    end Answer;
+
+   ----------
+   -- Find --
+   ----------
+
+   function Find
+     (Store  : Stores.Store;
+      Kind   : String;
+      Query  : String;
+      Failed : out Boolean) return String
+   is
+      package Sc renames Model_Runner.Tools.Schemas;
+      Named : constant String :=
+        (if Kind = "symbol" then "find_symbol" elsif Kind = "references" then "find_references"
+         elsif Kind = "uses" then "dependencies" elsif Kind = "used_by" then "dependents"
+         elsif Kind = "impact" then "impact" else "");
+      Key   : constant String :=
+        (if Kind in "symbol" | "references" then "name" elsif Kind = "impact" then "target" else "unit");
+   begin
+      if Named = "" then
+         Failed := True;
+         return "error: find takes kind symbol, references, uses, used_by, impact or text -- not " & Kind;
+      end if;
+      return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed);
+   end Find;
 
 end Model_Runner.Framework.Code_Queries;

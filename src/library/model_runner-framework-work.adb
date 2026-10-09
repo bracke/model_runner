@@ -6,6 +6,7 @@ with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
+with Model_Runner.Agent_Runtime;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
@@ -922,18 +923,10 @@ package body Model_Runner.Framework.Work is
    -- Child_Instructions --
    ------------------------
 
+   --  How a helper works and reports: the rules every helper is given,
+   --  run's and /work's alike.
    function Child_Instructions return String
-   is ("## What to do" & ASCII.LF
-       & "Do what you are asked, with the tools you have, and nothing more."
-       & " Paths are relative to the project. Only an edit_file or write_file call"
-       & " changes a file, and only if you were asked to change one." & ASCII.LF & ASCII.LF
-       & "When you are done, report in these lines:" & ASCII.LF & ASCII.LF
-       & "status: done" & ASCII.LF
-       & "summary: one line on what you found or did" & ASCII.LF
-       & "findings: what you were asked for, in as many lines as it needs"
-       & ASCII.LF & ASCII.LF
-       & "If you could not do it, the status is failed and the summary says"
-       & " why. Add changed_files: for any file you wrote." & ASCII.LF);
+   is (Model_Runner.Agent_Runtime.Helper_Rules);
 
    -------------
    -- Current --

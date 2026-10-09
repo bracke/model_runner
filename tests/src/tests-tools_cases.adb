@@ -21,6 +21,9 @@ with Model_Runner.Grammar;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Processes;
+with Model_Runner.Agent_Runtime;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
@@ -643,7 +646,7 @@ package body Tests.Tools_Cases is
       --  A child that ran out of steps did not do the task, whatever it
       --  said on the way; what it generated is the caller's spent.
       Delegator.Ending := Builtin.Exhausted;
-      Runner.Set_Context ((Cancel => null, Deadline => Ada.Real_Time.Time_Last, Tokens_Left => 100));
+      Runner.Set_Context ((Cancel => null, Deadline => Ada.Real_Time.Time_Last, Tokens_Left => 100, Depth => 0));
       Runner.Run ("delegate", "{""task"":""count the stars""}", Room, Last, Ended, Status);
       Assert (Ended.Answer = Tr.Failed and then Ended.Tokens = 40
               and then Ada.Strings.Fixed.Index (Room (1 .. Last), "stopped before answering: step limit") > 0,
@@ -785,6 +788,132 @@ package body Tests.Tools_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Files_Are_Edited_In_Part;
 
+   --  One runtime, configured two ways: what a run's agent and a project's
+   --  are offered comes from one registry by their capabilities, and a call
+   --  is let through by the same; a helper is asked by one contract and its
+   --  outputs checked by one check; a program's failure is said with its
+   --  exit status and what it wrote to its standard error.
+   procedure One_Runtime_For_Every_Agent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Rg renames Model_Runner.Tools.Registry;
+      package Rt renames Model_Runner.Agent_Runtime;
+      package Pr renames Model_Runner.Processes;
+      use type Model_Runner.Tools.Runner.Call_Kind;
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+
+      Reading : constant Rg.Capabilities := [Rg.Read_Files => True, others => False];
+      Working : constant Rg.Capabilities :=
+        [Rg.Read_Files | Rg.Write_Files | Rg.Project_Graph | Rg.Project_Checks => True, others => False];
+   begin
+      --  Offered by capability: reading alone is offered read_file,
+      --  list_directory and find -- find by text only, with no graph -- and
+      --  nothing that writes; a project's agent is offered the graph's
+      --  kinds, the checks, and the writes.
+      Assert (Has (Rg.Offered (Reading), """read_file""") and then Has (Rg.Offered (Reading), """find""")
+              and then not Has (Rg.Offered (Reading), """edit_file""")
+              and then not Has (Rg.Offered (Reading), """references""")
+              and then not Has (Rg.Offered (Reading), """read_range"""),
+              "a reading agent was offered what it cannot do, or a tool find took over");
+      Assert (Has (Rg.Offered (Working), """references""") and then Has (Rg.Offered (Working), """run_checks""")
+              and then Has (Rg.Offered (Working), """edit_file""")
+              and then not Has (Rg.Offered (Working), """delegate"""),
+              "a project's agent was not offered the graph, the checks and the writes, or was offered a helper");
+      --  Let through by the same: a known tool whose capability it has,
+      --  and a tool find took over still runs by name.
+      Assert (Rg.Allows (Reading, "read_file") and then Rg.Allows (Reading, "search_code")
+              and then not Rg.Allows (Reading, "write_file") and then not Rg.Allows (Working, "shell")
+              and then not Rg.Allows (Working, "no_such_tool"),
+              "a call was let through against the capabilities that chose the offer");
+      Assert (Rg.Kind_Of ("find") = Model_Runner.Tools.Runner.Reads
+              and then Rg.Kind_Of ("edit_file") = Model_Runner.Tools.Runner.Changes
+              and then Rg.Kind_Of ("now") = Model_Runner.Tools.Runner.Varies,
+              "a tool's kind was not the registry's");
+
+      --  One contract: the brief says each part as what it is, and the
+      --  outputs are checked by what they hold.
+      declare
+         Found   : Boolean;
+         Asked   : constant Rt.Contract :=
+           Rt.Contract_Of ("{""task"": ""write the notes"", ""outputs"": ""obj/rt_a.txt, obj/rt_b.txt"","
+                           & " ""acceptance"": ""both exist""}", Found);
+         Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Asked);
+         Before  : Rt.Paths.Vector;
+         F       : Ada.Text_IO.File_Type;
+      begin
+         Assert (Found and then Has (Rt.Brief (Asked), "write the notes")
+                 and then Has (Rt.Brief (Asked), "Write: obj/rt_a.txt")
+                 and then Has (Rt.Brief (Asked), "Done when: both exist")
+                 and then Natural (Outputs.Length) = 2,
+                 "a helper's contract was not briefed as what it is: " & Rt.Brief (Asked));
+         if Ada.Directories.Exists ("obj/rt_a.txt") then
+            Ada.Directories.Delete_File ("obj/rt_a.txt");
+         end if;
+         if Ada.Directories.Exists ("obj/rt_b.txt") then
+            Ada.Directories.Delete_File ("obj/rt_b.txt");
+         end if;
+         Before := Rt.Prints (Outputs);
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, "obj/rt_a.txt");
+         Ada.Text_IO.Put_Line (F, "written");
+         Ada.Text_IO.Close (F);
+         Assert (Rt.Unwritten (Outputs, Before) = "obj/rt_b.txt",
+                 "an output not written was not named, or a written one was: " & Rt.Unwritten (Outputs, Before));
+         Ada.Directories.Delete_File ("obj/rt_a.txt");
+         Assert (Has (Rt.Helper_Rules, "status: done") and then Has (Rt.Helper_Opening ("reviewer"), "as its reviewer"),
+                 "a helper was not told how to work and report");
+      end;
+
+      --  A program's failure, said with what the model needs to put it
+      --  right; its success as it printed it; a long run stopped.
+      declare
+         Asked : Pr.Request;
+         Ran   : Pr.Result;
+      begin
+         Asked.Program := Ada.Strings.Unbounded.To_Unbounded_String ("sh");
+         Asked.Arguments.Append (Ada.Strings.Unbounded.To_Unbounded_String ("-c"));
+         Asked.Arguments.Append
+           (Ada.Strings.Unbounded.To_Unbounded_String ("echo out; echo 'calc.adb:4: bad' >&2; exit 3"));
+         Ran := Pr.Run (Asked);
+         Assert (Ran.Started and then Ran.Exit_Status = 3 and then not Pr.Succeeded (Ran)
+                 and then Has (Pr.Told (Ran, "the tool command"), "exit status 3")
+                 and then Has (Pr.Told (Ran, "the tool command"), "stderr:")
+                 and then Has (Pr.Told (Ran, "the tool command"), "calc.adb:4: bad"),
+                 "a failing program's exit status and standard error were not said: " & Pr.Told (Ran, "it"));
+         Asked.Arguments.Replace_Element (2, Ada.Strings.Unbounded.To_Unbounded_String ("echo fine"));
+         Ran := Pr.Run (Asked);
+         Assert (Pr.Succeeded (Ran) and then Has (Pr.Told (Ran, "it"), "fine")
+                 and then not Has (Pr.Told (Ran, "it"), "error"),
+                 "a program that succeeded was not said as its output");
+         Asked.Arguments.Replace_Element (2, Ada.Strings.Unbounded.To_Unbounded_String ("sleep 5"));
+         Asked.Limit := 0.3;
+         Ran := Pr.Run (Asked);
+         Assert (Ran.Started and then Ran.Stopped, "a program past its limit was not stopped");
+         Asked.Program := Ada.Strings.Unbounded.To_Unbounded_String ("no-such-program-anywhere");
+         Ran := Pr.Run (Asked);
+         Assert (not Ran.Started and then Has (Pr.Told (Ran, "it"), "could not be run"),
+                 "a program not there was not said to be");
+      end;
+
+      --  find, here with no project: text in a file and in a tree; what
+      --  asks a graph is said to need one.
+      declare
+         Runner : Builtin.Instance;
+         Room   : String (1 .. Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Runner.Run ("find", "{""kind"": ""text"", ""query"": ""package Model_Runner.Tools.Registry"","
+                     & " ""path"": ""../src/library""}", Room, Last, Status);
+         Assert (Has (Room (1 .. Last), "model_runner-tools-registry.ads:"),
+                 "find text did not find a line in a tree: " & Room (1 .. Natural'Min (Last, 300)));
+         Runner.Run ("find", "{""kind"": ""symbol"", ""query"": ""Run""}", Room, Last, Status);
+         Assert (Has (Room (1 .. Last), "error:") and then Has (Room (1 .. Last), "graph"),
+                 "find symbol with no project did not say it needs one");
+      end;
+   end One_Runtime_For_Every_Agent;
+
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -843,8 +972,8 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 24,
-                 "the full set is not twenty-four tools");
+         Assert (Tools.Count (All_Defs) = 22,
+                 "the full set is not twenty-two tools");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");
@@ -1991,6 +2120,10 @@ package body Tests.Tools_Cases is
         (T, Files_Are_Edited_In_Part'Access,
          "a file is edited in part and only as it was read, read by lines, searched, and refused whole"
          & " past the bound");
+      Register_Routine
+        (T, One_Runtime_For_Every_Agent'Access,
+         "every agent is offered and fenced from one registry, helpers have one contract, and a"
+         & " program's failure is said with its exit status and standard error");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

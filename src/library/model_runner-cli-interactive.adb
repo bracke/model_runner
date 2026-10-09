@@ -319,6 +319,10 @@ package body Model_Runner.CLI.Interactive is
         L.Vocabulary (Prepared);
 
       Messages : Conv.History;
+
+      --  The project's revision the conversation last saw: what it moved by
+      --  since is said before the next turn.
+      Project_Seen : Natural := Model_Runner.CLI.Project_Commands.Project_Revision;
       Stop_Set : aliased Model_Runner.Stops.Set;
 
       --  The session's own model, as the agent /work runs on a task.
@@ -1173,7 +1177,10 @@ package body Model_Runner.CLI.Interactive is
             end if;
             After_Command := False;
             if Model_Runner.UTF8.Is_Valid (Prompt) then
-               Take_Turn (Prompt);
+               --  What changed in the project since the model last spoke,
+               --  said before the turn: its earlier talk of the project
+               --  may no longer hold.
+               Take_Turn (Model_Runner.CLI.Project_Commands.Changes_Since (Project_Seen) & Prompt);
             else
                Pres.Report (Screen, E.Make (E.IO_Invalid_UTF8));
             end if;

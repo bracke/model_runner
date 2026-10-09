@@ -36,6 +36,10 @@ package Model_Runner.Tools.Runner is
       Cancel      : Model_Runner.Cancellation.Token_Reference := null;
       Deadline    : Ada.Real_Time.Time := Ada.Real_Time.Time_Last;
       Tokens_Left : Natural := Natural'Last;
+
+      --  How deep the agent making the calls is: nought for the run's own,
+      --  one for its helper, and so on.
+      Depth       : Natural := 0;
    end record;
 
    --  No cancellation, no deadline, no token ceiling.
@@ -209,7 +213,7 @@ private
 
    No_Context : constant Tool_Context :=
      (Cancel => null, Deadline => Ada.Real_Time.Time_Last,
-      Tokens_Left => Natural'Last);
+      Tokens_Left => Natural'Last, Depth => 0);
 
    type Instance is abstract tagged limited record
       Context : Tool_Context;

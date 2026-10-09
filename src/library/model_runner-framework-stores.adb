@@ -495,6 +495,29 @@ package body Model_Runner.Framework.Stores is
    -- Allocate_Number --
    ---------------------
 
+   function Last_Number (Item : Store; Namespace : String) return Natural is
+      Counters : Records.Item;
+      Status   : E.Error_Info;
+   begin
+      if not Exists (Item, Project_Area, Counters_Name) then
+         return 0;
+      end if;
+      Read (Item, Project_Area, Counters_Name, Counters, Status);
+      if E.Is_Error (Status) then
+         return 0;
+      end if;
+      declare
+         Held : constant String := Records.Get (Counters, "next." & Namespace);
+         Next : Natural := 0;
+      begin
+         for Char of Held loop
+            exit when Char not in '0' .. '9' or else Next > 99_999_999;
+            Next := Next * 10 + (Character'Pos (Char) - Character'Pos ('0'));
+         end loop;
+         return (if Next = 0 then 0 else Next - 1);
+      end;
+   end Last_Number;
+
    procedure Allocate_Number
      (Item      : Store;
       Change    : in out Transaction;

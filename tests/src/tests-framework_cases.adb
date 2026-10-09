@@ -4033,9 +4033,26 @@ package body Tests.Framework_Cases is
          Put_File (Project & "/src/extra.adb",
                    "with Parser;" & LF & "procedure Extra is" & LF & "   Item : Natural;" & LF
                    & "begin" & LF & "   Parser.Next (Item);" & LF & "end Extra;" & LF);
+         Assert (Has (Cq.Find (Store, "used_by", "Parser", Failed), "Main")
+                 and then Has (Cq.Find (Store, "symbol", "Next", Failed), "src/parser.ads")
+                 and then Has (Cq.Find (Store, "nonsense", "Next", Failed), "error:") and then Failed,
+                 "find by kind did not ask the graph as its kind says");
          Assert (Has (Asked ("dependents", "{""unit"": ""Parser""}"), "Extra"),
                  "an answer after a write was about the code before it: "
                  & Asked ("dependents", "{""unit"": ""Parser""}"));
+      end;
+      --  The project's revision moves with its state.
+      declare
+         package Ev renames Model_Runner.Framework.Events;
+         Was    : constant Natural := Ev.Revision (Store);
+         Change : S.Transaction;
+         Made   : Unbounded_String;
+         Status : E.Error_Info;
+      begin
+         Tk.Create (Store, Change, Fields ("Another", "analysis"), "user", "", Made, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Ev.Revision (Store) > Was and then Was > 0,
+                 "the project's revision did not move with its state");
       end;
    end Code_Is_Asked_Of_The_Graph;
 

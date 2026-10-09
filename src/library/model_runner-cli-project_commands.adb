@@ -11,6 +11,7 @@ with Hostkit.Fs;
 with Hostkit.Terminal_Control;
 
 with Model_Runner.Agent;
+with Model_Runner.Agent_Runtime;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Platform.Signals;
 with Model_Runner.CLI.Init;
@@ -47,6 +48,7 @@ with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tools;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Tools.Schemas;
@@ -156,22 +158,11 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route, True),
       (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True)];
 
-   --  The tools the work's agents may call; each is offered only where the
-   --  agent's permissions give it.
-   Allowed_Tools : constant array (1 .. 14) of Word_Access :=
-     [new String'("read_file"), new String'("write_file"),
-      new String'("list_directory"), new String'("delegate"),
-      new String'("run_checks"), new String'("edit_file"),
-      new String'("read_range"), new String'("search_file"),
-      new String'("search_code"), new String'("find_symbol"),
-      new String'("find_references"), new String'("dependencies"),
-      new String'("dependents"), new String'("impact")];
-
    --  The tools that take a path in the tree, those of them that write,
    --  and those that ask the project's repository graph.
    function File_Tool (Named : String) return Boolean is
      (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
-              | "search_file" | "search_code");
+              | "search_file" | "search_code" | "find");
    function Writes (Named : String) return Boolean is
      (Named in "write_file" | "edit_file");
    function Graph_Tool (Named : String) return Boolean is
@@ -193,7 +184,11 @@ package body Model_Runner.CLI.Project_Commands is
 
    --  Every other tool refused, and said so.
    type Fence (Screen : not null access Pres.Console) is
-     limited new Model_Runner.Agent.Approver with null record;
+     limited new Model_Runner.Agent.Approver with record
+      --  What the agent may call: its capabilities, as the registry reads
+      --  them -- the same that chose what it was offered.
+      Can : Model_Runner.Tools.Registry.Capabilities := Model_Runner.Tools.Registry.Nothing;
+   end record;
 
    overriding function Consider
      (Self : in out Fence; Named : String; Arguments : String)
@@ -205,11 +200,9 @@ package body Model_Runner.CLI.Project_Commands is
    is
       pragma Unreferenced (Arguments);
    begin
-      for Tool of Allowed_Tools loop
-         if Tool.all = Named then
-            return Model_Runner.Agent.Allow;
-         end if;
-      end loop;
+      if Model_Runner.Tools.Registry.Allows (Self.Can, Named) then
+         return Model_Runner.Agent.Allow;
+      end if;
       Pres.Put_Note (Self.Screen.all, "cli.agent.denied", [Loc.Named ("name", Named)]);
       return Model_Runner.Agent.Deny;
    end Consider;
@@ -501,74 +494,26 @@ package body Model_Runner.CLI.Project_Commands is
       return Choices;
    end Role_Choices;
 
-   --  The tools an agent is offered: reading always, writing and handing
-   --  work to a helper where it may.
-   function Offered_Text (Host : Host_Access) return String is
-      package Sc renames Model_Runner.Tools.Schemas;
-      package Bi renames Model_Runner.Tools.Builtin;
+   --  What the agent now working can do, from its permissions: read the
+   --  tree always; write where it may; ask the project's graph and run its
+   --  checks where there is a project and it may; hand work to a helper
+   --  where it may make children. What it is offered and what its calls
+   --  are let through are both read from this, in the registry.
+   function Work_Capabilities (Host : Host_Access) return Model_Runner.Tools.Registry.Capabilities is
+      package Rg renames Model_Runner.Tools.Registry;
    begin
       return
-        "["
-        --  The file tools as every runner describes them.
-        & Bi.Definition_Of ("read_file") & ", " & Bi.Definition_Of ("list_directory")
-        & ", " & Bi.Definition_Of ("read_range") & ", " & Bi.Definition_Of ("search_file")
-        & ", " & Bi.Definition_Of ("search_code")
-        --  And the project's own knowledge of its code, asked rather than
-        --  found by reading: what a name is, where it is used, what a unit
-        --  uses and what uses it, and what a change reaches.
-        & (if Host = null then ""
-           else ", "
-                & Sc.Definition ("find_symbol", "Find where a name is declared: its kind, file and line."
-                                 & " A full name or its last part.", [Sc.Text ("name")])
-                & ", "
-                & Sc.Definition ("find_references", "Find every place a name is used, as file:line.",
-                                 [Sc.Text ("name")])
-                & ", "
-                & Sc.Definition ("dependencies", "The units a unit, or a file's unit, uses.",
-                                 [Sc.Text ("unit")])
-                & ", "
-                & Sc.Definition ("dependents", "The units that use a unit, or a file's unit.",
-                                 [Sc.Text ("unit")])
-                & ", "
-                & Sc.Definition ("impact", "What changing a file or a name reaches: the units, tests and"
-                                 & " requirements, and how sure that is.", [Sc.Text ("target")]))
-        & (if Host /= null and then Host.May_Check (Host.Task_Profile)
-           then ", "
-                & Sc.Definition
-                    ("run_checks",
-                     "Build and test the project as the task will be verified,"
-                     & " and get back whether it passes and, if not, what the"
-                     & " failing checks reported. scope affected checks only what your"
-                     & " changes so far reach -- quicker while you work; full, the"
-                     & " default, everything the task is held to.",
-                     [Sc.Text ("scope", Required => False, Choices => ["affected", "full"])])
-           else "")
-        & (if Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs)
-           then ", " & Bi.Definition_Of ("edit_file") & ", " & Bi.Definition_Of ("write_file")
-           else "")
-        & (if Host /= null and then Host.May (Pm.Create_Children)
-           then ", "
-                & Sc.Definition
-                    ("delegate",
-                     "Hand one part of the work -- a review, an investigation,"
-                     & " a piece to write -- to a helper that starts with no"
-                     & " memory of this conversation and reports back only its"
-                     & " result. Say everything it needs in task. role names"
-                     & " what it is for, and gives it that role's permissions where the"
-                     & " project names the role; need is required (the default),"
-                     & " optional or advisory. inputs names the files it starts from,"
-                     & " outputs the files it must write -- checked after -- and"
-                     & " acceptance when the part is done.",
-                     [Sc.Text ("task"),
-                      Sc.Text ("role", Required => False, Choices => Role_Choices),
-                      Sc.Text ("need", Required => False,
-                               Choices => ["required", "optional", "advisory"]),
-                      Sc.Text ("inputs", Required => False),
-                      Sc.Text ("outputs", Required => False),
-                      Sc.Text ("acceptance", Required => False)])
-           else "")
-        & "]";
-   end Offered_Text;
+        [Rg.Read_Files     => True,
+         Rg.Write_Files    => Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs),
+         Rg.Project_Graph  => Host /= null,
+         Rg.Project_Checks => Host /= null and then Host.May_Check (Host.Task_Profile),
+         Rg.Delegation     => Host /= null and then Host.May (Pm.Create_Children),
+         others            => False];
+   end Work_Capabilities;
+
+   --  The tools an agent is offered: those its capabilities allow.
+   function Offered_Text (Host : Host_Access) return String is
+     (Model_Runner.Tools.Registry.Offered (Work_Capabilities (Host), Role_Choices));
 
    --  The file tools, fenced by the permissions of the agent now working,
    --  and delegate, which makes a child through the harness and runs it.
@@ -754,6 +699,7 @@ package body Model_Runner.CLI.Project_Commands is
         (if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON)
          then Model_Runner.Tools.Open_JSON else Written);
    begin
+      Guard.Can := Work_Capabilities (Host);
       Answer := Null_Unbounded_String;
       Tokens := 0;
       Prompt_Tokens := 0;
@@ -984,52 +930,22 @@ package body Model_Runner.CLI.Project_Commands is
          return Text;
       end Refuses;
 
+      package Rt renames Model_Runner.Agent_Runtime;
       Found    : Boolean;
-      Ignored  : Boolean;
-      Asked    : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "task", Found);
 
-      --  The contract beside the task: what the helper starts from, what it
-      --  must write, and when it is done -- each said in the brief as what
-      --  it is, and the outputs checked by the harness after, not taken
-      --  from the helper's word.
-      Inputs     : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "inputs", Ignored);
-      Outputs    : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "outputs", Ignored);
-      Acceptance : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "acceptance", Ignored);
-      Brief      : constant String :=
-        Asked
-        & (if Inputs = "" then "" else ASCII.LF & "Start from: " & Inputs)
-        & (if Outputs = "" then ""
-           else ASCII.LF & "Write: " & Outputs & " -- the part is done when these are written")
-        & (if Acceptance = "" then "" else ASCII.LF & "Done when: " & Acceptance);
-
-      --  The outputs named, one a word, commas or spaces apart.
-      function Output_Paths return Names.Vector is
-         Result : Names.Vector;
-         Start  : Natural := Outputs'First;
-      begin
-         for Index in Outputs'First .. Outputs'Last + 1 loop
-            if Index > Outputs'Last or else Outputs (Index) in ',' | ' ' | ASCII.LF then
-               if Index > Start then
-                  Result.Append (Outputs (Start .. Index - 1));
-               end if;
-               Start := Index + 1;
-            end if;
-         end loop;
-         return Result;
-      end Output_Paths;
-
-      Named_Outputs : constant Names.Vector := Output_Paths;
+      --  The contract beside the task, as every delegate reads it: what the
+      --  helper starts from, what it must write, and when it is done --
+      --  each said in the brief as what it is, and the outputs checked by
+      --  the harness after, not taken from the helper's word.
+      Contract : constant Rt.Contract := Rt.Contract_Of (Arguments, Found);
+      Asked    : constant String := To_String (Contract.Task_Text);
+      Brief    : constant String := Rt.Brief (Contract);
+      Named_Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Contract);
 
       --  What each output held before the helper ran.
-      Before : Names.Vector;
-      Role     : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "role", Ignored);
-      Need     : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "need", Ignored);
+      Before   : constant Rt.Paths.Vector := Rt.Prints (Named_Outputs);
+      Role     : constant String := To_String (Contract.Role);
+      Need     : constant String := To_String (Contract.Need);
       Retry_Of : Unbounded_String;
       Told     : Unbounded_String;
    begin
@@ -1052,10 +968,6 @@ package body Model_Runner.CLI.Project_Commands is
       elsif Self.Host = null then
          return Refuses ("error: no helper can be made here; do the work with the other tools");
       end if;
-      for Path of Named_Outputs loop
-         Before.Append (Wk.File_Print (Path));
-      end loop;
-
       --  Nothing more is started for work already cancelled.
       if Model_Runner.Framework.Execution.Work_Withdrawn then
          return Fails ("error: the work was cancelled; no helper is made");
@@ -1125,15 +1037,13 @@ package body Model_Runner.CLI.Project_Commands is
       --  is not what it was, and the call failed where one is not.
       if not Named_Outputs.Is_Empty then
          declare
+            Missing_Said : constant String := Rt.Unwritten (Named_Outputs, Before);
             Written, Missing : Unbounded_String;
          begin
-            for Index in Named_Outputs.First_Index .. Named_Outputs.Last_Index loop
-               if Wk.File_Print (Named_Outputs (Index)) /= Before (Index) then
-                  Append (Written, (if Written = Null_Unbounded_String then "" else ", ")
-                                   & Named_Outputs (Index));
-               else
-                  Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ")
-                                   & Named_Outputs (Index));
+            Missing := To_Unbounded_String (Missing_Said);
+            for Path of Named_Outputs loop
+               if Ada.Strings.Fixed.Index (", " & Missing_Said & ",", ", " & Path & ",") = 0 then
+                  Append (Written, (if Written = Null_Unbounded_String then "" else ", ") & Path);
                end if;
             end loop;
             Append (Told, ASCII.LF & "(the harness checked the outputs:"
@@ -1198,7 +1108,8 @@ package body Model_Runner.CLI.Project_Commands is
       Given : constant String :=
         Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Given_Path);
       --  search_code with no folder searches the whole tree.
-      Path  : constant String := (if Given_Path then Given elsif Named = "search_code" then "." else "");
+      Path  : constant String :=
+        (if Given_Path then Given elsif Named in "search_code" | "find" then "." else "");
       Budget : constant Natural :=
         (if Self.Host = null then 0 else Self.Host.Tool_Budget);
 
@@ -1368,6 +1279,30 @@ package body Model_Runner.CLI.Project_Commands is
          --  A helper that answered may have changed anything its
          --  permissions let it.
          Outcome.Changed := Tr."=" (Outcome.Answer, Tr.Answered);
+      elsif Named = "find"
+        and then Model_Runner.Tools.Registry.Graph_Finding
+                   (Model_Runner.Tools.Builtin.Text_Argument (Arguments, "kind", Found_Scope))
+      then
+         Self.Graph_Asks := Self.Graph_Asks + 1;
+         if Self.Host = null then
+            Outcome.Answer := Tr.Failed;
+            Put ("error: there is no project graph to ask here");
+         else
+            declare
+               Asked_Failed : Boolean;
+               Said : constant String :=
+                 Model_Runner.Framework.Code_Queries.Find
+                   (Self.Host.Store_Of.all,
+                    Model_Runner.Tools.Builtin.Text_Argument (Arguments, "kind", Found_Scope),
+                    Model_Runner.Tools.Builtin.Text_Argument (Arguments, "query", Found_Scope),
+                    Asked_Failed);
+            begin
+               if Asked_Failed then
+                  Outcome.Answer := Tr.Failed;
+               end if;
+               Put (Said);
+            end;
+         end if;
       elsif Graph_Tool (Named) then
          Self.Graph_Asks := Self.Graph_Asks + 1;
          if Self.Host = null then
@@ -1446,11 +1381,13 @@ package body Model_Runner.CLI.Project_Commands is
                  (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
                   Outcome, Status);
                --  How the work went, counted as it goes.
-               if Named = "read_file" then
+               if Named = "read_file"
+                 and then Ada.Strings.Fixed.Index (Arguments, """first_line""") = 0
+               then
                   Self.Whole_Reads := Self.Whole_Reads + 1;
-               elsif Named = "read_range" then
+               elsif Named in "read_range" | "read_file" then
                   Self.Part_Reads := Self.Part_Reads + 1;
-               elsif Named in "search_file" | "search_code" then
+               elsif Named in "search_file" | "search_code" | "find" then
                   Self.Searches := Self.Searches + 1;
                end if;
                --  A change said with what uses what was changed, so the
@@ -2278,6 +2215,79 @@ package body Model_Runner.CLI.Project_Commands is
 
    function Runs_Mid_Message (Word : String) return Boolean
    is (for some Known of Commands => Known.Name.all = Word and then Known.Mid_Message);
+
+   ----------------------
+   -- Project_Revision --
+   ----------------------
+
+   function Project_Revision return Natural is
+      Store  : S.Store;
+      Opened : E.Error_Info;
+   begin
+      if not Ada.Directories.Exists (Here & "/.model_runner") then
+         return 0;
+      end if;
+      S.Open_To_Read (Store, Here, Opened);
+      if E.Is_Error (Opened) then
+         return 0;
+      end if;
+      return Revision : constant Natural := Model_Runner.Framework.Events.Revision (Store) do
+         S.Close (Store);
+      end return;
+   exception
+      when others =>
+         return 0;
+   end Project_Revision;
+
+   -------------------
+   -- Changes_Since --
+   -------------------
+
+   function Changes_Since (Seen : in out Natural) return String is
+      package Ev renames Model_Runner.Framework.Events;
+      Now    : constant Natural := Project_Revision;
+      Store  : S.Store;
+      Opened : E.Error_Info;
+      Said   : Unbounded_String;
+      Shown  : Natural := 0;
+      Most   : constant := 8;
+   begin
+      if Now <= Seen then
+         Seen := Natural'Max (Seen, Now);
+         return "";
+      end if;
+      S.Open_To_Read (Store, Here, Opened);
+      if E.Is_Ok (Opened) then
+         declare
+            Since : constant Ev.Event_List := Ev.Since (Store, Seen);
+            Count : constant Natural := Ev.Length (Since);
+         begin
+            for Index in Natural'Max (1, Count - Most + 1) .. Count loop
+               declare
+                  One : constant Ev.Event := Ev.Element (Since, Index);
+               begin
+                  Append (Said, "- " & To_String (One.Kind_Word) & " " & To_String (One.Subject)
+                          & (if Length (One.Detail) = 0 then "" else ": " & To_String (One.Detail))
+                          & ASCII.LF);
+                  Shown := Shown + 1;
+               end;
+            end loop;
+            if Count > Shown then
+               Said := To_Unbounded_String ("- (" & Image (Count - Shown) & " earlier)" & ASCII.LF) & Said;
+            end if;
+         end;
+         S.Close (Store);
+      end if;
+      Seen := Now;
+      return (if Said = Null_Unbounded_String then ""
+              else "(note from the harness, not the user: the project's state changed since your last"
+                   & " turn -- what was said before about it may be out of date; the project is"
+                   & " authoritative, /state shows it)" & ASCII.LF & To_String (Said) & ASCII.LF);
+   exception
+      when others =>
+         Seen := Now;
+         return "";
+   end Changes_Since;
 
    --  A command's route, or No_Route for a word that is none.
    function Route_Of (Word : String) return Command_Route is

@@ -1046,7 +1046,8 @@ begin
             end loop;
             Delegate_Runner.Leases.Open (Sub_Ready);
             Delegate_Runner.Ready := Sub_Ready;
-            if Sub_Ready >= 1 then
+            Delegate_Runner.Max_Depth := Item.Delegate_Depth;
+            if Sub_Ready >= 1 and then Item.Delegate_Depth >= 1 then
                Built_Runner.Use_Delegator
                  (Delegate_Runner'Unchecked_Access);
             end if;

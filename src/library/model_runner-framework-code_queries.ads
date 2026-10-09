@@ -41,4 +41,19 @@ package Model_Runner.Framework.Code_Queries is
       Args   : String;
       Failed : out Boolean) return String;
 
+   --  A finding by its kind, as the find tool asks it: symbol, references,
+   --  uses, used_by or impact, of a query -- a name, a unit, a file.
+   --
+   --  @param Store The store.
+   --  @param Kind The kind of finding.
+   --  @param Query What it is of.
+   --  @param Failed Whether it could not be asked: no query, or a kind
+   --    that is none of these.
+   --  @return The answer.
+   function Find
+     (Store  : Stores.Store;
+      Kind   : String;
+      Query  : String;
+      Failed : out Boolean) return String;
+
 end Model_Runner.Framework.Code_Queries;
