@@ -204,7 +204,13 @@ package body Conformance.Parts is
       Program     : String;
       Integers    : Boolean)
    is
-      Parts : constant Positive := Count;
+      --  One part an architecture, handed out to as many workers as the
+      --  machine has room for as each finishes: the architectures cost very
+      --  different amounts, and split into fixed shares the slowest share
+      --  held the whole sweep -- two of seven ran for an hour after the
+      --  other five were done.
+      Parts   : constant Positive := Architecture_Count;
+      Workers : constant Positive := Count;
 
       type Outcome is record
          Line   : Unbounded_String;
@@ -288,7 +294,7 @@ package body Conformance.Parts is
             end loop;
          end Runner;
 
-         Crew : array (1 .. Parts) of Runner;
+         Crew : array (1 .. Workers) of Runner;
          pragma Unreferenced (Crew);
       begin
          null;  --  the block's end waits for every part

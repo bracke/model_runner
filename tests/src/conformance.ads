@@ -281,6 +281,10 @@ package Conformance is
    is (Item.Ran and then Item.Failures = 0 and then Item.Refused = 0
        and then Item.Unlearned = 0);
 
+   --  How many architectures the sweep crosses: the most parts it can be
+   --  split into, one an architecture.
+   Architecture_Count : constant := 30;
+
    --  Whether this run was asked for the quantized arithmetic, from the
    --  command line and from nothing else.
    --

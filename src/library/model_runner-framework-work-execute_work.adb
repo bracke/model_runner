@@ -172,7 +172,11 @@ is
               (if Trim (Line)'Length > 2 and then Trim (Line) (Trim (Line)'First .. Trim (Line)'First + 1) = "./"
                then Trim (Line) (Trim (Line)'First + 2 .. Trim (Line)'Last) else Trim (Line));
          begin
-            if Path not in "" | "-" and then not Result.Changed_Files.Contains (Path) then
+            --  "none" is no file: a report that changed nothing says so in
+            --  words, and was told it named a file it did not change.
+            if Ada.Characters.Handling.To_Lower (Path) not in "" | "-" | "none" | "nothing" | "n/a" | "(none)"
+              and then not Result.Changed_Files.Contains (Path)
+            then
                Not_Changed.Append (Path);
             end if;
          end;

@@ -13,9 +13,10 @@
 --  did not run, not one that passed.
 package Conformance.Parts is
 
-   --  How many parts a sweep is split into on this machine: one a processor
-   --  but one, at most eight, at least one. A part is one process, mostly
-   --  on one processor, and about a gigabyte and a half.
+   --  How many parts of a sweep run at once on this machine: one a
+   --  processor but one, at most eight, at least one. A part is one
+   --  architecture, one process, mostly on one processor, and about a
+   --  gigabyte and a half.
    --
    --  @return The count.
    function Count return Positive;
