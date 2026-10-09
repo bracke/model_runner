@@ -166,12 +166,14 @@ package Model_Runner.Framework.Work is
    --  @param Answer What it answered.
    --  @param Number The entry Note_Start made for it, to fill in; nought
    --    for a new entry.
+   --  @param Ended How it ended, as a word; "" for none.
    procedure Note_Call
      (Host      : in out Child_Host;
       Named     : String;
       Arguments : String;
       Answer    : String;
-      Number    : Natural := 0);
+      Number    : Natural := 0;
+      Ended     : String := "");
 
    --  Record a call that may change state as started, before it runs, on
    --  the invocation now running; Note_Call with Number fills it in. A run

@@ -63,6 +63,21 @@ procedure Route_Why is
                  (Screen, (if Failed_Now then "cli.why.failed" else "cli.why.stopped"),
                   [Loc.Named ("name", Asked),
                    Loc.Named ("detail", (if Recorded = "" then "no reason was recorded" else Recorded))]);
+               --  And what the harness refused it on its last run: often
+               --  why the model gave up, where the reason does not say.
+               declare
+                  Last  : constant String := Model_Runner.Framework.Invocations.Last_For (Store, Asked);
+                  Shown : Natural := 0;
+               begin
+                  if Last /= "" then
+                     for Call of Model_Runner.Framework.Invocations.Refused_Calls (Store, Last) loop
+                        exit when Shown = 3;
+                        Pres.Put_Note (Screen, "cli.why.refused",
+                                       [Loc.Named ("name", Last), Loc.Named ("detail", Call)]);
+                        Shown := Shown + 1;
+                     end loop;
+                  end if;
+               end;
             end;
          end;
       else

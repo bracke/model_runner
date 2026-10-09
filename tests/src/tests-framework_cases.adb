@@ -4825,6 +4825,22 @@ package body Tests.Framework_Cases is
                             (Iv.Unanswered_Calls (Store, To_String (First)).First_Element,
                              "shell") = 1,
                  "an answered call was still named unanswered, or the other was not");
+         --  How a call ended is kept with it; a refused one is named so.
+         Iv.Note_Call (Store, Change, To_String (First), "read_file",
+                       "{""path"": ""/etc/passwd""}", "refused", Status,
+                       Ended => "refused: outside the project");
+         S.Commit (Store, Change, Status);
+         Assert (Natural (Iv.Refused_Calls (Store, To_String (First)).Length) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Iv.Refused_Calls (Store, To_String (First)).First_Element,
+                             "read_file") = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Iv.Refused_Calls (Store, To_String (First)).First_Element,
+                             "(outside the project)") > 0,
+                 "a refused call was not named with what refused it");
+         Assert (Iv.Last_For (Store, "TASK-1") = To_String (First)
+                 and then Iv.Last_For (Store, "TASK-9") = "",
+                 "a task's last invocation was not found, or one was found for none");
       end;
 
       Iv.Finish (Store, Change, To_String (First), Iv.Failed,
@@ -9953,6 +9969,19 @@ package body Tests.Framework_Cases is
       Tk.Move (Store, Change, To_String (Stuck), "blocked", "the vendor has not answered",
                Status => Status);
       S.Commit (Store, Change, Status);
+      --  Its last run had a call refused, for /why to name.
+      declare
+         Call : Unbounded_String;
+      begin
+         Model_Runner.Framework.Invocations.Start
+           (Store, Change, "AGENT-1", To_String (Stuck), "1", "default", "CTX-1", "none",
+            Model_Runner.Framework.Invocations.Work_Claim, Call, Status);
+         S.Commit (Store, Change, Status);
+         Model_Runner.Framework.Invocations.Note_Call
+           (Store, Change, To_String (Call), "write_file", "{""path"": ""/etc/hosts""}", "refused",
+            Status, Ended => "refused: outside the project");
+         S.Commit (Store, Change, Status);
+      end;
       declare
          Root : constant String := Fresh_Root (Store);
       begin
@@ -10041,6 +10070,9 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index
                          (Text, To_String (Stuck) & " is blocked: the vendor has not answered") > 0,
                        "/why did not give the reason a blocked task was recorded with");
+               Assert (Ada.Strings.Fixed.Index (Text, "refused write_file") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "(outside the project)") > 0,
+                       "/why did not name the call a blocked task's last run had refused");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

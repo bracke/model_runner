@@ -319,9 +319,27 @@ procedure Show_Result (Store : in out S.Store) is
                         Second : constant Natural :=
                           (if First = 0 then 0
                            else Ada.Strings.Fixed.Index (Raw (First + 1 .. Raw'Last), [1 => ASCII.HT]));
+                        --  And how it ended, where that is kept after it:
+                        --  the last part, an answer having tabs of its own.
+                        Last   : constant Natural :=
+                          Ada.Strings.Fixed.Index (Raw, [1 => ASCII.HT], Ada.Strings.Backward);
+                        Ended  : constant String := (if Last = 0 then "" else Raw (Last + 1 .. Raw'Last));
+                        Third  : constant Natural :=
+                          (if Last > Second and then Second > 0
+                             and then (Ada.Strings.Fixed.Index (Ended, "answered") = Ended'First
+                                       or else Ada.Strings.Fixed.Index (Ended, "failed") = Ended'First
+                                       or else Ada.Strings.Fixed.Index (Ended, "refused") = Ended'First)
+                           then Last
+                           else 0);
                      begin
                         Field (R.Field_Name (Value, Index),
-                               (if Second > 0
+                               (if Third > 0
+                                then Raw (Raw'First .. First - 1) & " " & Raw (First + 1 .. Second - 1)
+                                     & " -> " & Ada.Strings.Fixed.Translate
+                                                  (Raw (Second + 1 .. Third - 1),
+                                                   Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], " "))
+                                     & " [" & Raw (Third + 1 .. Raw'Last) & "]"
+                                elsif Second > 0
                                 then Raw (Raw'First .. First - 1) & " " & Raw (First + 1 .. Second - 1)
                                      & " -> " & Ada.Strings.Fixed.Translate
                                                   (Raw (Second + 1 .. Raw'Last),

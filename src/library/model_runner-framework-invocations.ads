@@ -145,6 +145,8 @@ package Model_Runner.Framework.Invocations is
    --  @param Status Framework_Not_Found when there is no such invocation.
    --  @param Number The entry Note_Start made for it, to fill in; nought
    --    for a new entry.
+   --  @param Ended How it ended, as a word -- answered, failed, or
+   --    refused and by what -- kept after the answer; "" for none.
    procedure Note_Call
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;
@@ -153,7 +155,23 @@ package Model_Runner.Framework.Invocations is
       Arguments : String;
       Answer    : String;
       Status    : out Model_Runner.Errors.Error_Info;
-      Number    : Natural := 0);
+      Number    : Natural := 0;
+      Ended     : String := "");
+
+   --  The calls an invocation recorded as refused, as their entries name
+   --  them: the tool, the start of its arguments, and what refused it.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return Them, in the order made; empty for none.
+   function Refused_Calls (Item : Stores.Store; Id : String) return Name_Lists.Vector;
+
+   --  The last invocation made for a task, or "".
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return Its identifier.
+   function Last_For (Item : Stores.Store; Task_Id : String) return String;
 
    --  What a call's entry says in place of its answer while it runs.
    Unanswered : constant String := "(started; not answered)";

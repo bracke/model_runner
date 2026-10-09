@@ -13,6 +13,7 @@ Keep a Changelog and the project uses semantic versioning.
 ### Changed
 
 - **The project's next work is one query:** Tasks.Next_Work_Of works out what can run in order, what is accepted and waits and on what, the candidates, what runs and what failed -- and /work's way on, its completion and /why read it, where each walked the accepted tasks for itself.
+- **A call's record says how it ended:** each call an invocation records keeps whether it was answered (and changed state), failed, or was refused and by what; /result shows it beside the call, and /why names the calls a blocked or failed task's last run had refused -- often why the model gave up, where the recorded reason does not say.
 - **A run is set against its plan:** the record /work shows when a root run ends says the calls it made of the calls its plan gave it.
 
 - **A write of what a file already holds is not a change:** write_file says "unchanged" and changes nothing where the file holds the content already, and a call's outcome says whether it changed state (Call_Outcome.Changed) -- so a run that only rewrites what is there has not written, for the watcher, the record of the work and the loop alike.

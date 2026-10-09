@@ -31,6 +31,7 @@ with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -432,7 +433,18 @@ package body Model_Runner.CLI.Project_Commands is
       if Self.Host /= null then
          Self.Host.Note_Call
            (Named, Arguments, Result,
-            Number => (if Call.In_Turn in Self.Started'Range then Self.Started (Call.In_Turn) else 0));
+            Number => (if Call.In_Turn in Self.Started'Range then Self.Started (Call.In_Turn) else 0),
+            --  How it ended, kept with it, for /why and /result to say.
+            Ended  =>
+              (case Ended.Answer is
+                 when Tr.Answered => (if Ended.Changed then "answered, changed" else "answered"),
+                 when Tr.Failed   => "failed",
+                 when Tr.Refused  =>
+                   (case Ended.Refusal is
+                      when Tr.Outside_Project => "refused: outside the project",
+                      when Tr.Harness_Owned   => "refused: the harness's own",
+                      when Tr.Policy          => "refused: by the execution policy",
+                      when Tr.Not_Permitted | Tr.Not_Refused => "refused: not permitted")));
       end if;
    end On_Result;
 

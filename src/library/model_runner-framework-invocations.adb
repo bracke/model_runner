@@ -611,7 +611,8 @@ package body Model_Runner.Framework.Invocations is
       Arguments : String;
       Answer    : String;
       Status    : out Model_Runner.Errors.Error_Info;
-      Number    : Natural := 0)
+      Number    : Natural := 0;
+      Ended     : String := "")
    is
       Value  : Records.Item;
       Staged : Boolean;
@@ -650,7 +651,8 @@ package body Model_Runner.Framework.Invocations is
          Records.Set
            (Value, "call." & [1 .. Integer'Max (0, 4 - Image (At_Entry)'Length) => '0']
                    & Image (At_Entry),
-            Named & ASCII.HT & Start_Of (Arguments) & ASCII.HT & Start_Of (Answer));
+            Named & ASCII.HT & Start_Of (Arguments) & ASCII.HT & Start_Of (Answer)
+            & (if Ended = "" then "" else ASCII.HT & Ended));
       end;
       Stores.Put (Change, Invocations_Area, Id, Value);
    end Note_Call;
@@ -690,6 +692,73 @@ package body Model_Runner.Framework.Invocations is
          Number := Calls + 1;
       end if;
    end Note_Start;
+
+   -------------------
+   -- Refused_Calls --
+   -------------------
+
+   function Refused_Calls (Item : Stores.Store; Id : String) return Name_Lists.Vector is
+      Value  : Records.Item;
+      Read   : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Stores.Read (Item, Invocations_Area, Id, Value, Read);
+      if E.Is_Error (Read) then
+         return Result;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Said  : constant String := Records.Get (Value, Field);
+            First : constant Natural := Ada.Strings.Fixed.Index (Said, [1 => ASCII.HT]);
+            Last  : constant Natural := Ada.Strings.Fixed.Index (Said, [1 => ASCII.HT], Ada.Strings.Backward);
+            Ended : constant String := (if Last = 0 then "" else Said (Last + 1 .. Said'Last));
+         begin
+            if Ada.Strings.Fixed.Index (Field, "call.") = 1 and then First > 0
+              and then Ada.Strings.Fixed.Index (Ended, "refused") = Ended'First
+            then
+               declare
+                  Second : constant Natural :=
+                    Ada.Strings.Fixed.Index (Said (First + 1 .. Said'Last), [1 => ASCII.HT]);
+               begin
+                  Result.Append
+                    (Said (Said'First .. First - 1) & " "
+                     & (if Second > 0 then Said (First + 1 .. Second - 1) else "")
+                     --  What refused it, without the word it starts with.
+                     & " (" & (if Ended'Length > 9 then Ended (Ended'First + 9 .. Ended'Last) else Ended)
+                     & ")");
+               end;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Refused_Calls;
+
+   --------------
+   -- Last_For --
+   --------------
+
+   function Last_For (Item : Stores.Store; Task_Id : String) return String is
+      Found : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Name of Stores.Names (Item, Invocations_Area) loop
+         if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-" then
+            declare
+               Value : Records.Item;
+               Read  : E.Error_Info;
+            begin
+               Stores.Read (Item, Invocations_Area, Name, Value, Read);
+               --  Identifiers are numbered in order, a fixed width.
+               if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
+                 and then Name > Ada.Strings.Unbounded.To_String (Found)
+               then
+                  Found := Ada.Strings.Unbounded.To_Unbounded_String (Name);
+               end if;
+            end;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Found);
+   end Last_For;
 
    ----------------------
    -- Unanswered_Calls --

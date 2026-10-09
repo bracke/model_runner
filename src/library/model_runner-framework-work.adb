@@ -1281,7 +1281,8 @@ package body Model_Runner.Framework.Work is
       Named     : String;
       Arguments : String;
       Answer    : String;
-      Number    : Natural := 0)
+      Number    : Natural := 0;
+      Ended     : String := "")
    is
       Change : Stores.Transaction;
       Status : E.Error_Info;
@@ -1289,7 +1290,7 @@ package body Model_Runner.Framework.Work is
       if not Host.Calls.Is_Empty then
          Invocations.Note_Call
            (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Answer, Status,
-            Number => Number);
+            Number => Number, Ended => Ended);
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
