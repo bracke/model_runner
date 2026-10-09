@@ -558,6 +558,32 @@ package Model_Runner.Platform.Device.Products is
    --  @param On True to read the copy, False the cache proper.
    procedure Prefer_Halves (Item : in out Engine; On : Boolean);
 
+   --  Which of a check round's Q4_K walks round their activations to
+   --  eight-bit integers and multiply them as integers: none, the
+   --  feed-forward's gate and up only, or every one.
+   type Walk_Rounding is (Rounds_None, Rounds_Feed_Forward, Rounds_Every);
+
+   --  Have a few positions' Q4_K walks multiply as integers.
+   --
+   --  A walk of two to eight positions is bound by its arithmetic, not by
+   --  the weights it reads, and the integer dot does four multiplies and
+   --  their sum in one instruction on bytes the weights already are.
+   --  What it costs is the rounding: each position is rounded to a byte a
+   --  value with a scale for every thirty-two, as --arith int8 rounds it
+   --  on the processor, so a drafted run no longer answers exactly what
+   --  an undrafted one does. A device without the integer dot, or opened
+   --  without it, keeps the binary32 walks whatever is asked.
+   --
+   --  @param Item Ready engine.
+   --  @param Rounding Which walks round.
+   procedure Round_Walks (Item : in out Engine; Rounding : Walk_Rounding);
+
+   --  Which walks round, as the device can honour it.
+   --
+   --  @param Item Engine to ask.
+   --  @return Rounds_None where the device has no integer walks.
+   function Rounds_Walks (Item : Engine) return Walk_Rounding;
+
    --  Whether a token's attention reads the half-precision copy.
    --
    --  @param Item Engine to ask.
@@ -3482,6 +3508,23 @@ private
       Glu_Line         : System.Address := System.Null_Address;
       Glu_Many_Shader  : System.Address := System.Null_Address;
       Glu_Many_Lines   : Many_Array := [others => System.Null_Address];
+
+      --  The two few-position Q4_K walks again over activations rounded to
+      --  bytes, and the kernel that rounds them; see Round_Walks. Made
+      --  where the device has the integer dot.
+      Dots_Shader      : System.Address := System.Null_Address;
+      Dots_Lines       : Many_Array := [others => System.Null_Address];
+      Glu_Dots_Shader  : System.Address := System.Null_Address;
+      Glu_Dots_Lines   : Many_Array := [others => System.Null_Address];
+      Round_Shader     : System.Address := System.Null_Address;
+      Round_Line       : System.Address := System.Null_Address;
+      Rounding         : Walk_Rounding := Rounds_None;
+
+      --  Where the rounded activations lie: eight positions' bytes and
+      --  their scales, nine bytes a column. Taken the first time a
+      --  sequence rounds.
+      Round_Buffer     : System.Address := System.Null_Address;
+      Round_Memory     : System.Address := System.Null_Address;
       Long_Shader6 : System.Address := System.Null_Address;
       Long_Line6   : System.Address := System.Null_Address;
       Mid_Shader6  : System.Address := System.Null_Address;

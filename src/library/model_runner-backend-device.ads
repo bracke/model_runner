@@ -432,6 +432,26 @@ package Model_Runner.Backend.Device is
    --  @param On True to read the copy.
    procedure Attend_In_Halves (On : Boolean);
 
+   --  Have a check round's Q4_K walks multiply as integers, over their
+   --  activations rounded to bytes, as --arith int8 has the processor's
+   --  products do; Rounds_Feed_Forward does so for the gate and up only,
+   --  as --arith mixed leaves the attention whole. See
+   --  Products.Round_Walks.
+   --
+   --  Task safety: run from one task, before the sequences it should
+   --  govern.
+   --
+   --  @param Rounding Which walks round.
+   procedure Round_Walks
+     (Rounding : Model_Runner.Platform.Device.Products.Walk_Rounding);
+
+   --  Which walks round, as the device can honour it.
+   --
+   --  @return Rounds_None where the device is not open or has no integer
+   --    walks.
+   function Rounds_Walks
+     return Model_Runner.Platform.Device.Products.Walk_Rounding;
+
    --  Whether a generated token attends out of the half-precision copy.
    --
    --  @return True after Attend_In_Halves said so, where the device has

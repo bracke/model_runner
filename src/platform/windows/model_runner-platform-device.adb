@@ -125,6 +125,13 @@ package body Model_Runner.Platform.Device is
    is (Item.Sized_Subgroups);
 
    ---------------------
+   -- Has_Integer_Dot --
+   ---------------------
+
+   function Has_Integer_Dot (Item : Context) return Boolean
+   is (Item.Integer_Dot);
+
+   ---------------------
    -- Host_Alignment --
    ---------------------
 

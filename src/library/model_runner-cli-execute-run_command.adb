@@ -21,6 +21,7 @@ with Model_Runner.Limits;
 with Model_Runner.Numerics;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Progress;
 with Model_Runner.Stops;

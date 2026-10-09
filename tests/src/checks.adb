@@ -5983,6 +5983,26 @@ package body Checks is
          end if;
       end;
 
+      --  The integer walks' rounding, asked the same way.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/round_vectors.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/round_vectors.comp is missing, and the words "
+                  & "compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Round_Vectors_Digest then
+            Fail ("src/shaders/round_vectors.comp has changed since it was "
+                  & "compiled; compile it and run 'tests shader' again with "
+                  & "every shader named");
+         end if;
+      end;
+
       --  The keeper's kernel, asked the same way.
       declare
          Found : Boolean;
@@ -6898,12 +6918,13 @@ package body Checks is
       --  waves, and Q6_K's a third time as the compilation for rows past
       --  2048 columns that shares a block's scales round the wave; and
       --  Q4_K's, Q5_K's and Q6_K's compilations over a few positions at
-      --  once, and Q4_K's gate and up at once for one and for a few.
-      for Which in 1 .. 12 loop
+      --  once, and Q4_K's gate and up at once for one and for a few --
+      --  and Q4_K's two few-position walks again as integers.
+      for Which in 1 .. 14 loop
          declare
             Name : constant String :=
               (if Which in 7 | 9 then "row_product_super6"
-               elsif Which in 8 | 10 | 11 then "row_product_super"
+               elsif Which in 8 | 10 | 11 | 13 | 14 then "row_product_super"
                elsif Which = 12 then "row_product_super5"
                else
                  (case (Which - 1) mod 3 is
@@ -6938,6 +6959,11 @@ package body Checks is
                      Model_Runner.Shaders.Row_Product_Super_Glu_Multi_Digest,
                   when 12 =>
                      Model_Runner.Shaders.Row_Product_Super5_Multi_Digest,
+                  when 13 =>
+                     Model_Runner.Shaders.Row_Product_Super_Multi_Dots_Digest,
+                  when 14 =>
+                     Model_Runner.Shaders
+                       .Row_Product_Super_Glu_Multi_Dots_Digest,
                   when others =>
                      Model_Runner.Shaders.Row_Product_Super6_Mid_Digest);
          begin

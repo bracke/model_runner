@@ -12822,6 +12822,20 @@ On a published model the same change leaves greedy output character for
 character where it was over the first two dozen tokens, which is an anecdote,
 and the bound is set from the sweep instead.
 
+On the device the default stays binary32, and `--arith` named is what
+rounds: a drafted round's Q4_K walks -- two to eight positions against one
+reading of the weights, bound by their arithmetic rather than their bytes --
+round each position to a byte a value with a scale for every thirty-two, once
+a product, and multiply four bytes by four in one instruction. `int8` rounds
+every such walk and `mixed` the feed-forward's gate and up only; a token, a
+prompt and every other format are as they were. Q4_K at 8192 rows of 4096 checks
+four positions in 0.40 ms where it took 0.45 and eight in 0.70 where it took
+0.89; Qwen3 8B drafting eight a round from its context reads 14.2 tokens a
+second against 13.6, and at four a round -- Gemma 3 4B drafted by its 270M --
+the two are level within a percent. A drafted run then no longer answers
+exactly what an undrafted one does, which is why it is asked for. A device
+without the integer dot keeps the binary32 walks.
+
 ### The four-bit k-quant, which had none of this
 
 Every kernel above was written for Q8_0 and served Q8_0 alone. `Q4_K` is what

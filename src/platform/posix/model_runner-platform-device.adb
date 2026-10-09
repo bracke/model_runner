@@ -257,6 +257,7 @@ package body Model_Runner.Platform.Device is
    Structure_Vulkan13         : constant := 53;
    Size_Control_Bit           : constant := 8;
    Full_Subgroups_Bit         : constant := 9;
+   Integer_Dot_Bit            : constant := 14;
 
    --  Where shaderFloat64 sits in the core feature set: the fortieth flag,
    --  after shaderCullDistance and before shaderInt64. The shaders reduce in
@@ -1167,6 +1168,10 @@ package body Model_Runner.Platform.Device is
             --  thirty-two, which the super-block row product asks for.
             Sized : Boolean := False;
 
+            --  And whether it multiplies four packed bytes in one
+            --  instruction, which the integer walks are made of.
+            Dotted : Boolean := False;
+
             List  : constant Extension_List_Call :=
               To_Extension_List
                 (Entry_Point (From.Handle,
@@ -1355,6 +1360,9 @@ package body Model_Runner.Platform.Device is
                      --  feature that permits it, from the core structure.
                      Sized :=
                        Sized and then Ask_13.Bits (Size_Control_Bit) /= 0;
+
+                     --  And the packed integer dot, from the same set.
+                     Dotted := Ask_13.Bits (Integer_Dot_Bit) /= 0;
                   end if;
                end;
             end if;
@@ -1393,11 +1401,15 @@ package body Model_Runner.Platform.Device is
                Request.Next := Models'Address;
             end if;
 
-            --  Enable the width control and full subgroups where reported.
-            if Sized then
-               Sizes.Bits (Size_Control_Bit) := 1;
-               Sizes.Bits (Full_Subgroups_Bit) :=
-                 (if Ask_13.Bits (Full_Subgroups_Bit) /= 0 then 1 else 0);
+            --  Enable the width control and full subgroups where reported,
+            --  and the integer dot, which is in the same set.
+            if Sized or else Dotted then
+               if Sized then
+                  Sizes.Bits (Size_Control_Bit) := 1;
+                  Sizes.Bits (Full_Subgroups_Bit) :=
+                    (if Ask_13.Bits (Full_Subgroups_Bit) /= 0 then 1 else 0);
+               end if;
+               Sizes.Bits (Integer_Dot_Bit) := (if Dotted then 1 else 0);
                Sizes.Next := Request.Next;
                Request.Next := Sizes'Address;
             end if;
@@ -1429,8 +1441,10 @@ package body Model_Runner.Platform.Device is
                Request.Next := System.Null_Address;
                Request.Features := System.Null_Address;
 
-               --  The fallback chains no features, so the width may not be set.
+               --  The fallback chains no features, so the width may not be set
+               --  and the dot may not be used.
                Sized := False;
+               Dotted := False;
 
                if Usable then
                   Usable := False;
@@ -1474,6 +1488,7 @@ package body Model_Runner.Platform.Device is
             Item.Matrices := Usable;
             Item.Subgroups := Grouped;
             Item.Sized_Subgroups := Sized;
+            Item.Integer_Dot := Dotted;
 
             --  The alignment a host pointer needs is a property this build
             --  does not ask for -- it arrives through an interface version
@@ -1587,6 +1602,13 @@ package body Model_Runner.Platform.Device is
 
    function Has_Sized_Subgroups (Item : Context) return Boolean
    is (Item.Sized_Subgroups);
+
+   ---------------------
+   -- Has_Integer_Dot --
+   ---------------------
+
+   function Has_Integer_Dot (Item : Context) return Boolean
+   is (Item.Integer_Dot);
 
    ---------------------
    -- Host_Alignment --

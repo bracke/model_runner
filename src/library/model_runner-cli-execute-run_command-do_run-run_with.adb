@@ -125,6 +125,21 @@ begin
    Model_Runner.Backend.CPU.Use_Integer_Activations
      (L.Quantized_Roles (Chosen_Arithmetic (Item, Prepared)));
 
+   --  And the device's check rounds, only where --arith was named: its
+   --  walks multiply in binary32 unasked, so a drafted run answers what
+   --  an undrafted one does. See Backend.Device.Round_Walks.
+   declare
+      package Products renames Model_Runner.Platform.Device.Products;
+   begin
+      Model_Runner.Backend.Device.Round_Walks
+        (if not Item.Arithmetic_Set then Products.Rounds_None
+         else
+           (case Chosen_Arithmetic (Item, Prepared) is
+              when L.Float_Activations   => Products.Rounds_None,
+              when L.Integer_Activations => Products.Rounds_Every,
+              when L.Mixed_Activations   => Products.Rounds_Feed_Forward));
+   end;
+
    L.Open
      (Session, Prepared, Item.Context_Size,
       Session_Bounds => Session_Bounds (Item),

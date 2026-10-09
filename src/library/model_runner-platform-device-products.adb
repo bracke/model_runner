@@ -148,6 +148,13 @@ package body Model_Runner.Platform.Device.Products is
    Host_Reserve : constant := 6 * 1024 * 1024 * 1024;
 
    Wave_Lanes : constant := 64;
+
+   --  The widest row an integer walk rounds the activations of, and the
+   --  room that takes: eight positions' bytes and a four-byte scale for
+   --  every thirty-two of them, nine bytes a column. Wider rows walk in
+   --  binary32.
+   Round_Columns : constant := 131_072;
+   Round_Bytes   : constant := 9 * Round_Columns;
    Wave_Rows  : constant := 2;
 
    --  The low-bit subgroup kernels' band, their shader's NUM_ROWS, and their
@@ -2806,6 +2813,44 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Glu_Many_Shader := Made;
                   end if;
                end;
+
+               --  And the integer walks and their rounding, where the
+               --  device was opened with the integer dot: see Round_Walks.
+               if Has_Integer_Dot (On) then
+                  declare
+                     Dots  : aliased constant Model_Runner.Shaders.Word_Array
+                       := Model_Runner.Shaders.Row_Product_Super_Multi_Dots;
+                     Glus  : aliased constant Model_Runner.Shaders.Word_Array
+                       := Model_Runner.Shaders
+                            .Row_Product_Super_Glu_Multi_Dots;
+                     Round : aliased constant Model_Runner.Shaders.Word_Array
+                       := Model_Runner.Shaders.Round_Vectors;
+                  begin
+                     Request.Size := Interfaces.C.size_t (Dots'Length * 4);
+                     Request.Code := Dots'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Dots_Shader := Made;
+                     end if;
+
+                     Request.Size := Interfaces.C.size_t (Glus'Length * 4);
+                     Request.Code := Glus'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Glu_Dots_Shader := Made;
+                     end if;
+
+                     Request.Size := Interfaces.C.size_t (Round'Length * 4);
+                     Request.Code := Round'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Round_Shader := Made;
+                     end if;
+                  end;
+               end if;
             end if;
          end;
 
@@ -4008,6 +4053,13 @@ package body Model_Runner.Platform.Device.Products is
          end loop;
 
          Line (Group_Size, Wide_Group, Item.Low_Wide_Line);
+
+         --  The rounding the integer walks read, at its own width.
+         if Item.Round_Shader /= Null_Handle then
+            Request.Stage.Module := Item.Round_Shader;
+            Line (Group_Size, 1, Item.Round_Line);
+         end if;
+
          Request.Stage.Module := Item.Shader;
 
          if Item.Low_Pipeline = Null_Handle then
@@ -4062,6 +4114,16 @@ package body Model_Runner.Platform.Device.Products is
                      Request.Stage.Module := Item.Glu_Many_Shader;
                      Line (Wave_Lanes, C.unsigned (Count),
                            Item.Glu_Many_Lines (Count));
+                  end if;
+                  if Item.Dots_Shader /= Null_Handle then
+                     Request.Stage.Module := Item.Dots_Shader;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Dots_Lines (Count));
+                  end if;
+                  if Item.Glu_Dots_Shader /= Null_Handle then
+                     Request.Stage.Module := Item.Glu_Dots_Shader;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Glu_Dots_Lines (Count));
                   end if;
                end loop;
 
@@ -5448,6 +5510,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back_Buffer (Item, Item.Turn_Buffer_Two, Item.Turn_Memory_Two);
       Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
       Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
+      Give_Back_Buffer (Item, Item.Round_Buffer, Item.Round_Memory);
       Item.Vector_Bytes := 0;
       Item.Turn_Bytes := 0;
       Item.Turn_Bytes_Two := 0;
@@ -5488,6 +5551,8 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Many_Lines5 (Count), "vkDestroyPipeline");
          Give_Back (Item.Many_Lines6 (Count), "vkDestroyPipeline");
          Give_Back (Item.Glu_Many_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Dots_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Glu_Dots_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Long_Line6, "vkDestroyPipeline");
       Give_Back (Item.Mid_Line6, "vkDestroyPipeline");
@@ -5679,6 +5744,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Many_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Many_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Dots_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Glu_Dots_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Round_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Round_Line, "vkDestroyPipeline");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Mid_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Long_Shader, "vkDestroyShaderModule");
@@ -5707,6 +5776,15 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Heads_Line /= Null_Handle);
 
    function Timed (Item : Engine) return Boolean is (Item.Timing);
+
+   procedure Round_Walks (Item : in out Engine; Rounding : Walk_Rounding)
+   is
+   begin
+      Item.Rounding := Rounding;
+   end Round_Walks;
+
+   function Rounds_Walks (Item : Engine) return Walk_Rounding
+   is (if Item.Round_Line = Null_Handle then Rounds_None else Item.Rounding);
 
    procedure Prefer_Halves (Item : in out Engine; On : Boolean) is
    begin
@@ -7686,6 +7764,19 @@ package body Model_Runner.Platform.Device.Products is
         and then not Over_Limit (Item, Tiled_Result)
         and then not Over_Limit (Item, Tiled_Half);
 
+      --  And whether its walk multiplies as integers, as a sequence's
+      --  would: see Round_Walks.
+      Rounds : constant Boolean :=
+        not Tiled
+        and then Count in Many_Count
+        and then Packing = Packed_Q4_K
+        and then Columns mod 256 = 0
+        and then Columns <= Round_Columns
+        and then Rounds_Walks (Item) = Rounds_Every
+        and then Item.Dots_Lines (Count) /= Null_Handle
+        and then Row_Line (Item, Count, Packing, Columns)
+                 = Item.Many_Lines4 (Count);
+
       --  The batch as the kernel that will run wants it.
       Vectors_Room : constant Natural :=
         (if Tiled then Tiled_Room else Count);
@@ -7805,6 +7896,15 @@ package body Model_Runner.Platform.Device.Products is
          Item.Half_Bytes := 3 * Half_Bytes;
       end if;
 
+      if Rounds and then Item.Round_Buffer = Null_Handle then
+         Take (Item, Round_Bytes, Item.Round_Buffer, Item.Round_Memory,
+               Good);
+         if not Good then
+            Release_Borrowed;
+            return;
+         end if;
+      end if;
+
       --  Still a map and an unmap of its own, unlike the read-back below.
       --  Keeping this one standing as well was written and measured and is
       --  not here: the results it produced were wrong -- the drafted device
@@ -7863,6 +7963,8 @@ package body Model_Runner.Platform.Device.Products is
          Told (5) := Told (3);
 
          Told (6) := Copy_Descriptor (Item);
+         Told (7) :=
+           (Buffer => Item.Round_Buffer, Offset => 0, Extent => Round_Bytes);
 
          for Index in Told'Range loop
             if Index in Buffers'Range then
@@ -7875,7 +7977,8 @@ package body Model_Runner.Platform.Device.Products is
             Notes (Index).Buffers := Told (Index)'Address;
          end loop;
 
-         Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+         Update (Item.Logical, (if Rounds then 7 else 6), Notes'Address, 0,
+                 Null_Handle);
       end;
 
       --  The work: one group per sixty-four rows, which is what the shader
@@ -7990,6 +8093,41 @@ package body Model_Runner.Platform.Device.Products is
                Bind_Pipeline
                  (Item.Buffer, Bind_Point_Compute,
                   Row_Line (Item, Count, Packing, Columns));
+
+               --  The activations rounded first, for a walk that
+               --  multiplies as integers.
+               if Rounds then
+                  declare
+                     Barrier : constant Barrier_Call :=
+                       To_Barrier (Point ("vkCmdPipelineBarrier"));
+                     Wall : aliased Memory_Barrier;
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => 0,
+                        Columns => C.unsigned (Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing => 0,
+                        Base    => 0,
+                        Joins   => 0,
+                        Table   => 0,
+                        others  => <>);
+                  begin
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute, Item.Round_Line);
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((Count * Columns / 32 + 63) / 64), 1, 1);
+                     Barrier
+                       (Item.Buffer, Pipeline_Stage_Compute,
+                        Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                        0, Null_Handle, 0, Null_Handle);
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        Item.Dots_Lines (Count));
+                  end;
+               end if;
 
                while First < Count loop
                   declare
@@ -12707,6 +12845,32 @@ package body Model_Runner.Platform.Device.Products is
                       Steps.Items (Which).Columns, Count,
                       Rounded => Steps.Items (Which).Rounded));
 
+      --  Whether a product walks as integers over its activations rounded
+      --  first: a Q4_K walk of a few positions, its gate and up or any of
+      --  them as Round_Walks says, reading its one activation from the
+      --  front of what its binding names. See Round_Walks.
+      function Dotted (Which : Positive) return Boolean
+      is (Count in Many_Count
+          and then Is_Product (Which)
+          and then Steps.Items (Which).Packing = Packed_Q4_K
+          and then not Steps.Items (Which).Exact
+          and then Steps.Items (Which).Columns mod 256 = 0
+          and then Steps.Items (Which).Columns <= Round_Columns
+          and then Rounds_Walks (Item) /= Rounds_None
+          and then
+            (if Steps.Items (Which).Glu
+             then Item.Glu_Dots_Lines (Count) /= Null_Handle
+             else Rounds_Walks (Item) = Rounds_Every
+                  and then not Tiled (Which)
+                  and then not Listed_Tiled (Which)
+                  and then not Steps.Items (Which).Listed
+                  and then Steps.Items (Which).Gathers = 0
+                  and then Steps.Items (Which).Routed = 0
+                  and then Item.Dots_Lines (Count) /= Null_Handle
+                  and then Row_Line (Item, Count, Packed_Q4_K,
+                                     Steps.Items (Which).Columns)
+                           = Item.Many_Lines4 (Count)));
+
       --  The stretch of the result buffer a step that readies heads reads:
       --  from the first byte of the steps it names to the last. It is bound
       --  as that and not as the whole buffer, and the offsets it is told are
@@ -13621,6 +13785,19 @@ package body Model_Runner.Platform.Device.Products is
          Item.Half_Bytes := 3 * Half_Bytes;
       end if;
 
+      --  And the room the integer walks' rounding writes, the first time
+      --  any walk rounds; it is one size whatever the model.
+      if Item.Round_Buffer = Null_Handle
+        and then (for some Index in 1 .. Steps.Held => Dotted (Index))
+      then
+         Take (Item, Round_Bytes, Item.Round_Buffer, Item.Round_Memory,
+               Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
+      end if;
+
       --  And the angles, where anything turns: written into a standing
       --  mapping as the activation is, because they change every call.
       if Turn_Room > 0 then
@@ -14211,13 +14388,19 @@ package body Model_Runner.Platform.Device.Products is
 
             Told (6) := Copy_Descriptor (Item);
 
+            --  And the rounded activations, for a walk that reads them.
+            Told (7) :=
+              (Buffer => Item.Round_Buffer, Offset => 0,
+               Extent => Round_Bytes);
+
             for Binding in Told'Range loop
                Notes (Binding).Target := Item.Sets (Index);
                Notes (Binding).Binding := C.unsigned (Binding - 1);
                Notes (Binding).Buffers := Told (Binding)'Address;
             end loop;
 
-            Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+            Update (Item.Logical, (if Dotted (Index) then 7 else 6),
+                    Notes'Address, 0, Null_Handle);
 
             <<Next_Set>>
          end loop;
@@ -14236,6 +14419,11 @@ package body Model_Runner.Platform.Device.Products is
          Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
          --  Steps whose results a barrier has already published.
          Fenced : Natural := 0;
+
+         --  The last step whose walk read the rounded activations, which
+         --  the next rounding may not overwrite until it has; not known at
+         --  the start, where the sequence before may still be reading.
+         Rounded_At : Natural := Natural'Last;
 
          --  The last step that wrote the cache, which an attending step
          --  reads without naming: its queries come from a step it names and
@@ -14296,6 +14484,46 @@ package body Model_Runner.Platform.Device.Products is
            [others => False];
          Gated     : array (1 .. Sequence_Limit) of Natural :=
            [others => 0];
+
+         --  A walk's activations rounded where it reads them, for it to
+         --  multiply as integers: after a barrier where a walk before may
+         --  still be reading the last rounding, and before one, so that
+         --  the walk reads this one whole.
+         procedure Round_For (Index : Positive) is
+            This : Step renames Steps.Items (Index);
+
+            Shape : aliased Shape_Constants :=
+              (Rows    => 0,
+               Columns => C.unsigned (This.Columns),
+               Count   => C.unsigned (Count),
+               First   => 0,
+               Packing => 0,
+               Base    => 0,
+               Joins   => 0,
+               Table   => 0,
+               others  => <>);
+         begin
+            if Rounded_At > Fenced then
+               Barrier
+                 (Item.Buffer, Pipeline_Stage_Compute,
+                  Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                  0, Null_Handle, 0, Null_Handle);
+               Fenced := Index - 1;
+            end if;
+
+            Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Round_Line);
+            Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                  Product_Bytes, Shape'Address);
+            Dispatch
+              (Item.Buffer,
+               C.unsigned ((Count * This.Columns / 32 + 63) / 64), 1, 1);
+
+            Barrier
+              (Item.Buffer, Pipeline_Stage_Compute,
+               Pipeline_Stage_Compute, 0, 1, Wall'Address,
+               0, Null_Handle, 0, Null_Handle);
+            Rounded_At := Index;
+         end Round_For;
       begin
          if Reset_Buffer = null or else Start = null or else Stop = null
            or else Bind_Pipeline = null or else Bind_Sets = null
@@ -16013,8 +16241,12 @@ package body Model_Runner.Platform.Device.Products is
                      Band : constant Natural :=
                        (if Q8 then (if One and then not Short then 1 else 2)
                         elsif One then 1 else 4);
+                     --  Or its walk as integers; see Round_Walks.
+                     Rounds : constant Boolean :=
+                       Dotted (Index) and then Barrier /= null;
                      Line : constant Address :=
-                       (if not Q8
+                       (if Rounds then Item.Glu_Dots_Lines (Count)
+                        elsif not Q8
                         then (if One then Item.Glu_Line
                               else Item.Glu_Many_Lines (Count))
                         elsif not One then Item.Q8_Glu_Multi_Lines (Count)
@@ -16035,6 +16267,10 @@ package body Model_Runner.Platform.Device.Products is
                         Apart   => 0,
                         Routed  => 0);
                   begin
+                     if Rounds then
+                        Round_For (Index);
+                     end if;
+
                      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Line);
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -16184,10 +16420,17 @@ package body Model_Runner.Platform.Device.Products is
                --  Bound here rather than left to whatever the step
                --  before it bound: the row kernel is chosen by the format
                --  as well as by the batch, and only a product knows its
-               --  format.
-               Bind_Pipeline
-                 (Item.Buffer, Bind_Point_Compute,
-                  Row_Line (Item, Count, This.Packing, This.Columns));
+               --  format. A walk that multiplies as integers rounds its
+               --  activations first; see Round_Walks.
+               if Dotted (Index) and then Barrier /= null then
+                  Round_For (Index);
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute, Item.Dots_Lines (Count));
+               else
+                  Bind_Pipeline
+                    (Item.Buffer, Bind_Point_Compute,
+                     Row_Line (Item, Count, This.Packing, This.Columns));
+               end if;
 
                --  A listed product on the matrix kernel: the runs'
                --  vectors laid out by slot in half precision first, then

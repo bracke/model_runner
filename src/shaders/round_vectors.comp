@@ -1,0 +1,57 @@
+#version 450
+
+//  A few positions' activations rounded to eight-bit integers, a scale for
+//  every thirty-two, for the walks that multiply them as integers: see
+//  row_product_super.comp's DOTS. Once a product rather than once a
+//  workgroup, for the reason half_batch.comp gives -- every workgroup of
+//  the walk rounding the vectors for itself cost what the integer dots
+//  saved.
+//
+//  An invocation a block of thirty-two: the largest magnitude is the
+//  scale's hundred and twenty-seven, and each value is rounded to the
+//  nearest step of it. The integers go to the front of the buffer, a
+//  position's after the last, and the scales past room for eight
+//  positions' integers.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
+layout(std430, binding = 6) writeonly buffer Rounded  { uint  qw[]; };
+layout(std430, binding = 6) writeonly buffer Scales   { float qs[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+} shape;
+
+void main() {
+    uint blocks = shape.columns / 32u;
+    uint block = gl_GlobalInvocationID.x;
+    uint position = block / blocks;
+
+    if (position >= shape.count) {
+        return;
+    }
+
+    uint at = block * 8u;
+    vec4 v[8];
+    float most = 0.0;
+    for (uint j = 0u; j < 8u; ++j) {
+        v[j] = x4[at + j];
+        vec4 a = abs (v[j]);
+        most = max (most, max (max (a.x, a.y), max (a.z, a.w)));
+    }
+
+    float scale = most / 127.0;
+    float inverse = most > 0.0 ? 127.0 / most : 0.0;
+    for (uint j = 0u; j < 8u; ++j) {
+        ivec4 r = ivec4 (round (v[j] * inverse));
+        qw[at + j] = (uint (r.x) & 0xFFu)
+                   | ((uint (r.y) & 0xFFu) << 8u)
+                   | ((uint (r.z) & 0xFFu) << 16u)
+                   | ((uint (r.w) & 0xFFu) << 24u);
+    }
+    qs[2u * shape.columns + block] = scale;
+}

@@ -231,6 +231,22 @@ package body Model_Runner.Backend.Device is
    function Attends_In_Halves return Boolean
    is (Ready_Now and then Products.Prefers_Halves (Engine));
 
+   --  Which walks round, kept for an engine opened after it was asked.
+   Rounding_Wanted : Products.Walk_Rounding := Products.Rounds_None;
+
+   procedure Round_Walks (Rounding : Products.Walk_Rounding) is
+   begin
+      Rounding_Wanted := Rounding;
+
+      if Ready_Now then
+         Products.Round_Walks (Engine, Rounding);
+      end if;
+   end Round_Walks;
+
+   function Rounds_Walks return Products.Walk_Rounding
+   is (if Ready_Now then Products.Rounds_Walks (Engine)
+       else Products.Rounds_None);
+
    procedure Attend_Exactly (On : Boolean) is
    begin
       if Ready_Now then
@@ -501,6 +517,8 @@ package body Model_Runner.Backend.Device is
       if Halves_Wanted then
          Products.Prefer_Halves (Engine, True);
       end if;
+
+      Products.Round_Walks (Engine, Rounding_Wanted);
 
       Sharing := Share_Host;
       Opened_Which := Which;

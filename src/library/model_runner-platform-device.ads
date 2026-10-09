@@ -208,6 +208,14 @@ package Model_Runner.Platform.Device is
    --  @return True when a thirty-two-lane subgroup may be required.
    function Has_Sized_Subgroups (Item : Context) return Boolean;
 
+   --  Whether this device multiplies four packed bytes by four in one
+   --  instruction for a compute shader, which the integer walks are made
+   --  of, and was opened with it.
+   --
+   --  @param Item Open device.
+   --  @return True when a shader using the integer dot may be dispatched.
+   function Has_Integer_Dot (Item : Context) return Boolean;
+
    --  What a host pointer must be aligned to before this device will take
    --  it.
    --
@@ -364,6 +372,9 @@ private
       --  thirty-two on request, which the super-block row product needs -- a
       --  workgroup of thirty-two, one subgroup.
       Sized_Subgroups : Boolean := False;
+
+      --  Whether the device was opened with the packed integer dot.
+      Integer_Dot : Boolean := False;
 
       --  Which memory kinds the processor can both write and see without
       --  being told to flush, as a mask over the device's list. An imported

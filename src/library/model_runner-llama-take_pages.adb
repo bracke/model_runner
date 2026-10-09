@@ -52,8 +52,7 @@ begin
       --  found again by dividing by the held size. A larger one would
       --  overrun its slot, and is refused while any are held. Gemma 3
       --  4B's page is four times its 270M draft's: refused, the draft
-      --  attended on the host and the drafted run read 17.0 tokens a
-      --  second where blocks read 19.8.
+      --  attended on the host.
       if not Item.Paged_In
         and then Pages_In_Use > 0
         and then Want > Page_Elements

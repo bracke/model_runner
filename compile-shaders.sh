@@ -17,7 +17,9 @@
 #  vulkan1.3 gives 1.6 (the cooperative-matrix kernels).
 #
 #  Run from the repository root.  Needs glslangValidator and a built tests
-#  tool (tests/bin/tests).
+#  tool (tests/bin/tests).  The integer-dot walks need a glslangValidator
+#  that knows GL_EXT_integer_dot_product (16 or later); name it in
+#  DOT_GLSLANG where the one on the path is older.
 
 set -e
 
@@ -46,6 +48,18 @@ compile () {
     PAIRS="$PAIRS ../src/shaders/$src $out"
 }
 
+#  compile_dots NAME SOURCE TARGET [DEFINE ...] -- as compile, with the
+#  compiler that knows the integer dot.
+compile_dots () {
+    name=$1; src=$2; target=$3; shift 3
+    out="$SPV/$name.spv"
+    defs=""
+    for d in "$@"; do defs="$defs -D$d"; done
+    # shellcheck disable=SC2086
+    "${DOT_GLSLANG:-glslangValidator}" --target-env "$target" $defs "$ROOT/src/shaders/$src" -o "$out"
+    PAIRS="$PAIRS ../src/shaders/$src $out"
+}
+
 compile attention                    attention.comp        vulkan1.0
 compile attention_subgroups          attention.comp        vulkan1.1 SUBGROUPS WIDE
 compile attention_tiled              attention.comp        vulkan1.1 SUBGROUPS QUERY_TILE
@@ -61,6 +75,9 @@ compile row_product_super_long       row_product_super.comp vulkan1.1 NUM_ROWS=2
 compile row_product_super_multi      row_product_super.comp vulkan1.1 NUM_ROWS=8u MULTI
 compile row_product_super_glu        row_product_super.comp vulkan1.1 NUM_ROWS=1u GLU
 compile row_product_super_glu_multi  row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU
+compile_dots row_product_super_multi_dots     row_product_super.comp vulkan1.1 NUM_ROWS=8u MULTI DOTS
+compile_dots row_product_super_glu_multi_dots row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU DOTS
+compile round_vectors                round_vectors.comp    vulkan1.0
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super5_multi     row_product_super5.comp vulkan1.1 NUM_ROWS=8u MULTI
