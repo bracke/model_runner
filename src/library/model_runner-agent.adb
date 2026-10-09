@@ -196,26 +196,6 @@ package body Model_Runner.Agent is
       Chances_Left : Natural := 2;
       Reading      : E.Error_Info;
 
-      --  FNV-1a over the name, a separator, and the arguments.
-      function Digest (Named : String; Args : String)
-        return Interfaces.Unsigned_64
-      is
-         Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
-         procedure Mix (Text : String) is
-         begin
-            for C of Text loop
-               Hash :=
-                 (Hash xor Interfaces.Unsigned_64 (Character'Pos (C)))
-                 * 16#0000_0100_0000_01B3#;
-            end loop;
-         end Mix;
-      begin
-         Mix (Named);
-         Mix ([1 => ASCII.NUL]);
-         Mix (Args);
-         return Hash;
-      end Digest;
-
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
       procedure Render
@@ -245,6 +225,7 @@ package body Model_Runner.Agent is
 
       Request.Add_Beginning := False;
       Request.Retain_Text := True;
+      Request.Deadline := Deadline;
       Request.Reuse_Committed_Prefix := True;
       if not L.Capability (Source).Supports_Batched then
          Request.Batch_Size := 1;
@@ -384,6 +365,14 @@ package body Model_Runner.Agent is
          if Last_Result.Reason = Gen.Cancelled then
             L.Reset (Session);
             Result.Reason := Cancelled;
+            exit Step_Loop;
+         end if;
+
+         --  The run's time ran out inside the reply: stopped there, not
+         --  after it, and the turn cut short is not committed.
+         if Last_Result.Reason = Gen.Time_Limit then
+            L.Reset (Session);
+            Result.Reason := Timed_Out;
             exit Step_Loop;
          end if;
 
@@ -773,8 +762,7 @@ package body Model_Runner.Agent is
                           (if Items (Source).Failed then Failed_Note else Items (Source).Ended);
 
                         Args    : constant String := U.To_String (Items (Call).Args);
-                        Key     : constant Interfaces.Unsigned_64 :=
-                          Digest (Model_Runner.Agent.Recall.Identity (Named, Args), "");
+                        Key     : constant String := Model_Runner.Agent.Recall.Identity (Named, Args);
                         Ran_Now : constant Boolean :=
                           Items (Call).Kind /= As_Note and then Items (Call).Copy_Of = 0;
 
@@ -792,11 +780,10 @@ package body Model_Runner.Agent is
                              Ran_Now
                              and then Ended.Answer = Model_Runner.Tools.Runner.Answered
                              and then Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
-                             and then Sighted.Seen_Again (Key, Digest ("", Said_By_Tool));
+                             and then Sighted.Seen_Again (Key, Said_By_Tool);
                            Back    : constant Boolean :=
                              Ran_Now and then Ended.Changed and then Has_Path and then Has_Content
-                             and then Sighted.Seen_Again
-                                        (Digest ("path", Path), Digest ("", Content));
+                             and then Sighted.Seen_Again ("path" & ASCII.NUL & Path, Content);
                         begin
                            if Again and then Made_Change then
                               return ASCII.LF & "(note from the harness: this answers exactly as it"

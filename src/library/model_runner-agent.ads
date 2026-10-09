@@ -327,11 +327,11 @@ package Model_Runner.Agent is
    --  @param Max_Steps Most model turns before the loop gives up on an open
    --    call. A task that needs one tool and an answer takes two.
    --  @param Max_Seconds A wall-clock budget for the whole loop, or 0.0 for
-   --    none. It is checked between steps, and it is the deadline every call
-   --    runs within: a tool's process and a child agent stop at it, so a
-   --    call that hangs does not outlast the run. A generation in flight is
-   --    bounded by its tokens, not this. Needs Time; with no clock there is
-   --    nothing to measure and the budget is ignored.
+   --    none. It is the deadline everything the run does runs within: a
+   --    reply stops at it between tokens, and a tool's process and a child
+   --    agent stop at it, so neither a long reply nor a call that hangs
+   --    outlasts the run. Needs Time; with no clock there is nothing to
+   --    measure and the budget is ignored.
    --  @param Max_Total_Tokens A ceiling on the tokens generated over the whole
    --    loop, child agents' included, or 0 for none. Each generation is asked
    --    for no more than is left, so the ceiling holds; a turn the ceiling

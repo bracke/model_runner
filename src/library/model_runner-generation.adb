@@ -777,6 +777,11 @@ package body Model_Runner.Generation is
       --  otherwise, so a round costs the tokens it added.
       procedure Recall_Said;
 
+      --  Whether the request's deadline has passed.
+      function Past_Deadline return Boolean is
+        (Ada.Real_Time."/=" (Item.Deadline, Ada.Real_Time.Time_Last)
+         and then Ada.Real_Time.">=" (Ada.Real_Time.Clock, Item.Deadline));
+
       procedure Recall_Said is
       begin
          if Said = null then
@@ -1527,6 +1532,9 @@ package body Model_Runner.Generation is
          while Index <= Prompt_Count loop
             if C.Is_Cancelled (Cancel) then
                Conclude (Cancelled);
+               exit Prefill_Loop;
+            elsif Past_Deadline then
+               Conclude (Time_Limit);
                exit Prefill_Loop;
             end if;
 
@@ -2531,6 +2539,9 @@ package body Model_Runner.Generation is
                begin
                   if C.Is_Cancelled (Cancel) then
                      Conclude (Cancelled);
+                     exit Decode_Loop;
+                  elsif Past_Deadline then
+                     Conclude (Time_Limit);
                      exit Decode_Loop;
                   end if;
 

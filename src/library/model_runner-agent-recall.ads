@@ -1,9 +1,8 @@
-with Ada.Containers.Hashed_Sets;
+with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
 with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
-with Interfaces;
 with Model_Runner.Tools.Runner;
 
 --  What the agent loop remembers of the calls a model has made, so that a
@@ -137,7 +136,7 @@ package Model_Runner.Agent.Recall is
    --  The longest record written.
    Record_Most : constant := 1_536;
 
-   --  Pairs of fingerprints seen -- a call and what it answered, a path and
+   --  Pairs seen -- a call and what it answered, a path and
    --  what was written to it -- kept across every change, so that an answer
    --  the same as one before a change, or a file put back as an earlier
    --  write left it, is noticed.
@@ -151,8 +150,8 @@ package Model_Runner.Agent.Recall is
    --  @return True when the pair was seen before this.
    function Seen_Again
      (Self    : in out Sightings;
-      Of_What : Interfaces.Unsigned_64;
-      Was     : Interfaces.Unsigned_64) return Boolean;
+      Of_What : String;
+      Was     : String) return Boolean;
 
 private
 
@@ -169,14 +168,10 @@ private
       Rows : Entry_Vectors.Vector;
    end record;
 
-   type Pair is record
-      Of_What, Was : Interfaces.Unsigned_64 := 0;
-   end record;
-
-   function Hash (Item : Pair) return Ada.Containers.Hash_Type;
-
-   package Pair_Sets is new Ada.Containers.Hashed_Sets
-     (Pair, Hash, Equivalent_Elements => "=");
+   --  A pair is held whole -- what it is of, a separator, what it was --
+   --  so two pairs are the same only where they are.
+   package Pair_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (String, Ada.Strings.Hash, Equivalent_Elements => "=");
 
    type Sightings is tagged limited record
       Held : Pair_Sets.Set;

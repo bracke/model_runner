@@ -1671,8 +1671,9 @@ package body Tests.Tools_Cases is
       declare
          Sighted : Model_Runner.Agent.Recall.Sightings;
       begin
-         Assert (not Sighted.Seen_Again (1, 10) and then not Sighted.Seen_Again (1, 11)
-                 and then Sighted.Seen_Again (1, 10) and then not Sighted.Seen_Again (2, 10),
+         Assert (not Sighted.Seen_Again ("a", "ten") and then not Sighted.Seen_Again ("a", "eleven")
+                 and then Sighted.Seen_Again ("a", "ten") and then not Sighted.Seen_Again ("b", "ten")
+                 and then not Sighted.Seen_Again ("a" & ASCII.NUL & "t", "en"),
                  "a pair seen before was not noticed, or a new one was taken for it");
       end;
 

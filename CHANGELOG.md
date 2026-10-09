@@ -13,6 +13,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A reply stops at its run's deadline:** a generation request carries a deadline, checked beside the cancellation between steps of the prompt and between tokens, and ends Time_Limit there; the agent loop gives each reply its run's --max-seconds deadline, so a long reply no longer runs past it, and the turn it cut short is not committed.
+- **The harness's notes compare whole:** what a call answered and what a write put in a file are kept as they are, not as 64-bit digests, so a note that an answer is the same as before is never a collision's.
 - **A call runs within its run:** a runner is given the context its calls run within -- the run's cancellation, its deadline from --max-seconds, and the tokens it has left (Runner.Tool_Context) -- and a program a built-in tool or the --tool-command runs is stopped with its group at the first of them, where it used to be waited out (the external runner had no bound at all). A call stopped so ends Timed_Out or Cancelled, and a run whose own limit stopped a call ends with it.
 - **The token ceiling holds:** each generation is asked for no more than the run has left of --max-total-tokens, child agents' tokens counted, where the generation in flight used to run past it.
 - **A sub-agent is held to how it ended:** delegate gives its answer only where the sub-agent answered; one that ran out of steps, tokens or time, went round, failed or was cancelled is said to have, with its steps and calls, and a sub-agent that answered nothing is a failure, not an empty success. Run_Sub returns a Sub_Outcome, and the sub-agent runs within its parent's cancellation, time and tokens rather than a fresh allowance of its own.

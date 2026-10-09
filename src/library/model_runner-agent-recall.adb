@@ -2,8 +2,6 @@ with Ada.Containers.Indefinite_Vectors;
 
 package body Model_Runner.Agent.Recall is
 
-   use type Interfaces.Unsigned_64;
-
    package Member_Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
    package Name_Sorting is new Member_Names.Generic_Sorting;
 
@@ -214,13 +212,6 @@ package body Model_Runner.Agent.Recall is
    function Identity (Named : String; Arguments : String) return String is
      (Named & ASCII.NUL & Canonical (Arguments));
 
-   ----------
-   -- Hash --
-   ----------
-
-   function Hash (Item : Pair) return Ada.Containers.Hash_Type is
-     (Ada.Containers.Hash_Type'Mod (Item.Of_What xor (Item.Was * 31)));
-
    -----------
    -- Holds --
    -----------
@@ -381,14 +372,15 @@ package body Model_Runner.Agent.Recall is
 
    function Seen_Again
      (Self    : in out Sightings;
-      Of_What : Interfaces.Unsigned_64;
-      Was     : Interfaces.Unsigned_64) return Boolean
+      Of_What : String;
+      Was     : String) return Boolean
    is
+      Whole : constant String := Of_What & ASCII.NUL & Was;
    begin
-      if Self.Held.Contains ((Of_What, Was)) then
+      if Self.Held.Contains (Whole) then
          return True;
       end if;
-      Self.Held.Insert ((Of_What, Was));
+      Self.Held.Insert (Whole);
       return False;
    end Seen_Again;
 

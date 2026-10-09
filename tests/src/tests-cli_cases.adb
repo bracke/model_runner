@@ -1,3 +1,4 @@
+with Ada.Real_Time;
 with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
 with Model_Runner.Project_Manifests;
@@ -8689,6 +8690,23 @@ package body Tests.CLI_Cases is
             Plain'Unchecked_Access, null, null, null, null, Outcome => Outcome);
          Assert (Outcome.Reason = Gen.Maximum_Tokens, "baseline run failed");
          Gen.Release (Outcome);
+
+         --  A request past its deadline stops there, with Time_Limit, and
+         --  generates nothing more: a long reply does not outlast its run.
+         declare
+            Late : Gen.Request := Request;
+         begin
+            Late.Deadline := Ada.Real_Time."-" (Ada.Real_Time.Clock, Ada.Real_Time.Seconds (1));
+            L.Reset (Session);
+            Gen.Generate
+              (Under.Ready, Session, "ab", Late, Stop, null,
+               Plain'Unchecked_Access, null, null, null, null, Outcome => Outcome);
+            Assert (Outcome.Reason = Gen.Time_Limit and then Outcome.Generated_Tokens = 0,
+                    "a request past its deadline did not stop at it: "
+                    & Gen.Completion_Reason'Image (Outcome.Reason));
+            Gen.Release (Outcome);
+            L.Reset (Session);
+         end;
 
          --  An empty prompt is not empty by the time it is tokenized: a
          --  SentencePiece vocabulary prepends its space marker, so "" comes

@@ -1,3 +1,4 @@
+with Ada.Real_Time;
 with Interfaces;
 
 with Model_Runner.Backend;
@@ -49,6 +50,7 @@ package Model_Runner.Generation is
       Maximum_Tokens,
       Context_Full,
       Cancelled,
+      Time_Limit,
       Output_Closed,
       Runtime_Error);
 
@@ -77,6 +79,12 @@ package Model_Runner.Generation is
       --  and stops, which is what reading a document to save its cache
       --  asks for.
       Max_Tokens : Natural := 256;
+
+      --  When it must be done by, or Time_Last for no time limit: checked
+      --  beside the cancellation between steps of the prompt and between
+      --  tokens, so a long reply stops at its caller's deadline with what
+      --  it had, ending Time_Limit.
+      Deadline : Ada.Real_Time.Time := Ada.Real_Time.Time_Last;
 
       --  Validated sampling configuration.
       Sampling : Model_Runner.Sampling.Configuration;
