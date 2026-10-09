@@ -209,7 +209,17 @@ package Model_Runner.Tools.Builtin is
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  What each built-in tool does to the state later calls read. Reads:
+   --  the pure ones, the file and directory reads, the memory read, the
+   --  network fetches, retrieve, and ask_user, whose answer stands until
+   --  something changes. Varies: now. Changes: write_file, the memory
+   --  write, the tools that run a program (shell, run_python, sql), and
+   --  delegate, whose child may do any of those.
+   overriding function Kind
+     (Self : Instance; Named : String) return Model_Runner.Tools.Runner.Call_Kind;
 
    --  Which built-in tools are safe to run beside another call in the turn.
    --  True for the tools that touch none of this runner's state and no shared

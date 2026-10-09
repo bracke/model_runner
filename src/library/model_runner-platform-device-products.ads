@@ -558,12 +558,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param On True to read the copy, False the cache proper.
    procedure Prefer_Halves (Item : in out Engine; On : Boolean);
 
-   --  Which of a check round's K-quant walks round their activations to
+   --  Which of a check round's K-quant and Q8_0 walks round their activations to
    --  eight-bit integers and multiply them as integers: none, the
    --  feed-forward's gate and up only, or every one.
    type Walk_Rounding is (Rounds_None, Rounds_Feed_Forward, Rounds_Every);
 
-   --  Have a few positions' Q4_K, Q5_K and Q6_K walks multiply as
+   --  Have a few positions' Q4_K, Q5_K, Q6_K and Q8_0 walks multiply as
    --  integers.
    --
    --  A walk of two to eight positions is bound by its arithmetic, not by
@@ -3571,6 +3571,12 @@ private
       Q8_Glu_Short_Line   : System.Address := System.Null_Address;
       Q8_Glu_Multi_Shaders : Multi_Array := [others => System.Null_Address];
       Q8_Glu_Multi_Lines   : Multi_Array := [others => System.Null_Address];
+
+      --  And both again over activations rounded to bytes; see Round_Walks.
+      Q8_Dots_Shaders     : Multi_Array := [others => System.Null_Address];
+      Q8_Dots_Lines       : Multi_Array := [others => System.Null_Address];
+      Q8_Glu_Dots_Shaders : Multi_Array := [others => System.Null_Address];
+      Q8_Glu_Dots_Lines   : Multi_Array := [others => System.Null_Address];
 
       --  And the two IQ4 formats, the same way: each read through its table
       --  of sixteen values, IQ4_XS with its sub-block scales beside.

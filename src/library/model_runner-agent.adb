@@ -2,11 +2,16 @@ with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
+with Model_Runner.Agent.Recall;
 with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
+with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Constraint;
 
 package body Model_Runner.Agent is
+
+   use type Model_Runner.Tools.Runner.Call_Kind;
+   use type Model_Runner.Tools.Runner.Answer_Kind;
 
    package Conv renames Model_Runner.Conversation;
    package U renames Ada.Strings.Unbounded;
@@ -23,7 +28,6 @@ package body Model_Runner.Agent is
    --  How many distinct calls one loop remembers, to notice a repeat. A
    --  model asks for a handful of tools; a table this size costs a couple
    --  of kilobytes and holds far more calls than a well-behaved loop makes.
-   Seen_Max : constant := 256;
 
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
@@ -112,16 +116,15 @@ package body Model_Runner.Agent is
       Budget_Ns : constant Model_Runner.Clocks.Nanoseconds :=
         Model_Runner.Clocks.Nanoseconds (Long_Float (Max_Seconds) * 1.0e9);
 
-      --  The calls made so far, by a hash of name-and-arguments, so a call
-      --  the model has already made is noticed rather than run again -- a
-      --  real tool may not be idempotent, and a model that repeats itself
-      --  is not making progress.
-      Seen      : array (1 .. Seen_Max) of Interfaces.Unsigned_64;
-      Seen_Used : Natural := 0;
+      --  The calls made since the state they read last changed, by a hash
+      --  of name-and-arguments, so a call the model has already made is
+      --  noticed rather than run again -- a real tool may not be
+      --  idempotent, and a model that repeats itself is not making
+      --  progress -- with what each answered and how it ended. See Recall.
+      Made : Model_Runner.Agent.Recall.Memory;
 
-      --  What each call seen answered, by its place in Seen: a repeat of
-      --  one that worked is given the same answer, not told off.
-      Answered_With : array (1 .. Seen_Max) of U.Unbounded_String;
+      --  And the work as it went, for a compacted conversation to carry.
+      Work : Model_Runner.Agent.Recall.Work_Log;
 
       --  Turns in a row that only repeated calls: going round is the
       --  second such turn, not the first.
@@ -151,17 +154,6 @@ package body Model_Runner.Agent is
          Mix (Args);
          return Hash;
       end Digest;
-
-      --  Where a call is in Seen, or zero.
-      function Place_Of (Key : Interfaces.Unsigned_64) return Natural is
-      begin
-         for Index in 1 .. Seen_Used loop
-            if Seen (Index) = Key then
-               return Index;
-            end if;
-         end loop;
-         return 0;
-      end Place_Of;
 
       --  A call's arguments without the spaces between their parts: the
       --  same call written with other spacing is the same call.
@@ -193,24 +185,6 @@ package body Model_Runner.Agent is
          end loop;
          return Result (1 .. Last);
       end Squeezed;
-
-      function Already_Seen (Key : Interfaces.Unsigned_64) return Boolean is
-      begin
-         for Index in 1 .. Seen_Used loop
-            if Seen (Index) = Key then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Already_Seen;
-
-      procedure Remember (Key : Interfaces.Unsigned_64) is
-      begin
-         if Seen_Used < Seen_Max then
-            Seen_Used := Seen_Used + 1;
-            Seen (Seen_Used) := Key;
-         end if;
-      end Remember;
 
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
@@ -288,7 +262,7 @@ package body Model_Runner.Agent is
                declare
                   Gone : Natural;
                begin
-                  Conv.Compact (Messages, Keep_Recent, Gone);
+                  Conv.Compact (Messages, Keep_Recent, Gone, Work.Record_Text);
                   exit when Gone = 0;
                   L.Reset (Session);
                   Result.Compactions := Result.Compactions + 1;
@@ -439,11 +413,24 @@ package body Model_Runner.Agent is
                   Failed : Boolean := False;     --  the answer would not fit
                   Done   : Boolean := False;     --  the run has happened
                   Copy_Of : Natural := 0;        --  the same call earlier this turn
+                  --  How the run, or the note in its place, ended.
+                  Ended  : Model_Runner.Tools.Runner.Call_Outcome :=
+                    Model_Runner.Tools.Runner.Done;
                end record;
 
                Items   : array (1 .. Asked) of Item_Rec;
                Planned : Natural := 0;  --  calls decided before an approval halt
                Halted  : Boolean := False;
+
+               --  Whether a call that Changes is planned this turn: a call
+               --  after it waits for it, not run ahead of it with the
+               --  parallel-safe ones, whose runs come before the serial.
+               Changing : Boolean := False;
+
+               --  A note in a call's place: refused by what, or failed.
+               Failed_Note : constant Model_Runner.Tools.Runner.Call_Outcome :=
+                 (Answer => Model_Runner.Tools.Runner.Failed,
+                  Refusal => Model_Runner.Tools.Runner.Not_Refused);
 
                Repeat_Note : constant String :=
                  "error: this exact call was already made in this "
@@ -461,6 +448,8 @@ package body Model_Runner.Agent is
                        Conv.Call_Arguments (Messages, Turn, Call);
                      Key   : constant Interfaces.Unsigned_64 :=
                        Digest (Named, Squeezed (Args));
+                     Effect : constant Model_Runner.Tools.Runner.Call_Kind :=
+                       Executor.Kind (Named);
                   begin
                      Items (Call).Named := U.To_Unbounded_String (Named);
                      Items (Call).Args  := U.To_Unbounded_String (Args);
@@ -469,8 +458,10 @@ package body Model_Runner.Agent is
                      end if;
 
                      --  The same call earlier in this very turn: its answer,
-                     --  once it has one -- not run twice, not told off.
-                     if Already_Seen (Key) and then U.Length (Answered_With (Place_Of (Key))) = 0
+                     --  once it has one -- not run twice, not told off. A
+                     --  clock is read again whatever was read before.
+                     if Effect /= Model_Runner.Tools.Runner.Varies
+                       and then Made.Holds (Key) and then not Made.Answered (Key)
                        and then (for some Earlier in 1 .. Call - 1 =>
                                    Digest (U.To_String (Items (Earlier).Named),
                                            Squeezed (U.To_String (Items (Earlier).Args))) = Key)
@@ -483,22 +474,26 @@ package body Model_Runner.Agent is
                               Items (Call).Copy_Of := Earlier;
                            end if;
                         end loop;
-                     elsif Already_Seen (Key) then
+                     elsif Effect /= Model_Runner.Tools.Runner.Varies and then Made.Holds (Key) then
                         --  Where it worked, the same answer again; where it
                         --  was an error, said that it will be again.
                         declare
-                           Earlier : constant String := U.To_String (Answered_With (Place_Of (Key)));
+                           Worked : constant Boolean :=
+                             Made.Answered (Key)
+                             and then Made.Ended (Key).Answer = Model_Runner.Tools.Runner.Answered;
                         begin
                            Items (Call).Text := U.To_Unbounded_String
-                             (if Earlier /= "" and then (Earlier'Length < 6
-                                                         or else Earlier (Earlier'First .. Earlier'First + 5)
-                                                                   /= "error:")
-                              then Earlier
-                              else Repeat_Note);
+                             (if Worked then Made.Answer (Key) else Repeat_Note);
+                           Items (Call).Ended :=
+                             (if Worked then Made.Ended (Key) else Failed_Note);
                         end;
                      else
-                        Progressed := True;
-                        Remember (Key);
+                        --  Only a call not made before gets further: a
+                        --  clock read again runs, and is no progress.
+                        if not Made.Holds (Key) then
+                           Progressed := True;
+                           Made.Remember (Key);
+                        end if;
                         if not Model_Runner.Tools.Offers (Offered, Named) then
                            --  The grammar should have made this impossible;
                            --  if it happens anyway, the model hears the truth
@@ -513,6 +508,7 @@ package body Model_Runner.Agent is
                               Items (Call).Text := U.To_Unbounded_String
                                 ("error: no tool named """ & Named & """ is offered here; the tools"
                                  & " offered are " & U.To_String (Listed));
+                              Items (Call).Ended := Failed_Note;
                            end;
                         else
                            case (if Approve = null then Allow
@@ -532,12 +528,23 @@ package body Model_Runner.Agent is
                                     & """ was not approved; do not repeat it "
                                     & "-- take a different approach or answer "
                                     & "without it");
+                                 Items (Call).Ended :=
+                                   (Answer  => Model_Runner.Tools.Runner.Refused,
+                                    Refusal => Model_Runner.Tools.Runner.Not_Permitted);
 
                               when Allow =>
-                                 if Executor.Parallel_Safe (Named) then
+                                 --  After a call that changes state, in
+                                 --  order: never run ahead of it.
+                                 if Executor.Parallel_Safe (Named) and then not Changing then
                                     Items (Call).Kind := As_Parallel;
                                  else
                                     Items (Call).Kind := As_Serial;
+                                 end if;
+                                 --  And what was answered before it is
+                                 --  stale once it has run.
+                                 if Effect = Model_Runner.Tools.Runner.Changes then
+                                    Changing := True;
+                                    Made.Changed (Key);
                                  end if;
                            end case;
                         end if;
@@ -598,7 +605,7 @@ package body Model_Runner.Agent is
                                  Executor.Run
                                    (U.To_String (Items (Idx).Named),
                                     U.To_String (Items (Idx).Args),
-                                    Buf, Fill, Ran);
+                                    Buf, Fill, Items (Idx).Ended, Ran);
                                  if E.Is_Error (Ran) then
                                     Items (Idx).Failed := True;
                                  else
@@ -646,7 +653,7 @@ package body Model_Runner.Agent is
                         begin
                            Executor.Run
                              (Named, U.To_String (Items (Call).Args),
-                              Buf, Fill, Ran);
+                              Buf, Fill, Items (Call).Ended, Ran);
                            if E.Is_Error (Ran) then
                               Items (Call).Failed := True;
                            else
@@ -657,28 +664,33 @@ package body Model_Runner.Agent is
                      end if;
 
                      declare
+                        Source : constant Positive :=
+                          (if Items (Call).Copy_Of > 0 then Items (Call).Copy_Of else Call);
                         Reply : constant String :=
-                          (if Items (Call).Copy_Of > 0
-                           then (if Items (Items (Call).Copy_Of).Failed
-                                 then "error: the tool's answer was too large to return"
-                                 else U.To_String (Items (Items (Call).Copy_Of).Text))
-                           elsif Items (Call).Failed
+                          (if Items (Source).Failed
                            then "error: the tool's answer was too large to "
                                 & "return"
-                           else U.To_String (Items (Call).Text));
+                           else U.To_String (Items (Source).Text));
+                        Ended : constant Model_Runner.Tools.Runner.Call_Outcome :=
+                          (if Items (Source).Failed then Failed_Note else Items (Source).Ended);
                      begin
-                        --  Kept by the call, for a repeat of it.
+                        --  Kept by the call, for a repeat of it, and in the
+                        --  record of the work: by the path it named, where
+                        --  it named one.
+                        Made.Keep
+                          (Digest (Named, Squeezed (U.To_String (Items (Call).Args))), Reply, Ended);
                         declare
-                           Place : constant Natural :=
-                             Place_Of (Digest (Named, Squeezed (U.To_String (Items (Call).Args))));
+                           Named_Path : Boolean;
+                           Path       : constant String :=
+                             Model_Runner.Tools.Builtin.Text_Argument
+                               (U.To_String (Items (Call).Args), "path", Named_Path);
                         begin
-                           if Place > 0 and then U.Length (Answered_With (Place)) = 0 then
-                              Answered_With (Place) := U.To_Unbounded_String (Reply);
-                           end if;
+                           Work.Note (Named, (if Named_Path then Path else ""),
+                                      Executor.Kind (Named), Ended);
                         end;
                         Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
                         if Watch /= null then
-                           Watch.On_Result (Named, Reply);
+                           Watch.On_Result (Named, Reply, Ended);
                         end if;
                      end;
 

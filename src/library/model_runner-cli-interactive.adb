@@ -322,10 +322,11 @@ package body Model_Runner.CLI.Interactive is
 
       --  The session's own model, as the agent /work runs on a task.
       Asked_For : aliased constant Opt.Command := Item;
+      Worker_Notes : aliased Model_Runner.CLI.Project_Commands.Run_Notes;
       Worker    : Model_Runner.CLI.Project_Commands.Session_Agent
         (Prepared'Unchecked_Access, Session'Unchecked_Access,
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
-         Asked_For'Unchecked_Access, Cancel);
+         Asked_For'Unchecked_Access, Cancel, Worker_Notes'Unchecked_Access);
       Sink     : aliased Pres.Standard_Output_Sink;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;

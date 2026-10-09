@@ -1686,9 +1686,9 @@ package body Tests.CLI_Cases is
    --  the binary32 walk answers, to the rounding of its activations: each
    --  position rounded to a byte a value, a scale for every thirty-two, is
    --  a part in two hundred and fifty-four of the largest of them, and a
-   --  row's sum carries that as a fraction of its own size. Q4_K, Q5_K and
-   --  Q6_K, at four and eight positions, the two widths a round checks
-   --  at. Skipped where no device has the integer dot.
+   --  row's sum carries that as a fraction of its own size. Q4_K, Q5_K,
+   --  Q6_K and Q8_0, at four and eight positions, the two widths a round
+   --  checks at -- Q8_0 walks as integers at four. Skipped where no device has the integer dot.
    procedure Device_Integer_Walks_Stay_Close
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1707,19 +1707,22 @@ package body Tests.CLI_Cases is
       Widths : constant array (1 .. 2) of Positive := [4, 8];
 
       type Format is record
-         Packing : Products.Weight_Packing;
-         Name    : String (1 .. 4);
-         Bytes   : Positive;
+         Packing  : Products.Weight_Packing;
+         Name     : String (1 .. 4);
+         Elements : Positive;
+         Bytes    : Positive;
       end record;
 
-      Formats : constant array (1 .. 3) of Format :=
-        [(Products.Packed_Q4_K, "Q4_K", 144),
-         (Products.Packed_Q5_K, "Q5_K", 176),
-         (Products.Packed_Q6_K, "Q6_K", 210)];
+      Formats : constant array (1 .. 4) of Format :=
+        [(Products.Packed_Q4_K, "Q4_K", 256, 144),
+         (Products.Packed_Q5_K, "Q5_K", 256, 176),
+         (Products.Packed_Q6_K, "Q6_K", 256, 210),
+         (Products.Packed_Q8_0, "Q8_0", 32, 34)];
 
       --  A block's bytes from a pattern, but for its factors: Q4_K's and
       --  Q5_K's scale of about a tenth and minimum of about a twentieth at
-      --  its front, Q6_K's scale of about a hundredth at its back. Q6_K's
+      --  its front -- Q8_0's scale of a tenth there too, its bytes after --
+      --  Q6_K's scale of about a hundredth at its back. Q6_K's
       --  weights are centred, and from a pattern alone a row's terms cancel
       --  to a sum a hundredth of their size, which the rounding is not a
       --  part in a hundred of: its sixes are held to the top half and its
@@ -1785,7 +1788,7 @@ package body Tests.CLI_Cases is
                      Weights : Model_Runner.Bytes.Byte_Array_Access :=
                        new Model_Runner.Bytes.Byte_Array
                          (1 .. Model_Runner.Bytes.Byte_Count
-                                 (Rows * Cols / 256 * Kind.Bytes));
+                                 (Rows * Cols / Kind.Elements * Kind.Bytes));
                   begin
                      for Index in Weights'Range loop
                         Weights (Index) := Byte_At (Kind, Index);

@@ -585,7 +585,17 @@ on offer and `/tool TEXT` to hand an answer back.
 model's calls are run and the answers fed back until it answers, a step
 budget (`--max-steps N`, eight by default) or a token budget
 (`--max-total-tokens N`, off by default) runs out, or a call repeats one
-already made. It runs a broad built-in set -- arithmetic and string work, a
+already made. A repeat is answered from the first only while nothing has
+changed what it read: each tool says whether it reads, changes state or
+varies (a clock), and a call that changes state -- a write, a shell, a
+sub-agent -- makes every call before it run again, so a file read after it
+was written is read anew. Each call also ends answered, failed or refused
+-- and refused by what: a path outside the project, the harness's own state,
+a permission, the execution policy -- which is what the harness acts on,
+never the words of the answer; `--trace-file` writes it beside each result.
+A conversation compacted to fit carries the harness's record of the work in
+its task -- what was changed, what still fails, what was refused -- written
+from the calls it saw rather than by asking the model. It runs a broad built-in set -- arithmetic and string work, a
 scratchpad it can write and read, base64, the clock, files, a ranked search
 over a folder of text files, PDFs, Office documents (modern and legacy),
 OpenDocument, EPUB, RTF and HTML, a shell, Python, an HTTP fetch, a web
@@ -12823,18 +12833,22 @@ character where it was over the first two dozen tokens, which is an anecdote,
 and the bound is set from the sweep instead.
 
 On the device the default stays binary32, and `--arith` named is what
-rounds: a drafted round's Q4_K, Q5_K and Q6_K walks -- two to eight positions against one
+rounds: a drafted round's Q4_K, Q5_K, Q6_K and Q8_0 walks -- two to eight positions against one
 reading of the weights, bound by their arithmetic rather than their bytes --
 round each position to a byte a value with a scale for every thirty-two, once
 a product, and multiply four bytes by four in one instruction. `int8` rounds
-every such walk and `mixed` the feed-forward's gate and up only; a token, a
-prompt and every other format are as they were. Q4_K at 8192 rows of 4096 checks
+every such walk and `mixed` the feed-forward's gate and up only; a token,
+a prompt longer than eight positions and every other format are as they
+were. Q4_K at 8192 rows of 4096 checks
 four positions in 0.40 ms where it took 0.45 and eight in 0.70 where it took
 0.89; Qwen3 8B drafting eight a round from its context reads 14.2 tokens a
 second against 13.6, and at four a round -- Gemma 3 4B drafted by its 270M --
 the two are level within a percent. Q5_K checks a seventh faster and Q6_K,
 bound more by its bytes, 2-8% faster; Qwen3 8B's own drafting, which checks
-its Q6_K matrices too, reads 19.3 tokens a second against 19.0. A drafted run then no longer answers
+its Q6_K matrices too, reads 19.3 tokens a second against 19.0. Q8_0's walk
+is bound by its bytes and checks four positions about as fast either way, but
+Qwen3.5-4B drafting from its own next-token block reads 30.0 tokens a second
+against 29.0. A drafted run then no longer answers
 exactly what an undrafted one does, which is why it is asked for. A device
 without the integer dot keeps the binary32 walks.
 

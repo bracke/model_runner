@@ -78,7 +78,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
    overriding procedure On_Call
      (Self : in out Agent_Watch; Named : String; Arguments : String);
    overriding procedure On_Result
-     (Self : in out Agent_Watch; Named : String; Result : String);
+     (Self   : in out Agent_Watch;
+      Named  : String;
+      Result : String;
+      Ended  : Model_Runner.Tools.Runner.Call_Outcome);
    overriding procedure On_Step (Self : in out Agent_Watch);
 
    overriding procedure On_Step (Self : in out Agent_Watch) is
@@ -123,13 +126,32 @@ package body Model_Runner.CLI.Execute.Run_Command is
    end On_Call;
 
    overriding procedure On_Result
-     (Self : in out Agent_Watch; Named : String; Result : String) is
+     (Self   : in out Agent_Watch;
+      Named  : String;
+      Result : String;
+      Ended  : Model_Runner.Tools.Runner.Call_Outcome)
+   is
+      package Tr renames Model_Runner.Tools.Runner;
+
+      --  How it ended, as the trace names it: answered, failed, or the
+      --  refusal by what refused it.
+      Said : constant String :=
+        (case Ended.Answer is
+           when Tr.Answered => "answered",
+           when Tr.Failed   => "failed",
+           when Tr.Refused  =>
+             (case Ended.Refusal is
+                when Tr.Outside_Project => "refused_outside_project",
+                when Tr.Harness_Owned   => "refused_harness_owned",
+                when Tr.Policy          => "refused_by_policy",
+                when Tr.Not_Permitted | Tr.Not_Refused => "refused"));
    begin
       Pres.Put_Tool_Result (Self.Screen.all, Result);
       if Self.Trace then
          Record_Event
            (Self,
             """event"":""result"",""name"":""" & JSON_Escape (Named)
+            & """,""outcome"":""" & Said
             & """,""result"":""" & JSON_Escape (Result) & """");
       end if;
    end On_Result;
@@ -238,26 +260,41 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Last     : out Natural;
       Status   : out E.Error_Info)
    is
-      Line : String (1 .. 4096);
-      Read : Natural := 0;
+      --  The whole line, however long: read into a fixed buffer, a longer
+      --  answer left its tail in the input for the next line read to take.
+      function Typed return String is
+      begin
+         return Ada.Text_IO.Get_Line;
+      exception
+         when Ada.Text_IO.End_Error =>
+            return "";
+      end Typed;
    begin
       Last   := 0;
       Status := E.Success;
       Pres.Put_Note
         (Self.Screen.all, "cli.agent.ask", [Loc.Named ("detail", Question)]);
-      begin
-         Ada.Text_IO.Get_Line (Line, Read);
-      exception
-         when Ada.Text_IO.End_Error =>
-            Read := 0;
-      end;
       declare
-         Take : constant Natural := Natural'Min (Read, Answer'Length);
+         Line : constant String := Typed;
+         Cut  : constant String :=
+           " (the answer was cut here: it was" & Natural'Image (Line'Length)
+           & " bytes, and a tool's answer holds" & Natural'Image (Answer'Length) & ")";
       begin
-         if Take > 0 then
-            Answer (Answer'First .. Answer'First + Take - 1) :=
-              Line (1 .. Take);
-            Last := Take;
+         if Line'Length <= Answer'Length then
+            Answer (Answer'First .. Answer'First + Line'Length - 1) := Line;
+            Last := Answer'First + Line'Length - 1;
+         elsif Answer'Length > Cut'Length then
+            --  Too long for the answer: what fits, and said to be cut.
+            declare
+               Keep : constant Natural := Answer'Length - Cut'Length;
+            begin
+               Answer (Answer'First .. Answer'First + Keep - 1) :=
+                 Line (Line'First .. Line'First + Keep - 1);
+               Answer (Answer'First + Keep .. Answer'Last) := Cut;
+               Last := Answer'Last;
+            end;
+         else
+            Status := E.Make (E.Tools_Too_Large);
          end if;
       end;
    end Ask;
@@ -570,6 +607,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
 
    overriding procedure Run
@@ -578,6 +616,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info)
    is
       use type GNAT.OS_Lib.String_Access;
@@ -601,9 +640,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
       end Note;
    begin
       Status := Model_Runner.Errors.Success;
+      Outcome := Model_Runner.Tools.Runner.Done;
       Last := 0;
 
       if Program = null then
+         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
          Note ("error: tool command not found on the path: "
                & Self.Command.all);
          for A of Args loop
@@ -620,6 +661,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
       if Ran and then Code = 0 then
          declare
             File  : Ada.Text_IO.File_Type;
+            --  Room kept at the end for saying the output was cut.
+            Cut   : constant String := ASCII.LF & "(the tool command's output was cut here: it printed more"
+              & " than a tool's answer holds)";
+            Room  : constant Natural := Result'Last - Cut'Length;
             Fill  : Natural := Result'First - 1;
             First : Boolean := True;
          begin
@@ -629,7 +674,12 @@ package body Model_Runner.CLI.Execute.Run_Command is
                   Line : constant String := Ada.Text_IO.Get_Line (File);
                   Gap  : constant Natural := (if First then 0 else 1);
                begin
-                  exit when Fill + Gap + Line'Length > Result'Last;
+                  --  Past what fits: said, not dropped without a word.
+                  if Fill + Gap + Line'Length > Room then
+                     Result (Fill + 1 .. Fill + Cut'Length) := Cut;
+                     Fill := Fill + Cut'Length;
+                     exit;
+                  end if;
                   if not First then
                      Fill := Fill + 1;
                      Result (Fill) := ASCII.LF;
@@ -650,9 +700,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
             end if;
          exception
             when others =>
+               Outcome.Answer := Model_Runner.Tools.Runner.Failed;
                Note ("error: could not read the tool command's output");
          end;
       else
+         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
          Note ("error: the tool command failed");
       end if;
 

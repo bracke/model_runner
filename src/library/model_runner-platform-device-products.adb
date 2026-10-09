@@ -3089,6 +3089,41 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end;
                end loop;
+
+               --  And both again as integers, where the device has the
+               --  integer dot; see Round_Walks.
+               if Has_Integer_Dot (On) then
+                  for Count in Multi_Count loop
+                     declare
+                        Dots : aliased constant Model_Runner.Shaders.Word_Array :=
+                          (case Count is
+                             when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots,
+                             when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots,
+                             when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots);
+                        Glus : aliased constant Model_Runner.Shaders.Word_Array :=
+                          (case Count is
+                             when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Glu,
+                             when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Glu,
+                             when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Glu);
+                     begin
+                        Request.Size := Interfaces.C.size_t (Dots'Length * 4);
+                        Request.Code := Dots'Address;
+                        if Create (Item.Logical, Request'Address, Null_Handle,
+                                   Made'Access) = 0
+                        then
+                           Item.Q8_Dots_Shaders (Count) := Made;
+                        end if;
+
+                        Request.Size := Interfaces.C.size_t (Glus'Length * 4);
+                        Request.Code := Glus'Address;
+                        if Create (Item.Logical, Request'Address, Null_Handle,
+                                   Made'Access) = 0
+                        then
+                           Item.Q8_Glu_Dots_Shaders (Count) := Made;
+                        end if;
+                     end;
+                  end loop;
+               end if;
             end if;
          end;
 
@@ -4209,6 +4244,14 @@ package body Model_Runner.Platform.Device.Products is
                   if Item.Q8_Glu_Multi_Shaders (Count) /= Null_Handle then
                      Request.Stage.Module := Item.Q8_Glu_Multi_Shaders (Count);
                      Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Multi_Lines (Count));
+                  end if;
+                  if Item.Q8_Dots_Shaders (Count) /= Null_Handle then
+                     Request.Stage.Module := Item.Q8_Dots_Shaders (Count);
+                     Line (Low_Wave_Lanes, 1, Item.Q8_Dots_Lines (Count));
+                  end if;
+                  if Item.Q8_Glu_Dots_Shaders (Count) /= Null_Handle then
+                     Request.Stage.Module := Item.Q8_Glu_Dots_Shaders (Count);
+                     Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Dots_Lines (Count));
                   end if;
                end loop;
 
@@ -5600,6 +5643,8 @@ package body Model_Runner.Platform.Device.Products is
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Lines (Count), "vkDestroyPipeline");
          Give_Back (Item.Q8_Glu_Multi_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Q8_Dots_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Q8_Glu_Dots_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.MX_Wave_Line, "vkDestroyPipeline");
@@ -5757,6 +5802,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Q8_Glu_Short_Shader, "vkDestroyShaderModule");
       for Count in Multi_Count loop
          Give_Back (Item.Q8_Multi_Shaders (Count), "vkDestroyShaderModule");
+         Give_Back (Item.Q8_Dots_Shaders (Count), "vkDestroyShaderModule");
+         Give_Back (Item.Q8_Glu_Dots_Shaders (Count), "vkDestroyShaderModule");
          Give_Back (Item.Q8_Glu_Multi_Shaders (Count),
                     "vkDestroyShaderModule");
       end loop;
@@ -5817,9 +5864,16 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Packing : Weight_Packing; Count : Natural;
       Columns : Natural) return Address
    is (if Count not in Many_Count
-         or else Columns mod 256 /= 0
+         or else Columns mod 32 /= 0
+         or else (Packing /= Packed_Q8_0 and then Columns mod 256 /= 0)
          or else Columns > Round_Columns
        then Null_Handle
+       elsif Packing = Packed_Q8_0
+       then (if Count in Multi_Count
+               and then Row_Line (Item, Count, Packing, Columns)
+                        = Item.Q8_Multi_Lines (Count)
+             then Item.Q8_Dots_Lines (Count)
+             else Null_Handle)
        elsif Packing = Packed_Q4_K
          and then Row_Line (Item, Count, Packing, Columns)
                   = Item.Many_Lines4 (Count)
@@ -12896,6 +12950,16 @@ package body Model_Runner.Platform.Device.Products is
                       Steps.Items (Which).Columns, Count,
                       Rounded => Steps.Items (Which).Rounded));
 
+      --  A gate-and-up step's walk as integers, or none: Q4_K's over
+      --  whole super-blocks, Q8_0's at two to four positions.
+      function Glu_Dots_Line
+        (Packing : Weight_Packing; Columns : Natural) return Address
+      is (if Packing = Packed_Q4_K and then Columns mod 256 = 0
+          then Item.Glu_Dots_Lines (Count)
+          elsif Packing = Packed_Q8_0 and then Count in Multi_Count
+          then Item.Q8_Glu_Dots_Lines (Count)
+          else Null_Handle);
+
       --  Whether a product walks as integers over its activations rounded
       --  first: a Q4_K walk of a few positions, its gate and up or any of
       --  them as Round_Walks says, reading its one activation from the
@@ -12904,13 +12968,14 @@ package body Model_Runner.Platform.Device.Products is
       is (Count in Many_Count
           and then Is_Product (Which)
           and then not Steps.Items (Which).Exact
-          and then Steps.Items (Which).Columns mod 256 = 0
+          and then Steps.Items (Which).Columns mod 32 = 0
           and then Steps.Items (Which).Columns <= Round_Columns
           and then Rounds_Walks (Item) /= Rounds_None
           and then
             (if Steps.Items (Which).Glu
-             then Steps.Items (Which).Packing = Packed_Q4_K
-                  and then Item.Glu_Dots_Lines (Count) /= Null_Handle
+             then Glu_Dots_Line (Steps.Items (Which).Packing,
+                                 Steps.Items (Which).Columns)
+                  /= Null_Handle
              else Rounds_Walks (Item) = Rounds_Every
                   and then not Tiled (Which)
                   and then not Listed_Tiled (Which)
@@ -16295,7 +16360,7 @@ package body Model_Runner.Platform.Device.Products is
                      Rounds : constant Boolean :=
                        Dotted (Index) and then Barrier /= null;
                      Line : constant Address :=
-                       (if Rounds then Item.Glu_Dots_Lines (Count)
+                       (if Rounds then Glu_Dots_Line (This.Packing, This.Columns)
                         elsif not Q8
                         then (if One then Item.Glu_Line
                               else Item.Glu_Many_Lines (Count))

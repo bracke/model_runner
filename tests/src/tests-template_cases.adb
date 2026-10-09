@@ -10,7 +10,9 @@ with Interfaces;
 
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.Conversation;
+with Model_Runner.Agent.Recall;
 with Model_Runner.Errors;
+with Model_Runner.Tools.Runner;
 with Model_Runner.Limits;
 with Model_Runner.Templates;
 with Model_Runner.Text;
@@ -3640,6 +3642,77 @@ package body Tests.Template_Cases is
       Conv.Close (Messages);
    end Compaction_Keeps_The_Shape;
 
+   --  A compacted conversation carries the harness's record of the work --
+   --  what was changed, what still fails, what was refused -- in the task,
+   --  and a later compaction carries the record as it then stands in place
+   --  of the first, never both.
+   procedure Compaction_Carries_The_Work_Record
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tr renames Model_Runner.Tools.Runner;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Dropped  : Natural;
+      Work     : Model_Runner.Agent.Recall.Work_Log;
+
+      function Count (Whole, Part : String) return Natural is
+         Found : Natural := 0;
+      begin
+         for P in Whole'First .. Whole'Last - Part'Length + 1 loop
+            if Whole (P .. P + Part'Length - 1) = Part then
+               Found := Found + 1;
+            end if;
+         end loop;
+         return Found;
+      end Count;
+
+      procedure Rounds (From : Positive) is
+      begin
+         for Round in From .. From + 4 loop
+            Conv.Append_Asking (Messages, "step" & Integer'Image (Round), Status);
+            Conv.Append_Call (Messages, "read_file", "{""path"":""a.adb""}", Status);
+            Conv.Append (Messages, Conv.Tool_Role, "result" & Integer'Image (Round), Status);
+         end loop;
+      end Rounds;
+   begin
+      Work.Note ("write_file", "a.adb", Tr.Changes, Tr.Done);
+      Work.Note ("run_checks", "", Tr.Reads, (Answer => Tr.Failed, Refusal => Tr.Not_Refused));
+      Work.Note ("read_file", "/etc/passwd", Tr.Reads,
+                 (Answer => Tr.Refused, Refusal => Tr.Outside_Project));
+      declare
+         Said : constant String := Work.Record_Text;
+      begin
+         Assert (Count (Said, "changed: write_file a.adb") = 1
+                 and then Count (Said, "failed, and not answered since: run_checks") = 1
+                 and then Count (Said, "refused: read_file /etc/passwd (outside the project)") = 1,
+                 "the record does not say the work: " & Said);
+      end;
+
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, "the task", Status);
+      Rounds (1);
+      Conv.Compact (Messages, 3, Dropped, Work.Record_Text);
+      Assert (Dropped > 0
+              and then Count (Conv.Content_At (Messages, 1), "run_checks") = 1,
+              "the task did not carry the record: " & Conv.Content_At (Messages, 1));
+
+      --  The checks pass now: the record as it stands replaces the first.
+      Work.Note ("run_checks", "", Tr.Reads, Tr.Done);
+      Rounds (6);
+      Conv.Compact (Messages, 3, Dropped, Work.Record_Text);
+      declare
+         Task_Text : constant String := Conv.Content_At (Messages, 1);
+      begin
+         Assert (Count (Task_Text, "[the work so far, as the harness recorded it:]") = 1,
+                 "a second compaction carried two records: " & Task_Text);
+         Assert (Count (Task_Text, "failed, and not answered since") = 0
+                 and then Count (Task_Text, "run_checks") = 1,
+                 "the record carried was not the work as it stands: " & Task_Text);
+      end;
+      Conv.Close (Messages);
+   end Compaction_Carries_The_Work_Record;
+
    --  The opening of the answer, as a conversation's next turn writes it
    --  otherwise: the bytes at the end of a rendering with the generation
    --  prompt that the rendering without it does not share. None where the
@@ -3776,6 +3849,10 @@ package body Tests.Template_Cases is
         (T, Compaction_Keeps_The_Shape'Access,
          "compacting a history drops the oldest turns and keeps the system "
          & "message, the task and a coherent recent tail");
+      Register_Routine
+        (T, Compaction_Carries_The_Work_Record'Access,
+         "a compacted conversation carries the harness's record of the work, "
+         & "the record as it stands replacing the last");
    end Register_Tests;
 
 end Tests.Template_Cases;

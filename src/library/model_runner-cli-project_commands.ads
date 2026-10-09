@@ -40,15 +40,22 @@ with Model_Runner.Stops;
 --  harness makes and answers for.
 package Model_Runner.CLI.Project_Commands is
 
+   --  What the last run of an agent was refused on its way -- a write
+   --  where it may not, a path outside the project -- kept with the agent
+   --  that ran rather than in this package, for its outcome to say.
+   type Run_Notes is limited private;
+
    --  An agent that is the session's own model, already loaded. Cancel, when
-   --  it is set, stops it and every child it made at the next token.
+   --  it is set, stops it and every child it made at the next token. Notes
+   --  is where its runs leave what they were refused.
    type Session_Agent
      (Prepared : not null access Model_Runner.Llama.Model;
       Session  : not null access Model_Runner.Llama.Session;
       Stop_Set : not null access constant Model_Runner.Stops.Set;
       Screen   : not null access Model_Runner.Presentation.Console;
       Item     : not null access constant Model_Runner.CLI.Options.Command;
-      Cancel   : Model_Runner.Cancellation.Token_Reference)
+      Cancel   : Model_Runner.Cancellation.Token_Reference;
+      Notes    : not null access Run_Notes)
    is new Model_Runner.Framework.Work.Parenting_Runner with null record;
 
    --  Run the agent without children: a fresh conversation holding the
@@ -155,11 +162,22 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True after such a /work.
    function Typed_During_Work return Boolean;
 
-   --  What the last /work's agent was refused on the way -- a write where
-   --  it may not, a path outside the project -- for its outcome to say.
+   --  What an agent's last run was refused on the way -- a write where it
+   --  may not, a path outside the project -- for its outcome to say.
    --
-   --  @return The refusals, a semicolon apart; empty for none.
-   function Last_Refusals return String;
+   --  @param Agent The agent /work ran.
+   --  @return The refusals, a semicolon apart; empty for none, and for an
+   --    agent that is not the session's.
+   function Last_Refusals
+     (Agent : Model_Runner.Framework.Work.Agent_Runner'Class) return String;
+
+   --  Whether any of those was a path outside the project, which no
+   --  permission reaches.
+   --
+   --  @param Agent The agent /work ran.
+   --  @return True when one was.
+   function Refused_Outside
+     (Agent : Model_Runner.Framework.Work.Agent_Runner'Class) return Boolean;
 
    --  Where the session was started, as a path within the project it
    --  moved up to: src/shop, for paths typed there to be found.
@@ -192,5 +210,12 @@ package Model_Runner.CLI.Project_Commands is
       Screen : in out Model_Runner.Presentation.Console;
       Agent  : Model_Runner.Framework.Work.Agent_Runner'Class;
       Status : out Natural);
+
+private
+
+   type Run_Notes is limited record
+      Refused : Ada.Strings.Unbounded.Unbounded_String;
+      Outside : Boolean := False;
+   end record;
 
 end Model_Runner.CLI.Project_Commands;

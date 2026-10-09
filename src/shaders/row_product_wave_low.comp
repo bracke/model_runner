@@ -1,6 +1,9 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#ifdef DOTS
+#extension GL_EXT_integer_dot_product : require
+#endif
 
 //  The generating row product for the twelve low-bit formats -- and Q8_0,
 //  IQ4, Q2_K and Q3_K beside them -- on a subgroup
@@ -37,6 +40,12 @@ layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
 layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
 layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
 layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+#ifdef DOTS
+//  The positions rounded to integers by round_vectors.comp, and their
+//  scales: see row_product_super.comp's DOTS.
+layout(std430, binding = 6) readonly  buffer Rounded  { int   qw[]; };
+layout(std430, binding = 6) readonly  buffer Scales   { float qs[]; };
+#endif
 
 const uint LISTED_BY_POSITION = 2u;
 
@@ -2460,6 +2469,21 @@ void main() {
         uint col = i * 256u + itid * 16u;
 
         if (col < shape.columns) {
+#ifdef DOTS
+            //  Q8_0 against bytes: the weights are signed bytes already,
+            //  four to a word, so a word's four products and their sum
+            //  are one instruction; the block's two scales after.
+            int qa[VEC][4];
+            float da[VEC];
+            for (uint k = 0u; k < VEC; ++k) {
+                uint xb = (from_k[k] + col) >> 2u;
+                qa[k][0] = qw[xb];
+                qa[k][1] = qw[xb + 1u];
+                qa[k][2] = qw[xb + 2u];
+                qa[k][3] = qw[xb + 3u];
+                da[k] = qs[2u * shape.columns + ((from_k[k] + col) >> 5u)];
+            }
+#else
             vec4 a[VEC][4];
             for (uint k = 0u; k < VEC; ++k) {
                 uint xb = (from_k[k] + col) >> 2u;
@@ -2468,6 +2492,7 @@ void main() {
                 a[k][2] = x4[xb + 2u];
                 a[k][3] = x4[xb + 3u];
             }
+#endif
             uint block = col / BLOCK_ELEMS;
             uint within = col % BLOCK_ELEMS;
 
@@ -2483,6 +2508,20 @@ void main() {
 #endif
                 uint q = at + 2u + within;
                 float scale = half_at(at);
+#ifdef DOTS
+                int w0 = int(quad_at(q));
+                int w1 = int(quad_at(q + 4u));
+                int w2 = int(quad_at(q + 8u));
+                int w3 = int(quad_at(q + 12u));
+
+                for (uint k = 0u; k < VEC; ++k) {
+                    int whole = dotPacked4x8EXT(qa[k][0], w0)
+                              + dotPacked4x8EXT(qa[k][1], w1)
+                              + dotPacked4x8EXT(qa[k][2], w2)
+                              + dotPacked4x8EXT(qa[k][3], w3);
+                    temp[r][k] += scale * da[k] * float(whole);
+                }
+#else
                 vec4 w0 = vec4(unpack8(int(quad_at(q))));
                 vec4 w1 = vec4(unpack8(int(quad_at(q + 4u))));
                 vec4 w2 = vec4(unpack8(int(quad_at(q + 8u))));
@@ -2493,6 +2532,7 @@ void main() {
                                   * (dot(a[k][0], w0) + dot(a[k][1], w1)
                                    + dot(a[k][2], w2) + dot(a[k][3], w3));
                 }
+#endif
             }
         }
     }

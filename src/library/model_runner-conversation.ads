@@ -189,13 +189,24 @@ package Model_Runner.Conversation is
    --  It does not touch the pool's size, only what fills it, and it leaves
    --  the model positions meaningless, so a caller resets the session after.
    --
+   --  What the task carries of what went is two things. A synopsis of the
+   --  dropped turns, a line each, bounded and added to each time. And,
+   --  where the caller keeps one, Work_Record: the work as it stands --
+   --  what was changed, what still fails, what was refused -- which a
+   --  harness writes from what it saw happen rather than asking the model
+   --  to summarize itself. It replaces the one an earlier compaction
+   --  carried, since it is the state and not a history, and goes only
+   --  where the dropped turns leave room for it.
+   --
    --  @param Item History to compact.
    --  @param Keep_Recent How many of the most recent turns to keep whole.
    --  @param Dropped How many turns were removed; zero when nothing could be.
+   --  @param Work_Record The harness's record of the work, or "" for none.
    procedure Compact
      (Item        : in out History;
       Keep_Recent : Natural;
-      Dropped     : out Natural);
+      Dropped     : out Natural;
+      Work_Record : String := "");
 
    --  Number of messages.
    --

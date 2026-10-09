@@ -45,13 +45,16 @@ with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tools;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Runner;
+with Model_Runner.Tools.Schemas;
 
 package body Model_Runner.CLI.Project_Commands is
 
-   --  What the last root agent's run was refused, a refusal a part.
-   Refused_Last : Ada.Strings.Unbounded.Unbounded_String;
-
    --  Where the session was started below the project's top; "" at it.
+   --  The process's, not a session's: Recover_Here moves the process's
+   --  working directory up to that top, and this is where it moved from,
+   --  which every session in the process shares as it shares the
+   --  directory.
    Below_Top : Ada.Strings.Unbounded.Unbounded_String;
 
    use Ada.Strings.Unbounded;
@@ -77,16 +80,43 @@ package body Model_Runner.CLI.Project_Commands is
 
    type Word_Access is access constant String;
 
-   Words : constant array (Positive range <>) of Word_Access :=
-     [new String'("/init"), new String'("/bootstrap"), new String'("/state"),
-      new String'("/config"), new String'("/task"), new String'("/accept"),
-      new String'("/reject"), new String'("/work"), new String'("/cancel"),
-      new String'("/check"), new String'("/req"), new String'("/result"),
-      new String'("/scan"), new String'("/tree"), new String'("/sym"), new String'("/refs"),
-      new String'("/deps"), new String'("/users"),
-      new String'("/impact"), new String'("/trace"), new String'("/reconfigure"),
-      new String'("/decision"), new String'("/spec"), new String'("/git"),
-      new String'("/sandbox"), new String'("/instruct")];
+   --  Every project command, once: its word and the catalog key of its
+   --  help line, in the order help lists them. Whether a word is a project
+   --  command and what help says of each are both read from here, so a
+   --  command added here is one both know -- they were two lists kept by
+   --  hand, and two such lists drift.
+   type Command_Descriptor is record
+      Name     : Word_Access;
+      Help_Key : Word_Access;
+   end record;
+
+   Commands : constant array (Positive range <>) of Command_Descriptor :=
+     [(new String'("/init"),        new String'("cli.interactive.help.init")),
+      (new String'("/bootstrap"),   new String'("cli.interactive.help.bootstrap")),
+      (new String'("/state"),       new String'("cli.interactive.help.state")),
+      (new String'("/config"),      new String'("cli.interactive.help.config")),
+      (new String'("/git"),         new String'("cli.interactive.help.git")),
+      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox")),
+      (new String'("/instruct"),    new String'("cli.interactive.help.instruct")),
+      (new String'("/reconfigure"), new String'("cli.interactive.help.reconfigure")),
+      (new String'("/task"),        new String'("cli.interactive.help.task")),
+      (new String'("/accept"),      new String'("cli.interactive.help.accept")),
+      (new String'("/reject"),      new String'("cli.interactive.help.reject")),
+      (new String'("/work"),        new String'("cli.interactive.help.work")),
+      (new String'("/cancel"),      new String'("cli.interactive.help.cancel")),
+      (new String'("/check"),       new String'("cli.interactive.help.check")),
+      (new String'("/req"),         new String'("cli.interactive.help.req")),
+      (new String'("/decision"),    new String'("cli.interactive.help.decision")),
+      (new String'("/spec"),        new String'("cli.interactive.help.spec")),
+      (new String'("/result"),      new String'("cli.interactive.help.result")),
+      (new String'("/scan"),        new String'("cli.interactive.help.scan")),
+      (new String'("/tree"),        new String'("cli.interactive.help.tree")),
+      (new String'("/sym"),         new String'("cli.interactive.help.sym")),
+      (new String'("/refs"),        new String'("cli.interactive.help.refs")),
+      (new String'("/deps"),        new String'("cli.interactive.help.deps")),
+      (new String'("/users"),       new String'("cli.interactive.help.users")),
+      (new String'("/impact"),      new String'("cli.interactive.help.impact")),
+      (new String'("/trace"),       new String'("cli.interactive.help.trace"))];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -98,28 +128,43 @@ package body Model_Runner.CLI.Project_Commands is
    function Image (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
 
-   --  A whole file, or nothing when it cannot be read.
-   function Whole (Path : String) return String is
+   --  A whole file, and whether it was read: a file not there and one
+   --  that would not read are errors, IO_Open_Failed and IO_Read_Failed,
+   --  and never the same as a file that is empty -- a specification that
+   --  could not be read is not one that says nothing.
+   procedure Read_Whole
+     (Path   : String;
+      Text   : out Unbounded_String;
+      Status : out E.Error_Info)
+   is
       File : Ada.Streams.Stream_IO.File_Type;
    begin
+      Text := Null_Unbounded_String;
+      Status := E.Success;
       if not Ada.Directories.Exists (Path) then
-         return "";
+         Status := E.Make (E.IO_Open_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         return;
       end if;
       declare
-         Text : String (1 .. Natural (Ada.Directories.Size (Path)));
+         Room : String (1 .. Natural (Ada.Directories.Size (Path)));
       begin
          Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
-         String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
+         String'Read (Ada.Streams.Stream_IO.Stream (File), Room);
          Ada.Streams.Stream_IO.Close (File);
-         return Text;
+         Text := To_Unbounded_String (Room);
       end;
    exception
       when others =>
+         --  Whatever the read raised, it is a read that failed: said as
+         --  that, with the file, and the file left closed.
          if Ada.Streams.Stream_IO.Is_Open (File) then
             Ada.Streams.Stream_IO.Close (File);
          end if;
-         return "";
-   end Whole;
+         Text := Null_Unbounded_String;
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+   end Read_Whole;
 
    --  Every other tool refused, and said so.
    type Fence (Screen : not null access Pres.Console) is
@@ -196,8 +241,10 @@ package body Model_Runner.CLI.Project_Commands is
       Wrote  : Boolean := False;
 
       --  What its calls were refused, first one of each: said with how
-      --  the work ended, as what likely kept it from going on.
+      --  the work ended, as what likely kept it from going on -- and
+      --  whether one was a path outside the project.
       Refused : Names.Vector;
+      Refused_Outside : Boolean := False;
       --  The last call that failed, and what it answered: a run going round
       --  on one is said by it.
       Last_Error : Unbounded_String;
@@ -234,7 +281,10 @@ package body Model_Runner.CLI.Project_Commands is
      (Self : in out Watch; Named : String; Arguments : String);
 
    overriding procedure On_Result
-     (Self : in out Watch; Named : String; Result : String);
+     (Self   : in out Watch;
+      Named  : String;
+      Result : String;
+      Ended  : Model_Runner.Tools.Runner.Call_Outcome);
 
    --  Whose line it is: nothing for the agent the run started with, the
    --  helper's identifier for a helper's.
@@ -288,7 +338,19 @@ package body Model_Runner.CLI.Project_Commands is
    end On_Call;
 
    overriding procedure On_Result
-     (Self : in out Watch; Named : String; Result : String) is
+     (Self   : in out Watch;
+      Named  : String;
+      Result : String;
+      Ended  : Model_Runner.Tools.Runner.Call_Outcome)
+   is
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Tr.Answer_Kind;
+      use type Tr.Refusal_Kind;
+
+      --  What it answered past the "error: " its failures are written with.
+      function Detail return String
+      is (if Result'Length > 7 and then Result (Result'First .. Result'First + 6) = "error: "
+          then Result (Result'First + 7 .. Result'Last) else Result);
       Owner : constant String := Whose (Self);
       --  Every answer named by its call; of several asked at once, by its
       --  number among them too.
@@ -303,8 +365,8 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       Self.Calls_Answered := Self.Calls_Answered + 1;
       Self.Last_Call := Null_Unbounded_String;
-      if Result'Length > 6 and then Result (Result'First .. Result'First + 5) = "error:" then
-         Self.Last_Error := To_Unbounded_String (Named & ": " & Result (Result'First + 7 .. Result'Last));
+      if Ended.Answer /= Tr.Answered then
+         Self.Last_Error := To_Unbounded_String (Named & ": " & Detail);
          Self.Errors_Count := Self.Errors_Count + 1;
          if Self.First_Error = Null_Unbounded_String then
             Self.First_Error := Self.Last_Error;
@@ -317,18 +379,16 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Tool_Result (Self.Screen.all, Label & Result);
       end if;
       Self.Shown := To_Unbounded_String (Result);
-      if Named = "write_file" and then Result'Length > 5 and then Result (Result'First .. Result'First + 4) = "wrote"
-      then
+      if Named = "write_file" and then Ended.Answer = Tr.Answered then
          Self.Wrote := True;
       end if;
-      if Result'Length > 7 and then Result (Result'First .. Result'First + 6) = "error: "
-        and then (Ada.Strings.Fixed.Index (Result, "may not") > 0
-                  or else Ada.Strings.Fixed.Index (Result, "outside the project") > 0
-                  or else Ada.Strings.Fixed.Index (Result, "is not a program") > 0)
-        and then Natural (Self.Refused.Length) < 3
-        and then not Self.Refused.Contains (Result (Result'First + 7 .. Result'Last))
-      then
-         Self.Refused.Append (Result (Result'First + 7 .. Result'Last));
+      --  Refused by a permission, a sandbox, the execution policy or the
+      --  project's edge: what likely kept the work from going on.
+      if Ended.Answer = Tr.Refused then
+         Self.Refused_Outside := Self.Refused_Outside or else Ended.Refusal = Tr.Outside_Project;
+         if Natural (Self.Refused.Length) < 3 and then not Self.Refused.Contains (Detail) then
+            Self.Refused.Append (Detail);
+         end if;
       end if;
       if Self.Host /= null then
          Self.Host.Note_Call
@@ -348,15 +408,6 @@ package body Model_Runner.CLI.Project_Commands is
    is (Pm.Path_Refusal (".", Path, Writing => False) = "");
 
    --  One tool as a model reads it.
-   function Tool (Name, Description, Parameters : String) return String
-   is ("{""type"": ""function"", ""function"": {""name"": """ & Name
-       & """, ""description"": """ & Description
-       & """, ""parameters"": " & Parameters & "}}");
-
-   function Strings (Names : String; Required : String) return String
-   is ("{""type"": ""object"", ""properties"": {" & Names & "}, ""required"": ["
-       & Required & "]}");
-
    --  The roles the project gives permissions to -- map.permission.role.R
    --  -- as the helper's role is offered: one of them, or anything, where
    --  the project names none.
@@ -393,58 +444,59 @@ package body Model_Runner.CLI.Project_Commands is
       return Roles;
    end Configured_Roles;
 
-   function Role_Property return String is
-      Roles  : constant Names.Vector := Configured_Roles;
-      Listed : Unbounded_String;
+   --  The role a helper may be given: one of those, or any where the
+   --  project names none.
+   function Role_Choices return Model_Runner.Tools.Schemas.Choice_Lists.Vector is
+      Choices : Model_Runner.Tools.Schemas.Choice_Lists.Vector;
    begin
-      for Role of Roles loop
-         Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ") & '"' & Role & '"');
+      for Role of Configured_Roles loop
+         Choices.Append (Role);
       end loop;
-      return (if Roles.Is_Empty then """role"": {""type"": ""string""}, "
-              else """role"": {""type"": ""string"", ""enum"": [" & To_String (Listed) & "]}, ");
-   end Role_Property;
+      return Choices;
+   end Role_Choices;
 
    --  The tools an agent is offered: reading always, writing and handing
    --  work to a helper where it may.
-   function Offered_Text (Host : Host_Access) return String
-   is ("["
-       & Tool ("read_file", "Read a text file and return its contents.",
-               Strings ("""path"": {""type"": ""string""}", """path"""))
-       & ", "
-       & Tool ("list_directory", "List the entries of a directory.",
-               Strings ("""path"": {""type"": ""string""}", """path"""))
-       & (if Host /= null and then Host.May_Check (Host.Task_Profile)
-          then ", "
-               & Tool ("run_checks",
-                       "Build and test the project as the task will be verified,"
-                       & " and get back whether it passes and, if not, what the"
-                       & " failing checks reported.",
-                       "{""type"": ""object"", ""properties"": {}}")
-          else "")
-       & (if Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs)
-          then ", "
-               & Tool ("write_file", "Write text to a file, replacing it.",
-                       Strings ("""path"": {""type"": ""string""}, "
-                                & """content"": {""type"": ""string""}",
-                                """path"", ""content"""))
-          else "")
-       & (if Host /= null and then Host.May (Pm.Create_Children)
-          then ", "
-               & Tool ("delegate",
-                       "Hand one part of the work -- a review, an investigation,"
-                       & " a piece to write -- to a helper that starts with no"
-                       & " memory of this conversation and reports back only its"
-                       & " result. Say everything it needs in task. role names"
-                       & " what it is for, and gives it that role's permissions where the"
-                       & " project names the role; need is required (the default),"
-                       & " optional or advisory.",
-                       Strings ("""task"": {""type"": ""string""}, "
-                                & Role_Property
-                                & """need"": {""type"": ""string"", ""enum"": "
-                                & "[""required"", ""optional"", ""advisory""]}",
-                                """task"""))
-          else "")
-       & "]");
+   function Offered_Text (Host : Host_Access) return String is
+      package Sc renames Model_Runner.Tools.Schemas;
+   begin
+      return
+        "["
+        & Sc.Definition ("read_file", "Read a text file and return its contents.", [Sc.Text ("path")])
+        & ", "
+        & Sc.Definition ("list_directory", "List the entries of a directory.", [Sc.Text ("path")])
+        & (if Host /= null and then Host.May_Check (Host.Task_Profile)
+           then ", "
+                & Sc.Definition
+                    ("run_checks",
+                     "Build and test the project as the task will be verified,"
+                     & " and get back whether it passes and, if not, what the"
+                     & " failing checks reported.",
+                     Sc.No_Parameters)
+           else "")
+        & (if Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs)
+           then ", "
+                & Sc.Definition ("write_file", "Write text to a file, replacing it.",
+                                 [Sc.Text ("path"), Sc.Text ("content")])
+           else "")
+        & (if Host /= null and then Host.May (Pm.Create_Children)
+           then ", "
+                & Sc.Definition
+                    ("delegate",
+                     "Hand one part of the work -- a review, an investigation,"
+                     & " a piece to write -- to a helper that starts with no"
+                     & " memory of this conversation and reports back only its"
+                     & " result. Say everything it needs in task. role names"
+                     & " what it is for, and gives it that role's permissions where the"
+                     & " project names the role; need is required (the default),"
+                     & " optional or advisory.",
+                     [Sc.Text ("task"),
+                      Sc.Text ("role", Required => False, Choices => Role_Choices),
+                      Sc.Text ("need", Required => False,
+                               Choices => ["required", "optional", "advisory"])])
+           else "")
+        & "]";
+   end Offered_Text;
 
    --  The file tools, fenced by the permissions of the agent now working,
    --  and delegate, which makes a child through the harness and runs it.
@@ -462,7 +514,14 @@ package body Model_Runner.CLI.Project_Commands is
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  run_checks reads the tree as it stands, and answers the same until
+   --  something is written; delegate's child may write anything. The rest
+   --  are the built-in tools'.
+   overriding function Kind
+     (Self : Work_Tools; Named : String) return Model_Runner.Tools.Runner.Call_Kind;
 
    overriding procedure Write
      (Self   : in out Watching_Sink;
@@ -696,9 +755,10 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       --  What it was refused on the way, for the outcome to say.
       if Root then
-         Refused_Last := Null_Unbounded_String;
+         Self.Notes.Refused := Null_Unbounded_String;
+         Self.Notes.Outside := Watcher.Refused_Outside;
          for One of Watcher.Refused loop
-            Append (Refused_Last, (if Refused_Last = Null_Unbounded_String then "" else "; ") & One);
+            Append (Self.Notes.Refused, (if Self.Notes.Refused = Null_Unbounded_String then "" else "; ") & One);
          end loop;
       end if;
       Conv.Close (Messages);
@@ -886,14 +946,29 @@ package body Model_Runner.CLI.Project_Commands is
       return To_String (Told);
    end Delegate;
 
+   overriding function Kind
+     (Self : Work_Tools; Named : String) return Model_Runner.Tools.Runner.Call_Kind
+   is (if Named = "run_checks" then Model_Runner.Tools.Runner.Reads
+       elsif Named = "delegate" then Model_Runner.Tools.Runner.Changes
+       else Model_Runner.Tools.Builtin.Kind (Model_Runner.Tools.Builtin.Instance (Self), Named));
+
    overriding procedure Run
      (Self      : in out Work_Tools;
       Named     : String;
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info)
    is
+      package Tr renames Model_Runner.Tools.Runner;
+
+      --  The call refused, by what.
+      procedure Refuse (By : Tr.Refusal_Kind) is
+      begin
+         Outcome := (Answer => Tr.Refused, Refusal => By);
+      end Refuse;
+
       procedure Put (Text : String) is
       begin
          Last := 0;
@@ -1023,9 +1098,11 @@ package body Model_Runner.CLI.Project_Commands is
          end;
       end Inside;
    begin
+      Outcome := Tr.Done;
       --  Past the work's time, nothing more is done: the call is refused,
       --  and the run ends as out of time.
       if Self.Host /= null and then Wk.Time_Is_Up (Self.Host.all) then
+         Outcome.Answer := Tr.Failed;
          Put ("error: the work's time is up; no further call is run");
          return;
       end if;
@@ -1041,7 +1118,7 @@ package body Model_Runner.CLI.Project_Commands is
                   Run (Self, Named,
                        Arguments (Arguments'First .. At_Path - 1) & '"' & Taken & '"'
                        & Arguments (At_Path + Quoted'Length .. Arguments'Last),
-                       Result, Last, Status);
+                       Result, Last, Outcome, Status);
                   --  Read from a shorter end of the path it gave: said, so
                   --  the agent knows which file it was.
                   if Named /= "write_file" and then Taken /= "." and then Last >= Result'First
@@ -1060,12 +1137,23 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       Self.Made := Self.Made + 1;
       if Budget > 0 and then Self.Made > Budget then
+         Outcome.Answer := Tr.Failed;
          Put ("error: the budget of" & Natural'Image (Budget)
               & (if Budget = 1 then " tool call" else " tool calls") & " is spent; give your answer now");
       elsif Named = "delegate" then
-         Put (Delegate (Self, Arguments));
+         declare
+            Told : constant String := Delegate (Self, Arguments);
+         begin
+            --  Delegate writes its failures as its answer, "error:" first,
+            --  as the built-in tools do.
+            if Told'Length >= 6 and then Told (Told'First .. Told'First + 5) = "error:" then
+               Outcome.Answer := Tr.Failed;
+            end if;
+            Put (Told);
+         end;
       elsif Named = "run_checks" then
          if Self.Host = null then
+            Outcome.Answer := Tr.Failed;
             Put ("error: no checks can be run here");
          else
             declare
@@ -1073,6 +1161,13 @@ package body Model_Runner.CLI.Project_Commands is
                Ran    : E.Error_Info;
             begin
                Self.Host.Run_Checks (Self.Host.Task_Profile, Report, Ran);
+               if E.Is_Error (Ran) then
+                  if E."=" (Ran.Code, E.Framework_Execution_Refused) then
+                     Refuse (Tr.Policy);
+                  else
+                     Outcome.Answer := Tr.Failed;
+                  end if;
+               end if;
                Put (if E.Is_Ok (Ran) then To_String (Report)
                     else "error: the checks were not run: " & Refusal (Ran));
             end;
@@ -1080,11 +1175,18 @@ package body Model_Runner.CLI.Project_Commands is
       elsif Named in "read_file" | "list_directory" | "write_file"
         and then Pm.Path_Refusal (".", Path, Writing => Named = "write_file") /= ""
       then
+         Refuse
+           (case Pm.Path_Refused_As (".", Path, Writing => Named = "write_file") is
+              when Pm.Path_Outside       => Tr.Outside_Project,
+              when Pm.Path_Harness_Owned => Tr.Harness_Owned,
+              when others                => Tr.Not_Permitted);
          Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Named = "write_file"));
       elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
+         Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not read " & Path
               & (if Pm.Sandbox_Refuses (Path, False) then " (" & Pm.Sandbox_Source & " confines it)" else ""));
       elsif Named = "write_file" and then not May (Reading => False) then
+         Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not write " & Path
               & (if Pm.Sandbox_Refuses (Path, True) then " (" & Pm.Sandbox_Source & " confines it)" else "")
               & (if Self.Host = null then "" else "; you may write " & Wk.Where_Writes (Self.Host.all)));
@@ -1098,12 +1200,13 @@ package body Model_Runner.CLI.Project_Commands is
                Wk.Keep_Before_Write (Self.Host.all, Path, Kept);
             end if;
             if E.Is_Error (Kept) then
+               Outcome.Answer := Tr.Failed;
                Put ("error: " & Path & " was not written: a copy of it as it was could not be"
                     & " kept first, so the write could not be undone");
             else
                Model_Runner.Tools.Builtin.Run
                  (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
-                  Status);
+                  Outcome, Status);
             end if;
          end;
       end if;
@@ -1119,17 +1222,24 @@ package body Model_Runner.CLI.Project_Commands is
       Status      : out Model_Runner.Errors.Error_Info)
    is
       Before : constant String := Ada.Directories.Current_Directory;
-      Prompt : constant String := Whole (Prompt_Path);
+      Prompt : Unbounded_String;
       Tokens : Natural;
       Read   : Natural;
    begin
+      --  The task's context, read: a context that would not read is the
+      --  work failing, not an agent sent off with nothing to go on.
+      Read_Whole (Prompt_Path, Prompt, Status);
+      if E.Is_Error (Status) then
+         Answer := Null_Unbounded_String;
+         return;
+      end if;
       --  The work is done where the task's files are, and its own
       --  conversation -- and each child's -- is on the session, which the
       --  screen's is read back into afterwards.
       L.Reset (Self.Session.all);
       Ada.Directories.Set_Directory (Project);
-      Run_Loop (Self, Prompt, Host, (if Host = null then 0 else Host.Token_Budget), True, Answer,
-                Tokens, Status, Read);
+      Run_Loop (Self, To_String (Prompt), Host, (if Host = null then 0 else Host.Token_Budget), True,
+                Answer, Tokens, Status, Read);
       --  Stopped at Ctrl-C, however the model's run then ended -- a closed
       --  backend among them: interrupted, and the task set aside.
       if E.Is_Error (Status)
@@ -1903,7 +2013,7 @@ package body Model_Runner.CLI.Project_Commands is
    ------------------------
 
    function Is_Project_Command (Word : String) return Boolean
-   is (for some Known of Words => Known.all = Word);
+   is (for some Known of Commands => Known.Name.all = Word);
 
    ----------
    -- Help --
@@ -1911,33 +2021,9 @@ package body Model_Runner.CLI.Project_Commands is
 
    procedure Help (Screen : in out Model_Runner.Presentation.Console) is
    begin
-      --  One key each, spelled out, so the catalog's readers can be found.
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.init");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.bootstrap");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.state");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.config");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.git");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.sandbox");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.instruct");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.reconfigure");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.task");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.accept");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.reject");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.work");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.cancel");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.check");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.req");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.decision");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.spec");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.result");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.scan");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.tree");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.sym");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.refs");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.deps");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.users");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.impact");
-      Pres.Put_Help_Line (Screen, "cli.interactive.help.trace");
+      for Command of Commands loop
+         Pres.Put_Help_Line (Screen, Command.Help_Key.all);
+      end loop;
    end Help;
 
    --  Whether a line leaves a quote open: the rest of it taken as quoted.
@@ -2367,7 +2453,14 @@ package body Model_Runner.CLI.Project_Commands is
    --  it was not shown, and is shown as it is taken up.
    Typed_Ahead : Boolean := False;
 
-   function Last_Refusals return String is (To_String (Refused_Last));
+   function Last_Refusals
+     (Agent : Model_Runner.Framework.Work.Agent_Runner'Class) return String
+   is (if Agent in Session_Agent'Class
+       then To_String (Session_Agent'Class (Agent).Notes.Refused) else "");
+
+   function Refused_Outside
+     (Agent : Model_Runner.Framework.Work.Agent_Runner'Class) return Boolean
+   is (Agent in Session_Agent'Class and then Session_Agent'Class (Agent).Notes.Outside);
 
    function Typed_During_Work return Boolean is
       Was : constant Boolean := Typed_Ahead;
@@ -5856,13 +5949,25 @@ package body Model_Runner.CLI.Project_Commands is
          end loop;
          for Path of Files loop
             declare
-               Scanned : constant Model_Runner.Framework.Bootstrap.Output_List :=
-                 Model_Runner.Framework.Bootstrap.Scan (Path, Whole (Path));
+               Text : Unbounded_String;
+               Read : E.Error_Info;
             begin
-               for Index in 1 .. Model_Runner.Framework.Bootstrap.Length (Scanned) loop
-                  Model_Runner.Framework.Bootstrap.Append
-                    (Found, Model_Runner.Framework.Bootstrap.Element (Scanned, Index));
-               end loop;
+               --  A document that would not read is said, not scanned as
+               --  one with nothing in it.
+               Read_Whole (Path, Text, Read);
+               if E.Is_Error (Read) then
+                  Pres.Report (Screen, Read);
+                  return;
+               end if;
+               declare
+                  Scanned : constant Model_Runner.Framework.Bootstrap.Output_List :=
+                    Model_Runner.Framework.Bootstrap.Scan (Path, To_String (Text));
+               begin
+                  for Index in 1 .. Model_Runner.Framework.Bootstrap.Length (Scanned) loop
+                     Model_Runner.Framework.Bootstrap.Append
+                       (Found, Model_Runner.Framework.Bootstrap.Element (Scanned, Index));
+                  end loop;
+               end;
             end;
          end loop;
          if Files.Is_Empty then

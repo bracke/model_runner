@@ -31,6 +31,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Runner;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
@@ -4097,7 +4098,7 @@ package body Tests.Framework_Cases is
          begin
             Env.Set (Pm.Agent_Root_Variable, Root);
             Env.Set (Pm.Agent_Permissions_Variable, Pm.Image (Pm.Unrestricted));
-            Model_Runner.Tools.Builtin.Run
+            Model_Runner.Tools.Runner.Run
               (Runner, "write_file", "{""path"": "".model_runner/evil"", ""content"": ""x""}",
                Said, Last, Status);
             Env.Clear (Pm.Agent_Root_Variable);
@@ -4110,11 +4111,11 @@ package body Tests.Framework_Cases is
             --  Nor does it read a whole folder, while a tool that reaches
             --  nothing still works.
             Env.Set (Pm.Agent_Root_Variable, Root);
-            Model_Runner.Tools.Builtin.Run
+            Model_Runner.Tools.Runner.Run
               (Runner, "retrieve", "{""folder"": ""."", ""query"": ""state""}", Said, Last, Status);
             Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "does not use retrieve") > 0,
                     "a confined agent process read a whole folder: " & Said (1 .. Last));
-            Model_Runner.Tools.Builtin.Run
+            Model_Runner.Tools.Runner.Run
               (Runner, "calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}", Said, Last, Status);
             Env.Clear (Pm.Agent_Root_Variable);
             Assert (Ada.Strings.Fixed.Index (Said (1 .. Last), "4") > 0,
@@ -4126,7 +4127,7 @@ package body Tests.Framework_Cases is
             Env.Set (Pm.Agent_Root_Variable, Root);
             Env.Set (Pm.Agent_Permissions_Variable,
                      Pm.Image (Pm.Value ("read_source" & ASCII.LF & "execute_external_process")));
-            Model_Runner.Tools.Builtin.Run
+            Model_Runner.Tools.Runner.Run
               (Runner, "shell", "{""command"": ""echo ran-it""}", Said, Last, Status);
             Env.Clear (Pm.Agent_Root_Variable);
             Env.Clear (Pm.Agent_Permissions_Variable);

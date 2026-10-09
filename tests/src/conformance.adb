@@ -15,6 +15,7 @@ with Reference_Transformer;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Backend.Reference;
 
 package body Conformance is
@@ -1072,6 +1073,13 @@ package body Conformance is
       --  for.
       Model_Runner.Backend.CPU.Use_Integer_Activations (Asked_For_Integers);
 
+      --  And the device's few-position walks with it: --arith int8 rounds
+      --  them there too, where a run names it.
+      Model_Runner.Backend.Device.Round_Walks
+        (if Asked_For_Integers
+         then Model_Runner.Platform.Device.Products.Rounds_Every
+         else Model_Runner.Platform.Device.Products.Rounds_None);
+
       Result := (others => <>);
 
       --  Both weight formats. The quantized one matters more: until it was
@@ -1423,6 +1431,37 @@ package body Conformance is
                                        Batched => True);
                               Also_Ran := Also_Ran + 1;
                            end if;
+                           Model_Runner.Backend.CPU.Use_Integer_Activations
+                             (False);
+                        end if;
+
+                        --  And the device's walks as integers, which --arith
+                        --  named turns on there: a walk is two to eight
+                        --  positions at once, and Q8_0's walks two to four,
+                        --  so the two-token prompt taken as one batch is the
+                        --  one of the four that walks. The sweep's tolerance
+                        --  for the quantized arithmetic is the one it is
+                        --  held to, as the processor's is.
+                        if Shape = Plain
+                          and then Repack = L.No_Repack
+                          and then Format = Tiny_Model.Q8_0
+                          and then Model_Runner.Backend."="
+                                     (Backend,
+                                      Model_Runner.Backend.Backend_Device)
+                          and then not Asked_For_Integers
+                          and then Batches (Backend)
+                        then
+                           Model_Runner.Backend.CPU.Use_Integer_Activations
+                             (True);
+                           Model_Runner.Backend.Device.Round_Walks
+                             (Model_Runner.Platform.Device.Products
+                                .Rounds_Every);
+                           Compare (2, L.Exact, Backend, Repack,
+                                    Batched => True);
+                           Also_Ran := Also_Ran + 1;
+                           Model_Runner.Backend.Device.Round_Walks
+                             (Model_Runner.Platform.Device.Products
+                                .Rounds_None);
                            Model_Runner.Backend.CPU.Use_Integer_Activations
                              (False);
                         end if;

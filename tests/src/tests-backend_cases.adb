@@ -6657,6 +6657,183 @@ package body Tests.Backend_Cases is
       Check (True);
    end The_Gated_Pair_Says_What_Its_Parts_Say;
 
+   --  A sequence's walks as integers -- a plain product and a gated pair
+   --  reading one normalization, at three positions and four -- answer
+   --  what the binary32 walks answer, to the rounding of their
+   --  activations; the feed-forward's rounding alone leaves the plain
+   --  product's bits where they were. Q4_K and Q8_0. Skipped where the
+   --  device has no integer dot.
+   procedure Rounded_Walks_In_A_Sequence_Stay_Close
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Products.Walk_Rounding;
+
+      procedure Check (Q8 : Boolean) is
+         Rows    : constant := 64;
+         Columns : constant := 512;
+         Wide    : constant B.Byte_Count :=
+           (if Q8 then Columns / 32 * 34 else Columns / 256 * 144);
+         Packing : constant Products.Weight_Packing :=
+           (if Q8 then Products.Packed_Q8_0 else Products.Packed_Q4_K);
+
+         Gate_Bytes : constant B.Byte_Array :=
+           (if Q8
+            then Fixtures.Encode_Q8_0
+                   (Fixtures.Sequence (Rows * Columns, 2711, 1.0))
+            else Fixtures.Encode_Q4_K
+                   (Fixtures.Sequence (Rows * Columns, 2711, 1.0)));
+         Up_Bytes   : constant B.Byte_Array :=
+           (if Q8
+            then Fixtures.Encode_Q8_0
+                   (Fixtures.Sequence (Rows * Columns, 3137, 1.0))
+            else Fixtures.Encode_Q4_K
+                   (Fixtures.Sequence (Rows * Columns, 3137, 1.0)));
+
+         Pair_At : constant B.Byte_Count := Rows * Wide;
+         Stored  : aliased B.Byte_Array (0 .. 2 * Rows * Wide - 1) :=
+           B."&" (Gate_Bytes, Up_Bytes);
+
+         Gain : constant N.Real_Array (0 .. Columns - 1) := [others => 1.0];
+
+         Held    : Devices.Inventory;
+         Opened  : Devices.Context;
+         Engine  : Products.Engine;
+         Found   : Boolean;
+         Ready   : Boolean;
+      begin
+         Devices.Open (Held, Found);
+         if not Found or else Devices.Count (Held) = 0 then
+            Devices.Close (Held);
+            return;
+         end if;
+         Devices.Open (Opened, Held, 1, Ready);
+         if Ready then
+            Products.Open (Engine, Opened, Ready);
+            if not Ready then
+               Devices.Close (Opened);
+            end if;
+         end if;
+         if not Ready then
+            Devices.Close (Held);
+            return;
+         end if;
+
+         Products.Round_Walks (Engine, Products.Rounds_Every);
+         if Products.Rounds_Walks (Engine) /= Products.Rounds_Every then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device walks as integers here");
+            Products.Close (Engine);
+            Devices.Close (Opened);
+            Devices.Close (Held);
+            return;
+         end if;
+
+         for Count in Positive range 3 .. 4 loop
+            if not Products.Pairs_Gate (Engine, Packing, Count, Columns) then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no gated pair kernel at" & Count'Image
+                  & " positions here");
+               goto Next_Count;
+            end if;
+
+            declare
+               Width : constant N.Element_Count := N.Element_Count (Count);
+               Input : constant N.Real_Array :=
+                 Fixtures.Sequence
+                   (N.Element_Count (Columns * Count),
+                    Interfaces.Unsigned_64 (4099 + Count), 1.0);
+
+               --  The normalization's room, which is not read back, then the
+               --  product's answer and the pair's.
+               subtype Answers is
+                 N.Real_Array (0 .. (Columns + 2 * Rows) * Width - 1);
+               Plain, Every, Feeding : Answers;
+               Product_At : constant N.Element_Count := Columns * Width;
+               Pair_At_N  : constant N.Element_Count :=
+                 (Columns + Rows) * Width;
+
+               procedure Run_With
+                 (Rounding : Products.Walk_Rounding; Into : out Answers)
+               is
+                  Steps  : Products.Sequence;
+                  Added  : Boolean;
+                  Ok     : Boolean;
+                  Halted : Boolean;
+               begin
+                  Products.Round_Walks (Engine, Rounding);
+                  Products.Open_Sequence (Steps);
+                  Products.Add_Norm
+                    (Steps, Gain (Gain'First)'Address,
+                     B.Byte_Count (Gain'Length) * 4, 0, Columns, 1.0E-6,
+                     Added, Key => Gain (Gain'First)'Address, Kept => False);
+                  Assert (Added, "the normalization was refused");
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, 0, Packing, Rows,
+                     Columns, Added, Key => Stored (0)'Address,
+                     From_Step => 1);
+                  Assert (Added, "the product was refused");
+                  Products.Add_Gated_Pair
+                    (Steps, Stored'Address, Stored'Length, 0, Pair_At,
+                     Packing, Rows, Columns, Added,
+                     Key => Stored (0)'Address, From_Step => 1);
+                  Assert (Added, "the gated pair was refused");
+                  Products.Run (Engine, Steps, Input, Count, Into, Ok, Halted);
+                  Assert (Ok, "the sequence would not run");
+               end Run_With;
+
+               --  The largest gap between two answers over one step's
+               --  rows, against the largest of the binary32 answer there.
+               procedure Compare
+                 (From : N.Element_Count; Other : Answers; What : String)
+               is
+                  Largest : N.Real := 0.0;
+                  Worst   : N.Real := 0.0;
+               begin
+                  for Index in From .. From + Rows * Width - 1 loop
+                     Largest := N.Real'Max (Largest, abs Plain (Index));
+                     Worst :=
+                       N.Real'Max (Worst, abs (Plain (Index) - Other (Index)));
+                  end loop;
+                  Assert (Largest > 0.0 and then Worst <= 0.01 * Largest,
+                          What & " as integers strayed" & N.Real'Image (Worst)
+                          & " from the binary32 answer's largest"
+                          & N.Real'Image (Largest) & " at" & Count'Image
+                          & " positions, " & (if Q8 then "Q8_0" else "Q4_K"));
+               end Compare;
+            begin
+               Run_With (Products.Rounds_Every, Every);
+               Run_With (Products.Rounds_None, Plain);
+               Run_With (Products.Rounds_Feed_Forward, Feeding);
+
+               Compare (Product_At, Every, "a sequence's product");
+               Compare (Pair_At_N, Every, "a sequence's gated pair");
+               Compare (Pair_At_N, Feeding, "a feed-forward-only gated pair");
+
+               Assert (N."=" (Feeding (Product_At .. Pair_At_N - 1),
+                              Plain (Product_At .. Pair_At_N - 1)),
+                       "rounding the feed-forward alone moved a plain "
+                       & "product's answer");
+               Assert (not N."=" (Every (Pair_At_N .. Every'Last),
+                                  Plain (Pair_At_N .. Plain'Last)),
+                       "a gated pair said to walk as integers answered the "
+                       & "binary32 walk's bits, so it did not");
+            end;
+
+            <<Next_Count>>
+         end loop;
+
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+      end Check;
+   begin
+      Check (False);
+      Check (True);
+   end Rounded_Walks_In_A_Sequence_Stay_Close;
+
    --  A product streamed for its run -- a split dense model's
    --  feed-forward over a long batch -- is computed and not kept: named,
    --  it would have been resident after, and streamed it is not; its buffer
@@ -10849,6 +11026,11 @@ package body Tests.Backend_Cases is
          & "combination say, and two products in one region what each in "
          & "its own does");
       AUnit.Test_Cases.Registration.Register_Routine
+        (T, Rounded_Walks_In_A_Sequence_Stay_Close'Access,
+         "a sequence's walks as integers stay within their rounding of the "
+         & "binary32 walks, and the feed-forward's alone leaves a plain "
+         & "product as it was");
+      Register_Routine
         (T, Holding_The_Clock_Spins_The_Keeper'Access,
          "holding the clock does nothing on a closed backend and spins the "
          & "keeper on an open one");

@@ -6,13 +6,19 @@ with Ada.Text_IO;
 
 with Zlib;
 
+with Ada.Environment_Variables;
+with Interfaces;
+
+with Model_Runner.Agent.Recall;
 with Model_Runner.Errors;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Numerics;
 with Model_Runner.Grammar;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Constraint;
+with Model_Runner.Tools.Runner;
 
 package body Tests.Tools_Cases is
 
@@ -1514,9 +1520,125 @@ package body Tests.Tools_Cases is
    -- Register_Tests --
    -------------------
 
+   --  The loop's memory of calls: a read made again is answered from the
+   --  first, until a call that changes state runs; then every call before
+   --  it is forgotten and runs again -- a file read after it was written
+   --  is read, not answered with what it held. The change itself is kept:
+   --  made twice with nothing between, the second is answered.
+   procedure A_Change_Makes_Earlier_Calls_Run_Again
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Tr.Answer_Kind;
+
+      Read  : constant Interfaces.Unsigned_64 := 11;
+      Write : constant Interfaces.Unsigned_64 := 22;
+      Made  : Model_Runner.Agent.Recall.Memory;
+   begin
+      Made.Remember (Read);
+      Assert (Made.Holds (Read) and then not Made.Answered (Read),
+              "a call made was not held, or held answered before it was");
+      Made.Keep (Read, "old text", Tr.Done);
+      Made.Keep (Read, "a second answer", Tr.Done);
+      Assert (Made.Answer (Read) = "old text",
+              "a held call's answer was not its first: " & Made.Answer (Read));
+
+      Made.Changed (Write);
+      Assert (not Made.Holds (Read),
+              "a read was still held after a change, and would be answered stale");
+      Assert (Made.Holds (Write), "the change itself was not held");
+      Made.Keep (Write, "wrote 8 bytes", Tr.Done);
+
+      Made.Remember (Read);
+      Made.Keep (Read, "new text", (Answer => Tr.Failed, Refusal => Tr.Not_Refused));
+      Assert (Made.Answer (Read) = "new text"
+              and then Made.Ended (Read).Answer = Tr.Failed,
+              "the read after the change did not keep its own answer and ending");
+      Assert (Made.Answer (Write) = "wrote 8 bytes",
+              "a change with nothing after it lost its answer");
+   end A_Change_Makes_Earlier_Calls_Run_Again;
+
+   --  Each built-in tool says what it does to the state later calls read,
+   --  and each call how it ended -- answered, failed, or refused and by
+   --  what -- beside its words, which nothing need read for that.
+   procedure Built_In_Calls_Say_How_They_Ended
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tr renames Model_Runner.Tools.Runner;
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Env renames Ada.Environment_Variables;
+      use type Tr.Call_Kind;
+      use type Tr.Call_Outcome;
+
+      Runner : Builtin.Instance;
+      Root   : constant String := "tools-outcome-root";
+
+      function Ended (Named, Arguments : String) return Tr.Call_Outcome is
+         Room   : String (1 .. Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+         Result : Tr.Call_Outcome;
+      begin
+         Runner.Run (Named, Arguments, Room, Last, Result, Status);
+         Assert (E.Is_Ok (Status), "a built-in tool would not answer " & Named);
+         return Result;
+      end Ended;
+   begin
+      Assert (Runner.Kind ("read_file") = Tr.Reads
+              and then Runner.Kind ("list_directory") = Tr.Reads
+              and then Runner.Kind ("calculator") = Tr.Reads
+              and then Runner.Kind ("write_file") = Tr.Changes
+              and then Runner.Kind ("shell") = Tr.Changes
+              and then Runner.Kind ("delegate") = Tr.Changes
+              and then Runner.Kind ("now") = Tr.Varies
+              and then Runner.Kind ("no such tool") = Tr.Changes,
+              "a built-in tool's kind is not what it does");
+
+      Assert (Ended ("calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}") = Tr.Done,
+              "an answered call did not end answered");
+      Assert (Ended ("read_file", "{""path"": ""no-such-file-anywhere.txt""}")
+              = (Answer => Tr.Failed, Refusal => Tr.Not_Refused),
+              "a read of a file not there did not end failed");
+
+      --  Held where the harness said: refused, and by what.
+      if not Ada.Directories.Exists (Root) then
+         Ada.Directories.Create_Path (Root & "/.model_runner");
+      end if;
+      Env.Set (Pm.Agent_Root_Variable, Root);
+      Env.Set (Pm.Agent_Permissions_Variable, Pm.Image (Pm.Unrestricted));
+      declare
+         Outside : constant Tr.Call_Outcome :=
+           Ended ("read_file", "{""path"": ""../elsewhere.txt""}");
+         State   : constant Tr.Call_Outcome :=
+           Ended ("write_file", "{""path"": "".model_runner/evil"", ""content"": ""x""}");
+         Program : constant Tr.Call_Outcome :=
+           Ended ("shell", "{""command"": ""echo ran-it""}");
+      begin
+         Env.Clear (Pm.Agent_Root_Variable);
+         Env.Clear (Pm.Agent_Permissions_Variable);
+         Ada.Directories.Delete_Tree (Root);
+         Assert (Outside = (Answer => Tr.Refused, Refusal => Tr.Outside_Project),
+                 "a path out of the tree was not refused as outside the project");
+         Assert (State = (Answer => Tr.Refused, Refusal => Tr.Harness_Owned),
+                 "a write into the state was not refused as the harness's");
+         Assert (Program = (Answer => Tr.Refused, Refusal => Tr.Not_Permitted),
+                 "a program an agent may not run was not refused as not permitted");
+      end;
+   end Built_In_Calls_Say_How_They_Ended;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, A_Change_Makes_Earlier_Calls_Run_Again'Access,
+         "a call that changes state makes every call before it run again, "
+         & "and is itself answered from the first when made again");
+      Register_Routine
+        (T, Built_In_Calls_Say_How_They_Ended'Access,
+         "each built-in tool says what it does to state, and each call how "
+         & "it ended and what refused it");
       Register_Routine
         (T, Open_JSON_Calls_Parse'Access,
          "an Open_JSON reply reads a bare or fenced object naming a function "

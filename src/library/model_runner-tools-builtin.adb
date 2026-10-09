@@ -1094,6 +1094,27 @@ package body Model_Runner.Tools.Builtin is
             else Pm.Nothing));
    end Confinement;
 
+   --  The verdict on a file tool's path where Confinement refuses it.
+   function Confined_Path_Verdict
+     (Named, Args : String) return Model_Runner.Framework.Permissions.Path_Verdict
+   is
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Env renames Ada.Environment_Variables;
+      Have : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have);
+   begin
+      if not Env.Exists (Pm.Agent_Root_Variable) then
+         return Pm.Path_Allowed;
+      end if;
+      return Pm.Path_Refused_As
+        (Env.Value (Pm.Agent_Root_Variable), Path,
+         Writing => Named = "write_file",
+         Allowed =>
+           (if Env.Exists (Pm.Agent_Permissions_Variable)
+            then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
+            else Pm.Nothing));
+   end Confined_Path_Verdict;
+
    --  Where an agent the harness started names a path from the root --
    --  /src/a.adb -- that is a place in the project, or for a file to be
    --  written one whose directory is: that place, relative; "" otherwise.
@@ -1955,6 +1976,27 @@ package body Model_Runner.Tools.Builtin is
    -- Run --
    ---------
 
+   ----------
+   -- Kind --
+   ----------
+
+   overriding function Kind
+     (Self : Instance; Named : String) return Model_Runner.Tools.Runner.Call_Kind
+   is
+      pragma Unreferenced (Self);
+   begin
+      if Named = "now" then
+         return Model_Runner.Tools.Runner.Varies;
+      elsif Named in "calculator" | "string_length" | "reverse_text" | "lookup"
+                   | "base64_encode" | "base64_decode" | "memory_get"
+                   | "read_file" | "list_directory" | "http_get" | "web_search"
+                   | "retrieve" | "ask_user"
+      then
+         return Model_Runner.Tools.Runner.Reads;
+      end if;
+      return Model_Runner.Tools.Runner.Changes;
+   end Kind;
+
    overriding function Parallel_Safe
      (Self : Instance; Named : String) return Boolean is
    begin
@@ -1976,8 +2018,35 @@ package body Model_Runner.Tools.Builtin is
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info)
    is
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Tr.Refusal_Kind;
+
+      --  What refused the call, where the confinement of an agent the
+      --  harness started did: set as Answer says so.
+      Refused : Tr.Refusal_Kind := Tr.Not_Refused;
+
+      --  The confinement's words for the call, and what refused it: a path
+      --  by its verdict, any other tool by the permissions.
+      function Confined (Called, Args : String) return String is
+         Said : constant String := Confinement (Called, Args);
+      begin
+         if Said /= "" then
+            Refused :=
+              (if Called not in "read_file" | "write_file" | "list_directory"
+               then Tr.Not_Permitted
+               else
+                 (case Confined_Path_Verdict (Called, Args) is
+                    when Pm.Path_Outside       => Tr.Outside_Project,
+                    when Pm.Path_Harness_Owned => Tr.Harness_Owned,
+                    when others                => Tr.Not_Permitted));
+         end if;
+         return Said;
+      end Confined;
+
       function Answer return String is
       begin
          if Named = "calculator" then
@@ -2013,7 +2082,7 @@ package body Model_Runner.Tools.Builtin is
                  & Arguments (At_Path + Given'Length + 1 .. Arguments'Last);
                Said  : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
             begin
-               if Confinement (Named, Moved) /= "" then
+               if Confined (Named, Moved) /= "" then
                   return "error: " & Confinement (Named, Moved);
                elsif Named = "read_file" then
                   return Said & Read_File (Moved);
@@ -2023,7 +2092,7 @@ package body Model_Runner.Tools.Builtin is
                   return Said & List_Directory (Moved);
                end if;
             end;
-         elsif Confinement (Named, Arguments) /= "" then
+         elsif Confined (Named, Arguments) /= "" then
             return "error: " & Confinement (Named, Arguments);
          elsif Named = "read_file" then
             return Read_File (Arguments);
@@ -2056,6 +2125,14 @@ package body Model_Runner.Tools.Builtin is
    begin
       Last   := 0;
       Status := E.Success;
+      --  Refused where the confinement said so; failed where the tool
+      --  answered with the failure each of them writes as its result.
+      Outcome :=
+        (if Refused /= Tr.Not_Refused
+         then (Answer => Tr.Refused, Refusal => Refused)
+         elsif Text'Length >= 6 and then Text (Text'First .. Text'First + 5) = "error:"
+         then (Answer => Tr.Failed, Refusal => Tr.Not_Refused)
+         else Tr.Done);
       if Text'Length > Result'Length then
          Status := E.Make (E.Tools_Too_Large);
          return;

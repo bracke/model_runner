@@ -1698,29 +1698,28 @@ package body Model_Runner.CLI.Work is
          --  What it was refused on the way, where its end does not say it:
          --  with the level that says what its kind may do.
          if Given_Runner /= null and then Setting ("model", "") = ""
-           and then Model_Runner.CLI.Project_Commands.Last_Refusals /= ""
+           and then Model_Runner.CLI.Project_Commands.Last_Refusals (Given_Runner.all) /= ""
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "may not") = 0
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "outside the project") = 0
          then
             --  A path outside the project is no permission's: its model
             --  named a whole path, and is told paths are relative.
-            if Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Last_Refusals, "outside the project") > 0
+            if Model_Runner.CLI.Project_Commands.Refused_Outside (Given_Runner.all)
               --  Its notes say so already: not suggested again.
               and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Title_Of (To_String (Done.Task_Id))
                                                   & " " & Notes_Of (To_String (Done.Task_Id))),
                                                 "relative to the project") > 0
             then
                Pres.Put_Note (Screen, "cli.work.refused_outside_noted",
-                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals (Given_Runner.all)),
                                Loc.Named ("name", To_String (Done.Task_Id))]);
-            elsif Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Last_Refusals, "outside the project") > 0
-            then
+            elsif Model_Runner.CLI.Project_Commands.Refused_Outside (Given_Runner.all) then
                Pres.Put_Note (Screen, "cli.work.refused_outside_on_way",
-                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals (Given_Runner.all)),
                                Loc.Named ("name", To_String (Done.Task_Id))]);
             else
                Pres.Put_Note (Screen, "cli.work.refused_on_way",
-                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals),
+                              [Loc.Named ("detail", Model_Runner.CLI.Project_Commands.Last_Refusals (Given_Runner.all)),
                                Loc.Named ("name", Kind_Of_Chosen)]);
             end if;
          end if;

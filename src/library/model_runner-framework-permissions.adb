@@ -958,11 +958,15 @@ package body Model_Runner.Framework.Permissions is
    -- Path_Refusal --
    ------------------
 
-   function Path_Refusal
+   --  Path_Refusal's judgement, with what refused: the words the agent is
+   --  told, and which of the refusals they are.
+   procedure Judge_Path
      (Root    : String;
       Path    : String;
       Writing : Boolean;
-      Allowed : Permission_Set := Unrestricted) return String
+      Allowed : Permission_Set;
+      Said    : out Unbounded_String;
+      Verdict : out Path_Verdict)
    is
       --  The path it asked for, as the project would name it: its last
       --  part, which is what a model that began it with / most likely
@@ -1109,7 +1113,9 @@ package body Model_Runner.Framework.Permissions is
                    and then Real (Real'First + Base'Length) in '/' | '\'));
    begin
       if Model_Runner.Framework.Is_Rooted (Path) then
-         return Outside;
+         Said := To_Unbounded_String (Outside);
+         Verdict := Path_Outside;
+         return;
       end if;
       for Index in Path'First .. Path'Last + 1 loop
          if Index > Path'Last or else Path (Index) in '/' | '\' then
@@ -1120,11 +1126,18 @@ package body Model_Runner.Framework.Permissions is
          end if;
       end loop;
       if Parts.Contains ("..") then
-         return Outside;
+         Said := To_Unbounded_String (Outside);
+         Verdict := Path_Outside;
+         return;
       elsif not Parts.Is_Empty and then Parts.First_Element = State_Directory then
-         return Path & " is the project's state, which only the harness reads and writes";
+         Said := To_Unbounded_String
+           (Path & " is the project's state, which only the harness reads and writes");
+         Verdict := Path_Harness_Owned;
+         return;
       elsif Writing and then Parts.Contains (".git") then
-         return Path & " is version control, which only the harness writes";
+         Said := To_Unbounded_String (Path & " is version control, which only the harness writes");
+         Verdict := Path_Harness_Owned;
+         return;
       end if;
 
       --  Inside once every link on the way is followed: what of the path
@@ -1144,31 +1157,75 @@ package body Model_Runner.Framework.Permissions is
             Real : constant String := Hostkit.Fs.Real_Path (To_String (Nearest));
          begin
             if Base = "" or else Real = "" or else not Under (Real, Base) then
-               return Outside;
+               Said := To_Unbounded_String (Outside);
+               Verdict := Path_Outside;
+               return;
             elsif Under (Real, Hostkit.Fs.Join (Base, State_Directory)) then
-               return Path & " is the project's state, which only the harness reads and writes";
+               Said := To_Unbounded_String
+                 (Path & " is the project's state, which only the harness reads and writes");
+               Verdict := Path_Harness_Owned;
+               return;
             end if;
          end;
       exception
          when others =>
-            return Outside;
+            Said := To_Unbounded_String (Outside);
+            Verdict := Path_Outside;
+            return;
       end;
 
       if Writing
         and then not Allows (Allowed, Write_Source, Path)
         and then not Allows (Allowed, Write_Specs, Path)
       then
-         return "you may not write " & Path
-           & (if Sandbox_Refuses (Path, True) then " (" & Sandbox_Source & " confines it)" else "");
+         Said := To_Unbounded_String
+           ("you may not write " & Path
+           & (if Sandbox_Refuses (Path, True) then " (" & Sandbox_Source & " confines it)" else ""));
+         Verdict := Path_Not_Granted;
+         return;
       elsif not Writing
         and then not Allows (Allowed, Read_Source, Path)
         and then not Allows (Allowed, Read_Specs, Path)
       then
-         return "you may not read " & Path
-           & (if Sandbox_Refuses (Path, False) then " (" & Sandbox_Source & " confines it)" else "");
+         Said := To_Unbounded_String
+           ("you may not read " & Path
+           & (if Sandbox_Refuses (Path, False) then " (" & Sandbox_Source & " confines it)" else ""));
+         Verdict := Path_Not_Granted;
+         return;
       end if;
-      return "";
+      Said := Null_Unbounded_String;
+      Verdict := Path_Allowed;
+   end Judge_Path;
+
+   function Path_Refusal
+     (Root    : String;
+      Path    : String;
+      Writing : Boolean;
+      Allowed : Permission_Set := Unrestricted) return String
+   is
+      Said    : Unbounded_String;
+      Verdict : Path_Verdict;
+   begin
+      Judge_Path (Root, Path, Writing, Allowed, Said, Verdict);
+      return To_String (Said);
    end Path_Refusal;
+
+   ---------------------
+   -- Path_Refused_As --
+   ---------------------
+
+   function Path_Refused_As
+     (Root    : String;
+      Path    : String;
+      Writing : Boolean;
+      Allowed : Permission_Set := Unrestricted) return Path_Verdict
+   is
+      Said    : Unbounded_String;
+      Verdict : Path_Verdict;
+   begin
+      Judge_Path (Root, Path, Writing, Allowed, Said, Verdict);
+      return Verdict;
+   end Path_Refused_As;
 
    --------------
    -- In_Words --

@@ -23,6 +23,41 @@ package Model_Runner.Tools.Runner is
    --  Something that answers a tool call. Derive from it.
    type Instance is abstract tagged limited null record;
 
+   --  What a call does to the state a later call reads, which decides
+   --  whether a later identical call may be answered from an earlier one.
+   --  Reads answers from that state and changes none of it: an identical
+   --  call is answered the same until a call that Changes has run, and
+   --  runs again after. Changes may change it -- a write, a process, a
+   --  child agent -- and every answer given before it is stale once it has
+   --  run; an identical call with nothing between is still not run twice.
+   --  Varies answers differently each time though nothing changed -- a
+   --  clock -- and always runs.
+   type Call_Kind is (Reads, Changes, Varies);
+
+   --  How a call ended, for the loop and whatever watches it to act on --
+   --  never read back out of the words of the result, which are the
+   --  model's. Answered: the tool did what was asked. Failed: it could not
+   --  -- a file not there, a program that exited badly. Refused: it was
+   --  not let -- and Refusal says by what.
+   type Answer_Kind is (Answered, Failed, Refused);
+
+   --  What refused a call. Outside_Project: a path out of the tree the
+   --  agent works in, which no permission reaches. Harness_Owned: the
+   --  project's state or its version control, which only the harness
+   --  writes. Not_Permitted: the agent's permissions or a sandbox. Policy:
+   --  the execution policy, which names the programs that may run.
+   type Refusal_Kind is
+     (Not_Refused, Outside_Project, Harness_Owned, Not_Permitted, Policy);
+
+   --  A call's ending, beside the text the model is given.
+   type Call_Outcome is record
+      Answer  : Answer_Kind := Answered;
+      Refusal : Refusal_Kind := Not_Refused;
+   end record;
+
+   --  An answer that did what it was asked.
+   Done : constant Call_Outcome := (Answer => Answered, Refusal => Not_Refused);
+
    --  Run one call and write back what the model should be told.
    --
    --  A result is text, whatever the tool is: a number is its digits, a
@@ -39,16 +74,46 @@ package Model_Runner.Tools.Runner is
    --  @param Result Buffer receiving the answer, written from its first
    --    index. Size it at least Model_Runner.Tools.Max_Call_Bytes.
    --  @param Last Number of bytes written; 0 when nothing was.
+   --  @param Outcome How the call ended: answered, failed or refused, and
+   --    by what. Set whatever Status says.
    --  @param Status Success, or Tools_Too_Large when the answer would not
    --    fit the buffer. A tool's own failure is not an error here: it is a
-   --    result that says the tool failed.
+   --    result that says the tool failed, and an Outcome that says so too.
    procedure Run
      (Self      : in out Instance;
       Named     : String;
       Arguments : String;
       Result    : out String;
       Last      : out Natural;
+      Outcome   : out Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  Run one call for its words alone, how it ended dropped: for a caller
+   --  that hands the answer on and acts on nothing about it.
+   --
+   --  @param Self The runner.
+   --  @param Named As the primitive.
+   --  @param Arguments As the primitive.
+   --  @param Result As the primitive.
+   --  @param Last As the primitive.
+   --  @param Status As the primitive.
+   procedure Run
+     (Self      : in out Instance'Class;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  What a call to the named tool does to the state later calls read;
+   --  see Call_Kind. Changes unless a runner says otherwise, since a tool
+   --  nothing is known of may change anything.
+   --
+   --  @param Self The runner.
+   --  @param Named The function the model called.
+   --  @return Its kind.
+   function Kind (Self : Instance; Named : String) return Call_Kind
+   is (Changes);
 
    --  Whether a call to the named tool may run beside other calls the model
    --  made in the same turn, on another task. The loop runs a runner's calls

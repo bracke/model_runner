@@ -116,10 +116,14 @@ package Model_Runner.Agent is
    --  @param Self The observer.
    --  @param Named The function that was run.
    --  @param Result The text the tool answered with.
+   --  @param Ended How it ended -- answered, failed, or refused and by
+   --    what -- for a watcher to act on rather than the words; a repeat
+   --    answered from an earlier call ends as that call did.
    procedure On_Result
      (Self   : in out Observer;
       Named  : String;
-      Result : String) is abstract;
+      Result : String;
+      Ended  : Model_Runner.Tools.Runner.Call_Outcome) is abstract;
 
    --  A step has finished: the model's turn and every tool result it drew are
    --  in the history now. Called once at the close of each step that ran

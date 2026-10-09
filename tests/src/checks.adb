@@ -6857,8 +6857,9 @@ package body Checks is
       --  format from the one source -- the twelve low-bit formats, Q8_0, the
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
       --  against it, and Q8_0's three over several vectors, and its five
-      --  gate-and-up compilations, and MXFP4's.
-      for Which in 1 .. 31 loop
+      --  gate-and-up compilations, and MXFP4's -- and Q8_0's six walks
+      --  again as integers.
+      for Which in 1 .. 37 loop
          declare
             Found : Boolean;
 
@@ -6898,6 +6899,12 @@ package body Checks is
                   when 29 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu_Digest,
                   when 30 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu_Digest,
                   when 31 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Digest,
+                  when 32 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Digest,
+                  when 33 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Digest,
+                  when 34 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Digest,
+                  when 35 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Glu_Digest,
+                  when 36 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Glu_Digest,
+                  when 37 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Glu_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

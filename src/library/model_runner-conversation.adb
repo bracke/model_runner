@@ -761,7 +761,8 @@ package body Model_Runner.Conversation is
    procedure Compact
      (Item        : in out History;
       Keep_Recent : Natural;
-      Dropped     : out Natural)
+      Dropped     : out Natural;
+      Work_Record : String := "")
    is
       N : constant Natural := Item.Used;
       Has_Sys : constant Boolean :=
@@ -777,6 +778,8 @@ package body Model_Runner.Conversation is
       Synopsis_Cap : constant := 2560;
       Marker       : constant String :=
         ASCII.LF & ASCII.LF & "[earlier turns this run, compacted:]" & ASCII.LF;
+      Record_Marker : constant String :=
+        ASCII.LF & "[the work so far, as the harness recorded it:]" & ASCII.LF;
       Digest       : String (1 .. Synopsis_Cap);
       D_Len        : Natural := 0;
 
@@ -903,6 +906,11 @@ package body Model_Runner.Conversation is
                Digest_Message (I);
             end if;
          end loop;
+         --  Nothing of the turns themselves, but a record to carry: the
+         --  task is rewritten all the same, to carry it.
+         if D_Len = 0 and then Work_Record /= "" then
+            Add ([1 => ASCII.LF]);
+         end if;
       end if;
 
       --  Rebuild the pool and tables into fresh storage, keeping order. Each
@@ -946,13 +954,38 @@ package body Model_Runner.Conversation is
                            Syn_First : constant Natural :=
                              (if M_At = 0 then Old'Last + 1
                               else M_At + Marker'Length);
-                           Old_Syn   : String renames Old (Syn_First .. Old'Last);
-                           Combined  : constant Natural := Old_Syn'Length + D_Len;
-                           Kept      : constant Natural :=
-                             Natural'Min (Combined, Synopsis_Cap);
-                           Skip      : constant Natural := Combined - Kept;
+
+                           --  The synopsis so far without the record an
+                           --  earlier compaction carried: the record is
+                           --  the work as it stands, said once and new
+                           --  each time, never a history of itself.
+                           function Without_Record (Syn : String) return String is
+                           begin
+                              for P in Syn'First .. Syn'Last - Record_Marker'Length + 1 loop
+                                 if Syn (P .. P + Record_Marker'Length - 1) = Record_Marker then
+                                    return Syn (Syn'First .. P - 1);
+                                 end if;
+                              end loop;
+                              return Syn;
+                           end Without_Record;
+
+                           Lines     : constant String :=
+                             Without_Record (Old (Syn_First .. Old'Last)) & Digest (1 .. D_Len);
+                           --  Its last Synopsis_Cap characters, then the
+                           --  record whole, where there is one and room.
+                           Kept      : constant String :=
+                             Lines (Lines'First
+                                    + Natural'Max (0, Lines'Length - Synopsis_Cap) .. Lines'Last);
+                           Recorded  : constant String :=
+                             (if Work_Record = "" then ""
+                              else Record_Marker & Work_Record);
+                           Room_Left : constant Integer :=
+                             New_Storage.all'Last - Fill - (Base_Last - Old'First + 1)
+                             - Marker'Length - Kept'Length;
+                           Synopsis  : constant String :=
+                             Kept & (if Recorded'Length <= Room_Left then Recorded else "");
                         begin
-                           --  Base, then the marker.
+                           --  Base, then the marker, then the synopsis.
                            New_Storage.all (Fill + 1 .. Fill + Base_Last
                                             - Old'First + 1) :=
                              Old (Old'First .. Base_Last);
@@ -960,26 +993,8 @@ package body Model_Runner.Conversation is
                            New_Storage.all (Fill + 1 .. Fill + Marker'Length) :=
                              Marker;
                            Fill := Fill + Marker'Length;
-                           --  The last Kept characters of Old_Syn & Digest.
-                           if Skip < Old_Syn'Length then
-                              New_Storage.all
-                                (Fill + 1 .. Fill + Old_Syn'Length - Skip) :=
-                                Old_Syn (Old_Syn'First + Skip .. Old_Syn'Last);
-                              Fill := Fill + Old_Syn'Length - Skip;
-                              New_Storage.all (Fill + 1 .. Fill + D_Len) :=
-                                Digest (1 .. D_Len);
-                              Fill := Fill + D_Len;
-                           else
-                              declare
-                                 D_Skip : constant Natural :=
-                                   Skip - Old_Syn'Length;
-                              begin
-                                 New_Storage.all
-                                   (Fill + 1 .. Fill + D_Len - D_Skip) :=
-                                   Digest (D_Skip + 1 .. D_Len);
-                                 Fill := Fill + D_Len - D_Skip;
-                              end;
-                           end if;
+                           New_Storage.all (Fill + 1 .. Fill + Synopsis'Length) := Synopsis;
+                           Fill := Fill + Synopsis'Length;
                         end;
                      end;
                      M := M + 1;

@@ -251,6 +251,25 @@ package Model_Runner.Framework.Permissions is
       Writing : Boolean;
       Allowed : Permission_Set := Unrestricted) return String;
 
+   --  Which of Path_Refusal's refusals it gives, for a caller that acts on
+   --  what refused rather than on the words: none, a path out of the tree,
+   --  the harness's own state or version control, or the permissions.
+   type Path_Verdict is
+     (Path_Allowed, Path_Outside, Path_Harness_Owned, Path_Not_Granted);
+
+   --  Path_Refusal's judgement as a verdict.
+   --
+   --  @param Root As Path_Refusal.
+   --  @param Path As Path_Refusal.
+   --  @param Writing As Path_Refusal.
+   --  @param Allowed As Path_Refusal.
+   --  @return Path_Allowed exactly where Path_Refusal answers "".
+   function Path_Refused_As
+     (Root    : String;
+      Path    : String;
+      Writing : Boolean;
+      Allowed : Permission_Set := Unrestricted) return Path_Verdict;
+
    --  Whether one set gives anything the other does not: a capability, a
    --  root outside the other's, a profile, a larger limit.
    --
