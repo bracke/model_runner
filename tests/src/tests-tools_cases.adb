@@ -21,6 +21,8 @@ with Model_Runner.Grammar;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.CLI.Command_Lines;
+with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Processes;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Tools.Registry;
@@ -916,6 +918,44 @@ package body Tests.Tools_Cases is
                  "find symbol with no project did not say it needs one");
       end;
    end One_Runtime_For_Every_Agent;
+
+   --  Every project command's line is read into a request by one reader,
+   --  and the request written back reads as the same request.
+   procedure Command_Lines_Read_Back
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Pc renames Model_Runner.CLI.Project_Commands;
+      package Cl renames Model_Runner.CLI.Command_Lines;
+      use type Cl.Request;
+      type Line_Ref is access constant String;
+      Lines : constant array (1 .. 9) of Line_Ref :=
+        [new String'("/work TASK-017 profile=review"),
+         new String'("/task new Count the stars kind=analysis notes=for the night sky"),
+         new String'("/accept TASK-008,TASK-009"),
+         new String'("/task note TASK-003 remember the ""quoted"" bit and a=b"),
+         new String'("/reconfigure scalar.agents.max_steps=12 confirm=yes"),
+         new String'("/req new ""Stars counted"" text=the stars are counted"),
+         new String'("/config diff 3 5"),
+         new String'("/why 7"),
+         new String'("/history")];
+   begin
+      for Line of Lines loop
+         declare
+            Asked : constant Cl.Request := Pc.Request_Of (Line.all);
+            Again : constant Cl.Request := Pc.Request_Of (Cl.Canonical (Asked));
+         begin
+            Assert (Again = Asked and then Cl.Canonical (Again) = Cl.Canonical (Asked),
+                    "a command's line did not read back as the same request: " & Line.all
+                    & " -> " & Cl.Canonical (Asked));
+         end;
+      end loop;
+      --  And what the reader makes of a list and of a value that runs on.
+      Assert (Natural (Pc.Request_Of ("/accept TASK-008,TASK-009").Positional.Length) = 2
+              and then Pc.Request_Of ("/task new X notes=for the sky").Settings.First_Element
+                       = "notes=for the sky",
+              "a list was not split at its commas, or a value did not run on");
+   end Command_Lines_Read_Back;
 
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
@@ -2127,6 +2167,9 @@ package body Tests.Tools_Cases is
         (T, One_Runtime_For_Every_Agent'Access,
          "every agent is offered and fenced from one registry, helpers have one contract, and a"
          & " program's failure is said with its exit status and standard error");
+      Register_Routine
+        (T, Command_Lines_Read_Back'Access,
+         "every project command's line is read into a request by one reader, and reads back the same");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

@@ -415,6 +415,21 @@ is
       return Held;
    end Has_Block;
 
+   --  The rows a linear layer carried out on the device, home into the
+   --  batch's activations, for an attention layer the device does not
+   --  run: whether a layer carries is asked of the next layer's shape,
+   --  not of whether the session holds its cache on the device, and a
+   --  session refused a block -- a second one beside a session holding
+   --  pages -- attended on the host from the linear layer's input.
+   Back_Home : Boolean := True;
+
+   procedure Bring_Carried_Home (Ok : out Boolean) is
+   begin
+      Model_Runner.Backend.Device.Fetch_Carried
+        (Acts.all (0 .. Count * Width - 1), Ok);
+      Carried := False;
+   end Bring_Carried_Home;
+
    procedure Release is
    begin
       T.Free (Acts);
@@ -1795,6 +1810,20 @@ begin
                   goto Front_Done_Batch;
                end if;
 
+               --  Not asked of the device -- no block or no pages for
+               --  it -- after a linear layer that carried its answer
+               --  out: that answer comes home before the projection
+               --  below, or the host's, reads the rows.
+               if Carried and then not Asked then
+                  Bring_Carried_Home (Back_Home);
+                  if not Back_Home then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Device_Refused);
+                     return;
+                  end if;
+               end if;
+
                Carried :=
                  Carrying
                  and then Whole_Layer_Done
@@ -1837,6 +1866,19 @@ begin
                   Rotated := Projected and then Turnable;
                end if;
             end;
+         end if;
+
+         --  And where the device's road was not taken at all, the carry
+         --  from the linear layer before is still where the device left
+         --  it, and the host reads the rows next.
+         if Carried and then not Fused then
+            Bring_Carried_Home (Back_Home);
+            if not Back_Home then
+               Release;
+               Item.Current := Failed;
+               Status := E.Make (E.Backend_Device_Refused);
+               return;
+            end if;
          end if;
 
          if not Projected then

@@ -23,6 +23,8 @@ with Model_Runner.Framework.Tasks;
 
 package body Model_Runner.Framework.Configurations is
 
+   package Name_Sorting is new Name_Lists.Generic_Sorting;
+
    use Ada.Strings.Unbounded;
    use type Templates.Setting_Kind;
    use type Templates.Input_Kind;
@@ -3724,6 +3726,63 @@ package body Model_Runner.Framework.Configurations is
       Records.Set
         (Result.After, "configuration_fingerprint", Configuration_Fingerprint (Result.After));
    end Plan_Normalized;
+
+   -----------------
+   -- Revision_At --
+   -----------------
+
+   procedure Revision_At
+     (Item     : Stores.Store;
+      Revision : Positive;
+      Value    : out Records.Item;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Number : constant String := Natural'Image (Revision);
+      Padded : constant String :=
+        [1 .. Integer'Max (0, 6 - (Number'Length - 1)) => '0'] & Number (Number'First + 1 .. Number'Last);
+   begin
+      Read (Item, Value, Status);
+      if E.Is_Ok (Status) and then Records.Revision (Value) = Revision then
+         return;
+      end if;
+      if not Stores.Exists (Item, Config_Area, "revision-" & Padded) then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", "configuration revision" & Number);
+         return;
+      end if;
+      Stores.Read (Item, Config_Area, "revision-" & Padded, Value, Status);
+   end Revision_At;
+
+   -----------------
+   -- Differences --
+   -----------------
+
+   function Differences (Before, After : Records.Item) return Name_Lists.Vector is
+      Names  : Name_Lists.Vector;
+      Result : Name_Lists.Vector;
+      procedure Note (From : Records.Item) is
+      begin
+         for Index in 1 .. Records.Field_Count (From) loop
+            if not Names.Contains (Records.Field_Name (From, Index)) then
+               Names.Append (Records.Field_Name (From, Index));
+            end if;
+         end loop;
+      end Note;
+   begin
+      Note (Before);
+      Note (After);
+      Name_Sorting.Sort (Names);
+      for Name of Names loop
+         if Name /= "configuration_fingerprint"
+           and then Records.Get (Before, Name) /= Records.Get (After, Name)
+         then
+            Result.Append
+              (Name & ": " & (if Records.Get (Before, Name) = "" then "(unset)" else Records.Get (Before, Name))
+               & " -> " & (if Records.Get (After, Name) = "" then "(unset)" else Records.Get (After, Name)));
+         end if;
+      end loop;
+      return Result;
+   end Differences;
 
    ------------------
    -- Stage_Change --

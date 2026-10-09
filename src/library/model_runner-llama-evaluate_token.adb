@@ -1202,6 +1202,32 @@ begin
                end if;
             end if;
 
+            --  A layer the device was never asked for, after a linear
+            --  layer that carried its answer out: the host goes on from
+            --  that answer, which is where the device left it. The carry
+            --  is decided by whether this layer's shape fits the device,
+            --  not by whether the session holds its cache there, so a
+            --  session refused a block -- a second session beside one
+            --  holding pages -- carried out of every linear layer and
+            --  attended on the host from the linear layer's input. A
+            --  helper of Qwen3.5 answered in nothing but noise for it.
+            --  A layer that was asked and refused is brought home by the
+            --  device's own refusal.
+            if Carried and then not Asked then
+               declare
+                  Back : Boolean;
+               begin
+                  Model_Runner.Backend.Device.Fetch_Carried
+                    (Item.Activation.all, Back);
+                  Carried := False;
+                  if not Back then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Device_Refused);
+                     return;
+                  end if;
+               end;
+            end if;
+
             Carried :=
               Chaining
               and then Fused

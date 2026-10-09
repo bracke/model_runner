@@ -522,10 +522,12 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Help
            and then Asked.First in Line'Range
-           and then Line (Asked.First .. Asked.Last) = "project"
+           and then Line (Asked.First .. Asked.Last) in "project" | "project all"
          then
-            --  The project's commands, each with what it does.
-            Model_Runner.CLI.Project_Commands.Help (Screen);
+            --  The project's commands that apply here, each with what it
+            --  does; all of them where asked.
+            Model_Runner.CLI.Project_Commands.Help
+              (Screen, All_Of_Them => Line (Asked.First .. Asked.Last) = "project all");
 
          elsif Asked.Kind = Help and then Asked.First in Line'Range
            and then Asked.Last >= Asked.First
@@ -539,14 +541,17 @@ package body Model_Runner.CLI.Interactive is
                Named : constant String :=
                  (if Ada.Strings.Fixed.Index (Whole, " ") > 0
                   then Whole (Whole'First .. Ada.Strings.Fixed.Index (Whole, " ") - 1) else Whole);
-               --  The commands a line of help is kept for.
+               --  The session's own commands a line of help is kept for; the
+               --  project's are the command table's.
                Known : constant String :=
                  " projects exit reset help settings stats context system tools tool save load"
-                 & " image video init bootstrap state config git sandbox instruct reconfigure task"
-                 & " accept reject work cancel check req decision spec result tree sym refs deps"
-                 & " users impact trace scan ";
+                 & " image video ";
             begin
-               if Named /= "" and then Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0 then
+               --  A project command by the command table, which knows every one.
+               if Named /= ""
+                 and then (Ada.Strings.Fixed.Index (Known, " " & Named & " ") > 0
+                           or else Model_Runner.CLI.Project_Commands.Is_Project_Command ("/" & Named))
+               then
                   Pres.Put_Help_Line (Screen, "cli.interactive.help." & Named);
                   --  And how it is used, where that takes more than a line.
                   if Named = "init" then

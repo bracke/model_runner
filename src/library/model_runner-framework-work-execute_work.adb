@@ -138,6 +138,61 @@ is
      (if Tasks.Kind_Policy (Item, Kind, "isolation") /= ""
       then Tasks.Kind_Policy (Item, Kind, "isolation")
       else Work_Setting (Item, "isolation")) = "workspace";
+
+   --  What the run is governed by, resolved once as it starts and read from
+   --  here to its end: a /reconfigure from another terminal while it runs
+   --  changes the next run, not this one. Recorded on its invocation as
+   --  what it resolved to, with the configuration's revision, so a run
+   --  read back later says what governed it and not only a name that may
+   --  since mean something else.
+   type Settings is record
+      Config_Revision  : Natural := 0;
+      Max_Seconds      : Natural := 0;
+      Max_Steps        : Natural := 24;
+      Max_Tool_Calls   : Natural := 0;
+      Token_Budget     : Natural := 0;
+      On_Child_Failure : Unbounded_String;
+      Seconds_From     : Unbounded_String;
+   end record;
+
+   function Resolve return Settings is
+      Config : Records.Item;
+      Read   : E.Error_Info;
+      Result : Settings;
+      function Policy (Name, Scalar_Name : String) return String is
+        (if Tasks.Kind_Policy (Item, Kind, Name) /= "" then Tasks.Kind_Policy (Item, Kind, Name)
+         else Scalar (Item, Scalar_Name));
+   begin
+      Configurations.Read (Item, Config, Read);
+      Result.Config_Revision := (if E.Is_Ok (Read) then Records.Revision (Config) else 0);
+      Result.Max_Seconds := Time_Allowed (Item, Task_Id);
+      Result.Max_Steps := Number_Of (Policy ("max_steps", "agents.max_steps"), 24);
+      Result.Max_Tool_Calls := Number_Of (Policy ("max_tool_calls", "agents.max_tool_calls"), 0);
+      Result.Token_Budget := Number_Of (Tasks.Kind_Policy (Item, Kind, "token_budget"), 0);
+      Result.On_Child_Failure := To_Unbounded_String (Scalar (Item, "agents.on_child_failure"));
+      Result.Seconds_From := To_Unbounded_String
+        (if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= "" then "task.max_seconds." & Kind
+         elsif Scalar (Item, "agents.max_seconds") /= "" then "agents.max_seconds"
+         else "work.lease");
+      return Result;
+   end Resolve;
+
+   Frozen : constant Settings := Resolve;
+
+   function Image (Value : Natural) return String is
+      Raw : constant String := Natural'Image (Value);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Image;
+
+   --  Those, as the lines an invocation keeps them in.
+   function Resolved_Lines return String is
+     ("config_revision=" & Image (Frozen.Config_Revision) & ASCII.LF
+      & "max_seconds=" & Image (Frozen.Max_Seconds) & ASCII.LF
+      & "max_steps=" & Image (Frozen.Max_Steps) & ASCII.LF
+      & "max_tool_calls=" & Image (Frozen.Max_Tool_Calls) & ASCII.LF
+      & "token_budget=" & Image (Frozen.Token_Budget) & ASCII.LF
+      & "on_child_failure=" & To_String (Frozen.On_Child_Failure));
    Place    : Unbounded_String := To_Unbounded_String (Project);
 
    --  End the work with the task moved and the agent recorded.
@@ -430,12 +485,12 @@ begin
         (Item, Change, Task_Id, "worker", Records.Get (Defined, "kind"),
          Result.Agent_Id, Status,
          Restriction => Records.Get (Defined, "permissions"),
-         Budget      => Number_Of (Tasks.Kind_Policy (Item, Kind, "token_budget"), 0));
+         Budget      => Frozen.Token_Budget);
    end;
    if E.Is_Error (Status) then
       return;
    end if;
-   Hold (Lease_Seconds (Item) + Time_Allowed (Item, Task_Id));
+   Hold (Lease_Seconds (Item) + Frozen.Max_Seconds);
    if E.Is_Ok (Status) then
       Tasks.Move (Item, Change, Task_Id, "running", "", Status => Status);
    end if;
@@ -490,12 +545,11 @@ begin
          To_String (Result.Manifest_Id),
          Tool_Policy
            (Item, To_String (Result.Agent_Id),
-            Number_Of ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
-                        then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
-                        else Scalar (Item, "agents.max_tool_calls")), 0),
+            Frozen.Max_Tool_Calls,
             Task_Id, Isolated, Hosted => Runner in Parenting_Runner'Class),
          Invocations.Work_Claim,
-         Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class));
+         Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class),
+         Resolved => Resolved_Lines);
       if E.Is_Ok (Status) then
          Agents.Record_Holding
            (Item, Change, To_String (Result.Agent_Id), "", To_String (Result.Invocation_Id),
@@ -619,19 +673,13 @@ begin
          Host.Model := Model;
          declare
             use type Ada.Calendar.Time;
-            Seconds : constant Natural := Time_Allowed (Item, Task_Id);
+            Seconds : constant Natural := Frozen.Max_Seconds;
          begin
             Host.Bounded := Seconds > 0;
             Host.Deadline := Ada.Calendar.Clock + Duration (Seconds);
          end;
-         Host.Max_Calls := Number_Of
-           ((if Tasks.Kind_Policy (Item, Kind, "max_tool_calls") /= ""
-             then Tasks.Kind_Policy (Item, Kind, "max_tool_calls")
-             else Scalar (Item, "agents.max_tool_calls")), 0);
-         Host.Max_Steps := Number_Of
-           ((if Tasks.Kind_Policy (Item, Kind, "max_steps") /= ""
-             then Tasks.Kind_Policy (Item, Kind, "max_steps")
-             else Scalar (Item, "agents.max_steps")), 24);
+         Host.Max_Calls := Frozen.Max_Tool_Calls;
+         Host.Max_Steps := Frozen.Max_Steps;
          Host.Open.Append (To_String (Result.Agent_Id));
          Host.Calls.Append (To_String (Result.Invocation_Id));
          Host.Opened.Append (Ada.Calendar.Clock);
@@ -870,26 +918,12 @@ begin
       --  Out of time is not wrong work: the task is set aside, not
       --  failed, with what its agents made stopped.
       Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work ran out of time");
-      declare
-         Defined : Records.Item;
-         Read    : E.Error_Info;
-      begin
-         Tasks.Definition (Item, Task_Id, Defined, Read);
-         declare
-            Own : constant Boolean :=
-              Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "max_seconds") /= "";
-            --  Which limit it was, and how it is raised: a retry alone
-            --  runs out the same way.
-            Limit : constant String :=
-              (if Own then "task.max_seconds." & Records.Get (Defined, "kind")
-               elsif Scalar (Item, "agents.max_seconds") /= "" then "agents.max_seconds"
-               else "work.lease");
-         begin
-            Conclude ("blocked", "its work ran out of time:" & Natural'Image (Time_Allowed (Item, Task_Id))
-                      & " s, as " & Limit & " allows; /reconfigure " & Limit & "=N gives it longer",
-                      "failed");
-         end;
-      end;
+      --  Which limit it was, as the run resolved it when it started, and
+      --  how it is raised: a retry alone runs out the same way.
+      Conclude ("blocked", "its work ran out of time:" & Natural'Image (Frozen.Max_Seconds)
+                & " s, as " & To_String (Frozen.Seconds_From) & " allows; /reconfigure "
+                & To_String (Frozen.Seconds_From) & "=N gives it longer",
+                "failed");
       return;
    elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Agent_Failed then
       --  A crash is not wrong work: what it changed is kept to be
@@ -904,9 +938,9 @@ begin
          Child_Why : Unbounded_String;
       begin
          if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) then
-            Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed" else "blocked"),
+            Conclude ((if To_String (Frozen.On_Child_Failure) = "fail" then "failed" else "blocked"),
                       Child_Failure (To_String (Child_Why), Why_Of (Ran),
-                                     Scalar (Item, "agents.on_child_failure")), "failed");
+                                     To_String (Frozen.On_Child_Failure)), "failed");
             return;
          end if;
       end;
@@ -1549,7 +1583,7 @@ begin
       Still   : Unbounded_String;
       Instead : constant String := Trim (Invocations.Claim (Said, "instead"));
       Going_On : constant Boolean :=
-        Scalar (Item, "agents.on_child_failure") = "continue" and then Instead not in "" | "-";
+        To_String (Frozen.On_Child_Failure) = "continue" and then Instead not in "" | "-";
    begin
       if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Why) then
          if not Going_On
@@ -1558,12 +1592,12 @@ begin
          then
             if Going_On then
                Why := Still;
-            elsif Scalar (Item, "agents.on_child_failure") = "continue" then
+            elsif To_String (Frozen.On_Child_Failure) = "continue" then
                --  continue set, and no instead: said why it did not go on.
                Append (Why, " (agents.on_child_failure is continue, which goes on only when the agent says"
                             & " instead: how it did the failed part; it said nothing of it)");
             end if;
-            Conclude ((if Scalar (Item, "agents.on_child_failure") = "fail" then "failed"
+            Conclude ((if To_String (Frozen.On_Child_Failure) = "fail" then "failed"
                        else "blocked"),
                       To_String (Why), "completed");
             return;

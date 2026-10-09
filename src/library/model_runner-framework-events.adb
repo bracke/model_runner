@@ -47,6 +47,15 @@ package body Model_Runner.Framework.Events is
       return Stores.Last_Number (Item, "EVT");
    end Revision;
 
+   ------------------------
+   -- Workspace_Revision --
+   ------------------------
+
+   function Workspace_Revision (Item : Stores.Store) return Natural is
+   begin
+      return Stores.Last_Number (Item, "SRC");
+   end Workspace_Revision;
+
    ----------
    -- Emit --
    ----------
@@ -74,6 +83,14 @@ package body Model_Runner.Framework.Events is
       Stores.Identify (Item, Change, Transaction, Status);
       if E.Is_Ok (Status) then
          Stores.Allocate_Number (Item, Change, "EVT", "", Number, Status);
+      end if;
+      --  A change of the source moves the workspace's revision too.
+      if E.Is_Ok (Status) and then Kind = Source_Changed then
+         declare
+            Source_Number : Natural;
+         begin
+            Stores.Allocate_Number (Item, Change, "SRC", "", Source_Number, Status);
+         end;
       end if;
       if E.Is_Error (Status) then
          return;

@@ -352,6 +352,23 @@ package Model_Runner.Framework.Stores is
      (Item   : in out Store;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Where a commit can be stopped short, for a test of what the store
+   --  makes of it when it is next opened: after the journal is written and
+   --  before it is marked committed; after it is marked and before any of
+   --  it is applied; and with some of it applied and the rest not. Opening
+   --  the store finishes or forgets what it finds, as it does after a real
+   --  crash, and a test asserts the state holds together after either.
+   type Crash_Point is (No_Crash, After_Journal, After_Mark, Mid_Apply);
+
+   --  Raised where a commit is stopped short at a Crash_Point.
+   Simulated_Crash : exception;
+
+   --  Stop the next commit short at a point: once, and then not again.
+   --  For tests; a store nobody asks this of is never stopped.
+   --
+   --  @param Point Where.
+   procedure Crash_At (Point : Crash_Point);
+
    --  Stage, mark and finish a transaction, and empty it.
    --
    --  @param Item The store.

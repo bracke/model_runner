@@ -269,6 +269,28 @@ package Model_Runner.Framework.Configurations is
    --  @return True for any failure but Framework_Not_Found.
    function Unreadable (Status : Model_Runner.Errors.Error_Info) return Boolean;
 
+   --  A revision of the configuration as the history kept it.
+   --
+   --  @param Item The store.
+   --  @param Revision Which; the current one is read as it is now.
+   --  @param Value The configuration at it.
+   --  @param Status Framework_Not_Found when the history keeps no such one.
+   procedure Revision_At
+     (Item     : Stores.Store;
+      Revision : Positive;
+      Value    : out Records.Item;
+      Status   : out Model_Runner.Errors.Error_Info);
+
+   --  What differs between two configurations: each setting one has that
+   --  the other has not, or has otherwise, as NAME: BEFORE -> AFTER, in the
+   --  order of their names; the fingerprint, which differs with anything,
+   --  left out.
+   --
+   --  @param Before The one.
+   --  @param After The other.
+   --  @return The differences; empty for none.
+   function Differences (Before, After : Records.Item) return Name_Lists.Vector;
+
    --  The project's configuration, for a caller that answers with a value
    --  rather than a status. Every caller with a status reads it with Read
    --  and returns its failure where it is Unreadable; this is for the rest.

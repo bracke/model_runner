@@ -450,7 +450,8 @@ package body Model_Runner.Framework.Invocations is
       Status      : out Model_Runner.Errors.Error_Info;
       Resource_Class : String := "";
       Parent      : String := "";
-      Parent_Call : Natural := 0)
+      Parent_Call : Natural := 0;
+      Resolved    : String := "")
    is
       Number : Natural;
    begin
@@ -524,9 +525,31 @@ package body Model_Runner.Framework.Invocations is
          Records.Set (Value, "tool_policy", Tool_Policy);
          Records.Set (Value, "result_contract", To_String (Rules.Name));
          Records.Set (Value, "started_at", Timestamp);
+         --  The project's state and its source as the call began: what it
+         --  started from, beside what it ended at.
+         Records.Set (Value, "project_revision", Image (Events.Revision (Item)));
+         Records.Set (Value, "workspace_revision", Image (Events.Workspace_Revision (Item)));
          if Resource_Class /= "" then
             Records.Set (Value, "resource_class", Resource_Class);
          end if;
+         --  What governed it, as it resolved.
+         declare
+            Start : Positive := Resolved'First;
+         begin
+            for Index in Resolved'First .. Resolved'Last + 1 loop
+               if Index > Resolved'Last or else Resolved (Index) = ASCII.LF then
+                  declare
+                     Line : constant String := Resolved (Start .. Index - 1);
+                     Eq   : constant Natural := Ada.Strings.Fixed.Index (Line, "=");
+                  begin
+                     if Eq > Line'First then
+                        Records.Set (Value, "resolved." & Line (Line'First .. Eq - 1), Line (Eq + 1 .. Line'Last));
+                     end if;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+         end;
          if Parent /= "" then
             Records.Set (Value, "parent", Parent);
             Records.Set (Value, "parent_call", Image (Parent_Call));
@@ -583,6 +606,8 @@ package body Model_Runner.Framework.Invocations is
 
       Records.Set (Value, "state", Next);
       Records.Set (Value, "ended_at", Timestamp);
+      Records.Set (Value, "ended_project_revision", Image (Events.Revision (Item)));
+      Records.Set (Value, "ended_workspace_revision", Image (Events.Workspace_Revision (Item)));
       Records.Set (Value, "prompt_tokens", Image (Used.Prompt_Tokens));
       Records.Set (Value, "output_tokens", Image (Used.Output_Tokens));
       Records.Set (Value, "seconds", Image (Used.Seconds));

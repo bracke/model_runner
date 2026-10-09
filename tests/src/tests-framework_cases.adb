@@ -3980,6 +3980,78 @@ package body Tests.Framework_Cases is
       end;
    end Terminal_Follows_Resize_And_Hides_Secrets;
 
+   --  Whether a project's state holds together: every finding the
+   --  consistency check makes, named, and none expected. Asserted after a
+   --  mutation, it catches the damage one component does to another's
+   --  state where an output check would not look.
+   procedure Assert_Holds_Together (Store : S.Store; After : String) is
+      Findings : constant Model_Runner.Framework.Consistency.Finding_List :=
+        Model_Runner.Framework.Consistency.Check (Store);
+      Said     : Unbounded_String;
+   begin
+      for Index in 1 .. Model_Runner.Framework.Consistency.Length (Findings) loop
+         declare
+            One : constant Model_Runner.Framework.Consistency.Finding :=
+              Model_Runner.Framework.Consistency.Element (Findings, Index);
+         begin
+            Append (Said, Model_Runner.Framework.Consistency.Kind_Word (One.Kind) & " " & To_String (One.Subject)
+                          & "; ");
+         end;
+      end loop;
+      Assert (Model_Runner.Framework.Consistency.Length (Findings) = 0,
+              "the state does not hold together after " & After & ": " & To_String (Said));
+   end Assert_Holds_Together;
+
+   --  A commit stopped short at each point a crash could stop it is finished
+   --  or forgotten when the store is next opened, and the state holds
+   --  together either way: before the journal is marked, the change is not
+   --  there at all; once it is marked, the change is there whole, however
+   --  little of it had been applied.
+   procedure Crashes_Leave_The_State_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type S.Crash_Point;
+      Store : S.Store;
+   begin
+      Task_Project (Store, "crash_points");
+      for Point in S.After_Journal .. S.Mid_Apply loop
+         declare
+            Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+            Title   : constant String := "Crashed at " & S.Crash_Point'Image (Point);
+            Change  : S.Transaction;
+            Made    : Unbounded_String;
+            Status  : E.Error_Info;
+            Crashed : Boolean := False;
+            Report  : S.Recovery_Report;
+         begin
+            Tk.Create (Store, Change, Fields (Title, "analysis"), "user", "", Made, Status);
+            Assert (E.Is_Ok (Status), "a task to crash on was not staged");
+            S.Crash_At (Point);
+            begin
+               S.Commit (Store, Change, Status);
+            exception
+               when S.Simulated_Crash =>
+                  Crashed := True;
+            end;
+            Assert (Crashed, "the commit was not stopped at " & S.Crash_Point'Image (Point));
+            --  As a process that died there: its hold on the store let go,
+            --  and the store opened again by whoever comes next.
+            S.Close (Store);
+            S.Open (Store, Project, Report, Status);
+            Assert (E.Is_Ok (Status),
+                    "the store did not open after a crash at " & S.Crash_Point'Image (Point) & ": "
+                    & Code_Of (Status));
+            Assert ((Tk.State_Of (Store, To_String (Made)) /= "") = (Point /= S.After_Journal),
+                    "a change stopped at " & S.Crash_Point'Image (Point) & " was "
+                    & (if Point = S.After_Journal then "kept though never marked committed"
+                       else "lost though marked committed"));
+            Assert_Holds_Together (Store, "a crash at " & S.Crash_Point'Image (Point));
+         end;
+      end loop;
+      S.Close (Store);
+   end Crashes_Leave_The_State_Whole;
+
    --  A working agent's questions of the code are answered from the graph
    --  as it is now: where a name is declared and used, what a unit uses and
    --  what uses it -- by its name or its file -- and what a change reaches;
@@ -4053,6 +4125,34 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Assert (Ev.Revision (Store) > Was and then Was > 0,
                  "the project's revision did not move with its state");
+         Assert_Holds_Together (Store, "a task made and the code asked of");
+         --  The configuration's first revision, as its history keeps it.
+         declare
+            First_Config : R.Item;
+            Got          : E.Error_Info;
+         begin
+            Model_Runner.Framework.Configurations.Revision_At (Store, 1, First_Config, Got);
+            Assert (E.Is_Ok (Got) and then R.Revision (First_Config) = 1,
+                    "the configuration's first revision was not read back from its history");
+         end;
+      end;
+      --  Every invocation names the revisions it started from.
+      declare
+         Change : S.Transaction;
+         Call   : Unbounded_String;
+         Status : E.Error_Info;
+         Value  : R.Item;
+      begin
+         Model_Runner.Framework.Invocations.Start
+           (Store, Change, "AGENT-1", "TASK-001", "1", "default", "CTX-1", "none",
+            Model_Runner.Framework.Invocations.Work_Claim, Call, Status,
+            Resolved => "max_steps=12" & ASCII.LF & "config_revision=3");
+         S.Commit (Store, Change, Status);
+         S.Read (Store, Model_Runner.Framework.Invocations_Area, To_String (Call), Value, Status);
+         Assert (R.Get (Value, "resolved.max_steps") = "12" and then R.Get (Value, "resolved.config_revision") = "3"
+                 and then R.Get (Value, "project_revision") /= ""
+                 and then R.Get (Value, "workspace_revision") /= "",
+                 "an invocation did not keep what governed it and the revisions it started from");
       end;
    end Code_Is_Asked_Of_The_Graph;
 
@@ -10151,6 +10251,12 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/history " & To_String (Stuck), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/history TASK-999", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/brief " & To_String (Stuck), Screen, Agent);
+            --  A setting changed, then said as what changed between the two
+            --  revisions; and help that lists what applies here.
+            Model_Runner.CLI.Project_Commands.Run
+              ("/reconfigure scalar.agents.max_steps=12 confirm=yes", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/config diff", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Help (Screen);
             --  A change of the project's state is said before the session
             --  model's next turn, once; nothing changed, nothing is said.
             declare
@@ -10197,6 +10303,11 @@ package body Tests.Framework_Cases is
                        "/history did not give a task's moves and the run made for it: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "no event names TASK-999") > 0,
                        "/history of what nothing names did not say so");
+               Assert (Ada.Strings.Fixed.Index (Text, "scalar.agents.max_steps: ") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "-> 12") > 0,
+                       "/config diff did not say the setting that changed: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "more apply where this session is not") > 0,
+                       "/help in a project did not leave out what applies only outside one");
                --  /brief builds the task's context as /work would and says
                --  what went in.
                Assert (Ada.Strings.Fixed.Index (Text, To_String (Stuck) & ": ") > 0
@@ -10957,6 +11068,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Code_Is_Asked_Of_The_Graph'Access,
          "a working agent's questions of the code are answered from the graph as it is now");
+      Register_Routine
+        (T, Crashes_Leave_The_State_Whole'Access,
+         "a commit stopped short at each crash point is finished or forgotten on opening, the state whole");
       Register_Routine
         (T, Agents_Stay_Out_Of_The_State'Access,
          "agents never reach the project's state, and harness programs get only what is passed");

@@ -120,43 +120,50 @@ package body Model_Runner.CLI.Project_Commands is
    --  the message kept: what looks or sets a record straight may; what
    --  starts a model's run or remakes the project's set-up waits for the
    --  message to be sent, and until then is its text.
+   --  Needs says where it applies: in a project, or where there is none
+   --  yet -- what /help lists here, and nothing else, unless asked for all.
+   type Availability is (In_Project, Without_Project);
+
    type Command_Descriptor is record
       Name        : Word_Access;
       Help_Key    : Word_Access;
       Route       : Command_Route;
       Mid_Message : Boolean := True;
+      Needs       : Availability := In_Project;
    end record;
 
    Commands : constant array (Positive range <>) of Command_Descriptor :=
-     [(new String'("/init"),        new String'("cli.interactive.help.init"), Init_Route, False),
-      (new String'("/bootstrap"),   new String'("cli.interactive.help.bootstrap"), Bootstrapping_Route, False),
-      (new String'("/state"),       new String'("cli.interactive.help.state"), State_Route, True),
-      (new String'("/config"),      new String'("cli.interactive.help.config"), Config_Route, True),
-      (new String'("/git"),         new String'("cli.interactive.help.git"), Git_Route, True),
-      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route, True),
-      (new String'("/instruct"),    new String'("cli.interactive.help.instruct"), Instructions_Route, True),
-      (new String'("/reconfigure"), new String'("cli.interactive.help.reconfigure"), Reconfiguring_Route, False),
-      (new String'("/task"),        new String'("cli.interactive.help.task"), Tasks_Route, True),
-      (new String'("/accept"),      new String'("cli.interactive.help.accept"), Verdicts_Route, True),
-      (new String'("/reject"),      new String'("cli.interactive.help.reject"), Verdicts_Route, True),
-      (new String'("/work"),        new String'("cli.interactive.help.work"), Work_Route, False),
-      (new String'("/cancel"),      new String'("cli.interactive.help.cancel"), Cancel_Route, True),
-      (new String'("/check"),       new String'("cli.interactive.help.check"), Checks_Route, True),
-      (new String'("/req"),         new String'("cli.interactive.help.req"), Intents_Route, True),
-      (new String'("/decision"),    new String'("cli.interactive.help.decision"), Intents_Route, True),
-      (new String'("/spec"),        new String'("cli.interactive.help.spec"), Intents_Route, True),
-      (new String'("/result"),      new String'("cli.interactive.help.result"), Results_Route, True),
-      (new String'("/scan"),        new String'("cli.interactive.help.scan"), Repository_Route, True),
-      (new String'("/tree"),        new String'("cli.interactive.help.tree"), Repository_Route, True),
-      (new String'("/sym"),         new String'("cli.interactive.help.sym"), Repository_Route, True),
-      (new String'("/refs"),        new String'("cli.interactive.help.refs"), Repository_Route, True),
-      (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route, True),
-      (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route, True),
-      (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route, True),
-      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route, True),
-      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route, True),
-      (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route, True),
-      (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True)];
+     [(new String'("/init"),        new String'("cli.interactive.help.init"), Init_Route, False, Without_Project),
+      (new String'("/bootstrap"),
+       new String'("cli.interactive.help.bootstrap"), Bootstrapping_Route, False, In_Project),
+      (new String'("/state"),       new String'("cli.interactive.help.state"), State_Route, True, In_Project),
+      (new String'("/config"),      new String'("cli.interactive.help.config"), Config_Route, True, In_Project),
+      (new String'("/git"),         new String'("cli.interactive.help.git"), Git_Route, True, In_Project),
+      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route, True, In_Project),
+      (new String'("/instruct"),    new String'("cli.interactive.help.instruct"), Instructions_Route, True, In_Project),
+      (new String'("/reconfigure"),
+       new String'("cli.interactive.help.reconfigure"), Reconfiguring_Route, False, In_Project),
+      (new String'("/task"),        new String'("cli.interactive.help.task"), Tasks_Route, True, In_Project),
+      (new String'("/accept"),      new String'("cli.interactive.help.accept"), Verdicts_Route, True, In_Project),
+      (new String'("/reject"),      new String'("cli.interactive.help.reject"), Verdicts_Route, True, In_Project),
+      (new String'("/work"),        new String'("cli.interactive.help.work"), Work_Route, False, In_Project),
+      (new String'("/cancel"),      new String'("cli.interactive.help.cancel"), Cancel_Route, True, In_Project),
+      (new String'("/check"),       new String'("cli.interactive.help.check"), Checks_Route, True, In_Project),
+      (new String'("/req"),         new String'("cli.interactive.help.req"), Intents_Route, True, In_Project),
+      (new String'("/decision"),    new String'("cli.interactive.help.decision"), Intents_Route, True, In_Project),
+      (new String'("/spec"),        new String'("cli.interactive.help.spec"), Intents_Route, True, In_Project),
+      (new String'("/result"),      new String'("cli.interactive.help.result"), Results_Route, True, In_Project),
+      (new String'("/scan"),        new String'("cli.interactive.help.scan"), Repository_Route, True, In_Project),
+      (new String'("/tree"),        new String'("cli.interactive.help.tree"), Repository_Route, True, In_Project),
+      (new String'("/sym"),         new String'("cli.interactive.help.sym"), Repository_Route, True, In_Project),
+      (new String'("/refs"),        new String'("cli.interactive.help.refs"), Repository_Route, True, In_Project),
+      (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route, True, In_Project),
+      (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route, True, In_Project),
+      (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route, True, In_Project),
+      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route, True, In_Project),
+      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route, True, In_Project),
+      (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route, True, In_Project),
+      (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True, In_Project)];
 
    --  The tools that take a path in the tree, those of them that write,
    --  and those that ask the project's repository graph.
@@ -2304,11 +2311,22 @@ package body Model_Runner.CLI.Project_Commands is
    -- Help --
    ----------
 
-   procedure Help (Screen : in out Model_Runner.Presentation.Console) is
+   procedure Help (Screen : in out Model_Runner.Presentation.Console; All_Of_Them : Boolean := False) is
+      --  Where this session stands: in a project or not.
+      Here_Is : constant Availability :=
+        (if Ada.Directories.Exists (Here & "/.model_runner") then In_Project else Without_Project);
+      Left    : Natural := 0;
    begin
       for Command of Commands loop
-         Pres.Put_Help_Line (Screen, Command.Help_Key.all);
+         if All_Of_Them or else Command.Needs = Here_Is then
+            Pres.Put_Help_Line (Screen, Command.Help_Key.all);
+         else
+            Left := Left + 1;
+         end if;
       end loop;
+      if Left > 0 then
+         Pres.Put_Note (Screen, "cli.interactive.help_more", [Loc.Named ("count", Image (Left))]);
+      end if;
    end Help;
 
    --  Whether a line leaves a quote open: the rest of it taken as quoted.
@@ -2772,6 +2790,94 @@ package body Model_Runner.CLI.Project_Commands is
       end loop;
       return To_String (Result);
    end Where_Raised;
+
+   ----------------
+   -- Request_Of --
+   ----------------
+
+   function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request is
+      All_Words : constant Names.Vector := Identifiers_As_Kept (Split (Line));
+      Result    : Model_Runner.CLI.Command_Lines.Request;
+      Continues : Boolean := False;
+      Is_Note   : Boolean;
+   begin
+      if All_Words.Is_Empty then
+         return Result;
+      end if;
+      Result.Word := To_Unbounded_String (All_Words.First_Element);
+      Is_Note := All_Words.First_Element = "/task" and then Natural (All_Words.Length) >= 4
+        and then All_Words (2) = "note";
+      --  A note is free text: kept as it was typed -- its quotes, its
+      --  NAME=VALUE words -- not taken apart into settings.
+      if Is_Note then
+         declare
+            Cursor : Natural := Line'First;
+         begin
+            for Skipped in 1 .. 3 loop
+               while Cursor <= Line'Last and then Line (Cursor) in ' ' | ASCII.HT loop
+                  Cursor := Cursor + 1;
+               end loop;
+               while Cursor <= Line'Last and then Line (Cursor) not in ' ' | ASCII.HT loop
+                  Cursor := Cursor + 1;
+               end loop;
+            end loop;
+            Result.Positional.Append (All_Words (2));
+            Result.Positional.Append (All_Words (3));
+            Result.Positional.Append (Ada.Strings.Fixed.Trim (Line (Cursor .. Line'Last), Ada.Strings.Both));
+            Result.Free_Last := True;
+         end;
+         return Result;
+      end if;
+      for Index in 2 .. Natural (All_Words.Length) loop
+         declare
+            Part : constant String := All_Words (Index);
+         begin
+            --  --set before NAME=VALUE, as the shell spells it, is the
+            --  same as NAME=VALUE alone.
+            if Part = "--set" then
+               null;
+            elsif Is_Setting (Part) and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
+               Result.Settings.Append (Part);
+               Continues := True;
+            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
+               --  A value runs on to the next NAME=, as /reconfigure takes
+               --  one: notes=for users is one value, not a word dropped.
+               Result.Settings.Replace_Element
+                 (Result.Settings.Last_Index, Result.Settings.Last_Element & " " & Part);
+            else
+               Continues := False;
+               --  IDs a comma apart, as a list is written: TASK-008, TASK-009,
+               --  or TASK-008,TASK-009 -- each its own.
+               if Ada.Strings.Fixed.Index (Part, ",") > 0
+                 and then (Part (Part'First) in '0' .. '9'
+                           or else (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
+                                      Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix))
+               then
+                  declare
+                     From : Natural := Part'First;
+                  begin
+                     for At_Comma in Part'Range loop
+                        if Part (At_Comma) = ',' or else At_Comma = Part'Last then
+                           declare
+                              Piece : constant String :=
+                                Part (From .. (if Part (At_Comma) = ',' then At_Comma - 1 else At_Comma));
+                           begin
+                              if Piece /= "" then
+                                 Result.Positional.Append (Piece);
+                              end if;
+                           end;
+                           From := At_Comma + 1;
+                        end if;
+                     end loop;
+                  end;
+               else
+                  Result.Positional.Append (Part);
+               end if;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Request_Of;
 
    --  A command line, carried out: Run_Line, a subunit of its own, as each
    --  of its handlers is.

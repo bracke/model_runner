@@ -84,7 +84,65 @@ procedure Show_Config (Store : in out S.Store) is
 
    function In_Area (Name, Area : String) return Boolean
    is (Area = "all" or else Area_Of (Name) = Area);
+
+   --  /config diff [REV1 [REV2]]: what changed between two revisions of the
+   --  configuration -- the previous and the current where none are named,
+   --  or the one named and the current -- each setting as before -> after.
+   procedure Show_Diff is
+      package Cf renames Model_Runner.Framework.Configurations;
+      Now     : R.Item;
+      Got     : E.Error_Info;
+   begin
+      Cf.Read (Store, Now, Got);
+      if E.Is_Error (Got) then
+         Pres.Report (Screen, Got);
+         return;
+      end if;
+      declare
+         Current : constant Natural := R.Revision (Now);
+         function Number (Text : String; Default : Natural) return Natural is
+           (if Text /= "" and then (for all C of Text => C in '0' .. '9') then Natural'Value (Text) else Default);
+         From : constant Natural := Number (Argument (2), Natural'Max (1, Current - 1));
+         To   : constant Natural := Number (Argument (3), Current);
+         A, B : R.Item;
+         Read_A, Read_B : E.Error_Info;
+      begin
+         if From = 0 or else To = 0 then
+            Pres.Put_Note (Screen, "cli.config.diff_none", [Loc.Named ("value", Image (From)),
+                                                            Loc.Named ("total", Image (To))]);
+            return;
+         end if;
+         Cf.Revision_At (Store, From, A, Read_A);
+         Cf.Revision_At (Store, To, B, Read_B);
+         if E.Is_Error (Read_A) then
+            Pres.Report (Screen, Read_A);
+            return;
+         elsif E.Is_Error (Read_B) then
+            Pres.Report (Screen, Read_B);
+            return;
+         end if;
+         declare
+            Said : constant Names.Vector := Cf.Differences (A, B);
+         begin
+            if Said.Is_Empty then
+               Pres.Put_Note (Screen, "cli.config.diff_none", [Loc.Named ("value", Image (From)),
+                                                               Loc.Named ("total", Image (To))]);
+            else
+               Pres.Put_Note (Screen, "cli.config.diff_head", [Loc.Named ("value", Image (From)),
+                                                               Loc.Named ("total", Image (To))]);
+               for One of Said loop
+                  Pres.Put_Note (Screen, "cli.config.diff_line", [Loc.Named ("detail", One)]);
+               end loop;
+            end if;
+         end;
+      end;
+   end Show_Diff;
+
 begin
+   if Argument (1) = "diff" then
+      Show_Diff;
+      return;
+   end if;
    Model_Runner.Framework.Configurations.Read (Store, Config, Read);
    if E.Is_Error (Read) then
       Pres.Report (Screen, Read);

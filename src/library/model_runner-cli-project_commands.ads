@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Command_Lines;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Cancellation;
@@ -126,6 +127,13 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True when it is.
    function Is_Project_Command (Word : String) return Boolean;
 
+   --  What a line asks, read once: the command, its words, its settings --
+   --  every command's line read by this one reader before it is acted on.
+   --
+   --  @param Line The line typed.
+   --  @return The request.
+   function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request;
+
    --  Whether a project command may run while a message is being typed,
    --  the message kept to go on with: what its entry in the command table
    --  says -- every command but those that start a model's run or remake
@@ -153,7 +161,8 @@ package Model_Runner.CLI.Project_Commands is
    --  One help line for each command.
    --
    --  @param Screen Where to write.
-   procedure Help (Screen : in out Model_Runner.Presentation.Console);
+   --  @param All_Of_Them Every command, where it applies here or not.
+   procedure Help (Screen : in out Model_Runner.Presentation.Console; All_Of_Them : Boolean := False);
 
    --  Carry out a project command.
    --

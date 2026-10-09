@@ -13,6 +13,10 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
+      --  Stopping a commit short at a crash point: for the tests that
+      --  crash a commit at each and reopen the store, and nothing else.
+      new String'("Crash_At"),
+
       --  One symbol by its full name, the first declared. The sym command
       --  and a work agent's find_symbol list every declaration of a name;
       --  a caller that wants the one asks.

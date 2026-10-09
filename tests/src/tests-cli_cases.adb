@@ -9763,11 +9763,16 @@ package body Tests.CLI_Cases is
                           "nothing is asking yes or no"),
               "a lone answer after a command was sent to the model");
       --  /help fits a screen, naming the project's commands; /help project
-      --  says what each does.
+      --  says what each that applies here does -- outside a project, what
+      --  makes one, and how many more there are -- and /help project all
+      --  says every one.
       Assert (Project_Tools.Text.Contains
                 (Conversed ("/help" & ASCII.LF & "/exit" & ASCII.LF), "/help project says")
               and then Project_Tools.Text.Contains
                          (Conversed ("/help project" & ASCII.LF & "/exit" & ASCII.LF),
+                          "more apply where this session is not")
+              and then Project_Tools.Text.Contains
+                         (Conversed ("/help project all" & ASCII.LF & "/exit" & ASCII.LF),
                           "where a symbol is declared"),
               "/help did not name the project's commands, or /help project say them");
 

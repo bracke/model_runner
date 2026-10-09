@@ -922,6 +922,23 @@ package body Model_Runner.Framework.Stores is
    -- Finish --
    ------------
 
+   --  Where the next commit is to be stopped short, for a test.
+   Crash_Armed : Crash_Point := No_Crash;
+
+   procedure Crash_At (Point : Crash_Point) is
+   begin
+      Crash_Armed := Point;
+   end Crash_At;
+
+   --  Stop short here, where a test asked for this point: once.
+   procedure Crash_Here (Point : Crash_Point) is
+   begin
+      if Crash_Armed = Point and then Point /= No_Crash then
+         Crash_Armed := No_Crash;
+         raise Simulated_Crash;
+      end if;
+   end Crash_Here;
+
    procedure Finish
      (Item   : in out Store;
       Status : out Model_Runner.Errors.Error_Info)
@@ -1001,6 +1018,10 @@ package body Model_Runner.Framework.Stores is
       end;
 
       for Op in 1 .. Count loop
+         --  Some of it applied and the rest not, where a test stops it so.
+         if Op = 2 then
+            Crash_Here (Mid_Apply);
+         end if;
          declare
             Line   : constant String := Records.Get (Manifest, "op." & Six (Op));
             Verb   : constant String := Word (Line, 1);
@@ -1155,9 +1176,11 @@ package body Model_Runner.Framework.Stores is
       elsif E.Is_Error (Status) then
          return;
       end if;
+      Crash_Here (After_Journal);
       if E.Is_Ok (Status) then
          Mark (Item, Status);
       end if;
+      Crash_Here (After_Mark);
       if E.Is_Ok (Status) then
          Finish (Item, Status);
       end if;

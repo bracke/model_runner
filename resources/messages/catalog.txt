@@ -286,7 +286,10 @@ en.cli.interactive.help.video = /video PATH    show the model a video, a file or
 en.cli.interactive.help.init = /init [TEMPLATE]    start the project's state from a template
 en.cli.interactive.help.bootstrap = /bootstrap [FILE]   read documents for requirements and decisions
 en.cli.interactive.help.state = /state              where the project stands
-en.cli.interactive.help.config = /config             the project's resolved configuration
+en.cli.interactive.help.config = /config [diff]      the project's resolved configuration; diff [REV [REV]] what changed between two revisions
+en.cli.config.diff_head = the configuration from revision {value} to {total}:
+en.cli.config.diff_line = {detail}
+en.cli.config.diff_none = the configuration is the same at revisions {value} and {total}
 en.cli.interactive.help.git = /git                how the project stands in Git, and which tasks changed what
 en.cli.interactive.help.sandbox = /sandbox [R|off]    confine every agent this session starts: R is capabilities separated by ;, each with its constraints, as write_source roots=docs/; read_source
 en.cli.interactive.help.instruct = /instruct [S = V]   a standing instruction of yours: above every other source; withdraw ID ends it
@@ -310,6 +313,7 @@ en.cli.interactive.help.users = /users UNIT         the units that depend on a u
 en.cli.interactive.help.impact = /impact FILE        what a change to a file reaches
 en.cli.interactive.help.trace = /trace NODE         the traceability of a requirement, task or file
 en.cli.interactive.help.why = /why [TASK]          why a task can or cannot run, or what /work takes next
+en.cli.interactive.help_more = {count} more apply where this session is not -- /help project all lists every one
 en.cli.interactive.help.history = /history [ID]       what happened to a task, invocation or record, from the event log; with none, the latest
 en.cli.interactive.help.brief = /brief TASK          what /work would give the task's agent: each item in, as what, and each left out, and why
 en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the project from TEMPLATE, each input as NAME=VALUE; /init alone offers the templates and asks for what is needed. The plan (inputs, files, facts, and checks the policy would refuse) is shown before anything is written
@@ -1806,7 +1810,10 @@ da.cli.interactive.help.video = /video STI     vis modellen en video, en fil ell
 da.cli.interactive.help.init = /init [SKABELON]    start projektets tilstand fra en skabelon
 da.cli.interactive.help.bootstrap = /bootstrap [FIL]    læs dokumenter for krav og beslutninger
 da.cli.interactive.help.state = /state              hvor projektet står
-da.cli.interactive.help.config = /config             projektets afklarede konfiguration
+da.cli.interactive.help.config = /config [diff]      projektets afklarede konfiguration; diff [REV [REV]] hvad der ændrede sig mellem to revisioner
+da.cli.config.diff_head = konfigurationen fra revision {value} til {total}:
+da.cli.config.diff_line = {detail}
+da.cli.config.diff_none = konfigurationen er den samme ved revision {value} og {total}
 da.cli.interactive.help.git = /git                hvordan projektet står i Git, og hvilke opgaver ændrede hvad
 da.cli.interactive.help.sandbox = /sandbox [R|off]    begræns hver agent denne session starter: R er kapabiliteter adskilt af ;, hver med sine begrænsninger, som write_source roots=docs/; read_source
 da.cli.interactive.help.instruct = /instruct [S = V]   en stående instruks fra dig: over alle andre kilder; withdraw ID ophæver den
@@ -1830,6 +1837,7 @@ da.cli.interactive.help.users = /users ENHED        de enheder der afhænger af 
 da.cli.interactive.help.impact = /impact FIL         hvad en ændring af en fil når
 da.cli.interactive.help.trace = /trace KNUDE        sporbarheden for et krav, en opgave eller en fil
 da.cli.interactive.help.why = /why [OPGAVE]        hvorfor en opgave kan eller ikke kan køre, eller hvad /work tager næst
+da.cli.interactive.help_more = {count} flere gælder hvor denne session ikke er -- /help project all viser dem alle
 da.cli.interactive.help.history = /history [ID]       hvad der skete med en opgave, et kald eller en post, fra hændelsesloggen; uden, de seneste
 da.cli.interactive.help.brief = /brief OPGAVE        hvad /work ville give opgavens agent: hvert punkt med, som hvad, og hvert udeladt, og hvorfor
 da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projektet fra SKABELON, hvert input som NAVN=VÆRDI; /init alene tilbyder skabelonerne og spørger om det nødvendige. Planen (input, filer, fakta og kontroller politikken ville afvise) vises før noget skrives
@@ -3037,7 +3045,10 @@ qps.cli.interactive.help.video = ⟦/video PÁŦH    ßhów ŧhé móðéĺ á v
 qps.cli.interactive.help.init = ⟦/íñíŧ [ŦEMPLAŦE]    ßŧáŕŧ ŧhé pŕójéçŧ'ß ßŧáŧé fŕóm á ŧémpĺáŧé⟧
 qps.cli.interactive.help.bootstrap = ⟦/bóóŧßŧŕáp [FILE]   ŕéáð ðóçúméñŧß fóŕ ŕéqúíŕéméñŧß áñð ðéçíßíóñß⟧
 qps.cli.interactive.help.state = ⟦/ßŧáŧé              whéŕé ŧhé pŕójéçŧ ßŧáñðß⟧
-qps.cli.interactive.help.config = ⟦/çóñfíg             ŧhé pŕójéçŧ'ß ŕéßóĺvéð çóñfígúŕáŧíóñ⟧
+qps.cli.interactive.help.config = ⟦/çóñfíg [ðíff]      ŧhé pŕójéçŧ'ß ŕéßóĺvéð çóñfígúŕáŧíóñ; ðíff [ŔÉV [ŔÉV]] ŵĥáŧ ćĥáñĝéď⟧
+qps.cli.config.diff_head = ⟦ŧĥé ćóñfíĝúŕáŧíóñ fŕóm ŕévíśíóñ {value} ŧó {total}:⟧
+qps.cli.config.diff_line = ⟦{detail}⟧
+qps.cli.config.diff_none = ⟦ŧĥé ćóñfíĝúŕáŧíóñ íś ŧĥé śáḿé áŧ ŕévíśíóñś {value} áñď {total}⟧
 qps.cli.interactive.help.git = ⟦/gíŧ                hów ŧhé pŕójéçŧ ßŧáñðß íñ Gíŧ, áñð whíçh ŧáßkß çháñgéð wháŧ⟧
 qps.cli.interactive.help.sandbox = ⟦/ßáñðbóx [R|óff]    çóñfíñé évéŕý ágéñŧ ŧhíß ßéßßíóñ ßŧáŕŧß: R íß çápábíĺíŧíéß ßépáŕáŧéð bý ;, éáçh wíŧh íŧß çóñßŧŕáíñŧß, áß wŕíŧé_ßóúŕçé ŕóóŧß=ðóçß/; ŕéáð_ßóúŕçé⟧
 qps.cli.interactive.help.instruct = ⟦/íñßŧŕúçŧ [S = V]   á ßŧáñðíñg íñßŧŕúçŧíóñ óf ýóúŕß: ábóvé évéŕý óŧhéŕ ßóúŕçé; wíŧhðŕáw ID éñðß íŧ⟧
@@ -3061,6 +3072,7 @@ qps.cli.interactive.help.users = ⟦/úßéŕß ÚNIŦ         ŧhé úñíŧß 
 qps.cli.interactive.help.impact = ⟦/ímpáçŧ FILE        wháŧ á çháñgé ŧó á fíĺé ŕéáçhéß⟧
 qps.cli.interactive.help.trace = ⟦/ŧŕáçé NODE         ŧhé ŧŕáçéábíĺíŧý óf á ŕéqúíŕéméñŧ, ŧáßk óŕ fíĺé⟧
 qps.cli.interactive.help.why = ⟦/ŵĥý [ŦÁßK]          ŵĥý á ŧáßk ćáñ óŕ ćáññóŧ ŕúñ, óŕ ŵĥáŧ /ŵóŕķ ŧáķéś ñéxŧ⟧
+qps.cli.interactive.help_more = ⟦{count} ḿóŕé áþþĺý ŵĥéŕé ŧĥíś śéśśíóñ íś ñóŧ -- /ĥéĺþ þŕóĵéćŧ áĺĺ ĺíśŧś évéŕý óñé⟧
 qps.cli.interactive.help.history = ⟦/ĥíśŧóŕý [ÍĐ]       ŵĥáŧ ĥáppéñéď ŧó á ŧáśķ, íñvóćáŧíóñ óŕ ŕéćóŕď, fŕóm ŧĥé évéñŧ ĺóg; ŵíŧĥ ñóñé, ŧĥé ĺáŧéśŧ⟧
 qps.cli.interactive.help.brief = ⟦/ßŕíéf ŦÁßK          ŵĥáŧ /ŵóŕķ ŵóúĺď ĝívé ŧĥé ŧáśķ'ś áĝéñŧ: éáçĥ íŧéḿ íñ, áś ŵĥáŧ, áñď éáçĥ ĺéfŧ óúŧ, áñď ŵĥý⟧
 qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧáŕŧß ŧhé pŕójéçŧ fŕóm ŦEMPLAŦE, éáçh íñpúŧ áß NAME=VALÚE; /íñíŧ áĺóñé ófféŕß ŧhé ŧémpĺáŧéß áñð áßkß fóŕ wháŧ íß ñééðéð. Ŧhé pĺáñ (íñpúŧß, fíĺéß, fáçŧß, áñð çhéçkß ŧhé póĺíçý wóúĺð ŕéfúßé) íß ßhówñ béfóŕé áñýŧhíñg íß wŕíŧŧéñ⟧

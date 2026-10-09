@@ -101,6 +101,9 @@ package Model_Runner.Framework.Invocations is
    --  @param Parent The invocation whose call started this one, a helper
    --    being the child of the run that asked for it; "" for a root.
    --  @param Parent_Call That call's number among the parent's calls.
+   --  @param Resolved What the run resolved its settings to as it started,
+   --    a NAME=VALUE a line, kept as resolved.NAME: what governed it, read
+   --    back after the configuration has moved on.
    procedure Start
      (Item        : Stores.Store;
       Change      : in out Stores.Transaction;
@@ -115,7 +118,8 @@ package Model_Runner.Framework.Invocations is
       Status      : out Model_Runner.Errors.Error_Info;
       Resource_Class : String := "";
       Parent      : String := "";
-      Parent_Call : Natural := 0);
+      Parent_Call : Natural := 0;
+      Resolved    : String := "");
 
    --  How many calls an invocation has recorded, answered or not.
    --

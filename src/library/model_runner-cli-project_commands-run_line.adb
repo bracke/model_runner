@@ -9,7 +9,6 @@ is
    Word       : constant String := All_Words.First_Element;
    Positional : Names.Vector;
    Command    : Model_Runner.CLI.Project_Requests.Request;
-   Continues  : Boolean := False;
    To_Task    : Boolean := False;
    Status     : Natural := 0;
    Outcome    : E.Error_Info;
@@ -332,77 +331,18 @@ begin
    if Open_Quote then
       Pres.Put_Note (Screen, "cli.project.quote_open");
    end if;
-   --  A note is free text: kept as it was typed -- its quotes, its
-   --  NAME=VALUE words -- not taken apart into settings.
-   if Word = "/task" and then Natural (All_Words.Length) >= 4 and then All_Words (2) = "note" then
-      declare
-         Cursor : Natural := Line'First;
-      begin
-         for Skipped in 1 .. 3 loop
-            while Cursor <= Line'Last and then Line (Cursor) in ' ' | ASCII.HT loop
-               Cursor := Cursor + 1;
-            end loop;
-            while Cursor <= Line'Last and then Line (Cursor) not in ' ' | ASCII.HT loop
-               Cursor := Cursor + 1;
-            end loop;
-         end loop;
-         Positional.Append (All_Words (2));
-         Positional.Append (All_Words (3));
-         Positional.Append (Ada.Strings.Fixed.Trim (Line (Cursor .. Line'Last), Ada.Strings.Both));
-      end;
-   end if;
-   for Index in 2 .. Natural (All_Words.Length) loop
-      exit when Word = "/task" and then Natural (All_Words.Length) >= 4 and then All_Words (2) = "note";
-      declare
-         Part : constant String := All_Words (Index);
-      begin
-         --  --set before NAME=VALUE, as the shell spells it, is the
-         --  same as NAME=VALUE alone.
-         if Part = "--set" then
-            null;
-         elsif Is_Setting (Part) and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
-           and then Command.Input_Count < Opt.Max_Guards
-         then
-            Command.Input_Count := Command.Input_Count + 1;
-            Command.Inputs (Command.Input_Count) := T.To_Bounded (Part);
-            Continues := True;
-         elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
-            --  A value runs on to the next NAME=, as /reconfigure takes
-            --  one: notes=for users is one value, not a word dropped.
-            Command.Inputs (Command.Input_Count) :=
-              T.To_Bounded (T.To_String (Command.Inputs (Command.Input_Count)) & " " & Part);
-         else
-            Continues := False;
-            --  IDs a comma apart, as a list is written: TASK-008, TASK-009,
-            --  or TASK-008,TASK-009 -- each its own.
-            if Ada.Strings.Fixed.Index (Part, ",") > 0
-              and then (Part (Part'First) in '0' .. '9'
-                        or else (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
-                                   Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix))
-            then
-               declare
-                  From : Natural := Part'First;
-               begin
-                  for Index in Part'Range loop
-                     if Part (Index) = ',' or else Index = Part'Last then
-                        declare
-                           Piece : constant String :=
-                             Part (From .. (if Part (Index) = ',' then Index - 1 else Index));
-                        begin
-                           if Piece /= "" then
-                              Positional.Append (Piece);
-                           end if;
-                        end;
-                        From := Index + 1;
-                     end if;
-                  end loop;
-               end;
-            else
-               Positional.Append (Part);
-            end if;
-         end if;
-      end;
-   end loop;
+   --  The line read once, as every command's is: its words and its
+   --  settings, which the handlers below work from.
+   declare
+      Asked : constant Model_Runner.CLI.Command_Lines.Request := Request_Of (Line);
+   begin
+      Positional := Asked.Positional;
+      for One of Asked.Settings loop
+         exit when Command.Input_Count >= Opt.Max_Guards;
+         Command.Input_Count := Command.Input_Count + 1;
+         Command.Inputs (Command.Input_Count) := T.To_Bounded (One);
+      end loop;
+   end;
 
    --  A session works in the directory it was started in: another is
    --  refused by name, not worked in unasked or taken for text.

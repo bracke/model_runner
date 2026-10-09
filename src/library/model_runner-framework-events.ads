@@ -135,6 +135,17 @@ package Model_Runner.Framework.Events is
    --  @return The revision; nought before any event.
    function Revision (Item : Stores.Store) return Natural;
 
+   --  The workspace's revision: how many times the harness has recorded the
+   --  project's source changing -- every Source_Changed -- apart from the
+   --  project's state. What an invocation started from and ended at, and
+   --  what derived knowledge of the source was made at. A change made
+   --  outside the harness is not counted here; the repository graph's
+   --  fingerprint, read from the files, is what notices that.
+   --
+   --  @param Item The store.
+   --  @return The revision; nought before any change was recorded.
+   function Workspace_Revision (Item : Stores.Store) return Natural;
+
    --  The committed events numbered after a point, in order.
    --
    --  @param Item The store.
