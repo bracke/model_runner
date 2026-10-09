@@ -16,11 +16,13 @@ with Model_Runner.Tools.Runner;
 --  happened to agree. A
 --  call that reads is remembered with its answer and how it ended, and the
 --  same call again gets that answer. A call that changes state forgets
---  every call before it: what they answered was read from state it may
---  have changed, so the next of them runs again -- a file read after it
---  was written is read, not answered with what it held before. The call
---  that changed is kept, so the same change made twice with nothing
---  between is still not made twice.
+--  every call before it that read what it changes: what they answered was
+--  read from state it may have changed, so the next of them runs again -- a
+--  file read after it was written is read, not answered with what it held
+--  before. The call that changed is kept, so the same change made twice
+--  with nothing between is still not made twice. And an answer read from
+--  the tree is kept with a stamp of what it read, and stands only while
+--  the stamp does: the tree is not the harness's alone.
 --
 --  Unbounded: what a run has made is remembered however many calls that
 --  is, so the protection does not lapse in a long one.
@@ -80,7 +82,25 @@ package Model_Runner.Agent.Recall is
    --
    --  @param Self The memory.
    --  @param Key The call's identity.
-   procedure Remember (Self : in out Memory; Key : String);
+   --  @param Touches What it reads or changes.
+   procedure Remember
+     (Self    : in out Memory;
+      Key     : String;
+      Touches : Model_Runner.Tools.Runner.Resource := Model_Runner.Tools.Runner.Anything);
+
+   --  The stamp a remembered call's answer was kept with; "" for none.
+   --
+   --  @param Self The memory.
+   --  @param Key The call's identity.
+   --  @return The stamp.
+   function Stamp_Of (Self : Memory; Key : String) return String;
+
+   --  Forget one call: what it read has changed under it, though no call
+   --  here changed it.
+   --
+   --  @param Self The memory.
+   --  @param Key The call's identity.
+   procedure Forget (Self : in out Memory; Key : String);
 
    --  Keep a held call's answer, the first one given. A call not held, or
    --  answered already, is left.
@@ -89,18 +109,28 @@ package Model_Runner.Agent.Recall is
    --  @param Key The call's identity.
    --  @param Text What it answered.
    --  @param Ended How it ended.
+   --  @param Stamp What it read, as it was when it answered (see
+   --    Runner.Stamp): the answer stands only while that stamp does.
    procedure Keep
      (Self  : in out Memory;
       Key   : String;
       Text  : String;
-      Ended : Model_Runner.Tools.Runner.Call_Outcome);
+      Ended : Model_Runner.Tools.Runner.Call_Outcome;
+      Stamp : String := "");
 
-   --  A call that changes state is to run: every other call is forgotten,
-   --  and this one remembered.
+   --  A call that changes state is to run: every call that read what it
+   --  changes is forgotten -- all of them, where it may change anything --
+   --  and this one remembered. A call that read nothing outside itself is
+   --  kept, and so is one that read what this does not change: a note put
+   --  in the scratchpad leaves a file read standing.
    --
    --  @param Self The memory.
    --  @param Key The changing call's identity.
-   procedure Changed (Self : in out Memory; Key : String);
+   --  @param Touches What it changes.
+   procedure Changed
+     (Self    : in out Memory;
+      Key     : String;
+      Touches : Model_Runner.Tools.Runner.Resource := Model_Runner.Tools.Runner.Anything);
 
    --  The work as the loop saw it happen, call by call: what each call
    --  was about -- a path, where it named one -- what it does to state,
@@ -181,6 +211,8 @@ private
       Answer     : Ada.Strings.Unbounded.Unbounded_String;
       Ends       : Model_Runner.Tools.Runner.Call_Outcome;
       Has_Answer : Boolean := False;
+      Touches    : Model_Runner.Tools.Runner.Resource := Model_Runner.Tools.Runner.Anything;
+      Stamp      : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    package Call_Maps is new Ada.Containers.Indefinite_Hashed_Maps

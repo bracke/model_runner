@@ -5,38 +5,66 @@ package body Model_Runner.Tools.Registry is
    package Sc renames Model_Runner.Tools.Schemas;
    package U renames Ada.Strings.Unbounded;
 
-   --  A tool: its name, what it needs, and whether it is offered or only
-   --  run when called by name.
+   --  A tool, described once: its name, what it needs, whether it is
+   --  offered or only run when called by name, what its call does to the
+   --  state later calls read and which state that is, whether it may run
+   --  beside the other calls of a turn, and what it does with a path.
    type Word is access constant String;
    type Entry_Of is record
-      Name    : Word;
-      Needs   : Capability;
-      Offered : Boolean;
+      Name     : Word;
+      Needs    : Capability;
+      Offered  : Boolean;
+      Effect   : Runner.Call_Kind;
+      Touches  : Runner.Resource;
+      Parallel : Boolean;
+      Path     : Path_Use;
    end record;
 
    function W (Text : String) return Word is (new String'(Text));
 
+   use Runner;
+
    Table : constant array (Positive range <>) of Entry_Of :=
-     [(W ("calculator"), Facts, True), (W ("string_length"), Facts, True),
-      (W ("reverse_text"), Facts, True), (W ("lookup"), Facts, True),
-      (W ("base64_encode"), Text, True), (W ("base64_decode"), Text, True),
-      (W ("now"), Clock, True),
-      (W ("memory_put"), Memory, True), (W ("memory_get"), Memory, True),
-      (W ("read_file"), Read_Files, True), (W ("list_directory"), Read_Files, True),
-      (W ("find"), Read_Files, True),
-      (W ("edit_file"), Write_Files, True), (W ("write_file"), Write_Files, True),
-      (W ("run_checks"), Project_Checks, True),
-      (W ("retrieve"), Retrieval, True),
-      (W ("shell"), Run_Programs, True), (W ("run_python"), Run_Programs, True),
-      (W ("sql"), Run_Programs, True),
-      (W ("http_get"), Network, True), (W ("web_search"), Network, True),
-      (W ("delegate"), Delegation, True), (W ("ask_user"), Ask_User, True),
+     [(W ("calculator"), Facts, True, Reads, Pure, True, No_Path),
+      (W ("string_length"), Facts, True, Reads, Pure, True, No_Path),
+      (W ("reverse_text"), Facts, True, Reads, Pure, True, No_Path),
+      (W ("lookup"), Facts, True, Reads, Pure, True, No_Path),
+      (W ("base64_encode"), Text, True, Reads, Pure, True, No_Path),
+      (W ("base64_decode"), Text, True, Reads, Pure, True, No_Path),
+      --  The clock answers anew each time.
+      (W ("now"), Clock, True, Varies, Pure, True, No_Path),
+      (W ("memory_put"), Memory, True, Changes, Agent_Memory, False, No_Path),
+      (W ("memory_get"), Memory, True, Reads, Agent_Memory, False, No_Path),
+      (W ("read_file"), Read_Files, True, Reads, Files, True, Reads_Path),
+      (W ("list_directory"), Read_Files, True, Reads, Files, True, Reads_Path),
+      (W ("find"), Read_Files, True, Reads, Files, True, Reads_Path),
+      (W ("edit_file"), Write_Files, True, Changes, Files, False, Writes_Path),
+      (W ("write_file"), Write_Files, True, Changes, Files, False, Writes_Path),
+      --  The checks read the tree as it stands; their processes do not
+      --  overlap, since waiting reaps whichever child ended.
+      (W ("run_checks"), Project_Checks, True, Reads, Files, False, No_Path),
+      --  Overlaps only without an embedding model: the runner says.
+      (W ("retrieve"), Retrieval, True, Reads, Files, True, No_Path),
+      (W ("shell"), Run_Programs, True, Changes, Anything, False, No_Path),
+      (W ("run_python"), Run_Programs, True, Changes, Anything, False, No_Path),
+      (W ("sql"), Run_Programs, True, Changes, Anything, False, No_Path),
+      --  The world outside changes without a call here changing it.
+      (W ("http_get"), Network, True, Varies, Pure, True, No_Path),
+      (W ("web_search"), Network, True, Varies, Pure, True, No_Path),
+      --  A helper may write anything; it overlaps where its delegator can
+      --  run two at once, which the runner says.
+      (W ("delegate"), Delegation, True, Changes, Anything, True, No_Path),
+      --  Somebody may answer the same question differently.
+      (W ("ask_user"), Ask_User, True, Varies, Pure, False, No_Path),
       --  Run by name, not offered: what read_file and find took over.
-      (W ("read_range"), Read_Files, False), (W ("search_file"), Read_Files, False),
-      (W ("search_code"), Read_Files, False),
-      (W ("find_symbol"), Project_Graph, False), (W ("find_references"), Project_Graph, False),
-      (W ("dependencies"), Project_Graph, False), (W ("dependents"), Project_Graph, False),
-      (W ("impact"), Project_Graph, False)];
+      (W ("read_range"), Read_Files, False, Reads, Files, True, Reads_Path),
+      (W ("search_file"), Read_Files, False, Reads, Files, True, Reads_Path),
+      (W ("search_code"), Read_Files, False, Reads, Files, True, Reads_Path),
+      (W ("find_symbol"), Project_Graph, False, Reads, Files, False, No_Path),
+      (W ("find_references"), Project_Graph, False, Reads, Files, False, No_Path),
+      (W ("dependencies"), Project_Graph, False, Reads, Files, False, No_Path),
+      (W ("dependents"), Project_Graph, False, Reads, Files, False, No_Path),
+      (W ("impact"), Project_Graph, False, Reads, Files, False, No_Path)];
 
    function Place (Named : String) return Natural is
    begin
@@ -71,15 +99,29 @@ package body Model_Runner.Tools.Registry is
    -- Kind_Of --
    -------------
 
-   function Kind_Of (Named : String) return Runner.Call_Kind is
-     (if Named = "now" then Runner.Varies
-      elsif Named in "calculator" | "string_length" | "reverse_text" | "lookup" | "base64_encode"
-                   | "base64_decode" | "memory_get" | "read_file" | "list_directory" | "find"
-                   | "read_range" | "search_file" | "search_code" | "find_symbol" | "find_references"
-                   | "dependencies" | "dependents" | "impact" | "http_get" | "web_search" | "retrieve"
-                   | "ask_user" | "run_checks"
-      then Runner.Reads
-      else Runner.Changes);
+   function Kind_Of (Named : String) return Runner.Call_Kind
+   is (if Known (Named) then Table (Place (Named)).Effect else Runner.Changes);
+
+   -------------
+   -- Touches --
+   -------------
+
+   function Touches (Named : String) return Runner.Resource
+   is (if Known (Named) then Table (Place (Named)).Touches else Runner.Anything);
+
+   --------------
+   -- Parallel --
+   --------------
+
+   function Parallel (Named : String) return Boolean
+   is (Known (Named) and then Table (Place (Named)).Parallel);
+
+   -------------
+   -- Path_Of --
+   -------------
+
+   function Path_Of (Named : String) return Path_Use
+   is (if Known (Named) then Table (Place (Named)).Path else No_Path);
 
    --  One tool's definition, as the capabilities shape it.
    function Definition
@@ -182,12 +224,12 @@ package body Model_Runner.Tools.Registry is
             & " starts with no memory of this conversation and reports back only its result. Say"
             & " everything it needs in task. role names what it is for"
             & (if Roles.Is_Empty then "" else ", and gives it that role's permissions")
-            & "; need is required (the default), optional or advisory. inputs names the files it starts"
-            & " from, outputs the files it must write -- checked after -- and acceptance when the part"
-            & " is done.",
+            & "; need is required (the default), optional or advisory. inputs lists the paths of the"
+            & " files it starts from, outputs the paths of the files it must write -- checked after --"
+            & " and acceptance says when the part is done.",
             [Sc.Text ("task"), Sc.Text ("role", Required => False, Choices => Roles),
              Sc.Text ("need", Required => False, Choices => ["required", "optional", "advisory"]),
-             Sc.Text ("inputs", Required => False), Sc.Text ("outputs", Required => False),
+             Sc.Text_List ("inputs", Required => False), Sc.Text_List ("outputs", Required => False),
              Sc.Text ("acceptance", Required => False)]);
       elsif Named = "ask_user" then
          return Sc.Definition

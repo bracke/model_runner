@@ -189,12 +189,22 @@ package Model_Runner.Framework.Work is
       Arguments : String;
       Number    : out Natural);
 
+   --  One part of a task, as its plan holds it.
+   type Planned_Part is record
+      Id    : Ada.Strings.Unbounded.Unbounded_String;
+      Title : Ada.Strings.Unbounded.Unbounded_String;
+      State : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   package Part_Lists is new Ada.Containers.Vectors (Positive, Planned_Part);
+
    --  What a task's run is to be, worked out from the project state before
    --  its agent is called: the task and its kind, what the agent may do --
    --  write, check and by which profile, hand parts to helpers and how
    --  many, propose tasks, split the task -- its parts, and its budgets.
-   --  The instructions the agent is given are this, rendered; and it is
-   --  one object a caller can show, or set what a run did against.
+   --  The instructions the agent is given are this, rendered -- Rendered is
+   --  the one place it becomes words -- and it is one object a caller can
+   --  show, or set what a run did against.
    type Execution_Plan is record
       Task_Id      : Ada.Strings.Unbounded.Unbounded_String;
       Kind         : Ada.Strings.Unbounded.Unbounded_String;
@@ -207,11 +217,21 @@ package Model_Runner.Framework.Work is
       May_Split    : Boolean := False;
       Apart        : Boolean := False;
 
-      --  What may be done, in plain words, as the agent is told it.
-      Permitted    : Ada.Strings.Unbounded.Unbounded_String;
+      --  What it may read: the source, the specifications.
+      Read_Source  : Boolean := False;
+      Read_Specs   : Boolean := False;
 
-      --  Its parts, a line each: identifier, title and state.
-      Parts        : Ada.Strings.Unbounded.Unbounded_String;
+      --  What it may write: source files, under these roots where any are
+      --  named and not under these; specifications, under these roots
+      --  where any are named.
+      Write_Source  : Boolean := False;
+      Source_Roots  : Name_Lists.Vector;
+      Source_Denied : Name_Lists.Vector;
+      Write_Specs   : Boolean := False;
+      Spec_Roots    : Name_Lists.Vector;
+
+      --  Its parts: identifier, title and state each.
+      Parts        : Part_Lists.Vector;
 
       --  The most tool calls and steps a run may take, and the seconds it
       --  is given; nought for no bound.
@@ -241,6 +261,14 @@ package Model_Runner.Framework.Work is
    --  @param Plan The plan.
    --  @return The text.
    function Rendered (Plan : Execution_Plan) return String;
+
+   --  What a plan lets its agent do, in the words the agent is told it:
+   --  only what it has a tool or a way to do, as "read the source; write
+   --  files".
+   --
+   --  @param Plan The plan.
+   --  @return The words.
+   function Permitted_Words (Plan : Execution_Plan) return String;
 
    --  What a task's agent is told after its context -- how to answer, the
    --  tools it holds and what it may do -- as /work would tell it now: the

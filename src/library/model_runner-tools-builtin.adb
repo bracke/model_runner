@@ -45,12 +45,14 @@ package body Model_Runner.Tools.Builtin is
    --  inside the call.
    Tool_Timeout : constant Duration := 30.0;
 
-   --  The tools that take a path in the tree, and of them those that write.
+   --  The tools that take a path in the tree, and of them those that write:
+   --  the registry's.
    function File_Tool (Named : String) return Boolean is
-     (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
-              | "search_file" | "search_code" | "find");
+     (Model_Runner.Tools.Registry."/=" (Model_Runner.Tools.Registry.Path_Of (Named),
+                                         Model_Runner.Tools.Registry.No_Path));
    function Writes (Named : String) return Boolean is
-     (Named in "write_file" | "edit_file");
+     (Model_Runner.Tools.Registry."=" (Model_Runner.Tools.Registry.Path_Of (Named),
+                                        Model_Runner.Tools.Registry.Writes_Path));
 
    ---------------------------------------------------------------------------
    --  Definitions
@@ -244,6 +246,58 @@ package body Model_Runner.Tools.Builtin is
       Found := True;
       return String_Content (Args, From);
    end Text_Argument;
+
+   procedure Text_List_Argument
+     (Args        : String;
+      Key         : String;
+      Items       : out Schemas.Choice_Lists.Vector;
+      Found       : out Boolean;
+      Well_Formed : out Boolean)
+   is
+      From, To : Natural;
+      Present  : Boolean;
+      I        : Natural;
+
+      procedure Blanks is
+      begin
+         while I <= To and then Args (I) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+            I := I + 1;
+         end loop;
+      end Blanks;
+   begin
+      Items.Clear;
+      Found := False;
+      Well_Formed := True;
+      Locate (Args, Key, From, To, Present);
+      if not Present or else To < From then
+         return;
+      end if;
+      Found := True;
+      if Args (From) /= '[' then
+         Well_Formed := False;
+         return;
+      end if;
+      I := From + 1;
+      loop
+         Blanks;
+         exit when I > To or else Args (I) = ']';
+         if Args (I) /= '"' then
+            Well_Formed := False;
+            Items.Clear;
+            return;
+         end if;
+         Items.Append (String_Content (Args, I));
+         I := After_String (Args, I);
+         Blanks;
+         if I <= To and then Args (I) = ',' then
+            I := I + 1;
+         end if;
+      end loop;
+      if I > To then
+         Well_Formed := False;
+         Items.Clear;
+      end if;
+   end Text_List_Argument;
 
    procedure Integer_Argument
      (Args  : String;
@@ -827,7 +881,8 @@ package body Model_Runner.Tools.Builtin is
          return "";
    end Read_Raw;
 
-   function Read_Capped (Path : String) return Reply is
+   function Read_Capped (Path : String; Base : String := "") return Reply is
+      Disk : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Path);
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
       File : Stream_IO.File_Type;
@@ -845,12 +900,12 @@ package body Model_Runner.Tools.Builtin is
       end As_String;
    begin
       --  A directory is listed, not read: said so, with the call that does.
-      if Ada.Directories.Exists (Path)
-        and then Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Directory)
+      if Ada.Directories.Exists (Disk)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Directory)
       then
          return Failure ("" & Path & " is a directory: list_directory " & Path & " lists it");
       end if;
-      Open (File, In_File, Path);
+      Open (File, In_File, Disk);
       declare
          Total : constant Natural := Natural (Size (File));
       begin
@@ -1100,18 +1155,18 @@ package body Model_Runner.Tools.Builtin is
    end Rooted;
 
    --  A file whole, and its revision after it, for edit_file to be given.
-   function Read_File (Args : String) return Reply is
+   function Read_File (Args : String; Base : String) return Reply is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
    begin
       if not Have then
          return Failure ("read_file needs a path");
-      elsif not Ada.Directories.Exists (Path) then
+      elsif not Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Base, Path)) then
          return Failure ("no file at " & Path);
       end if;
       declare
-         Read : constant Reply := Read_Capped (Path);
-         Now  : constant String := Model_Runner.Tools.Editing.Revision_Of (Path);
+         Read : constant Reply := Read_Capped (Path, Base);
+         Now  : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
       begin
          if Read.Failed or else Now = "" then
             return Read;
@@ -1134,7 +1189,7 @@ package body Model_Runner.Tools.Builtin is
               Tokens => 0, Text => Text);
    end As_Reply;
 
-   function Edit_File (Args : String) return Reply is
+   function Edit_File (Args : String; Base : String) return Reply is
       Have_P, Have_O, Have_N, Have_R : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have_P);
       Old  : constant String := Text_Argument (Args, "old_text", Have_O);
@@ -1144,10 +1199,10 @@ package body Model_Runner.Tools.Builtin is
       if not (Have_P and then Have_O and then Have_N) then
          return Failure ("edit_file needs a path, old_text and new_text");
       end if;
-      return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev));
+      return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev, Base));
    end Edit_File;
 
-   function Read_Range (Args : String) return Reply is
+   function Read_Range (Args : String; Base : String) return Reply is
       Have, Have_F, Have_L : Boolean;
       Path  : constant String := Text_Argument (Args, "path", Have);
       First, Last : Long_Long_Integer := 0;
@@ -1161,10 +1216,10 @@ package body Model_Runner.Tools.Builtin is
         (Model_Runner.Tools.Editing.Read_Range
            (Path, Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (First, 100_000_000))),
             (if Have_L then Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (Last, 100_000_000)))
-             else 0)));
+             else 0), Base));
    end Read_Range;
 
-   function Search_File (Args : String) return Reply is
+   function Search_File (Args : String; Base : String) return Reply is
       Have_P, Have_T : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Pattern : constant String := Text_Argument (Args, "pattern", Have_T);
@@ -1172,10 +1227,10 @@ package body Model_Runner.Tools.Builtin is
       if not (Have_P and then Have_T) then
          return Failure ("search_file needs a path and a pattern");
       end if;
-      return As_Reply (Model_Runner.Tools.Editing.Search_File (Path, Pattern));
+      return As_Reply (Model_Runner.Tools.Editing.Search_File (Path, Pattern, Base));
    end Search_File;
 
-   function Search_Code (Args : String) return Reply is
+   function Search_Code (Args : String; Base : String) return Reply is
       Have_P, Have_T : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Pattern : constant String := Text_Argument (Args, "pattern", Have_T);
@@ -1184,15 +1239,16 @@ package body Model_Runner.Tools.Builtin is
          return Failure ("search_code needs a pattern");
       end if;
       return As_Reply
-        (Model_Runner.Tools.Editing.Search_Code ((if Have_P and then Path /= "" then Path else "."), Pattern));
+        (Model_Runner.Tools.Editing.Search_Code ((if Have_P and then Path /= "" then Path else "."), Pattern, Base));
    end Search_Code;
 
-   function Write_File (Args : String) return Reply is
+   function Write_File (Args : String; Base : String) return Reply is
       use Ada.Streams;
       Have_P, Have_C : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Content : constant String := Text_Argument (Args, "content", Have_C);
       File    : Stream_IO.File_Type;
+      Disk    : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Path);
    begin
       if not (Have_P and then Have_C) then
          return Failure ("write_file needs "
@@ -1202,9 +1258,9 @@ package body Model_Runner.Tools.Builtin is
       end if;
       --  A file that already holds exactly this is left as it is, and said
       --  so: a write of what is there changes nothing, and is no progress.
-      if Ada.Directories.Exists (Path)
-        and then Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File)
-        and then Natural (Ada.Directories.Size (Path)) = Content'Length
+      if Ada.Directories.Exists (Disk)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File)
+        and then Natural (Ada.Directories.Size (Disk)) = Content'Length
       then
          declare
             Held : Stream_IO.File_Type;
@@ -1212,7 +1268,7 @@ package body Model_Runner.Tools.Builtin is
             Last : Stream_Element_Offset := 0;
             Same : Boolean := True;
          begin
-            Stream_IO.Open (Held, Stream_IO.In_File, Path);
+            Stream_IO.Open (Held, Stream_IO.In_File, Disk);
             if Content'Length > 0 then
                Stream_IO.Read (Held, Room, Last);
             end if;
@@ -1239,7 +1295,7 @@ package body Model_Runner.Tools.Builtin is
       --  A new file's directory made with it: a file under src/ is asked
       --  for whether or not src/ is there yet.
       declare
-         Folder : constant String := Ada.Directories.Containing_Directory (Path);
+         Folder : constant String := Ada.Directories.Containing_Directory (Disk);
       begin
          if Folder /= "" and then not Ada.Directories.Exists (Folder) then
             Ada.Directories.Create_Path (Folder);
@@ -1250,7 +1306,7 @@ package body Model_Runner.Tools.Builtin is
       end;
       --  Written as bytes, the way the file is read back: a text file
       --  would end the content with a line break the model never wrote.
-      Stream_IO.Create (File, Stream_IO.Out_File, Path);
+      Stream_IO.Create (File, Stream_IO.Out_File, Disk);
       declare
          Block : Stream_Element_Array
            (1 .. Stream_Element_Offset (Content'Length));
@@ -1271,21 +1327,22 @@ package body Model_Runner.Tools.Builtin is
          return Failure ("could not write the file");
    end Write_File;
 
-   function List_Directory (Args : String) return Reply is
+   function List_Directory (Args : String; Base : String) return Reply is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
       Out_S : U.Unbounded_String;
       Search : Ada.Directories.Search_Type;
       Item   : Ada.Directories.Directory_Entry_Type;
+      Disk   : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Path);
    begin
       if not Have then
          return Failure ("list_directory needs a path");
-      elsif not Ada.Directories.Exists (Path) then
+      elsif not Ada.Directories.Exists (Disk) then
          return Failure ("no directory at " & Path);
-      elsif Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Directory) then
+      elsif Ada.Directories."/=" (Ada.Directories.Kind (Disk), Ada.Directories.Directory) then
          return Failure ("" & Path & " is a file, not a directory: read_file reads it");
       end if;
-      Ada.Directories.Start_Search (Search, Path, "");
+      Ada.Directories.Start_Search (Search, Disk, "");
       while Ada.Directories.More_Entries (Search)
         and then U.Length (Out_S) <= Cap
       loop
@@ -1310,7 +1367,7 @@ package body Model_Runner.Tools.Builtin is
 
    --  find, by its kind: text in a file or a tree here; what asks a
    --  project's graph only where a project's work runs it.
-   function Find (Args : String) return Reply is
+   function Find (Args : String; Base : String) return Reply is
       Have_K, Have_Q, Have_P : Boolean;
       Kind  : constant String := Text_Argument (Args, "kind", Have_K);
       Query : constant String := Text_Argument (Args, "query", Have_Q);
@@ -1323,33 +1380,34 @@ package body Model_Runner.Tools.Builtin is
          return Failure ("find " & Kind & " asks a project's graph, which is not here; find text searches");
       elsif Kind /= "text" then
          return Failure ("find takes kind text" & " -- not " & Kind);
-      elsif Ada.Directories.Exists (Where)
-        and then Ada.Directories."=" (Ada.Directories.Kind (Where), Ada.Directories.Ordinary_File)
+      elsif Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Base, Where))
+        and then Ada.Directories."=" (Ada.Directories.Kind (Model_Runner.Tools.Editing.On_Disk (Base, Where)),
+                                      Ada.Directories.Ordinary_File)
       then
-         return As_Reply (Model_Runner.Tools.Editing.Search_File (Where, Query));
+         return As_Reply (Model_Runner.Tools.Editing.Search_File (Where, Query, Base));
       end if;
-      return As_Reply (Model_Runner.Tools.Editing.Search_Code (Where, Query));
+      return As_Reply (Model_Runner.Tools.Editing.Search_Code (Where, Query, Base));
    end Find;
 
    --  A file read whole, or by its lines where it is asked for some.
-   function Read_Any (Args : String) return Reply is
+   function Read_Any (Args : String; Base : String) return Reply is
       First : Long_Long_Integer;
       Have  : Boolean;
    begin
       Integer_Argument (Args, "first_line", First, Have);
-      return (if Have then Read_Range (Args) else Read_File (Args));
+      return (if Have then Read_Range (Args, Base) else Read_File (Args, Base));
    end Read_Any;
 
    --  A tool that takes a path in the tree, answered.
-   function File_Answer (Named, Args : String) return Reply is
-     (if Named = "read_file" then Read_Any (Args)
-      elsif Named = "find" then Find (Args)
-      elsif Named = "write_file" then Write_File (Args)
-      elsif Named = "list_directory" then List_Directory (Args)
-      elsif Named = "edit_file" then Edit_File (Args)
-      elsif Named = "read_range" then Read_Range (Args)
-      elsif Named = "search_file" then Search_File (Args)
-      else Search_Code (Args));
+   function File_Answer (Named, Args : String; Base : String) return Reply is
+     (if Named = "read_file" then Read_Any (Args, Base)
+      elsif Named = "find" then Find (Args, Base)
+      elsif Named = "write_file" then Write_File (Args, Base)
+      elsif Named = "list_directory" then List_Directory (Args, Base)
+      elsif Named = "edit_file" then Edit_File (Args, Base)
+      elsif Named = "read_range" then Read_Range (Args, Base)
+      elsif Named = "search_file" then Search_File (Args, Base)
+      else Search_Code (Args, Base));
 
    function Shell (Args : String) return Reply is
       Have : Boolean;
@@ -1502,11 +1560,14 @@ package body Model_Runner.Tools.Builtin is
       Job   : constant String :=
         (if U.Length (Asked.Role) = 0 then Rt.Brief (Asked)
          else "Your role: " & U.To_String (Asked.Role) & ASCII.LF & Rt.Brief (Asked));
-      Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Asked);
+      Outputs : constant Rt.Paths.Vector := Asked.Outputs;
       Before  : constant Rt.Paths.Vector := Rt.Prints (Outputs);
    begin
       if not Have then
          return Failure ("delegate needs a task string");
+      end if;
+      if U.Length (Asked.Refusal) > 0 then
+         return Failure ("delegate's " & U.To_String (Asked.Refusal));
       end if;
       if Self.Sub = null then
          return Failure ("delegation is not available here -- a sub-agent "
@@ -2128,17 +2189,120 @@ package body Model_Runner.Tools.Builtin is
    overriding function Parallel_Safe
      (Self : Instance; Named : String) return Boolean is
    begin
-      --  delegate overlaps only when its delegator can run two subtasks at
-      --  once -- more than one sub-session, on a backend that allows it.
-      if Named = "delegate" then
+      if not Rg.Parallel (Named) then
+         return False;
+      elsif Named = "delegate" then
          return Self.Sub /= null and then Self.Sub.Parallel_Delegates;
+      elsif Named = "retrieve" then
+         return Self.Embed = null;
       end if;
-      return Named in "calculator" | "string_length" | "reverse_text"
-          | "lookup" | "base64_encode" | "base64_decode" | "now"
-          | "read_file" | "list_directory" | "read_range" | "search_file" | "search_code" | "find"
-          | "http_get" | "web_search"
-        or else (Named = "retrieve" and then Self.Embed = null);
+      return True;
    end Parallel_Safe;
+
+   --------------
+   -- Set_Base --
+   --------------
+
+   procedure Set_Base (Self : in out Instance; Base : String) is
+   begin
+      Self.Base := U.To_Unbounded_String (Base);
+   end Set_Base;
+
+   ----------
+   -- Base --
+   ----------
+
+   function Base (Self : Instance) return String is (U.To_String (Self.Base));
+
+   -------------
+   -- Touches --
+   -------------
+
+   overriding function Touches
+     (Self : Instance; Named : String) return Model_Runner.Tools.Runner.Resource
+   is
+      pragma Unreferenced (Self);
+   begin
+      return Rg.Touches (Named);
+   end Touches;
+
+   -----------
+   -- Stamp --
+   -----------
+
+   overriding function Stamp
+     (Self : Instance; Named : String; Arguments : String) return String
+   is
+      use type Model_Runner.Tools.Runner.Resource;
+      use type Model_Runner.Tools.Runner.Call_Kind;
+      use type Ada.Directories.File_Kind;
+
+      --  FNV-1a over what was seen, as the revisions are.
+      type Hash is mod 2 ** 64;
+      Sum   : Hash := 16#CBF29CE484222325#;
+      Files : Natural := 0;
+
+      procedure Mix (Text : String) is
+      begin
+         for C of Text loop
+            Sum := (Sum xor Hash (Character'Pos (C))) * 16#100000001B3#;
+         end loop;
+         Sum := (Sum xor 16#0A#) * 16#100000001B3#;
+      end Mix;
+
+      procedure Walk (Folder : String) is
+         use Ada.Directories;
+         Search : Search_Type;
+         Found  : Directory_Entry_Type;
+      begin
+         Start_Search (Search, Folder, "", [Ordinary_File | Directory => True, others => False]);
+         while More_Entries (Search) loop
+            Get_Next_Entry (Search, Found);
+            declare
+               Name : constant String := Simple_Name (Found);
+               Full : constant String := Full_Name (Found);
+            begin
+               if Name'Length > 0 and then Name (Name'First) /= '.' then
+                  if Kind (Found) = Directory then
+                     Walk (Full);
+                  else
+                     Files := Files + 1;
+                     Mix (Full & Ada.Directories.File_Size'Image (Size (Found))
+                          & Ada.Calendar.Formatting.Image (Modification_Time (Found), Include_Time_Fraction => True));
+                  end if;
+               end if;
+            end;
+         end loop;
+         End_Search (Search);
+      exception
+         when others =>
+            Mix ("unreadable " & Folder);
+      end Walk;
+
+      Has_Path : Boolean;
+      Path     : constant String := Text_Argument (Arguments, "path", Has_Path);
+      Where    : constant String :=
+        Model_Runner.Tools.Editing.On_Disk
+          (U.To_String (Self.Base), (if Has_Path and then Path /= "" then Path else "."));
+   begin
+      if Rg.Touches (Named) /= Model_Runner.Tools.Runner.Files
+        or else Rg.Kind_Of (Named) /= Model_Runner.Tools.Runner.Reads
+      then
+         return "";
+      end if;
+      if Ada.Directories.Exists (Where)
+        and then Ada.Directories.Kind (Where) = Ada.Directories.Ordinary_File
+      then
+         return "file " & Model_Runner.Tools.Editing.Revision_Of (Where);
+      elsif Ada.Directories.Exists (Where) then
+         Walk (Where);
+         return "tree" & Natural'Image (Files) & " " & Hash'Image (Sum);
+      end if;
+      return "absent " & Where;
+   exception
+      when others =>
+         return "unreadable " & Where;
+   end Stamp;
 
    overriding procedure Run
      (Self      : in out Instance;
@@ -2213,12 +2377,12 @@ package body Model_Runner.Tools.Builtin is
                if Confined (Named, Moved) /= "" then
                   return Failure (Confinement (Named, Moved));
                end if;
-               return Prefixed (Taken_As, File_Answer (Named, Moved));
+               return Prefixed (Taken_As, File_Answer (Named, Moved, U.To_String (Self.Base)));
             end;
          elsif Confined (Named, Arguments) /= "" then
             return Failure (Confinement (Named, Arguments));
          elsif File_Tool (Named) then
-            return File_Answer (Named, Arguments);
+            return File_Answer (Named, Arguments, U.To_String (Self.Base));
          elsif Named = "shell" then
             return Shell (Arguments);
          elsif Named = "run_python" then

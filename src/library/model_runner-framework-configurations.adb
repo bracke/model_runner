@@ -10,6 +10,7 @@ with Ada.Directories;
 with Hostkit.Fs;
 with Hostkit.Process;
 
+with Model_Runner.Framework.Automation;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
@@ -1950,6 +1951,20 @@ package body Model_Runner.Framework.Configurations is
          end;
       end loop;
 
+      --  An automation rule is read here, once: one that names no event or
+      --  no action is refused, not left to do nothing when it is due.
+      for Line of Lines_Of (Records.Get (Config, "list.automation.rules")) loop
+         declare
+            One     : Automation.Rule;
+            Refusal : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Automation.Read (Line, One, Refusal);
+            if Ada.Strings.Unbounded.Length (Refusal) > 0 then
+               return "list.automation.rules: " & Ada.Strings.Unbounded.To_String (Refusal);
+            end if;
+         end;
+      end loop;
+
       if not Among ("scalar.repository.state_policy", "portable, local, all") then
          return "scalar.repository.state_policy is portable, local or all";
       elsif not Among ("scalar.work.isolation", "project, workspace") then
@@ -2238,7 +2253,9 @@ package body Model_Runner.Framework.Configurations is
          end if;
       end loop;
       if Name = "list.automation.rules" then
-         return "rules run when something happens, one a line: WHEN -> DO";
+         return "rules run when something happens, one a line: EVENT: ACTION -- an event as the log"
+           & " names it, or * for any; the actions are derive_tasks, recompute_readiness,"
+           & " reevaluate_requirements and verify";
       elsif Name = "list.verification.full" then
          return "the profiles /check full runs, in order";
       elsif Name = "scalar.agents.child_retries" then

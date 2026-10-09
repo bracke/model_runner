@@ -97,6 +97,15 @@ package Model_Runner.Tools.Runner is
    --  clock -- and always runs.
    type Call_Kind is (Reads, Changes, Varies);
 
+   --  What a call reads or changes, so that a change makes stale only the
+   --  answers read from what it changed. Pure: nothing outside the call --
+   --  a sum, a length -- whose answer never goes stale. Files: the tree,
+   --  and what is derived from it -- the project's graph, its checks.
+   --  Agent_Memory: the scratchpad memory_put writes. Anything: what a
+   --  call may change without saying what -- a program, a helper -- whose
+   --  change makes every answer stale.
+   type Resource is (Pure, Files, Agent_Memory, Anything);
+
    --  How a call ended, for the loop and whatever watches it to act on --
    --  never read back out of the words of the result, which are the
    --  model's. Answered: the tool did what was asked. Failed: it could not
@@ -190,6 +199,27 @@ package Model_Runner.Tools.Runner is
    --  @return Its kind.
    function Kind (Self : Instance; Named : String) return Call_Kind
    is (Changes);
+
+   --  What a call to the named tool reads or changes; see Resource.
+   --  Anything unless a runner says otherwise.
+   --
+   --  @param Self The runner.
+   --  @param Named The function the model called.
+   --  @return Its resource.
+   function Touches (Self : Instance; Named : String) return Resource
+   is (Anything);
+
+   --  A stamp of what a reading call read, as it is now: the same stamp
+   --  later says it is unchanged, and an answer remembered with another is
+   --  stale even though no call changed it -- an editor, a build, another
+   --  process does. "" where a runner keeps none, which every stamp equals.
+   --
+   --  @param Self The runner.
+   --  @param Named The function called.
+   --  @param Arguments Its arguments.
+   --  @return The stamp.
+   function Stamp (Self : Instance; Named : String; Arguments : String) return String
+   is ("");
 
    --  Whether a call to the named tool may run beside other calls the model
    --  made in the same turn, on another task. The loop runs a runner's calls

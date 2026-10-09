@@ -103,12 +103,14 @@ package body Agent_Trial is
       Ada.Directories.Create_Path (Root & "/obj");
    end Make_Project;
 
-   --  The project's check: the program compiled, where a compiler is here.
-   --  /init's own is the command true, which checks nothing, and a model
-   --  that wrote Ada that would not compile was told its work had passed.
+   --  The project's check: the program built, bound and linked, where a
+   --  compiler is here. /init's own is the command true, which checks
+   --  nothing, and a model that wrote Ada that would not compile was told
+   --  its work had passed; a semantic check of the main alone passed a
+   --  body rewritten as another unit, which only the link finds.
    Check_Line : constant String :=
      "/reconfigure add set.execution.allowed gnatmake "
-     & "profile.checks=""check: gnatmake -q -gnatc -D obj -aIsrc src/main.adb"" confirm=yes";
+     & "profile.checks=""check: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"" confirm=yes";
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is

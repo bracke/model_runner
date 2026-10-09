@@ -24,6 +24,15 @@ package Model_Runner.Tools.Editing is
    Range_Most  : constant := 400;
    Search_Most : constant := 100;
 
+   --  Where a path is on disk: under Base where it is relative and a Base
+   --  is given; as it is otherwise, which the process's directory then
+   --  resolves.
+   --
+   --  @param Base The directory; "" for the process's own.
+   --  @param Path The path, as a tool was given it.
+   --  @return The path to open.
+   function On_Disk (Base, Path : String) return String;
+
    --  Read a text file whole, within Text_Most.
    --
    --  @param Path The file.
@@ -32,10 +41,14 @@ package Model_Runner.Tools.Editing is
    --    IO_Not_A_Regular_File for a directory, IO_File_Too_Large past
    --    Text_Most, IO_Read_Failed for a binary file or one that would not
    --    read -- each with the path, and the size where that was it.
+   --  @param Base The directory a relative Path is under; "" for the
+   --    process's own. Every function here that takes a path takes this,
+   --    and says the path as it was given.
    procedure Read_Text
      (Path   : String;
       Text   : out Ada.Strings.Unbounded.Unbounded_String;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Base   : String := "");
 
    --  A text's revision: sixteen hexadecimal digits that change when any of
    --  its bytes does.
@@ -48,8 +61,10 @@ package Model_Runner.Tools.Editing is
    --  Read_Text reads.
    --
    --  @param Path The file.
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
    --  @return Its revision.
-   function Revision_Of (Path : String) return String;
+   function Revision_Of (Path : String; Base : String := "") return String;
 
    --  What a tool said, and how it went.
    type Said is record
@@ -69,8 +84,10 @@ package Model_Runner.Tools.Editing is
    --  @param Old_Text The exact text to replace.
    --  @param New_Text What replaces it.
    --  @param Expected The revision the caller read, or "".
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
    --  @return What happened.
-   function Edit (Path, Old_Text, New_Text, Expected : String) return Said;
+   function Edit (Path, Old_Text, New_Text, Expected : String; Base : String := "") return Said;
 
    --  Lines First .. Last of a file, numbered; Last of nought for to the
    --  end. At most Range_Most of them.
@@ -78,15 +95,19 @@ package Model_Runner.Tools.Editing is
    --  @param Path The file.
    --  @param First The first line, from one.
    --  @param Last The last line, or nought.
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
    --  @return The lines.
-   function Read_Range (Path : String; First, Last : Natural) return Said;
+   function Read_Range (Path : String; First, Last : Natural; Base : String := "") return Said;
 
    --  The lines of a file that hold a text, numbered; at most Search_Most.
    --
    --  @param Path The file.
    --  @param Pattern The text, as it is written.
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
    --  @return The lines.
-   function Search_File (Path, Pattern : String) return Said;
+   function Search_File (Path, Pattern : String; Base : String := "") return Said;
 
    --  The lines of every text file under a folder that hold a text, as
    --  path:line; at most Search_Most. Hidden folders and those a build
@@ -95,8 +116,10 @@ package Model_Runner.Tools.Editing is
    --
    --  @param Folder The folder; "." for the whole tree.
    --  @param Pattern The text, as it is written.
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
    --  @return The hits.
-   function Search_Code (Folder, Pattern : String) return Said;
+   function Search_Code (Folder, Pattern : String; Base : String := "") return Said;
 
    --  The declarations lines First .. Last of a text fall in or name: the
    --  nearest one opening at or above First, and each one opening within.

@@ -42,58 +42,7 @@ is
       return Limit.Granted and then Depth + 1 <= Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
    end May_Split;
 
-   --  The permissions it has a tool for, in plain words.
-   function Said_Permissions return String is
-      Said : Unbounded_String;
-      procedure Add (Text : String) is
-      begin
-         Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Text);
-      end Add;
-   begin
-      if Allowed (Permissions.Read_Source).Granted then
-         Add ("read the source");
-      end if;
-      if Allowed (Permissions.Read_Specs).Granted then
-         Add ("read the specifications");
-      end if;
-      if Allowed (Permissions.Write_Source).Granted then
-         Add ("write " & (if Allowed (Permissions.Write_Source).Roots.Is_Empty then "files"
-                          else "files under " & Comma_Separated (Allowed (Permissions.Write_Source).Roots))
-              --  What it may not, inherited or its own, said with it.
-              & (if Allowed (Permissions.Write_Source).Deny.Is_Empty then ""
-                 else " except " & Comma_Separated (Allowed (Permissions.Write_Source).Deny)));
-      end if;
-      if Allowed (Permissions.Write_Specs).Granted then
-         Add ("write specifications "
-              & (if Allowed (Permissions.Write_Specs).Roots.Is_Empty
-                 then "(in " & Permissions.Specification_Places & ")"
-                 else "under " & Comma_Separated (Allowed (Permissions.Write_Specs).Roots)));
-      end if;
-      --  Its checks, by the profile that runs them.
-      if May_Check then
-         declare
-            Kind    : constant String := Kind_Of_Task (Item, Task_Id);
-            Profile : constant String :=
-              (if Tasks.Kind_Policy (Item, Kind, "profile") /= "" then Tasks.Kind_Policy (Item, Kind, "profile")
-               else Scalar (Item, "verification.default"));
-         begin
-            Add ("run the project's checks" & (if Profile = "" then "" else " (profile " & Profile & ")"));
-         end;
-      end if;
-      if May_Delegate then
-         --  The lower of the grant and the agents' own bound: what an
-         --  agent meets.
-         Add ("hand parts to helpers (at most"
-              & Natural'Image (Natural'Min (Allowed (Permissions.Create_Children).Max_Children,
-                                            Agents.Limits_Of (Item).Max_Children)) & ")");
-      end if;
-      if May_Propose then
-         Add ("propose tasks");
-      end if;
-      return (if Said = Null_Unbounded_String then "read only what you are given" else To_String (Said));
-   end Said_Permissions;
-
-   Parts : Unbounded_String;
+   Parts : Part_Lists.Vector;
    Kind  : constant String := Kind_Of_Task (Item, Task_Id);
 
    --  The agents' bound on calls, or the kind's own.
@@ -108,8 +57,10 @@ begin
          Read    : E.Error_Info;
       begin
          Tasks.Definition (Item, Child, Defined, Read);
-         Append (Parts, "- " & Child & " " & Records.Get (Defined, "title") & ": "
-                 & Tasks.State_Of (Item, Child) & ASCII.LF);
+         Parts.Append
+           (Planned_Part'(Id    => To_Unbounded_String (Child),
+             Title => To_Unbounded_String (Records.Get (Defined, "title")),
+             State => To_Unbounded_String (Tasks.State_Of (Item, Child))));
       end;
    end loop;
    return
@@ -130,7 +81,13 @@ begin
       May_Propose  => May_Propose,
       May_Split    => May_Split,
       Apart        => Apart,
-      Permitted    => To_Unbounded_String (Said_Permissions),
+      Read_Source   => Allowed (Permissions.Read_Source).Granted,
+      Read_Specs    => Allowed (Permissions.Read_Specs).Granted,
+      Write_Source  => Allowed (Permissions.Write_Source).Granted,
+      Source_Roots  => Allowed (Permissions.Write_Source).Roots,
+      Source_Denied => Allowed (Permissions.Write_Source).Deny,
+      Write_Specs   => Allowed (Permissions.Write_Specs).Granted,
+      Spec_Roots    => Allowed (Permissions.Write_Specs).Roots,
       Parts        => Parts,
       Max_Calls    => Bound ("max_tool_calls", 0),
       Max_Steps    => Bound ("max_steps", 24),

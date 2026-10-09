@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 with Model_Runner.Tools.Runner;
+with Model_Runner.Tools.Schemas;
 
 --  The runner of the built-in tools.
 --
@@ -231,6 +232,22 @@ package Model_Runner.Tools.Builtin is
    function Text_Argument (Args : String; Key : String; Found : out Boolean)
      return String;
 
+   --  A list-of-strings argument of a call, each decoded from its JSON.
+   --
+   --  @param Args The call's arguments, a JSON object.
+   --  @param Key The argument's name.
+   --  @param Items Its strings, in order; empty when it is not there.
+   --  @param Found Whether it was there.
+   --  @param Well_Formed False when it was there and was not a JSON array
+   --    of strings -- a list written as one string among them, which is
+   --    then not guessed at.
+   procedure Text_List_Argument
+     (Args        : String;
+      Key         : String;
+      Items       : out Schemas.Choice_Lists.Vector;
+      Found       : out Boolean;
+      Well_Formed : out Boolean);
+
    --  The tools this runner can carry out as it is wired: every built-in
    --  one, but delegate only where it has a delegator and ask_user only
    --  where it has somebody to ask. A tool the model is shown is one its
@@ -250,25 +267,46 @@ package Model_Runner.Tools.Builtin is
       Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
 
-   --  What each built-in tool does to the state later calls read. Reads:
-   --  the pure ones, the file and directory reads, the memory read, the
-   --  network fetches, retrieve, and ask_user, whose answer stands until
-   --  something changes. Varies: now. Changes: write_file, the memory
-   --  write, the tools that run a program (shell, run_python, sql), and
-   --  delegate, whose child may do any of those.
+   --  Name the directory the file tools work in: a relative path a call
+   --  gives is under it, said to the model as it gave it. Without one they
+   --  work in the process's own, as a person's run does; a project's work
+   --  names the project, so what it reaches is not whatever directory the
+   --  process happens to be in.
+   --
+   --  @param Self The runner.
+   --  @param Base The directory, absolute; "" for the process's own.
+   procedure Set_Base (Self : in out Instance; Base : String);
+
+   --  The directory the file tools work in, as Set_Base named it; "" for
+   --  the process's own.
+   --
+   --  @param Self The runner.
+   --  @return The directory.
+   function Base (Self : Instance) return String;
+
+   --  What each built-in tool does to the state later calls read, as the
+   --  registry describes it (Registry.Kind_Of).
    overriding function Kind
      (Self : Instance; Named : String) return Model_Runner.Tools.Runner.Call_Kind;
 
-   --  Which built-in tools are safe to run beside another call in the turn.
-   --  True for the tools that touch none of this runner's state and no shared
-   --  resource: the pure ones, the reads (read_file, list_directory), the
-   --  network fetches (http_get, web_search, each its own request), and
-   --  retrieve when it ranks by words alone. False for the rest -- the memory
-   --  notes (shared scratchpad), write_file (a shared file tree), the tools
-   --  that run a process this program waits on (shell, run_python, sql, whose
-   --  wait would reap each other's children), delegate and ask_user (each a
-   --  single session or the one console), and retrieve when it embeds (the
-   --  one embedding session) -- so those run one at a time.
+   --  What each built-in tool reads or changes, as the registry describes
+   --  it (Registry.Touches).
+   overriding function Touches
+     (Self : Instance; Named : String) return Model_Runner.Tools.Runner.Resource;
+
+   --  What a call reading the tree read, as it is now: a file it names by
+   --  its contents' revision, and a folder or the whole tree -- a search,
+   --  the graph, the checks -- by every file's name, size and time under
+   --  it, the folders that start with a dot left out. "" for a call that
+   --  reads no files.
+   overriding function Stamp
+     (Self : Instance; Named : String; Arguments : String) return String;
+
+   --  Which built-in tools are safe to run beside another call in the turn:
+   --  those the registry marks so (Registry.Parallel), narrowed by what this
+   --  runner holds -- retrieve only while it ranks by words alone, the one
+   --  embedding session being shared, and delegate only where its delegator
+   --  can run two subtasks at once.
    overriding function Parallel_Safe
      (Self : Instance; Named : String) return Boolean;
 
@@ -288,6 +326,10 @@ private
    type Instance is new Model_Runner.Tools.Runner.Instance with record
       Memory : Notes;
       Used   : Natural := 0;
+
+      --  The directory a relative path a file tool is given is under; ""
+      --  for the process's own.
+      Base   : Ada.Strings.Unbounded.Unbounded_String;
 
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;

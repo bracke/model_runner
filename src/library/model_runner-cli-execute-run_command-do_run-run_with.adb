@@ -979,9 +979,17 @@ begin
                         return False;
                      end if;
                   end loop;
+                  --  Under a harness: the file tools, and the network's
+                  --  where the harness grants it -- by what each needs.
                   return not Harnessed
-                    or else Named in "read_file" | "list_directory" | "write_file"
-                    or else (Named in "http_get" | "web_search"
+                    or else (Model_Runner.Tools.Registry.Known (Named)
+                             and then Model_Runner.Tools.Registry.Needs (Named)
+                                      in Model_Runner.Tools.Registry.Read_Files
+                                       | Model_Runner.Tools.Registry.Write_Files)
+                    or else (Model_Runner.Tools.Registry.Known (Named)
+                             and then Model_Runner.Tools.Registry."="
+                                        (Model_Runner.Tools.Registry.Needs (Named),
+                                         Model_Runner.Tools.Registry.Network)
                              and then Ada.Strings.Fixed.Index (Granted, "use_network") > 0);
                end Offered_Here;
             begin

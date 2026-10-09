@@ -40,6 +40,7 @@ with Model_Runner.CLI.Pictures;
 with Model_Runner.Agent;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Runner;
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Checkpoint;

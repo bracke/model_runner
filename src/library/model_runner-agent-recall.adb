@@ -248,12 +248,34 @@ package body Model_Runner.Agent.Recall is
    -- Remember --
    --------------
 
-   procedure Remember (Self : in out Memory; Key : String) is
+   procedure Remember
+     (Self    : in out Memory;
+      Key     : String;
+      Touches : Model_Runner.Tools.Runner.Resource := Model_Runner.Tools.Runner.Anything) is
    begin
       if not Self.Held.Contains (Key) then
-         Self.Held.Insert (Key, (others => <>));
+         Self.Held.Insert (Key, (Touches => Touches, others => <>));
       end if;
    end Remember;
+
+   --------------
+   -- Stamp_Of --
+   --------------
+
+   function Stamp_Of (Self : Memory; Key : String) return String
+   is (if Self.Held.Contains (Key)
+       then Ada.Strings.Unbounded.To_String (Self.Held.Element (Key).Stamp) else "");
+
+   ------------
+   -- Forget --
+   ------------
+
+   procedure Forget (Self : in out Memory; Key : String) is
+   begin
+      if Self.Held.Contains (Key) then
+         Self.Held.Delete (Key);
+      end if;
+   end Forget;
 
    ----------
    -- Keep --
@@ -263,13 +285,16 @@ package body Model_Runner.Agent.Recall is
      (Self  : in out Memory;
       Key   : String;
       Text  : String;
-      Ended : Model_Runner.Tools.Runner.Call_Outcome) is
+      Ended : Model_Runner.Tools.Runner.Call_Outcome;
+      Stamp : String := "") is
    begin
       if Self.Held.Contains (Key) and then not Self.Held.Element (Key).Has_Answer then
          Self.Held.Replace
            (Key, (Answer     => Ada.Strings.Unbounded.To_Unbounded_String (Text),
                   Ends       => Ended,
-                  Has_Answer => True));
+                  Has_Answer => True,
+                  Touches    => Self.Held.Element (Key).Touches,
+                  Stamp      => Ada.Strings.Unbounded.To_Unbounded_String (Stamp)));
       end if;
    end Keep;
 
@@ -277,10 +302,31 @@ package body Model_Runner.Agent.Recall is
    -- Changed --
    -------------
 
-   procedure Changed (Self : in out Memory; Key : String) is
+   procedure Changed
+     (Self    : in out Memory;
+      Key     : String;
+      Touches : Model_Runner.Tools.Runner.Resource := Model_Runner.Tools.Runner.Anything)
+   is
+      use type Model_Runner.Tools.Runner.Resource;
+      Stale : Call_Maps.Map;
    begin
-      Self.Held.Clear;
-      Remember (Self, Key);
+      for Position in Self.Held.Iterate loop
+         declare
+            Held : constant Model_Runner.Tools.Runner.Resource := Call_Maps.Element (Position).Touches;
+         begin
+            if Held /= Model_Runner.Tools.Runner.Pure
+              and then (Touches = Model_Runner.Tools.Runner.Anything
+                        or else Held = Model_Runner.Tools.Runner.Anything
+                        or else Held = Touches)
+            then
+               Stale.Insert (Call_Maps.Key (Position), Call_Maps.Element (Position));
+            end if;
+         end;
+      end loop;
+      for Position in Stale.Iterate loop
+         Self.Held.Delete (Call_Maps.Key (Position));
+      end loop;
+      Remember (Self, Key, Touches);
    end Changed;
 
    ----------

@@ -1,6 +1,6 @@
-with Ada.Strings.Fixed;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Editing;
+with Model_Runner.Tools.Schemas;
 
 package body Model_Runner.Agent_Runtime is
 
@@ -21,11 +21,39 @@ package body Model_Runner.Agent_Runtime is
       Found := Found and then Length (Result.Task_Text) > 0;
       Result.Role := Get ("role");
       Result.Need := Get ("need");
-      Result.Inputs := Get ("inputs");
-      Result.Outputs := Get ("outputs");
       Result.Acceptance := Get ("acceptance");
+      for Key of Paths.Vector'(["inputs", "outputs"]) loop
+         declare
+            Items       : Model_Runner.Tools.Schemas.Choice_Lists.Vector;
+            Given       : Boolean;
+            Well_Formed : Boolean;
+         begin
+            Model_Runner.Tools.Builtin.Text_List_Argument (Arguments, Key, Items, Given, Well_Formed);
+            if not Well_Formed and then Length (Result.Refusal) = 0 then
+               Result.Refusal := To_Unbounded_String
+                 (Key & " is a list of file paths, as [""src/a.adb"", ""docs/b.md""] -- not words");
+            end if;
+            for One of Items loop
+               if Key = "inputs" then
+                  Result.Inputs.Append (One);
+               else
+                  Result.Outputs.Append (One);
+               end if;
+            end loop;
+         end;
+      end loop;
       return Result;
    end Contract_Of;
+
+   --  Paths, comma-separated.
+   function Listed (Items : Paths.Vector) return String is
+      Said : Unbounded_String;
+   begin
+      for One of Items loop
+         Append (Said, (if Length (Said) = 0 then "" else ", ") & One);
+      end loop;
+      return To_String (Said);
+   end Listed;
 
    -----------
    -- Brief --
@@ -33,38 +61,10 @@ package body Model_Runner.Agent_Runtime is
 
    function Brief (Item : Contract) return String is
      (To_String (Item.Task_Text)
-      & (if Length (Item.Inputs) = 0 then "" else ASCII.LF & "Start from: " & To_String (Item.Inputs))
-      & (if Length (Item.Outputs) = 0 then ""
-         else ASCII.LF & "Write: " & To_String (Item.Outputs) & " -- the part is done when these are written")
+      & (if Item.Inputs.Is_Empty then "" else ASCII.LF & "Start from: " & Listed (Item.Inputs))
+      & (if Item.Outputs.Is_Empty then ""
+         else ASCII.LF & "Write: " & Listed (Item.Outputs) & " -- the part is done when these are written")
       & (if Length (Item.Acceptance) = 0 then "" else ASCII.LF & "Done when: " & To_String (Item.Acceptance)));
-
-   ------------------
-   -- Output_Paths --
-   ------------------
-
-   function Output_Paths (Item : Contract) return Paths.Vector is
-      Outputs : constant String := To_String (Item.Outputs);
-      Result  : Paths.Vector;
-      Start   : Natural := Outputs'First;
-      --  A word that names a file: a folder or an extension in it, and
-      --  nothing a sentence has. Outputs described in words -- "the result
-      --  of 6 * 7" -- name no file, and none is held to be written.
-      function Path_Like (Word : String) return Boolean is
-        ((Ada.Strings.Fixed.Index (Word, "/") > 0
-          or else (Ada.Strings.Fixed.Index (Word, ".") > Word'First
-                   and then Ada.Strings.Fixed.Index (Word, ".") < Word'Last))
-         and then (for all C of Word => C not in '*' | '?' | '"' | '(' | ')'));
-   begin
-      for Index in Outputs'First .. Outputs'Last + 1 loop
-         if Index > Outputs'Last or else Outputs (Index) in ',' | ' ' | ASCII.LF then
-            if Index > Start and then Path_Like (Outputs (Start .. Index - 1)) then
-               Result.Append (Outputs (Start .. Index - 1));
-            end if;
-            Start := Index + 1;
-         end if;
-      end loop;
-      return Result;
-   end Output_Paths;
 
    ------------
    -- Prints --

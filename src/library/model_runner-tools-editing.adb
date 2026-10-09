@@ -19,6 +19,16 @@ package body Model_Runner.Tools.Editing is
       return Raw (Raw'First + 1 .. Raw'Last);
    end Image;
 
+   -------------
+   -- On_Disk --
+   -------------
+
+   function On_Disk (Base, Path : String) return String
+   is (if Base = "" or else Path = "" or else Path (Path'First) = '/'
+       then Path
+       elsif Path = "." then Base
+       else Base & "/" & Path);
+
    function Failing (Text : String) return Said is
      ((Text => U.To_Unbounded_String ("error: " & Text), Failed => True, others => <>));
 
@@ -29,29 +39,31 @@ package body Model_Runner.Tools.Editing is
    procedure Read_Text
      (Path   : String;
       Text   : out U.Unbounded_String;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Base   : String := "")
    is
+      Disk : constant String := On_Disk (Base, Path);
       use Ada.Streams;
       File : Stream_IO.File_Type;
    begin
       Text := U.Null_Unbounded_String;
       Status := E.Success;
-      if not Ada.Directories.Exists (Path) then
+      if not Ada.Directories.Exists (Disk) then
          Status := E.Make (E.IO_Open_Failed);
          E.Add_Text (Status, "path", Path, E.Param_Path);
          return;
-      elsif Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File) then
+      elsif Ada.Directories."/=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File) then
          Status := E.Make (E.IO_Not_A_Regular_File);
          E.Add_Text (Status, "path", Path, E.Param_Path);
          return;
-      elsif Ada.Directories.Size (Path) > Ada.Directories.File_Size (Text_Most) then
+      elsif Ada.Directories.Size (Disk) > Ada.Directories.File_Size (Text_Most) then
          Status := E.Make (E.IO_File_Too_Large);
          E.Add_Text (Status, "path", Path, E.Param_Path);
-         E.Add_Text (Status, "detail", Image (Natural (Ada.Directories.Size (Path) / 1024)) & " KiB, past the "
+         E.Add_Text (Status, "detail", Image (Natural (Ada.Directories.Size (Disk) / 1024)) & " KiB, past the "
                      & Image (Text_Most / 1024) & " KiB a file is read whole");
          return;
       end if;
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Disk);
       declare
          Length : constant Natural := Natural (Stream_IO.Size (File));
          Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Length));
@@ -107,11 +119,11 @@ package body Model_Runner.Tools.Editing is
    -- Revision_Of --
    -----------------
 
-   function Revision_Of (Path : String) return String is
+   function Revision_Of (Path : String; Base : String := "") return String is
       Text   : U.Unbounded_String;
       Status : E.Error_Info;
    begin
-      Read_Text (Path, Text, Status);
+      Read_Text (Path, Text, Status, Base);
       return (if E.Is_Ok (Status) then Revision (U.To_String (Text)) else "");
    end Revision_Of;
 
@@ -260,11 +272,11 @@ package body Model_Runner.Tools.Editing is
    -- Edit --
    ----------
 
-   function Edit (Path, Old_Text, New_Text, Expected : String) return Said is
+   function Edit (Path, Old_Text, New_Text, Expected : String; Base : String := "") return Said is
       Held   : U.Unbounded_String;
       Status : E.Error_Info;
    begin
-      Read_Text (Path, Held, Status);
+      Read_Text (Path, Held, Status, Base);
       if E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));
       end if;
@@ -300,7 +312,7 @@ package body Model_Runner.Tools.Editing is
                Upto  : constant Positive := From + Natural'Max (1, Lines_In (New_Text)) - 1;
                Names : constant String := Declarations_In (After, From, Upto);
             begin
-               Write_Bytes (Path, After);
+               Write_Bytes (On_Disk (Base, Path), After);
                return
                  (Text    => U.To_Unbounded_String
                     ("edited " & Path & " at line" & Natural'Image (From) & ":"
@@ -323,7 +335,7 @@ package body Model_Runner.Tools.Editing is
    -- Read_Range --
    ----------------
 
-   function Read_Range (Path : String; First, Last : Natural) return Said is
+   function Read_Range (Path : String; First, Last : Natural; Base : String := "") return Said is
       Held   : U.Unbounded_String;
       Status : E.Error_Info;
       Result : Said;
@@ -331,7 +343,7 @@ package body Model_Runner.Tools.Editing is
       if First = 0 or else (Last /= 0 and then Last < First) then
          return Failing ("read_range takes first_line from 1, and last_line at or after it (0 for the end)");
       end if;
-      Read_Text (Path, Held, Status);
+      Read_Text (Path, Held, Status, Base);
       if E.Is_Error (Status) and then Status.Code = E.IO_File_Too_Large then
          return Failing (Path & " is too large to read here (" & E.Text_Of (Status, "detail")
                          & "): search_file finds the lines you want");
@@ -407,7 +419,7 @@ package body Model_Runner.Tools.Editing is
    -- Search_File --
    -----------------
 
-   function Search_File (Path, Pattern : String) return Said is
+   function Search_File (Path, Pattern : String; Base : String := "") return Said is
       Held   : U.Unbounded_String;
       Status : E.Error_Info;
       Result : Said;
@@ -416,7 +428,7 @@ package body Model_Runner.Tools.Editing is
       if Pattern = "" then
          return Failing ("search_file needs a pattern: the text to find");
       end if;
-      Read_Text (Path, Held, Status);
+      Read_Text (Path, Held, Status, Base);
       if E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));
       end if;
@@ -433,7 +445,7 @@ package body Model_Runner.Tools.Editing is
    -- Search_Code --
    -----------------
 
-   function Search_Code (Folder, Pattern : String) return Said is
+   function Search_Code (Folder, Pattern : String; Base : String := "") return Said is
       Result : Said;
       Hits   : Natural := 0;
 
@@ -445,7 +457,7 @@ package body Model_Runner.Tools.Editing is
          Search : Ada.Directories.Search_Type;
          Found  : Ada.Directories.Directory_Entry_Type;
       begin
-         Ada.Directories.Start_Search (Search, Here, "");
+         Ada.Directories.Start_Search (Search, On_Disk (Base, Here), "");
          while Ada.Directories.More_Entries (Search) and then not Result.Truncated loop
             Ada.Directories.Get_Next_Entry (Search, Found);
             declare
@@ -462,7 +474,7 @@ package body Model_Runner.Tools.Editing is
                      Held   : U.Unbounded_String;
                      Status : E.Error_Info;
                   begin
-                     Read_Text (Full, Held, Status);
+                     Read_Text (Full, Held, Status, Base);
                      if E.Is_Ok (Status) then
                         Search_Text (U.To_String (Held), Pattern, Full & ":", Result, Hits);
                      end if;
@@ -478,8 +490,8 @@ package body Model_Runner.Tools.Editing is
    begin
       if Pattern = "" then
          return Failing ("search_code needs a pattern: the text to find");
-      elsif not Ada.Directories.Exists (Folder)
-        or else Ada.Directories."/=" (Ada.Directories.Kind (Folder), Ada.Directories.Directory)
+      elsif not Ada.Directories.Exists (On_Disk (Base, Folder))
+        or else Ada.Directories."/=" (Ada.Directories.Kind (On_Disk (Base, Folder)), Ada.Directories.Directory)
       then
          return Failing ("no folder at " & Folder);
       end if;

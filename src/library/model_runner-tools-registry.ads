@@ -5,7 +5,9 @@ with Model_Runner.Tools.Schemas;
 --
 --  A tool is a descriptor: its name, its definition -- what a model is told
 --  of it, built from Tools.Schemas -- what its call does to the state later
---  calls read, and the capability it needs. What an agent is offered is not
+--  calls read and which state that is, whether it may overlap another call,
+--  what it does with a path, and the capability it needs. Every other place
+--  that classes a tool asks here, so a tool is described in one row. What an agent is offered is not
 --  every tool with the unavailable ones refused at the call, and not a list
 --  each way of running an agent keeps for itself: it is the tools whose
 --  capability the agent's environment has, selected here. run's agent and
@@ -41,6 +43,11 @@ package Model_Runner.Tools.Registry is
      );
 
    type Capabilities is array (Capability) of Boolean;
+
+   --  What a tool does with a path it is given: nothing, read the file or
+   --  folder there, or write the file there -- which decides what a
+   --  project's permissions and its sandbox are asked of the call.
+   type Path_Use is (No_Path, Reads_Path, Writes_Path);
 
    Nothing : constant Capabilities := [others => False];
 
@@ -78,12 +85,40 @@ package Model_Runner.Tools.Registry is
    function Allows (Can : Capabilities; Named : String) return Boolean;
 
    --  What a call to a tool does to the state later calls read: Reads for
-   --  the reading, finding and asking tools, Varies for the clock, Changes
-   --  for the rest -- and for a tool not known.
+   --  the reading and finding tools, Varies for the clock, the network and
+   --  the user -- each answers anew though no call here changed anything --
+   --  Changes for the rest, and for a tool not known.
    --
    --  @param Named The tool.
    --  @return Its kind.
    function Kind_Of (Named : String) return Runner.Call_Kind;
+
+   --  What a call to a tool reads or changes; Anything for a tool not known.
+   --
+   --  @param Named The tool.
+   --  @return Its resource.
+   function Touches (Named : String) return Runner.Resource;
+
+   --  Whether a call to a tool may run beside the other calls of a turn, as
+   --  far as the tool goes: a runner may narrow it further by what it holds
+   --  (see Runner.Parallel_Safe). False for a tool not known.
+   --
+   --  @param Named The tool.
+   --  @return Whether it may.
+   function Parallel (Named : String) return Boolean;
+
+   --  What a tool does with its path; No_Path for a tool not known.
+   --
+   --  @param Named The tool.
+   --  @return Its use.
+   function Path_Of (Named : String) return Path_Use;
+
+   --  Whether a tool asks the project's graph.
+   --
+   --  @param Named The tool.
+   --  @return Whether it does.
+   function Asks_Graph (Named : String) return Boolean
+   is (Known (Named) and then Needs (Named) = Project_Graph);
 
    --  Whether a kind of finding find takes is one that asks the project's
    --  graph, rather than searching text.

@@ -1,6 +1,6 @@
-with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Automation;
 with Model_Runner.Framework.Stores;
 
 --  Moving a project along without asking a model what is routine.
@@ -8,7 +8,8 @@ with Model_Runner.Framework.Stores;
 --  Automation rules say what the harness does when something happens: the
 --  configuration's list automation.rules holds lines of EVENT: ACTION, with
 --  * for any event, and the actions are derive_tasks, recompute_readiness,
---  reevaluate_requirements and verify. A project that says nothing gets the
+--  reevaluate_requirements and verify, read as values (Automation) where the
+--  configuration is accepted, so a rule that names neither is refused there. A project that says nothing gets the
 --  ones every project needs: tasks derived when a requirement is accepted
 --  or revised, requirements reevaluated when a task completes or the source
 --  changes, readiness worked out after anything. A step consumes each event
@@ -22,12 +23,6 @@ with Model_Runner.Framework.Stores;
 --  of authority -- is listed, because that is where a person or a model is
 --  needed and nowhere else.
 package Model_Runner.Framework.Orchestration is
-
-   --  One rule.
-   type Rule is record
-      Event  : Ada.Strings.Unbounded.Unbounded_String;
-      Action : Ada.Strings.Unbounded.Unbounded_String;
-   end record;
 
    --  What a step did.
    type Step_Report is record
@@ -48,11 +43,18 @@ package Model_Runner.Framework.Orchestration is
       Slots   : Natural := 0;
    end record;
 
-   --  The rules in force.
+   --  The rules in force, read: the configuration's, or the defaults where
+   --  it names none.
    --
    --  @param Item The store.
-   --  @return The rules, one a line as EVENT: ACTION.
-   function Rules (Item : Stores.Store) return Name_Lists.Vector;
+   --  @param Result The rules.
+   --  @param Status Framework_Input_Invalid naming a line that is no rule --
+   --    one stored before rules were read where they are set -- and then
+   --    no rule at all, so that no event is acted on by part of them.
+   procedure Rules
+     (Item   : Stores.Store;
+      Result : out Automation.Rule_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Act on every event not yet acted on, by the rules, and work out
    --  readiness.

@@ -1,5 +1,6 @@
 with Ada.Containers.Vectors;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
@@ -18,9 +19,6 @@ package body Model_Runner.Framework.Orchestration is
 
    Consumer : constant String := "orchestrator";
 
-   function Trim (Text : String) return String
-   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
-
    function Config (Item : Stores.Store) return Records.Item is
    begin
       return Configurations.Required (Item);
@@ -30,26 +28,39 @@ package body Model_Runner.Framework.Orchestration is
    -- Rules --
    -----------
 
-   function Rules (Item : Stores.Store) return Name_Lists.Vector is
+   procedure Rules
+     (Item   : Stores.Store;
+      Result : out Automation.Rule_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Given : constant Name_Lists.Vector :=
         Lines_Of (Records.Get (Config (Item), "list.automation.rules"));
-      Result : Name_Lists.Vector;
    begin
-      if not Given.Is_Empty then
-         return Given;
+      Status := E.Success;
+      if Given.Is_Empty then
+         Result := Automation.Defaults;
+         return;
       end if;
-      Result.Append ("Requirement_Accepted: derive_tasks");
-      Result.Append ("Requirement_Revised: derive_tasks");
-      Result.Append ("Task_Completed: reevaluate_requirements");
-      Result.Append ("Source_Changed: reevaluate_requirements");
-      --  What governs the work changing its meaning takes verification
-      --  from what rested on it.
-      Result.Append ("Decision_Revised: reevaluate_requirements");
-      Result.Append ("Decision_Superseded: reevaluate_requirements");
-      Result.Append ("Specification_Revised: reevaluate_requirements");
-      Result.Append ("Specification_Superseded: reevaluate_requirements");
-      Result.Append ("*: recompute_readiness");
-      return Result;
+      Result.Clear;
+      for Line of Given loop
+         declare
+            One     : Automation.Rule;
+            Refusal : Unbounded_String;
+         begin
+            Automation.Read (Line, One, Refusal);
+            if Length (Refusal) > 0 then
+               --  Accepted before rules were read where they are set: said
+               --  rather than skipped, so no event is taken as acted on.
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "list.automation.rules");
+               E.Add_Text (Status, "value", Line);
+               E.Add_Text (Status, "detail", To_String (Refusal));
+               Result.Clear;
+               return;
+            end if;
+            Result.Append (One);
+         end;
+      end loop;
    end Rules;
 
    ----------
@@ -61,32 +72,25 @@ package body Model_Runner.Framework.Orchestration is
       Result : out Step_Report;
       Status : out Model_Runner.Errors.Error_Info)
    is
-      In_Force : constant Name_Lists.Vector := Rules (Item);
+      use type Automation.Action;
+      package Action_Lists is new Ada.Containers.Vectors (Positive, Automation.Action);
+
+      In_Force : Automation.Rule_Lists.Vector;
       Listed   : constant Events.Event_List := Events.Since (Item, 0);
       Change   : Stores.Transaction;
-      Wanted   : Name_Lists.Vector;
+      Wanted   : Action_Lists.Vector;
 
       --  The first action that failed, said once the rest are taken.
       Failed   : E.Error_Info := E.Success;
 
       --  The actions the rules give an event, in rule order, once each.
-      function Actions_For (Kind : String) return Name_Lists.Vector is
-         Found : Name_Lists.Vector;
+      function Actions_For (Kind : String) return Action_Lists.Vector is
+         Found : Action_Lists.Vector;
       begin
-         for Line of In_Force loop
-            declare
-               Colon  : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
-               Event  : constant String :=
-                 (if Colon = 0 then "" else Trim (Line (Line'First .. Colon - 1)));
-               Action : constant String :=
-                 (if Colon = 0 then "" else Trim (Line (Colon + 1 .. Line'Last)));
-            begin
-               if (Event = "*" or else Event = Kind) and then Action /= ""
-                 and then not Found.Contains (Action)
-               then
-                  Found.Append (Action);
-               end if;
-            end;
+         for One of In_Force loop
+            if Automation.Matches (One, Kind) and then not Found.Contains (One.Act) then
+               Found.Append (One.Act);
+            end if;
          end loop;
          return Found;
       end Actions_For;
@@ -96,10 +100,13 @@ package body Model_Runner.Framework.Orchestration is
       Fresh_Kinds : Name_Lists.Vector;
 
       --  The actions that failed: their events stay to be acted on again.
-      Broken      : Name_Lists.Vector;
+      Broken      : Action_Lists.Vector;
    begin
       Result := (others => <>);
-      Status := E.Success;
+      Rules (Item, In_Force, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
 
       --  Which events are new, asked without consuming them: an event is
       --  consumed only with what it calls for done, so that a failure or a
@@ -128,29 +135,32 @@ package body Model_Runner.Framework.Orchestration is
       end loop;
 
       for Action of Wanted loop
-         if Action = "recompute_readiness" then
+         if Action = Automation.Recompute_Readiness then
             goto Next_Action;
          end if;
          Result.Actions_Taken := Result.Actions_Taken + 1;
-         if Action = "derive_tasks" then
-            Tasks.Derive (Item, Change, Result.Derived, Status);
-         elsif Action = "reevaluate_requirements" then
-            Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
-         elsif Action = "verify" then
-            declare
-               Profile  : constant String :=
-                 Records.Get (Config (Item), "scalar.verification.default");
-               Evidence : Unbounded_String;
-               Passed   : Boolean;
-            begin
-               if Profile /= "" then
-                  Verification.Run_Profile (Item, Change, Profile, "", Evidence, Passed, Status);
-                  if E.Is_Ok (Status) then
-                     Result.Evidence.Append (To_String (Evidence));
+         case Action is
+            when Automation.Derive_Tasks =>
+               Tasks.Derive (Item, Change, Result.Derived, Status);
+            when Automation.Reevaluate_Requirements =>
+               Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
+            when Automation.Verify =>
+               declare
+                  Profile  : constant String :=
+                    Records.Get (Config (Item), "scalar.verification.default");
+                  Evidence : Unbounded_String;
+                  Passed   : Boolean;
+               begin
+                  if Profile /= "" then
+                     Verification.Run_Profile (Item, Change, Profile, "", Evidence, Passed, Status);
+                     if E.Is_Ok (Status) then
+                        Result.Evidence.Append (To_String (Evidence));
+                     end if;
                   end if;
-               end if;
-            end;
-         end if;
+               end;
+            when Automation.Recompute_Readiness =>
+               null;
+         end case;
 
          --  Each action kept on its own; one that fails is dropped and
          --  said, and the others are still taken.
@@ -169,7 +179,7 @@ package body Model_Runner.Framework.Orchestration is
       end loop;
 
       --  Readiness last, over what the actions left.
-      if Wanted.Contains ("recompute_readiness") then
+      if Wanted.Contains (Automation.Recompute_Readiness) then
          Result.Actions_Taken := Result.Actions_Taken + 1;
          Tasks.Recompute_Readiness (Item, Change, Result.Became_Ready, Status);
          if E.Is_Ok (Status) then
@@ -177,7 +187,7 @@ package body Model_Runner.Framework.Orchestration is
          end if;
          if E.Is_Error (Status) then
             Change := Stores.No_Changes;
-            Broken.Append ("recompute_readiness");
+            Broken.Append (Automation.Recompute_Readiness);
             if E.Is_Ok (Failed) then
                Failed := Status;
             end if;
@@ -218,7 +228,12 @@ package body Model_Runner.Framework.Orchestration is
       Isolated : constant Boolean :=
         Records.Get (Settings, "scalar.work.isolation") = "workspace";
       Running  : Natural := 0;
-      Taken    : Name_Lists.Vector;
+
+      --  The components being written, and those being read, by the tasks
+      --  running or planned: two readers of one component go together, and
+      --  a writer goes with nobody else in it.
+      Written  : Name_Lists.Vector;
+      Read_In  : Name_Lists.Vector;
 
       --  Whether a task's agent may write at all: one that only reads is
       --  no writer the project waits on.
@@ -243,6 +258,10 @@ package body Model_Runner.Framework.Orchestration is
          Id        : Unbounded_String;
          Priority  : Natural := 0;
          Component : Unbounded_String;
+
+         --  The order it was made in: its definition's created_sequence,
+         --  nought for one made before tasks were counted.
+         Sequence  : Natural := 0;
       end record;
       package Candidate_Vectors is new Ada.Containers.Vectors (Positive, Candidate);
       Ready : Candidate_Vectors.Vector;
@@ -257,7 +276,13 @@ package body Model_Runner.Framework.Orchestration is
             Read    : E.Error_Info;
          begin
             Tasks.Definition (Item, Id, Defined, Read);
-            Taken.Append (Records.Get (Defined, "component"));
+            if Records.Get (Defined, "component") /= "" then
+               if Writes (Id) then
+                  Written.Append (Records.Get (Defined, "component"));
+               else
+                  Read_In.Append (Records.Get (Defined, "component"));
+               end if;
+            end if;
          end;
       end loop;
       Result.Slots :=
@@ -272,22 +297,33 @@ package body Model_Runner.Framework.Orchestration is
             begin
                Tasks.Definition (Item, Id, Defined, Read);
                Text := To_Unbounded_String (Records.Get (Defined, "priority"));
-               Ready.Append
+               declare
+                  Made : constant String := Records.Get (Defined, "created_sequence");
+               begin
+                  Ready.Append
                  (Candidate'(Id        => To_Unbounded_String (Id),
                    Priority  =>
                      (if Length (Text) in 1 .. 9
                         and then (for all C of To_String (Text) => C in '0' .. '9')
                       then Natural'Value (To_String (Text)) else 0),
-                   Component => To_Unbounded_String (Records.Get (Defined, "component"))));
+                   Component => To_Unbounded_String (Records.Get (Defined, "component")),
+                   Sequence  =>
+                     (if Made'Length in 1 .. 9 and then (for all C of Made => C in '0' .. '9')
+                      then Natural'Value (Made) else 0)));
+               end;
             end;
          end if;
       end loop;
 
-      --  Most important first; of equals, the older.
+      --  Most important first; of equals, the older -- by the order they
+      --  were made in, and by name only between two made before that was
+      --  counted.
       declare
          function Before (Left, Right : Candidate) return Boolean
          is (Left.Priority > Right.Priority
-             or else (Left.Priority = Right.Priority and then Left.Id < Right.Id));
+             or else (Left.Priority = Right.Priority
+                      and then (Left.Sequence < Right.Sequence
+                                or else (Left.Sequence = Right.Sequence and then Left.Id < Right.Id))));
          package Sorting is new Candidate_Vectors.Generic_Sorting (Before);
       begin
          Sorting.Sort (Ready);
@@ -313,17 +349,26 @@ package body Model_Runner.Framework.Orchestration is
                      else "would wait for " & To_String (Writer_Planned)
                           & ", planned before it, to write in the project first")
                   & "; one task writes in it at a time");
-            elsif not Isolated and then Component /= "" and then Taken.Contains (Component)
-            then
+            elsif not Isolated and then Component /= "" and then Written.Contains (Component) then
                Result.Held.Append
                  (To_String (Next.Id) & ": another task is writing " & Component);
+            elsif not Isolated and then Component /= "" and then Writes (To_String (Next.Id))
+              and then Read_In.Contains (Component)
+            then
+               Result.Held.Append
+                 (To_String (Next.Id) & ": another task is reading " & Component
+                  & ", and would read this one's changes half made");
             else
                Result.Start.Append (To_String (Next.Id));
                if Writer_Planned = Null_Unbounded_String and then Writes (To_String (Next.Id)) then
                   Writer_Planned := Next.Id;
                end if;
                if Component /= "" then
-                  Taken.Append (Component);
+                  if Writes (To_String (Next.Id)) then
+                     Written.Append (Component);
+                  else
+                     Read_In.Append (Component);
+                  end if;
                end if;
             end if;
          end;

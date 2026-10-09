@@ -98,7 +98,6 @@ package body Untested_Surface is
          | "On_Step"
          | "On_Turn"
          | "Ordinal"
-         | "Plan_For"
          | "Power"
          | "Prefetch"
          | "Prefetch_Go"

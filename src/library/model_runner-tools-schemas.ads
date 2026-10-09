@@ -35,6 +35,15 @@ package Model_Runner.Tools.Schemas is
       Required : Boolean := True;
       Choices  : Choice_Lists.Vector := Any_Text) return Parameter;
 
+   --  A parameter that is a list of strings: a JSON array of them.
+   --
+   --  @param Name What the model writes it as.
+   --  @param Required Whether a call must give it.
+   --  @return The parameter.
+   function Text_List
+     (Name     : String;
+      Required : Boolean := True) return Parameter;
+
    --  A whole-number parameter.
    --
    --  @param Name What the model writes it as.
@@ -76,6 +85,7 @@ private
       Required : Boolean := True;
       Choices  : Choice_Lists.Vector;
       Whole    : Boolean := False;
+      List     : Boolean := False;
    end record;
 
    No_Parameters : constant Parameter_List (1 .. 0) := [others => <>];

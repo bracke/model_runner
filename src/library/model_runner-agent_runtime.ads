@@ -29,9 +29,16 @@ package Model_Runner.Agent_Runtime is
       Task_Text  : Ada.Strings.Unbounded.Unbounded_String;
       Role       : Ada.Strings.Unbounded.Unbounded_String;
       Need       : Ada.Strings.Unbounded.Unbounded_String;
-      Inputs     : Ada.Strings.Unbounded.Unbounded_String;
-      Outputs    : Ada.Strings.Unbounded.Unbounded_String;
+      --  The files it starts from, and those it must write -- each a path,
+      --  as delegate's arguments list them, never words read for one.
+      Inputs     : Paths.Vector;
+      Outputs    : Paths.Vector;
       Acceptance : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Why the arguments are no contract, though they name a task: inputs
+      --  or outputs given otherwise than as a list of paths. "" when they
+      --  are one.
+      Refusal    : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  A contract from a delegate call's arguments.
@@ -47,14 +54,6 @@ package Model_Runner.Agent_Runtime is
    --  @param Item The contract.
    --  @return The brief.
    function Brief (Item : Contract) return String;
-
-   --  The files a contract says the helper must write, one a word, commas or
-   --  spaces apart -- the words that name a file, with a folder or an
-   --  extension; outputs described in words name none.
-   --
-   --  @param Item The contract.
-   --  @return The paths.
-   function Output_Paths (Item : Contract) return Paths.Vector;
 
    --  What each of some files holds, as a revision -- "-" for one not there
    --  or not text -- to hold against later.

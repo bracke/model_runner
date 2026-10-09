@@ -26,6 +26,7 @@ with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Processes;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Tools.Registry;
+with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
@@ -839,16 +840,18 @@ package body Tests.Tools_Cases is
       declare
          Found   : Boolean;
          Asked   : constant Rt.Contract :=
-           Rt.Contract_Of ("{""task"": ""write the notes"", ""outputs"": ""obj/rt_a.txt, obj/rt_b.txt"","
-                           & " ""acceptance"": ""both exist""}", Found);
-         Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Asked);
+           Rt.Contract_Of ("{""task"": ""write the notes"", ""outputs"": [""obj/rt_a.txt"", ""obj/rt_b.txt""],"
+                           & " ""inputs"": [""docs/my notes.md""], ""acceptance"": ""both exist""}", Found);
+         Outputs : constant Rt.Paths.Vector := Asked.Outputs;
          Before  : Rt.Paths.Vector;
          F       : Ada.Text_IO.File_Type;
       begin
          Assert (Found and then Has (Rt.Brief (Asked), "write the notes")
                  and then Has (Rt.Brief (Asked), "Write: obj/rt_a.txt")
                  and then Has (Rt.Brief (Asked), "Done when: both exist")
-                 and then Natural (Outputs.Length) = 2,
+                 and then Natural (Outputs.Length) = 2
+                 and then Has (Rt.Brief (Asked), "Start from: docs/my notes.md")
+                 and then Ada.Strings.Unbounded.Length (Asked.Refusal) = 0,
                  "a helper's contract was not briefed as what it is: " & Rt.Brief (Asked));
          if Ada.Directories.Exists ("obj/rt_a.txt") then
             Ada.Directories.Delete_File ("obj/rt_a.txt");
@@ -863,9 +866,35 @@ package body Tests.Tools_Cases is
          Assert (Rt.Unwritten (Outputs, Before) = "obj/rt_b.txt",
                  "an output not written was not named, or a written one was: " & Rt.Unwritten (Outputs, Before));
          Ada.Directories.Delete_File ("obj/rt_a.txt");
-         Assert (Rt.Output_Paths
-                   (Rt.Contract_Of ("{""task"": ""t"", ""outputs"": ""the result of 6 * 7""}", Found)).Is_Empty,
-                 "outputs described in words were taken for files");
+         --  A list argument is read as the list it is, and one written as
+         --  a string is not taken for one.
+         declare
+            Items       : Model_Runner.Tools.Schemas.Choice_Lists.Vector;
+            Given       : Boolean;
+            Well_Formed : Boolean;
+         begin
+            Builtin.Text_List_Argument
+              ("{""outputs"": [""a b.txt"", ""src/c.adb""]}", "outputs", Items, Given, Well_Formed);
+            Assert (Given and then Well_Formed and then Natural (Items.Length) = 2
+                    and then Items (1) = "a b.txt" and then Items (2) = "src/c.adb",
+                    "a list of strings was not read as it is");
+            Builtin.Text_List_Argument ("{""outputs"": ""a.txt""}", "outputs", Items, Given, Well_Formed);
+            Assert (Given and then not Well_Formed and then Items.Is_Empty,
+                    "a string was taken for a list");
+            Builtin.Text_List_Argument ("{""task"": ""t""}", "outputs", Items, Given, Well_Formed);
+            Assert (not Given and then Well_Formed, "a list not given was said to be there");
+         end;
+
+         --  Outputs written as words are no list of paths: refused, not
+         --  read for what might be one.
+         declare
+            Worded : constant Rt.Contract :=
+              Rt.Contract_Of ("{""task"": ""t"", ""outputs"": ""write src/foo.adb; then docs/a.md""}", Found);
+         begin
+            Assert (Worded.Outputs.Is_Empty
+                    and then Has (Ada.Strings.Unbounded.To_String (Worded.Refusal), "outputs is a list of file paths"),
+                    "outputs written as words were read for paths, or not refused");
+         end;
          Assert (Has (Rt.Helper_Rules, "status: done") and then Has (Rt.Helper_Opening ("reviewer"), "as its reviewer"),
                  "a helper was not told how to work and report");
       end;
@@ -2110,6 +2139,41 @@ package body Tests.Tools_Cases is
               "the read after the change did not keep its own answer and ending");
       Assert (Made.Answer (Write) = "wrote 8 bytes",
               "a change with nothing after it lost its answer");
+
+      --  A change makes stale only what read what it changes: a note put
+      --  in the scratchpad leaves a file read standing, a sum stands
+      --  through anything, and a program, which may change anything,
+      --  leaves nothing but the sum.
+      declare
+         use type Tr.Resource;
+         Sum  : constant String := Rc.Identity ("calculator", "{""a"":1,""b"":1,""op"":""+""}");
+         Note : constant String := Rc.Identity ("memory_get", "{""key"":""k""}");
+         Put  : constant String := Rc.Identity ("memory_put", "{""key"":""k"",""value"":""v""}");
+         Run  : constant String := Rc.Identity ("shell", "{""command"":""true""}");
+         Kept : Rc.Memory;
+      begin
+         Kept.Remember (Read, Tr.Files);
+         Kept.Remember (Sum, Tr.Pure);
+         Kept.Remember (Note, Tr.Agent_Memory);
+         Kept.Changed (Put, Tr.Agent_Memory);
+         Assert (Kept.Holds (Read) and then Kept.Holds (Sum) and then not Kept.Holds (Note),
+                 "a scratchpad note made a file read stale, or left the note's read standing");
+         Kept.Changed (Write, Tr.Files);
+         Assert (not Kept.Holds (Read) and then Kept.Holds (Sum) and then Kept.Holds (Put),
+                 "a write left a file read standing, or took the sum or the note's change with it");
+         Kept.Remember (Read, Tr.Files);
+         Kept.Changed (Run, Tr.Anything);
+         Assert (Kept.Holds (Sum) and then not Kept.Holds (Read) and then not Kept.Holds (Put)
+                 and then not Kept.Holds (Write),
+                 "a program, which may change anything, left a read or a change standing");
+
+         --  An answer is kept with the stamp of what it read.
+         Kept.Remember (Read, Tr.Files);
+         Kept.Keep (Read, "text", Tr.Done, Stamp => "file 1234");
+         Assert (Kept.Stamp_Of (Read) = "file 1234", "an answer's stamp was not kept");
+         Kept.Forget (Read);
+         Assert (not Kept.Holds (Read), "a call forgotten was still held");
+      end;
    end A_Change_Makes_Earlier_Calls_Run_Again;
 
    --  Each built-in tool says what it does to the state later calls read,
@@ -2149,6 +2213,76 @@ package body Tests.Tools_Cases is
               and then Runner.Kind ("now") = Tr.Varies
               and then Runner.Kind ("no such tool") = Tr.Changes,
               "a built-in tool's kind is not what it does");
+      --  What answers anew though nothing here changed is never answered
+      --  from before: somebody may answer a question differently, and the
+      --  web is not the harness's.
+      Assert (Runner.Kind ("ask_user") = Tr.Varies
+              and then Runner.Kind ("http_get") = Tr.Varies
+              and then Runner.Kind ("web_search") = Tr.Varies,
+              "a question to the user or a fetch from the web was taken as a read that stands");
+      declare
+         use type Tr.Resource;
+      begin
+         Assert (Runner.Touches ("read_file") = Tr.Files
+                 and then Runner.Touches ("memory_get") = Tr.Agent_Memory
+                 and then Runner.Touches ("calculator") = Tr.Pure
+                 and then Runner.Touches ("shell") = Tr.Anything
+                 and then Runner.Touches ("no such tool") = Tr.Anything,
+                 "a built-in tool's resource is not what it reads or changes");
+      end;
+
+      --  Given a tree, the file tools work in it, whatever directory the
+      --  process is in, and say a path as the model gave it.
+      declare
+         Tree   : constant String := Ada.Directories.Full_Name ("obj") & "/tools-base";
+         Placed : Builtin.Instance;
+         Room   : String (1 .. Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Ended  : Tr.Call_Outcome;
+         Status : E.Error_Info;
+      begin
+         if not Ada.Directories.Exists (Tree) then
+            Ada.Directories.Create_Path (Tree);
+         end if;
+         Placed.Set_Base (Tree);
+         Placed.Run ("write_file", "{""path"": ""note.txt"", ""content"": ""placed""}", Room, Last, Ended, Status);
+         Assert (E.Is_Ok (Status) and then Ada.Directories.Exists (Tree & "/note.txt")
+                 and then not Ada.Directories.Exists ("note.txt")
+                 and then Room (Room'First .. Last) = "wrote 6 bytes to note.txt",
+                 "a write went to the process's directory, not the tree named: " & Room (Room'First .. Last));
+         Placed.Run ("read_file", "{""path"": ""note.txt""}", Room, Last, Ended, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "placed") > 0,
+                 "a read was not of the tree named: " & Room (Room'First .. Last));
+         Ada.Directories.Delete_File (Tree & "/note.txt");
+      end;
+
+      --  A file read is stamped by what the file holds, so one changed
+      --  under it -- by an editor, a build -- is read again; a tree read
+      --  by the files under it; a call that reads no files by nothing.
+      declare
+         Path  : constant String := "tools-stamp.txt";
+         Args  : constant String := "{""path"": """ & Path & """}";
+         File  : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, "one");
+         Ada.Text_IO.Close (File);
+         declare
+            Before : constant String := Runner.Stamp ("read_file", Args);
+            Tree   : constant String := Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}");
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path);
+            Ada.Text_IO.Put (File, "two!");
+            Ada.Text_IO.Close (File);
+            Assert (Before /= "" and then Runner.Stamp ("read_file", Args) /= Before,
+                    "a file changed under a read kept its stamp: " & Before);
+            Assert (Tree /= "" and then Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}") /= Tree,
+                    "a tree with a file changed in it kept its stamp");
+            Assert (Runner.Stamp ("calculator", "{}") = "" and then Runner.Stamp ("write_file", Args) = "",
+                    "a call that reads no files was given a stamp");
+         end;
+         Ada.Directories.Delete_File (Path);
+      end;
 
       Assert (Ended ("calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}") = Tr.Done,
               "an answered call did not end answered");

@@ -599,6 +599,15 @@ package body Model_Runner.Agent is
                            Named, Args);
                      end if;
 
+                     --  An answer read from the tree stands while what it read
+                     --  does: changed under it, by an editor or a build, it
+                     --  is forgotten and the call runs again.
+                     if Effect = Model_Runner.Tools.Runner.Reads and then Made.Answered (Key)
+                       and then Made.Stamp_Of (Key) /= Executor.Stamp (Named, Args)
+                     then
+                        Made.Forget (Key);
+                     end if;
+
                      if Call = Asked and then Cut_Last then
                         --  Cut off before it was whole: told, not run.
                         Items (Call).Text := U.To_Unbounded_String
@@ -647,7 +656,7 @@ package body Model_Runner.Agent is
                         --  clock read again runs, and is no progress.
                         if not Made.Holds (Key) then
                            Progressed := True;
-                           Made.Remember (Key);
+                           Made.Remember (Key, Executor.Touches (Named));
                         end if;
                         if not Model_Runner.Tools.Offers (Offered, Named) then
                            --  The grammar should have made this impossible;
@@ -699,7 +708,7 @@ package body Model_Runner.Agent is
                                  --  stale once it has run.
                                  if Effect = Model_Runner.Tools.Runner.Changes then
                                     Changing := True;
-                                    Made.Changed (Key);
+                                    Made.Changed (Key, Executor.Touches (Named));
                                  end if;
                            end case;
                         end if;
@@ -882,7 +891,10 @@ package body Model_Runner.Agent is
                            --  Kept by the call, for a repeat of it, and in the
                            --  record of the work: by the path it named, where
                            --  it named one.
-                           Made.Keep (Model_Runner.Agent.Recall.Identity (Named, Args), Reply, Ended);
+                           Made.Keep (Model_Runner.Agent.Recall.Identity (Named, Args), Reply, Ended,
+                                      Stamp =>
+                                        (if Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
+                                         then Executor.Stamp (Named, Args) else ""));
                            declare
                               Named_Path : Boolean;
                               Path       : constant String :=

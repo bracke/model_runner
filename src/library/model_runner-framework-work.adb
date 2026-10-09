@@ -950,12 +950,65 @@ package body Model_Runner.Framework.Work is
       Helpers : Boolean := True) return Execution_Plan
    is separate;
 
-   function Rendered (Plan : Execution_Plan) return String is
+   ---------------------
+   -- Permitted_Words --
+   ---------------------
+
+   function Permitted_Words (Plan : Execution_Plan) return String is
+      Said : Unbounded_String;
+      procedure Add (Text : String) is
+      begin
+         Append (Said, (if Said = Null_Unbounded_String then "" else "; ") & Text);
+      end Add;
    begin
+      if Plan.Read_Source then
+         Add ("read the source");
+      end if;
+      if Plan.Read_Specs then
+         Add ("read the specifications");
+      end if;
+      if Plan.Write_Source then
+         Add ("write " & (if Plan.Source_Roots.Is_Empty then "files"
+                          else "files under " & Comma_Separated (Plan.Source_Roots))
+              --  What it may not, inherited or its own, said with it.
+              & (if Plan.Source_Denied.Is_Empty then ""
+                 else " except " & Comma_Separated (Plan.Source_Denied)));
+      end if;
+      if Plan.Write_Specs then
+         Add ("write specifications "
+              & (if Plan.Spec_Roots.Is_Empty
+                 then "(in " & Permissions.Specification_Places & ")"
+                 else "under " & Comma_Separated (Plan.Spec_Roots)));
+      end if;
+      --  Its checks, by the profile that runs them.
+      if Plan.May_Check then
+         Add ("run the project's checks"
+              & (if Length (Plan.Profile) = 0 then "" else " (profile " & To_String (Plan.Profile) & ")"));
+      end if;
+      if Plan.May_Delegate then
+         Add ("hand parts to helpers (at most" & Natural'Image (Plan.Max_Helpers) & ")");
+      end if;
+      if Plan.May_Propose then
+         Add ("propose tasks");
+      end if;
+      return (if Said = Null_Unbounded_String then "read only what you are given" else To_String (Said));
+   end Permitted_Words;
+
+   --------------
+   -- Rendered --
+   --------------
+
+   function Rendered (Plan : Execution_Plan) return String is
+      Parts : Unbounded_String;
+   begin
+      for One of Plan.Parts loop
+         Append (Parts, "- " & To_String (One.Id) & " " & To_String (One.Title) & ": "
+                 & To_String (One.State) & ASCII.LF);
+      end loop;
       return Instructions_For (Plan.May_Propose, Plan.May_Split, Plan.May_Write,
                                May_Delegate => Plan.May_Delegate, May_Check => Plan.May_Check)
         & ASCII.LF & "## What you may do" & ASCII.LF
-        & "You may " & To_String (Plan.Permitted) & "."
+        & "You may " & Permitted_Words (Plan) & "."
         & (if Plan.May_Write
            then " Change only the files you may write; a change to any other file fails the work."
            else "")
@@ -965,8 +1018,8 @@ package body Model_Runner.Framework.Work is
         --  it has spends them on the work.
         & (if Plan.Max_Calls = 0 then ""
            else "You have at most" & Natural'Image (Plan.Max_Calls) & " tool calls." & ASCII.LF)
-        & (if Plan.Parts = Null_Unbounded_String then ""
-           else ASCII.LF & "## Your parts" & ASCII.LF & To_String (Plan.Parts)
+        & (if Plan.Parts.Is_Empty then ""
+           else ASCII.LF & "## Your parts" & ASCII.LF & To_String (Parts)
                 & "Those complete are done: do what is left of the task itself, and do not split"
                 & " it into them again." & ASCII.LF);
    end Rendered;
@@ -985,39 +1038,36 @@ package body Model_Runner.Framework.Work is
    -- Instructions_Of --
    -----------------------
 
-   function Instructions_Of (Item : Stores.Store; Task_Id : String) return String is
+   --  The plan /work would make for a task now, for its worker, as its
+   --  kind and its own permissions give it.
+   function Plan_Now (Item : Stores.Store; Task_Id : String) return Execution_Plan is
       Defined : Records.Item;
       Read    : E.Error_Info;
    begin
       Tasks.Definition (Item, Task_Id, Defined, Read);
-      return Instructions_With
+      return Plan_For
         (Item, Task_Id,
          Permissions.Effective (Item, Records.Get (Defined, "kind"), "worker",
                                 Task_Level => Records.Get (Defined, "permissions")),
          Apart => (if Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "isolation") /= ""
                    then Tasks.Kind_Policy (Item, Records.Get (Defined, "kind"), "isolation")
                    else Work_Setting (Item, "isolation")) = "workspace");
-   end Instructions_Of;
+   end Plan_Now;
+
+   function Instructions_Of (Item : Stores.Store; Task_Id : String) return String
+   is (Rendered (Plan_Now (Item, Task_Id)));
 
    ------------
    -- May_Do --
    ------------
 
    function May_Do (Item : Stores.Store; Task_Id : String) return String is
-      Text  : constant String := Instructions_Of (Item, Task_Id);
-      Lead  : constant String := "## What you may do" & ASCII.LF & "You may ";
-      Start : constant Natural := Ada.Strings.Fixed.Index (Text, Lead);
+      Defined : Records.Item;
+      Read    : E.Error_Info;
    begin
-      if Start = 0 then
-         return "";
-      end if;
-      --  To the end of its sentence: a full stop a word ends with.
-      for Index in Start + Lead'Length .. Text'Last loop
-         if Text (Index) = '.' and then (Index = Text'Last or else Text (Index + 1) in ' ' | ASCII.LF) then
-            return Text (Start + Lead'Length .. Index - 1);
-         end if;
-      end loop;
-      return Text (Start + Lead'Length .. Text'Last);
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      --  The plan Instructions_Of renders, read as the plan it is.
+      return (if E.Is_Error (Read) then "" else Permitted_Words (Plan_Now (Item, Task_Id)));
    end May_Do;
 
    -------------------

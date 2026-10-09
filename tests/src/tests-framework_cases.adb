@@ -27,6 +27,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Context;
+with Model_Runner.Framework.Automation;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
@@ -3427,16 +3428,20 @@ package body Tests.Framework_Cases is
          Link : constant String := Scratch & "/away";
          Gone : Boolean;
       begin
-         Assert (Pc.Within_Project ("src/none.adb")
-                 and then not Pc.Within_Project ("../x")
-                 and then not Pc.Within_Project ("src/../../x")
-                 and then not Pc.Within_Project ("/etc/passwd"),
+         Assert (Pc.Within_Project (".", "src/none.adb")
+                 and then not Pc.Within_Project (".", "../x")
+                 and then not Pc.Within_Project (".", "src/../../x")
+                 and then not Pc.Within_Project (".", "/etc/passwd"),
                  "a path was placed wrongly inside or outside the project");
+         --  The tree is the one named, wherever the process is.
+         Assert (Pc.Within_Project (Dirs.Full_Name (Scratch), "src/none.adb")
+                 and then not Pc.Within_Project (Dirs.Full_Name (Scratch), "../x"),
+                 "a path was judged against the process's directory, not the tree named");
          if Away /= "" then
             Gone := Hostkit.Fs.Delete_Link (Link);
             if Hostkit.Fs.Create_Link (Away, Link) then
-               Assert (not Pc.Within_Project (Link & "/x")
-                       and then not Pc.Within_Project (Link),
+               Assert (not Pc.Within_Project (".", Link & "/x")
+                       and then not Pc.Within_Project (".", Link),
                        "a link out of the project was followed");
                Gone := Hostkit.Fs.Delete_Link (Link);
             end if;
@@ -4810,6 +4815,22 @@ package body Tests.Framework_Cases is
                                        "read the source") > 0,
               "what an agent may do was not said as it is told: "
               & Model_Runner.Framework.Work.May_Do (Store, To_String (Id)));
+      --  The plan is values, and words only where it is rendered: what it
+      --  may read and write, as flags and roots, and its parts as a list.
+      declare
+         package Wk renames Model_Runner.Framework.Work;
+         Plan : constant Wk.Execution_Plan :=
+           Wk.Plan_For (Store, To_String (Id),
+                        Model_Runner.Framework.Permissions.Effective
+                          (Store, "analysis", "worker", Task_Level => "read_source"),
+                        Apart => False);
+      begin
+         Assert (Plan.Read_Source and then not Plan.Write_Source and then not Plan.May_Write
+                 and then Plan.Parts.Is_Empty
+                 and then Wk.Permitted_Words (Plan) = "read the source"
+                 and then Ada.Strings.Fixed.Index (Wk.Rendered (Plan), "You may read the source.") > 0,
+                 "a plan was not its values, or was not rendered from them: " & Wk.Permitted_Words (Plan));
+      end;
       Model_Runner.Framework.Work.Execute
         (Store, To_String (Id),
          Accounting_Agent'(Scripted_Agent'(File   => Null_Unbounded_String,
@@ -10745,6 +10766,72 @@ package body Tests.Framework_Cases is
 
    package Or_ch renames Model_Runner.Framework.Orchestration;
 
+   --  A rule is read into an event and an action once, where it is set:
+   --  one naming an action or an event there is none of is refused there,
+   --  by name, and a project's configuration holding one is not made --
+   --  where it was taken as text and did nothing when it was due.
+   procedure Automation_Rules_Are_Read
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Au renames Model_Runner.Framework.Automation;
+      use type Au.Action;
+      One     : Au.Rule;
+      Refusal : Unbounded_String;
+   begin
+      Au.Read ("Task_Completed: reevaluate_requirements", One, Refusal);
+      Assert (Length (Refusal) = 0 and then not One.Any
+              and then One.Event = Model_Runner.Framework.Events.Task_Completed
+              and then One.Act = Au.Reevaluate_Requirements
+              and then Au.Image (One) = "Task_Completed: reevaluate_requirements",
+              "a rule did not read, or did not read back as written");
+      Assert (Au.Matches (One, "Task_Completed") and then not Au.Matches (One, "Task_Failed"),
+              "a rule matched an event it is not for");
+      Au.Read ("*: recompute_readiness", One, Refusal);
+      Assert (Length (Refusal) = 0 and then One.Any and then Au.Matches (One, "Some_Later_Kind"),
+              "a rule for any event did not take one this build does not know");
+
+      Au.Read ("Task_Completed: recompute_readines", One, Refusal);
+      Assert (Index (Refusal, "unknown automation action ""recompute_readines""") > 0,
+              "a misspelt action was not refused by name: " & To_String (Refusal));
+      Au.Read ("Task_Complete: verify", One, Refusal);
+      Assert (Index (Refusal, "unknown event ""Task_Complete""") > 0,
+              "a misspelt event was not refused by name: " & To_String (Refusal));
+      Au.Read ("Task_Completed -> verify", One, Refusal);
+      Assert (Index (Refusal, "EVENT: ACTION") > 0,
+              "a rule in another shape was not refused with the one it takes: " & To_String (Refusal));
+
+      --  A configuration holding one is no configuration.
+      declare
+         Registry : Tp.Registry;
+         Composed : Tp.Composition;
+         Given    : Cf.Value_Maps.Map;
+         Planned  : Cf.Plan;
+         Status   : E.Error_Info;
+      begin
+         Tp.Add (Registry, Parsed
+           ("template = work" & LF & "name = W" & LF & "description = D" & LF & "version = 1" & LF
+            & "list automation.rules = Task_Completed: recompute_readines" & LF));
+         Tp.Compose (Registry, "work", Composed, Status);
+         Cf.Prepare (Composed, Fresh ("automation-misspelt"), Given, Planned, Status);
+         if E.Is_Ok (Status) then
+            declare
+               Store : S.Store;
+               Done  : Cf.Outcome;
+            begin
+               Cf.Initialize (Store, Fresh ("automation-misspelt"), Planned, Done, Status);
+               if E.Is_Ok (Status) then
+                  S.Close (Store);
+               end if;
+            end;
+         end if;
+         Assert (E.Is_Error (Status)
+                 and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "recompute_readines") > 0,
+                 "a configuration with a misspelt automation action was accepted: "
+                 & Code_Of (Status));
+      end;
+   end Automation_Rules_Are_Read;
+
    --  Events are acted on once, by the rules, without a model; dispatch
    --  starts the most important ready tasks that fit, one writer to a
    --  component; and what needs judgment is listed.
@@ -10762,8 +10849,13 @@ package body Tests.Framework_Cases is
       Given  : Tk.Field_Map;
    begin
       Task_Project (Store, "orchestration", "scalar agents.max_active = 2" & LF);
-      Assert (Natural (Or_ch.Rules (Store).Length) = 9,
-              "a project that says nothing did not get the rules it needs");
+      declare
+         In_Force : Model_Runner.Framework.Automation.Rule_Lists.Vector;
+      begin
+         Or_ch.Rules (Store, In_Force, Status);
+         Assert (E.Is_Ok (Status) and then Natural (In_Force.Length) = 9,
+                 "a project that says nothing did not get the rules it needs");
+      end;
 
       Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
                   "user", "", "io", Req, Status);
@@ -10847,6 +10939,44 @@ package body Tests.Framework_Cases is
             Found := Found or else Ada.Strings.Fixed.Index (Line, "candidate") > 0;
          end loop;
          Assert (Found, "the derived candidate was not listed for judgment");
+      end;
+
+      --  Each task carries the order it was made in, apart from its name.
+      declare
+         First_Made, Last_Made : Model_Runner.Framework.Records.Item;
+         Read_Status           : E.Error_Info;
+      begin
+         Tk.Definition (Store, To_String (Ids (1)), First_Made, Read_Status);
+         Tk.Definition (Store, To_String (Ids (4)), Last_Made, Read_Status);
+         Assert (Natural'Value (Model_Runner.Framework.Records.Get (First_Made, "created_sequence"))
+                 < Natural'Value (Model_Runner.Framework.Records.Get (Last_Made, "created_sequence")),
+                 "a task did not carry the order it was made in");
+      end;
+      S.Close (Store);
+
+      --  Two tasks that only read one component go together; a writer goes
+      --  with no reader in it.
+      Task_Project (Store, "orchestration-readers", "scalar agents.max_active = 3" & LF);
+      declare
+         Readers : array (1 .. 2) of Unbounded_String;
+      begin
+         for Index in Readers'Range loop
+            Given := Fields ("Look" & Integer'Image (Index), "analysis", "component", "parser");
+            Given.Include ("permissions", "read_source");
+            Tk.Create (Store, Change, Given, "user", "", Readers (Index), Status);
+         end loop;
+         S.Commit (Store, Change, Status);
+         for Index in Readers'Range loop
+            Tk.Move (Store, Change, To_String (Readers (Index)), "accepted", "", Status => Status);
+         end loop;
+         S.Commit (Store, Change, Status);
+         Or_ch.Step (Store, Done, Status);
+         Plan := Or_ch.Plan (Store);
+         Assert (Natural (Plan.Start.Length) = 2
+                 and then Plan.Start.First_Element = To_String (Readers (1)),
+                 "two tasks reading one component were not started together, older first: "
+                 & Natural'Image (Natural (Plan.Start.Length))
+                 & (if Plan.Held.Is_Empty then "" else " -- " & Plan.Held.First_Element));
       end;
       S.Close (Store);
    end Orchestration_Is_Routine;
@@ -10954,6 +11084,10 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Parents_Wait_For_Children'Access,
          "a parent waits for its children and goes back to work after them");
+      Register_Routine
+        (T, Automation_Rules_Are_Read'Access,
+         "an automation rule is read where it is set, and one naming no action or no event is"
+         & " refused there by name");
       Register_Routine
         (T, Orchestration_Is_Routine'Access,
          "routine progression is rule-driven, once, and dispatched by"

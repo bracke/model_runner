@@ -728,6 +728,16 @@ package body Model_Runner.Framework.Tasks is
          end if;
          Records.Set (Defined, "created_by", Created_By);
          Records.Set (Defined, "origin", Origin);
+         declare
+            Made_As : Natural;
+         begin
+            Stores.Allocate_Number (Item, Change, "TASKSEQ", "", Made_As, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Records.Set (Defined, "created_sequence",
+                         Ada.Strings.Fixed.Trim (Natural'Image (Made_As), Ada.Strings.Left));
+         end;
          Stores.Put (Change, Tasks_Area, Task_Id, Defined);
 
          Records.Set (State, "state", "candidate");

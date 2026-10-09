@@ -167,13 +167,16 @@ package body Model_Runner.CLI.Project_Commands is
 
    --  The tools that take a path in the tree, those of them that write,
    --  and those that ask the project's repository graph.
+   --  What a tool does with a path, and whether it asks the graph: the
+   --  registry's, which describes each tool once.
    function File_Tool (Named : String) return Boolean is
-     (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
-              | "search_file" | "search_code" | "find");
+     (Model_Runner.Tools.Registry."/=" (Model_Runner.Tools.Registry.Path_Of (Named),
+                                         Model_Runner.Tools.Registry.No_Path));
    function Writes (Named : String) return Boolean is
-     (Named in "write_file" | "edit_file");
+     (Model_Runner.Tools.Registry."=" (Model_Runner.Tools.Registry.Path_Of (Named),
+                                        Model_Runner.Tools.Registry.Writes_Path));
    function Graph_Tool (Named : String) return Boolean is
-     (Named in "find_symbol" | "find_references" | "dependencies" | "dependents" | "impact");
+     (Model_Runner.Tools.Registry.Asks_Graph (Named));
 
    function Image (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
@@ -187,7 +190,8 @@ package body Model_Runner.CLI.Project_Commands is
    procedure Read_Whole
      (Path   : String;
       Text   : out Unbounded_String;
-      Status : out E.Error_Info) renames Model_Runner.Tools.Editing.Read_Text;
+      Status : out E.Error_Info;
+      Base   : String := "") renames Model_Runner.Tools.Editing.Read_Text;
 
    --  Every other tool refused, and said so.
    type Fence (Screen : not null access Pres.Console) is
@@ -449,9 +453,10 @@ package body Model_Runner.CLI.Project_Commands is
    end On_Result;
 
    --  Whether a path is one an agent's file tools may reach: inside the
-   --  project once every link is followed, and not its state.
-   function Within_Project (Path : String) return Boolean
-   is (Pm.Path_Refusal (".", Path, Writing => False) = "");
+   --  tree the work is done in -- the project, or a workspace's -- once
+   --  every link is followed, and not its state.
+   function Within_Project (Root, Path : String) return Boolean
+   is (Pm.Path_Refusal (Root, Path, Writing => False) = "");
 
    --  One tool as a model reads it.
    --  The roles the project gives permissions to -- map.permission.role.R
@@ -554,12 +559,6 @@ package body Model_Runner.CLI.Project_Commands is
       Last      : out Natural;
       Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
-
-   --  run_checks reads the tree as it stands, and answers the same until
-   --  something is written; delegate's child may write anything. The rest
-   --  are the built-in tools'.
-   overriding function Kind
-     (Self : Work_Tools; Named : String) return Model_Runner.Tools.Runner.Call_Kind;
 
    overriding procedure Write
      (Self   : in out Watching_Sink;
@@ -679,7 +678,8 @@ package body Model_Runner.CLI.Project_Commands is
       Answer : out Unbounded_String;
       Tokens : out Natural;
       Status : out Model_Runner.Errors.Error_Info;
-      Prompt_Tokens : out Natural)
+      Prompt_Tokens : out Natural;
+      Tree   : String)
    is
       Messages : Conv.History;
       Offered  : Model_Runner.Tools.Definitions;
@@ -706,6 +706,9 @@ package body Model_Runner.CLI.Project_Commands is
         (if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON)
          then Model_Runner.Tools.Open_JSON else Written);
    begin
+      --  The tools work in the tree the work is done in, named, not in
+      --  whatever directory the process is in.
+      Runner.Set_Base (Tree);
       Guard.Can := Work_Capabilities (Host);
       Answer := Null_Unbounded_String;
       Tokens := 0;
@@ -947,7 +950,7 @@ package body Model_Runner.CLI.Project_Commands is
       Contract : constant Rt.Contract := Rt.Contract_Of (Arguments, Found);
       Asked    : constant String := To_String (Contract.Task_Text);
       Brief    : constant String := Rt.Brief (Contract);
-      Named_Outputs : constant Rt.Paths.Vector := Rt.Output_Paths (Contract);
+      Named_Outputs : constant Rt.Paths.Vector := Contract.Outputs;
 
       --  What each output held before the helper ran.
       Before   : constant Rt.Paths.Vector := Rt.Prints (Named_Outputs);
@@ -959,9 +962,11 @@ package body Model_Runner.CLI.Project_Commands is
       Ended := Tr.Done;
       if not Found or else Asked = "" then
          return Fails ("error: delegate needs a task string");
+      elsif Length (Contract.Refusal) > 0 then
+         return Fails ("error: delegate's " & To_String (Contract.Refusal));
       --  A role is one the project names, where it names any; a tool's
       --  name is never one.
-      elsif Role in "read_file" | "write_file" | "list_directory" | "run_checks" | "delegate" then
+      elsif Model_Runner.Tools.Registry.Known (Role) then
          return Fails ("error: " & Role & " is a tool, not a role: a role says what the helper is for, as reviewer");
       elsif Role /= "" and then not Configured_Roles.Is_Empty and then not Configured_Roles.Contains (Role) then
          declare
@@ -1010,7 +1015,7 @@ package body Model_Runner.CLI.Project_Commands is
                                                    else Brief))]);
             Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
                       Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
-                      Prompt_Tokens => Prompt);
+                      Prompt_Tokens => Prompt, Tree => Self.Base);
 
             --  The work cancelled while the helper ran: it is cancelled
             --  with it, however it came to stop.
@@ -1076,12 +1081,6 @@ package body Model_Runner.CLI.Project_Commands is
       & ", graph questions:" & Natural'Image (Self.Graph_Asks)
       & ", checks run:" & Natural'Image (Self.Check_Runs));
 
-   overriding function Kind
-     (Self : Work_Tools; Named : String) return Model_Runner.Tools.Runner.Call_Kind
-   is (if Named = "run_checks" or else Graph_Tool (Named) then Model_Runner.Tools.Runner.Reads
-       elsif Named = "delegate" then Model_Runner.Tools.Runner.Changes
-       else Model_Runner.Tools.Builtin.Kind (Model_Runner.Tools.Builtin.Instance (Self), Named));
-
    overriding procedure Run
      (Self      : in out Work_Tools;
       Named     : String;
@@ -1120,6 +1119,15 @@ package body Model_Runner.CLI.Project_Commands is
       Budget : constant Natural :=
         (if Self.Host = null then 0 else Self.Host.Tool_Budget);
 
+      --  The tree the work is done in, as the tools were given it.
+      Root : constant String := (if Self.Base = "" then "." else Self.Base);
+
+      function Within_Project (Path : String) return Boolean
+      is (Project_Commands.Within_Project (Root, Path));
+
+      function Exists (Path : String) return Boolean
+      is (Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Self.Base, Path)));
+
       --  Whether the agent now working may read or write there: inside the
       --  project, and within its source or specification grants.
       function May (Reading : Boolean) return Boolean
@@ -1148,7 +1156,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  top, as the model was told paths are -- the longest end of it the
          --  project holds: /home/user/src/x.adb is src/x.adb where src/ is
          --  the project's, and never a home/user/ tree made inside it.
-         if Ada.Directories.Exists (Path) then
+         if Exists (Path) then
             return "";
          end if;
          --  Under the project's own name -- /demo/a.txt in the project demo
@@ -1157,7 +1165,7 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             --  The project's own name, from a workspace's tree too, where
             --  the work is done in .model_runner/workspaces/WS/tree.
-            Here    : constant String := Ada.Directories.Current_Directory;
+            Here    : constant String := Ada.Directories.Full_Name (Root);
             State   : constant Natural := Ada.Strings.Fixed.Index (Here, "/.model_runner/");
             Project : constant String :=
               Ada.Directories.Simple_Name (if State > Here'First then Here (Here'First .. State - 1) else Here);
@@ -1173,10 +1181,10 @@ package body Model_Runner.CLI.Project_Commands is
                   Slash  : constant Natural := Ada.Strings.Fixed.Index (Tail, "/", Ada.Strings.Backward);
                begin
                   if Within_Project (Tail)
-                    and then (Ada.Directories.Exists (Tail)
+                    and then (Exists (Tail)
                               or else (Writes (Named)
                                        and then (Slash = 0
-                                                 or else Ada.Directories.Exists (Tail (Tail'First .. Slash - 1)))))
+                                                 or else Exists (Tail (Tail'First .. Slash - 1)))))
                   then
                      return Tail;
                   end if;
@@ -1195,7 +1203,7 @@ package body Model_Runner.CLI.Project_Commands is
                Slash  : constant Natural := Ada.Strings.Fixed.Index (Whole, "/", Ada.Strings.Backward);
             begin
                return (if Whole /= "" and then Within_Project (Whole)
-                         and then (Slash = 0 or else Ada.Directories.Exists (Whole (Whole'First .. Slash - 1)))
+                         and then (Slash = 0 or else Exists (Whole (Whole'First .. Slash - 1)))
                        then Whole else "");
             end;
          end if;
@@ -1209,8 +1217,8 @@ package body Model_Runner.CLI.Project_Commands is
                   Folder : constant String := (if Slash = 0 then "." else Tail (Tail'First .. Slash - 1));
                begin
                   if Tail /= "" and then Within_Project (Tail)
-                    and then (Ada.Directories.Exists (Tail)
-                              or else (Writes (Named) and then Ada.Directories.Exists (Folder)
+                    and then (Exists (Tail)
+                              or else (Writes (Named) and then Exists (Folder)
                                        and then (Folder /= "." or else Start = Bare)))
                   then
                      return Tail;
@@ -1353,14 +1361,14 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end if;
       elsif File_Tool (Named)
-        and then Pm.Path_Refusal (".", Path, Writing => Writes (Named)) /= ""
+        and then Pm.Path_Refusal (Root, Path, Writing => Writes (Named)) /= ""
       then
          Refuse
-           (case Pm.Path_Refused_As (".", Path, Writing => Writes (Named)) is
+           (case Pm.Path_Refused_As (Root, Path, Writing => Writes (Named)) is
               when Pm.Path_Outside       => Tr.Outside_Project,
               when Pm.Path_Harness_Owned => Tr.Harness_Owned,
               when others                => Tr.Not_Permitted);
-         Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Writes (Named)));
+         Put ("error: " & Pm.Path_Refusal (Root, Path, Writing => Writes (Named)));
       elsif File_Tool (Named) and then not Writes (Named) and then not May (Reading => True) then
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not read " & Path
@@ -1426,7 +1434,6 @@ package body Model_Runner.CLI.Project_Commands is
       Answer      : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info)
    is
-      Before : constant String := Ada.Directories.Current_Directory;
       Prompt : Unbounded_String;
       Tokens : Natural;
       Read   : Natural;
@@ -1438,13 +1445,13 @@ package body Model_Runner.CLI.Project_Commands is
          Answer := Null_Unbounded_String;
          return;
       end if;
-      --  The work is done where the task's files are, and its own
-      --  conversation -- and each child's -- is on the session, which the
-      --  screen's is read back into afterwards.
+      --  The work is done where the task's files are -- the tree its tools
+      --  are given, the process's own directory left where it is -- and
+      --  its own conversation, and each child's, is on the session, which
+      --  the screen's is read back into afterwards.
       L.Reset (Self.Session.all);
-      Ada.Directories.Set_Directory (Project);
       Run_Loop (Self, To_String (Prompt), Host, (if Host = null then 0 else Host.Token_Budget), True,
-                Answer, Tokens, Status, Read);
+                Answer, Tokens, Status, Read, Tree => Ada.Directories.Full_Name (Project));
       --  Stopped at Ctrl-C, however the model's run then ended -- a closed
       --  backend among them: interrupted, and the task set aside.
       if E.Is_Error (Status)
@@ -1453,14 +1460,12 @@ package body Model_Runner.CLI.Project_Commands is
       then
          Status := E.Make (E.Generation_Cancelled);
       end if;
-      Ada.Directories.Set_Directory (Before);
       L.Reset (Self.Session.all);
       if Host /= null then
          Host.Spend (Tokens, Prompt_Tokens => Read);
       end if;
    exception
       when Failure : others =>
-         Ada.Directories.Set_Directory (Before);
          L.Reset (Self.Session.all);
          Answer := Null_Unbounded_String;
          Status := E.Unexpected (Failure, "work");

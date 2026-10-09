@@ -201,6 +201,9 @@ package body Model_Runner.Framework.Schemas is
          [Rule ("title", Text_Field, True),
           Rule ("kind", Text_Field, True),
           Rule ("created_by", Text_Field, True),
+          --  The order tasks were made in, counted apart from their names,
+          --  which are names: TASK-1000 sorts before TASK-999 as text.
+          Rule ("created_sequence", Number_Field, False),
           Rule ("origin", Text_Field, False),
           Rule ("component", Text_Field, False),
           Rule ("requirements", Text_Field, False),
