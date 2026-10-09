@@ -44,6 +44,9 @@
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
+#ifdef ROUNDS
+#extension GL_KHR_shader_subgroup_clustered : require
+#endif
 
 const uint LANES = 256u;
 
@@ -102,6 +105,31 @@ layout(push_constant) uniform Shape {
 } shape;
 
 layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
+
+#ifdef ROUNDS
+//  The answer again rounded to bytes, for the integer walks that read it
+//  -- what round_vectors.comp makes of it, made here instead, where the
+//  answer is in hand and the walk's own rounding pass and its barrier are
+//  spared: a byte a value, four to a word, and a scale for every thirty-two
+//  past room for eight positions' bytes, as round_vectors.comp lays them.
+//  Thirty-two values in a row are thirty-two lanes in a row here, so a
+//  block's largest is a clustered maximum and its word a clustered or.
+layout(std430, binding = 6) writeonly buffer Rounded { uint qw[]; };
+layout(std430, binding = 6) writeonly buffer Scales  { float qs[]; };
+
+void round_out (uint at, uint c, float made) {
+    float most = subgroupClusteredMax (abs (made), 32u);
+    float inverse = most > 0.0 ? 127.0 / most : 0.0;
+    uint byte = uint (int (round (made * inverse))) & 0xFFu;
+    uint word = subgroupClusteredOr (byte << ((c & 3u) * 8u), 4u);
+    if ((c & 3u) == 0u) {
+        qw[(at + c) >> 2u] = word;
+    }
+    if ((c & 31u) == 0u) {
+        qs[2u * shape.width + ((at + c) >> 5u)] = most / 127.0;
+    }
+}
+#endif
 
 shared float partial[LANES];
 
@@ -243,6 +271,9 @@ void main() {
             } else {
                 y[at + c] = made;
             }
+#ifdef ROUNDS
+            round_out (at, c, made);
+#endif
         }
     }
 
@@ -258,5 +289,8 @@ void main() {
         } else {
             y[at + c] = made;
         }
+#ifdef ROUNDS
+        round_out (at, c, made);
+#endif
     }
 }

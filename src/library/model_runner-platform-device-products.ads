@@ -255,6 +255,9 @@ package Model_Runner.Platform.Device.Products is
    --  A few-vector pipeline a format and a count; see Wave_Multi_Lines.
    type Wave_Multi_Table is array (Weight_Packing) of Many_Array;
 
+   --  A module a format.
+   type Packing_Address_Array is array (Weight_Packing) of System.Address;
+
    --  The packings whose blocks hold two hundred and fifty-six elements
    --  rather than thirty-two. A row in one of these is a whole number of
    --  super-blocks, so a width that is not a multiple of 256 is refused
@@ -3382,6 +3385,10 @@ private
       --  rather than for itself: a layer normalizes twice and the host
       --  doing it is the host needing the products back.
       Normer     : System.Address := System.Null_Address;
+
+      --  The normalization again, writing its answer rounded to bytes as
+      --  well, for the integer walks that read it; see Round_Walks.
+      Round_Normer : System.Address := System.Null_Address;
       Turner     : System.Address := System.Null_Address;
       Placer     : System.Address := System.Null_Address;
 
@@ -3551,6 +3558,13 @@ private
       Wave_Multi_Lines : Wave_Multi_Table :=
         [others => [others => System.Null_Address]];
 
+      --  IQ4_NL's, IQ4_XS's and MXFP4's few-vector walks again as integers,
+      --  their table's values being whole numbers a byte holds; see
+      --  Round_Walks.
+      Dots_Wave_Shaders : Packing_Address_Array := [others => System.Null_Address];
+      Dots_Multi_Lines  : Wave_Multi_Table :=
+        [others => [others => System.Null_Address]];
+
       --  And Q8_0, on the same kernel compiled for it.
       Q8_Wave_Shader : System.Address := System.Null_Address;
       --  And its four-row compilation, which short rows take.
@@ -3632,6 +3646,7 @@ private
       --  and four subgroups: see FEW in attention_matrix.comp.
       Few_Attend : Few_Lines := [others => [others => System.Null_Address]];
       Norm_Line   : System.Address := System.Null_Address;
+      Norm_Round_Line : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;
       Route_Line  : System.Address := System.Null_Address;

@@ -176,25 +176,34 @@ package body Model_Runner.Framework.Tasks is
    -- Lifecycle --
    ---------------
 
+   function Image (State : Core_State) return String
+   is (case State is
+         when Candidate    => "candidate",
+         when Accepted     => "accepted",
+         when Running      => "running",
+         when Blocked      => "blocked",
+         when Verification => "verification",
+         when Complete     => "complete",
+         when Failed       => "failed",
+         when Cancelled    => "cancelled",
+         when Rejected     => "rejected");
+
    function Core_Task_States return Name_Lists.Vector is
       Result : Name_Lists.Vector;
    begin
-      for State of Name_Lists.Vector'
-        (["candidate", "accepted", "running", "blocked", "verification", "complete",
-          "failed", "cancelled", "rejected"])
-      loop
-         Result.Append (State);
+      for State in Core_State loop
+         Result.Append (Image (State));
       end loop;
       return Result;
    end Core_Task_States;
 
    function Forbiddable (From, To : String) return Boolean
-   is ((From = "candidate" and then To = "rejected")
-       or else (From = "accepted" and then To = "blocked")
-       or else (From = "blocked" and then To = "failed")
-       or else (From = "failed" and then To = "accepted")
-       or else (From in "complete" | "cancelled" and then To = "accepted")
-       or else (From = "rejected" and then To = "candidate"));
+   is ((From = Tasks.Candidate and then To = Tasks.Rejected)
+       or else (From = Tasks.Accepted and then To = Tasks.Blocked)
+       or else (From = Tasks.Blocked and then To = Tasks.Failed)
+       or else (From = Tasks.Failed and then To = Tasks.Accepted)
+       or else (From in "complete" | "cancelled" and then To = Tasks.Accepted)
+       or else (From = Tasks.Rejected and then To = Tasks.Candidate));
 
    --  A FROM -> TO line's two sides, or two empty ones.
    procedure Sides (Line : String; From, To : out Unbounded_String) is
@@ -757,15 +766,15 @@ package body Model_Runner.Framework.Tasks is
 
    --  The event a move is recorded by.
    function Event_For (Next : String) return Events.Event_Kind
-   is (if Next = "accepted" then Events.Task_Accepted
-       elsif Next = "rejected" then Events.Task_Rejected
-       elsif Next = "running" then Events.Task_Started
-       elsif Next = "blocked" then Events.Task_Blocked
-       elsif Next = "verification" then Events.Task_Verification_Started
-       elsif Next = "complete" then Events.Task_Completed
-       elsif Next = "failed" then Events.Task_Failed
-       elsif Next = "cancelled" then Events.Task_Cancelled
-       elsif Next = "candidate" then Events.Task_Candidate_Created
+   is (if Next = Tasks.Accepted then Events.Task_Accepted
+       elsif Next = Tasks.Rejected then Events.Task_Rejected
+       elsif Next = Tasks.Running then Events.Task_Started
+       elsif Next = Tasks.Blocked then Events.Task_Blocked
+       elsif Next = Tasks.Verification then Events.Task_Verification_Started
+       elsif Next = Tasks.Complete then Events.Task_Completed
+       elsif Next = Tasks.Failed then Events.Task_Failed
+       elsif Next = Tasks.Cancelled then Events.Task_Cancelled
+       elsif Next = Tasks.Candidate then Events.Task_Candidate_Created
        else Events.Task_Moved);
 
    ----------
@@ -814,7 +823,7 @@ package body Model_Runner.Framework.Tasks is
       if Transitions.By_Person (Actor)
         and then (Next in "running" | "verification" | "complete"
                   or else (Records.Get (Value, "state") = "running"
-                           and then Next /= "cancelled")
+                           and then Next /= Tasks.Cancelled)
                   or else (Records.Get (Value, "state") = "verification"
                            and then Next not in "cancelled" | "failed" | "blocked"))
       then
@@ -823,10 +832,10 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "value", Records.Get (Value, "state"));
          E.Add_Text (Status, "expected", Next);
          E.Add_Text (Status, "detail",
-                     (if Next = "complete" and then Records.Get (Value, "state") in "failed" | "blocked"
+                     (if Next = Tasks.Complete and then Records.Get (Value, "state") in "failed" | "blocked"
                       then "the harness makes this move: /task accept " & Id & " takes it up again and /work "
                            & Id & " then does it, or /task complete " & Id & " once it is done by hand"
-                      elsif Next = "complete"
+                      elsif Next = Tasks.Complete
                       then "the harness makes this move: /work " & Id & " does it, or /task complete "
                            & Id & " once it is done by hand"
                       elsif Next in "running" | "verification"
@@ -836,7 +845,7 @@ package body Model_Runner.Framework.Tasks is
          return;
       end if;
 
-      if Next = "running" then
+      if Next = Tasks.Running then
          declare
             Now : constant Readiness := Ready_In (Item, Change, Id);
          begin
@@ -845,7 +854,7 @@ package body Model_Runner.Framework.Tasks is
                return;
             end if;
          end;
-      elsif Next = "complete" and then not Gates_Passed then
+      elsif Next = Tasks.Complete and then not Gates_Passed then
          Not_Ready ("its completion gates have not passed");
          return;
       end if;
@@ -860,7 +869,7 @@ package body Model_Runner.Framework.Tasks is
 
       --  What the move changes beyond the state.
       Runtime (Item, Change, Id, Value, Status);
-      if Next = "running" then
+      if Next = Tasks.Running then
          declare
             Generation : constant String := Records.Get (Value, "generation");
          begin
@@ -870,11 +879,11 @@ package body Model_Runner.Framework.Tasks is
                        ((if Generation = "" then 0
                          else Natural'Value (Generation)) + 1)));
          end;
-      elsif Next = "blocked" then
+      elsif Next = Tasks.Blocked then
          Records.Set (Value, "blocking_reasons", Reason);
-      elsif Next = "failed" then
+      elsif Next = Tasks.Failed then
          Records.Set (Value, "current_failure", Reason);
-      elsif Next = "complete" then
+      elsif Next = Tasks.Complete then
          --  What each requirement it served meant when it was done: work
          --  done for other words implements nothing of the new ones.
          declare
@@ -893,7 +902,7 @@ package body Model_Runner.Framework.Tasks is
                end;
             end loop;
          end;
-      elsif Next = "accepted" then
+      elsif Next = Tasks.Accepted then
          Records.Remove (Value, "blocking_reasons");
          Records.Remove (Value, "current_failure");
          if Actor = "" and then Reason /= "" then
@@ -942,7 +951,7 @@ package body Model_Runner.Framework.Tasks is
       --  Accepted with children still open -- split while a candidate --
       --  its work is theirs, as a split of an accepted task makes it,
       --  unless the project lets it coordinate.
-      if Next = "accepted" then
+      if Next = Tasks.Accepted then
          declare
             Defined : Records.Item;
             Read    : E.Error_Info;
@@ -1005,7 +1014,7 @@ package body Model_Runner.Framework.Tasks is
          return Result;
       end if;
 
-      if State /= "accepted" then
+      if State /= Tasks.Accepted then
          --  Blocked or failed, it says why: what was recorded when it
          --  stopped is what a person acts on.
          declare
@@ -1016,12 +1025,12 @@ package body Model_Runner.Framework.Tasks is
             Stores.Read (Item, Tasks_Area, Id & State_Suffix, Runtime_Value, Got);
             if E.Is_Ok (Got) then
                Why := To_Unbounded_String
-                 (if State = "blocked" then Records.Get (Runtime_Value, "blocking_reasons")
-                  elsif State = "failed" then Records.Get (Runtime_Value, "current_failure")
+                 (if State = Tasks.Blocked then Records.Get (Runtime_Value, "blocking_reasons")
+                  elsif State = Tasks.Failed then Records.Get (Runtime_Value, "current_failure")
                   else "");
             end if;
             Result.Reasons.Append
-              (if State = "verification"
+              (if State = Tasks.Verification
                  and then Records.Get (Runtime_Value, "current_workspace") /= ""
                then "its work waits in " & Records.Get (Runtime_Value, "current_workspace")
                     & " to be taken in: "
@@ -1034,29 +1043,29 @@ package body Model_Runner.Framework.Tasks is
                                       ", ")
                             & "; settle them in the workspace, then /task integrate " & Id
                             & " resolved")
-               elsif State = "verification" then "it is being verified"
-               elsif State = "complete" then "it is complete already"
-               elsif State = "cancelled" then "it is cancelled: /task reopen " & Id
+               elsif State = Tasks.Verification then "it is being verified"
+               elsif State = Tasks.Complete then "it is complete already"
+               elsif State = Tasks.Cancelled then "it is cancelled: /task reopen " & Id
                                               & " makes it workable again"
-               elsif State = "rejected" then "it is rejected: /task reconsider " & Id
+               elsif State = Tasks.Rejected then "it is rejected: /task reconsider " & Id
                                              & " makes it a candidate again"
                --  Serving only what is retired: accepting is refused, so
                --  letting it go or giving it another is the way on.
-               elsif State = "candidate"
+               elsif State = Tasks.Candidate
                  and then not Lines_Of (Records.Get (Defined, "requirements")).Is_Empty
                  and then (for all Req of Lines_Of (Records.Get (Defined, "requirements")) =>
                              Intent.State_Of (Item, Intent.Requirement, Req) in "obsolete" | "superseded" | "rejected")
                then "it serves only retired requirements: /task reject " & Id & " lets it go, or /task edit " & Id
                     & " requirements=REQ-ID gives it one that stands"
-               elsif State = "candidate" then "it is a candidate: /task accept " & Id
+               elsif State = Tasks.Candidate then "it is a candidate: /task accept " & Id
                                               & " accepts it first"
                --  Blocked with nothing said why: by hand, and how it goes on.
-               elsif State = "blocked" and then Why = Null_Unbounded_String
+               elsif State = Tasks.Blocked and then Why = Null_Unbounded_String
                then "it was blocked with no reason given: /task accept " & Id & " takes it up again"
-               elsif State = "failed"
+               elsif State = Tasks.Failed
                then "it failed" & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why))
                --  Stopped by the person: stopped, as every list says it.
-               elsif State = "blocked" and then Index (Why, "you stopped its work") > 0
+               elsif State = Tasks.Blocked and then Index (Why, "you stopped its work") > 0
                then "it is stopped: " & To_String (Why)
                else "it is " & State_Said (State)
                     & (if Why = Null_Unbounded_String then "" else ": " & To_String (Why)));
@@ -1070,12 +1079,12 @@ package body Model_Runner.Framework.Tasks is
             begin
                Result.Reasons.Append
                  ("it waits for " & Other & ", which "
-                  & (if State = "failed" then "failed"
+                  & (if State = Tasks.Failed then "failed"
                      elsif State = "" then "is not there"
-                     elsif State = "accepted" then "is not done yet"
-                     elsif State = "blocked" and then Stopped_By_Person (Item, Other) then "is stopped"
+                     elsif State = Tasks.Accepted then "is not done yet"
+                     elsif State = Tasks.Blocked and then Stopped_By_Person (Item, Other) then "is stopped"
                      --  Its parts open: what it waits on in turn, by name.
-                     elsif State = "blocked" and then not Open_Children (Item, Change, Other).Is_Empty
+                     elsif State = Tasks.Blocked and then not Open_Children (Item, Change, Other).Is_Empty
                      then "is waiting for its parts " & Joined (Open_Children (Item, Change, Other), ", ")
                      else "is " & State_Said (State)));
             end;
@@ -1102,7 +1111,7 @@ package body Model_Runner.Framework.Tasks is
                     not in "accepted" | "implemented" | "verified"
             then
                Result.Reasons.Append
-                 (if To_String (Held.State) = "candidate"
+                 (if To_String (Held.State) = Tasks.Candidate
                   then Requirement & " is a candidate: /req accept " & Requirement & " accepts it"
                   else Requirement & " is " & To_String (Held.State));
             end if;
@@ -1727,7 +1736,7 @@ package body Model_Runner.Framework.Tasks is
                begin
                   Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
                   if Fresh and then E.Is_Ok (Read)
-                    and then To_String (Held.State) = "accepted"
+                    and then To_String (Held.State) = Tasks.Accepted
                   then
                      declare
                         Key    : constant String :=
@@ -2246,11 +2255,11 @@ package body Model_Runner.Framework.Tasks is
          E.Add_Text (Status, "name", "the task to revise");
          E.Add_Text (Status, "value", Id);
          E.Add_Text (Status, "detail",
-                     (if Now = "rejected"
+                     (if Now = Tasks.Rejected
                       then "a rejected task is not revised; /task reconsider " & Id & " first"
                       elsif Now in "complete" | "cancelled"
                       then "a " & Now & " task is not revised; /task reopen " & Id & " first"
-                      elsif Now = "verification"
+                      elsif Now = Tasks.Verification
                       then "its work waits to be taken in or checked; /task diff " & Id & " shows it, /task"
                            & " integrate " & Id & " takes it in, and /task integrate " & Id & " discard sets"
                            & " it aside, kept as a copy, so that the task is revised and worked again"
@@ -2480,7 +2489,7 @@ package body Model_Runner.Framework.Tasks is
          declare
             Coordination : constant String := Coordination_Of (Item, Kind);
          begin
-            if Coordination /= "parent_runs" and then State_Of (Item, Parent) = "accepted"
+            if Coordination /= "parent_runs" and then State_Of (Item, Parent) = Tasks.Accepted
               and then not Made.Is_Empty
             then
                Move (Item, Change, Parent, "blocked",
@@ -2488,7 +2497,7 @@ package body Model_Runner.Framework.Tasks is
                      Status => Status);
 
             --  Split again while it waits: it waits for all of them.
-            elsif State_Of (Item, Parent) = "blocked" and then not Made.Is_Empty then
+            elsif State_Of (Item, Parent) = Tasks.Blocked and then not Made.Is_Empty then
                declare
                   Value : Records.Item;
                   Read  : E.Error_Info;

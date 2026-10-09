@@ -46,6 +46,7 @@ package body Model_Runner.CLI.Tasks is
    package S renames Model_Runner.Framework.Stores;
    package T renames Model_Runner.Text;
    package Tk renames Model_Runner.Framework.Tasks;
+   use type Tk.Core_State;
 
    --  A parent's parts let go -- cancelled or rejected -- as said beside
    --  its parts being settled: " (TASK-006 cancelled: its work not done)".
@@ -525,7 +526,7 @@ package body Model_Runner.CLI.Tasks is
          Rest   : Model_Runner.Framework.Name_Lists.Vector;
       begin
          for Id of Tk.List (Store) loop
-            if Tk.State_Of (Store, Id) = "accepted" and then Tk.Ready (Store, Id).Ready then
+            if Tk.State_Of (Store, Id) = Tk.Accepted and then Tk.Ready (Store, Id).Ready then
                Result.Append (Id);
             else
                Rest.Append (Id);
@@ -560,7 +561,7 @@ package body Model_Runner.CLI.Tasks is
          Said : Unbounded_String;
       begin
          for Child of Tk.Children (Store, Argument) loop
-            if Tk.State_Of (Store, Child) = "failed" then
+            if Tk.State_Of (Store, Child) = Tk.Failed then
                Append (Said, (if Said = Null_Unbounded_String then "" else " ") & Child);
             end if;
          end loop;
@@ -596,27 +597,27 @@ package body Model_Runner.CLI.Tasks is
       function Listed_State (Id : String) return String is
          State : constant String := Tk.State_Of (Store, Id);
          Space : constant String :=
-           (if State = "verification"
+           (if State = Tk.Verification
             then Model_Runner.Framework.Workspaces.Active_For (Store, Id) else "");
          --  Work waiting to be taken in says so, and whether it is in
          --  conflict: it waits on a person, not on the harness.
       begin
          return
-           (if State = "accepted" and then Tk.Ready (Store, Id).Ready then "ready"
-            elsif State = "accepted"
+           (if State = Tk.Accepted and then Tk.Ready (Store, Id).Ready then "ready"
+            elsif State = Tk.Accepted
               and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
                           Ada.Strings.Fixed.Index (Reason, ", which is cancelled") > 0
                           or else Ada.Strings.Fixed.Index (Reason, ", which is rejected") > 0)
             then "waiting on an ended task"
             --  Held back by what it may do, not by another task: refused.
-            elsif State = "accepted"
+            elsif State = Tk.Accepted
               and then not (for some Reason of Tk.Ready (Store, Id).Reasons =>
                               Ada.Strings.Fixed.Index (Reason, "waits for") > 0
                               or else Ada.Strings.Fixed.Index (Reason, "waiting for") > 0
                               or else Ada.Strings.Fixed.Index (Reason, "a candidate") > 0)
               and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) /= ""
             then "refused"
-            elsif State = "accepted" then "waiting"
+            elsif State = Tk.Accepted then "waiting"
             elsif Space /= ""
               and then not Model_Runner.Framework.Workspaces.Conflict_Files
                              (Store, Space, Unsettled_Only => True).Is_Empty
@@ -628,13 +629,13 @@ package body Model_Runner.CLI.Tasks is
             elsif Space /= "" then "to integrate"
             --  Waiting for its parts -- one failed among them too, as
             --  /state says it, its why naming the one that failed.
-            elsif State = "blocked"
+            elsif State = Tk.Blocked
               and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
                           Ada.Strings.Fixed.Index (Reason, "waiting for its children") > 0
                           or else Ada.Strings.Fixed.Index (Reason, "its child ") = Reason'First)
             then "waiting for parts"
             --  Stopped by the person, not by anything wrong with it.
-            elsif State = "blocked"
+            elsif State = Tk.Blocked
               and then (for some Reason of Tk.Ready (Store, Id).Reasons =>
                           Ada.Strings.Fixed.Index (Reason, "you stopped its work") > 0)
             then "stopped"
@@ -654,7 +655,7 @@ package body Model_Runner.CLI.Tasks is
           elsif Listed_State (Id) in "waiting for parts" | "stopped" | "to integrate" | "conflict" | "checks failed"
           then Listed_State (Id)
           --  Complete, its work put back out since.
-          elsif Tk.State_Of (Store, Id) = "complete" and then State_Field (Id, "undone_by") /= ""
+          elsif Tk.State_Of (Store, Id) = Tk.Complete and then State_Field (Id, "undone_by") /= ""
           then "complete, its work undone"
           --  As /task list names it first, the state it is a case of after.
           else Listed_State (Id) & " (" & Tk.State_Of (Store, Id) & ")");
@@ -867,8 +868,8 @@ package body Model_Runner.CLI.Tasks is
                     and then (Fits ("state", Shown_State)
                       or else (Wanted ("state") = "waiting"
                                and then Ada.Strings.Fixed.Index (Shown_State, "waiting") = Shown_State'First)
-                      or else (Wanted ("state") = "accepted" and then State = "accepted")
-                      or else (Wanted ("state") = "verification" and then State = "verification"))
+                      or else (Wanted ("state") = "accepted" and then State = Tk.Accepted)
+                      or else (Wanted ("state") = "verification" and then State = Tk.Verification))
                     and then Fits ("kind", R.Get (Defined, "kind"))
                     and then Fits ("component", R.Get (Defined, "component"))
                     and then Fits ("origin", R.Get (Defined, "origin"))
@@ -887,7 +888,7 @@ package body Model_Runner.CLI.Tasks is
                          Loc.Named ("value", Shown_State),
                          --  Complete, its work put back out since: said beside it.
                          Loc.Named ("detail", R.Get (Defined, "title")
-                                              & (if Shown_State = "complete"
+                                              & (if Shown_State = Tk.Complete
                                                    and then State_Field (Id, "undone_by") /= ""
                                                  then " (its work undone by " & State_Field (Id, "undone_by") & ")"
                                                  else ""))],
@@ -897,7 +898,7 @@ package body Model_Runner.CLI.Tasks is
                          then Pres.Bad
                          elsif Shown_State in "to integrate" | "waiting for parts" then Pres.Pending
                          --  Done with: dimmed, so what still asks stands out.
-                         elsif Shown_State = "complete" then Pres.Muted
+                         elsif Shown_State = Tk.Complete then Pres.Muted
                          else Pres.Tone_Of (Shown_State)));
                   end if;
                end;
@@ -1366,7 +1367,7 @@ package body Model_Runner.CLI.Tasks is
                  (Screen, "cli.task.field",
                   [Loc.Named ("name", "left"),
                    Loc.Named ("value", Child & " " & Listed_State (Child)
-                              & "; /task " & (if Tk.State_Of (Store, Child) = "candidate"
+                              & "; /task " & (if Tk.State_Of (Store, Child) = Tk.Candidate
                                              then "reject " else "cancel ")
                               & Child & " lets it go")]);
             end if;
@@ -1407,7 +1408,7 @@ package body Model_Runner.CLI.Tasks is
                        (Screen, "cli.task.left_waiting",
                         [Loc.Named ("name", Other), Loc.Named ("value", Ended),
                          --  A rejected task is reconsidered; one cancelled, reopened.
-                         Loc.Named ("other", (if Tk.State_Of (Store, Ended) = "rejected"
+                         Loc.Named ("other", (if Tk.State_Of (Store, Ended) = Tk.Rejected
                                               then "reconsider" else "reopen"))]);
                   end if;
                end;
@@ -1438,13 +1439,13 @@ package body Model_Runner.CLI.Tasks is
          if Next in "rejected" | "cancelled" then
             Say_Left_Waiting (Argument);
             --  How a rejected one is taken up again; a cancel's ask said it.
-            if Next = "rejected" then
+            if Next = Tk.Rejected then
                Pres.Put_Note (Screen, "cli.next.undo_end",
                               [Loc.Named ("name", Argument), Loc.Named ("value", "reconsider")]);
             end if;
-         elsif Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
+         elsif Next = Tk.Accepted and then Tk.Ready (Store, Argument).Ready then
             Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
-         elsif Next = "accepted" and then Tk.State_Of (Store, Argument) = "accepted"
+         elsif Next = Tk.Accepted and then Tk.State_Of (Store, Argument) = Tk.Accepted
            and then not Tk.Ready (Store, Argument).Reasons.Is_Empty
          then
             --  Accepted, and waiting: for what, and what makes it ready --
@@ -1487,14 +1488,14 @@ package body Model_Runner.CLI.Tasks is
                      Ready_Part, Failed_Part, Candidate_Part : Unbounded_String;
                   begin
                      for Child of Tk.Children (Store, Argument) loop
-                        if Ready_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = "accepted"
+                        if Ready_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = Tk.Accepted
                           and then Tk.Ready (Store, Child).Ready
                         then
                            Ready_Part := To_Unbounded_String (Child);
-                        elsif Failed_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = "failed" then
+                        elsif Failed_Part = Null_Unbounded_String and then Tk.State_Of (Store, Child) = Tk.Failed then
                            Failed_Part := To_Unbounded_String (Child);
                         elsif Candidate_Part = Null_Unbounded_String
-                          and then Tk.State_Of (Store, Child) = "candidate"
+                          and then Tk.State_Of (Store, Child) = Tk.Candidate
                         then
                            Candidate_Part := To_Unbounded_String (Child);
                         end if;
@@ -1907,7 +1908,7 @@ package body Model_Runner.CLI.Tasks is
             --  news after its check failed.
             if not (Id = Argument and then Action in "accept" | "reopen" | "reconsider" | "move" | "edit")
               and then not (Action = "complete" and then Id = Argument and then Status /= E.Exit_Success)
-              and then Tk.State_Of (Store, Id) = "accepted"
+              and then Tk.State_Of (Store, Id) = Tk.Accepted
               and then not Said_Ready.Contains (Id)
             then
                Said_Ready.Append (Id);
@@ -1946,7 +1947,7 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          Tk.Move (Store, Change, Argument, Next,
-                  (if Next = "accepted" then "reopened" else "reconsidered"),
+                  (if Next = Tk.Accepted then "reopened" else "reconsidered"),
                   Granted, Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
          if E.Is_Ok (Outcome) then
             Commit;
@@ -1997,7 +1998,7 @@ package body Model_Runner.CLI.Tasks is
                null;
          end;
          --  Taken up again and able to start: the way on, as accepting says.
-         if Next = "accepted" and then Tk.Ready (Store, Argument).Ready then
+         if Next = Tk.Accepted and then Tk.Ready (Store, Argument).Ready then
             Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
          end if;
       end Move_Granted;
@@ -2051,14 +2052,14 @@ package body Model_Runner.CLI.Tasks is
                return;
             elsif Undo then
                Tk.Remove_Dependency (Store, Change, First_Word, On, Outcome);
-            elsif Tk.State_Of (Store, First_Word) = "complete" then
+            elsif Tk.State_Of (Store, First_Word) = Tk.Complete then
                --  Done: it waits for nothing, until it is taken up again.
                Outcome := E.Make (E.Framework_Input_Invalid);
                E.Add_Text (Outcome, "name", "the task to make wait");
                E.Add_Text (Outcome, "value", First_Word);
                E.Add_Text (Outcome, "detail", First_Word & " is complete; /task reopen " & First_Word
                            & " first, and it can wait for " & On & " then");
-            elsif Tk.State_Of (Store, On) = "complete" then
+            elsif Tk.State_Of (Store, On) = Tk.Complete then
                --  Done already: nothing to wait for, and nothing changed.
                Pres.Put_Note (Screen, "cli.task.depends_done",
                               [Loc.Named ("name", First_Word), Loc.Named ("value", On)]);
@@ -2071,7 +2072,7 @@ package body Model_Runner.CLI.Tasks is
                E.Add_Text (Outcome, "value", On);
                E.Add_Text (Outcome, "detail", On & " is " & Tk.State_Of (Store, On) & ", so it never completes and "
                            & First_Word & " would wait for ever; /task "
-                           & (if Tk.State_Of (Store, On) = "cancelled" then "reopen " else "reconsider ")
+                           & (if Tk.State_Of (Store, On) = Tk.Cancelled then "reopen " else "reconsider ")
                            & On & " takes it up again first");
             else
                Tk.Add_Dependency (Store, Change, First_Word, After_First, Outcome);
@@ -2098,7 +2099,7 @@ package body Model_Runner.CLI.Tasks is
          Fields : Tk.Field_Map := Given;
          --  Kept from the work by its permissions before this edit.
          Was_Refused : constant Boolean :=
-           Tk.State_Of (Store, Id) = "accepted" and then not Tk.Ready (Store, Id).Ready
+           Tk.State_Of (Store, Id) = Tk.Accepted and then not Tk.Ready (Store, Id).Ready
            and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) /= "";
       begin
          if not Needs_Task then
@@ -2415,7 +2416,7 @@ package body Model_Runner.CLI.Tasks is
                               [Loc.Named ("name", Id), Loc.Named ("value", Fields ("component"))]);
             end if;
             --  Refused before, and given what it lacked: ready now, said.
-            if Was_Refused and then Tk.State_Of (Store, Id) = "accepted" and then Tk.Ready (Store, Id).Ready
+            if Was_Refused and then Tk.State_Of (Store, Id) = Tk.Accepted and then Tk.Ready (Store, Id).Ready
               and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) = ""
             then
                Pres.Put_Note (Screen, "cli.task.ready_now", [Loc.Named ("name", Id)]);
@@ -2426,7 +2427,7 @@ package body Model_Runner.CLI.Tasks is
               and then Model_Runner.Framework.Work.Unable_Reason (Store, Id) /= ""
             then
                --  Accepted already: nothing more to accept once it is put right.
-               Pres.Put_Note (Screen, (if Tk.State_Of (Store, Id) = "candidate" then "cli.next.permissions_first"
+               Pres.Put_Note (Screen, (if Tk.State_Of (Store, Id) = Tk.Candidate then "cli.next.permissions_first"
                                        else "cli.next.permissions_first_open"),
                               [Loc.Named ("name", Id),
                                Loc.Named ("detail", Model_Runner.Framework.Work.Unable_Reason (Store, Id))]);
@@ -2516,7 +2517,7 @@ package body Model_Runner.CLI.Tasks is
            (Ada.Strings.Fixed.Translate (After_First, Ada.Strings.Maps.To_Mapping (" ,", [ASCII.LF, ASCII.LF])))
          loop
             if Model_Runner.Framework.Intent.State_Of (Store, Model_Runner.Framework.Intent.Requirement, Word)
-                 = "candidate"
+                 = Tk.Candidate
             then
                Pres.Put_Note (Screen, "cli.next.req_first",
                               [Loc.Named ("name", First_Word), Loc.Named ("value", Word)]);
@@ -2776,7 +2777,7 @@ package body Model_Runner.CLI.Tasks is
                      Said : Unbounded_String;
                   begin
                      for Dec of Nt.List (Store, Nt.Decision) loop
-                        if Nt.State_Of (Store, Nt.Decision, Dec) = "accepted" then
+                        if Nt.State_Of (Store, Nt.Decision, Dec) = Tk.Accepted then
                            declare
                               All_Of : Model_Runner.Framework.Name_Lists.Vector :=
                                 Nt.Also_Governs (Store, Nt.Decision, Dec);
@@ -3059,9 +3060,9 @@ package body Model_Runner.CLI.Tasks is
          --  Parts a person split it into are the parts they want: accepted,
          --  not candidates waiting on the same person again -- unless the
          --  task itself is still a candidate, whose parts wait with it.
-         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) /= "candidate" then
+         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) /= Tk.Candidate then
             for Part of Made loop
-               if Tk.State_Of (Store, Part) = "candidate" then
+               if Tk.State_Of (Store, Part) = Tk.Candidate then
                   Tk.Move (Store, Change, Part, "accepted", "", Status => Outcome,
                            Actor => Model_Runner.Framework.Transitions.User);
                   exit when E.Is_Error (Outcome);
@@ -3113,12 +3114,12 @@ package body Model_Runner.CLI.Tasks is
          --  first part ready is worked.
          declare
             Waiting : Unbounded_String :=
-              (if Tk.State_Of (Store, First_Word) = "candidate" then To_Unbounded_String (First_Word)
+              (if Tk.State_Of (Store, First_Word) = Tk.Candidate then To_Unbounded_String (First_Word)
                else Null_Unbounded_String);
             Ready   : Unbounded_String;
          begin
             for Part of Made loop
-               if Tk.State_Of (Store, Part) = "candidate" then
+               if Tk.State_Of (Store, Part) = Tk.Candidate then
                   Append (Waiting, (if Waiting = Null_Unbounded_String then "" else " ") & Part);
                elsif Ready = Null_Unbounded_String and then Tk.Ready (Store, Part).Ready then
                   Ready := To_Unbounded_String (Part);
@@ -3490,7 +3491,7 @@ package body Model_Runner.CLI.Tasks is
                      Open, Done : Unbounded_String;
                   begin
                      for One of Model_Runner.Framework.Lines_Of (Held) loop
-                        if Tk.State_Of (Store, One) = "complete" then
+                        if Tk.State_Of (Store, One) = Tk.Complete then
                            Append (Done, (if Done = Null_Unbounded_String then "" else ", ") & One);
                         else
                            Append (Open, (if Open = Null_Unbounded_String then "" else ", ") & One);
@@ -3701,16 +3702,16 @@ package body Model_Runner.CLI.Tasks is
                   State : constant String := R.Get (View, "runtime.state");
                   Label : constant String :=
                     (if Shown_Name = "blocked_by"
-                     then (if State = "candidate" then "to start"
+                     then (if State = Tk.Candidate then "to start"
                            --  Run, its work waiting: where it is, not why it cannot start.
-                           elsif State = "verification" then "where its work is"
-                           elsif State = "failed" then "why it stopped"
+                           elsif State = Tk.Verification then "where its work is"
+                           elsif State = Tk.Failed then "why it stopped"
                            --  Stopped by the person: no reason it cannot start.
-                           elsif State = "blocked"
+                           elsif State = Tk.Blocked
                              and then Ada.Strings.Fixed.Index (R.Get (View, "runtime.blocked_by"), "you stopped") > 0
                            then "why it stopped"
                            --  Blocked by how a run of it ended: why it stopped.
-                           elsif State = "blocked" and then not Never_Worked (Argument)
+                           elsif State = Tk.Blocked and then not Never_Worked (Argument)
                              and then Ada.Strings.Fixed.Index (R.Get (View, "runtime.blocked_by"), "children") = 0
                            then "why it stopped"
                            else "why it cannot start")
@@ -3718,7 +3719,7 @@ package body Model_Runner.CLI.Tasks is
                      elsif Shown_Name = "accepted_by" then "accepted by"
                      elsif Shown_Name = "moved_by" then "moved by"
                      --  Taken back since: said in the past.
-                     elsif Shown_Name = "rejected_by" and then State /= "rejected" then "was rejected by"
+                     elsif Shown_Name = "rejected_by" and then State /= Tk.Rejected then "was rejected by"
                      elsif Shown_Name = "rejected_by" then "rejected by"
                      elsif Shown_Name = "acceptance" then "judged by"
                      elsif Shown_Name = "gates" then "done when"
@@ -3762,7 +3763,7 @@ package body Model_Runner.CLI.Tasks is
                      elsif Shown_Name = "acceptance" and then Shown_Value = "from_requirements"
                      then "the criteria of the requirements it serves"
                      elsif Shown_Name = "gates" then Gates_Said (Shown_Value)
-                     elsif Shown_Name = "rejected_by" and then State /= "rejected"
+                     elsif Shown_Name = "rejected_by" and then State /= Tk.Rejected
                      then Shown_Value & ", and reconsidered since"
                      elsif Shown_Name = "accepted_by"
                        and then Ada.Strings.Fixed.Index (Shown_Value, "its children are done") > 0
@@ -3872,9 +3873,9 @@ package body Model_Runner.CLI.Tasks is
                Grouped ("  its work", "undone in the project: " & State_Field (Argument, "undone_by")
                                       & " was put back over it"
                                       --  The way on only where reopening is one.
-                                      & (if Tk.State_Of (Store, Argument) = "complete"
+                                      & (if Tk.State_Of (Store, Argument) = Tk.Complete
                                          then " -- /task reopen " & Argument & " does it again"
-                                         elsif Tk.State_Of (Store, Argument) = "accepted"
+                                         elsif Tk.State_Of (Store, Argument) = Tk.Accepted
                                          then " -- /work " & Argument & " does it again"
                                          else ""));
             end if;
@@ -4068,7 +4069,7 @@ package body Model_Runner.CLI.Tasks is
                      begin
                         Model_Runner.Framework.Intent.Read
                           (Store, Model_Runner.Framework.Intent.Specification, Id, Held, Got);
-                        if E.Is_Ok (Got) and then To_String (Held.State) = "accepted"
+                        if E.Is_Ok (Got) and then To_String (Held.State) = Tk.Accepted
                           and then To_String (Held.Scope) in "" | "project" | Component
                         then
                            Specs.Append (Id);
@@ -4604,8 +4605,8 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "value", Tk.State_Of (Store, Argument));
             E.Add_Text (Outcome, "expected", "complete");
             E.Add_Text (Outcome, "detail",
-                        (if Tk.State_Of (Store, Argument) = "complete" then "it is complete already"
-                         elsif Tk.State_Of (Store, Argument) = "cancelled"
+                        (if Tk.State_Of (Store, Argument) = Tk.Complete then "it is complete already"
+                         elsif Tk.State_Of (Store, Argument) = Tk.Cancelled
                          then "/task reopen " & Argument & " takes it up again first"
                          else "/task reconsider " & Argument & " makes it a candidate again first"));
             Fail (Outcome);
@@ -4624,7 +4625,7 @@ package body Model_Runner.CLI.Tasks is
 
          --  A candidate completed by hand is accepted on the way: saying the
          --  work is done is saying it was wanted.
-         if Tk.State_Of (Store, Argument) = "candidate" then
+         if Tk.State_Of (Store, Argument) = Tk.Candidate then
             Tk.Move (Store, Change, Argument, "accepted", "completed by hand",
                      Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
             if E.Is_Ok (Outcome) then
@@ -4639,7 +4640,7 @@ package body Model_Runner.CLI.Tasks is
          end if;
 
          --  Its work still in a workspace: taken in first, and nothing run.
-         if Tk.State_Of (Store, Argument) = "verification"
+         if Tk.State_Of (Store, Argument) = Tk.Verification
            and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= ""
          then
             Outcome := E.Make (E.Framework_Task_Not_Ready);
@@ -4703,7 +4704,7 @@ package body Model_Runner.CLI.Tasks is
          end;
 
          --  Already complete: said, and nothing run.
-         if Tk.State_Of (Store, Argument) = "complete" then
+         if Tk.State_Of (Store, Argument) = Tk.Complete then
             Pres.Put_Note (Screen, "cli.intent.already",
                            [Loc.Named ("name", Argument), Loc.Named ("value", "complete")]);
             return;
@@ -4723,13 +4724,13 @@ package body Model_Runner.CLI.Tasks is
                declare
                   Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
                begin
-                  if Named /= "" and then Tk.State_Of (Store, Named) /= "complete" then
+                  if Named /= "" and then Tk.State_Of (Store, Named) /= Tk.Complete then
                      Outcome := E.Make (E.Framework_Task_Not_Ready);
                      E.Add_Text (Outcome, "name", Argument);
                      E.Add_Text (Outcome, "detail", "it waits for " & Named & ", which is "
                                  & Model_Runner.Framework.State_Said (Moved_State (Named)));
                      Fail (Outcome);
-                     if Tk.State_Of (Store, Named) = "blocked"
+                     if Tk.State_Of (Store, Named) = Tk.Blocked
                        and then (for some Child of Tk.Children (Store, Named) =>
                                    Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected")
                      then
@@ -4739,7 +4740,7 @@ package body Model_Runner.CLI.Tasks is
                               Pres.Put_Note
                                 (Screen, "cli.next.waits_on_parts",
                                  [Loc.Named ("name", Argument), Loc.Named ("value", Named),
-                                  Loc.Named ("detail", (if Tk.State_Of (Store, Child) = "candidate"
+                                  Loc.Named ("detail", (if Tk.State_Of (Store, Child) = Tk.Candidate
                                                         then "/task accept " else "/work ") & Child)]);
                               exit;
                            end if;
@@ -4754,7 +4755,7 @@ package body Model_Runner.CLI.Tasks is
                           (Screen, "cli.next.waits_first",
                            [Loc.Named ("name", Argument), Loc.Named ("value", Named),
                             Loc.Named ("detail",
-                                       (if Tk.State_Of (Store, Named) = "candidate"
+                                       (if Tk.State_Of (Store, Named) = Tk.Candidate
                                         then "/task accept " & Named else "/work " & Named))]);
                      end if;
                      return;
@@ -5103,7 +5104,7 @@ package body Model_Runner.CLI.Tasks is
                  (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
                   else Model_Runner.Framework.Workspaces.Changes (Store, Space));
             begin
-               if Space = "" or else Tk.State_Of (Store, First_Word) /= "verification" then
+               if Space = "" or else Tk.State_Of (Store, First_Word) /= Tk.Verification then
                   --  Nothing waits: said as a state, with where its work is.
                   Pres.Put_Note
                     (Screen, "cli.task.diff_none",
@@ -5431,7 +5432,7 @@ package body Model_Runner.CLI.Tasks is
 
          --  Settled, but not passing where it was settled: nothing taken
          --  in, and the work still where it can be put right.
-         if Done.Changed_Files.Is_Empty and then To_String (Done.Final_State) = "verification" then
+         if Done.Changed_Files.Is_Empty and then To_String (Done.Final_State) = Tk.Verification then
             Pres.Put_Message
               (Screen, "cli.task.field",
                [Loc.Named ("name", "reason"), Loc.Named ("value", To_String (Done.Reason))]);
@@ -5500,7 +5501,7 @@ package body Model_Runner.CLI.Tasks is
          if Done.Reason /= Null_Unbounded_String then
             Pres.Put_Message
               (Screen, "cli.task.field",
-               [Loc.Named ("name", (if To_String (Done.Final_State) = "complete" then "note" else "reason")),
+               [Loc.Named ("name", (if To_String (Done.Final_State) = Tk.Complete then "note" else "reason")),
                 Loc.Named ("value", To_String (Done.Reason))]);
          end if;
          Pres.Put_Message
@@ -5530,7 +5531,7 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end;
          end if;
-         if To_String (Done.Final_State) = "complete" then
+         if To_String (Done.Final_State) = Tk.Complete then
             --  What its end lets go on, named as any change's is.
             declare
                Became : Model_Runner.Framework.Name_Lists.Vector;
@@ -5544,7 +5545,7 @@ package body Model_Runner.CLI.Tasks is
             end;
             Say_Parent_Ready (First_Word);
          end if;
-         if To_String (Done.Final_State) /= "complete" then
+         if To_String (Done.Final_State) /= Tk.Complete then
             Status := E.Exit_Input_Output;
          end if;
       end Integrate;
@@ -5759,7 +5760,7 @@ package body Model_Runner.CLI.Tasks is
                              (Ada.Strings.Fixed.Translate
                                 (Argument, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF]))))
                loop
-                  if Tk.State_Of (Store, Word) = "accepted" and then Ticked_Done (Store, Word) /= "" then
+                  if Tk.State_Of (Store, Word) = Tk.Accepted and then Ticked_Done (Store, Word) /= "" then
                      Pres.Put_Note (Screen, "cli.next.complete_ticked",
                                     [Loc.Named ("name", Word), Loc.Named ("detail", Ticked_Done (Store, Word))]);
                   end if;
@@ -5804,7 +5805,7 @@ package body Model_Runner.CLI.Tasks is
       if E."=" (Outcome.Code, E.Framework_Locked) and then Action = "cancel" and then Argument /= ""
       then
          S.Open_To_Read (Store, Directory, Outcome);
-         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) = "running" then
+         if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) = Tk.Running then
             --  Asked once is asked: a second time says so.
             if Ada.Directories.Exists
                  (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join
@@ -5878,11 +5879,11 @@ package body Model_Runner.CLI.Tasks is
          E.Add_Text (Outcome, "value", "ready");
          E.Add_Text (Outcome, "detail", "ready is no state of its own: a task is ready when it"
                      & " is accepted and waits for nothing; "
-                     & (if Tk.State_Of (Store, First_Word) = "accepted"
+                     & (if Tk.State_Of (Store, First_Word) = Tk.Accepted
                           and then not Tk.Ready (Store, First_Word).Reasons.Is_Empty
                         then First_Word & " is accepted, and "
                              & Tk.Ready (Store, First_Word).Reasons.First_Element
-                        elsif Tk.State_Of (Store, First_Word) = "accepted"
+                        elsif Tk.State_Of (Store, First_Word) = Tk.Accepted
                         then First_Word & " is ready already"
                         else "/task accept " & First_Word & " accepts it"));
          Fail (Outcome);
@@ -5911,7 +5912,7 @@ package body Model_Runner.CLI.Tasks is
                      & Argument & " makes it ready again");
          Fail (Outcome);
       elsif Action = "accept" and then Argument /= ""
-        and then Tk.State_Of (Store, Argument) = "verification"
+        and then Tk.State_Of (Store, Argument) = Tk.Verification
         and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= ""
       then
          --  Its work waits in a workspace: taken in, or given up to be done
@@ -5957,11 +5958,11 @@ package body Model_Runner.CLI.Tasks is
             E.Add_Text (Outcome, "value", Tk.State_Of (Store, First_Word));
             E.Add_Text (Outcome, "expected", "cancelled");
             E.Add_Text (Outcome, "detail",
-                        (if Tk.State_Of (Store, First_Word) = "candidate"
+                        (if Tk.State_Of (Store, First_Word) = Tk.Candidate
                          then "a candidate is not cancelled but rejected: /task reject " & First_Word
                          else "it is ended already"));
             Fail (Outcome);
-         elsif After_First /= "anyway" and then Tk.State_Of (Store, First_Word) = "verification"
+         elsif After_First /= "anyway" and then Tk.State_Of (Store, First_Word) = Tk.Verification
            and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
          then
             Outcome := E.Make (E.Framework_Transition_Invalid);
@@ -6041,13 +6042,13 @@ package body Model_Runner.CLI.Tasks is
                end;
             end loop;
             --  Never worked: little to audit yet, and how it comes to have.
-            if Never_Worked (Argument) and then Tk.State_Of (Store, Argument) = "accepted" then
+            if Never_Worked (Argument) and then Tk.State_Of (Store, Argument) = Tk.Accepted then
                Pres.Put_Note (Screen, "cli.next.work", [Loc.Named ("name", Argument)]);
-            elsif Never_Worked (Argument) and then Tk.State_Of (Store, Argument) = "candidate" then
+            elsif Never_Worked (Argument) and then Tk.State_Of (Store, Argument) = Tk.Candidate then
                Pres.Put_Note (Screen, "cli.next.accept_one_task", [Loc.Named ("name", Argument)]);
             end if;
          end if;
-      elsif Action = "reopen" and then Argument /= "" and then Tk.State_Of (Store, Argument) = "rejected"
+      elsif Action = "reopen" and then Argument /= "" and then Tk.State_Of (Store, Argument) = Tk.Rejected
       then
          --  A rejected one is reconsidered, not reopened: said so.
          Outcome := E.Make (E.Framework_Transition_Invalid);
@@ -6057,7 +6058,7 @@ package body Model_Runner.CLI.Tasks is
          E.Add_Text (Outcome, "detail", "a rejected task is reconsidered, not reopened: /task reconsider "
                      & Argument & " makes it a candidate again");
          Fail (Outcome);
-      elsif Action = "reopen" and then Argument /= "" and then Tk.State_Of (Store, Argument) = "verification"
+      elsif Action = "reopen" and then Argument /= "" and then Tk.State_Of (Store, Argument) = Tk.Verification
         and then Model_Runner.Framework.Workspaces.Active_For (Store, Argument) /= ""
       then
          --  Its work waits: the ways on that keep it, first.
@@ -6079,14 +6080,14 @@ package body Model_Runner.CLI.Tasks is
          E.Add_Text (Outcome, "value", Tk.State_Of (Store, Argument));
          E.Add_Text (Outcome, "expected", "accepted");
          E.Add_Text (Outcome, "detail",
-                     (if Tk.State_Of (Store, Argument) = "candidate"
+                     (if Tk.State_Of (Store, Argument) = Tk.Candidate
                       then "a candidate is not reopened but accepted: /task accept " & Argument
                       else "only an ended, failed or blocked task is reopened; it is "
                            & Tk.State_Of (Store, Argument) & " and open"));
          Fail (Outcome);
       elsif Action = "reopen" then
          declare
-            Was_Complete : constant Boolean := Tk.State_Of (Store, Argument) = "complete";
+            Was_Complete : constant Boolean := Tk.State_Of (Store, Argument) = Tk.Complete;
             Had_Changed  : constant String := Changed_By (Argument);
          begin
             --  Its work done before is not undone: said, so a run starts
@@ -6116,7 +6117,7 @@ package body Model_Runner.CLI.Tasks is
          Fail (Outcome);
       elsif Action = "reconsider" then
          Move_Granted ("candidate", Model_Runner.Framework.Transitions.Reconsideration);
-         if Tk.State_Of (Store, First_Word) = "candidate" then
+         if Tk.State_Of (Store, First_Word) = Tk.Candidate then
             Pres.Put_Note (Screen, "cli.next.accept_one_task", [Loc.Named ("name", First_Word)]);
          end if;
       elsif Action = "move" then
@@ -6209,8 +6210,8 @@ package body Model_Runner.CLI.Tasks is
                   else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
             begin
                --  Work waiting in a workspace is not given up unsaid.
-               if Next = "failed" and then Why /= "anyway"
-                 and then Tk.State_Of (Store, First_Word) = "verification"
+               if Next = Tk.Failed and then Why /= "anyway"
+                 and then Tk.State_Of (Store, First_Word) = Tk.Verification
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
                then
                   Outcome := E.Make (E.Framework_Transition_Invalid);
@@ -6266,7 +6267,7 @@ package body Model_Runner.CLI.Tasks is
                      [Loc.Named ("name", First_Word), Loc.Named ("value", Model_Runner.Framework.State_Said (Next))]);
                   --  Blocked by hand: how it goes on, and how to say why --
                   --  the why only where none was given.
-                  if Next = "blocked" then
+                  if Next = Tk.Blocked then
                      Pres.Put_Note (Screen, (if Why in "" | "anyway" then "cli.task.blocked_by_hand"
                                              else "cli.task.blocked_with_reason"),
                                     [Loc.Named ("name", First_Word)]);
@@ -6665,7 +6666,7 @@ package body Model_Runner.CLI.Tasks is
                                          Model_Runner.Framework.Work.Holder_Of (Store, File);
                                     begin
                                        for Other of Tk.List (Store) loop
-                                          if Other /= Owner and then Tk.State_Of (Store, Other) = "complete"
+                                          if Other /= Owner and then Tk.State_Of (Store, Other) = Tk.Complete
                                             and then Model_Runner.Framework.Lines_Of (Changed_By_Lines (Other))
                                                        .Contains (File)
                                           then
@@ -6684,11 +6685,11 @@ package body Model_Runner.CLI.Tasks is
                                       (Screen, "cli.task.after_restore",
                                        [Loc.Named ("name", Owner), Loc.Named ("value", Listed_State (Owner)),
                                         Loc.Named ("detail",
-                                                   (if Undo and then State = "complete"
+                                                   (if Undo and then State = Tk.Complete
                                                     then "its work is undone in the project now: /task reopen "
                                                          & Owner & " takes it up again"
                                                     --  Taken up already: worked again, not accepted.
-                                                    elsif Undo and then State = "accepted"
+                                                    elsif Undo and then State = Tk.Accepted
                                                     then "its work is undone in the project now: /work "
                                                          & Owner & " does it again"
                                                     elsif Undo
@@ -6733,7 +6734,7 @@ package body Model_Runner.CLI.Tasks is
                   [Loc.Named ("name", First_Word), Loc.Named ("value", Moved_State (First_Word)),
                    Loc.Named ("detail",
                               --  Waiting on something: that, not a /work refused.
-                              (if Tk.State_Of (Store, First_Word) = "accepted"
+                              (if Tk.State_Of (Store, First_Word) = Tk.Accepted
                                  and then not Tk.Ready (Store, First_Word).Ready
                                  and then not Tk.Ready (Store, First_Word).Reasons.Is_Empty
                                then "nothing of it is there to show, and it cannot be worked yet: "
@@ -6753,11 +6754,12 @@ package body Model_Runner.CLI.Tasks is
                                elsif Tk.State_Of (Store, First_Word) in "candidate" | "accepted" | "ready"
                                then "what its last attempt wrote -- " & Changed_By (First_Word)
                                     & " -- is in the project itself; /work " & First_Word & " does it again"
-                               elsif Tk.State_Of (Store, First_Word) = "complete" and then Changed_By (First_Word) /= ""
+                               elsif Tk.State_Of (Store, First_Word) = Tk.Complete
+                                 and then Changed_By (First_Word) /= ""
                                then "its work is in the project already, and committed: git log -p -- "
                                     & Spaced (Changed_By (First_Word))
                                     & " shows what it changed"
-                               elsif Tk.State_Of (Store, First_Word) = "complete"
+                               elsif Tk.State_Of (Store, First_Word) = Tk.Complete
                                then "its work is in the project already"
                                     & (if Model_Runner.Framework.Git.Status_Of
                                             (Ada.Directories.Containing_Directory (S.Root (Store))).Found

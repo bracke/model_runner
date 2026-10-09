@@ -7,6 +7,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`--arith int8` rounds IQ4_NL's, IQ4_XS's and MXFP4's walks on the device, and a normalization rounds for the walks that read it:** the three formats decode through a table of sixteen whole numbers a byte holds, so their weights go to the integer dot as bytes: IQ4_XS -- ThinkingCap's format -- checks four positions in 0.46 ms against 0.50 and eight in 0.58 against 0.79, IQ4_NL and MXFP4 alike. And a walk that reads a normalization's answer no longer rounds it in a pass and a barrier of its own: the normalization writes it rounded as well (norm.comp's ROUNDS), into a region of the rounding buffer only normalizations write. Qwen3 8B drafting eight a round reads 14.2 tokens a second against 13.9-14.1.
+- **The project commands go to their handlers through their table:** each command's entry names its route, and Run dispatches on the route in a case -- a route without a handler does not compile -- to a handler holding that command's branches in the order the one long if-chain tried them.
+- **Task states are compared as a type:** the nine core states are Tasks.Core_State, and the comparisons of a task's state -- about two hundred and twenty of them -- name a value of it, so a state misspelt is a compilation that fails. States stay words in the store, since a project may add its own.
+- **The built-in tools say where they fail:** each built-in tool returns its answer with whether it failed, rather than the loop reading an "error:" at the front of its words; delegate does too, and a helper that could not be made after an earlier attempt's words -- which the prefix missed -- now ends failed.
+
 - **A compacted agent conversation carries the work as the harness saw it:** compaction kept the task and folded a line a dropped turn into it. It now also carries the harness's record of the work -- what was changed, what was read, what failed and has not been answered since, what was refused and by what -- written from the calls the loop ran rather than by asking the model, replacing the record an earlier compaction carried.
 - **The project commands are one table:** whether a word is a project command and the help listed for each were two lists kept by hand; both read one table of descriptors now.
 

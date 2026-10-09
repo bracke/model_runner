@@ -28,6 +28,7 @@ package body Model_Runner.CLI.Completion is
    package S renames Model_Runner.Framework.Stores;
    package Nt renames Model_Runner.Framework.Intent;
    package Tk renames Model_Runner.Framework.Tasks;
+   use type Tk.Core_State;
    package R renames Model_Runner.Framework.Records;
 
    package Sorting is new Names.Generic_Sorting;
@@ -538,14 +539,14 @@ package body Model_Runner.CLI.Completion is
                      State : constant String := Tk.State_Of (Store, Id);
                   begin
                      if (if Action = "accept" then State in "candidate" | "failed" | "blocked"
-                         elsif Action = "reject" then State = "candidate"
+                         elsif Action = "reject" then State = Tk.Candidate
                          elsif Action = "complete" then State in "accepted" | "failed" | "blocked" | "verification"
                          elsif Action = "integrate"
                          then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
                          elsif Action in "cancel" | "split" | "depend" | "edit" | "note" | "grant" | "withhold"
                          then State not in "complete" | "cancelled" | "rejected"
                          elsif Action = "reopen" then State in "complete" | "cancelled" | "failed" | "blocked"
-                         elsif Action = "reconsider" then State = "rejected"
+                         elsif Action = "reconsider" then State = Tk.Rejected
                          elsif Action = "verify" then State in "complete" | "verification"
                          else True)
                      then
@@ -1130,12 +1131,13 @@ package body Model_Runner.CLI.Completion is
                   is (for some Reason of Reasons => Ada.Strings.Fixed.Index (Reason, Part) > 0);
                   --  Named as /task list names it.
                   Shown   : constant String :=
-                    (if State = "verification" and then Model_Runner.Framework.Workspaces.Active_For (Store, Word) /= ""
+                    (if State = Tk.Verification
+                       and then Model_Runner.Framework.Workspaces.Active_For (Store, Word) /= ""
                      then "to integrate"
-                     elsif State = "blocked" and then Said_For ("you stopped its work") then "stopped"
-                     elsif State = "blocked" and then Said_For ("waiting for its children") then "waiting for parts"
-                     elsif State = "accepted" and then Tk.Ready (Store, Word).Ready then "ready"
-                     elsif State = "accepted" then "waiting"
+                     elsif State = Tk.Blocked and then Said_For ("you stopped its work") then "stopped"
+                     elsif State = Tk.Blocked and then Said_For ("waiting for its children") then "waiting for parts"
+                     elsif State = Tk.Accepted and then Tk.Ready (Store, Word).Ready then "ready"
+                     elsif State = Tk.Accepted then "waiting"
                      else State);
                begin
                   Said := Ada.Strings.Unbounded.To_Unbounded_String

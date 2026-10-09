@@ -65,9 +65,32 @@ package Model_Runner.Framework.Tasks is
      (Item : Stores.Store;
       Kind : String) return Name_Lists.Vector;
 
-   --  The task states the harness itself gives meaning to: candidate,
-   --  accepted, running, blocked, verification, complete, failed,
-   --  cancelled and rejected.
+   --  The task states the harness itself gives meaning to. A state is
+   --  kept as its word -- a project may add states of its own, map
+   --  task.state.NAME = MEANING, which no type here could list -- and code
+   --  that asks about one of these asks by this type, so a state misspelt
+   --  is a compilation that fails rather than a test that is never true.
+   type Core_State is
+     (Candidate, Accepted, Running, Blocked, Verification, Complete, Failed,
+      Cancelled, Rejected);
+
+   --  A core state's word, as the store keeps it: "candidate" and so on.
+   --
+   --  @param State The state.
+   --  @return Its word.
+   function Image (State : Core_State) return String;
+
+   --  Whether a state's word is a core state's.
+   --
+   --  @param Left The word, as kept.
+   --  @param Right The core state.
+   --  @return True when the word is that state's.
+   function "=" (Left : String; Right : Core_State) return Boolean
+   is (Left = Image (Right));
+
+   --  The task states the harness itself gives meaning to, as words:
+   --  candidate, accepted, running, blocked, verification, complete,
+   --  failed, cancelled and rejected.
    --
    --  @return Them.
    function Core_Task_States return Name_Lists.Vector;

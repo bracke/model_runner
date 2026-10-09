@@ -19,6 +19,7 @@ with Model_Runner.Framework.Workspaces;
 with Model_Runner.Platform;
 
 package body Model_Runner.Framework.Verification is
+   use type Tasks.Core_State;
 
    use Ada.Strings.Unbounded;
 
@@ -2332,15 +2333,15 @@ package body Model_Runner.Framework.Verification is
               and then State not in "cancelled" | "rejected"
             then
                Any := True;
-               if State /= "complete" then
+               if State /= Tasks.Complete then
                   --  The way on first -- the work done -- and taking what is
                   --  there as done only after, for code written already.
                   return Lacks (Id & " serves it and "
-                                & (if State = "failed" then "has failed" else "is " & State)
+                                & (if State = Tasks.Failed then "has failed" else "is " & State)
                                 & "; it is verified once that is complete"
-                                & (if State = "candidate"
+                                & (if State = Tasks.Candidate
                                    then ": /task accept " & Id & ", then /work " & Id & " does it"
-                                   elsif State = "failed"
+                                   elsif State = Tasks.Failed
                                    then ": /task accept " & Id & " tries it again"
                                    elsif State in "accepted" | "blocked"
                                    then ": /work " & Id & " does it"
@@ -2582,7 +2583,7 @@ package body Model_Runner.Framework.Verification is
                     and then State not in "cancelled" | "rejected"
                   then
                      Serving := Serving + 1;
-                     Open := Open or else State /= "complete" or else Done_For_Other_Words (Id);
+                     Open := Open or else State /= Tasks.Complete or else Done_For_Other_Words (Id);
                   end if;
                end;
             end loop;

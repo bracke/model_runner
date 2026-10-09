@@ -407,7 +407,28 @@ package body Model_Runner.Tools.Builtin is
    --  The pure tools
    ---------------------------------------------------------------------------
 
-   function Calculator (Args : String) return String is
+   --  A tool's answer and whether it is a failure, which each tool says
+   --  where it fails rather than leaving it to be read back out of the
+   --  words. The words of a failure still begin "error: ", for the model.
+   type Reply (Length : Natural) is record
+      Failed : Boolean;
+      Text   : String (1 .. Length);
+   end record;
+
+   --  An answer.
+   function Said (Text : String) return Reply
+   is ((Length => Text'Length, Failed => False, Text => Text));
+
+   --  A failure, in the words the model is told it in.
+   function Failure (Text : String) return Reply
+   is ((Length => Text'Length + 7, Failed => True, Text => "error: " & Text));
+
+   --  The same answer with words before it, failed or not as it was.
+   function Prefixed (Before : String; Item : Reply) return Reply
+   is ((Length => Before'Length + Item.Length, Failed => Item.Failed,
+        Text => Before & Item.Text));
+
+   function Calculator (Args : String) return Reply is
       A, B : Long_Long_Integer;
       Found_A, Found_B, Found_Op : Boolean;
       Op : constant String := Text_Argument (Args, "op", Found_Op);
@@ -415,42 +436,42 @@ package body Model_Runner.Tools.Builtin is
       Integer_Argument (Args, "a", A, Found_A);
       Integer_Argument (Args, "b", B, Found_B);
       if not (Found_A and then Found_B and then Found_Op) then
-         return "error: calculator needs integers a and b and an op";
+         return Failure ("calculator needs integers a and b and an op");
       end if;
       if Op = "+" then
-         return Image (A + B);
+         return Said (Image (A + B));
       elsif Op = "-" then
-         return Image (A - B);
+         return Said (Image (A - B));
       elsif Op = "*" then
-         return Image (A * B);
+         return Said (Image (A * B));
       elsif Op = "/" then
          if B = 0 then
-            return "error: division by zero";
+            return Failure ("division by zero");
          else
-            return Image (A / B);
+            return Said (Image (A / B));
          end if;
       else
-         return "error: op must be one of + - * /";
+         return Failure ("op must be one of + - * /");
       end if;
    end Calculator;
 
-   function String_Length (Args : String) return String is
+   function String_Length (Args : String) return Reply is
       Have : Boolean;
       Text : constant String := Text_Argument (Args, "text", Have);
    begin
       if not Have then
-         return "error: string_length needs a string text";
+         return Failure ("string_length needs a string text");
       end if;
-      return Image
-        (Long_Long_Integer (Model_Runner.UTF8.Code_Point_Count (Text)));
+      return Said (Image
+        (Long_Long_Integer (Model_Runner.UTF8.Code_Point_Count (Text))));
    end String_Length;
 
-   function Reverse_Text (Args : String) return String is
+   function Reverse_Text (Args : String) return Reply is
       Have : Boolean;
       Text : constant String := Text_Argument (Args, "text", Have);
    begin
       if not Have then
-         return "error: reverse_text needs a string text";
+         return Failure ("reverse_text needs a string text");
       end if;
       declare
          Output : String (1 .. Text'Length);
@@ -467,24 +488,24 @@ package body Model_Runner.Tools.Builtin is
             Fill := Fill - Width;
             I := I + Width;
          end loop;
-         return Output;
+         return Said (Output);
       end;
    end Reverse_Text;
 
-   function Lookup (Args : String) return String is
+   function Lookup (Args : String) return Reply is
       Have : Boolean;
       Key  : constant String := Text_Argument (Args, "key", Have);
    begin
       if not Have then
-         return "error: lookup needs a string key";
+         return Failure ("lookup needs a string key");
       elsif Key = "capital_of_france" then
-         return "Paris";
+         return Said ("Paris");
       elsif Key = "speed_of_light" then
-         return "299792458 metres per second";
+         return Said ("299792458 metres per second");
       elsif Key = "ada_year" then
-         return "1983";
+         return Said ("1983");
       else
-         return "error: no fact by that key";
+         return Failure ("no fact by that key");
       end if;
    end Lookup;
 
@@ -492,12 +513,12 @@ package body Model_Runner.Tools.Builtin is
    Alphabet : constant String :=
      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-   function Base64_Encode (Args : String) return String is
+   function Base64_Encode (Args : String) return Reply is
       Have : Boolean;
       Text : constant String := Text_Argument (Args, "text", Have);
    begin
       if not Have then
-         return "error: base64_encode needs a string text";
+         return Failure ("base64_encode needs a string text");
       end if;
       declare
          Out_S : U.Unbounded_String;
@@ -530,11 +551,11 @@ package body Model_Runner.Tools.Builtin is
             end;
             I := I + 3;
          end loop;
-         return Capped (U.To_String (Out_S));
+         return Said (Capped (U.To_String (Out_S)));
       end;
    end Base64_Encode;
 
-   function Base64_Decode (Args : String) return String is
+   function Base64_Decode (Args : String) return Reply is
       Have : Boolean;
       Text : constant String := Text_Argument (Args, "text", Have);
 
@@ -549,7 +570,7 @@ package body Model_Runner.Tools.Builtin is
       end Value_Of;
    begin
       if not Have then
-         return "error: base64_decode needs a string text";
+         return Failure ("base64_decode needs a string text");
       end if;
       declare
          Out_S : U.Unbounded_String;
@@ -563,7 +584,7 @@ package body Model_Runner.Tools.Builtin is
                   V : constant Integer := Value_Of (C);
                begin
                   if V < 0 then
-                     return "error: not valid base64";
+                     return Failure ("not valid base64");
                   end if;
                   Acc := Acc * 64 + V;
                   Bits := Bits + 6;
@@ -575,7 +596,7 @@ package body Model_Runner.Tools.Builtin is
                end;
             end if;
          end loop;
-         return Capped (U.To_String (Out_S));
+         return Said (Capped (U.To_String (Out_S)));
       end;
    end Base64_Decode;
 
@@ -751,13 +772,13 @@ package body Model_Runner.Tools.Builtin is
       Load_Store (Self);
    end Use_Memory_File;
 
-   function Memory_Put (Self : in out Instance; Args : String) return String is
+   function Memory_Put (Self : in out Instance; Args : String) return Reply is
       Have_K, Have_V : Boolean;
       Key   : constant String := Text_Argument (Args, "key", Have_K);
       Value : constant String := Text_Argument (Args, "value", Have_V);
    begin
       if not (Have_K and then Have_V) then
-         return "error: memory_put needs a key and a value";
+         return Failure ("memory_put needs a key and a value");
       end if;
       for I in 1 .. Self.Used loop
          if U.To_String (Self.Memory (I).Key) = Key then
@@ -765,11 +786,11 @@ package body Model_Runner.Tools.Builtin is
             if U.Length (Self.Store) > 0 then
                Save_Store (Self);
             end if;
-            return "ok";
+            return Said ("ok");
          end if;
       end loop;
       if Self.Used >= Max_Notes then
-         return "error: memory is full";
+         return Failure ("memory is full");
       end if;
       Self.Used := Self.Used + 1;
       Self.Memory (Self.Used) :=
@@ -778,22 +799,22 @@ package body Model_Runner.Tools.Builtin is
       if U.Length (Self.Store) > 0 then
          Save_Store (Self);
       end if;
-      return "ok";
+      return Said ("ok");
    end Memory_Put;
 
-   function Memory_Get (Self : in out Instance; Args : String) return String is
+   function Memory_Get (Self : in out Instance; Args : String) return Reply is
       Have : Boolean;
       Key  : constant String := Text_Argument (Args, "key", Have);
    begin
       if not Have then
-         return "error: memory_get needs a key";
+         return Failure ("memory_get needs a key");
       end if;
       for I in 1 .. Self.Used loop
          if U.To_String (Self.Memory (I).Key) = Key then
-            return U.To_String (Self.Memory (I).Value);
+            return Said (U.To_String (Self.Memory (I).Value));
          end if;
       end loop;
-      return "error: nothing remembered under that key";
+      return Failure ("nothing remembered under that key");
    end Memory_Get;
 
    ---------------------------------------------------------------------------
@@ -864,7 +885,7 @@ package body Model_Runner.Tools.Builtin is
          return "";
    end Read_Raw;
 
-   function Read_Capped (Path : String) return String is
+   function Read_Capped (Path : String) return Reply is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
       File : Stream_IO.File_Type;
@@ -885,7 +906,7 @@ package body Model_Runner.Tools.Builtin is
       if Ada.Directories.Exists (Path)
         and then Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Directory)
       then
-         return "error: " & Path & " is a directory: list_directory " & Path & " lists it";
+         return Failure ("" & Path & " is a directory: list_directory " & Path & " lists it");
       end if;
       Open (File, In_File, Path);
       declare
@@ -893,7 +914,7 @@ package body Model_Runner.Tools.Builtin is
       begin
          if Total = 0 then
             Close (File);
-            return "";
+            return Said ("");
          elsif Total <= Cap then
             --  It fits: return the file whole, byte for byte.
             declare
@@ -902,7 +923,7 @@ package body Model_Runner.Tools.Builtin is
             begin
                Read (File, Block, Last);
                Close (File);
-               return As_String (Block, Last);
+               return Said (As_String (Block, Last));
             end;
          else
             --  Too big for the buffer: read only the head and the tail --
@@ -926,10 +947,10 @@ package body Model_Runner.Tools.Builtin is
                   Dropped : constant Natural :=
                     Total - Natural (Head_Last) - Natural (Tail_Last);
                begin
-                  return As_String (Head_Block, Head_Last)
+                  return Said (As_String (Head_Block, Head_Last)
                     & ASCII.LF & "...[" & Image (Long_Long_Integer (Dropped))
                     & " bytes elided]..." & ASCII.LF
-                    & As_String (Tail_Block, Tail_Last);
+                    & As_String (Tail_Block, Tail_Last));
                end;
             end;
          end if;
@@ -939,13 +960,13 @@ package body Model_Runner.Tools.Builtin is
          if Is_Open (File) then
             Close (File);
          end if;
-         return "error: could not read the file";
+         return Failure ("could not read the file");
    end Read_Capped;
 
    --  Run a program, capturing its output (and its errors), and free the
    --  argument list. A program that is not installed is said so plainly.
    function Capture
-     (Program : String; Args : GNAT.OS_Lib.Argument_List) return String
+     (Program : String; Args : GNAT.OS_Lib.Argument_List) return Reply
    is
       use type GNAT.OS_Lib.String_Access;
       use type GNAT.OS_Lib.Process_Id;
@@ -975,7 +996,7 @@ package body Model_Runner.Tools.Builtin is
    begin
       if Prog = null then
          Release;
-         return "error: '" & Program & "' is not installed on this machine";
+         return Failure ("'" & Program & "' is not installed on this machine");
       end if;
 
       GNAT.OS_Lib.Create_Temp_File (FD, Path);
@@ -991,7 +1012,7 @@ package body Model_Runner.Tools.Builtin is
             GNAT.OS_Lib.Delete_File (Path.all, Gone);
             GNAT.OS_Lib.Free (Path);
             Release;
-            return "error: could not run '" & Program & "'";
+            return Failure ("could not run '" & Program & "'");
          end if;
 
          --  A watchdog that kills the child if it outlives the budget. The
@@ -1026,16 +1047,18 @@ package body Model_Runner.Tools.Builtin is
             Watchdog.Stop (Timed_Out);
 
             declare
-               Output : constant String := Read_Capped (Path.all);
+               Output : constant Reply := Read_Capped (Path.all);
             begin
                GNAT.OS_Lib.Delete_File (Path.all, Gone);
                GNAT.OS_Lib.Free (Path);
                Release;
                if Timed_Out then
-                  return "error: '" & Program & "' did not finish within "
-                    & Seconds & " seconds and was stopped";
-               elsif Output = "" then
-                  return "(the command produced no output)";
+                  return Failure ("'" & Program & "' did not finish within "
+                    & Seconds & " seconds and was stopped");
+               elsif Output.Failed then
+                  return Output;
+               elsif Output.Text = "" then
+                  return Said ("(the command produced no output)");
                else
                   return Output;
                end if;
@@ -1164,19 +1187,19 @@ package body Model_Runner.Tools.Builtin is
          return "";
    end Rooted;
 
-   function Read_File (Args : String) return String is
+   function Read_File (Args : String) return Reply is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
    begin
       if not Have then
-         return "error: read_file needs a path";
+         return Failure ("read_file needs a path");
       elsif not Ada.Directories.Exists (Path) then
-         return "error: no file at " & Path;
+         return Failure ("no file at " & Path);
       end if;
       return Read_Capped (Path);
    end Read_File;
 
-   function Write_File (Args : String) return String is
+   function Write_File (Args : String) return Reply is
       use Ada.Streams;
       Have_P, Have_C : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
@@ -1184,10 +1207,10 @@ package body Model_Runner.Tools.Builtin is
       File    : Stream_IO.File_Type;
    begin
       if not (Have_P and then Have_C) then
-         return "error: write_file needs "
+         return Failure ("write_file needs "
            & (if not Have_P and then not Have_C then "a path and content"
               elsif not Have_P then "a path"
-              else "content: the whole new text of " & Path);
+              else "content: the whole new text of " & Path));
       end if;
       --  A new file's directory made with it: a file under src/ is asked
       --  for whether or not src/ is there yet.
@@ -1215,16 +1238,16 @@ package body Model_Runner.Tools.Builtin is
          Stream_IO.Write (File, Block);
       end;
       Stream_IO.Close (File);
-      return "wrote" & Natural'Image (Content'Length) & " bytes to " & Path;
+      return Said ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path);
    exception
       when others =>
          if Stream_IO.Is_Open (File) then
             Stream_IO.Close (File);
          end if;
-         return "error: could not write the file";
+         return Failure ("could not write the file");
    end Write_File;
 
-   function List_Directory (Args : String) return String is
+   function List_Directory (Args : String) return Reply is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
       Out_S : U.Unbounded_String;
@@ -1232,11 +1255,11 @@ package body Model_Runner.Tools.Builtin is
       Item   : Ada.Directories.Directory_Entry_Type;
    begin
       if not Have then
-         return "error: list_directory needs a path";
+         return Failure ("list_directory needs a path");
       elsif not Ada.Directories.Exists (Path) then
-         return "error: no directory at " & Path;
+         return Failure ("no directory at " & Path);
       elsif Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Directory) then
-         return "error: " & Path & " is a file, not a directory: read_file reads it";
+         return Failure ("" & Path & " is a file, not a directory: read_file reads it");
       end if;
       Ada.Directories.Start_Search (Search, Path, "");
       while Ada.Directories.More_Entries (Search)
@@ -1255,28 +1278,28 @@ package body Model_Runner.Tools.Builtin is
          end;
       end loop;
       Ada.Directories.End_Search (Search);
-      return Capped (U.To_String (Out_S));
+      return Said (Capped (U.To_String (Out_S)));
    exception
       when others =>
-         return "error: could not list the directory";
+         return Failure ("could not list the directory");
    end List_Directory;
 
-   function Shell (Args : String) return String is
+   function Shell (Args : String) return Reply is
       Have : Boolean;
       Cmd  : constant String := Text_Argument (Args, "command", Have);
    begin
       if not Have then
-         return "error: shell needs a command";
+         return Failure ("shell needs a command");
       end if;
       return Capture ("sh", [new String'("-c"), new String'(Cmd)]);
    end Shell;
 
-   function Run_Python (Args : String) return String is
+   function Run_Python (Args : String) return Reply is
       Have : Boolean;
       Code : constant String := Text_Argument (Args, "code", Have);
    begin
       if not Have then
-         return "error: run_python needs code";
+         return Failure ("run_python needs code");
       end if;
       return Capture ("python3", [new String'("-c"), new String'(Code)]);
    end Run_Python;
@@ -1286,7 +1309,7 @@ package body Model_Runner.Tools.Builtin is
    --  capped. No process is spawned; the client's own timeouts bound a slow
    --  or silent server, and Max_Download_Size keeps the temp file no larger
    --  than what the tool will hand back.
-   function Download (Url : String) return String is
+   function Download (Url : String) return Reply is
       package HC renames Http_Client.Clients;
       package HE renames Http_Client.Errors;
 
@@ -1318,19 +1341,20 @@ package body Model_Runner.Tools.Builtin is
          Configuration => Config);
 
       declare
-         Body_Text : constant String :=
-           (if HE.Is_Success (Status) then Read_Capped (Path.all) else "");
+         Read      : constant Reply :=
+           (if HE.Is_Success (Status) then Read_Capped (Path.all) else Said (""));
+         Body_Text : String renames Read.Text;
       begin
          GNAT.OS_Lib.Delete_File (Path.all, Gone);
          GNAT.OS_Lib.Free (Path);
          if not HE.Is_Success (Status) then
-            return "error: the request failed ("
-              & HE.Result_Status'Image (Status) & ")";
+            return Failure ("the request failed ("
+              & HE.Result_Status'Image (Status) & ")");
          elsif Body_Text = "" then
-            return "(the request returned no body; HTTP status"
-              & Natural'Image (Outcome.HTTP_Status_Code) & ")";
+            return Said ("(the request returned no body; HTTP status"
+              & Natural'Image (Outcome.HTTP_Status_Code) & ")");
          else
-            return Body_Text;
+            return Said (Body_Text);
          end if;
       end;
    end Download;
@@ -1366,17 +1390,17 @@ package body Model_Runner.Tools.Builtin is
    --  the model reads, so the loop goes on rather than blocking on input
    --  no one will give.
    function Ask_User
-     (Self : in out Instance; Args : String) return String
+     (Self : in out Instance; Args : String) return Reply
    is
       Have     : Boolean;
       Question : constant String := Text_Argument (Args, "question", Have);
    begin
       if not Have then
-         return "error: ask_user needs a question string";
+         return Failure ("ask_user needs a question string");
       end if;
       if Self.Asker = null then
-         return "error: no user is available to ask; decide with what you "
-                & "have or use another tool";
+         return Failure ("no user is available to ask; decide with what you "
+                & "have or use another tool");
       end if;
 
       declare
@@ -1386,11 +1410,11 @@ package body Model_Runner.Tools.Builtin is
       begin
          Self.Asker.Ask (Question, Buffer, Last, Status);
          if E.Is_Error (Status) then
-            return "error: the user could not be asked";
+            return Failure ("the user could not be asked");
          elsif Last = 0 then
-            return "the user gave no answer";
+            return Said ("the user gave no answer");
          else
-            return Buffer (1 .. Last);
+            return Said (Buffer (1 .. Last));
          end if;
       end;
    end Ask_User;
@@ -1400,17 +1424,17 @@ package body Model_Runner.Tools.Builtin is
    --  runner is left -- the call is declined in words the model reads, so
    --  delegation cannot recurse and the loop goes on.
    function Delegate
-     (Self : in out Instance; Args : String) return String
+     (Self : in out Instance; Args : String) return Reply
    is
       Have : Boolean;
       Job  : constant String := Text_Argument (Args, "task", Have);
    begin
       if not Have then
-         return "error: delegate needs a task string";
+         return Failure ("delegate needs a task string");
       end if;
       if Self.Sub = null then
-         return "error: delegation is not available here -- a sub-agent "
-                & "cannot delegate further; do the work with the other tools";
+         return Failure ("delegation is not available here -- a sub-agent "
+                & "cannot delegate further; do the work with the other tools");
       end if;
 
       declare
@@ -1420,17 +1444,17 @@ package body Model_Runner.Tools.Builtin is
       begin
          Self.Sub.Run_Sub (Job, Buffer, Last, Status);
          if E.Is_Error (Status) then
-            return "error: the sub-agent could not finish the task";
+            return Failure ("the sub-agent could not finish the task");
          elsif Last = 0 then
-            return "the sub-agent returned no answer";
+            return Said ("the sub-agent returned no answer");
          else
-            return Buffer (1 .. Last);
+            return Said (Buffer (1 .. Last));
          end if;
       end;
    end Delegate;
 
    function Retrieve
-     (Args : String; Embed : Embedder_Reference) return String
+     (Args : String; Embed : Embedder_Reference) return Reply
    is
       Max_Chunks : constant := 2048;  --  passages held across the folder
       Max_Terms  : constant := 24;    --  distinct query words scored
@@ -1704,9 +1728,10 @@ package body Model_Runner.Tools.Builtin is
                   --  An HTML or XML file: its tags stripped to the text.
                   Files := Files + 1;
                   declare
+                     Read : constant Reply := Read_Capped (Full);
                      Text : constant String :=
-                       Model_Runner.Tools.Text_Util.Strip_Tags
-                         (Read_Capped (Full));
+                       (if Read.Failed then ""
+                        else Model_Runner.Tools.Text_Util.Strip_Tags (Read.Text));
                   begin
                      if Text'Length > 0 then
                         Split (Prefix & Name, Skip_Front (Text));
@@ -1718,12 +1743,9 @@ package body Model_Runner.Tools.Builtin is
                else
                   Files := Files + 1;
                   declare
-                     Body_Text  : constant String := Read_Capped (Full);
-                     Unreadable : constant Boolean :=
-                       Body_Text'Length >= 6
-                       and then Body_Text
-                                  (Body_Text'First .. Body_Text'First + 5)
-                                = "error:";
+                     Read       : constant Reply := Read_Capped (Full);
+                     Body_Text  : String renames Read.Text;
+                     Unreadable : constant Boolean := Read.Failed;
                   begin
                      if not Unreadable then
                         Split (Prefix & Name, Body_Text);
@@ -1740,21 +1762,21 @@ package body Model_Runner.Tools.Builtin is
 
    begin
       if not (Have_F and then Have_Q) then
-         return "error: retrieve needs a folder and a query";
+         return Failure ("retrieve needs a folder and a query");
       elsif not Ada.Directories.Exists (Folder) then
-         return "error: no folder at that path";
+         return Failure ("no folder at that path");
       end if;
 
       Read_Terms (Low (Query));
       if N_Term = 0 then
-         return "error: the query has no words to search for";
+         return Failure ("the query has no words to search for");
       end if;
 
       --  Read the folder tree's files into passages.
       Walk (Folder, "");
 
       if N_Chunks = 0 then
-         return "no readable text files in that folder";
+         return Said ("no readable text files in that folder");
       end if;
 
       --  Document frequency of each term across the passages.
@@ -1904,18 +1926,18 @@ package body Model_Runner.Tools.Builtin is
          end loop;
 
          if Found = 0 then
-            return "no passage in that folder matched the query";
+            return Said ("no passage in that folder matched the query");
          end if;
-         return Capped (U.To_String (Out_S));
+         return Said (Capped (U.To_String (Out_S)));
       end;
    end Retrieve;
 
-   function Http_Get (Args : String) return String is
+   function Http_Get (Args : String) return Reply is
       Have : Boolean;
       Url  : constant String := Text_Argument (Args, "url", Have);
    begin
       if not Have then
-         return "error: http_get needs a url";
+         return Failure ("http_get needs a url");
       end if;
       return Download (Url);
    end Http_Get;
@@ -1947,12 +1969,12 @@ package body Model_Runner.Tools.Builtin is
       return Room (1 .. Used);
    end Encode_Query;
 
-   function Web_Search (Args : String) return String is
+   function Web_Search (Args : String) return Reply is
       Have  : Boolean;
       Query : constant String := Text_Argument (Args, "query", Have);
    begin
       if not Have then
-         return "error: web_search needs a query";
+         return Failure ("web_search needs a query");
       end if;
       --  Fetched the same way as http_get -- through the in-process client,
       --  streamed -- with the query percent-encoded into the URL.
@@ -1960,13 +1982,13 @@ package body Model_Runner.Tools.Builtin is
         ("https://lite.duckduckgo.com/lite/?q=" & Encode_Query (Query));
    end Web_Search;
 
-   function Sql (Args : String) return String is
+   function Sql (Args : String) return Reply is
       Have_D, Have_Q : Boolean;
       Database : constant String := Text_Argument (Args, "database", Have_D);
       Query    : constant String := Text_Argument (Args, "query", Have_Q);
    begin
       if not (Have_D and then Have_Q) then
-         return "error: sql needs a database and a query";
+         return Failure ("sql needs a database and a query");
       end if;
       return Capture
         ("sqlite3", [new String'(Database), new String'(Query)]);
@@ -2047,7 +2069,7 @@ package body Model_Runner.Tools.Builtin is
          return Said;
       end Confined;
 
-      function Answer return String is
+      function Answer return Reply is
       begin
          if Named = "calculator" then
             return Calculator (Arguments);
@@ -2062,7 +2084,7 @@ package body Model_Runner.Tools.Builtin is
          elsif Named = "base64_decode" then
             return Base64_Decode (Arguments);
          elsif Named = "now" then
-            return Now_Text;
+            return Said (Now_Text);
          elsif Named = "memory_put" then
             return Memory_Put (Self, Arguments);
          elsif Named = "memory_get" then
@@ -2080,20 +2102,20 @@ package body Model_Runner.Tools.Builtin is
                Moved : constant String :=
                  Arguments (Arguments'First .. At_Path) & Taken
                  & Arguments (At_Path + Given'Length + 1 .. Arguments'Last);
-               Said  : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
+               Taken_As : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
             begin
                if Confined (Named, Moved) /= "" then
-                  return "error: " & Confinement (Named, Moved);
+                  return Failure (Confinement (Named, Moved));
                elsif Named = "read_file" then
-                  return Said & Read_File (Moved);
+                  return Prefixed (Taken_As, Read_File (Moved));
                elsif Named = "write_file" then
-                  return Said & Write_File (Moved);
+                  return Prefixed (Taken_As, Write_File (Moved));
                else
-                  return Said & List_Directory (Moved);
+                  return Prefixed (Taken_As, List_Directory (Moved));
                end if;
             end;
          elsif Confined (Named, Arguments) /= "" then
-            return "error: " & Confinement (Named, Arguments);
+            return Failure (Confinement (Named, Arguments));
          elsif Named = "read_file" then
             return Read_File (Arguments);
          elsif Named = "write_file" then
@@ -2117,20 +2139,21 @@ package body Model_Runner.Tools.Builtin is
          elsif Named = "ask_user" then
             return Ask_User (Self, Arguments);
          else
-            return "error: no tool by the name """ & Named & """";
+            return Failure ("no tool by the name """ & Named & """");
          end if;
       end Answer;
 
-      Text : constant String := Answer;
+      Given : constant Reply := Answer;
+      Text  : String renames Given.Text;
    begin
       Last   := 0;
       Status := E.Success;
       --  Refused where the confinement said so; failed where the tool
-      --  answered with the failure each of them writes as its result.
+      --  said it failed.
       Outcome :=
         (if Refused /= Tr.Not_Refused
          then (Answer => Tr.Refused, Refusal => Refused)
-         elsif Text'Length >= 6 and then Text (Text'First .. Text'First + 5) = "error:"
+         elsif Given.Failed
          then (Answer => Tr.Failed, Refusal => Tr.Not_Refused)
          else Tr.Done);
       if Text'Length > Result'Length then

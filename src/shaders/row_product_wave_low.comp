@@ -2058,6 +2058,20 @@ vec4 nl4(uint word, uint shift) {
                 kv4[(word >> (shift + 16u)) & 15u],
                 kv4[(word >> (shift + 24u)) & 15u]);
 }
+
+#ifdef DOTS
+//  The table again as signed bytes -- every value in it is a whole number
+//  a byte holds -- and four nibbles of a word through it as one word of
+//  four bytes, for the integer dot.
+shared uint kvb[16];
+
+int nlb(uint word, uint shift) {
+    return int(kvb[(word >> shift) & 15u]
+               | (kvb[(word >> (shift + 8u)) & 15u] << 8u)
+               | (kvb[(word >> (shift + 16u)) & 15u] << 16u)
+               | (kvb[(word >> (shift + 24u)) & 15u] << 24u));
+}
+#endif
 #endif
 
 #if defined(IQ4_NL) || defined(MXFP4)
@@ -2121,6 +2135,22 @@ void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
     scale = scale4(b);
     lift = 0.0;
 }
+
+#ifdef DOTS
+//  The same sixteen weights as four words of signed bytes.
+void lane_bytes_own(uint at, uint lane, out int wq[4], out float scale) {
+    uint block = lane / 2u;
+    uint half_of = lane % 2u;
+    uint b = at + block * SUB4;
+    uint q0 = quad_at(b + QUANTS4 + half_of * 8u);
+    uint q1 = quad_at(b + QUANTS4 + 4u + half_of * 8u);
+    wq[0] = nlb(q0, 0u);
+    wq[1] = nlb(q1, 0u);
+    wq[2] = nlb(q0, 4u);
+    wq[3] = nlb(q1, 4u);
+    scale = scale4(b);
+}
+#endif
 #define WEIGHTS_OWN
 #endif
 
@@ -2173,6 +2203,24 @@ void lane_weights_own(uint at, uint lane, out vec4 wv[4], out float scale,
     wv[3] = nl4(q1, 4u);
     lift = 0.0;
 }
+
+#ifdef DOTS
+//  The same sixteen weights as four words of signed bytes.
+void lane_bytes_own(uint at, uint lane, out int wq[4], out float scale) {
+    uint ib = lane / 2u;
+    uint half_of = lane % 2u;
+    uint low = (byte_at(at + 4u + (ib >> 1u)) >> (4u * (ib & 1u))) & 15u;
+    uint high = (u16_at(at + 2u) >> (2u * ib)) & 3u;
+    scale = half_at(at) * float(int(low | (high << 4u)) - 32);
+    uint q = (at + 8u + 16u * ib + half_of * 8u) >> 2u;
+    uint q0 = w[q];
+    uint q1 = w[q + 1u];
+    wq[0] = nlb(q0, 0u);
+    wq[1] = nlb(q1, 0u);
+    wq[2] = nlb(q0, 4u);
+    wq[3] = nlb(q1, 4u);
+}
+#endif
 #define WEIGHTS_OWN
 #endif
 
@@ -2614,6 +2662,9 @@ void main_many() {
 #ifdef TABLE4
     if (tid < 16u) {
         kv4[tid] = KV4[tid];
+#ifdef DOTS
+        kvb[tid] = uint(int(KV4[tid])) & 0xFFu;
+#endif
     }
     barrier();
 #endif
@@ -2665,6 +2716,37 @@ void main_many() {
 
     for (uint i = ix; i < groups; i += 4u) {
         if (i * 256u + ib * 32u < shape.columns) {
+#ifdef DOTS
+            //  The rounded activations, four words of bytes a lane, all in
+            //  the lane's block of thirty-two, and that block's scale; the
+            //  table formats lift nothing, so no sum is wanted.
+            int qa[MULTI][4];
+            float da[MULTI];
+            for (uint k = 0u; k < MULTI; ++k) {
+                uint xb = ((from_k[k] + i * 256u) >> 2u) + own_at(itid);
+                qa[k][0] = qw[xb + OWN_STEPS[0]];
+                qa[k][1] = qw[xb + OWN_STEPS[1]];
+                qa[k][2] = qw[xb + OWN_STEPS[2]];
+                qa[k][3] = qw[xb + OWN_STEPS[3]];
+                da[k] = qs[2u * shape.columns + ((from_k[k] + i * 256u) >> 5u) + ib];
+            }
+
+            for (uint r = 0u; r < MANY_R; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
+                int wq[4];
+                float scale;
+                lane_bytes_own(at, itid, wq, scale);
+
+                for (uint k = 0u; k < MULTI; ++k) {
+                    int whole = dotPacked4x8EXT(qa[k][0], wq[0])
+                              + dotPacked4x8EXT(qa[k][1], wq[1])
+                              + dotPacked4x8EXT(qa[k][2], wq[2])
+                              + dotPacked4x8EXT(qa[k][3], wq[3]);
+                    temp[r][k] += scale * da[k] * float(whole);
+                }
+            }
+#else
             vec4 a[MULTI][4];
             float total[MULTI];
             for (uint k = 0u; k < MULTI; ++k) {
@@ -2692,6 +2774,7 @@ void main_many() {
                                 + lift * total[k];
                 }
             }
+#endif
         }
     }
 

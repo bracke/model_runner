@@ -29,6 +29,7 @@ with Model_Runner.Platform;
 with Model_Runner.Text;
 
 package body Model_Runner.Framework.Work is
+   use type Tasks.Core_State;
 
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
@@ -444,7 +445,7 @@ package body Model_Runner.Framework.Work is
          Records.Set_Revision (Held, Records.Revision (Held) + 1);
       end if;
       Records.Set (Held, "state", State);
-      if State /= "running" then
+      if State /= Tasks.Running then
          Records.Set (Held, "ended_at", Timestamp);
       end if;
       --  Said once: as its summary where it has none, else as a note

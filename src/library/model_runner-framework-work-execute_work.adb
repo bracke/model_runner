@@ -235,7 +235,7 @@ is
          for Path of Result.Changed_Files loop
             Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
          end loop;
-         return Left_Words (Item, To_String (Named), Task_Id, Cancelled => Next = "cancelled");
+         return Left_Words (Item, To_String (Named), Task_Id, Cancelled => Next = Tasks.Cancelled);
       end Left_Behind;
 
       --  Not done, where it worked apart: its workspace is given up --

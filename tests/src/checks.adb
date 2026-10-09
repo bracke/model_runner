@@ -6036,7 +6036,9 @@ package body Checks is
          if not Found then
             Fail ("src/shaders/norm.comp is missing, and the words "
                   & "compiled from it are committed");
-         elsif Digest /= Model_Runner.Shaders.Norm_Digest then
+         elsif Digest /= Model_Runner.Shaders.Norm_Digest
+           or else Digest /= Model_Runner.Shaders.Norm_Rounds_Digest
+         then
             Fail ("src/shaders/norm.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader' again with "
                   & "every shader named");
@@ -6858,8 +6860,8 @@ package body Checks is
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
       --  against it, and Q8_0's three over several vectors, and its five
       --  gate-and-up compilations, and MXFP4's -- and Q8_0's six walks
-      --  again as integers.
-      for Which in 1 .. 37 loop
+      --  again as integers, and the two IQ4 formats' and MXFP4's.
+      for Which in 1 .. 40 loop
          declare
             Found : Boolean;
 
@@ -6905,6 +6907,9 @@ package body Checks is
                   when 35 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Glu_Digest,
                   when 36 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Glu_Digest,
                   when 37 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Glu_Digest,
+                  when 38 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl_Dots_Digest,
+                  when 39 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_Dots_Digest,
+                  when 40 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

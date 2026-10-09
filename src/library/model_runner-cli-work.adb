@@ -45,6 +45,7 @@ package body Model_Runner.CLI.Work is
    package S renames Model_Runner.Framework.Stores;
    package T renames Model_Runner.Text;
    package Tk renames Model_Runner.Framework.Tasks;
+   use type Tk.Core_State;
    package W renames Model_Runner.Framework.Work;
 
    --  The tools an agent working on a task is not given: no shell, no
@@ -647,7 +648,7 @@ package body Model_Runner.CLI.Work is
       --  where it does not.
       function Open_Part (Id : String) return String is
       begin
-         if Tk.State_Of (Store, Id) /= "blocked" then
+         if Tk.State_Of (Store, Id) /= Tk.Blocked then
             return "";
          end if;
          for Child of Tk.Children (Store, Id) loop
@@ -666,14 +667,14 @@ package body Model_Runner.CLI.Work is
          First   : Unbounded_String;
       begin
          Tk.Definition (Store, Id, Defined, Read);
-         if State = "candidate" then
+         if State = Tk.Candidate then
             return Pres.Next_Step_Value (Screen, "cli.next.accept_task", [Loc.Named ("name", Id)]);
          --  Ended: what takes it up again.
          elsif State in "complete" | "cancelled" then
             return Pres.Next_Step_Value (Screen, "cli.next.reopen", [Loc.Named ("name", Id)]);
-         elsif State = "rejected" then
+         elsif State = Tk.Rejected then
             return Pres.Next_Step_Value (Screen, "cli.next.reconsider", [Loc.Named ("name", Id)]);
-         elsif State = "verification"
+         elsif State = Tk.Verification
            and then Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= ""
          then
             return Pres.Next_Step_Value (Screen, "cli.next.integrate", [Loc.Named ("name", Id)]);
@@ -683,11 +684,11 @@ package body Model_Runner.CLI.Work is
          for Child of Tk.Children (Store, Id) loop
             if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
                Append (Waiting, (if Waiting = Null_Unbounded_String then "" else "; ")
-                       & (if Tk.State_Of (Store, Child) = "candidate" then "/task accept " & Child
-                          elsif Tk.State_Of (Store, Child) = "verification"
+                       & (if Tk.State_Of (Store, Child) = Tk.Candidate then "/task accept " & Child
+                          elsif Tk.State_Of (Store, Child) = Tk.Verification
                             and then Model_Runner.Framework.Workspaces.Active_For (Store, Child) /= ""
                           then "/task integrate " & Child
-                          elsif Tk.State_Of (Store, Child) = "running" then Child & " is being worked"
+                          elsif Tk.State_Of (Store, Child) = Tk.Running then Child & " is being worked"
                           elsif Tk.State_Of (Store, Child) in "blocked" | "failed"
                           then "/task accept " & Child & " (" & Tk.State_Of (Store, Child) & ")"
                           elsif Tk.Ready (Store, Child).Ready then "/work " & Child
@@ -706,7 +707,7 @@ package body Model_Runner.CLI.Work is
          --  A requirement it serves that is not accepted yet holds it back.
          for Requirement of Model_Runner.Framework.Lines_Of (R.Get (Defined, "requirements")) loop
             if Model_Runner.Framework.Intent.State_Of (Store, Model_Runner.Framework.Intent.Requirement, Requirement)
-                 = "candidate"
+                 = Tk.Candidate
             then
                return Pres.Next_Step_Value (Screen, "cli.next.req_first",
                                             [Loc.Named ("name", Id), Loc.Named ("value", Requirement)]);
@@ -720,7 +721,7 @@ package body Model_Runner.CLI.Work is
             declare
                Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
             begin
-               if Named /= "" and then Tk.State_Of (Store, Named) /= "complete" then
+               if Named /= "" and then Tk.State_Of (Store, Named) /= Tk.Complete then
                   First := To_Unbounded_String (Named);
                   exit;
                end if;
@@ -1069,7 +1070,7 @@ package body Model_Runner.CLI.Work is
             loop
                for Id of Tk.List (Store, State) loop
                   if (Matching.Is_Empty or else Matching.Contains (Id))
-                    and then (State /= "verification"
+                    and then (State /= Tk.Verification
                               or else Model_Runner.Framework.Workspaces.Active_For (Store, Id) /= "")
                   then
                      Waiting.Append (Id);
@@ -1100,7 +1101,7 @@ package body Model_Runner.CLI.Work is
                                    else ", serving " & On_One_Line (R.Get (Defined, "requirements")))
                                 & ASCII.LF);
                         if not Now.Ready then
-                           Append (Why, (if Tk.State_Of (Store, Id) = "verification"
+                           Append (Why, (if Tk.State_Of (Store, Id) = Tk.Verification
                                          then "not worked here: its work waits to be taken in"
                                          else "not workable now (" & Tk.State_Of (Store, Id) & ")")
                                    & ASCII.LF);
@@ -1119,9 +1120,9 @@ package body Model_Runner.CLI.Work is
                                             (if Now.Ready and then Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) /= ""
                                              then "[ready, marked done]"
                                              elsif Now.Ready then "[ready]"
-                                             elsif Tk.State_Of (Store, Id) = "accepted"
+                                             elsif Tk.State_Of (Store, Id) = Tk.Accepted
                                              then "[waiting]"
-                                             elsif Tk.State_Of (Store, Id) = "verification"
+                                             elsif Tk.State_Of (Store, Id) = Tk.Verification
                                              then "[to integrate]"
                                              else "[" & Tk.State_Of (Store, Id) & "]"),
                             Details    => Why,
@@ -1515,14 +1516,14 @@ package body Model_Runner.CLI.Work is
             Waiting : Unbounded_String;
          begin
             for Candidate of Done.Proposed loop
-               if Tk.State_Of (Store, Candidate) = "candidate" then
+               if Tk.State_Of (Store, Candidate) = Tk.Candidate then
                   Append (Waiting, (if Waiting = Null_Unbounded_String then "" else ", ")
                                    & Candidate);
                end if;
             end loop;
             --  A split's parts are said by the step after it, once.
             if Waiting /= Null_Unbounded_String
-              and then not (To_String (Done.Final_State) = "blocked"
+              and then not (To_String (Done.Final_State) = Tk.Blocked
                             and then Ada.Strings.Fixed.Index
                                        (To_String (Done.Reason), "waiting for its children: ") = 1)
             then
@@ -1597,7 +1598,7 @@ package body Model_Runner.CLI.Work is
 
          --  Complete, and what it served that is still not verified: said,
          --  with why, not left to be found.
-         if To_String (Done.Final_State) = "complete" then
+         if To_String (Done.Final_State) = Tk.Complete then
             declare
                Defined : R.Item;
                Read    : E.Error_Info;
@@ -1659,18 +1660,18 @@ package body Model_Runner.CLI.Work is
             Shown : constant String :=
               --  As /task list names it: its work to integrate, or in
               --  conflict, with the state it is a case of.
-              (if Final = "verification"
+              (if Final = Tk.Verification
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
                  and then not Model_Runner.Framework.Workspaces.Conflict_Files
                                 (Store, Model_Runner.Framework.Workspaces.Active_For
                                           (Store, To_String (Done.Task_Id)),
                                  Unsettled_Only => True).Is_Empty
                then "conflict"
-               elsif Final = "verification"
+               elsif Final = Tk.Verification
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Done.Task_Id)) /= ""
                then "to integrate"
-               elsif Final = "verification" then "in verification"
-               elsif Final = "blocked" and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
+               elsif Final = Tk.Verification then "in verification"
+               elsif Final = Tk.Blocked and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") = 1
                then "stopped"
                else Final);
          begin
@@ -1682,8 +1683,8 @@ package body Model_Runner.CLI.Work is
                --  Complete with a reservation: the reservation said as
                --  one, not as why it completed.
                Pres.Put_Marked
-                 (Screen, (if Final = "failed" then "cli.work.failed_because"
-                           elsif Final = "complete" then "cli.work.complete_but"
+                 (Screen, (if Final = Tk.Failed then "cli.work.failed_because"
+                           elsif Final = Tk.Complete then "cli.work.complete_but"
                            else "cli.work.ended_because"),
                   --  Its parts, as /task show calls them.
                   [Loc.Named ("name", Shown),
@@ -1735,7 +1736,7 @@ package body Model_Runner.CLI.Work is
          end;
 
          --  And what a person does next, where it did not complete.
-         if To_String (Done.Final_State) = "blocked"
+         if To_String (Done.Final_State) = Tk.Blocked
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "waiting for its children: ") = 1
          then
             declare
@@ -1940,7 +1941,7 @@ package body Model_Runner.CLI.Work is
             else
                Pres.Put_Note (Screen, "cli.next.retry", [Loc.Named ("name", To_String (Done.Task_Id))]);
             end if;
-         elsif To_String (Done.Final_State) = "cancelled" then
+         elsif To_String (Done.Final_State) = Tk.Cancelled then
             Pres.Put_Note (Screen, "cli.next.reopen", [Loc.Named ("name", To_String (Done.Task_Id))]);
             --  What waits for it waits still, as a cancel here says.
             for Other of Tk.List (Store) loop
@@ -1966,7 +1967,7 @@ package body Model_Runner.CLI.Work is
                   end;
                end if;
             end loop;
-         elsif To_String (Done.Final_State) = "verification"
+         elsif To_String (Done.Final_State) = Tk.Verification
            and then Done.Workspace_Id /= Null_Unbounded_String
          then
             Pres.Put_Note
@@ -2139,10 +2140,10 @@ package body Model_Runner.CLI.Work is
          --  Named as /task list names it: work to take in, a stop.
          Ended.Append
            (To_String (Chosen) & " "
-            & (if To_String (Done.Final_State) = "verification"
+            & (if To_String (Done.Final_State) = Tk.Verification
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, To_String (Chosen)) /= ""
                then "to integrate"
-               elsif To_String (Done.Final_State) = "blocked"
+               elsif To_String (Done.Final_State) = Tk.Blocked
                  and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
                then "stopped"
                else Model_Runner.Framework.State_Said (To_String (Done.Final_State))));
@@ -2156,7 +2157,7 @@ package body Model_Runner.CLI.Work is
          exit when Remaining.Is_Empty;
          --  Stopped by the person: the whole of it, not only this task --
          --  what was left said, still ready.
-         if To_String (Done.Final_State) = "blocked"
+         if To_String (Done.Final_State) = Tk.Blocked
            and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
          then
             declare
@@ -2188,15 +2189,15 @@ package body Model_Runner.CLI.Work is
       end if;
 
       --  Cancelled, from here or from elsewhere, ends as a cancellation.
-      if To_String (Done.Final_State) = "cancelled" then
+      if To_String (Done.Final_State) = Tk.Cancelled then
          Status := E.Exit_Cancelled;
 
       --  Waiting to be taken in is where isolated work ends well; and so
       --  is a split, waiting for its parts.
-      elsif To_String (Done.Final_State) /= "complete"
-        and then not (To_String (Done.Final_State) = "verification"
+      elsif To_String (Done.Final_State) /= Tk.Complete
+        and then not (To_String (Done.Final_State) = Tk.Verification
                       and then Done.Workspace_Id /= Null_Unbounded_String)
-        and then not (To_String (Done.Final_State) = "blocked"
+        and then not (To_String (Done.Final_State) = Tk.Blocked
                       and then Ada.Strings.Fixed.Index
                                  (To_String (Done.Reason), "waiting for its children: ") = 1)
       then

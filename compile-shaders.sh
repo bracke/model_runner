@@ -117,6 +117,9 @@ compile_dots row_product_wave_q8_0_v4_dots_glu row_product_wave_low.comp vulkan1
 compile row_product_wave_iq4_nl       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_NL MANY_ROWS=8u
 compile row_product_wave_iq4_xs       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS MANY_ROWS=8u
 compile row_product_wave_mxfp4        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u MXFP4 MANY_ROWS=8u
+compile_dots row_product_wave_iq4_nl_dots row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_NL MANY_ROWS=8u DOTS
+compile_dots row_product_wave_iq4_xs_dots row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS MANY_ROWS=8u DOTS
+compile_dots row_product_wave_mxfp4_dots  row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u MXFP4 MANY_ROWS=8u DOTS
 compile row_product_wave_nvfp4       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u NVFP4
 compile row_product_wave_q2_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q2_K MANY_ROWS=8u MANY_ROWS_FEW=4u
 compile row_product_wave_q3_k        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q3_K MANY_ROWS=8u
@@ -142,6 +145,7 @@ compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
 compile attention_matrix_mid         attention_matrix.comp vulkan1.3 MID_HEAD
 compile attention_matrix_wider       attention_matrix.comp vulkan1.3 WIDER_HEAD
 compile norm                         norm.comp             vulkan1.1
+compile norm_rounds                  norm.comp             vulkan1.1 ROUNDS
 compile rotate                       rotate.comp           vulkan1.0
 compile place                        place.comp            vulkan1.0
 compile route                        route.comp            vulkan1.0

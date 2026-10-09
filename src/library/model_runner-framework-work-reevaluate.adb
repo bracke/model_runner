@@ -31,7 +31,7 @@ begin
                                          else "");
             function Rank (State : String) return Natural
             is (if State = "verified" then 3 elsif State = "implemented" then 2
-                elsif State = "accepted" then 1 else 0);
+                elsif State = Tasks.Accepted then 1 else 0);
          begin
             --  Said as the way it went: back, because what verified it
             --  no longer covers it; or on, because now something does.

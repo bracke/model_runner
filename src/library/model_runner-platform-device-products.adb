@@ -155,6 +155,12 @@ package body Model_Runner.Platform.Device.Products is
    --  binary32.
    Round_Columns : constant := 131_072;
    Round_Bytes   : constant := 9 * Round_Columns;
+
+   --  And a second region past it that only a normalization rounding its
+   --  own answer writes, for the walks that read that answer: a walk's own
+   --  rounding between the two would otherwise overwrite it.
+   Normed_At     : constant := Round_Bytes;
+   Round_Room    : constant := 2 * Round_Bytes;
    Wave_Rows  : constant := 2;
 
    --  The low-bit subgroup kernels' band, their shader's NUM_ROWS, and their
@@ -3156,6 +3162,15 @@ package body Model_Runner.Platform.Device.Products is
                     Item.MX_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs,
                     Item.XS_Wave_Shader);
+            --  And their walks as integers, where the device has the dot.
+            if Has_Integer_Dot (On) then
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ4_NL));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ4_XS));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots,
+                       Item.Dots_Wave_Shaders (Packed_MXFP4));
+            end if;
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,
                     Item.Q2K_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K,
@@ -3211,6 +3226,23 @@ package body Model_Runner.Platform.Device.Products is
                Item.Normer := Made;
             end if;
          end;
+
+         --  And its rounding compilation, where the walks may round.
+         if Has_Integer_Dot (On) then
+            declare
+               Normed : aliased constant Model_Runner.Shaders.Word_Array :=
+                 Model_Runner.Shaders.Norm_Rounds;
+            begin
+               Request.Size := Interfaces.C.size_t (Normed'Length * 4);
+               Request.Code := Normed'Address;
+
+               if Create (Item.Logical, Request'Address, Null_Handle,
+                          Made'Access) = 0
+               then
+                  Item.Round_Normer := Made;
+               end if;
+            end;
+         end if;
 
          --  And a mixture's routing and its weighted sum, the same story
          --  again: a device that refuses either runs its mixtures a
@@ -4322,6 +4354,17 @@ package body Model_Runner.Platform.Device.Products is
                   Many (Item.NL_Wave_Shader, Packed_IQ4_NL);
                   Many (Item.MX_Wave_Shader, Packed_MXFP4);
                   Many (Item.XS_Wave_Shader, Packed_IQ4_XS);
+
+                  --  The integer walks, at the same counts.
+                  for Packing in Weight_Packing loop
+                     if Item.Dots_Wave_Shaders (Packing) /= Null_Handle then
+                        Request.Stage.Module := Item.Dots_Wave_Shaders (Packing);
+                        for Count in Many_Count loop
+                           Line (Low_Wave_Lanes, C.unsigned (Count),
+                                 Item.Dots_Multi_Lines (Packing) (Count));
+                        end loop;
+                     end if;
+                  end loop;
                   Many (Item.Q2K_Wave_Shader, Packed_Q2_K);
                   Many (Item.Q3K_Wave_Shader, Packed_Q3_K);
                   for Packing in Legacy_Packing loop
@@ -4376,6 +4419,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Norm_Line := Made;
+            end if;
+         end if;
+
+         if Item.Round_Normer /= Null_Handle then
+            Request.Stage.Module := Item.Round_Normer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Norm_Round_Line := Made;
             end if;
          end if;
 
@@ -5651,6 +5704,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
       for Packing in Weight_Packing loop
          for Count in Many_Count loop
+            Give_Back (Item.Dots_Multi_Lines (Packing) (Count), "vkDestroyPipeline");
             Give_Back (Item.Wave_Multi_Lines (Packing) (Count),
                        "vkDestroyPipeline");
          end loop;
@@ -5754,6 +5808,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
       Give_Back (Item.Attender, "vkDestroyShaderModule");
       Give_Back (Item.Norm_Line, "vkDestroyPipeline");
+      Give_Back (Item.Norm_Round_Line, "vkDestroyPipeline");
       Give_Back (Item.Route_Line, "vkDestroyPipeline");
       Give_Back (Item.Mix_Line, "vkDestroyPipeline");
       Give_Back (Item.Bias_Line, "vkDestroyPipeline");
@@ -5772,6 +5827,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
+      Give_Back (Item.Round_Normer, "vkDestroyShaderModule");
       Give_Back (Item.Router, "vkDestroyShaderModule");
       Give_Back (Item.Mixer, "vkDestroyShaderModule");
       Give_Back (Item.Biaser, "vkDestroyShaderModule");
@@ -5810,6 +5866,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.MX_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
+      for Packing in Weight_Packing loop
+         Give_Back (Item.Dots_Wave_Shaders (Packing), "vkDestroyShaderModule");
+      end loop;
       Give_Back (Item.Q2K_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");
       for Packing in Legacy_Packing loop
@@ -5865,9 +5924,15 @@ package body Model_Runner.Platform.Device.Products is
       Columns : Natural) return Address
    is (if Count not in Many_Count
          or else Columns mod 32 /= 0
-         or else (Packing /= Packed_Q8_0 and then Columns mod 256 /= 0)
+         or else (Packing not in Packed_Q8_0 | Packed_IQ4_NL | Packed_MXFP4
+                  and then Columns mod 256 /= 0)
          or else Columns > Round_Columns
        then Null_Handle
+       elsif Item.Dots_Multi_Lines (Packing) (Count) /= Null_Handle
+       then (if Row_Line (Item, Count, Packing, Columns)
+                = Item.Wave_Multi_Lines (Packing) (Count)
+             then Item.Dots_Multi_Lines (Packing) (Count)
+             else Null_Handle)
        elsif Packing = Packed_Q8_0
        then (if Count in Multi_Count
                and then Row_Line (Item, Count, Packing, Columns)
@@ -8002,7 +8067,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Rounds and then Item.Round_Buffer = Null_Handle then
-         Take (Item, Round_Bytes, Item.Round_Buffer, Item.Round_Memory,
+         Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
                Good);
          if not Good then
             Release_Borrowed;
@@ -12960,6 +13025,13 @@ package body Model_Runner.Platform.Device.Products is
           then Item.Q8_Glu_Dots_Lines (Count)
           else Null_Handle);
 
+      --  The step a step reads its activation from, or nought for the
+      --  caller's.
+      function Reads_From (Which : Positive) return Natural
+      is (if Steps.Items (Which).Reads /= 0 then Steps.Items (Which).Reads
+          elsif Steps.Items (Which).Chained then Which - 1
+          else 0);
+
       --  Whether a product walks as integers over its activations rounded
       --  first: a Q4_K walk of a few positions, its gate and up or any of
       --  them as Round_Walks says, reading its one activation from the
@@ -12985,6 +13057,30 @@ package body Model_Runner.Platform.Device.Products is
                   and then Dots_Line (Item, Steps.Items (Which).Packing,
                                       Count, Steps.Items (Which).Columns)
                            /= Null_Handle));
+
+      --  Whether a walk reads a normalization's answer whole, a position
+      --  a row of its width.
+      function Reads_Normed (Which, Norm : Positive) return Boolean
+      is (Dotted (Which)
+          and then Reads_From (Which) = Norm
+          and then Steps.Items (Norm).Norms
+          and then Steps.Items (Norm).Groups = 1
+          and then Steps.Items (Which).Columns = Steps.Items (Norm).Rows);
+
+      --  Whether a normalization rounds its answer for the walks that
+      --  read it, sparing them a rounding of their own: where one does.
+      function Norm_Rounds (Which : Positive) return Boolean
+      is (Steps.Items (Which).Norms
+          and then Item.Norm_Round_Line /= Null_Handle
+          and then (for some Reader in Which + 1 .. Steps.Held =>
+                      Reads_Normed (Reader, Which)));
+
+      --  Whether a walk reads a normalization that rounded for it: its
+      --  rounding is there already, in the normalization's region.
+      function From_Rounded_Norm (Which : Positive) return Boolean
+      is (Reads_From (Which) > 0
+          and then Reads_Normed (Which, Reads_From (Which))
+          and then Norm_Rounds (Reads_From (Which)));
 
       --  The stretch of the result buffer a step that readies heads reads:
       --  from the first byte of the steps it names to the last. It is bound
@@ -13905,7 +14001,7 @@ package body Model_Runner.Platform.Device.Products is
       if Item.Round_Buffer = Null_Handle
         and then (for some Index in 1 .. Steps.Held => Dotted (Index))
       then
-         Take (Item, Round_Bytes, Item.Round_Buffer, Item.Round_Memory,
+         Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
                Good);
          if not Good then
             Release_All;
@@ -14348,13 +14444,20 @@ package body Model_Runner.Platform.Device.Products is
 
                Told (6) := Copy_Descriptor (Item);
 
+               --  And where it rounds its answer, for the walks that
+               --  read it: the normalizations' region.
+               Told (7) :=
+                 (Buffer => Item.Round_Buffer, Offset => Normed_At,
+                  Extent => Round_Bytes);
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
                   Notes (Binding).Buffers := Told (Binding)'Address;
                end loop;
 
-               Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+               Update (Item.Logical, (if Norm_Rounds (Index) then 7 else 6),
+                       Notes'Address, 0, Null_Handle);
                goto Next_Set;
             end if;
 
@@ -14503,9 +14606,11 @@ package body Model_Runner.Platform.Device.Products is
 
             Told (6) := Copy_Descriptor (Item);
 
-            --  And the rounded activations, for a walk that reads them.
+            --  And the rounded activations, for a walk that reads them:
+            --  its own rounding's, or the normalization's it reads.
             Told (7) :=
-              (Buffer => Item.Round_Buffer, Offset => 0,
+              (Buffer => Item.Round_Buffer,
+               Offset => (if From_Rounded_Norm (Index) then Normed_At else 0),
                Extent => Round_Bytes);
 
             for Binding in Told'Range loop
@@ -14539,6 +14644,10 @@ package body Model_Runner.Platform.Device.Products is
          --  the next rounding may not overwrite until it has; not known at
          --  the start, where the sequence before may still be reading.
          Rounded_At : Natural := Natural'Last;
+
+         --  And the last that read the normalizations' region, which the
+         --  next normalization to round may not overwrite until it has.
+         Normed_Read_At : Natural := Natural'Last;
 
          --  The last step that wrote the cache, which an attending step
          --  reads without naming: its queries come from a step it names and
@@ -14618,6 +14727,14 @@ package body Model_Runner.Platform.Device.Products is
                Table   => 0,
                others  => <>);
          begin
+            --  Rounded already by the normalization it reads, which a
+            --  barrier has published: only noted, for the next
+            --  normalization that rounds to wait for.
+            if From_Rounded_Norm (Index) then
+               Normed_Read_At := Index;
+               return;
+            end if;
+
             if Rounded_At > Fenced then
                Barrier
                  (Item.Buffer, Pipeline_Stage_Compute,
@@ -16197,8 +16314,23 @@ package body Model_Runner.Platform.Device.Products is
                end if;
 
                if This.Norms then
-                  Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Norm_Line);
+                  --  Rounding its answer too, for the walks that read it,
+                  --  once the walks that read the last such rounding are
+                  --  done with it.
+                  if Norm_Rounds (Index) and then Barrier /= null then
+                     if Normed_Read_At > Fenced then
+                        Barrier
+                          (Item.Buffer, Pipeline_Stage_Compute,
+                           Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                           0, Null_Handle, 0, Null_Handle);
+                        Fenced := Index - 1;
+                     end if;
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute, Item.Norm_Round_Line);
+                  else
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute, Item.Norm_Line);
+                  end if;
 
                   declare
                      function Bits is new Ada.Unchecked_Conversion
