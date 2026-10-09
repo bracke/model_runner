@@ -89,6 +89,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Ended     : Model_Runner.Tools.Runner.Call_Outcome);
 
    overriding procedure On_Step (Self : in out Agent_Watch);
+   overriding procedure On_Turn
+     (Self  : in out Agent_Watch;
+      Step  : Positive;
+      Calls : Positive);
 
    --  A call's number in the run, as the trace writes it.
    function Number (Call : Model_Runner.Agent.Invocation) return String is
@@ -125,6 +129,25 @@ package body Model_Runner.CLI.Execute.Run_Command is
                  & Body_Text & "}");
       Self.Count := Self.Count + 1;
    end Record_Event;
+
+   --  A turn's calls, counted, before they run: in the trace as an event
+   --  of its own, so a reader sees which calls came together.
+   overriding procedure On_Turn
+     (Self  : in out Agent_Watch;
+      Step  : Positive;
+      Calls : Positive)
+   is
+      function Bare (Value : Positive) return String is
+         Raw : constant String := Positive'Image (Value);
+      begin
+         return Raw (Raw'First + 1 .. Raw'Last);
+      end Bare;
+   begin
+      if Self.Trace then
+         Record_Event
+           (Self, """event"":""turn"",""step"":" & Bare (Step) & ",""calls"":" & Bare (Calls));
+      end if;
+   end On_Turn;
 
    overriding procedure On_Call
      (Self      : in out Agent_Watch;

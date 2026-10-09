@@ -9901,6 +9901,7 @@ package body Tests.Framework_Cases is
       Change  : S.Transaction;
       First   : Unbounded_String;
       Second  : Unbounded_String;
+      Stuck   : Unbounded_String;
       Catalog : aliased Model_Runner.Localization.Catalog;
       Screen  : Model_Runner.Presentation.Console;
       Before  : constant String := Dirs.Current_Directory;
@@ -9943,6 +9944,14 @@ package body Tests.Framework_Cases is
       end;
       Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
       Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      --  And one blocked, with why, for /why to say.
+      Tk.Create (Store, Change, Fields ("Wait for the vendor", "analysis"), "user", "", Stuck, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Stuck), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Stuck), "blocked", "the vendor has not answered",
+               Status => Status);
       S.Commit (Store, Change, Status);
       declare
          Root : constant String := Fresh_Root (Store);
@@ -10014,6 +10023,7 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/why", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Second), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/why TASK-404", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Stuck), Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -10028,6 +10038,9 @@ package body Tests.Framework_Cases is
                        or else Ada.Strings.Fixed.Index (Text, To_String (Second) & " can") > 0
                        or else Ada.Strings.Fixed.Index (Text, To_String (Second) & " cannot") > 0,
                        "/why said nothing of the task it was asked about");
+               Assert (Ada.Strings.Fixed.Index
+                         (Text, To_String (Stuck) & " is blocked: the vendor has not answered") > 0,
+                       "/why did not give the reason a blocked task was recorded with");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

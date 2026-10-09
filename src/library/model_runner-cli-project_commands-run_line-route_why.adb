@@ -44,6 +44,27 @@ procedure Route_Why is
                          Loc.Named ("detail", Next.Why_Not (Next.Blocked.Find_Index (Asked)))]);
       elsif Next.Awaiting.Contains (Asked) then
          Pres.Put_Note (Screen, "cli.why.candidate", [Loc.Named ("name", Asked)]);
+      elsif Tk.State_Of (Store, Asked) = Tk.Blocked or else Tk.State_Of (Store, Asked) = Tk.Failed then
+         --  Why it stopped, as the harness recorded it when it moved it.
+         declare
+            View : R.Item;
+            Read : E.Error_Info;
+            Failed_Now : constant Boolean := Tk.State_Of (Store, Asked) = Tk.Failed;
+            Field : constant String := (if Failed_Now then "current_failure" else "blocking_reasons");
+         begin
+            Tk.Effective (Store, Asked, View, Read);
+            declare
+               Recorded : constant String :=
+                 (if E.Is_Error (Read) then ""
+                  elsif R.Get (View, "runtime." & Field) /= "" then R.Get (View, "runtime." & Field)
+                  else R.Get (View, Field));
+            begin
+               Pres.Put_Note
+                 (Screen, (if Failed_Now then "cli.why.failed" else "cli.why.stopped"),
+                  [Loc.Named ("name", Asked),
+                   Loc.Named ("detail", (if Recorded = "" then "no reason was recorded" else Recorded))]);
+            end;
+         end;
       else
          Pres.Put_Note (Screen, "cli.why.state",
                         [Loc.Named ("name", Asked), Loc.Named ("value", Tk.State_Of (Store, Asked))]);

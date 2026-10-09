@@ -297,6 +297,11 @@ package body Model_Runner.CLI.Project_Commands is
 
    end record;
 
+   overriding procedure On_Turn
+     (Self  : in out Watch;
+      Step  : Positive;
+      Calls : Positive);
+
    overriding procedure On_Call
      (Self      : in out Watch;
       Call      : Model_Runner.Agent.Invocation;
@@ -335,6 +340,20 @@ package body Model_Runner.CLI.Project_Commands is
       end;
    end Whose;
 
+   --  Several asked at once: said so before the first is shown, as their
+   --  answers come after them all, in the order asked.
+   overriding procedure On_Turn
+     (Self  : in out Watch;
+      Step  : Positive;
+      Calls : Positive)
+   is
+      pragma Unreferenced (Step);
+   begin
+      if Calls > 1 then
+         Pres.Put_Note (Self.Screen.all, "cli.agent.calls_at_once");
+      end if;
+   end On_Turn;
+
    overriding procedure On_Call
      (Self      : in out Watch;
       Call      : Model_Runner.Agent.Invocation;
@@ -349,11 +368,6 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       if Self.Output /= null then
          Drop_Held (Self.Output.all);
-      end if;
-      --  The second of several asked at once: said so, as their answers
-      --  come after them all, in the order asked.
-      if Call.In_Turn = 2 then
-         Pres.Put_Note (Self.Screen.all, "cli.agent.calls_at_once");
       end if;
       --  Each of several asked at once is numbered, as its answer is.
       Pres.Put_Tool_Call (Self.Screen.all, Whose (Self) & Named & Place (Call), Arguments);

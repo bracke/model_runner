@@ -28,9 +28,9 @@ package body Untested_Surface is
    --  is the current directory, which a test would have to change under
    --  every other case running.
    --
-   --  The agent loop's observer. On_Call, On_Result and On_Step are what
-   --  a watcher overrides to be told of each call, each result and each
-   --  step, and every `run --agent` drives them through the console's
+   --  The agent loop's observer. On_Turn, On_Call, On_Result and On_Step
+   --  are what a watcher overrides to be told of each turn's calls, each
+   --  call, each result and each step, and every `run --agent` drives them through the console's
    --  watcher; a test that names them would need a model that calls a
    --  tool, and no fixture here does -- the campaign that exercises them
    --  runs against published models, behind the gate rather than in it.
@@ -96,6 +96,7 @@ package body Untested_Surface is
          | "On_Call"
          | "On_Result"
          | "On_Step"
+         | "On_Turn"
          | "Ordinal"
          | "Plan_For"
          | "Power"

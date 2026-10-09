@@ -7,7 +7,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
-- **/why:** why a task can or cannot run, or -- with no task named -- what /work takes next, or why it takes nothing, from the project's next work rather than reconstructed: a task that can run is said with whether /work takes it first, one that cannot with its reason, a candidate with how to accept it.
+- **/why:** why a task can or cannot run, or -- with no task named -- what /work takes next, or why it takes nothing, from the project's next work rather than reconstructed: a task that can run is said with whether /work takes it first, one that cannot with its reason, a candidate with how to accept it, and a blocked or failed task with the reason the harness recorded when it moved it.
+- **The agent loop says a turn before its calls:** Observer.On_Turn gives how many calls a turn asked for before any runs, so a watcher says a batch from that rather than from noticing a second call; --trace-file writes it as a turn event.
 
 ### Changed
 

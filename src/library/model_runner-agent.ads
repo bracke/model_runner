@@ -124,6 +124,18 @@ package Model_Runner.Agent is
       Changes : Boolean := False;
    end record;
 
+   --  A turn the model took that asked for calls, before any is run: how
+   --  many it asked for, so a watcher knows a batch for one before its
+   --  first call arrives. The default does nothing.
+   --
+   --  @param Self The observer.
+   --  @param Step The model's turn, counting from one.
+   --  @param Calls How many calls it asked for.
+   procedure On_Turn
+     (Self  : in out Observer;
+      Step  : Positive;
+      Calls : Positive) is null;
+
    --  A call the model made, about to be run.
    --
    --  @param Self The observer.

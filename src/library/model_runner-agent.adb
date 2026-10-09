@@ -462,6 +462,10 @@ package body Model_Runner.Agent is
             --  Nothing left to run: the model has answered.
             exit Step_Loop when Asked = 0;
 
+            if Watch /= null then
+               Watch.On_Turn (Result.Steps, Asked);
+            end if;
+
             --  Calls to run, but no room to run them and read the answer.
             if Result.Steps >= Max_Steps then
                Result.Reason := Step_Limit;
