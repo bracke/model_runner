@@ -13055,9 +13055,14 @@ package body Model_Runner.Platform.Device.Products is
              else Rounds_Walks (Item) = Rounds_Every
                   and then not Tiled (Which)
                   and then not Listed_Tiled (Which)
-                  and then not Steps.Items (Which).Listed
-                  and then Steps.Items (Which).Gathers = 0
-                  and then Steps.Items (Which).Routed = 0
+                  --  A mixture's experts each walking their own run: the
+                  --  runs read the batch's positions by their lists, as
+                  --  the rounding lays them out -- but not a run laid out
+                  --  by slot, whose activation is a gathered copy.
+                  and then (if Steps.Items (Which).Listed
+                            then not Steps.Items (Which).By_Slot
+                            else Steps.Items (Which).Gathers = 0
+                                 and then Steps.Items (Which).Routed = 0)
                   and then Dots_Line (Item, Steps.Items (Which).Packing,
                                       Count, Steps.Items (Which).Columns)
                            /= Null_Handle));

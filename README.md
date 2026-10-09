@@ -12853,10 +12853,13 @@ against 29.0. The table formats' weights are whole numbers a byte holds, and
 IQ4_XS checks eight positions in 0.58 ms against 0.79; Q2_K's and Q3_K's
 quants are small whole numbers already, and both check a third faster (Q2_K
 eight positions 0.51 ms against 0.75). The codebook formats -- IQ2 and IQ3 --
-were tried and are not: their walks are bound by the lookups that decode
-them, and the integer dot read level or slower. A walk that reads a
+were tried, IQ1 too, and are not: their walks are bound by the lookups that
+decode them, and the integer dot read level or slower. A walk that reads a
 normalization's answer takes it rounded from the normalization itself rather
-than in a pass of its own. Qwen3 8B's own drafting reads 19.4 tokens a second
+than in a pass of its own. A mixture's experts walk the same way, each its
+run of the batch's positions out of the one rounding: Qwen3-Coder-30B-A3B
+Q2_K drafting seven a round reads 25.8 tokens a second against 22.6 in
+binary32. Qwen3 8B's own drafting reads 19.4 tokens a second
 by default against 18.9 at `--arith f32`. A drafted run at the default then
 no longer answers exactly what an undrafted one does; `--arith f32` is the
 run that does. A device without the integer dot keeps the binary32 walks.

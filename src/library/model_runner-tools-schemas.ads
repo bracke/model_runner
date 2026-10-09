@@ -20,8 +20,8 @@ package Model_Runner.Tools.Schemas is
    --  No fixed few: any string.
    Any_Text : constant Choice_Lists.Vector := Choice_Lists.Empty_Vector;
 
-   --  One parameter of a tool: a string, named, required or not, and one
-   --  of Choices where those are given.
+   --  One parameter of a tool: a string or a whole number, named, required
+   --  or not, and a string one of Choices where those are given.
    type Parameter is private;
 
    --  A string parameter.
@@ -34,6 +34,15 @@ package Model_Runner.Tools.Schemas is
      (Name     : String;
       Required : Boolean := True;
       Choices  : Choice_Lists.Vector := Any_Text) return Parameter;
+
+   --  A whole-number parameter.
+   --
+   --  @param Name What the model writes it as.
+   --  @param Required Whether a call must give it.
+   --  @return The parameter.
+   function Whole_Number
+     (Name     : String;
+      Required : Boolean := True) return Parameter;
 
    type Parameter_List is array (Positive range <>) of Parameter;
 
@@ -66,6 +75,7 @@ private
       Name     : Ada.Strings.Unbounded.Unbounded_String;
       Required : Boolean := True;
       Choices  : Choice_Lists.Vector;
+      Whole    : Boolean := False;
    end record;
 
    No_Parameters : constant Parameter_List (1 .. 0) := [others => <>];

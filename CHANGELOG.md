@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A mixture's experts walk as integers too:** a check round's expert runs read the batch's positions by their lists out of the one rounding, so a listed walk takes the integer kernels as a plain one does (a run laid out by slot, the experts' down projection, keeps binary32). Qwen3-Coder-30B-A3B Q2_K drafting seven a round from its context reads 25.8 tokens a second against 23.1 before and 22.6 at --arith f32, the same proposals kept; at three a round 34.0 against 32.1.
+- **The built-in tools' definitions are structures too:** the calculator, lookup and the rest are written through Tools.Schemas, which takes a whole-number parameter now, as the work agent's tools already were -- every string escaped, one shape.
+- **IQ1_S's and IQ1_M's walks were written as integers and measured level or slower** -- their grid lookups are the cost, as IQ2's and IQ3's -- and are not kept.
+
 - **The device rounds a drafted round's walks by default, as the processor does:** `run` and `tests speed` set the device's walks by the run's arithmetic -- int8 unless named otherwise, mixed for Gemma 2 -- where they rounded only when --arith was named. Qwen3 8B drafts at 19.4 tokens a second against 18.9 at --arith f32, the same proposals kept. `--arith f32` keeps them binary32, where a drafted run answers exactly what an undrafted one does. The device table's six-token run, which walks, was taken again: both backends print the same text, every cell within its spread.
 - **Q2_K's and Q3_K's walks multiply as integers:** their quants are small whole numbers already; both check a third faster (Q2_K eight positions 0.51 ms against 0.75, Q3_K 0.59 against 0.87). The codebook formats' walks were written the same way and measured level or slower -- their lookups are the cost -- and are not kept.
 - **/work says the work as the harness recorded it:** what was changed, what still fails and what was refused, as a root agent's run ends -- the record a compacted conversation carries, now shown too.

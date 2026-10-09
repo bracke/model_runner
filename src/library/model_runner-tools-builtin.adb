@@ -16,6 +16,7 @@ with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
 with Model_Runner.Tools.RTF;
+with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Text_Util;
 with Model_Runner.UTF8;
 
@@ -47,112 +48,85 @@ package body Model_Runner.Tools.Builtin is
    --  tool cannot be described in one place and not the other.
    ---------------------------------------------------------------------------
 
+   package Sc renames Model_Runner.Tools.Schemas;
+
    Pure_Body : constant String :=
-     "{""type"": ""function"", ""function"": {"
-     & """name"": ""calculator"", "
-     & """description"": ""Evaluate a binary arithmetic operation on two "
-     & "integers."", "
-     & """parameters"": {""type"": ""object"", ""properties"": {"
-     & """a"": {""type"": ""integer""}, "
-     & """op"": {""type"": ""string"", ""enum"": [""+"", ""-"", ""*"", "
-     & """/""]}, "
-     & """b"": {""type"": ""integer""}}, "
-     & """required"": [""a"", ""op"", ""b""]}}}, "
-     & "{""type"": ""function"", ""function"": {"
-     & """name"": ""string_length"", "
-     & """description"": ""Return the number of characters in a string."", "
-     & """parameters"": {""type"": ""object"", ""properties"": {"
-     & """text"": {""type"": ""string""}}, "
-     & """required"": [""text""]}}}, "
-     & "{""type"": ""function"", ""function"": {"
-     & """name"": ""reverse_text"", "
-     & """description"": ""Return a string with its characters reversed."", "
-     & """parameters"": {""type"": ""object"", ""properties"": {"
-     & """text"": {""type"": ""string""}}, "
-     & """required"": [""text""]}}}, "
-     & "{""type"": ""function"", ""function"": {"
-     & """name"": ""lookup"", "
-     & """description"": ""Look up a fact by its key."", "
-     & """parameters"": {""type"": ""object"", ""properties"": {"
-     & """key"": {""type"": ""string"", ""enum"": ["
-     & """capital_of_france"", ""speed_of_light"", ""ada_year""]}}, "
-     & """required"": [""key""]}}}";
-
-   --  Shorthands for the many one- and two-string parameter schemas below.
-   function Str1 (Name : String) return String
-   is ("{""type"": ""object"", ""properties"": {"
-       & """" & Name & """: {""type"": ""string""}}, "
-       & """required"": [""" & Name & """]}");
-
-   function Str2 (A, B : String) return String
-   is ("{""type"": ""object"", ""properties"": {"
-       & """" & A & """: {""type"": ""string""}, "
-       & """" & B & """: {""type"": ""string""}}, "
-       & """required"": [""" & A & """, """ & B & """]}");
-
-   function Tool (Name, Description, Parameters : String) return String
-   is ("{""type"": ""function"", ""function"": {""name"": """ & Name
-       & """, ""description"": """ & Description
-       & """, ""parameters"": " & Parameters & "}}");
+     Sc.Definition
+       ("calculator", "Evaluate a binary arithmetic operation on two integers.",
+        [Sc.Whole_Number ("a"), Sc.Text ("op", Choices => ["+", "-", "*", "/"]),
+         Sc.Whole_Number ("b")])
+     & ", "
+     & Sc.Definition ("string_length", "Return the number of characters in a string.",
+                      [Sc.Text ("text")])
+     & ", "
+     & Sc.Definition ("reverse_text", "Return a string with its characters reversed.",
+                      [Sc.Text ("text")])
+     & ", "
+     & Sc.Definition
+         ("lookup", "Look up a fact by its key.",
+          [Sc.Text ("key",
+                    Choices => ["capital_of_france", "speed_of_light", "ada_year"])]);
 
    More_Body : constant String :=
-     Tool ("base64_encode", "Encode a string as base64.", Str1 ("text"))
+     Sc.Definition ("base64_encode", "Encode a string as base64.", [Sc.Text ("text")])
      & ", "
-     & Tool ("base64_decode", "Decode a base64 string.", Str1 ("text"))
+     & Sc.Definition ("base64_decode", "Decode a base64 string.", [Sc.Text ("text")])
      & ", "
-     & Tool ("now", "Return the current local date and time.",
-             "{""type"": ""object"", ""properties"": {}}")
+     & Sc.Definition ("now", "Return the current local date and time.", Sc.No_Parameters)
      & ", "
-     & Tool ("memory_put", "Remember a value under a key for later.",
-             Str2 ("key", "value"))
+     & Sc.Definition ("memory_put", "Remember a value under a key for later.",
+                      [Sc.Text ("key"), Sc.Text ("value")])
      & ", "
-     & Tool ("memory_get", "Recall the value remembered under a key.",
-             Str1 ("key"))
+     & Sc.Definition ("memory_get", "Recall the value remembered under a key.",
+                      [Sc.Text ("key")])
      & ", "
-     & Tool ("read_file", "Read a text file and return its contents.",
-             Str1 ("path"))
+     & Sc.Definition ("read_file", "Read a text file and return its contents.",
+                      [Sc.Text ("path")])
      & ", "
-     & Tool ("write_file", "Write text to a file, replacing it.",
-             Str2 ("path", "content"))
+     & Sc.Definition ("write_file", "Write text to a file, replacing it.",
+                      [Sc.Text ("path"), Sc.Text ("content")])
      & ", "
-     & Tool ("list_directory", "List the entries of a directory.",
-             Str1 ("path"))
+     & Sc.Definition ("list_directory", "List the entries of a directory.",
+                      [Sc.Text ("path")])
      & ", "
-     & Tool ("retrieve",
-             "Search a folder of text files for the passages most relevant "
-             & "to a query, ranked.",
-             Str2 ("folder", "query"))
+     & Sc.Definition
+         ("retrieve",
+          "Search a folder of text files for the passages most relevant "
+          & "to a query, ranked.",
+          [Sc.Text ("folder"), Sc.Text ("query")])
      & ", "
-     & Tool ("shell", "Run a shell command and return its output.",
-             Str1 ("command"))
+     & Sc.Definition ("shell", "Run a shell command and return its output.",
+                      [Sc.Text ("command")])
      & ", "
-     & Tool ("run_python", "Run Python 3 source and return its output.",
-             Str1 ("code"))
+     & Sc.Definition ("run_python", "Run Python 3 source and return its output.",
+                      [Sc.Text ("code")])
      & ", "
-     & Tool ("http_get", "Fetch a URL over HTTP and return the body.",
-             Str1 ("url"))
+     & Sc.Definition ("http_get", "Fetch a URL over HTTP and return the body.",
+                      [Sc.Text ("url")])
      & ", "
-     & Tool ("web_search", "Search the web and return the results page.",
-             Str1 ("query"))
+     & Sc.Definition ("web_search", "Search the web and return the results page.",
+                      [Sc.Text ("query")])
      & ", "
-     & Tool ("sql", "Run a query against a SQLite database file.",
-             Str2 ("database", "query"))
+     & Sc.Definition ("sql", "Run a query against a SQLite database file.",
+                      [Sc.Text ("database"), Sc.Text ("query")])
      & ", "
-     & Tool ("delegate",
-             "Hand a self-contained subtask to a fresh sub-agent that has "
-             & "the same tools and a budget of its own, and get back only its "
-             & "final answer. Use it to keep the detail of a large job out of "
-             & "your own context: describe the whole subtask in one task "
-             & "string, as the sub-agent starts with no memory of this "
-             & "conversation.",
-             Str1 ("task"))
+     & Sc.Definition
+         ("delegate",
+          "Hand a self-contained subtask to a fresh sub-agent that has "
+          & "the same tools and a budget of its own, and get back only its "
+          & "final answer. Use it to keep the detail of a large job out of "
+          & "your own context: describe the whole subtask in one task "
+          & "string, as the sub-agent starts with no memory of this "
+          & "conversation.",
+          [Sc.Text ("task")])
      & ", "
-     & Tool ("ask_user",
-             "Ask the user a question and get back what they type. Use it "
-             & "when the task is ambiguous, a choice is the user's to make, or "
-             & "you need something only the user knows -- not for what a tool "
-             & "or your own reasoning can settle.",
-             Str1 ("question"));
+     & Sc.Definition
+         ("ask_user",
+          "Ask the user a question and get back what they type. Use it "
+          & "when the task is ambiguous, a choice is the user's to make, or "
+          & "you need something only the user knows -- not for what a tool "
+          & "or your own reasoning can settle.",
+          [Sc.Text ("question")]);
 
    Definitions     : constant String := "[" & Pure_Body & "]";
    All_Definitions : constant String := "[" & Pure_Body & ", " & More_Body

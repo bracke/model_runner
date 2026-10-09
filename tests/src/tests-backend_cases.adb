@@ -8102,6 +8102,125 @@ package body Tests.Backend_Cases is
    --  over a batch long enough for the matrix kernel, whose half-precision
    --  operand is held to a tolerance. Holds Add_Invert and Add_Listed_Product, and the
    --  inverting, listed and mixing kernels' listed paths.
+   --  A mixture's experts walking a few positions as integers -- each
+   --  expert its run, the runs reading the batch's positions by their lists
+   --  out of the one rounding -- answer what the binary32 walks answer, to
+   --  the rounding of the activations. Q4_K stacks, four positions.
+   procedure Listed_Walks_As_Integers_Stay_Close
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type Products.Walk_Rounding;
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 256;
+      Feed    : constant := 256;
+      Count   : constant := 4;
+      Padded  : constant := Used + (15 * Experts + Count - 1) / Count;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Gates  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Inputs : N.Real_Array (0 .. Count * Width - 1);
+
+      --  The router's scores, the routing, the inversion's room, then the
+      --  listed answer with its padding, a position each.
+      At_Listed : constant N.Element_Count :=
+        N.Element_Count (Count) * (Experts + 2 * Used + 32 * Experts + 3 * Used);
+      Room      : constant N.Element_Count :=
+        At_Listed + N.Element_Count (Count * Padded * Feed);
+
+      subtype Answers is N.Real_Array (0 .. Room - 1);
+      Plain, Rounded : Answers := [others => 0.0];
+
+      type Byte_Access is access B.Byte_Array;
+      G_Bytes : Byte_Access;
+
+      procedure Run_With (Rounding : Products.Walk_Rounding; Into : out Answers) is
+         Steps : Products.Sequence;
+      begin
+         Into := [others => 0.0];
+         Products.Round_Walks (Engine, Rounding);
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address,
+            B.Byte_Count (Router'Length) * 4, 0,
+            Products.Values_F32, Experts, Width, Added, Kept => False);
+         Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+         Products.Add_Invert (Steps, Experts, Used, 2, Added);
+         Products.Add_Listed_Product
+           (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+            Products.Packed_Q4_K, Experts * Feed, Feed, Width, Experts, Used, 3,
+            Count, Added, Chained => False);
+         Assert (Added, "the listed gates were refused");
+         Products.Run (Engine, Steps, Inputs, Count, Into, Ok, Halted);
+         Assert (Ok, "the listed walk was refused");
+      end Run_With;
+
+      Largest : N.Real := 0.0;
+      Worst   : N.Real := 0.0;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+         if not Ready then
+            Devices.Close (Opened);
+         end if;
+      end if;
+      if not Ready then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Round_Walks (Engine, Products.Rounds_Every);
+      if Products.Rounds_Walks (Engine) /= Products.Rounds_Every then
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Router'Range loop
+         Router (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Gates'Range loop
+         Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
+      end loop;
+      for Index in Inputs'Range loop
+         Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
+      end loop;
+      G_Bytes := new B.Byte_Array'(Fixtures.Encode_Q4_K (Gates.all));
+
+      Run_With (Products.Rounds_None, Plain);
+      Run_With (Products.Rounds_Every, Rounded);
+
+      for Index in At_Listed .. Room - 1 loop
+         Largest := N.Real'Max (Largest, abs Plain (Index));
+         Worst := N.Real'Max (Worst, abs (Plain (Index) - Rounded (Index)));
+      end loop;
+      Assert (Largest > 0.0, "the listed walk answered nothing but zeroes");
+      Assert (Worst <= 0.01 * Largest,
+              "a listed walk as integers strayed" & N.Real'Image (Worst)
+              & " from the binary32 walk's largest" & N.Real'Image (Largest));
+      Assert (Worst > 0.0,
+              "a listed walk said to round answered the binary32 bits, so it did not");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Listed_Walks_As_Integers_Stay_Close;
+
    procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10914,6 +11033,10 @@ package body Tests.Backend_Cases is
         (T, A_Whole_Group_Bundle_Attends_As_A_Host_Does'Access,
          "a group of five, six or seven heads bundled whole attends as the "
          & "host works it out");
+      Register_Routine
+        (T, Listed_Walks_As_Integers_Stay_Close'Access,
+         "a mixture's experts walking a few positions as integers stay "
+         & "within their rounding of the binary32 walks");
       Register_Routine
         (T, Device_Decodes_Every_Format_It_Claims'Access,
          "the device decodes every format it claims, as the processor does");

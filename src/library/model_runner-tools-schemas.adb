@@ -10,7 +10,18 @@ package body Model_Runner.Tools.Schemas is
      (Name     : String;
       Required : Boolean := True;
       Choices  : Choice_Lists.Vector := Any_Text) return Parameter
-   is ((Name => To_Unbounded_String (Name), Required => Required, Choices => Choices));
+   is ((Name => To_Unbounded_String (Name), Required => Required, Choices => Choices,
+        Whole => False));
+
+   ------------------
+   -- Whole_Number --
+   ------------------
+
+   function Whole_Number
+     (Name     : String;
+      Required : Boolean := True) return Parameter
+   is ((Name => To_Unbounded_String (Name), Required => Required,
+        Choices => Any_Text, Whole => True));
 
    ------------
    -- Quoted --
@@ -58,7 +69,8 @@ package body Model_Runner.Tools.Schemas is
             end loop;
             Append (Properties,
                     (if Length (Properties) = 0 then "" else ", ")
-                    & Quoted (To_String (One.Name)) & ": {""type"": ""string"""
+                    & Quoted (To_String (One.Name))
+                    & (if One.Whole then ": {""type"": ""integer""" else ": {""type"": ""string""")
                     & (if One.Choices.Is_Empty then ""
                        else ", ""enum"": [" & To_String (Choices) & "]")
                     & "}");
