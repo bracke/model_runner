@@ -103,10 +103,41 @@ begin
       end;
    end;
 
-   Report := To_Unbounded_String
-     (Scope_Said & Running & (if Passed then " passed" else " failed") & ", "
-      & To_String (Evidence));
    Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
+
+   --  A profile whose every check is the command true -- what /init writes
+   --  where no check was named -- passes having checked nothing. Said as
+   --  that, or a model reads the pass as its work found sound: a 4B wrote
+   --  Ada that would not compile and reported it verified on this.
+   declare
+      Commands : Natural := 0;
+      Empty    : Natural := 0;
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Said  : constant String := Records.Get (Value, Field);
+            Mark  : constant String := "command=true,";
+         begin
+            if Field'Length > 11 and then Field (Field'First .. Field'First + 10) = "parameters." then
+               Commands := Commands + 1;
+               if Said'Length >= Mark'Length
+                 and then Said (Said'First .. Said'First + Mark'Length - 1) = Mark
+               then
+                  Empty := Empty + 1;
+               end if;
+            end if;
+         end;
+      end loop;
+      Report := To_Unbounded_String
+        (Scope_Said & Running
+         & (if Passed and then Commands > 0 and then Empty = Commands
+            then " checked nothing: its every check is the command true, which "
+                 & "tests nothing -- the project names no real check, so the "
+                 & "work is unchecked; say so rather than calling it verified"
+            elsif Passed then " passed" else " failed") & ", "
+         & To_String (Evidence));
+   end;
    for Index in 1 .. Records.Field_Count (Value) loop
       declare
          Field : constant String := Records.Field_Name (Value, Index);

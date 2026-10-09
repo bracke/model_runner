@@ -99,7 +99,16 @@ package body Agent_Trial is
       Git ("init -q");
       Git ("add -A");
       Git ("commit -qm start");
+      --  Where the check's compiler writes, apart from the sources.
+      Ada.Directories.Create_Path (Root & "/obj");
    end Make_Project;
+
+   --  The project's check: the program compiled, where a compiler is here.
+   --  /init's own is the command true, which checks nothing, and a model
+   --  that wrote Ada that would not compile was told its work had passed.
+   Check_Line : constant String :=
+     "/reconfigure add set.execution.allowed gnatmake "
+     & "profile.checks=""check: gnatmake -q -gnatc -D obj -aIsrc src/main.adb"" confirm=yes";
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is
@@ -200,6 +209,14 @@ package body Agent_Trial is
                   Ignored := Hostkit.Descriptors.Write (Pair.To_Child, Bytes, Wrote);
                end Send;
 
+               --  Send a line, as a condition: true, so a chain of steps
+               --  reads as one.
+               function Send_Then (Line : String) return Boolean is
+               begin
+                  Send (Line);
+                  return True;
+               end Send_Then;
+
                Words  : Hostkit.String_Vectors.Vector;
                Worked : Boolean := False;
             begin
@@ -250,7 +267,11 @@ package body Agent_Trial is
                      Send ("");
                      if Wait_For ("as planned", 30.0) then
                         Send ("");
-                        if Wait_For ("initialized", 30.0) then
+                        if Wait_For ("initialized", 30.0)
+                          and then (Hostkit.Process.Locate ("gnatmake") = ""
+                                    or else (Send_Then (Check_Line)
+                                             and then Wait_For ("is now revision", 30.0)))
+                        then
                            Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
                                  & (if To_String (One.Kind) = "implementation"
                                     then " component=" & Project else "")

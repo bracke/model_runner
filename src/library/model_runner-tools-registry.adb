@@ -125,7 +125,7 @@ package body Model_Runner.Tools.Registry is
          begin
             Kinds.Append ("text");
             if Can (Project_Graph) then
-               for One of Sc.Choice_Lists.Vector'(["symbol", "references", "uses", "used_by", "impact"]) loop
+               for One of Sc.Choice_Lists.Vector'(["symbol", "references", "depends_on", "used_by", "impact"]) loop
                   Kinds.Append (One);
                end loop;
             end if;
@@ -134,8 +134,9 @@ package body Model_Runner.Tools.Registry is
                "Find, by kind: text -- the lines holding query in path, a file or a folder (the whole"
                & " tree when not given)"
                & (if Can (Project_Graph)
-                  then "; symbol -- where a name is declared; references -- where it is used; uses --"
-                       & " what a unit or a file's unit uses; used_by -- what uses it; impact -- what"
+                  then "; symbol -- where a name is declared; references -- where it is used; depends_on --"
+                       & " the units a unit or a file's unit depends on; used_by -- the units that use"
+                       & " it; impact -- what"
                        & " changing a file or a name reaches"
                   else "")
                & ".",

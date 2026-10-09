@@ -217,6 +217,20 @@ package body Model_Runner.Framework.Code_Queries is
             end if;
          end;
       end if;
+      --  A unit the graph holds with nothing on the side asked is an
+      --  answer, not an absence: said as one, with the other direction
+      --  named. "Nothing in the graph for Calc", said of what Calc uses, a
+      --  model took for "nothing uses Calc", when Main did.
+      if Said = Null_Unbounded_String
+        and then Named in "dependencies" | "dependents"
+        and then (if Is_File (Given) then not Units.Is_Empty
+                  else not Rp.Find_Symbols (Graph, Given).Is_Empty)
+      then
+         return (if Named = "dependencies"
+                 then Given & " depends on no unit of the project; find kind used_by says what uses it"
+                 else "no unit of the project uses " & Given
+                      & "; find kind depends_on says what it uses");
+      end if;
       return (if Said = Null_Unbounded_String
               then "nothing in the project's graph for " & Given
               else To_String (Said));
@@ -235,14 +249,14 @@ package body Model_Runner.Framework.Code_Queries is
       package Sc renames Model_Runner.Tools.Schemas;
       Named : constant String :=
         (if Kind = "symbol" then "find_symbol" elsif Kind = "references" then "find_references"
-         elsif Kind = "uses" then "dependencies" elsif Kind = "used_by" then "dependents"
+         elsif Kind = "depends_on" then "dependencies" elsif Kind = "used_by" then "dependents"
          elsif Kind = "impact" then "impact" else "");
       Key   : constant String :=
         (if Kind in "symbol" | "references" then "name" elsif Kind = "impact" then "target" else "unit");
    begin
       if Named = "" then
          Failed := True;
-         return "error: find takes kind symbol, references, uses, used_by, impact or text -- not " & Kind;
+         return "error: find takes kind symbol, references, depends_on, used_by, impact or text -- not " & Kind;
       end if;
       return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed);
    end Find;

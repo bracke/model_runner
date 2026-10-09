@@ -4109,6 +4109,20 @@ package body Tests.Framework_Cases is
                  and then Has (Cq.Find (Store, "symbol", "Next", Failed), "src/parser.ads")
                  and then Has (Cq.Find (Store, "nonsense", "Next", Failed), "error:") and then Failed,
                  "find by kind did not ask the graph as its kind says");
+         --  A unit there with nothing on the side asked: said as an
+         --  answer, the other direction named -- not as a unit not there.
+         declare
+            Failed_Uses  : Boolean;
+            Failed_Users : Boolean;
+            Uses_Nothing : constant String := Cq.Find (Store, "depends_on", "Parser", Failed_Uses);
+            Not_Used     : constant String := Cq.Find (Store, "used_by", "Extra", Failed_Users);
+         begin
+            Assert (Has (Uses_Nothing, "Parser depends on no unit of the project; find kind used_by")
+                    and then not Failed_Uses and then not Failed_Users,
+                    "a unit depending on nothing was not said so: " & Uses_Nothing);
+            Assert (Has (Not_Used, "no unit of the project uses Extra; find kind depends_on"),
+                    "a unit nothing uses was not said so: " & Not_Used);
+         end;
          Assert (Has (Asked ("dependents", "{""unit"": ""Parser""}"), "Extra"),
                  "an answer after a write was about the code before it: "
                  & Asked ("dependents", "{""unit"": ""Parser""}"));
