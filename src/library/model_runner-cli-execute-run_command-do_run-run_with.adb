@@ -1533,10 +1533,14 @@ begin
             --  edit to code, a summary, a quotation -- is where it
             --  pays: gemma-3-4b editing a function 20.8 -> 31.8
             --  tokens a second, qwen3-8b 12.7 -> 13.9, and prose
-            --  within a few per cent either way. Not a mixture: its
-            --  check of several positions reads several tokens'
-            --  experts, and Qwen3-Coder-30B lost 9 and 15 per cent.
-            --  Nor on the processor, where checking several positions
+            --  within a few per cent either way. A mixture too, now
+            --  that a lookup keeping little rests: its check of several
+            --  positions reads several tokens' experts, so a round that
+            --  keeps nothing costs it most of a token, and Qwen3-Coder-
+            --  30B lost 9 and 15 per cent before -- resting, it reads
+            --  prose 37.0 -> 36.3 and an edit 33.2 -> 37.6, though its
+            --  token reads only the experts it routes to, 1.1 GB, under
+            --  the size a dense model must have. Not on the processor, where checking several positions
             --  costs several positions' arithmetic and a phrase seen
             --  before is too seldom what follows to pay for it: phi3
             --  kept 4 to 8 per cent of what the text proposed and lost
@@ -1547,8 +1551,8 @@ begin
               and then not Draft_Ready
               and then not Item.Draft_Tokens_Set
               and then Item.Draft_Tokens > 0
-              and then L.Config (Prepared).Experts = 0
-              and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+              and then (L.Config (Prepared).Experts > 0
+                        or else L.Token_Bytes (Prepared) >= Next_Draft_Bytes)
               and then not Model_Runner.Backend."="
                              (L.Capability (Prepared).Kind,
                               Model_Runner.Backend.Backend_CPU)

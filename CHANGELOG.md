@@ -13,6 +13,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A mixture drafts from its context unasked, and a lookup that keeps little rests:** while a run keeps under a quarter of what its lookup proposed, a round that keeps nothing rests the lookup for 32 tokens, doubling each time and back once a round keeps something, and it proposes one token at a time -- so a mixture, whose miss costs it most of a token, drafts by lookup on the device as a dense model does. Qwen3-Coder-30B Q2_K: an edit 33.3 -> 37.5 tokens a second, prose 37.0 -> 36.6, fresh code 36.9 -> 36.1 (lookup asked for before: prose 34.0, edit 37.7).
 - **The project's next work is one query:** Tasks.Next_Work_Of works out what can run in order, what is accepted and waits and on what, the candidates, what runs and what failed -- and /work's way on, its completion and /why read it, where each walked the accepted tasks for itself.
 - **A call's record says how it ended:** each call an invocation records keeps whether it was answered (and changed state), failed, or was refused and by what; /result shows it beside the call, and /why names the calls a blocked or failed task's last run had refused -- often why the model gave up, where the recorded reason does not say.
 - **A run is set against its plan:** the record /work shows when a root run ends says the calls it made of the calls its plan gave it.

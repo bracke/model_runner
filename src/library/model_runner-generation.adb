@@ -602,6 +602,21 @@ package body Model_Runner.Generation is
       Plain_Most   : constant := 1_024;
       Plain_Hold   : Natural := Plain_Least;
 
+      --  A lookup proposes only where the context repeats, so on prose its
+      --  rounds are too few for the timing above to see -- yet each costs
+      --  a mixture of experts most of a step more: Qwen3-Coder-30B made
+      --  37.0 tokens a second plain and 34.0 by lookup, 4% of its
+      --  proposals kept. While the run keeps less than Lookup_Keeps per
+      --  cent of what it proposed, a round that keeps nothing rests the
+      --  lookup for Lookup_Rest tokens, the rest doubling each time and
+      --  back to its least once a round keeps something. An edit keeps
+      --  three in five and never rests.
+      Lookup_Rest       : Natural := 0;
+      Lookup_Rest_Next  : Natural := 32;
+      Lookup_Rest_Least : constant := 32;
+      Lookup_Rest_Most  : constant := 1_024;
+      Lookup_Keeps      : constant := 25;
+
       --  The first rounds of a reply are not timed: they bear what the
       --  first use of the kernels and the tables costs, and Qwen3.6's
       --  first sixteen drafted tokens took 1.02 s against 0.61 for the
@@ -1920,10 +1935,18 @@ package body Model_Runner.Generation is
                declare
                   Given : Natural;
                begin
-                  if not Paused then
+                  if Lookup_Rest > 0 then
+                     Lookup_Rest := Lookup_Rest - 1;
+                  elsif not Paused then
+                     --  One at a time while little is kept: a round that
+                     --  keeps nothing then checks two positions, not five.
                      Lookup.Propose
                        (Said.all (1 .. Said_Count),
-                        Proposed.all (2 .. Largest_Draft + 1), Given);
+                        Proposed.all
+                          (2 .. (if Outcome.Accepted * 100
+                                      < Lookup_Keeps * Outcome.Drafted
+                                 then 2 else Largest_Draft + 1)),
+                        Given);
                      Count := Count + Given;
                   end if;
                end;
@@ -2441,6 +2464,16 @@ package body Model_Runner.Generation is
                   Outcome.Kept_At (Position) := Outcome.Kept_At (Position) + 1;
                end if;
             end loop;
+
+            if By_Context and then Count > 1 then
+               if Accepted > 1 then
+                  Lookup_Rest_Next := Lookup_Rest_Least;
+               elsif Outcome.Accepted * 100 < Lookup_Keeps * Outcome.Drafted then
+                  Lookup_Rest := Lookup_Rest_Next;
+                  Lookup_Rest_Next :=
+                    Natural'Min (2 * Lookup_Rest_Next, Lookup_Rest_Most);
+               end if;
+            end if;
 
             if Adapting then
                if Accepted - 1 >= Count - 1 and then Count - 1 = Round_Draft
