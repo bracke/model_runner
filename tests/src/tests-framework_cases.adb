@@ -36,6 +36,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Git;
+with Model_Runner.Framework.Code_Queries;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Orchestration;
@@ -3978,6 +3979,65 @@ package body Tests.Framework_Cases is
          end;
       end;
    end Terminal_Follows_Resize_And_Hides_Secrets;
+
+   --  A working agent's questions of the code are answered from the graph
+   --  as it is now: where a name is declared and used, what a unit uses and
+   --  what uses it -- by its name or its file -- and what a change reaches;
+   --  and a file written since the last answer is in the next.
+   procedure Code_Is_Asked_Of_The_Graph
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Cq renames Model_Runner.Framework.Code_Queries;
+      Store   : S.Store;
+      Failed  : Boolean;
+
+      function Asked (Named, Args : String) return String is
+        (Cq.Answer (Store, Named, Args, Failed));
+
+      function Has (Text, Part : String) return Boolean is
+        (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      Task_Project (Store, "code_queries");
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+      begin
+         Dirs.Create_Path (Project & "/src");
+         Put_File (Project & "/src/parser.ads",
+                   "package Parser is" & LF & "   procedure Next (Item : out Natural);" & LF
+                   & "end Parser;" & LF);
+         Put_File (Project & "/src/parser.adb",
+                   "package body Parser is" & LF & "   procedure Next (Item : out Natural) is" & LF
+                   & "   begin" & LF & "      Item := 1;" & LF & "   end Next;" & LF & "end Parser;" & LF);
+         Put_File (Project & "/src/main.adb",
+                   "with Parser;" & LF & "procedure Main is" & LF & "   Item : Natural;" & LF
+                   & "begin" & LF & "   Parser.Next (Item);" & LF & "end Main;" & LF);
+         Assert (Has (Asked ("find_symbol", "{""name"": ""Next""}"), "procedure Parser.Next  src/parser.ads:2"),
+                 "a name was not found where it is declared: "
+                 & Asked ("find_symbol", "{""name"": ""Next""}"));
+         Assert (Has (Asked ("find_references", "{""name"": ""Parser.Next""}"), "src/main.adb:5"),
+                 "a name's use was not found: " & Asked ("find_references", "{""name"": ""Parser.Next""}"));
+         Assert (Has (Asked ("dependencies", "{""unit"": ""Main""}"), "Parser")
+                 and then Has (Asked ("dependents", "{""unit"": ""src/parser.ads""}"), "Main"),
+                 "what a unit uses, or what uses a file's unit, was not said");
+         Assert (Has (Cq.Users_Of_File (Store, "src/parser.ads"), "Main"),
+                 "what uses a file was not said");
+         Assert (Asked ("impact", "{""target"": ""src/parser.ads""}") /= ""
+                 and then not Failed,
+                 "what a change reaches was not answered");
+         Assert (Has (Asked ("find_symbol", "{""name"": ""Nowhere""}"), "nothing in the project's graph")
+                 and then (Asked ("find_symbol", "{}") /= "" and then Failed),
+                 "a name not there was not said so, or a missing argument was not a failure");
+
+         --  Written since the last answer: in the next.
+         Put_File (Project & "/src/extra.adb",
+                   "with Parser;" & LF & "procedure Extra is" & LF & "   Item : Natural;" & LF
+                   & "begin" & LF & "   Parser.Next (Item);" & LF & "end Extra;" & LF);
+         Assert (Has (Asked ("dependents", "{""unit"": ""Parser""}"), "Extra"),
+                 "an answer after a write was about the code before it: "
+                 & Asked ("dependents", "{""unit"": ""Parser""}"));
+      end;
+   end Code_Is_Asked_Of_The_Graph;
 
    --  The derived indexes are made at init, known to be stale once the
    --  state or the repository moves on, and say what they were built from.
@@ -9707,6 +9767,24 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0
                        and then Ada.Strings.Fixed.Index (To_String (Report), "exists") > 0,
                        "the checks' report does not say what failed: " & To_String (Report));
+               --  Asked for what its changes reach before it has changed
+               --  anything: the whole, and said why; after a write, the
+               --  scope traced from it, said.
+               Children.Run_Checks (Children.Task_Profile, Report, Ran, Affected => True);
+               Assert (E.Is_Ok (Ran)
+                       and then Ada.Strings.Fixed.Index (To_String (Report), "scope: full, since nothing") = 1,
+                       "an affected check before any change did not say it ran whole: " & To_String (Report));
+               declare
+                  Kept : E.Error_Info;
+               begin
+                  Children.Keep_Before_Write ("hello.txt", Kept);
+               end;
+               Children.Run_Checks (Children.Task_Profile, Report, Ran, Affected => True);
+               Assert (E.Is_Ok (Ran)
+                       and then Ada.Strings.Fixed.Index (To_String (Report), "scope: ") = 1
+                       and then Ada.Strings.Fixed.Index (To_String (Report), "since nothing") = 0,
+                       "an affected check after a change did not say the scope it traced: "
+                       & To_String (Report));
             end;
          when Out_Of_Time =>
             --  Bounded by the project's time, and stopped by it.
@@ -10840,6 +10918,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Indexes_Are_Derived'Access,
          "the derived indexes are made at init and known to be stale when they are");
+      Register_Routine
+        (T, Code_Is_Asked_Of_The_Graph'Access,
+         "a working agent's questions of the code are answered from the graph as it is now");
       Register_Routine
         (T, Agents_Stay_Out_Of_The_State'Access,
          "agents never reach the project's state, and harness programs get only what is passed");

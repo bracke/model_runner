@@ -13,13 +13,10 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
-      --  The places a symbol is referred to, as path:line. The refs command
-      --  reads the relations themselves, for how sure each is; a caller
-      --  that wants only the places asks.
-
       --  One symbol by its full name, the first declared. The sym command
-      --  lists every declaration of an overloaded name; a caller that wants
-      --  the one asks.
+      --  and a work agent's find_symbol list every declaration of a name;
+      --  a caller that wants the one asks.
+      new String'("Symbol_Of"),
 
       --  The project state's operation its commands do not reach yet:
       --  blocking a parent on children made some other way than by a

@@ -19,6 +19,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A work agent's questions of the code are a library's:** Framework.Code_Queries answers find_symbol, find_references, dependencies, dependents and impact, and says what uses a file -- tested on a project of its own, a file written after one answer in the next -- with a file resolved against the project, not the caller's directory; find_symbol gives every declaration of a name, a spec and its body both.
 - **A text is read whole only within a bound:** 4 MiB, a binary file refused as not text -- for the tools and for the project's own reads alike, where a path to a large log or a model file was allocated whole.
 - **What may run while a message is typed is the command table's to say:** every project command but /work, /init, /bootstrap and /reconfigure, the message kept; the input policy says so, where it said commands ran only between messages.
 - **Run_Sub's Last is the last index written,** as every runner's is, where it was a count.

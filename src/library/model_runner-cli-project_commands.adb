@@ -25,6 +25,7 @@ with Model_Runner.Entropy;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
+with Model_Runner.Framework.Code_Queries;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Consistency;
@@ -37,7 +38,6 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
-with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
@@ -569,169 +569,6 @@ package body Model_Runner.CLI.Project_Commands is
            else "")
         & "]";
    end Offered_Text;
-
-   --  The units a file declares, as the graph knows them: its packages,
-   --  or the file itself where it declares none.
-   function Units_Of_File
-     (Graph : Model_Runner.Framework.Repository.Graph;
-      Path  : String) return Model_Runner.Framework.Name_Lists.Vector
-   is
-      package Rp renames Model_Runner.Framework.Repository;
-      Units : Model_Runner.Framework.Name_Lists.Vector;
-   begin
-      for Index in 1 .. Rp.Symbol_Count (Graph) loop
-         declare
-            One : constant Rp.Symbol := Rp.Symbol_At (Graph, Index);
-         begin
-            if To_String (One.Path) = Path and then To_String (One.Kind) = "package"
-              and then not Units.Contains (To_String (One.Name))
-            then
-               Units.Append (To_String (One.Name));
-            end if;
-         end;
-      end loop;
-      if Units.Is_Empty then
-         Units.Append (Path);
-      end if;
-      return Units;
-   end Units_Of_File;
-
-   --  What uses a file's units, from the graph as it is now; "" for nothing.
-   function Users_Of_File (Store : S.Store; Path : String) return String is
-      package Rp renames Model_Runner.Framework.Repository;
-      Graph : constant Rp.Graph := Rp.Now (Store);
-      Said  : Unbounded_String;
-      Shown : Natural := 0;
-   begin
-      for Unit of Units_Of_File (Graph, Path) loop
-         for User of Rp.Dependents_Of (Graph, Unit) loop
-            if Shown < 20 and then Index (Said, User) = 0 then
-               Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & User);
-               Shown := Shown + 1;
-            end if;
-         end loop;
-      end loop;
-      return To_String (Said);
-   end Users_Of_File;
-
-   --  A question to the project's repository graph, answered from the graph
-   --  as it is now -- brought up to date first, so an answer after a write
-   --  is about the code as written.
-   function Graph_Answer
-     (Store   : S.Store;
-      Named   : String;
-      Args    : String;
-      Outcome : in out Model_Runner.Tools.Runner.Call_Outcome) return String
-   is
-      package Rp renames Model_Runner.Framework.Repository;
-      package Tc renames Model_Runner.Framework.Traceability;
-      Graph : constant Rp.Graph := Rp.Now (Store);
-      Have  : Boolean;
-      Key   : constant String :=
-        (if Named in "find_symbol" | "find_references" then "name"
-         elsif Named = "impact" then "target" else "unit");
-      Given : constant String := Model_Runner.Tools.Builtin.Text_Argument (Args, Key, Have);
-      Said  : Unbounded_String;
-
-      function Listed (Items : Model_Runner.Framework.Name_Lists.Vector; Most : Positive) return String is
-         Text  : Unbounded_String;
-         Count : Natural := 0;
-      begin
-         for One of Items loop
-            Count := Count + 1;
-            exit when Count > Most;
-            Append (Text, One & ASCII.LF);
-         end loop;
-         if Natural (Items.Length) > Most then
-            Append (Text, "(" & Image (Most) & " of" & Natural'Image (Natural (Items.Length)) & ")" & ASCII.LF);
-         end if;
-         return To_String (Text);
-      end Listed;
-
-      --  A unit, or a file's units.
-      function Units return Model_Runner.Framework.Name_Lists.Vector is
-      begin
-         if Ada.Directories.Exists (Given) then
-            return Units_Of_File (Graph, Given);
-         end if;
-         return Result : Model_Runner.Framework.Name_Lists.Vector do
-            Result.Append (Given);
-         end return;
-      end Units;
-   begin
-      if not Have or else Given = "" then
-         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
-         return "error: " & Named & " needs a " & Key;
-      end if;
-      if Named = "find_symbol" then
-         for Name of Rp.Find_Symbols (Graph, Given) loop
-            declare
-               Found : Boolean;
-               One   : constant Rp.Symbol := Rp.Symbol_Of (Graph, Name, Found);
-            begin
-               if Found then
-                  Append (Said, To_String (One.Kind) & " " & Name & "  " & To_String (One.Path) & ":"
-                          & Image (One.Line) & ASCII.LF);
-               end if;
-            end;
-            exit when Length (Said) > 8_000;
-         end loop;
-      elsif Named = "find_references" then
-         for Name of Rp.Find_Symbols (Graph, Given) loop
-            declare
-               Places : constant Model_Runner.Framework.Name_Lists.Vector := Rp.References_To (Graph, Name);
-            begin
-               if not Places.Is_Empty then
-                  Append (Said, Name & ":" & ASCII.LF & Listed (Places, 100));
-               end if;
-            end;
-            exit when Length (Said) > 8_000;
-         end loop;
-      elsif Named in "dependencies" | "dependents" then
-         for Unit of Units loop
-            declare
-               Found : constant Model_Runner.Framework.Name_Lists.Vector :=
-                 (if Named = "dependencies" then Rp.Dependencies_Of (Graph, Unit)
-                  else Rp.Dependents_Of (Graph, Unit));
-            begin
-               if not Found.Is_Empty then
-                  Append (Said, Unit & (if Named = "dependencies" then " uses:" else " is used by:") & ASCII.LF
-                          & Listed (Found, 100));
-               end if;
-            end;
-         end loop;
-      else
-         --  A file as itself, a name as its symbol.
-         declare
-            Node    : Model_Runner.Framework.Name_Lists.Vector;
-            Matches : constant Model_Runner.Framework.Name_Lists.Vector := Rp.Find_Symbols (Graph, Given);
-         begin
-            if Ada.Directories.Exists (Given) then
-               Node.Append (Given);
-            elsif not Matches.Is_Empty then
-               Node.Append ("symbol:" & Matches.First_Element);
-            end if;
-            if not Node.Is_Empty then
-               declare
-                  Reach : constant Tc.Impact := Tc.Impact_Of (Tc.Build (Store, Graph), Node);
-               begin
-                  for Index in 1 .. Natural'Min (Tc.Length (Reach), 100) loop
-                     declare
-                        One : constant Tc.Reached := Tc.Element (Reach, Index);
-                     begin
-                        Append (Said, To_String (One.Kind) & " " & To_String (One.Id) & " ("
-                                & Ada.Characters.Handling.To_Lower (Rp.Confidence'Image (One.Sure)) & ")"
-                                & ASCII.LF);
-                     end;
-                  end loop;
-               end;
-            end if;
-         end;
-      end if;
-      return (if Said = Null_Unbounded_String
-              then "nothing in the project's graph for " & Given
-              else To_String (Said));
-   end Graph_Answer;
 
    --  The file tools, fenced by the permissions of the agent now working,
    --  and delegate, which makes a child through the harness and runs it.
@@ -1536,7 +1373,16 @@ package body Model_Runner.CLI.Project_Commands is
             Outcome.Answer := Tr.Failed;
             Put ("error: there is no project graph to ask here");
          else
-            Put (Graph_Answer (Self.Host.Store_Of.all, Named, Arguments, Outcome));
+            declare
+               Asked_Failed : Boolean;
+               Said : constant String :=
+                 Model_Runner.Framework.Code_Queries.Answer (Self.Host.Store_Of.all, Named, Arguments, Asked_Failed);
+            begin
+               if Asked_Failed then
+                  Outcome.Answer := Tr.Failed;
+               end if;
+               Put (Said);
+            end;
          end if;
       elsif Named = "run_checks" then
          if Self.Host = null then
@@ -1612,7 +1458,8 @@ package body Model_Runner.CLI.Project_Commands is
                  and then Last >= Result'First
                then
                   declare
-                     Users : constant String := Users_Of_File (Self.Host.Store_Of.all, Path);
+                     Users : constant String :=
+                       Model_Runner.Framework.Code_Queries.Users_Of_File (Self.Host.Store_Of.all, Path);
                      Was   : constant String := Result (Result'First .. Last);
                   begin
                      if Users /= "" then
