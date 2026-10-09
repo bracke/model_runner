@@ -290,6 +290,17 @@ package body Tests.Tools_Cases is
               "<parameter/op> was taken as a parameter");
       Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Qwen_Short),
               "a Qwen call missing required parameters was taken");
+      --  Code compares with '<': in a value, and in the prose before a
+      --  call, it is text -- where it used to end the value, and an edit
+      --  with it was cut short mid-line.
+      Assert (Full_Set_Takes_In
+                (Tools.Qwen_XML,
+                 "When A + B < Integer'First it saturates." & LF
+                 & "<tool_call>" & LF & "<function=write_file>" & LF
+                 & "<parameter=path>" & LF & "calc.adb" & LF & "</parameter>" & LF
+                 & "<parameter=content>" & LF & "if A < B then" & LF & "   null;" & LF & "end if;" & LF
+                 & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
+              "a '<' in prose or in a value was not taken as text");
       Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Envelope),
               "the JSON envelope was taken as a Qwen call");
       Assert (Full_Set_Takes_In (Tools.Qwen_XML, "Just an answer."),

@@ -7,6 +7,7 @@ with Hostkit.Fs;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
+with Model_Runner.Framework.Code_Queries;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
@@ -665,6 +666,38 @@ package body Model_Runner.Framework.Context is
             end loop;
          end;
 
+         --  An Ada file's other half -- a body's spec, a spec's body -- beside
+         --  it: what a change to one is held to is in the other.
+         declare
+            Halves : constant Name_Lists.Vector := Named_Files;
+         begin
+            for Named of Halves loop
+               if Named'Length > 4
+                 and then Named (Named'Last - 3 .. Named'Last) in ".adb" | ".ads"
+               then
+                  declare
+                     Other : constant String :=
+                       Named (Named'First .. Named'Last - 1)
+                       & (if Named (Named'Last) = 'b' then "s" else "b");
+                     Text  : Unbounded_String;
+                     Got   : E.Error_Info;
+                  begin
+                     if not Named_Files.Contains (Other)
+                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Other))
+                     then
+                        Files.Read_Text (Hostkit.Fs.Join (Project, Other), Text, Got);
+                        if E.Is_Ok (Got) then
+                           Offer ("file:" & Other,
+                                  (if Named (Named'Last) = 'b' then "spec of " else "body of ") & Named,
+                                  High, To_String (Text));
+                           Named_Files.Append (Other);
+                        end if;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end;
+
          --  And what uses those files: the units that depend on theirs, their
          --  files offered after, so a change to what the task names is made
          --  seeing its callers -- found by the graph, not by the model.
@@ -672,7 +705,8 @@ package body Model_Runner.Framework.Context is
             Users_Offered : Natural := 0;
             Users_Most    : constant := 6;
 
-            --  The files that declare a unit.
+            --  The files that declare a unit: a package, its body, or a
+            --  subprogram that is a unit of its own.
             function Files_Of (Unit : String) return Name_Lists.Vector is
                Found : Name_Lists.Vector;
             begin
@@ -680,7 +714,7 @@ package body Model_Runner.Framework.Context is
                   declare
                      One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
                   begin
-                     if To_String (One.Name) = Unit and then To_String (One.Kind) = "package"
+                     if To_String (One.Name) = Unit
                        and then not Found.Contains (To_String (One.Path))
                      then
                         Found.Append (To_String (One.Path));
@@ -691,12 +725,10 @@ package body Model_Runner.Framework.Context is
             end Files_Of;
          begin
             for Named of Named_Files loop
-               for Index in 1 .. Repository.Symbol_Count (Graph) loop
-                  declare
-                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+               for Unit of Code_Queries.Units_Of_File (Graph, Named) loop
                   begin
-                     if To_String (One.Path) = Named and then To_String (One.Kind) = "package" then
-                        for User of Repository.Dependents_Of (Graph, To_String (One.Name)) loop
+                     if Unit /= Named then
+                        for User of Repository.Dependents_Of (Graph, Unit) loop
                            for Path of Files_Of (User) loop
                               exit when Users_Offered = Users_Most;
                               if not Named_Files.Contains (Path) then

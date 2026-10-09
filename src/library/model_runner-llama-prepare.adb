@@ -212,6 +212,15 @@ begin
             end;
          end if;
 
+         --  A template that renders is the model's own, and what format it
+         --  writes calls in is read off it the same way a stand-in's is:
+         --  Qwen3.5's own template asks for the <function=...> form, and
+         --  with no name recorded its calls were read as JSON -- every one
+         --  of them taken for the answer, a run ending with none made.
+         if E.Is_Ok (Item.Chat_Status) then
+            Set_Template_Format (Item, Model_Runner.Templates.Recognise (Source_Text));
+         end if;
+
          --  A template outside the subset that is nonetheless written in
          --  a format this build carries -- its own text says which, by
          --  the turn markers and the call shape in it -- is rendered with

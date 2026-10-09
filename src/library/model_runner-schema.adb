@@ -1013,7 +1013,9 @@ package body Model_Runner.Schema is
       Put ("ws ::= [ \x09\x0A\x0D]*" & Character'Val (10));
       --  What a string is in a tag: anything up to the next tag. The
       --  reader takes the whitespace off either end of it.
-      Put ("text ::= [^<]*" & Character'Val (10));
+      --  Text with a '<' in it where no tag follows: code compares with
+      --  one, and a value that stopped at it cut an edit short mid-line.
+      Put ("text ::= ( [^<] | ""<"" [^/] )*" & Character'Val (10));
 
       if Malformed then
          Status := E.Make (E.Grammar_Syntax_Error);

@@ -9,7 +9,7 @@ package body Model_Runner.Tools.Constraint is
    --  A grammar with no calls in it: the model was offered nothing, so its
    --  reply is prose and nothing follows it.
    Prose_Only : constant String :=
-     "root ::= [^<]*" & ASCII.LF;
+     "root ::= ( [^<] | ""<"" [^/] )*" & ASCII.LF;
 
    --  The loose grammar's fixed part: the call envelope around a general
    --  JSON value, with the one hole -- the name rule -- filled from the
@@ -21,7 +21,7 @@ package body Model_Runner.Tools.Constraint is
    --  through two layers of quoting.
    Loose_Fixed : constant String :=
      "root ::= prose calls?" & ASCII.LF &
-     "prose ::= [^<]*" & ASCII.LF &
+     "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF &
      "calls ::= call ( ws call )*" & ASCII.LF &
      "call ::= ""<tool_call>"" ws obj ws ""</tool_call>""" & ASCII.LF &
      "obj ::= ""{"" ws ""\x22name\x22"" ws "":"" ws name ws "","" ws "
@@ -201,11 +201,14 @@ package body Model_Runner.Tools.Constraint is
    is (if Syntax = Qwen_XML then Qwen_Spelling else Func_Spelling);
 
    --  What may stand ahead of a reply in a tag syntax: the families that
-   --  write one reason in a <think> block, and its '<' is one the prose
-   --  rule refuses. Admitted once, at the start, closed before anything
-   --  else; a reply with no reasoning writes none.
+   --  write one reason in a <think> block, whose opening '<' the prose rule
+   --  refuses -- a '<' followed by t, f or / is where a tag may begin, and
+   --  any other is text: "A < B" in reasoning is reasoning, not a call.
+   --  Admitted once, at the start, closed before anything else; a reply
+   --  with no reasoning writes none.
    Think_Rule : constant String :=
-     "think ::= ""<think>"" [^<]* ""</think>"" ws" & ASCII.LF;
+     "think ::= ""<think>"" ( [^<] | ""<"" [^/] )* ""</think>"" ws"
+     & ASCII.LF;
 
    --  The loose grammar for a tag syntax: the envelope around parameters
    --  named freely, each holding text. Names still constrained to the
@@ -214,7 +217,7 @@ package body Model_Runner.Tools.Constraint is
    begin
       Put (B, "root ::= think? prose calls?" & ASCII.LF);
       Put (B, Think_Rule);
-      Put (B, "prose ::= [^<]*" & ASCII.LF);
+      Put (B, "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF);
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
       Put (B, "call ::= """ & Sp.Opens.all & """ name """ & Sp.Named.all
               & """ ws params """ & Sp.Closes.all & """" & ASCII.LF);
@@ -222,7 +225,7 @@ package body Model_Runner.Tools.Constraint is
               & Sp.After.all & """ text """ & Sp.Close.all & """ ws )*"
               & ASCII.LF);
       Put (B, "pname ::= [A-Za-z_] [A-Za-z0-9_.-]*" & ASCII.LF);
-      Put (B, "text ::= [^<]*" & ASCII.LF);
+      Put (B, "text ::= ( [^<] | ""<"" [^/] )*" & ASCII.LF);
       Put (B, "ws ::= [ \x09\x0A\x0D]*" & ASCII.LF);
    end Put_Loose_Tags;
 
@@ -315,7 +318,7 @@ package body Model_Runner.Tools.Constraint is
       else
          Put (B, (if Tags then "root ::= think? prose calls?"
                   else "root ::= prose calls?") & ASCII.LF);
-         Put (B, "prose ::= [^<]*" & ASCII.LF);
+         Put (B, "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF);
       end if;
       if Tags then
          Put (B, Think_Rule);

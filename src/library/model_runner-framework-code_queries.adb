@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Framework.Traceability;
@@ -23,12 +24,43 @@ package body Model_Runner.Framework.Code_Queries is
    is
       package Rp renames Repository;
       Units : Name_Lists.Vector;
+      Least : Natural := Natural'Last;
+
+      --  A unit's declaration: a package, or a body, named with the fewest
+      --  dots in the file -- a unit that is a subprogram of its own.
+      function Unit_Kind (Kind : String) return Boolean is (Kind in "package" | "body");
+
+      function Dots (Name : String) return Natural is
+        (Ada.Strings.Fixed.Count (Name, "."));
    begin
+      --  An Ada body is its spec's unit: the graph keeps a body's
+      --  subprograms, not the body.
+      if Path'Length > 4 and then Path (Path'Last - 3 .. Path'Last) = ".adb" then
+         declare
+            Spec : constant String := Path (Path'First .. Path'Last - 1) & "s";
+         begin
+            for Index in 1 .. Rp.Symbol_Count (Graph) loop
+               if To_String (Rp.Symbol_At (Graph, Index).Path) = Spec then
+                  return Units_Of_File (Graph, Spec);
+               end if;
+            end loop;
+         end;
+      end if;
       for Index in 1 .. Rp.Symbol_Count (Graph) loop
          declare
             One : constant Rp.Symbol := Rp.Symbol_At (Graph, Index);
          begin
-            if To_String (One.Path) = Path and then To_String (One.Kind) = "package"
+            if To_String (One.Path) = Path and then Unit_Kind (To_String (One.Kind)) then
+               Least := Natural'Min (Least, Dots (To_String (One.Name)));
+            end if;
+         end;
+      end loop;
+      for Index in 1 .. Rp.Symbol_Count (Graph) loop
+         declare
+            One : constant Rp.Symbol := Rp.Symbol_At (Graph, Index);
+         begin
+            if To_String (One.Path) = Path and then Unit_Kind (To_String (One.Kind))
+              and then Dots (To_String (One.Name)) = Least
               and then not Units.Contains (To_String (One.Name))
             then
                Units.Append (To_String (One.Name));

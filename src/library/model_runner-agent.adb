@@ -196,6 +196,30 @@ package body Model_Runner.Agent is
       Chances_Left : Natural := 2;
       Reading      : E.Error_Info;
 
+      --  Whether a reply's text closes the call it ends in, in the syntax the
+      --  calls are read in: a marked call by its closing tag, an open one by
+      --  its object's brace or its fence.
+      function Closes_Call (Text : String) return Boolean is
+         Last : Natural := Text'Last;
+      begin
+         while Last >= Text'First and then Text (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+            Last := Last - 1;
+         end loop;
+         declare
+            Trimmed : constant String := Text (Text'First .. Last);
+            function Ends (Mark : String) return Boolean is
+              (Trimmed'Length >= Mark'Length
+               and then Trimmed (Trimmed'Last - Mark'Length + 1 .. Trimmed'Last) = Mark);
+         begin
+            case Tool_Syntax is
+               when Model_Runner.Tools.Function_XML => return Ends ("</function>");
+               when Model_Runner.Tools.Tool_Call_JSON | Model_Runner.Tools.Qwen_XML =>
+                  return Ends ("</tool_call>");
+               when others => return Ends ("}") or else Ends ("```");
+            end case;
+         end;
+      end Closes_Call;
+
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
       procedure Render
@@ -452,6 +476,15 @@ package body Model_Runner.Agent is
             --  whose calls are all repeats got nowhere, and the loop stops
             --  rather than circle.
             Progressed : Boolean := False;
+
+            --  Whether the reply stopped at its token limit inside its last
+            --  call: the text does not close it. Such a call is read from
+            --  what was written before the cut -- a file's content stopping
+            --  mid-line -- and is not run: a write of it would leave the
+            --  file cut short.
+            Cut_Last : constant Boolean :=
+              Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
+              and then not Closes_Call (Gen.Generated_Text (Last_Result));
          begin
             --  Nothing left to run: the model has answered.
             exit Step_Loop when Asked = 0;
@@ -540,6 +573,17 @@ package body Model_Runner.Agent is
                           ((Id => Invocations + Call, In_Turn => Call, Of_Turn => Asked,
                             Changes => Effect = Model_Runner.Tools.Runner.Changes),
                            Named, Args);
+                     end if;
+
+                     if Call = Asked and then Cut_Last then
+                        --  Cut off before it was whole: told, not run.
+                        Items (Call).Text := U.To_Unbounded_String
+                          ("error: your reply reached its length limit before this call was"
+                           & " complete, so it was not run. Say less before a call; to change part"
+                           & " of a file, edit_file replaces just that part.");
+                        Items (Call).Ended := Failed_Note;
+                        Progressed := True;
+                        goto Decided;
                      end if;
 
                      --  The same call earlier in this very turn: its answer,
@@ -636,6 +680,7 @@ package body Model_Runner.Agent is
                            end case;
                         end if;
                      end if;
+                     <<Decided>>
                      Planned := Call;
                   end;
                end loop Plan_Calls;

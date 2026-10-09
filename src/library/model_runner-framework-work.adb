@@ -71,9 +71,11 @@ package body Model_Runner.Framework.Work is
       May_Check    : Boolean := True) return String
    is ((if not May_Write then Read_Only_Opening
         else "## What to do" & ASCII.LF
-       & "Do the task now with your tools, paths relative to the project. Make each"
-       & " change by calling write_file with the whole new content; describing a"
-       & " change does not make it."
+       & "Do the task now with your tools, paths relative to the project. Change part"
+       & " of a file with edit_file -- the exact text to replace and what replaces it"
+       & " -- and make a new file with write_file; describing a change does not make"
+       & " it. Ask find_symbol, find_references and dependents where a name is"
+       & " declared and used, rather than reading files to find it."
        & (if May_Delegate
           then " Hand a part better done apart -- a review, an investigation -- to a helper"
                & " with delegate."
@@ -727,7 +729,10 @@ package body Model_Runner.Framework.Work is
    is
       Held : Agents.Agent;
       Read : E.Error_Info;
-      Said : Unbounded_String := To_Unbounded_String ("tools: read_file, list_directory");
+      Said : Unbounded_String :=
+        To_Unbounded_String ("tools: read_file, list_directory, read_range, search_file, search_code"
+                             & (if Hosted then ", find_symbol, find_references, dependencies, dependents, impact"
+                                else ""));
    begin
       Agents.Read (Item, Agent_Id, Held, Read);
       if E.Is_Error (Read) then
@@ -739,7 +744,7 @@ package body Model_Runner.Framework.Work is
       if Permissions.Allows (Held.Allowed, Permissions.Write_Source)
         or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs)
       then
-         Append (Said, ", write_file");
+         Append (Said, ", edit_file, write_file");
       end if;
       if Hosted and then Permissions.Allows (Held.Allowed, Permissions.Create_Children)
         and then Held.Allowed (Permissions.Create_Children).Max_Children > 0
@@ -920,8 +925,8 @@ package body Model_Runner.Framework.Work is
    function Child_Instructions return String
    is ("## What to do" & ASCII.LF
        & "Do what you are asked, with the tools you have, and nothing more."
-       & " Paths are relative to the project. Only a write_file call changes a"
-       & " file, and only if you were asked to change one." & ASCII.LF & ASCII.LF
+       & " Paths are relative to the project. Only an edit_file or write_file call"
+       & " changes a file, and only if you were asked to change one." & ASCII.LF & ASCII.LF
        & "When you are done, report in these lines:" & ASCII.LF & ASCII.LF
        & "status: done" & ASCII.LF
        & "summary: one line on what you found or did" & ASCII.LF
