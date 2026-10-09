@@ -67,6 +67,14 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+#ifdef DOTS
+//  Where the rounding's scales begin: past room for eight positions'
+//  bytes, or -- for a walk that reads its experts' runs by slot, which may
+//  be many more rows than eight -- past the room the push block's table
+//  word says, in rows.
+#define SCALES_AT ((shape.routed == 3u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+#endif
+
 //  A sixteen-bit field at a byte position, which for Q6_K is only two-byte
 //  aligned -- a block is two hundred and ten bytes, so every other one begins
 //  two bytes into a word. Index counts sixteen-bit fields from the base byte.
@@ -148,7 +156,7 @@ void main() {
         for (uint k = 0u; k < VEC; ++k) {
             uint y1 = from_k[k] + i * 256u + y_offset;
             uint xb = y1 >> 2u;
-            uint sb = 2u * shape.columns + (y1 >> 5u);
+            uint sb = SCALES_AT + (y1 >> 5u);
             for (uint j = 0u; j < 4u; ++j) {
                 qy[k][j] = int (qw[xb + 8u * j]);
                 dy[k][j] = qs[sb + j];

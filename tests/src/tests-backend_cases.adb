@@ -8104,8 +8104,10 @@ package body Tests.Backend_Cases is
    --  inverting, listed and mixing kernels' listed paths.
    --  A mixture's experts walking a few positions as integers -- each
    --  expert its run, the runs reading the batch's positions by their lists
-   --  out of the one rounding -- answer what the binary32 walks answer, to
-   --  the rounding of the activations. Q4_K stacks, four positions.
+   --  out of the one rounding, and the down projection after them its
+   --  runs by slot out of a rounding of every slot -- answer what the
+   --  binary32 walks answer, to the rounding of the activations. Q4_K
+   --  stacks, four positions.
    procedure Listed_Walks_As_Integers_Stay_Close
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -8127,20 +8129,26 @@ package body Tests.Backend_Cases is
       Router : N.Real_Array (0 .. Experts * Width - 1);
       Gates  : constant T.Real_Array_Access :=
         new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Width * Feed - 1);
       Inputs : N.Real_Array (0 .. Count * Width - 1);
 
       --  The router's scores, the routing, the inversion's room, then the
-      --  listed answer with its padding, a position each.
+      --  listed gates and the listed downs with their padding, a position
+      --  each.
       At_Listed : constant N.Element_Count :=
         N.Element_Count (Count) * (Experts + 2 * Used + 32 * Experts + 3 * Used);
-      Room      : constant N.Element_Count :=
+      At_Down   : constant N.Element_Count :=
         At_Listed + N.Element_Count (Count * Padded * Feed);
+      Room      : constant N.Element_Count :=
+        At_Down + N.Element_Count (Count * Padded * Width);
 
       subtype Answers is N.Real_Array (0 .. Room - 1);
       Plain, Rounded : Answers := [others => 0.0];
 
       type Byte_Access is access B.Byte_Array;
       G_Bytes : Byte_Access;
+      D_Bytes : Byte_Access;
 
       procedure Run_With (Rounding : Products.Walk_Rounding; Into : out Answers) is
          Steps : Products.Sequence;
@@ -8159,6 +8167,11 @@ package body Tests.Backend_Cases is
             Products.Packed_Q4_K, Experts * Feed, Feed, Width, Experts, Used, 3,
             Count, Added, Chained => False);
          Assert (Added, "the listed gates were refused");
+         Products.Add_Listed_Product
+           (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+            Products.Packed_Q4_K, Experts * Width, Width, Feed, Experts, Used, 3,
+            Count, Added, By_Slot => True);
+         Assert (Added, "the listed downs were refused");
          Products.Run (Engine, Steps, Inputs, Count, Into, Ok, Halted);
          Assert (Ok, "the listed walk was refused");
       end Run_With;
@@ -8197,24 +8210,38 @@ package body Tests.Backend_Cases is
       for Index in Gates'Range loop
          Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
       end loop;
+      for Index in Downs'Range loop
+         Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
+      end loop;
       for Index in Inputs'Range loop
          Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
       end loop;
       G_Bytes := new B.Byte_Array'(Fixtures.Encode_Q4_K (Gates.all));
+      D_Bytes := new B.Byte_Array'(Fixtures.Encode_Q4_K (Downs.all));
 
       Run_With (Products.Rounds_None, Plain);
       Run_With (Products.Rounds_Every, Rounded);
 
-      for Index in At_Listed .. Room - 1 loop
-         Largest := N.Real'Max (Largest, abs Plain (Index));
-         Worst := N.Real'Max (Worst, abs (Plain (Index) - Rounded (Index)));
+      --  The gates, read by position, and the downs, by slot, each held to
+      --  its own largest.
+      for Part in 1 .. 2 loop
+         Largest := 0.0;
+         Worst := 0.0;
+         for Index in (if Part = 1 then At_Listed else At_Down)
+                      .. (if Part = 1 then At_Down else Room) - 1
+         loop
+            Largest := N.Real'Max (Largest, abs Plain (Index));
+            Worst := N.Real'Max (Worst, abs (Plain (Index) - Rounded (Index)));
+         end loop;
+         Assert (Largest > 0.0, "a listed walk answered nothing but zeroes");
+         Assert (Worst <= 0.01 * Largest,
+                 "a listed walk " & (if Part = 1 then "by position" else "by slot")
+                 & " as integers strayed" & N.Real'Image (Worst)
+                 & " from the binary32 walk's largest" & N.Real'Image (Largest));
+         Assert (Worst > 0.0,
+                 "a listed walk " & (if Part = 1 then "by position" else "by slot")
+                 & " said to round answered the binary32 bits, so it did not");
       end loop;
-      Assert (Largest > 0.0, "the listed walk answered nothing but zeroes");
-      Assert (Worst <= 0.01 * Largest,
-              "a listed walk as integers strayed" & N.Real'Image (Worst)
-              & " from the binary32 walk's largest" & N.Real'Image (Largest));
-      Assert (Worst > 0.0,
-              "a listed walk said to round answered the binary32 bits, so it did not");
 
       Products.Close (Engine);
       Devices.Close (Opened);

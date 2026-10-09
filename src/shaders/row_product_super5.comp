@@ -68,6 +68,14 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+#ifdef DOTS
+//  Where the rounding's scales begin: past room for eight positions'
+//  bytes, or -- for a walk that reads its experts' runs by slot, which may
+//  be many more rows than eight -- past the room the push block's table
+//  word says, in rows.
+#define SCALES_AT ((shape.routed == 3u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+#endif
+
 //  A sixteen-bit field of the weights, index into the array of them that
 //  begins at a word.
 uint u16 (uint base_word, uint index) {
@@ -148,7 +156,7 @@ void main() {
             for (uint j = 0u; j < 4u; ++j) {
                 qy[k][j] = int (pair_at (at4[j])
                                 | (pair_at (at4[j] + 16u) << 16u));
-                dy[k][j] = qs[2u * shape.columns + (at4[j] >> 5u)];
+                dy[k][j] = qs[SCALES_AT + (at4[j] >> 5u)];
             }
             bsum[k] = dy[k] * vec4 (float (dotPacked4x8EXT (qy[k][0], 0x01010101)),
                                     float (dotPacked4x8EXT (qy[k][1], 0x01010101)),

@@ -11,7 +11,8 @@
 //  scale's hundred and twenty-seven, and each value is rounded to the
 //  nearest step of it. The integers go to the front of the buffer, a
 //  position's after the last, and the scales past room for eight
-//  positions' integers.
+//  positions' integers -- or for as many rows as rows says, where more are
+//  rounded.
 
 layout(local_size_x = 64) in;
 
@@ -20,6 +21,8 @@ layout(std430, binding = 6) writeonly buffer Rounded  { uint  qw[]; };
 layout(std430, binding = 6) writeonly buffer Scales   { float qs[]; };
 
 layout(push_constant) uniform Shape {
+    //  Rows of bytes the scales lie past: eight positions' unless more
+    //  are to be rounded -- a mixture's runs by slot.
     uint rows;
     uint columns;
     uint count;
@@ -53,5 +56,5 @@ void main() {
                    | ((uint (r.z) & 0xFFu) << 16u)
                    | ((uint (r.w) & 0xFFu) << 24u);
     }
-    qs[2u * shape.columns + block] = scale;
+    qs[max(shape.rows, 8u) * shape.columns / 4u + block] = scale;
 }

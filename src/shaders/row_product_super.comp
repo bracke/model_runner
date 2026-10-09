@@ -78,6 +78,14 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+#ifdef DOTS
+//  Where the rounding's scales begin: past room for eight positions'
+//  bytes, or -- for a walk that reads its experts' runs by slot, which may
+//  be many more rows than eight -- past the room the push block's table
+//  word says, in rows.
+#define SCALES_AT ((shape.routed == 3u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+#endif
+
 float sigmoid_weighted(float x) {
     return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
 }
@@ -173,8 +181,8 @@ void main() {
             qy[k][1] = qw[w1 + 8u];
             qy[k][2] = qw[w2];
             qy[k][3] = qw[w2 + 8u];
-            uint s1 = 2u * shape.columns + (y1 >> 5u);
-            uint s2 = 2u * shape.columns + ((y1 + 128u) >> 5u);
+            uint s1 = SCALES_AT + (y1 >> 5u);
+            uint s2 = SCALES_AT + ((y1 + 128u) >> 5u);
             dy[k] = vec4 (qs[s1], qs[s1 + 1u], qs[s2], qs[s2 + 1u]);
             bsum[k] = dy[k] * vec4 (float (dotPacked4x8EXT (qy[k][0], 0x01010101)),
                                     float (dotPacked4x8EXT (qy[k][1], 0x01010101)),

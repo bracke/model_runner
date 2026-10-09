@@ -64,6 +64,14 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+#ifdef DOTS
+//  Where the rounding's scales begin: past room for eight positions'
+//  bytes, or -- for a walk that reads its experts' runs by slot, which may
+//  be many more rows than eight -- past the room the push block's table
+//  word says, in rows.
+#define SCALES_AT ((shape.routed == 3u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+#endif
+
 //  GLU: a feed-forward's gate and up projections at once, as
 //  row_product_super.comp's GLU takes them -- the up's rows stride bytes
 //  past the gate's, each row summed as the plain kernel sums it, and the
@@ -2575,7 +2583,7 @@ void main() {
                 qa[k][1] = qw[xb + 1u];
                 qa[k][2] = qw[xb + 2u];
                 qa[k][3] = qw[xb + 3u];
-                da[k] = qs[2u * shape.columns + ((from_k[k] + col) >> 5u)];
+                da[k] = qs[SCALES_AT + ((from_k[k] + col) >> 5u)];
             }
 #else
             vec4 a[VEC][4];
@@ -2774,7 +2782,7 @@ void main_many() {
                 qa[k][1] = qw[xb + OWN_STEPS[1]];
                 qa[k][2] = qw[xb + OWN_STEPS[2]];
                 qa[k][3] = qw[xb + OWN_STEPS[3]];
-                da[k] = qs[2u * shape.columns + ((from_k[k] + i * 256u) >> 5u) + ib];
+                da[k] = qs[SCALES_AT + ((from_k[k] + i * 256u) >> 5u) + ib];
             }
 
             for (uint r = 0u; r < MANY_R; ++r) {
@@ -3061,7 +3069,7 @@ void main_many() {
                 for (uint j = 0u; j < 4u; ++j) {
                     qa[k][j] = qw[xb + j];
                 }
-                da[k] = qs[2u * shape.columns + ((from_k[k] + col) >> 5u)];
+                da[k] = qs[SCALES_AT + ((from_k[k] + col) >> 5u)];
                 total[k] = da[k] * float(dotPacked4x8EXT(qa[k][0], 0x01010101)
                                          + dotPacked4x8EXT(qa[k][1], 0x01010101)
                                          + dotPacked4x8EXT(qa[k][2], 0x01010101)

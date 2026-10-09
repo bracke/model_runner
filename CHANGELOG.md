@@ -7,7 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
-- **A mixture's experts walk as integers too:** a check round's expert runs read the batch's positions by their lists out of the one rounding, so a listed walk takes the integer kernels as a plain one does (a run laid out by slot, the experts' down projection, keeps binary32). Qwen3-Coder-30B-A3B Q2_K drafting seven a round from its context reads 25.8 tokens a second against 23.1 before and 22.6 at --arith f32, the same proposals kept; at three a round 34.0 against 32.1.
+- **A mixture's experts walk as integers too:** a check round's expert runs read the batch's positions by their lists out of the one rounding, so a listed walk takes the integer kernels as a plain one does; and the experts' down projection, whose runs are read by slot, takes them over a rounding of every slot, the scales placed past as many rows as there are slots (the push block's table word says where). Qwen3-Coder-30B-A3B Q2_K drafting seven a round from its context reads 28.0 tokens a second against 23.1 before and 22.6 at --arith f32, the same proposals kept. Drafting still loses on a mixture -- 37 tokens a second undrafted against 34 drafting from the context and 31 from Qwen2.5-Coder-0.5B at 72% kept, a round's positions reading more experts' weights -- so a mixture still drafts only when asked.
 - **The built-in tools' definitions are structures too:** the calculator, lookup and the rest are written through Tools.Schemas, which takes a whole-number parameter now, as the work agent's tools already were -- every string escaped, one shape.
 - **IQ1_S's and IQ1_M's walks were written as integers and measured level or slower** -- their grid lookups are the cost, as IQ2's and IQ3's -- and are not kept.
 

@@ -154,7 +154,11 @@ package body Model_Runner.Platform.Device.Products is
    --  every thirty-two of them, nine bytes a column. Wider rows walk in
    --  binary32.
    Round_Columns : constant := 131_072;
-   Round_Bytes   : constant := 9 * Round_Columns;
+
+   --  A region's room: eight positions of the widest row, or -- for a
+   --  mixture's runs by slot, which may be many more rows than eight -- as
+   --  many rows of a narrower one as fit.
+   Round_Bytes   : constant := 4 * 1024 * 1024;
 
    --  And a second region past it that only a normalization rounding its
    --  own answer writes, for the walks that read that answer: a walk's own
@@ -13036,6 +13040,18 @@ package body Model_Runner.Platform.Device.Products is
           elsif Steps.Items (Which).Chained then Which - 1
           else 0);
 
+      --  The rows a walk that reads its experts' runs by slot reads: every
+      --  slot of the step it reads, each a row of its width. Nought for any
+      --  other walk, which reads the batch's positions.
+      function Slot_Rows (Which : Positive) return Natural
+      is (if Steps.Items (Which).Listed
+            and then Steps.Items (Which).By_Slot
+            and then Reads_From (Which) > 0
+            and then Steps.Items (Which).Columns > 0
+          then Natural (Places (Reads_From (Which)).Bytes
+                        / Interfaces.Unsigned_64 (4 * Steps.Items (Which).Columns))
+          else 0);
+
       --  Whether a product walks as integers over its activations rounded
       --  first: a Q4_K walk of a few positions, its gate and up or any of
       --  them as Round_Walks says, reading its one activation from the
@@ -13061,6 +13077,12 @@ package body Model_Runner.Platform.Device.Products is
                   --  by slot, whose activation is a gathered copy.
                   and then (if Steps.Items (Which).Listed
                             then not Steps.Items (Which).By_Slot
+                                 --  By slot, every slot rounded, which the
+                                 --  region has to hold.
+                                 or else (Slot_Rows (Which) > 0
+                                          and then Natural'Max (Slot_Rows (Which), 8)
+                                                   * Steps.Items (Which).Columns / 8 * 9
+                                                   <= Round_Bytes)
                             else Steps.Items (Which).Gathers = 0
                                  and then Steps.Items (Which).Routed = 0)
                   and then Dots_Line (Item, Steps.Items (Which).Packing,
@@ -14725,10 +14747,15 @@ package body Model_Runner.Platform.Device.Products is
          procedure Round_For (Index : Positive) is
             This : Step renames Steps.Items (Index);
 
+            --  The rows rounded: the batch's positions, or a mixture's
+            --  every slot where its runs are read by slot.
+            Rows : constant Natural :=
+              (if Slot_Rows (Index) > 0 then Slot_Rows (Index) else Count);
+
             Shape : aliased Shape_Constants :=
-              (Rows    => 0,
+              (Rows    => C.unsigned (Slot_Rows (Index)),
                Columns => C.unsigned (This.Columns),
-               Count   => C.unsigned (Count),
+               Count   => C.unsigned (Rows),
                First   => 0,
                Packing => 0,
                Base    => 0,
@@ -14757,7 +14784,7 @@ package body Model_Runner.Platform.Device.Products is
                   Product_Bytes, Shape'Address);
             Dispatch
               (Item.Buffer,
-               C.unsigned ((Count * This.Columns / 32 + 63) / 64), 1, 1);
+               C.unsigned ((Rows * This.Columns / 32 + 63) / 64), 1, 1);
 
             Barrier
               (Item.Buffer, Pipeline_Stage_Compute,
@@ -16774,7 +16801,11 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
                         Base    => C.unsigned (Places (Index).Base),
                         Joins   => 0,
-                        Table   => 0,
+                        --  Where an integer walk by slot finds its
+                        --  rounding's scales, in rows.
+                        Table   =>
+                          (if Dotted (Index) and then Barrier /= null
+                           then C.unsigned (Slot_Rows (Index)) else 0),
                         Members => [0 => C.unsigned (This.Gathers),
                                     others => 0],
                         Stride  => C.unsigned (Slice_Bytes (Index)),
