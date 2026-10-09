@@ -1020,7 +1020,7 @@ package body Device_Bench is
          --  Binary32 is here as the floor: it decodes to nothing at all, so
          --  whatever it reaches is what this device does with a row product
          --  when the decode is free.
-         Table : constant array (1 .. 35) of Shape :=
+         Table : constant array (1 .. 37) of Shape :=
            [(Products.Values_F32,   "f32   ",   1,   4),
             (Products.Values_F16,   "f16   ",   1,   2),
             (Products.Values_BF16,  "bf16  ",   1,   2),
@@ -1033,7 +1033,9 @@ package body Device_Bench is
             (Products.Packed_IQ4_NL, "iq4nl ", 32,  18),
             (Products.Packed_IQ4_NL, "iq4nli", 32,  18),
             (Products.Packed_Q2_K,  "q2_k  ", 256,  84),
+            (Products.Packed_Q2_K,  "q2_k i", 256,  84),
             (Products.Packed_Q3_K,  "q3_k  ", 256, 110),
+            (Products.Packed_Q3_K,  "q3_k i", 256, 110),
             (Products.Packed_Q4_K,  "q4_k  ", 256, 144),
             --  And Q4_K's walks as integers; see Products.Round_Walks.
             (Products.Packed_Q4_K,  "q4_k i", 256, 144),

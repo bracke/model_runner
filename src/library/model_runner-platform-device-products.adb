@@ -3170,6 +3170,10 @@ package body Model_Runner.Platform.Device.Products is
                        Item.Dots_Wave_Shaders (Packed_IQ4_XS));
                Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots,
                        Item.Dots_Wave_Shaders (Packed_MXFP4));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K_Dots,
+                       Item.Dots_Wave_Shaders (Packed_Q2_K));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K_Dots,
+                       Item.Dots_Wave_Shaders (Packed_Q3_K));
             end if;
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,
                     Item.Q2K_Wave_Shader);

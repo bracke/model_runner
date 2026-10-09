@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+
 with Model_Runner.Cancellation;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
@@ -87,6 +89,12 @@ package Model_Runner.Agent is
 
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
+
+      --  The work as the loop saw it happen -- what was changed, read,
+      --  failed and not answered since, refused -- the record a compacted
+      --  conversation carries, for the caller to show; empty when no call
+      --  ran.
+      Work_Record : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  Somewhere for the loop to report what it does as it does it.

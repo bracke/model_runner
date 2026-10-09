@@ -1,4 +1,3 @@
-with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
@@ -736,6 +735,7 @@ package body Model_Runner.Agent is
          null;
       end loop Step_Loop;
 
+      Result.Work_Record := U.To_Unbounded_String (Work.Record_Text);
       Gen.Release (Last_Result);
       Model_Runner.Grammar.Close (Rules_Grammar);
    exception

@@ -6860,8 +6860,9 @@ package body Checks is
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
       --  against it, and Q8_0's three over several vectors, and its five
       --  gate-and-up compilations, and MXFP4's -- and Q8_0's six walks
-      --  again as integers, and the two IQ4 formats' and MXFP4's.
-      for Which in 1 .. 40 loop
+      --  again as integers, and the two IQ4 formats', MXFP4's, Q2_K's and
+      --  Q3_K's.
+      for Which in 1 .. 42 loop
          declare
             Found : Boolean;
 
@@ -6910,6 +6911,8 @@ package body Checks is
                   when 38 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl_Dots_Digest,
                   when 39 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_Dots_Digest,
                   when 40 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots_Digest,
+                  when 41 => Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K_Dots_Digest,
+                  when 42 => Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K_Dots_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

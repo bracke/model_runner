@@ -52,6 +52,7 @@ with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Generation;
@@ -2881,6 +2882,15 @@ begin
          --  through.
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Roles_Named (Option ("--arith", "int8")));
+
+         --  And the device's walks by the same arithmetic, as `run` sets
+         --  them: a drafted run measured here rounds where `run`'s does.
+         Model_Runner.Backend.Device.Round_Walks
+           (if Option ("--arith", "int8") = "f32"
+            then Model_Runner.Platform.Device.Products.Rounds_None
+            elsif Option ("--arith", "int8") = "mixed"
+            then Model_Runner.Platform.Device.Products.Rounds_Feed_Forward
+            else Model_Runner.Platform.Device.Products.Rounds_Every);
 
          declare
             --  One measurement of one prompt, with every other option as

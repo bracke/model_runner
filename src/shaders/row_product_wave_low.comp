@@ -2380,6 +2380,27 @@ void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
     }
     lift = -dm.y * float(scale >> 4u);
 }
+
+#ifdef DOTS
+//  The same sixteen weights as the bytes they are, nought to three, four
+//  words of them, with the scale and the minimum that go on after.
+void lane_bytes(uint at, uint within, out int wq[4], out float sc,
+                out float lift) {
+    uint sub = within >> 4u;
+    uint side = sub >> 3u;
+    uint group = (within & 127u) >> 5u;
+    uint upper = sub & 1u;
+    uint q = (at + 16u + 32u * side + 16u * upper) >> 2u;
+    uint shift = 2u * group;
+    uint scale = byte_at(at + sub);
+    vec2 dm = unpackHalf2x16(w[(at + 80u) >> 2u]);
+    sc = dm.x * float(scale & 15u);
+    for (uint c = 0u; c < 4u; ++c) {
+        wq[c] = int((w[q + c] >> shift) & 0x03030303u);
+    }
+    lift = -dm.y * float(scale >> 4u);
+}
+#endif
 #endif
 
 #ifdef Q3_K
@@ -2443,6 +2464,31 @@ void lane_weights(uint at, uint within, out vec4 wv[4], out float lift) {
     wv[3] = sc * vec4(unpack8(v.w));
     lift = -4.0 * sc;
 }
+
+#ifdef DOTS
+//  The same sixteen weights as the bytes they are before the four is
+//  taken off, nought to seven, with the scale and that four after.
+void lane_bytes(uint at, uint within, out int wq[4], out float sc,
+                out float lift) {
+    uint sub = within >> 4u;
+    uint side = sub >> 3u;
+    uint group = (within & 127u) >> 5u;
+    uint upper = sub & 1u;
+    uint shift = 2u * group;
+    uint bit = 4u * side + group;
+    uvec4 q = span_at(at + 32u + 32u * side + 16u * upper);
+    uvec4 h = span_at(at + 16u * upper);
+    uvec4 v = ((q >> shift) & 0x03030303u) | (((h >> bit) & 0x01010101u) << 2u);
+    uint low = (byte_at(at + 96u + (sub & 7u)) >> (4u * (sub >> 3u))) & 15u;
+    uint high = (byte_at(at + 104u + (sub & 3u)) >> (2u * (sub >> 2u))) & 3u;
+    sc = half_at(at + 108u) * float(int(low | (high << 4u)) - 32);
+    wq[0] = int(v.x);
+    wq[1] = int(v.y);
+    wq[2] = int(v.z);
+    wq[3] = int(v.w);
+    lift = -4.0 * sc;
+}
+#endif
 #endif
 
 #ifdef Q8_0
@@ -2995,6 +3041,46 @@ void main_many() {
                     uint xg = (from_k[k] + i * 256u) >> 2u;
                     float unused;
                     temp[r][k] += lane_dot_own(at, itid, xg, unused);
+                }
+            }
+        }
+#elif defined(DOTS) && defined(WEIGHTS16)
+        //  The rounded activations against the weights' own bytes: a
+        //  lane's sixteen lie in one block of thirty-two, so one scale;
+        //  the minimum or the four taken off goes on the sum of the
+        //  rounded values, as the binary32 walk's goes on theirs.
+        uint col = i * 256u + itid * 16u;
+        if (col < shape.columns) {
+            uint block = col / BLOCK_ELEMS;
+            uint within = col % BLOCK_ELEMS;
+            int qa[MULTI][4];
+            float da[MULTI];
+            float total[MULTI];
+            for (uint k = 0u; k < MULTI; ++k) {
+                uint xb = (from_k[k] + col) >> 2u;
+                for (uint j = 0u; j < 4u; ++j) {
+                    qa[k][j] = qw[xb + j];
+                }
+                da[k] = qs[2u * shape.columns + ((from_k[k] + col) >> 5u)];
+                total[k] = da[k] * float(dotPacked4x8EXT(qa[k][0], 0x01010101)
+                                         + dotPacked4x8EXT(qa[k][1], 0x01010101)
+                                         + dotPacked4x8EXT(qa[k][2], 0x01010101)
+                                         + dotPacked4x8EXT(qa[k][3], 0x01010101));
+            }
+            for (uint r = 0u; r < MANY_R; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                uint at = shape.base + slice + row * span
+                          + block * BLOCK_BYTES;
+                int wq[4];
+                float sc;
+                float lift;
+                lane_bytes(at, within, wq, sc, lift);
+                for (uint k = 0u; k < MULTI; ++k) {
+                    int whole = dotPacked4x8EXT(qa[k][0], wq[0])
+                              + dotPacked4x8EXT(qa[k][1], wq[1])
+                              + dotPacked4x8EXT(qa[k][2], wq[2])
+                              + dotPacked4x8EXT(qa[k][3], wq[3]);
+                    temp[r][k] += sc * da[k] * float(whole) + lift * total[k];
                 }
             }
         }
