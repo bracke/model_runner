@@ -128,7 +128,13 @@ begin
             Tool_Policy (Host.Item.all, To_String (Child_Id), Host.Max_Calls,
                          To_String (Host.Task_Id), Host.Apart),
             Child_Claim, Called, Read,
-            Resource_Class => To_String (Host.Model.Resource_Class));
+            Resource_Class => To_String (Host.Model.Resource_Class),
+            --  The run that asked for it, and the call it asked by: the
+            --  latest that run recorded.
+            Parent         => (if Host.Calls.Is_Empty then "" else Host.Calls.Last_Element),
+            Parent_Call    =>
+              (if Host.Calls.Is_Empty then 0
+               else Invocations.Calls_Made (Host.Item.all, Host.Calls.Last_Element)));
          if E.Is_Ok (Read) then
             Agents.Record_Holding
               (Host.Item.all, Change, To_String (Child_Id), "", To_String (Called), Read);

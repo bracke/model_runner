@@ -98,6 +98,9 @@ package Model_Runner.Framework.Invocations is
    --    together.
    --  @param Resource_Class The model's memory or resource class, where
    --    it is known.
+   --  @param Parent The invocation whose call started this one, a helper
+   --    being the child of the run that asked for it; "" for a root.
+   --  @param Parent_Call That call's number among the parent's calls.
    procedure Start
      (Item        : Stores.Store;
       Change      : in out Stores.Transaction;
@@ -110,7 +113,16 @@ package Model_Runner.Framework.Invocations is
       Rules       : Contract;
       Id          : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info;
-      Resource_Class : String := "");
+      Resource_Class : String := "";
+      Parent      : String := "";
+      Parent_Call : Natural := 0);
+
+   --  How many calls an invocation has recorded, answered or not.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return The count; nought for none, or no such invocation.
+   function Calls_Made (Item : Stores.Store; Id : String) return Natural;
 
    --  Record how a call ended.
    --

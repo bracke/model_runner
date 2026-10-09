@@ -8,9 +8,12 @@ with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 
+with Hostkit.Process;
+
 with Http_Client.Clients;
 with Http_Client.Errors;
 
+with Model_Runner.Cancellation;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.OOXML;
@@ -108,9 +111,10 @@ package body Model_Runner.Tools.Builtin is
                       [Sc.Text ("query")])
      & ", "
      & Sc.Definition ("sql", "Run a query against a SQLite database file.",
-                      [Sc.Text ("database"), Sc.Text ("query")])
-     & ", "
-     & Sc.Definition
+                      [Sc.Text ("database"), Sc.Text ("query")]);
+
+   Delegate_Body : constant String :=
+     Sc.Definition
          ("delegate",
           "Hand a self-contained subtask to a fresh sub-agent that has "
           & "the same tools and a budget of its own, and get back only its "
@@ -118,9 +122,10 @@ package body Model_Runner.Tools.Builtin is
           & "your own context: describe the whole subtask in one task "
           & "string, as the sub-agent starts with no memory of this "
           & "conversation.",
-          [Sc.Text ("task")])
-     & ", "
-     & Sc.Definition
+          [Sc.Text ("task")]);
+
+   Ask_Body : constant String :=
+     Sc.Definition
          ("ask_user",
           "Ask the user a question and get back what they type. Use it "
           & "when the task is ambiguous, a choice is the user's to make, or "
@@ -129,11 +134,20 @@ package body Model_Runner.Tools.Builtin is
           [Sc.Text ("question")]);
 
    Definitions     : constant String := "[" & Pure_Body & "]";
-   All_Definitions : constant String := "[" & Pure_Body & ", " & More_Body
-                                        & "]";
+   All_Definitions : constant String :=
+     "[" & Pure_Body & ", " & More_Body & ", " & Delegate_Body & ", " & Ask_Body & "]";
 
    function Definitions_Text return String is (Definitions);
    function All_Definitions_Text return String is (All_Definitions);
+
+   ------------------
+   -- Offered_Text --
+   ------------------
+
+   function Offered_Text (Self : Instance) return String is
+     ("[" & Pure_Body & ", " & More_Body
+      & (if Self.Sub /= null then ", " & Delegate_Body else "")
+      & (if Self.Asker /= null then ", " & Ask_Body else "") & "]");
 
    ---------------------------------------------------------------------------
    --  Reading arguments (a walk over the top level of one JSON object)
@@ -384,29 +398,47 @@ package body Model_Runner.Tools.Builtin is
    --  A tool's answer and whether it is a failure, which each tool says
    --  where it fails rather than leaving it to be read back out of the
    --  words. The words of a failure still begin "error: ", for the model.
+   --  Halted: Timed_Out or Cancelled where the call's context stopped it,
+   --  Answered otherwise. Truncated: the text is not all the tool said.
+   --  Tokens: what a child agent generated for it.
    type Reply (Length : Natural) is record
-      Failed  : Boolean;
-      Changed : Boolean := False;
-      Text    : String (1 .. Length);
+      Failed    : Boolean;
+      Changed   : Boolean := False;
+      Halted    : Model_Runner.Tools.Runner.Answer_Kind := Model_Runner.Tools.Runner.Answered;
+      Truncated : Boolean := False;
+      Tokens    : Natural := 0;
+      Text      : String (1 .. Length);
    end record;
 
    --  An answer.
    function Said (Text : String) return Reply
-   is ((Length => Text'Length, Failed => False, Changed => False, Text => Text));
+   is ((Length => Text'Length, Failed => False, Changed => False, Text => Text, others => <>));
 
    --  An answer that changed what later calls read: a file written anew.
    function Changed_It (Text : String) return Reply
-   is ((Length => Text'Length, Failed => False, Changed => True, Text => Text));
+   is ((Length => Text'Length, Failed => False, Changed => True, Text => Text, others => <>));
 
    --  A failure, in the words the model is told it in.
    function Failure (Text : String) return Reply
    is ((Length => Text'Length + 7, Failed => True, Changed => False,
-        Text => "error: " & Text));
+        Text => "error: " & Text, others => <>));
+
+   --  The same reply, said to be cut short.
+   function Cut (Item : Reply) return Reply
+   is ((Length => Item.Length, Failed => Item.Failed, Changed => Item.Changed,
+        Halted => Item.Halted, Truncated => True, Tokens => Item.Tokens, Text => Item.Text));
+
+   --  A failure where the call's context stopped it: How says how.
+   function Halted_By
+     (How : Model_Runner.Tools.Runner.Answer_Kind; Text : String) return Reply
+   is ((Length => Text'Length + 7, Failed => True, Changed => False,
+        Halted => How, Truncated => False, Tokens => 0, Text => "error: " & Text));
 
    --  The same answer with words before it, failed or not as it was.
    function Prefixed (Before : String; Item : Reply) return Reply
    is ((Length => Before'Length + Item.Length, Failed => Item.Failed,
-        Changed => Item.Changed, Text => Before & Item.Text));
+        Changed => Item.Changed, Halted => Item.Halted, Truncated => Item.Truncated,
+        Tokens => Item.Tokens, Text => Before & Item.Text));
 
    function Calculator (Args : String) return Reply is
       A, B : Long_Long_Integer;
@@ -927,10 +959,10 @@ package body Model_Runner.Tools.Builtin is
                   Dropped : constant Natural :=
                     Total - Natural (Head_Last) - Natural (Tail_Last);
                begin
-                  return Said (As_String (Head_Block, Head_Last)
+                  return Cut (Said (As_String (Head_Block, Head_Last)
                     & ASCII.LF & "...[" & Image (Long_Long_Integer (Dropped))
                     & " bytes elided]..." & ASCII.LF
-                    & As_String (Tail_Block, Tail_Last));
+                    & As_String (Tail_Block, Tail_Last)));
                end;
             end;
          end if;
@@ -949,11 +981,18 @@ package body Model_Runner.Tools.Builtin is
      (Program : String; Args : GNAT.OS_Lib.Argument_List) return Reply
    is
       use type GNAT.OS_Lib.String_Access;
-      use type GNAT.OS_Lib.Process_Id;
+      package Tr renames Model_Runner.Tools.Runner;
       Prog : GNAT.OS_Lib.String_Access :=
         GNAT.OS_Lib.Locate_Exec_On_Path (Program);
       Path : GNAT.OS_Lib.String_Access;
       FD   : GNAT.OS_Lib.File_Descriptor;
+      Words : Hostkit.String_Vectors.Vector;
+
+      --  The run's own limits, as the task running the call entered them:
+      --  its cancellation, and its deadline where that comes before the
+      --  tool's own. A process outliving either is stopped with its group.
+      Context : constant Tr.Tool_Context := Tr.Entered_Context;
+      Allowed : constant Duration := Tr.Time_Left (Context, Tool_Timeout);
 
       procedure Release is
       begin
@@ -967,9 +1006,8 @@ package body Model_Runner.Tools.Builtin is
          GNAT.OS_Lib.Free (Prog);
       end Release;
 
-      function Seconds return String is
-         Whole : constant Integer := Integer (Tool_Timeout);
-         Raw   : constant String := Integer'Image (Whole);
+      function Seconds (Span : Duration) return String is
+         Raw : constant String := Integer'Image (Integer (Span));
       begin
          return Raw (Raw'First + 1 .. Raw'Last);
       end Seconds;
@@ -978,72 +1016,55 @@ package body Model_Runner.Tools.Builtin is
          Release;
          return Failure ("'" & Program & "' is not installed on this machine");
       end if;
+      if Tr.Stopped (Context) then
+         Release;
+         return (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
+                 then Halted_By (Tr.Cancelled, "the run was cancelled before '" & Program & "' started")
+                 else Halted_By (Tr.Timed_Out, "the run's time ran out before '" & Program & "' started"));
+      end if;
+      for A of Args loop
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (A.all));
+      end loop;
 
       GNAT.OS_Lib.Create_Temp_File (FD, Path);
       GNAT.OS_Lib.Close (FD);
 
       declare
-         Pid : constant GNAT.OS_Lib.Process_Id :=
-           GNAT.OS_Lib.Non_Blocking_Spawn
-             (Prog.all, Args, Path.all, Err_To_Out => True);
+         Happened : constant Hostkit.Process.Process_Outcome :=
+           Hostkit.Process.Run_Captured
+             (Program     => Prog.all,
+              Arguments   => Words,
+              Stdout_Path => Path.all,
+              Stderr_Path => Path.all,
+              Timeout_Ms  => Natural'Max (1, Natural (Allowed * 1000)),
+              Cancelled   => Tr.Stop_Now'Access,
+              Whole_Group => True);
+         Output : constant Reply :=
+           (if Happened.Started then Read_Capped (Path.all) else Said (""));
          Gone : Boolean;
       begin
-         if Pid = GNAT.OS_Lib.Invalid_Pid then
-            GNAT.OS_Lib.Delete_File (Path.all, Gone);
-            GNAT.OS_Lib.Free (Path);
-            Release;
+         GNAT.OS_Lib.Delete_File (Path.all, Gone);
+         GNAT.OS_Lib.Free (Path);
+         Release;
+         if not Happened.Started then
             return Failure ("could not run '" & Program & "'");
+         elsif Happened.Timed_Out
+           and then Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
+         then
+            return Halted_By (Tr.Cancelled, "'" & Program & "' was stopped: the run was cancelled");
+         elsif Happened.Timed_Out and then Allowed < Tool_Timeout then
+            return Halted_By (Tr.Timed_Out, "'" & Program & "' was stopped when the run's time ran out, after "
+                              & Seconds (Allowed) & " seconds");
+         elsif Happened.Timed_Out then
+            return Halted_By (Tr.Timed_Out, "'" & Program & "' did not finish within "
+                              & Seconds (Tool_Timeout) & " seconds and was stopped");
+         elsif Output.Failed then
+            return Output;
+         elsif Output.Text = "" then
+            return Said ("(the command produced no output)");
+         else
+            return Output;
          end if;
-
-         --  A watchdog that kills the child if it outlives the budget. The
-         --  main path waits for the child -- which returns whether it exited
-         --  on its own or was killed -- and then stops the watchdog, telling
-         --  it whether it was the one that ended the child.
-         declare
-            task Watchdog is
-               entry Stop (Killed : out Boolean);
-            end Watchdog;
-
-            task body Watchdog is
-            begin
-               select
-                  accept Stop (Killed : out Boolean) do
-                     Killed := False;
-                  end Stop;
-               or
-                  delay Tool_Timeout;
-                  GNAT.OS_Lib.Kill (Pid, Hard_Kill => True);
-                  accept Stop (Killed : out Boolean) do
-                     Killed := True;
-                  end Stop;
-               end select;
-            end Watchdog;
-
-            Done_Pid  : GNAT.OS_Lib.Process_Id;
-            Ok        : Boolean;
-            Timed_Out : Boolean;
-         begin
-            GNAT.OS_Lib.Wait_Process (Done_Pid, Ok);
-            Watchdog.Stop (Timed_Out);
-
-            declare
-               Output : constant Reply := Read_Capped (Path.all);
-            begin
-               GNAT.OS_Lib.Delete_File (Path.all, Gone);
-               GNAT.OS_Lib.Free (Path);
-               Release;
-               if Timed_Out then
-                  return Failure ("'" & Program & "' did not finish within "
-                    & Seconds & " seconds and was stopped");
-               elsif Output.Failed then
-                  return Output;
-               elsif Output.Text = "" then
-                  return Said ("(the command produced no output)");
-               else
-                  return Output;
-               end if;
-            end;
-         end;
       end;
    end Capture;
 
@@ -1454,18 +1475,48 @@ package body Model_Runner.Tools.Builtin is
       end if;
 
       declare
+         package Tr renames Model_Runner.Tools.Runner;
          Buffer : String (1 .. Model_Runner.Tools.Max_Call_Bytes);
          Last   : Natural;
+         Ended  : Sub_Outcome;
          Status : E.Error_Info;
+
+         --  What it took, beside what it came to: the caller's budget is
+         --  spent by what its child generated, whatever the child gave.
+         function Spent (Item : Reply) return Reply
+         is ((Length => Item.Length, Failed => Item.Failed, Changed => Item.Changed,
+              Halted => Item.Halted, Truncated => Item.Truncated,
+              Tokens => Ended.Tokens, Text => Item.Text));
+
+         function Took return String is
+           (Image (Long_Long_Integer (Ended.Steps)) & " steps and "
+            & Image (Long_Long_Integer (Ended.Calls)) & " calls");
       begin
-         Self.Sub.Run_Sub (Job, Buffer, Last, Status);
+         Self.Sub.Run_Sub (Job, Tr.Context_Of (Self), Buffer, Last, Ended, Status);
          if E.Is_Error (Status) then
-            return Failure ("the sub-agent could not finish the task");
-         elsif Last = 0 then
-            return Said ("the sub-agent returned no answer");
-         else
-            return Said (Buffer (1 .. Last));
+            return Spent (Failure ("the sub-agent could not run the task (" & E.Diagnostic_Code (Status.Code) & ")"));
          end if;
+         --  Only an answer is a result: a child that stopped any other way
+         --  has not done the task, whatever it said on the way.
+         case Ended.State is
+            when Completed =>
+               if Last = 0 then
+                  return Spent (Failure ("the sub-agent ended without an answer, after " & Took));
+               end if;
+               return Spent (Said (Buffer (1 .. Last)));
+            when Cancelled =>
+               return Spent (Halted_By (Tr.Cancelled, "the sub-agent was stopped: the run was cancelled"));
+            when Exhausted =>
+               if Ended.Timed then
+                  return Spent (Halted_By (Tr.Timed_Out, "the sub-agent ran out of time before answering, after "
+                                           & Took));
+               end if;
+               return Spent (Failure ("the sub-agent stopped before answering: "
+                                      & Ada.Strings.Unbounded.To_String (Ended.Reason) & ", after " & Took));
+            when Failed =>
+               return Spent (Failure ("the sub-agent failed: "
+                                      & Ada.Strings.Unbounded.To_String (Ended.Reason) & ", after " & Took));
+         end case;
       end;
    end Delegate;
 
@@ -2159,24 +2210,39 @@ package body Model_Runner.Tools.Builtin is
          end if;
       end Answer;
 
+      --  The run's limits, for a tool that waits to answer to.
+      function Entered return Boolean is
+      begin
+         Tr.Enter (Tr.Context_Of (Self));
+         return True;
+      end Entered;
+
+      Ready : constant Boolean := Entered;
+      pragma Unreferenced (Ready);
       Given : constant Reply := Answer;
       Text  : String renames Given.Text;
+      use type Tr.Answer_Kind;
    begin
       Last   := 0;
       Status := E.Success;
-      --  Refused where the confinement said so; failed where the tool
-      --  said it failed.
+      --  Refused where the confinement said so; stopped where the run's
+      --  limits stopped it; failed where the tool said it failed.
       Outcome :=
         (if Refused /= Tr.Not_Refused
-         then (Answer => Tr.Refused, Refusal => Refused, Changed => False)
+         then (Answer => Tr.Refused, Refusal => Refused, others => <>)
+         elsif Given.Halted /= Tr.Answered
+         then (Answer => Given.Halted, Changed => Named /= "write_file"
+                                                  and then Tr."=" (Kind (Self, Named), Tr.Changes),
+               Tokens => Given.Tokens, others => <>)
          elsif Given.Failed
-         then (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False)
+         then (Answer => Tr.Failed, Tokens => Given.Tokens, others => <>)
          --  A write says whether it changed the file; any other tool that
          --  may change state is taken to have.
          else (Answer => Tr.Answered, Refusal => Tr.Not_Refused,
                Changed => Given.Changed
                           or else (Named /= "write_file"
-                                   and then Tr."=" (Kind (Self, Named), Tr.Changes))));
+                                   and then Tr."=" (Kind (Self, Named), Tr.Changes)),
+               Truncated => Given.Truncated, Tokens => Given.Tokens));
       if Text'Length > Result'Length then
          Status := E.Make (E.Tools_Too_Large);
          return;

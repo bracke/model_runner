@@ -1,4 +1,4 @@
-private with Ada.Strings.Unbounded;
+with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
@@ -79,19 +79,46 @@ package Model_Runner.Tools.Builtin is
    --  recurse without bound: a sub-agent's own delegate call is declined.
    type Delegator is limited interface;
 
+   --  How a sub-agent's run ended. Completed: it answered, and its answer
+   --  is the result. Failed: it could not go on -- a render, a generation,
+   --  a grammar failed, or it went round in circles. Cancelled: the run it
+   --  belongs to was. Exhausted: a budget ran out -- steps, tokens, time --
+   --  before it answered. Only Completed is a result; what a sub-agent said
+   --  before it stopped any other way is not its answer.
+   type Sub_State is (Completed, Failed, Cancelled, Exhausted);
+
+   --  A sub-agent's run, beside its answer: how it ended, why in words,
+   --  and what it took.
+   type Sub_Outcome is record
+      State   : Sub_State := Failed;
+      Reason  : Ada.Strings.Unbounded.Unbounded_String;
+      Timed   : Boolean := False;
+      Steps   : Natural := 0;
+      Calls   : Natural := 0;
+      Tokens  : Natural := 0;
+   end record;
+
    --  Run Instruction as a subtask and return the sub-agent's final answer.
    --
    --  @param Self The delegator.
    --  @param Instruction The subtask, in the words the sub-agent is given as
    --    its task.
-   --  @param Result Buffer receiving the sub-agent's answer.
+   --  @param Context What the calling run has left -- its cancellation, its
+   --    deadline, its tokens -- which the sub-agent runs within: a child's
+   --    budget is the least of its own and its parent's.
+   --  @param Result Buffer receiving the sub-agent's answer, written only
+   --    when it completed.
    --  @param Last Number of bytes written.
+   --  @param Ended How the sub-agent's run ended; Timed says a budget of
+   --    time was the one that ran out.
    --  @param Status Success, or a diagnostic when the subtask could not run.
    procedure Run_Sub
      (Self        : in out Delegator;
       Instruction : String;
+      Context     : Model_Runner.Tools.Runner.Tool_Context;
       Result      : out String;
       Last        : out Natural;
+      Ended       : out Sub_Outcome;
       Status      : out Model_Runner.Errors.Error_Info) is abstract;
 
    --  Whether two delegated subtasks may run at the same time. Delegation
@@ -202,6 +229,16 @@ package Model_Runner.Tools.Builtin is
    --  @return Its content, or "" when not Found.
    function Text_Argument (Args : String; Key : String; Found : out Boolean)
      return String;
+
+   --  The tools this runner can carry out as it is wired: every built-in
+   --  one, but delegate only where it has a delegator and ask_user only
+   --  where it has somebody to ask. A tool the model is shown is one its
+   --  call can run -- a model told of a tool the runner will decline spends
+   --  its tokens choosing it.
+   --
+   --  @param Self The runner.
+   --  @return A JSON array of function definitions.
+   function Offered_Text (Self : Instance) return String;
 
    overriding procedure Run
      (Self      : in out Instance;

@@ -1,3 +1,5 @@
+with Ada.Real_Time;
+with Ada.Characters.Handling;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
@@ -30,6 +32,21 @@ package body Model_Runner.Agent is
 
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+
+   ------------------
+   -- Reason_Words --
+   ------------------
+
+   function Reason_Words (Reason : Stop_Reason) return String is
+      Said : String := Ada.Characters.Handling.To_Lower (Stop_Reason'Image (Reason));
+   begin
+      for C of Said loop
+         if C = '_' then
+            C := ' ';
+         end if;
+      end loop;
+      return Said;
+   end Reason_Words;
 
    ---------
    -- Run --
@@ -128,8 +145,16 @@ package body Model_Runner.Agent is
       Budget_Ns : constant Model_Runner.Clocks.Nanoseconds :=
         Model_Runner.Clocks.Nanoseconds (Long_Float (Max_Seconds) * 1.0e9);
 
-      --  The calls made since the state they read last changed, by a hash
-      --  of name-and-arguments, so a call the model has already made is
+      --  The same budget as the deadline the run's calls run within.
+      Deadline : constant Ada.Real_Time.Time :=
+        (if Timing then Ada.Real_Time."+" (Ada.Real_Time.Clock, Ada.Real_Time.To_Time_Span (Max_Seconds))
+         else Ada.Real_Time.Time_Last);
+
+      --  Tokens the run has spent, its own and its children's.
+      function Spent return Natural is (Result.Generated_Tokens + Result.Delegated_Tokens);
+
+      --  The calls made since the state they read last changed, by their
+      --  identity -- name and canonical arguments -- so a call the model has already made is
       --  noticed rather than run again -- a real tool may not be
       --  idempotent, and a model that repeats itself is not making
       --  progress -- with what each answered and how it ended. See Recall.
@@ -190,37 +215,6 @@ package body Model_Runner.Agent is
          Mix (Args);
          return Hash;
       end Digest;
-
-      --  A call's arguments without the spaces between their parts: the
-      --  same call written with other spacing is the same call.
-      function Squeezed (Args : String) return String is
-         Result : String (1 .. Args'Length);
-         Last   : Natural := 0;
-         Quoted : Boolean := False;
-         Escape : Boolean := False;
-      begin
-         for C of Args loop
-            if Quoted then
-               Last := Last + 1;
-               Result (Last) := C;
-               if Escape then
-                  Escape := False;
-               elsif C = '\' then
-                  Escape := True;
-               elsif C = '"' then
-                  Quoted := False;
-               end if;
-            elsif C = '"' then
-               Quoted := True;
-               Last := Last + 1;
-               Result (Last) := C;
-            elsif C not in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
-               Last := Last + 1;
-               Result (Last) := C;
-            end if;
-         end loop;
-         return Result (1 .. Last);
-      end Squeezed;
 
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
@@ -323,6 +317,17 @@ package body Model_Runner.Agent is
                  Thinking => Thinking,
                  Tools    => (if Have_Tools then Offered'Unrestricted_Access
                               else null));
+
+            --  No more asked of a generation than the run has left.
+            if Max_Total_Tokens > 0 then
+               if Spent >= Max_Total_Tokens then
+                  Free (Rendered);
+                  Result.Reason := Token_Limit;
+                  exit Step_Loop;
+               end if;
+               Request.Max_Tokens :=
+                 Natural'Min (Generation.Max_Tokens, Max_Total_Tokens - Spent);
+            end if;
 
             Gen.Release (Last_Result);
             Gen.Generate
@@ -473,12 +478,18 @@ package body Model_Runner.Agent is
             end if;
 
             --  Calls to run, but the cumulative token budget is spent.
-            if Max_Total_Tokens > 0
-              and then Result.Generated_Tokens >= Max_Total_Tokens
-            then
+            if Max_Total_Tokens > 0 and then Spent >= Max_Total_Tokens then
                Result.Reason := Token_Limit;
                exit Step_Loop;
             end if;
+
+            --  The run's limits, for every call of the turn to run within.
+            Model_Runner.Tools.Runner.Set_Context
+              (Executor,
+               (Cancel      => Cancel,
+                Deadline    => Deadline,
+                Tokens_Left => (if Max_Total_Tokens = 0 then Natural'Last
+                                else Max_Total_Tokens - Spent)));
 
             --  Decide, run and report the turn's calls. The decisions --
             --  dedup and approval -- and every result appended stay on this
@@ -513,8 +524,7 @@ package body Model_Runner.Agent is
 
                --  A note in a call's place: refused by what, or failed.
                Failed_Note : constant Model_Runner.Tools.Runner.Call_Outcome :=
-                 (Answer => Model_Runner.Tools.Runner.Failed,
-                  Refusal => Model_Runner.Tools.Runner.Not_Refused, Changed => False);
+                 (Answer => Model_Runner.Tools.Runner.Failed, others => <>);
 
                Repeat_Note : constant String :=
                  "error: this exact call was already made in this "
@@ -530,8 +540,7 @@ package body Model_Runner.Agent is
                        Conv.Call_Name (Messages, Turn, Call);
                      Args  : constant String :=
                        Conv.Call_Arguments (Messages, Turn, Call);
-                     Key   : constant Interfaces.Unsigned_64 :=
-                       Digest (Named, Squeezed (Args));
+                     Key   : constant String := Model_Runner.Agent.Recall.Identity (Named, Args);
                      Effect : constant Model_Runner.Tools.Runner.Call_Kind :=
                        Executor.Kind (Named);
                   begin
@@ -550,12 +559,14 @@ package body Model_Runner.Agent is
                      if Effect /= Model_Runner.Tools.Runner.Varies
                        and then Made.Holds (Key) and then not Made.Answered (Key)
                        and then (for some Earlier in 1 .. Call - 1 =>
-                                   Digest (U.To_String (Items (Earlier).Named),
-                                           Squeezed (U.To_String (Items (Earlier).Args))) = Key)
+                                   Model_Runner.Agent.Recall.Identity
+                                     (U.To_String (Items (Earlier).Named),
+                                      U.To_String (Items (Earlier).Args)) = Key)
                      then
                         for Earlier in 1 .. Call - 1 loop
-                           if Digest (U.To_String (Items (Earlier).Named),
-                                      Squeezed (U.To_String (Items (Earlier).Args))) = Key
+                           if Model_Runner.Agent.Recall.Identity
+                                (U.To_String (Items (Earlier).Named),
+                                 U.To_String (Items (Earlier).Args)) = Key
                              and then Items (Call).Copy_Of = 0
                            then
                               Items (Call).Copy_Of := Earlier;
@@ -617,7 +628,7 @@ package body Model_Runner.Agent is
                                     & "without it");
                                  Items (Call).Ended :=
                                    (Answer  => Model_Runner.Tools.Runner.Refused,
-                                    Refusal => Model_Runner.Tools.Runner.Not_Permitted, Changed => False);
+                                    Refusal => Model_Runner.Tools.Runner.Not_Permitted, others => <>);
 
                               when Allow =>
                                  --  After a call that changes state, in
@@ -762,7 +773,8 @@ package body Model_Runner.Agent is
                           (if Items (Source).Failed then Failed_Note else Items (Source).Ended);
 
                         Args    : constant String := U.To_String (Items (Call).Args);
-                        Key     : constant Interfaces.Unsigned_64 := Digest (Named, Squeezed (Args));
+                        Key     : constant Interfaces.Unsigned_64 :=
+                          Digest (Model_Runner.Agent.Recall.Identity (Named, Args), "");
                         Ran_Now : constant Boolean :=
                           Items (Call).Kind /= As_Note and then Items (Call).Copy_Of = 0;
 
@@ -814,8 +826,7 @@ package body Model_Runner.Agent is
                            --  Kept by the call, for a repeat of it, and in the
                            --  record of the work: by the path it named, where
                            --  it named one.
-                           Made.Keep
-                             (Digest (Named, Squeezed (U.To_String (Items (Call).Args))), Reply, Ended);
+                           Made.Keep (Model_Runner.Agent.Recall.Identity (Named, Args), Reply, Ended);
                            declare
                               Named_Path : Boolean;
                               Path       : constant String :=
@@ -836,6 +847,9 @@ package body Model_Runner.Agent is
                      end;
 
                      Result.Calls := Result.Calls + 1;
+                     if Items (Call).Copy_Of = 0 and then Items (Call).Kind /= As_Note then
+                        Result.Delegated_Tokens := Result.Delegated_Tokens + Items (Call).Ended.Tokens;
+                     end if;
                      if E.Is_Error (Status) then
                         L.Reset (Session);
                         Result.Reason := History_Failed;
@@ -847,6 +861,22 @@ package body Model_Runner.Agent is
 
                if Halted then
                   Result.Reason := Declined;
+                  exit Step_Loop;
+               end if;
+
+               --  A call the run's own limits stopped ends the run: its
+               --  cancellation, its deadline. A tool's own time limit is
+               --  the tool's failure, and the model hears it.
+               if Model_Runner.Cancellation.Is_Cancelled (Cancel)
+                 and then (for some Call in 1 .. Planned =>
+                             Items (Call).Ended.Answer = Model_Runner.Tools.Runner.Cancelled)
+               then
+                  Result.Reason := Cancelled;
+                  exit Step_Loop;
+               elsif Timing
+                 and then Model_Runner.Clocks.Read (Time) - Started > Budget_Ns
+               then
+                  Result.Reason := Timed_Out;
                   exit Step_Loop;
                end if;
             end;

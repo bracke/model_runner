@@ -448,7 +448,9 @@ package body Model_Runner.Framework.Invocations is
       Rules       : Contract;
       Id          : out Ada.Strings.Unbounded.Unbounded_String;
       Status      : out Model_Runner.Errors.Error_Info;
-      Resource_Class : String := "")
+      Resource_Class : String := "";
+      Parent      : String := "";
+      Parent_Call : Natural := 0)
    is
       Number : Natural;
    begin
@@ -525,13 +527,22 @@ package body Model_Runner.Framework.Invocations is
          if Resource_Class /= "" then
             Records.Set (Value, "resource_class", Resource_Class);
          end if;
+         if Parent /= "" then
+            Records.Set (Value, "parent", Parent);
+            Records.Set (Value, "parent_call", Image (Parent_Call));
+         end if;
          Stores.Put (Change, Invocations_Area, To_String (Id), Value);
       end;
+      --  A helper's start names the run and the call that asked for it, so
+      --  what a run started is read off the log by the run's name.
       declare
          Event : Ada.Strings.Unbounded.Unbounded_String;
       begin
          Events.Emit (Item, Change, Events.Invocation_Started, To_String (Id),
-                      Task_Id & " by " & Agent, Event, Status);
+                      Task_Id & " by " & Agent
+                      & (if Parent = "" then ""
+                         else " for " & Parent & " call" & Natural'Image (Parent_Call)),
+                      Event, Status);
       end;
    end Start;
 
@@ -707,6 +718,27 @@ package body Model_Runner.Framework.Invocations is
          Number := Calls + 1;
       end if;
    end Note_Start;
+
+   ----------------
+   -- Calls_Made --
+   ----------------
+
+   function Calls_Made (Item : Stores.Store; Id : String) return Natural is
+      Value : Records.Item;
+      Read  : E.Error_Info;
+      Count : Natural := 0;
+   begin
+      Stores.Read (Item, Invocations_Area, Id, Value, Read);
+      if E.Is_Error (Read) then
+         return 0;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "call.") = 1 then
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Count;
+   end Calls_Made;
 
    -------------------
    -- Refused_Calls --

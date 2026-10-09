@@ -45,8 +45,8 @@ package Model_Runner.Agent is
    type Stop_Reason is
      (Answered,           --  the model replied with no call to run
       Step_Limit,         --  the step budget ran out with a call still open
-      Timed_Out,          --  the wall-clock budget ran out between steps
-      Token_Limit,        --  the cumulative token budget ran out between steps
+      Timed_Out,          --  the wall-clock budget ran out
+      Token_Limit,        --  the cumulative token budget ran out
       Repeating,          --  a turn made only calls already made, and got
                           --  no further, so the loop stopped rather than
                           --  circle
@@ -56,6 +56,43 @@ package Model_Runner.Agent is
       History_Failed,     --  a turn would not fit the history
       Cancelled,          --  the caller cancelled a generation
       Declined);          --  an approver stopped the run before a call ran
+
+   --  What a stop asks of whoever acts on it, decided here once rather
+   --  than by each caller for itself. Finished: the run answered.
+   --  Exhausted: a budget ran out -- steps, tokens, time -- and more of it
+   --  takes the run on from where it is. Retryable: the same again may go
+   --  through, a backend's failure being passing. Needs_Change: the same
+   --  again would end the same way -- the run went round, or its
+   --  conversation would not render -- so going on wants a changed context
+   --  or approach. Needs_User: a person stopped it, by cancelling or by
+   --  declining a call, and it waits on them.
+   type Stop_Traits is record
+      Finished     : Boolean := False;
+      Exhausted    : Boolean := False;
+      Retryable    : Boolean := False;
+      Needs_Change : Boolean := False;
+      Needs_User   : Boolean := False;
+   end record;
+
+   --  A stop's traits.
+   --
+   --  @param Reason Why the loop stopped.
+   --  @return What it asks.
+   function Traits_Of (Reason : Stop_Reason) return Stop_Traits
+   is (case Reason is
+         when Answered          => (Finished => True, others => False),
+         when Step_Limit | Token_Limit | Timed_Out =>
+           (Exhausted => True, others => False),
+         when Generation_Failed => (Retryable => True, others => False),
+         when Repeating | Render_Failed | Grammar_Failed | History_Failed =>
+           (Needs_Change => True, others => False),
+         when Cancelled | Declined => (Needs_User => True, others => False));
+
+   --  A stop in words: "step limit", "timed out".
+   --
+   --  @param Reason Why the loop stopped.
+   --  @return It, in lower case with spaces.
+   function Reason_Words (Reason : Stop_Reason) return String;
 
    --  What a run did.
    type Outcome is record
@@ -75,6 +112,10 @@ package Model_Runner.Agent is
       --  Tokens the model generated over the whole loop, summed across the
       --  turns it took. The decode cost of the run in one number.
       Generated_Tokens : Natural := 0;
+
+      --  Tokens child agents generated for the run's calls: its budget
+      --  spent, though not by its own model turns.
+      Delegated_Tokens : Natural := 0;
 
       --  The prompt token count of the last turn -- the whole conversation,
       --  tools and all, as it stood when the loop ended. How much of the
@@ -286,15 +327,15 @@ package Model_Runner.Agent is
    --  @param Max_Steps Most model turns before the loop gives up on an open
    --    call. A task that needs one tool and an answer takes two.
    --  @param Max_Seconds A wall-clock budget for the whole loop, or 0.0 for
-   --    none. It is checked between steps -- a single generation is bounded
-   --    by its token budget, not this -- so the loop may overrun by the one
-   --    generation in flight when the budget passes, and then stops. Needs
-   --    Time; with no clock there is nothing to measure and the budget is
-   --    ignored.
+   --    none. It is checked between steps, and it is the deadline every call
+   --    runs within: a tool's process and a child agent stop at it, so a
+   --    call that hangs does not outlast the run. A generation in flight is
+   --    bounded by its tokens, not this. Needs Time; with no clock there is
+   --    nothing to measure and the budget is ignored.
    --  @param Max_Total_Tokens A ceiling on the tokens generated over the whole
-   --    loop, or 0 for none. Like Max_Seconds it is checked between steps, so
-   --    the generation in flight when the ceiling is reached finishes before
-   --    the loop stops with Token_Limit; a turn that answers is never cut off.
+   --    loop, child agents' included, or 0 for none. Each generation is asked
+   --    for no more than is left, so the ceiling holds; a turn the ceiling
+   --    cut short ends the loop with Token_Limit.
    --  @param Max_Parallel How many of a turn's calls may run at once. One, the
    --    default, runs them one after another as before. More lets calls the
    --    Executor marks parallel-safe (see Runner.Parallel_Safe) overlap on up

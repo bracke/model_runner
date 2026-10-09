@@ -1,3 +1,6 @@
+with Ada.Strings.Fixed;
+with Ada.Real_Time;
+with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
 
 with Ada.Directories;
@@ -7,9 +10,9 @@ with Ada.Text_IO;
 with Zlib;
 
 with Ada.Environment_Variables;
-with Interfaces;
 
 with Model_Runner.Agent;
+with Model_Runner.Cancellation;
 with Model_Runner.Agent.Recall;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Permissions;
@@ -386,13 +389,19 @@ package body Tests.Tools_Cases is
    --  null is the runner it started as.
    type Counting_Delegator is limited new Builtin.Delegator with record
       Calls : Natural := 0;
+
+      --  How its sub-agent ends, and what it was handed to run within.
+      Ending  : Builtin.Sub_State := Builtin.Completed;
+      Handed  : Model_Runner.Tools.Runner.Tool_Context;
    end record;
 
    overriding procedure Run_Sub
      (Self        : in out Counting_Delegator;
       Instruction : String;
+      Context     : Model_Runner.Tools.Runner.Tool_Context;
       Result      : out String;
       Last        : out Natural;
+      Ended       : out Builtin.Sub_Outcome;
       Status      : out E.Error_Info);
 
    overriding function Parallel_Delegates
@@ -401,13 +410,20 @@ package body Tests.Tools_Cases is
    overriding procedure Run_Sub
      (Self        : in out Counting_Delegator;
       Instruction : String;
+      Context     : Model_Runner.Tools.Runner.Tool_Context;
       Result      : out String;
       Last        : out Natural;
+      Ended       : out Builtin.Sub_Outcome;
       Status      : out E.Error_Info)
    is
       Reply : constant String := "sub-agent did: " & Instruction;
    begin
       Self.Calls := Self.Calls + 1;
+      Self.Handed := Context;
+      Ended := (State  => Self.Ending,
+                Reason => Ada.Strings.Unbounded.To_Unbounded_String
+                            (if Builtin."=" (Self.Ending, Builtin.Exhausted) then "step limit" else "answered"),
+                Steps  => 3, Calls => 2, Tokens => 40, others => <>);
       Last := Natural'Min (Reply'Length, Result'Length);
       Result (Result'First .. Result'First + Last - 1) :=
         Reply (Reply'First .. Reply'First + Last - 1);
@@ -564,6 +580,90 @@ package body Tests.Tools_Cases is
 
       Ada.Directories.Delete_Tree (Dir);
    end Wired_Helpers_Reach_Their_Tools;
+
+   --  A child's run is held to how it ended: only an answer is a result,
+   --  and what it spent is its parent's. A tool is offered only where the
+   --  runner can carry it out, and a call runs within the run's limits --
+   --  a process stopped at the run's cancellation and its deadline, not
+   --  waited out. And each stop says what it asks of whoever acts on it.
+   procedure Calls_Run_Within_The_Run
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tr renames Model_Runner.Tools.Runner;
+      package Ag renames Model_Runner.Agent;
+      use type Tr.Answer_Kind;
+      use type Ada.Real_Time.Time;
+      use type Ada.Real_Time.Time_Span;
+      Runner    : Builtin.Instance;
+      Delegator : aliased Counting_Delegator;
+      Inquirer  : aliased Fixed_Inquirer;
+      Room      : String (1 .. Tools.Max_Call_Bytes);
+      Last      : Natural;
+      Ended     : Tr.Call_Outcome;
+      Status    : E.Error_Info;
+
+      function Offers (Text, Named : String) return Boolean is
+        (Ada.Strings.Fixed.Index (Text, """" & Named & """") > 0);
+   begin
+      --  Offered what it can run, and nothing it would decline.
+      Assert (not Offers (Runner.Offered_Text, "delegate")
+              and then not Offers (Runner.Offered_Text, "ask_user")
+              and then Offers (Runner.Offered_Text, "read_file"),
+              "an unwired runner offered a tool it declines, or not one it runs");
+      Runner.Use_Delegator (Delegator'Unchecked_Access);
+      Runner.Use_Inquirer (Inquirer'Unchecked_Access);
+      Assert (Offers (Runner.Offered_Text, "delegate") and then Offers (Runner.Offered_Text, "ask_user"),
+              "a wired runner did not offer what it was wired for");
+
+      --  A child that ran out of steps did not do the task, whatever it
+      --  said on the way; what it generated is the caller's spent.
+      Delegator.Ending := Builtin.Exhausted;
+      Runner.Set_Context ((Cancel => null, Deadline => Ada.Real_Time.Time_Last, Tokens_Left => 100));
+      Runner.Run ("delegate", "{""task"":""count the stars""}", Room, Last, Ended, Status);
+      Assert (Ended.Answer = Tr.Failed and then Ended.Tokens = 40
+              and then Ada.Strings.Fixed.Index (Room (1 .. Last), "stopped before answering: step limit") > 0,
+              "a child that ran out of steps was taken for an answer: " & Room (1 .. Last));
+      Assert (Delegator.Handed.Tokens_Left = 100,
+              "the child was not handed what its parent had left");
+      Delegator.Ending := Builtin.Completed;
+      Runner.Run ("delegate", "{""task"":""count the stars""}", Room, Last, Ended, Status);
+      Assert (Ended.Answer = Tr.Answered and then Ended.Tokens = 40
+              and then Ada.Strings.Fixed.Index (Room (1 .. Last), "sub-agent did: count the stars") > 0,
+              "a child that answered was not its answer");
+
+      --  A process stops at the run's cancellation, and at its deadline.
+      declare
+         Stop  : aliased Model_Runner.Cancellation.Token;
+         Began : Ada.Real_Time.Time;
+      begin
+         Stop.Request;
+         Runner.Set_Context ((Cancel => Stop'Unchecked_Access, others => <>));
+         Runner.Run ("shell", "{""command"":""sleep 5""}", Room, Last, Ended, Status);
+         Assert (Ended.Answer = Tr.Cancelled,
+                 "a program run for a cancelled run was not stopped as cancelled: " & Room (1 .. Last));
+
+         Began := Ada.Real_Time.Clock;
+         Runner.Set_Context
+           ((Cancel => null, Deadline => Ada.Real_Time.Clock + Ada.Real_Time.Milliseconds (500), others => <>));
+         Runner.Run ("shell", "{""command"":""sleep 5""}", Room, Last, Ended, Status);
+         Assert (Ended.Answer = Tr.Timed_Out
+                 and then Ada.Real_Time.Clock - Began < Ada.Real_Time.Seconds (4),
+                 "a program outlasting the run's deadline was waited out: " & Room (1 .. Last));
+      end;
+      Runner.Set_Context (Tr.No_Context);
+
+      --  What each stop asks.
+      Assert (Ag.Traits_Of (Ag.Answered).Finished
+              and then Ag.Traits_Of (Ag.Step_Limit).Exhausted
+              and then Ag.Traits_Of (Ag.Timed_Out).Exhausted
+              and then Ag.Traits_Of (Ag.Generation_Failed).Retryable
+              and then Ag.Traits_Of (Ag.Repeating).Needs_Change
+              and then Ag.Traits_Of (Ag.Cancelled).Needs_User
+              and then not Ag.Traits_Of (Ag.Repeating).Exhausted,
+              "a stop did not say what it asks");
+      Assert (Ag.Reason_Words (Ag.Step_Limit) = "step limit", "a stop was not said in words");
+   end Calls_Run_Within_The_Run;
 
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
@@ -1533,10 +1633,40 @@ package body Tests.Tools_Cases is
       package Tr renames Model_Runner.Tools.Runner;
       use type Tr.Answer_Kind;
 
-      Read  : constant Interfaces.Unsigned_64 := 11;
-      Write : constant Interfaces.Unsigned_64 := 22;
-      Made  : Model_Runner.Agent.Recall.Memory;
+      package Rc renames Model_Runner.Agent.Recall;
+      Read  : constant String := Rc.Identity ("read_file", "{""path"": ""a.adb"", ""line"": 1}");
+      Write : constant String := Rc.Identity ("write_file", "{""path"": ""a.adb"", ""content"": ""x""}");
+      Made  : Rc.Memory;
    begin
+      --  A call is its name and its arguments as an object, whatever order
+      --  its members were written in and however spaced; another value,
+      --  another tool or text that is not JSON is another call.
+      Assert (Rc.Identity ("read_file", "{""line"":1,""path"":""a.adb""}") = Read
+              and then Rc.Identity ("read_file", " { ""path"" : ""a.adb"" , ""line"" : 1 } ") = Read,
+              "the same arguments in another order or spacing were taken for another call");
+      Assert (Rc.Identity ("read_file", "{""path"": ""a.adb"", ""line"": 2}") /= Read
+              and then Rc.Identity ("list_directory", "{""path"": ""a.adb"", ""line"": 1}") /= Read
+              and then Rc.Identity ("read_file", "{""path"": ""a b""}")
+                       /= Rc.Identity ("read_file", "{""path"": ""ab""}"),
+              "different calls were taken for the same, or space inside a string was dropped");
+      Assert (Rc.Canonical ("{""b"": [ {""d"":1, ""c"":2} ], ""a"": null}") = "{""a"":null,""b"":[{""c"":2,""d"":1}]}"
+              and then Rc.Canonical ("not json  at all") = "notjsonatall",
+              "arguments were not put in canonical order, or text that is not JSON was not squeezed: "
+              & Rc.Canonical ("{""b"": [ {""d"":1, ""c"":2} ], ""a"": null}"));
+
+      --  However many calls are made, each is remembered: the protection
+      --  does not lapse past a count.
+      declare
+         Many : Rc.Memory;
+      begin
+         for Index in 1 .. 1_000 loop
+            Many.Remember (Rc.Identity ("read_file", "{""path"": ""f" & Integer'Image (Index) & """}"));
+         end loop;
+         Assert (Many.Holds (Rc.Identity ("read_file", "{""path"": ""f 1000""}"))
+                 and then Many.Holds (Rc.Identity ("read_file", "{""path"": ""f 1""}")),
+                 "a call past the first few hundred was not remembered");
+      end;
+
       --  What was seen once is seen again; a new pair is not.
       declare
          Sighted : Model_Runner.Agent.Recall.Sightings;
@@ -1561,7 +1691,7 @@ package body Tests.Tools_Cases is
       Made.Keep (Write, "wrote 8 bytes", Tr.Done);
 
       Made.Remember (Read);
-      Made.Keep (Read, "new text", (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False));
+      Made.Keep (Read, "new text", (Answer => Tr.Failed, others => <>));
       Assert (Made.Answer (Read) = "new text"
               and then Made.Ended (Read).Answer = Tr.Failed,
               "the read after the change did not keep its own answer and ending");
@@ -1625,7 +1755,7 @@ package body Tests.Tools_Cases is
                  "a write of what a file already held was not told from one that changed it");
       end;
       Assert (Ended ("read_file", "{""path"": ""no-such-file-anywhere.txt""}")
-              = (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False),
+              = Tr.Call_Outcome'(Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False, others => <>),
               "a read of a file not there did not end failed");
 
       --  Held where the harness said: refused, and by what.
@@ -1645,11 +1775,15 @@ package body Tests.Tools_Cases is
          Env.Clear (Pm.Agent_Root_Variable);
          Env.Clear (Pm.Agent_Permissions_Variable);
          Ada.Directories.Delete_Tree (Root);
-         Assert (Outside = (Answer => Tr.Refused, Refusal => Tr.Outside_Project, Changed => False),
+         Assert (Outside =
+                   Tr.Call_Outcome'(Answer => Tr.Refused, Refusal => Tr.Outside_Project,
+                                   Changed => False, others => <>),
                  "a path out of the tree was not refused as outside the project");
-         Assert (State = (Answer => Tr.Refused, Refusal => Tr.Harness_Owned, Changed => False),
+         Assert (State =
+                   Tr.Call_Outcome'(Answer => Tr.Refused, Refusal => Tr.Harness_Owned, Changed => False, others => <>),
                  "a write into the state was not refused as the harness's");
-         Assert (Program = (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Changed => False),
+         Assert (Program =
+                   Tr.Call_Outcome'(Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Changed => False, others => <>),
                  "a program an agent may not run was not refused as not permitted");
       end;
    end Built_In_Calls_Say_How_They_Ended;
@@ -1723,6 +1857,10 @@ package body Tests.Tools_Cases is
          "a delegator, an inquirer and an embedder wired into the runner "
          & "are what delegate, ask_user and retrieve reach, and unwired "
          & "each declines again");
+      Register_Routine
+        (T, Calls_Run_Within_The_Run'Access,
+         "a call runs within its run: a child is held to how it ended, a tool offered only where it runs,"
+         & " a process stopped at the run's cancellation and deadline");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

@@ -1,61 +1,266 @@
+with Ada.Containers.Indefinite_Vectors;
+
 package body Model_Runner.Agent.Recall is
 
    use type Interfaces.Unsigned_64;
 
-   --  Where a call is held, or nought.
-   function Place (Self : Memory; Key : Interfaces.Unsigned_64) return Natural is
-   begin
-      for Index in 1 .. Self.Used loop
-         if Self.Held (Index) = Key then
-            return Index;
+   package Member_Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
+   package Name_Sorting is new Member_Names.Generic_Sorting;
+
+   ---------------
+   -- Canonical --
+   ---------------
+
+   function Canonical (Arguments : String) return String is
+      use Ada.Strings.Unbounded;
+
+      At_Char : Natural := Arguments'First;
+      Bad     : exception;
+
+      procedure Skip is
+      begin
+         while At_Char <= Arguments'Last
+           and then Arguments (At_Char) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+         loop
+            At_Char := At_Char + 1;
+         end loop;
+      end Skip;
+
+      function Peek return Character is
+      begin
+         Skip;
+         if At_Char > Arguments'Last then
+            raise Bad;
          end if;
-      end loop;
-      return 0;
-   end Place;
+         return Arguments (At_Char);
+      end Peek;
+
+      --  A string as written, quotes and escapes and all.
+      function Text return String is
+         First : Positive;
+      begin
+         if Peek /= '"' then
+            raise Bad;
+         end if;
+         First := At_Char;
+         At_Char := At_Char + 1;
+         while At_Char <= Arguments'Last and then Arguments (At_Char) /= '"' loop
+            if Arguments (At_Char) = '\' then
+               At_Char := At_Char + 1;
+            end if;
+            At_Char := At_Char + 1;
+         end loop;
+         if At_Char > Arguments'Last then
+            raise Bad;
+         end if;
+         At_Char := At_Char + 1;
+         return Arguments (First .. At_Char - 1);
+      end Text;
+
+      function Value return String;
+
+      --  An object's members in the order of their names; a name given
+      --  twice is the last given, as a reader takes it.
+      function Object return String is
+         package Members is new Ada.Containers.Indefinite_Hashed_Maps
+           (String, String, Ada.Strings.Hash, "=");
+         Held  : Members.Map;
+         Names : Member_Names.Vector;
+         Said  : Unbounded_String := To_Unbounded_String ("{");
+      begin
+         At_Char := At_Char + 1;
+         if Peek = '}' then
+            At_Char := At_Char + 1;
+            return "{}";
+         end if;
+         loop
+            declare
+               Name : constant String := Text;
+            begin
+               if Peek /= ':' then
+                  raise Bad;
+               end if;
+               At_Char := At_Char + 1;
+               declare
+                  Given : constant String := Value;
+               begin
+                  if Held.Contains (Name) then
+                     Held.Replace (Name, Given);
+                  else
+                     Held.Insert (Name, Given);
+                     Names.Append (Name);
+                  end if;
+               end;
+            end;
+            case Peek is
+               when ',' =>
+                  At_Char := At_Char + 1;
+               when '}' =>
+                  At_Char := At_Char + 1;
+                  exit;
+               when others =>
+                  raise Bad;
+            end case;
+         end loop;
+         Name_Sorting.Sort (Names);
+         for Index in Names.First_Index .. Names.Last_Index loop
+            Append (Said, (if Index = Names.First_Index then "" else ",")
+                          & Names (Index) & ":" & Held.Element (Names (Index)));
+         end loop;
+         return To_String (Said) & "}";
+      end Object;
+
+      function List return String is
+         Said  : Unbounded_String := To_Unbounded_String ("[");
+         First : Boolean := True;
+      begin
+         At_Char := At_Char + 1;
+         if Peek = ']' then
+            At_Char := At_Char + 1;
+            return "[]";
+         end if;
+         loop
+            Append (Said, (if First then "" else ",") & Value);
+            First := False;
+            case Peek is
+               when ',' =>
+                  At_Char := At_Char + 1;
+               when ']' =>
+                  At_Char := At_Char + 1;
+                  exit;
+               when others =>
+                  raise Bad;
+            end case;
+         end loop;
+         return To_String (Said) & "]";
+      end List;
+
+      --  A number or a literal, as written.
+      function Word return String is
+         First : Positive;
+      begin
+         Skip;
+         First := At_Char;
+         while At_Char <= Arguments'Last
+           and then Arguments (At_Char)
+                    not in ',' | '}' | ']' | ':' | ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+         loop
+            At_Char := At_Char + 1;
+         end loop;
+         if At_Char = First then
+            raise Bad;
+         end if;
+         return Arguments (First .. At_Char - 1);
+      end Word;
+
+      function Value return String is
+      begin
+         case Peek is
+            when '{' => return Object;
+            when '[' => return List;
+            when '"' => return Text;
+            when others => return Word;
+         end case;
+      end Value;
+
+      --  What is not JSON, without the space outside its strings.
+      function Squeezed return String is
+         Result : String (1 .. Arguments'Length);
+         Last   : Natural := 0;
+         Quoted : Boolean := False;
+         Escape : Boolean := False;
+      begin
+         for C of Arguments loop
+            if Quoted then
+               Last := Last + 1;
+               Result (Last) := C;
+               if Escape then
+                  Escape := False;
+               elsif C = '\' then
+                  Escape := True;
+               elsif C = '"' then
+                  Quoted := False;
+               end if;
+            elsif C = '"' then
+               Quoted := True;
+               Last := Last + 1;
+               Result (Last) := C;
+            elsif C not in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+               Last := Last + 1;
+               Result (Last) := C;
+            end if;
+         end loop;
+         return Result (1 .. Last);
+      end Squeezed;
+   begin
+      declare
+         Whole : constant String := Value;
+      begin
+         Skip;
+         if At_Char <= Arguments'Last then
+            raise Bad;
+         end if;
+         return Whole;
+      end;
+   exception
+      when Bad | Constraint_Error =>
+         return Squeezed;
+   end Canonical;
+
+   --------------
+   -- Identity --
+   --------------
+
+   function Identity (Named : String; Arguments : String) return String is
+     (Named & ASCII.NUL & Canonical (Arguments));
+
+   ----------
+   -- Hash --
+   ----------
+
+   function Hash (Item : Pair) return Ada.Containers.Hash_Type is
+     (Ada.Containers.Hash_Type'Mod (Item.Of_What xor (Item.Was * 31)));
 
    -----------
    -- Holds --
    -----------
 
-   function Holds (Self : Memory; Key : Interfaces.Unsigned_64) return Boolean
-   is (Place (Self, Key) > 0);
+   function Holds (Self : Memory; Key : String) return Boolean
+   is (Self.Held.Contains (Key));
 
    --------------
    -- Answered --
    --------------
 
-   function Answered (Self : Memory; Key : Interfaces.Unsigned_64) return Boolean
-   is (Place (Self, Key) > 0 and then Self.Has_Answer (Place (Self, Key)));
+   function Answered (Self : Memory; Key : String) return Boolean
+   is (Self.Held.Contains (Key) and then Self.Held.Element (Key).Has_Answer);
 
    ------------
    -- Answer --
    ------------
 
-   function Answer (Self : Memory; Key : Interfaces.Unsigned_64) return String
+   function Answer (Self : Memory; Key : String) return String
    is (if Answered (Self, Key)
-       then Ada.Strings.Unbounded.To_String (Self.Answers (Place (Self, Key)))
+       then Ada.Strings.Unbounded.To_String (Self.Held.Element (Key).Answer)
        else "");
 
    -----------
    -- Ended --
    -----------
 
-   function Ended (Self : Memory; Key : Interfaces.Unsigned_64)
+   function Ended (Self : Memory; Key : String)
      return Model_Runner.Tools.Runner.Call_Outcome
-   is (if Answered (Self, Key) then Self.Ends (Place (Self, Key))
+   is (if Answered (Self, Key) then Self.Held.Element (Key).Ends
        else Model_Runner.Tools.Runner.Done);
 
    --------------
    -- Remember --
    --------------
 
-   procedure Remember (Self : in out Memory; Key : Interfaces.Unsigned_64) is
+   procedure Remember (Self : in out Memory; Key : String) is
    begin
-      if Place (Self, Key) = 0 and then Self.Used < Most then
-         Self.Used := Self.Used + 1;
-         Self.Held (Self.Used) := Key;
-         Self.Answers (Self.Used) := Ada.Strings.Unbounded.Null_Unbounded_String;
-         Self.Has_Answer (Self.Used) := False;
+      if not Self.Held.Contains (Key) then
+         Self.Held.Insert (Key, (others => <>));
       end if;
    end Remember;
 
@@ -65,16 +270,15 @@ package body Model_Runner.Agent.Recall is
 
    procedure Keep
      (Self  : in out Memory;
-      Key   : Interfaces.Unsigned_64;
+      Key   : String;
       Text  : String;
-      Ended : Model_Runner.Tools.Runner.Call_Outcome)
-   is
-      At_Key : constant Natural := Place (Self, Key);
+      Ended : Model_Runner.Tools.Runner.Call_Outcome) is
    begin
-      if At_Key > 0 and then not Self.Has_Answer (At_Key) then
-         Self.Answers (At_Key) := Ada.Strings.Unbounded.To_Unbounded_String (Text);
-         Self.Ends (At_Key) := Ended;
-         Self.Has_Answer (At_Key) := True;
+      if Self.Held.Contains (Key) and then not Self.Held.Element (Key).Has_Answer then
+         Self.Held.Replace
+           (Key, (Answer     => Ada.Strings.Unbounded.To_Unbounded_String (Text),
+                  Ends       => Ended,
+                  Has_Answer => True));
       end if;
    end Keep;
 
@@ -82,14 +286,12 @@ package body Model_Runner.Agent.Recall is
    -- Changed --
    -------------
 
-   procedure Changed (Self : in out Memory; Key : Interfaces.Unsigned_64) is
+   procedure Changed (Self : in out Memory; Key : String) is
    begin
-      Self.Used := 0;
+      Self.Held.Clear;
       Remember (Self, Key);
    end Changed;
 
-   ----------
-   -- Note --
    ----------
 
    procedure Note
@@ -101,20 +303,17 @@ package body Model_Runner.Agent.Recall is
    is
       use Ada.Strings.Unbounded;
    begin
-      for Index in 1 .. Self.Used loop
-         if Self.Rows (Index).Named = Named and then Self.Rows (Index).Subject = Subject then
-            Self.Rows (Index).Ended := Ended;
+      for Row of Self.Rows loop
+         if Row.Named = Named and then Row.Subject = Subject then
+            Row.Ended := Ended;
             return;
          end if;
       end loop;
-      if Self.Used < Most then
-         Self.Used := Self.Used + 1;
-         Self.Rows (Self.Used) :=
-           (Named   => To_Unbounded_String (Named),
-            Subject => To_Unbounded_String (Subject),
-            Kind    => Kind,
-            Ended   => Ended);
-      end if;
+      Self.Rows.Append
+        (Entry_Row'(Named   => To_Unbounded_String (Named),
+          Subject => To_Unbounded_String (Subject),
+                    Kind    => Kind,
+                    Ended   => Ended));
    end Note;
 
    -----------------
@@ -135,7 +334,7 @@ package body Model_Runner.Agent.Recall is
       is (case Which is
             when Changed => Row.Ended.Answer = Tr.Answered and then Row.Ended.Changed,
             when Read    => Row.Ended.Answer = Tr.Answered and then Row.Kind /= Tr.Changes,
-            when Failing => Row.Ended.Answer = Tr.Failed,
+            when Failing => Row.Ended.Answer in Tr.Failed | Tr.Timed_Out | Tr.Cancelled,
             when Refused => Row.Ended.Answer = Tr.Refused);
 
       function Why (Row : Entry_Row) return String
@@ -157,14 +356,14 @@ package body Model_Runner.Agent.Recall is
          declare
             Line : Unbounded_String;
          begin
-            for Index in 1 .. Self.Used loop
-               if Of_Section (Self.Rows (Index), Which) then
+            for Row of Self.Rows loop
+               if Of_Section (Row, Which) then
                   Append (Line,
                           (if Length (Line) = 0 then Heading (Which) else "; ")
-                          & To_String (Self.Rows (Index).Named)
-                          & (if Length (Self.Rows (Index).Subject) = 0 then ""
-                             else " " & To_String (Self.Rows (Index).Subject))
-                          & Why (Self.Rows (Index)));
+                          & To_String (Row.Named)
+                          & (if Length (Row.Subject) = 0 then ""
+                             else " " & To_String (Row.Subject))
+                          & Why (Row));
                end if;
             end loop;
             if Length (Line) > 0 then
@@ -186,15 +385,10 @@ package body Model_Runner.Agent.Recall is
       Was     : Interfaces.Unsigned_64) return Boolean
    is
    begin
-      for Index in 1 .. Self.Used loop
-         if Self.Held (Index).Of_What = Of_What and then Self.Held (Index).Was = Was then
-            return True;
-         end if;
-      end loop;
-      if Self.Used < Self.Held'Last then
-         Self.Used := Self.Used + 1;
-         Self.Held (Self.Used) := (Of_What => Of_What, Was => Was);
+      if Self.Held.Contains ((Of_What, Was)) then
+         return True;
       end if;
+      Self.Held.Insert ((Of_What, Was));
       return False;
    end Seen_Again;
 

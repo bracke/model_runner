@@ -1062,6 +1062,55 @@ begin
                  (T.To_String (Item.Memory_File_Path));
             end if;
 
+            --  And of those, only what the runner as wired can carry
+            --  out: delegate where a sub-agent session opened, ask_user
+            --  where there is someone to ask.
+            declare
+               Can     : Model_Runner.Tools.Definitions;
+               Kept    : Ada.Strings.Unbounded.Unbounded_String;
+               Dropped : Boolean := False;
+
+               function Runs (Named : String) return Boolean is
+               begin
+                  for Index in 1 .. Model_Runner.Tools.Count (Can) loop
+                     if Model_Runner.Tools.Tool_Name (Can, Index) = Named then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end Runs;
+            begin
+               Model_Runner.Tools.Read (Can, Built_Runner.Offered_Text, Condition);
+               if E.Is_Ok (Condition) then
+                  for Index in 1 .. Model_Runner.Tools.Count (Agent_Tools) loop
+                     if Runs (Model_Runner.Tools.Tool_Name (Agent_Tools, Index)) then
+                        Ada.Strings.Unbounded.Append
+                          (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
+                                 & Model_Runner.Tools.Definition (Agent_Tools, Index));
+                     else
+                        Dropped := True;
+                     end if;
+                  end loop;
+                  Model_Runner.Tools.Close (Can);
+                  --  The kept definitions are the ones just read, so they
+                  --  read again; were they not, the whole set stands.
+                  if Dropped then
+                     declare
+                        Fewer : Model_Runner.Tools.Definitions;
+                     begin
+                        Model_Runner.Tools.Read
+                          (Fewer, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Condition);
+                        if E.Is_Ok (Condition) then
+                           Model_Runner.Tools.Close (Agent_Tools);
+                           Model_Runner.Tools.Read
+                             (Agent_Tools, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Condition);
+                        end if;
+                        Model_Runner.Tools.Close (Fewer);
+                     end;
+                  end if;
+               end if;
+            end;
+
             Drive (Agent_Tools, Built_Runner);
 
             if Embed_Open then

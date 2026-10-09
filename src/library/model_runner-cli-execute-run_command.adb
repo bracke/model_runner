@@ -3,6 +3,7 @@ with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Real_Time;
 with Ada.Text_IO;
 with Interfaces;
 with Model_Runner.Drafts;
@@ -19,6 +20,8 @@ with Model_Runner.Grammar;
 with Model_Runner.Schema;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
+with Hostkit.Process;
+
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Device.Products;
@@ -180,8 +183,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
       --  refusal by what refused it.
       Said : constant String :=
         (case Ended.Answer is
-           when Tr.Answered => "answered",
-           when Tr.Failed   => "failed",
+           when Tr.Answered  => "answered",
+           when Tr.Failed    => "failed",
+           when Tr.Timed_Out => "timed_out",
+           when Tr.Cancelled => "cancelled",
            when Tr.Refused  =>
              (case Ended.Refusal is
                 when Tr.Outside_Project => "refused_outside_project",
@@ -537,18 +542,37 @@ package body Model_Runner.CLI.Execute.Run_Command is
    overriding procedure Run_Sub
      (Self        : in out Model_Delegator;
       Instruction : String;
+      Context     : Model_Runner.Tools.Runner.Tool_Context;
       Result      : out String;
       Last        : out Natural;
+      Ended       : out Model_Runner.Tools.Builtin.Sub_Outcome;
       Status      : out E.Error_Info);
 
    overriding procedure Run_Sub
      (Self        : in out Model_Delegator;
       Instruction : String;
+      Context     : Model_Runner.Tools.Runner.Tool_Context;
       Result      : out String;
       Last        : out Natural;
+      Ended       : out Model_Runner.Tools.Builtin.Sub_Outcome;
       Status      : out E.Error_Info)
    is
+      package Bi renames Model_Runner.Tools.Builtin;
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Ada.Real_Time.Time;
+
       Slot : Positive;
+
+      --  The child's budget is the least of its own and what its parent
+      --  has left: a child does not get a fresh allowance of the time or
+      --  the tokens its parent is spending.
+      Tokens : constant Natural :=
+        (if Context.Tokens_Left = Natural'Last then Self.Budget
+         elsif Self.Budget = 0 then Context.Tokens_Left
+         else Natural'Min (Self.Budget, Context.Tokens_Left));
+      Timed   : constant Boolean := Context.Deadline /= Ada.Real_Time.Time_Last;
+      Seconds : constant Duration :=
+        (if Timed then Tr.Time_Left (Context, Duration (86_400)) else 0.0);
 
       System_Prompt : constant String :=
         (if Self.System_Text /= null then Self.System_Text.all
@@ -559,6 +583,19 @@ package body Model_Runner.CLI.Execute.Run_Command is
    begin
       Last   := 0;
       Status := E.Success;
+      Ended  := (State => Bi.Failed, others => <>);
+
+      --  Nothing left to run it with: said, not started.
+      if Tr.Stopped (Context) or else (Context.Tokens_Left = 0) then
+         Ended :=
+           (State  => (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel) then Bi.Cancelled
+                       else Bi.Exhausted),
+            Reason => Ada.Strings.Unbounded.To_Unbounded_String
+                        (if Context.Tokens_Left = 0 then "token limit" else "timed out"),
+            Timed  => Context.Tokens_Left /= 0,
+            others => <>);
+         return;
+      end if;
 
       --  Take a session of our own; wait if every one is busy.
       Self.Leases.Acquire (Slot);
@@ -570,8 +607,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
          Loop_Out   : Model_Runner.Agent.Outcome;
          Cond       : E.Error_Info;
       begin
-         Model_Runner.Tools.Read
-           (Sub_Tools, Model_Runner.Tools.Builtin.All_Definitions_Text, Cond);
+         --  Offered what its runner can run: it has no delegator and no one
+         --  to ask, so neither delegate nor ask_user is put to it.
+         Model_Runner.Tools.Read (Sub_Tools, Sub_Runner.Offered_Text, Cond);
          if E.Is_Error (Cond) then
             Status := Cond;
          else
@@ -600,13 +638,36 @@ package body Model_Runner.CLI.Execute.Run_Command is
                      Sink             => null,
                      Time             => Self.Time,
                      Seeds            => Self.Seed,
+                     Cancel           => Context.Cancel,
                      Max_Steps        => Self.Steps,
-                     Max_Total_Tokens => Self.Budget,
+                     Max_Seconds      => Seconds,
+                     Max_Total_Tokens => Tokens,
                      Compact          => True,
                      Result           => Loop_Out);
 
-                  --  The answer is the last assistant turn's text.
+                  --  How it ended, by what its stop asks: only an answer is
+                  --  a result.
+                  declare
+                     Traits : constant Model_Runner.Agent.Stop_Traits :=
+                       Model_Runner.Agent.Traits_Of (Loop_Out.Reason);
+                  begin
+                     Ended :=
+                       (State  => (if Traits.Finished then Bi.Completed
+                                   elsif Loop_Out.Reason = Model_Runner.Agent.Cancelled then Bi.Cancelled
+                                   elsif Traits.Exhausted then Bi.Exhausted
+                                   else Bi.Failed),
+                        Reason => Ada.Strings.Unbounded.To_Unbounded_String
+                                    (Model_Runner.Agent.Reason_Words (Loop_Out.Reason)),
+                        Timed  => Loop_Out.Reason = Model_Runner.Agent.Timed_Out,
+                        Steps  => Loop_Out.Steps,
+                        Calls  => Loop_Out.Calls,
+                        Tokens => Loop_Out.Generated_Tokens + Loop_Out.Delegated_Tokens);
+                  end;
+
+                  --  The answer is the last assistant turn's text, and only
+                  --  where the child answered.
                   for I in reverse 1 .. Conv.Length (Sub_Msgs) loop
+                     exit when Bi."/=" (Ended.State, Bi.Completed);
                      if Conv.Sender_At (Sub_Msgs, I) = Conv.Assistant_Role then
                         declare
                            Answer : constant String :=
@@ -700,8 +761,40 @@ package body Model_Runner.CLI.Execute.Run_Command is
 
       GNAT.OS_Lib.Create_Temp_File (Handle, Path);
       GNAT.OS_Lib.Close (Handle);
-      GNAT.OS_Lib.Spawn
-        (Program.all, Args, Path.all, Ran, Code, Err_To_Out => False);
+
+      --  Within the run's limits: its cancellation, and its deadline where
+      --  it has one. A program that hangs is stopped with its group then,
+      --  where it used to hang the run with it.
+      declare
+         package Tr renames Model_Runner.Tools.Runner;
+         use type Ada.Real_Time.Time;
+         Context : constant Tr.Tool_Context := Tr.Context_Of (Self);
+         Words   : Hostkit.String_Vectors.Vector;
+         Happened : Hostkit.Process.Process_Outcome;
+      begin
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Named));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Arguments));
+         Tr.Enter (Context);
+         Happened := Hostkit.Process.Run_Captured
+           (Program     => Program.all,
+            Arguments   => Words,
+            Stdout_Path => Path.all,
+            Timeout_Ms  =>
+              (if Context.Deadline = Ada.Real_Time.Time_Last then 0
+               else Natural'Max (1, Natural (Tr.Time_Left (Context, Duration (86_400)) * 1000))),
+            Cancelled   => Tr.Stop_Now'Access,
+            Whole_Group => True);
+         Ran := Happened.Started and then not Happened.Timed_Out;
+         Code := Happened.Exit_Status;
+         if Happened.Timed_Out then
+            Outcome.Answer :=
+              (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
+               then Tr.Cancelled else Tr.Timed_Out);
+            Note ("error: the tool command was stopped: "
+                  & (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel)
+                     then "the run was cancelled" else "the run's time ran out"));
+         end if;
+      end;
 
       if Ran and then Code = 0 then
          declare
@@ -723,6 +816,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                   if Fill + Gap + Line'Length > Room then
                      Result (Fill + 1 .. Fill + Cut'Length) := Cut;
                      Fill := Fill + Cut'Length;
+                     Outcome.Truncated := True;
                      exit;
                   end if;
                   if not First then
@@ -748,7 +842,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                Outcome.Answer := Model_Runner.Tools.Runner.Failed;
                Note ("error: could not read the tool command's output");
          end;
-      else
+      elsif Model_Runner.Tools.Runner."=" (Outcome.Answer, Model_Runner.Tools.Runner.Answered) then
          Outcome.Answer := Model_Runner.Tools.Runner.Failed;
          Note ("error: the tool command failed");
       end if;

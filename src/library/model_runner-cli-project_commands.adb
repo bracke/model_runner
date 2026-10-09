@@ -441,8 +441,10 @@ package body Model_Runner.CLI.Project_Commands is
             Ended  =>
               (case Ended.Answer is
                  when Tr.Answered => (if Ended.Changed then "answered, changed" else "answered"),
-                 when Tr.Failed   => "failed",
-                 when Tr.Refused  =>
+                 when Tr.Failed    => "failed",
+                 when Tr.Timed_Out => "failed: timed out",
+                 when Tr.Cancelled => "failed: cancelled",
+                 when Tr.Refused   =>
                    (case Ended.Refusal is
                       when Tr.Outside_Project => "refused: outside the project",
                       when Tr.Harness_Owned   => "refused: the harness's own",
@@ -935,14 +937,14 @@ package body Model_Runner.CLI.Project_Commands is
       --  The call failed, in the words given.
       function Fails (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
+         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
          return Text;
       end Fails;
 
       --  The call refused: no helper may be made here.
       function Refuses (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Changed => False);
+         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, others => <>);
          return Text;
       end Refuses;
 
@@ -1076,7 +1078,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  The helper's last run is the call's ending: failed where it
             --  failed, however its answer reads.
             if not Retry and then E.Is_Error (Ran) then
-               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
             end if;
             exit when not Retry;
             Retry_Of := Id;
@@ -1105,7 +1107,7 @@ package body Model_Runner.CLI.Project_Commands is
                              else " not written: " & To_String (Missing) & ";")
                           & ")");
             if Missing /= Null_Unbounded_String then
-               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
             end if;
          end;
       end if;
@@ -1132,7 +1134,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  The call refused, by what.
       procedure Refuse (By : Tr.Refusal_Kind) is
       begin
-         Outcome := (Answer => Tr.Refused, Refusal => By, Changed => False);
+         Outcome := (Answer => Tr.Refused, Refusal => By, others => <>);
       end Refuse;
 
       procedure Put (Text : String) is

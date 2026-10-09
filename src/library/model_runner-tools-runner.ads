@@ -1,3 +1,6 @@
+with Ada.Real_Time;
+
+with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 
 --  The end of a tool call this package would not close.
@@ -21,7 +24,63 @@ with Model_Runner.Errors;
 package Model_Runner.Tools.Runner is
 
    --  Something that answers a tool call. Derive from it.
-   type Instance is abstract tagged limited null record;
+   type Instance is abstract tagged limited private;
+
+   --  What a call runs within, set by whoever runs it: the cancellation it
+   --  answers to, the time by which it must be done, and how many tokens a
+   --  child agent it starts may still generate. A tool that waits -- on a
+   --  process, a child agent -- stops at the first of these and says so; a
+   --  run's budget is the budget of everything it does, not a check made
+   --  between the things it does.
+   type Tool_Context is record
+      Cancel      : Model_Runner.Cancellation.Token_Reference := null;
+      Deadline    : Ada.Real_Time.Time := Ada.Real_Time.Time_Last;
+      Tokens_Left : Natural := Natural'Last;
+   end record;
+
+   --  No cancellation, no deadline, no token ceiling.
+   No_Context : constant Tool_Context;
+
+   --  Give a runner the context its next calls run within.
+   --
+   --  @param Self The runner.
+   --  @param Context The context.
+   procedure Set_Context (Self : in out Instance'Class; Context : Tool_Context);
+
+   --  The context a runner's calls run within.
+   --
+   --  @param Self The runner.
+   --  @return Its context; No_Context until one is set.
+   function Context_Of (Self : Instance'Class) return Tool_Context;
+
+   --  Whether a context says stop: cancelled, or past its deadline.
+   --
+   --  @param Context The context.
+   --  @return Whether to stop now.
+   function Stopped (Context : Tool_Context) return Boolean;
+
+   --  How long a context leaves, at most Most.
+   --
+   --  @param Context The context.
+   --  @param Most The longest wanted.
+   --  @return The time left, never more than Most and never negative.
+   function Time_Left (Context : Tool_Context; Most : Duration) return Duration;
+
+   --  Make a context the one the calling task's waits answer to, for a wait
+   --  that can only ask a function with no arguments whether to stop.
+   --
+   --  @param Context The context.
+   procedure Enter (Context : Tool_Context);
+
+   --  The context the calling task entered; No_Context when none.
+   --
+   --  @return It.
+   function Entered_Context return Tool_Context;
+
+   --  Whether the context the calling task entered says stop.
+   --
+   --  @return Whether to stop now.
+   function Stop_Now return Boolean;
 
    --  What a call does to the state a later call reads, which decides
    --  whether a later identical call may be answered from an earlier one.
@@ -39,7 +98,9 @@ package Model_Runner.Tools.Runner is
    --  model's. Answered: the tool did what was asked. Failed: it could not
    --  -- a file not there, a program that exited badly. Refused: it was
    --  not let -- and Refusal says by what.
-   type Answer_Kind is (Answered, Failed, Refused);
+   --  Timed_Out: it was stopped at its context's deadline. Cancelled: at
+   --  its context's cancellation.
+   type Answer_Kind is (Answered, Failed, Refused, Timed_Out, Cancelled);
 
    --  What refused a call. Outside_Project: a path out of the tree the
    --  agent works in, which no permission reaches. Harness_Owned: the
@@ -53,15 +114,21 @@ package Model_Runner.Tools.Runner is
    --  whether the state later calls read is different for it: a write of
    --  what a file already held changed nothing, and a run of a program or
    --  a child agent is taken to have changed what it may.
+   --  Truncated says the text the model is given is not all the tool
+   --  said; Tokens, what a child agent the call started generated, which
+   --  is the caller's budget spent.
    type Call_Outcome is record
-      Answer  : Answer_Kind := Answered;
-      Refusal : Refusal_Kind := Not_Refused;
-      Changed : Boolean := False;
+      Answer    : Answer_Kind := Answered;
+      Refusal   : Refusal_Kind := Not_Refused;
+      Changed   : Boolean := False;
+      Truncated : Boolean := False;
+      Tokens    : Natural := 0;
    end record;
 
    --  An answer that did what it was asked.
    Done : constant Call_Outcome :=
-     (Answer => Answered, Refusal => Not_Refused, Changed => False);
+     (Answer => Answered, Refusal => Not_Refused, Changed => False,
+      Truncated => False, Tokens => 0);
 
    --  Run one call and write back what the model should be told.
    --
@@ -137,5 +204,15 @@ package Model_Runner.Tools.Runner is
    --  @return Whether a call to it may overlap another call in the turn.
    function Parallel_Safe
      (Self : Instance; Named : String) return Boolean is (False);
+
+private
+
+   No_Context : constant Tool_Context :=
+     (Cancel => null, Deadline => Ada.Real_Time.Time_Last,
+      Tokens_Left => Natural'Last);
+
+   type Instance is abstract tagged limited record
+      Context : Tool_Context;
+   end record;
 
 end Model_Runner.Tools.Runner;
