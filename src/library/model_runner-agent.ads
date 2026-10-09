@@ -88,6 +88,16 @@ package Model_Runner.Agent is
            (Needs_Change => True, others => False),
          when Cancelled | Declined => (Needs_User => True, others => False));
 
+   --  A reply as an answer: what follows its reasoning. A model whose
+   --  template opens a think block before the reply -- Qwen3.5's -- writes
+   --  its reasoning and closes the block with "</think>"; the answer is
+   --  what comes after the last such close, and a reply with none is its
+   --  answer whole.
+   --
+   --  @param Reply The reply's text.
+   --  @return The answer.
+   function Answer_Of (Reply : String) return String;
+
    --  A stop in words: "step limit", "timed out".
    --
    --  @param Reason Why the loop stopped.

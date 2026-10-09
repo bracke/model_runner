@@ -301,6 +301,18 @@ package body Tests.Tools_Cases is
                  & "<parameter=content>" & LF & "if A < B then" & LF & "   null;" & LF & "end if;" & LF
                  & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
               "a '<' in prose or in a value was not taken as text");
+      --  A reply begun inside a think block the prompt opened -- Qwen3.5's
+      --  generation prompt ends "<think>" -- closes it before its call.
+      Assert (Full_Set_Takes_In
+                (Tools.Qwen_XML,
+                 "I should read the file first, since A < B matters." & LF & "</think>" & LF & LF
+                 & "<tool_call>" & LF & "<function=read_file>" & LF
+                 & "<parameter=path>" & LF & "calc.adb" & LF & "</parameter>" & LF
+                 & "</function>" & LF & "</tool_call>"),
+              "a reply closing the think block its prompt opened was refused");
+      Assert (Model_Runner.Agent.Answer_Of ("reasoning" & LF & "</think>" & LF & LF & "The sum.") = "The sum."
+              and then Model_Runner.Agent.Answer_Of ("The sum.") = "The sum.",
+              "an answer was not what follows its reasoning");
       Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Envelope),
               "the JSON envelope was taken as a Qwen call");
       Assert (Full_Set_Takes_In (Tools.Qwen_XML, "Just an answer."),

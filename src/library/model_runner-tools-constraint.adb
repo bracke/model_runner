@@ -20,7 +20,8 @@ package body Model_Runner.Tools.Constraint is
    --  \x22 and \x5C throughout, to spare a reader counting backslashes
    --  through two layers of quoting.
    Loose_Fixed : constant String :=
-     "root ::= prose calls?" & ASCII.LF &
+     "root ::= think? prose calls?" & ASCII.LF &
+     "think ::= ""<think>""? ( [^<] | ""<"" [^/] )* ""</think>"" ws" & ASCII.LF &
      "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF &
      "calls ::= call ( ws call )*" & ASCII.LF &
      "call ::= ""<tool_call>"" ws obj ws ""</tool_call>""" & ASCII.LF &
@@ -206,8 +207,14 @@ package body Model_Runner.Tools.Constraint is
    --  any other is text: "A < B" in reasoning is reasoning, not a call.
    --  Admitted once, at the start, closed before anything else; a reply
    --  with no reasoning writes none.
+   --  Its opening tag is optional: a template whose generation prompt ends
+   --  "<think>" -- Qwen3.5's, whenever thinking is not turned off -- has
+   --  the reply begin inside the block, and the reply's first tag is the
+   --  one that closes it. Refused that, a reasoning model never left its
+   --  reasoning: it wrote fences for "</think>" and was forced into a call
+   --  by the first '<' it wrote.
    Think_Rule : constant String :=
-     "think ::= ""<think>"" ( [^<] | ""<"" [^/] )* ""</think>"" ws"
+     "think ::= ""<think>""? ( [^<] | ""<"" [^/] )* ""</think>"" ws"
      & ASCII.LF;
 
    --  The loose grammar for a tag syntax: the envelope around parameters
@@ -313,16 +320,12 @@ package body Model_Runner.Tools.Constraint is
          --  A reply is a call or the answer, in the shape asked for -- no
          --  free prose. The answer rule is defined after the tools, from the
          --  same shared helpers.
-         Put (B, (if Tags then "root ::= think? (calls | answer)"
-                  else "root ::= calls | answer") & ASCII.LF);
+         Put (B, "root ::= think? (calls | answer)" & ASCII.LF);
       else
-         Put (B, (if Tags then "root ::= think? prose calls?"
-                  else "root ::= prose calls?") & ASCII.LF);
+         Put (B, "root ::= think? prose calls?" & ASCII.LF);
          Put (B, "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF);
       end if;
-      if Tags then
-         Put (B, Think_Rule);
-      end if;
+      Put (B, Think_Rule);
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
 
       Put (B, "call ::= ");

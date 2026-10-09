@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Real_Time;
 with Ada.Characters.Handling;
 with Ada.Unchecked_Deallocation;
@@ -32,6 +33,24 @@ package body Model_Runner.Agent is
 
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+
+   ---------------
+   -- Answer_Of --
+   ---------------
+
+   function Answer_Of (Reply : String) return String is
+      Close : constant Natural :=
+        Ada.Strings.Fixed.Index (Reply, "</think>", Ada.Strings.Backward);
+      First : Positive := (if Close = 0 then Reply'First else Close + 8);
+   begin
+      if Close = 0 then
+         return Reply;
+      end if;
+      while First <= Reply'Last and then Reply (First) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+         First := First + 1;
+      end loop;
+      return Reply (First .. Reply'Last);
+   end Answer_Of;
 
    ------------------
    -- Reason_Words --

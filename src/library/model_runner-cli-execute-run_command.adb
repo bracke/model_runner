@@ -671,7 +671,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                      if Conv.Sender_At (Sub_Msgs, I) = Conv.Assistant_Role then
                         declare
                            Answer : constant String :=
-                             Conv.Content_At (Sub_Msgs, I);
+                             Model_Runner.Agent.Answer_Of (Conv.Content_At (Sub_Msgs, I));
                            Take   : constant Natural :=
                              Natural'Min (Answer'Length, Result'Length);
                         begin

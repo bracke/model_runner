@@ -842,7 +842,8 @@ package body Model_Runner.CLI.Project_Commands is
       if Conv.Length (Messages) > 0
         and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
       then
-         Answer := To_Unbounded_String (Conv.Content_At (Messages, Conv.Length (Messages)));
+         Answer := To_Unbounded_String
+           (Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))));
       end if;
       --  What it was refused on the way, for the outcome to say.
       --  The root's work as the harness recorded it, said when it ends: what
