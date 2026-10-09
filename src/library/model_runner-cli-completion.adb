@@ -766,11 +766,7 @@ package body Model_Runner.CLI.Completion is
             end if;
          elsif Command = "/work" and then Position >= 2 then
             --  Only those it would start: ready.
-            for Id of Tk.List (Store, "accepted") loop
-               if Tk.Ready (Store, Id).Ready then
-                  Offer (Id);
-               end if;
-            end loop;
+            Offer_All (Tk.Next_Work_Of (Store).Runnable);
             if Position = 2 and then Natural (Offered.Length) > 0 then
                Offer ("all");
             end if;

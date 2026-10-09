@@ -10009,12 +10009,25 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/req new Bogus text=x bogus=1", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/result TASK-099", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/result dismiss REQ-001", Screen, Agent);
+            --  Why, from the project's next work: what /work takes, and
+            --  why a task it would not take is not taken.
+            Model_Runner.CLI.Project_Commands.Run ("/why", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Second), Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/why TASK-404", Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
             declare
                Text : constant String := Read_Whole (Path);
             begin
+               Assert ((Ada.Strings.Fixed.Index (Text, "/work takes it next") > 0
+                        or else Ada.Strings.Fixed.Index (Text, "nothing can run") > 0)
+                       and then Ada.Strings.Fixed.Index (Text, "TASK-404 is not in the project state") > 0,
+                       "/why did not say what /work takes, or took a task not there for one");
+               Assert (Ada.Strings.Fixed.Index (Text, To_String (Second) & " is ") > 0
+                       or else Ada.Strings.Fixed.Index (Text, To_String (Second) & " can") > 0
+                       or else Ada.Strings.Fixed.Index (Text, To_String (Second) & " cannot") > 0,
+                       "/why said nothing of the task it was asked about");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

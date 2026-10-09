@@ -101,7 +101,8 @@ package body Model_Runner.CLI.Project_Commands is
       Git_Route,
       Instructions_Route,
       Sandbox_Route,
-      Reconfiguring_Route);
+      Reconfiguring_Route,
+      Why_Route);
 
    --  Every project command, once: its word and the catalog key of its
    --  help line, in the order help lists them, and the handler it goes to. Whether a word is a project
@@ -140,7 +141,8 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route),
       (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route),
       (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route),
-      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route)];
+      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route),
+      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route)];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
@@ -784,9 +786,15 @@ package body Model_Runner.CLI.Project_Commands is
       --  What it was refused on the way, for the outcome to say.
       --  The root's work as the harness recorded it, said when it ends: what
       --  it changed, what still fails, what it was refused.
+      --  And set against its plan: the calls it made of the calls it had.
       if Root and then Length (Recorded) > 0 then
-         Pres.Put_Aside (Self.Screen.all, "cli.agent.work_record",
-                         [Loc.Named ("detail", To_String (Recorded))]);
+         Pres.Put_Aside
+           (Self.Screen.all, "cli.agent.work_record",
+            [Loc.Named ("detail",
+                        To_String (Recorded)
+                        & (if Host = null or else Host.Tool_Budget = 0 then ""
+                           else "calls:" & Natural'Image (Calls) & " of"
+                                & Natural'Image (Host.Tool_Budget) & " planned" & ASCII.LF))]);
       end if;
       if Root then
          Self.Notes.Refused := Null_Unbounded_String;

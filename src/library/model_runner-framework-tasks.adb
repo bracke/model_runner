@@ -1166,6 +1166,31 @@ package body Model_Runner.Framework.Tasks is
    --  Ready as its state and dependencies go, and its agent able to do
    --  it: one its permissions leave unable is not ready, wherever that is
    --  said -- a listing, the state, the work picker.
+   ------------------
+   -- Next_Work_Of --
+   ------------------
+
+   function Next_Work_Of (Item : Stores.Store) return Next_Work is
+      Result : Next_Work;
+   begin
+      for Id of List (Item, Image (Accepted)) loop
+         declare
+            Now : constant Readiness := Ready (Item, Id);
+         begin
+            if Now.Ready then
+               Result.Runnable.Append (Id);
+            else
+               Result.Blocked.Append (Id);
+               Result.Why_Not.Append (if Now.Reasons.Is_Empty then "" else Now.Reasons.First_Element);
+            end if;
+         end;
+      end loop;
+      Result.Awaiting := List (Item, Image (Candidate));
+      Result.Running := List (Item, Image (Running));
+      Result.Retryable := List (Item, Image (Failed));
+      return Result;
+   end Next_Work_Of;
+
    function Ready (Item : Stores.Store; Id : String) return Readiness is
       Result : Readiness := Ready_In (Item, Stores.No_Changes, Id);
    begin

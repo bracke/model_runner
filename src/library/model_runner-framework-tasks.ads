@@ -237,6 +237,28 @@ package Model_Runner.Framework.Tasks is
    --  @return Whether, and if not why not.
    function Ready (Item : Stores.Store; Id : String) return Readiness;
 
+   --  What there is to do in a project, worked out once from its state so
+   --  that every command that says it -- /work, /state, a way on -- says
+   --  the same: the tasks that can run, in the order they are listed; the
+   --  accepted ones that cannot yet, each with why; the candidates waiting
+   --  to be accepted; what is running; and what failed and may be taken up
+   --  again.
+   type Next_Work is record
+      Runnable  : Name_Lists.Vector;
+      Blocked   : Name_Lists.Vector;
+      Why_Not   : Name_Lists.Vector;
+      Awaiting  : Name_Lists.Vector;
+      Running   : Name_Lists.Vector;
+      Retryable : Name_Lists.Vector;
+   end record;
+
+   --  The project's next work, as it stands.
+   --
+   --  @param Item The store.
+   --  @return It; Why_Not holds a blocked task's first reason at its place
+   --    in Blocked.
+   function Next_Work_Of (Item : Stores.Store) return Next_Work;
+
    --  Work readiness out again for every task, and announce each task that
    --  became ready since it was last worked out.
    --

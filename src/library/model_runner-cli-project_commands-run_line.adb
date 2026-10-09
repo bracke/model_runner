@@ -59,13 +59,8 @@ is
 
    --  The work ready to be done, where there is some: one, or all.
    procedure Say_Ready_Work (Store : in out S.Store) is
-      Ready_Ones : Names.Vector;
+      Ready_Ones : constant Names.Vector := Tk.Next_Work_Of (Store).Runnable;
    begin
-      for Id of Tk.List (Store, "accepted") loop
-         if Tk.Ready (Store, Id).Ready then
-            Ready_Ones.Append (Id);
-         end if;
-      end loop;
       if Natural (Ready_Ones.Length) > 1 then
          Pres.Put_Note (Screen, "cli.next.work_all",
                         [Loc.Named ("count", Image (Natural (Ready_Ones.Length))),
@@ -87,13 +82,8 @@ is
       --  Several ready: all of them, in turn, and one of them.
       if E.Is_Ok (Read) then
          declare
-            Ready_Ones : Names.Vector;
+            Ready_Ones : constant Names.Vector := Tk.Next_Work_Of (Store).Runnable;
          begin
-            for Id of Tk.List (Store, "accepted") loop
-               if Tk.Ready (Store, Id).Ready then
-                  Ready_Ones.Append (Id);
-               end if;
-            end loop;
             if Natural (Ready_Ones.Length) > 1 then
                Pres.Put_Note (Screen, "cli.next.work_all",
                               [Loc.Named ("count", Image (Natural (Ready_Ones.Length))),
@@ -271,6 +261,10 @@ is
    --  dispatch tried them.
    procedure Route_State is separate;
 
+   --  Why a task can or cannot run, or what /work takes next: said from
+   --  the project's next work, the one query every command reads it from.
+   procedure Route_Why is separate;
+
    --  The branches of the config route, in the order the
    --  dispatch tried them.
    procedure Route_Config is separate;
@@ -434,6 +428,7 @@ begin
       when Work_Route => Route_Work;
       when Repository_Route => Route_Repository;
       when State_Route => Route_State;
+         when Why_Route => Route_Why;
       when Config_Route => Route_Config;
       when Intents_Route => Route_Intents;
       when Results_Route => Route_Results;

@@ -5,7 +5,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **/why:** why a task can or cannot run, or -- with no task named -- what /work takes next, or why it takes nothing, from the project's next work rather than reconstructed: a task that can run is said with whether /work takes it first, one that cannot with its reason, a candidate with how to accept it.
+
 ### Changed
+
+- **The project's next work is one query:** Tasks.Next_Work_Of works out what can run in order, what is accepted and waits and on what, the candidates, what runs and what failed -- and /work's way on, its completion and /why read it, where each walked the accepted tasks for itself.
+- **A run is set against its plan:** the record /work shows when a root run ends says the calls it made of the calls its plan gave it.
 
 - **A write of what a file already holds is not a change:** write_file says "unchanged" and changes nothing where the file holds the content already, and a call's outcome says whether it changed state (Call_Outcome.Changed) -- so a run that only rewrites what is there has not written, for the watcher, the record of the work and the loop alike.
 - **The harness says when a run goes nowhere:** a check that answers exactly as before the last change, a write that puts a file back as an earlier write left it, and eight calls in a row that changed nothing are each said after the call's answer, from what the loop saw -- a note, not a stop, since an agent whose part is to read changes nothing by design.

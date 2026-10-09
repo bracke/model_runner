@@ -308,6 +308,7 @@ en.cli.interactive.help.deps = /deps UNIT          the units a unit depends on
 en.cli.interactive.help.users = /users UNIT         the units that depend on a unit
 en.cli.interactive.help.impact = /impact FILE        what a change to a file reaches
 en.cli.interactive.help.trace = /trace NODE         the traceability of a requirement, task or file
+en.cli.interactive.help.why = /why [TASK]          why a task can or cannot run, or what /work takes next
 en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the project from TEMPLATE, each input as NAME=VALUE; /init alone offers the templates and asks for what is needed. The plan (inputs, files, facts, and checks the policy would refuse) is shown before anything is written
 en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (the task it was proposed from) parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify and integrate take several, or all; reconsider takes a rejected task back to a candidate), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAME=VALUE (kind too), note ID TEXT (adds to its notes), grant ID CAPABILITY [roots=...], withhold ID CAPABILITY, link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE [REASON], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAME or a task's ID, drop NAME, a task's ID or all]
 en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones, or all for every one the plan can start, one after another -- [model=PATH [steps=N]]: a model file runs it apart, with file tools only, steps= at most the task's step limit -- [profile=NAME]: the map.model profile its context is planned with -- it shows its context, the agent's calls, the files changed, verification, and where the task ended
@@ -360,6 +361,14 @@ en.cli.agent.same_again = (the same as the answer above)
 en.cli.agent.calls_at_once = several calls at once: #2 and on are numbered, and their answers follow them all, in the order asked
 en.cli.agent.helper_starts = -- {name} ({value}) starts: {detail}
 en.cli.agent.work_record = the work as the harness recorded it: {detail}
+en.cli.why.next = {name} can run, and /work takes it next: it is the first ready task
+en.cli.why.nothing_ready = nothing can run: {count} accepted task(s) wait, the first, {name}, on {detail}
+en.cli.why.nothing = nothing can run, and nothing accepted waits
+en.cli.why.runnable_first = {name} can run, and /work takes it next
+en.cli.why.runnable = {name} can run; /work takes {value} first, which is listed before it
+en.cli.why.blocked = {name} cannot run yet: {detail}
+en.cli.why.candidate = {name} is a candidate: /accept {name} to work on it
+en.cli.why.state = {name} is {value}, not waiting to run
 en.cli.agent.ask = the model asks: {detail}
 en.cli.download.unresolved = the model could not be resolved on Hugging Face: {detail}
 en.cli.download.no_directory = no models directory to download into; set MODEL_RUNNER_MODELS to one
@@ -1805,6 +1814,7 @@ da.cli.interactive.help.deps = /deps ENHED         de enheder en enhed afhænger
 da.cli.interactive.help.users = /users ENHED        de enheder der afhænger af en enhed
 da.cli.interactive.help.impact = /impact FIL         hvad en ændring af en fil når
 da.cli.interactive.help.trace = /trace KNUDE        sporbarheden for et krav, en opgave eller en fil
+da.cli.interactive.help.why = /why [OPGAVE]        hvorfor en opgave kan eller ikke kan køre, eller hvad /work tager næst
 da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projektet fra SKABELON, hvert input som NAVN=VÆRDI; /init alene tilbyder skabelonerne og spørger om det nødvendige. Planen (input, filer, fakta og kontroller politikken ville afvise) vises før noget skrives
 da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (opgaven den blev foreslået fra) parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify og integrate tager flere, eller all; reconsider tager en afvist opgave tilbage til kandidat), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAVN=VÆRDI (også kind), note ID TEKST (føjer til noterne), grant ID EVNE [roots=...], withhold ID EVNE, link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND [GRUND], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAVN eller en opgaves ID, drop NAVN, en opgaves ID eller all]
 da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare, eller all for hver den plan kan starte, den ene efter den anden -- [model=STI [steps=N]]: en modelfil kører den for sig, kun med filværktøjer, steps= højst opgavens skridtgrænse -- [profile=NAVN]: den map.model-profil dens kontekst planlægges med -- den viser sin kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
@@ -1833,6 +1843,14 @@ da.cli.agent.same_again = (det samme som svaret ovenfor)
 da.cli.agent.calls_at_once = flere kald på én gang: #2 og frem er nummereret, og deres svar følger efter dem alle, i den rækkefølge de blev bedt om
 da.cli.agent.helper_starts = -- {name} ({value}) starter: {detail}
 da.cli.agent.work_record = arbejdet, som harnesset noterede det: {detail}
+da.cli.why.next = {name} kan køre, og /work tager den næst: den er den første klare opgave
+da.cli.why.nothing_ready = intet kan køre: {count} accepterede opgave(r) venter, den første, {name}, på {detail}
+da.cli.why.nothing = intet kan køre, og intet accepteret venter
+da.cli.why.runnable_first = {name} kan køre, og /work tager den næst
+da.cli.why.runnable = {name} kan køre; /work tager {value} først, som står før den
+da.cli.why.blocked = {name} kan ikke køre endnu: {detail}
+da.cli.why.candidate = {name} er en kandidat: /accept {name} for at arbejde på den
+da.cli.why.state = {name} er {value}, venter ikke på at køre
 da.cli.agent.ask = modellen spørger: {detail}
 da.cli.download.unresolved = modellen kunne ikke slås op på Hugging Face: {detail}
 da.cli.download.no_directory = ingen modelmappe at hente til; sæt MODEL_RUNNER_MODELS til en
@@ -3015,6 +3033,7 @@ qps.cli.interactive.help.deps = ⟦/ðépß ÚNIŦ          ŧhé úñíŧß á 
 qps.cli.interactive.help.users = ⟦/úßéŕß ÚNIŦ         ŧhé úñíŧß ŧháŧ ðépéñð óñ á úñíŧ⟧
 qps.cli.interactive.help.impact = ⟦/ímpáçŧ FILE        wháŧ á çháñgé ŧó á fíĺé ŕéáçhéß⟧
 qps.cli.interactive.help.trace = ⟦/ŧŕáçé NODE         ŧhé ŧŕáçéábíĺíŧý óf á ŕéqúíŕéméñŧ, ŧáßk óŕ fíĺé⟧
+qps.cli.interactive.help.why = ⟦/ŵĥý [ŦÁßK]          ŵĥý á ŧáßk ćáñ óŕ ćáññóŧ ŕúñ, óŕ ŵĥáŧ /ŵóŕķ ŧáķéś ñéxŧ⟧
 qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧáŕŧß ŧhé pŕójéçŧ fŕóm ŦEMPLAŦE, éáçh íñpúŧ áß NAME=VALÚE; /íñíŧ áĺóñé ófféŕß ŧhé ŧémpĺáŧéß áñð áßkß fóŕ wháŧ íß ñééðéð. Ŧhé pĺáñ (íñpúŧß, fíĺéß, fáçŧß, áñð çhéçkß ŧhé póĺíçý wóúĺð ŕéfúßé) íß ßhówñ béfóŕé áñýŧhíñg íß wŕíŧŧéñ⟧
 qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=ŦASK (ŧhé ŧáßk íŧ wáß pŕópóßéð fŕóm) páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID (áççépŧ, ŕéjéçŧ, çómpĺéŧé, véŕífý áñð íñŧégŕáŧé ŧáké ßévéŕáĺ, óŕ áĺĺ; ŕéçóñßíðéŕ ŧákéß á ŕéjéçŧéð ŧáßk báçk ŧó á çáñðíðáŧé), /ŧáßk çáñçéĺ ID [áñýwáý] -- /ŧáßk ßhów|áúðíŧ|çóñŧéxŧ ID [--véŕbóßé], /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE (kíñð ŧóó), ñóŧé ID ŦEXŦ (áððß ŧó íŧß ñóŧéß), gŕáñŧ ID ÇAPABILIŦY [ŕóóŧß=...], wíŧhhóĺð ID ÇAPABILIŦY, ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE [REASON], ðéŕívé -- /ŧáßk ðíff ID, /ŧáßk íñŧégŕáŧé ID [ŕéßóĺvéð|áñýwáý|ŕéßóĺvéð áñýwáý|ðíßçáŕð] -- /ŧáßk képŧ [ðíff|ŕéßŧóŕé NAME óŕ á ŧáßk'ß ID, ðŕóp NAME, á ŧáßk'ß ID óŕ áĺĺ]⟧
 qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß, óŕ áĺĺ fóŕ évéŕý óñé ŧhé pĺáñ çáñ ßŧáŕŧ, óñé áfŧéŕ áñóŧhéŕ -- [móðéĺ=PAŦH [ßŧépß=N]]: á móðéĺ fíĺé ŕúñß íŧ ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý, ßŧépß= áŧ móßŧ ŧhé ŧáßk'ß ßŧép ĺímíŧ -- [pŕófíĺé=NAME]: ŧhé máp.móðéĺ pŕófíĺé íŧß çóñŧéxŧ íß pĺáññéð wíŧh -- íŧ ßhówß íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺß, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
@@ -3067,6 +3086,14 @@ qps.cli.agent.same_again = ⟦(ŧhé ßámé áß ŧhé áñßwéŕ ábóvé)⟧
 qps.cli.agent.calls_at_once = ⟦ßévéŕáĺ çáĺĺß áŧ óñçé: #2 áñð óñ áŕé ñúmbéŕéð, áñð ŧhéíŕ áñßwéŕß fóĺĺów ŧhém áĺĺ, íñ ŧhé óŕðéŕ áßkéð⟧
 qps.cli.agent.helper_starts = ⟦-- {name} ({value}) ßŧáŕŧß: {detail}⟧
 qps.cli.agent.work_record = ⟦ŧĥé ŵőŕķ áś ŧĥé ĥáŕńéśś ŕéćőŕďéď ĩŧ: {detail}⟧
+qps.cli.why.next = ⟦{name} çáñ rúñ, áñd /ŵórķ ŧáķéś íŧ ñéxŧ: íŧ íś ŧĥé fírśŧ réády ŧáśķ⟧
+qps.cli.why.nothing_ready = ⟦ñóŧĥíñg çáñ rúñ: {count} áççépŧéd ŧáśķ(ś) ŵáíŧ, ŧĥé fírśŧ, {name}, óñ {detail}⟧
+qps.cli.why.nothing = ⟦ñóŧĥíñg çáñ rúñ, áñd ñóŧĥíñg áççépŧéd ŵáíŧś⟧
+qps.cli.why.runnable_first = ⟦{name} çáñ rúñ, áñd /ŵórķ ŧáķéś íŧ ñéxŧ⟧
+qps.cli.why.runnable = ⟦{name} çáñ rúñ; /ŵórķ ŧáķéś {value} fírśŧ, ŵĥíçĥ íś líśŧéd béfóré íŧ⟧
+qps.cli.why.blocked = ⟦{name} çáññóŧ rúñ yéŧ: {detail}⟧
+qps.cli.why.candidate = ⟦{name} íś á çáñdídáŧé: /áççépŧ {name} ŧó ŵórķ óñ íŧ⟧
+qps.cli.why.state = ⟦{name} íś {value}, ñóŧ ŵáíŧíñg ŧó rúñ⟧
 qps.cli.agent.ask = ⟦ŧhé móðéĺ áßkß: {detail}⟧
 qps.cli.download.unresolved = ⟦ŧhé móðéĺ çóúĺð ñóŧ ƀé ŕéßóĺvéð óñ Húggíñg Fáçé: {detail}⟧
 qps.cli.download.no_directory = ⟦ñó móðéĺß ðíŕéçŧóŕý ŧó ðówñĺóáð íñŧó; ßéŧ MODEL_RUNNER_MODELS ŧó óñé⟧
