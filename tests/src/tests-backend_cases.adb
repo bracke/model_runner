@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 with Ada.Numerics.Elementary_Functions;
@@ -2502,6 +2503,81 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Close;
    end Resident_Cache_Attends_As_A_Host_Does;
+
+   --  A cache kept as its copy alone -- a context whose binary32 cache
+   --  is past what one storage buffer holds -- gives its rows back from
+   --  the copy, keeps them when it grows for a second block, and gives
+   --  them back from the values' buffer where the copy is split. It did
+   --  none of these: grown, the copy came up zeroed, and read back, there
+   --  was no binary32 to read, so a Gemma 3 4B drafted by its 270M wrote
+   --  underscores and a split copy's first generated token was noise.
+   procedure Copy_Only_Cache_Keeps_Its_Rows
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Dev renames Model_Runner.Backend.Device;
+      package Env renames Ada.Environment_Variables;
+
+      Ready, Ok : Boolean;
+
+      --  Halves exactly, so what comes back is what went in.
+      Rows : constant N.Real_Array (0 .. 7) :=
+        [0.5, -1.25, 2.0, 0.0, 3.5, -0.75, 1.0, 64.0];
+
+      procedure Read_Back (At_Row : N.Element_Count; What : String) is
+         Read : N.Real_Array (Rows'Range) := [others => 9.0];
+      begin
+         Dev.Get_Cache (At_Row, Read, Ok);
+         Assert (Ok, "a copy-only cache would not give its rows back "
+                 & What);
+         for Index in Rows'Range loop
+            Assert (Read (Index) = Rows (Index),
+                    "row" & Index'Image & " came back as"
+                    & Read (Index)'Image & " " & What);
+         end loop;
+      end Read_Back;
+   begin
+      Dev.Close;
+      Dev.Open (Ready, Share_Host => False);
+      if not Ready then
+         return;
+      end if;
+
+      Env.Set ("MR_FORCE_COPY_ONLY", "1");
+      Dev.Reserve_Cache (64, 64, Ok, Allow_Copy_Only => True);
+      if not Ok then
+         Env.Clear ("MR_FORCE_COPY_ONLY");
+         Dev.Close;
+         return;
+      end if;
+
+      Dev.Put_Cache (40, Rows, Ok);
+      Assert (Ok, "a copy-only cache would not take rows");
+      Read_Back (40, "as put");
+
+      Dev.Reserve_Cache (1_048_576, 1_048_576, Ok, Allow_Copy_Only => True);
+      Assert (Ok, "a copy-only cache would not grow");
+      Read_Back (40, "after it grew");
+      Env.Clear ("MR_FORCE_COPY_ONLY");
+      Dev.Release_Cache;
+
+      --  Split: keys before the keys' end, values in a buffer of their own.
+      Env.Set ("MR_FORCE_SPLIT_COPY", "1");
+      Dev.Reserve_Cache (128, 128, Ok, Allow_Copy_Only => True,
+                        Keys_Upto => 64);
+      Env.Clear ("MR_FORCE_SPLIT_COPY");
+      Assert (Ok, "a split copy was refused");
+
+      Dev.Put_Cache (8, Rows, Ok);
+      Assert (Ok, "a split copy would not take keys");
+      Dev.Put_Cache (72, Rows, Ok);
+      Assert (Ok, "a split copy would not take values");
+      Read_Back (8, "from a split copy's keys");
+      Read_Back (72, "from a split copy's values");
+
+      Dev.Release_Cache;
+      Dev.Close;
+   end Copy_Only_Cache_Keeps_Its_Rows;
 
    --  A paged cache's second copy, for the layers one storage buffer of
    --  halves does not hold: room made for it, rows put past Second_Copy
@@ -10829,6 +10905,10 @@ package body Tests.Backend_Cases is
         (T, Second_Copy_Keeps_Its_Rows'Access,
          "a paged cache's second copy keeps the rows put into it, as it "
          & "grows too");
+      Register_Routine
+        (T, Copy_Only_Cache_Keeps_Its_Rows'Access,
+         "a cache kept as its copy keeps its rows as it grows, and a split "
+         & "one gives them back from the buffer each is in");
       Register_Routine
         (T, Resident_Cache_Attends_As_A_Host_Does'Access,
          "a cache a device holds is written and attended to, and says what "

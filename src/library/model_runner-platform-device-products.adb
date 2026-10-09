@@ -8212,6 +8212,9 @@ package body Model_Runner.Platform.Device.Products is
       Copy_Carried_Buffer : Address := Null_Handle;
       Copy_Carried_Memory : Address := Null_Handle;
       Copy_Carried_Bytes  : Interfaces.Unsigned_64 := 0;
+      Values_Carried_At     : Address := Null_Handle;
+      Values_Carried_Buffer : Address := Null_Handle;
+      Values_Carried_Memory : Address := Null_Handle;
    begin
       Ok := False;
 
@@ -8262,6 +8265,15 @@ package body Model_Runner.Platform.Device.Products is
                         or else not Wants_Copy (Item)))
       then
          Ok := True;
+         return;
+      end if;
+
+      --  A split copy is not made again in another shape: its values sit
+      --  against its own keys' end, which a copy made whole or split
+      --  elsewhere does not keep, and carrying its front would carry the
+      --  keys alone. The block that asks attends on the host instead,
+      --  and the one in it keeps what it holds.
+      if Item.Copy_Split then
          return;
       end if;
 
@@ -8372,7 +8384,15 @@ package body Model_Runner.Platform.Device.Products is
             Ok := True;
          end if;
 
-         Carry_Over := Was_At /= Null_Handle and then Was_Elements > 0;
+         --  A cache kept as its copy alone has no binary32 buffer, and its
+         --  copy is all it holds: carried as well. It was not -- the copy
+         --  came up zeroed and the old one was left standing -- so a block
+         --  dealt behind one, a Gemma 3 4B's at its unnamed context and its
+         --  270M draft's, wiped the first one's keys and values and the
+         --  drafted run wrote underscores.
+         Carry_Over :=
+           (Was_At /= Null_Handle and then Was_Elements > 0)
+           or else (Was_Copy_At /= Null_Handle and then Was_Copy_Bytes > 0);
          Carried := Was_Elements;
          Carried_Bytes := Was_Bytes;
          Carried_Buffer := Was_Buffer;
@@ -8381,6 +8401,9 @@ package body Model_Runner.Platform.Device.Products is
          Copy_Carried_Buffer := Was_Copy_Buffer;
          Copy_Carried_Memory := Was_Copy_Memory;
          Copy_Carried_Bytes := Was_Copy_Bytes;
+         Values_Carried_At := Was_Values_At;
+         Values_Carried_Buffer := Was_Values_Buffer;
+         Values_Carried_Memory := Was_Values_Memory;
       end;
 
       --  Mapped here and left mapped. The kind this came from is
@@ -8583,16 +8606,23 @@ package body Model_Runner.Platform.Device.Products is
             Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
          begin
             if Unmap /= null then
-               Unmap (Item.Logical, Carried_Memory);
+               if Carried_Buffer /= Null_Handle then
+                  Unmap (Item.Logical, Carried_Memory);
+               end if;
 
                if Copy_Carried_At /= Null_Handle then
                   Unmap (Item.Logical, Copy_Carried_Memory);
+               end if;
+
+               if Values_Carried_At /= Null_Handle then
+                  Unmap (Item.Logical, Values_Carried_Memory);
                end if;
             end if;
          end;
 
          Give_Back_Buffer (Item, Carried_Buffer, Carried_Memory);
          Give_Back_Buffer (Item, Copy_Carried_Buffer, Copy_Carried_Memory);
+         Give_Back_Buffer (Item, Values_Carried_Buffer, Values_Carried_Memory);
       end if;
 
       Item.Cache_Bytes := F32_Bytes;
@@ -9653,35 +9683,52 @@ package body Model_Runner.Platform.Device.Products is
       --  Rows past the front of a cache kept as its copy and a front are in
       --  the copy alone, and come back from its halves -- the values the
       --  device attends with, which a binary16 cache holds anyway.
-      if Item.Cache_Front > 0
-        and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front
+      --  And so are a block's rows where the copy is all that is kept --
+      --  in the values' buffer, off its front, where the copy is split.
+      --  A split copy's generated tokens attend on the host, which reads
+      --  the rows the prompt wrote here first; it read the binary32
+      --  cache there is none of, and qwen3-8b's first token was noise.
+      if (Item.Cache_Front > 0
+          and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front)
+        or else (Item.Copy_Only and then Item.Cache_Front = 0)
       then
-         if not Is_Ready (Item)
-           or else Item.Copy_At = Null_Handle
-           or else Values'Length = 0
-           or else (Interfaces.Unsigned_64 (At_Value)
-                    + Interfaces.Unsigned_64 (Values'Length)) * 2
-                   > Item.Copy_Bytes
-         then
-            return;
-         end if;
-
          declare
-            Halves : Model_Runner.Numerics.Half_Array (Values'Range)
-              with Import,
-                   Address =>
-                     System.Storage_Elements.To_Address
-                       (System.Storage_Elements.To_Integer (Item.Copy_At)
-                        + System.Storage_Elements.Integer_Address
-                            (Interfaces.Unsigned_64 (At_Value) * 2));
+            In_Values : constant Boolean :=
+              Item.Copy_Split
+              and then Interfaces.Unsigned_64 (At_Value)
+                       >= Item.Copy_Keys_Halves;
+            From : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64 (At_Value)
+              - (if In_Values then Item.Copy_Keys_Halves else 0);
+            Base : constant Address :=
+              (if In_Values then Item.Copy_Values_At else Item.Copy_At);
+            Room : constant Interfaces.Unsigned_64 :=
+              (if In_Values then Item.Copy_Values_Bytes else Item.Copy_Bytes);
          begin
-            for Index in Values'Range loop
-               Values (Index) := Model_Runner.Numerics.To_Real (Halves (Index));
-            end loop;
-         end;
+            if not Is_Ready (Item)
+              or else Base = Null_Handle
+              or else Values'Length = 0
+              or else (From + Interfaces.Unsigned_64 (Values'Length)) * 2 > Room
+            then
+               return;
+            end if;
 
-         Ok := True;
-         return;
+            declare
+               Halves : Model_Runner.Numerics.Half_Array (Values'Range)
+                 with Import,
+                      Address =>
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Base)
+                           + System.Storage_Elements.Integer_Address (From * 2));
+            begin
+               for Index in Values'Range loop
+                  Values (Index) := Model_Runner.Numerics.To_Real (Halves (Index));
+               end loop;
+            end;
+
+            Ok := True;
+            return;
+         end;
       end if;
 
       if not Is_Ready (Item)

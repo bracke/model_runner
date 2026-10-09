@@ -175,11 +175,22 @@ begin
          --  layer's values, so the keys' length is the boundary. A
          --  context wide enough that even the copy will not fit one
          --  buffer splits there, keeping the two halves apart.
+         --  The split is at one place in the whole copy, and only the
+         --  block at its front has its keys all before that place and its
+         --  values all past it -- so only a block alone at the front may
+         --  ask for it. A second block behind a split one read its keys
+         --  out of the values' buffer: a Gemma 3 4B at its unnamed context
+         --  of 131,072 drafted by its 270M wrote nothing but underscores.
+         --  Unsplit, such a copy is past the bound, so the second block is
+         --  refused and its session attends on the host.
          Model_Runner.Backend.Device.Reserve_Cache
            (Wanted, Copy_Upto, Ok,
             Allow_Copy_Only => Sink_Footprint (Item.Owner.Settings) = 0,
             Keys_Upto =>
-              (if Item.Keys = null then 0 else Item.Keys.all'Length));
+              (if Item.Keys = null or else Base /= 0
+                  or else (for some Held of Block_Holder => Held /= null)
+               then 0
+               else Item.Keys.all'Length));
          if not Ok then
             return;
          end if;
