@@ -3,7 +3,6 @@ with Ada.Characters.Handling;
 with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Environment_Variables;
-with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
@@ -38,6 +37,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
@@ -47,6 +47,7 @@ with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tools;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Tools.Schemas;
 
@@ -105,55 +106,76 @@ package body Model_Runner.CLI.Project_Commands is
       Sandbox_Route,
       Reconfiguring_Route,
       Why_Route,
-      History_Route);
+      History_Route,
+      Brief_Route);
 
    --  Every project command, once: its word and the catalog key of its
    --  help line, in the order help lists them, and the handler it goes to. Whether a word is a project
    --  command and what help says of each are both read from here, so a
    --  command added here is one both know -- they were two lists kept by
    --  hand, and two such lists drift.
+   --  Mid_Message says whether it may run while a message is being typed,
+   --  the message kept: what looks or sets a record straight may; what
+   --  starts a model's run or remakes the project's set-up waits for the
+   --  message to be sent, and until then is its text.
    type Command_Descriptor is record
-      Name     : Word_Access;
-      Help_Key : Word_Access;
-      Route    : Command_Route;
+      Name        : Word_Access;
+      Help_Key    : Word_Access;
+      Route       : Command_Route;
+      Mid_Message : Boolean := True;
    end record;
 
    Commands : constant array (Positive range <>) of Command_Descriptor :=
-     [(new String'("/init"),        new String'("cli.interactive.help.init"), Init_Route),
-      (new String'("/bootstrap"),   new String'("cli.interactive.help.bootstrap"), Bootstrapping_Route),
-      (new String'("/state"),       new String'("cli.interactive.help.state"), State_Route),
-      (new String'("/config"),      new String'("cli.interactive.help.config"), Config_Route),
-      (new String'("/git"),         new String'("cli.interactive.help.git"), Git_Route),
-      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route),
-      (new String'("/instruct"),    new String'("cli.interactive.help.instruct"), Instructions_Route),
-      (new String'("/reconfigure"), new String'("cli.interactive.help.reconfigure"), Reconfiguring_Route),
-      (new String'("/task"),        new String'("cli.interactive.help.task"), Tasks_Route),
-      (new String'("/accept"),      new String'("cli.interactive.help.accept"), Verdicts_Route),
-      (new String'("/reject"),      new String'("cli.interactive.help.reject"), Verdicts_Route),
-      (new String'("/work"),        new String'("cli.interactive.help.work"), Work_Route),
-      (new String'("/cancel"),      new String'("cli.interactive.help.cancel"), Cancel_Route),
-      (new String'("/check"),       new String'("cli.interactive.help.check"), Checks_Route),
-      (new String'("/req"),         new String'("cli.interactive.help.req"), Intents_Route),
-      (new String'("/decision"),    new String'("cli.interactive.help.decision"), Intents_Route),
-      (new String'("/spec"),        new String'("cli.interactive.help.spec"), Intents_Route),
-      (new String'("/result"),      new String'("cli.interactive.help.result"), Results_Route),
-      (new String'("/scan"),        new String'("cli.interactive.help.scan"), Repository_Route),
-      (new String'("/tree"),        new String'("cli.interactive.help.tree"), Repository_Route),
-      (new String'("/sym"),         new String'("cli.interactive.help.sym"), Repository_Route),
-      (new String'("/refs"),        new String'("cli.interactive.help.refs"), Repository_Route),
-      (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route),
-      (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route),
-      (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route),
-      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route),
-      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route),
-      (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route)];
+     [(new String'("/init"),        new String'("cli.interactive.help.init"), Init_Route, False),
+      (new String'("/bootstrap"),   new String'("cli.interactive.help.bootstrap"), Bootstrapping_Route, False),
+      (new String'("/state"),       new String'("cli.interactive.help.state"), State_Route, True),
+      (new String'("/config"),      new String'("cli.interactive.help.config"), Config_Route, True),
+      (new String'("/git"),         new String'("cli.interactive.help.git"), Git_Route, True),
+      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route, True),
+      (new String'("/instruct"),    new String'("cli.interactive.help.instruct"), Instructions_Route, True),
+      (new String'("/reconfigure"), new String'("cli.interactive.help.reconfigure"), Reconfiguring_Route, False),
+      (new String'("/task"),        new String'("cli.interactive.help.task"), Tasks_Route, True),
+      (new String'("/accept"),      new String'("cli.interactive.help.accept"), Verdicts_Route, True),
+      (new String'("/reject"),      new String'("cli.interactive.help.reject"), Verdicts_Route, True),
+      (new String'("/work"),        new String'("cli.interactive.help.work"), Work_Route, False),
+      (new String'("/cancel"),      new String'("cli.interactive.help.cancel"), Cancel_Route, True),
+      (new String'("/check"),       new String'("cli.interactive.help.check"), Checks_Route, True),
+      (new String'("/req"),         new String'("cli.interactive.help.req"), Intents_Route, True),
+      (new String'("/decision"),    new String'("cli.interactive.help.decision"), Intents_Route, True),
+      (new String'("/spec"),        new String'("cli.interactive.help.spec"), Intents_Route, True),
+      (new String'("/result"),      new String'("cli.interactive.help.result"), Results_Route, True),
+      (new String'("/scan"),        new String'("cli.interactive.help.scan"), Repository_Route, True),
+      (new String'("/tree"),        new String'("cli.interactive.help.tree"), Repository_Route, True),
+      (new String'("/sym"),         new String'("cli.interactive.help.sym"), Repository_Route, True),
+      (new String'("/refs"),        new String'("cli.interactive.help.refs"), Repository_Route, True),
+      (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route, True),
+      (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route, True),
+      (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route, True),
+      (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route, True),
+      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route, True),
+      (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route, True),
+      (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True)];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.
-   Allowed_Tools : constant array (1 .. 5) of Word_Access :=
+   Allowed_Tools : constant array (1 .. 14) of Word_Access :=
      [new String'("read_file"), new String'("write_file"),
       new String'("list_directory"), new String'("delegate"),
-      new String'("run_checks")];
+      new String'("run_checks"), new String'("edit_file"),
+      new String'("read_range"), new String'("search_file"),
+      new String'("search_code"), new String'("find_symbol"),
+      new String'("find_references"), new String'("dependencies"),
+      new String'("dependents"), new String'("impact")];
+
+   --  The tools that take a path in the tree, those of them that write,
+   --  and those that ask the project's repository graph.
+   function File_Tool (Named : String) return Boolean is
+     (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
+              | "search_file" | "search_code");
+   function Writes (Named : String) return Boolean is
+     (Named in "write_file" | "edit_file");
+   function Graph_Tool (Named : String) return Boolean is
+     (Named in "find_symbol" | "find_references" | "dependencies" | "dependents" | "impact");
 
    function Image (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
@@ -161,40 +183,13 @@ package body Model_Runner.CLI.Project_Commands is
    --  A whole file, and whether it was read: a file not there and one
    --  that would not read are errors, IO_Open_Failed and IO_Read_Failed,
    --  and never the same as a file that is empty -- a specification that
-   --  could not be read is not one that says nothing.
+   --  could not be read is not one that says nothing. Read within the
+   --  bound every tool reads a text by, so a path to a large log or a model
+   --  file is refused as too large, IO_File_Too_Large, not allocated whole.
    procedure Read_Whole
      (Path   : String;
       Text   : out Unbounded_String;
-      Status : out E.Error_Info)
-   is
-      File : Ada.Streams.Stream_IO.File_Type;
-   begin
-      Text := Null_Unbounded_String;
-      Status := E.Success;
-      if not Ada.Directories.Exists (Path) then
-         Status := E.Make (E.IO_Open_Failed);
-         E.Add_Text (Status, "path", Path, E.Param_Path);
-         return;
-      end if;
-      declare
-         Room : String (1 .. Natural (Ada.Directories.Size (Path)));
-      begin
-         Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
-         String'Read (Ada.Streams.Stream_IO.Stream (File), Room);
-         Ada.Streams.Stream_IO.Close (File);
-         Text := To_Unbounded_String (Room);
-      end;
-   exception
-      when others =>
-         --  Whatever the read raised, it is a read that failed: said as
-         --  that, with the file, and the file left closed.
-         if Ada.Streams.Stream_IO.Is_Open (File) then
-            Ada.Streams.Stream_IO.Close (File);
-         end if;
-         Text := Null_Unbounded_String;
-         Status := E.Make (E.IO_Read_Failed);
-         E.Add_Text (Status, "path", Path, E.Param_Path);
-   end Read_Whole;
+      Status : out E.Error_Info) renames Model_Runner.Tools.Editing.Read_Text;
 
    --  Every other tool refused, and said so.
    type Fence (Screen : not null access Pres.Console) is
@@ -510,25 +505,46 @@ package body Model_Runner.CLI.Project_Commands is
    --  work to a helper where it may.
    function Offered_Text (Host : Host_Access) return String is
       package Sc renames Model_Runner.Tools.Schemas;
+      package Bi renames Model_Runner.Tools.Builtin;
    begin
       return
         "["
-        & Sc.Definition ("read_file", "Read a text file and return its contents.", [Sc.Text ("path")])
-        & ", "
-        & Sc.Definition ("list_directory", "List the entries of a directory.", [Sc.Text ("path")])
+        --  The file tools as every runner describes them.
+        & Bi.Definition_Of ("read_file") & ", " & Bi.Definition_Of ("list_directory")
+        & ", " & Bi.Definition_Of ("read_range") & ", " & Bi.Definition_Of ("search_file")
+        & ", " & Bi.Definition_Of ("search_code")
+        --  And the project's own knowledge of its code, asked rather than
+        --  found by reading: what a name is, where it is used, what a unit
+        --  uses and what uses it, and what a change reaches.
+        & (if Host = null then ""
+           else ", "
+                & Sc.Definition ("find_symbol", "Find where a name is declared: its kind, file and line."
+                                 & " A full name or its last part.", [Sc.Text ("name")])
+                & ", "
+                & Sc.Definition ("find_references", "Find every place a name is used, as file:line.",
+                                 [Sc.Text ("name")])
+                & ", "
+                & Sc.Definition ("dependencies", "The units a unit, or a file's unit, uses.",
+                                 [Sc.Text ("unit")])
+                & ", "
+                & Sc.Definition ("dependents", "The units that use a unit, or a file's unit.",
+                                 [Sc.Text ("unit")])
+                & ", "
+                & Sc.Definition ("impact", "What changing a file or a name reaches: the units, tests and"
+                                 & " requirements, and how sure that is.", [Sc.Text ("target")]))
         & (if Host /= null and then Host.May_Check (Host.Task_Profile)
            then ", "
                 & Sc.Definition
                     ("run_checks",
                      "Build and test the project as the task will be verified,"
                      & " and get back whether it passes and, if not, what the"
-                     & " failing checks reported.",
-                     Sc.No_Parameters)
+                     & " failing checks reported. scope affected checks only what your"
+                     & " changes so far reach -- quicker while you work; full, the"
+                     & " default, everything the task is held to.",
+                     [Sc.Text ("scope", Required => False, Choices => ["affected", "full"])])
            else "")
         & (if Host = null or else Host.May (Pm.Write_Source) or else Host.May (Pm.Write_Specs)
-           then ", "
-                & Sc.Definition ("write_file", "Write text to a file, replacing it.",
-                                 [Sc.Text ("path"), Sc.Text ("content")])
+           then ", " & Bi.Definition_Of ("edit_file") & ", " & Bi.Definition_Of ("write_file")
            else "")
         & (if Host /= null and then Host.May (Pm.Create_Children)
            then ", "
@@ -554,6 +570,169 @@ package body Model_Runner.CLI.Project_Commands is
         & "]";
    end Offered_Text;
 
+   --  The units a file declares, as the graph knows them: its packages,
+   --  or the file itself where it declares none.
+   function Units_Of_File
+     (Graph : Model_Runner.Framework.Repository.Graph;
+      Path  : String) return Model_Runner.Framework.Name_Lists.Vector
+   is
+      package Rp renames Model_Runner.Framework.Repository;
+      Units : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      for Index in 1 .. Rp.Symbol_Count (Graph) loop
+         declare
+            One : constant Rp.Symbol := Rp.Symbol_At (Graph, Index);
+         begin
+            if To_String (One.Path) = Path and then To_String (One.Kind) = "package"
+              and then not Units.Contains (To_String (One.Name))
+            then
+               Units.Append (To_String (One.Name));
+            end if;
+         end;
+      end loop;
+      if Units.Is_Empty then
+         Units.Append (Path);
+      end if;
+      return Units;
+   end Units_Of_File;
+
+   --  What uses a file's units, from the graph as it is now; "" for nothing.
+   function Users_Of_File (Store : S.Store; Path : String) return String is
+      package Rp renames Model_Runner.Framework.Repository;
+      Graph : constant Rp.Graph := Rp.Now (Store);
+      Said  : Unbounded_String;
+      Shown : Natural := 0;
+   begin
+      for Unit of Units_Of_File (Graph, Path) loop
+         for User of Rp.Dependents_Of (Graph, Unit) loop
+            if Shown < 20 and then Index (Said, User) = 0 then
+               Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & User);
+               Shown := Shown + 1;
+            end if;
+         end loop;
+      end loop;
+      return To_String (Said);
+   end Users_Of_File;
+
+   --  A question to the project's repository graph, answered from the graph
+   --  as it is now -- brought up to date first, so an answer after a write
+   --  is about the code as written.
+   function Graph_Answer
+     (Store   : S.Store;
+      Named   : String;
+      Args    : String;
+      Outcome : in out Model_Runner.Tools.Runner.Call_Outcome) return String
+   is
+      package Rp renames Model_Runner.Framework.Repository;
+      package Tc renames Model_Runner.Framework.Traceability;
+      Graph : constant Rp.Graph := Rp.Now (Store);
+      Have  : Boolean;
+      Key   : constant String :=
+        (if Named in "find_symbol" | "find_references" then "name"
+         elsif Named = "impact" then "target" else "unit");
+      Given : constant String := Model_Runner.Tools.Builtin.Text_Argument (Args, Key, Have);
+      Said  : Unbounded_String;
+
+      function Listed (Items : Model_Runner.Framework.Name_Lists.Vector; Most : Positive) return String is
+         Text  : Unbounded_String;
+         Count : Natural := 0;
+      begin
+         for One of Items loop
+            Count := Count + 1;
+            exit when Count > Most;
+            Append (Text, One & ASCII.LF);
+         end loop;
+         if Natural (Items.Length) > Most then
+            Append (Text, "(" & Image (Most) & " of" & Natural'Image (Natural (Items.Length)) & ")" & ASCII.LF);
+         end if;
+         return To_String (Text);
+      end Listed;
+
+      --  A unit, or a file's units.
+      function Units return Model_Runner.Framework.Name_Lists.Vector is
+      begin
+         if Ada.Directories.Exists (Given) then
+            return Units_Of_File (Graph, Given);
+         end if;
+         return Result : Model_Runner.Framework.Name_Lists.Vector do
+            Result.Append (Given);
+         end return;
+      end Units;
+   begin
+      if not Have or else Given = "" then
+         Outcome.Answer := Model_Runner.Tools.Runner.Failed;
+         return "error: " & Named & " needs a " & Key;
+      end if;
+      if Named = "find_symbol" then
+         for Name of Rp.Find_Symbols (Graph, Given) loop
+            declare
+               Found : Boolean;
+               One   : constant Rp.Symbol := Rp.Symbol_Of (Graph, Name, Found);
+            begin
+               if Found then
+                  Append (Said, To_String (One.Kind) & " " & Name & "  " & To_String (One.Path) & ":"
+                          & Image (One.Line) & ASCII.LF);
+               end if;
+            end;
+            exit when Length (Said) > 8_000;
+         end loop;
+      elsif Named = "find_references" then
+         for Name of Rp.Find_Symbols (Graph, Given) loop
+            declare
+               Places : constant Model_Runner.Framework.Name_Lists.Vector := Rp.References_To (Graph, Name);
+            begin
+               if not Places.Is_Empty then
+                  Append (Said, Name & ":" & ASCII.LF & Listed (Places, 100));
+               end if;
+            end;
+            exit when Length (Said) > 8_000;
+         end loop;
+      elsif Named in "dependencies" | "dependents" then
+         for Unit of Units loop
+            declare
+               Found : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 (if Named = "dependencies" then Rp.Dependencies_Of (Graph, Unit)
+                  else Rp.Dependents_Of (Graph, Unit));
+            begin
+               if not Found.Is_Empty then
+                  Append (Said, Unit & (if Named = "dependencies" then " uses:" else " is used by:") & ASCII.LF
+                          & Listed (Found, 100));
+               end if;
+            end;
+         end loop;
+      else
+         --  A file as itself, a name as its symbol.
+         declare
+            Node    : Model_Runner.Framework.Name_Lists.Vector;
+            Matches : constant Model_Runner.Framework.Name_Lists.Vector := Rp.Find_Symbols (Graph, Given);
+         begin
+            if Ada.Directories.Exists (Given) then
+               Node.Append (Given);
+            elsif not Matches.Is_Empty then
+               Node.Append ("symbol:" & Matches.First_Element);
+            end if;
+            if not Node.Is_Empty then
+               declare
+                  Reach : constant Tc.Impact := Tc.Impact_Of (Tc.Build (Store, Graph), Node);
+               begin
+                  for Index in 1 .. Natural'Min (Tc.Length (Reach), 100) loop
+                     declare
+                        One : constant Tc.Reached := Tc.Element (Reach, Index);
+                     begin
+                        Append (Said, To_String (One.Kind) & " " & To_String (One.Id) & " ("
+                                & Ada.Characters.Handling.To_Lower (Rp.Confidence'Image (One.Sure)) & ")"
+                                & ASCII.LF);
+                     end;
+                  end loop;
+               end;
+            end if;
+         end;
+      end if;
+      return (if Said = Null_Unbounded_String
+              then "nothing in the project's graph for " & Given
+              else To_String (Said));
+   end Graph_Answer;
+
    --  The file tools, fenced by the permissions of the agent now working,
    --  and delegate, which makes a child through the harness and runs it.
    type Work_Tools
@@ -562,7 +741,21 @@ package body Model_Runner.CLI.Project_Commands is
    is new Model_Runner.Tools.Builtin.Instance with record
       --  The calls this agent has made, against its tool budget.
       Made : Natural := 0;
+
+      --  How the work went, for the record: calls before its first
+      --  change -- finding its way -- whole reads, reads of part, searches,
+      --  questions to the graph, and checks run more than once.
+      Before_Change : Natural := 0;
+      Changed_Yet   : Boolean := False;
+      Whole_Reads   : Natural := 0;
+      Part_Reads    : Natural := 0;
+      Searches      : Natural := 0;
+      Graph_Asks    : Natural := 0;
+      Check_Runs    : Natural := 0;
    end record;
+
+   --  Those, in a line.
+   function Figures (Self : Work_Tools'Class) return String;
 
    overriding procedure Run
      (Self      : in out Work_Tools;
@@ -825,7 +1018,8 @@ package body Model_Runner.CLI.Project_Commands is
                         To_String (Recorded)
                         & (if Host = null or else Host.Tool_Budget = 0 then ""
                            else "calls:" & Natural'Image (Calls) & " of"
-                                & Natural'Image (Host.Tool_Budget) & " planned" & ASCII.LF))]);
+                                & Natural'Image (Host.Tool_Budget) & " planned" & ASCII.LF)
+                        & Figures (Runner) & ASCII.LF)]);
       end if;
       if Root then
          Self.Notes.Refused := Null_Unbounded_String;
@@ -1118,9 +1312,18 @@ package body Model_Runner.CLI.Project_Commands is
       return To_String (Told);
    end Delegate;
 
+   function Figures (Self : Work_Tools'Class) return String is
+     ("calls before the first change:" & Natural'Image (Self.Before_Change)
+      & (if Self.Changed_Yet then "" else " (none made)")
+      & "; whole reads:" & Natural'Image (Self.Whole_Reads)
+      & ", reads of part:" & Natural'Image (Self.Part_Reads)
+      & ", searches:" & Natural'Image (Self.Searches)
+      & ", graph questions:" & Natural'Image (Self.Graph_Asks)
+      & ", checks run:" & Natural'Image (Self.Check_Runs));
+
    overriding function Kind
      (Self : Work_Tools; Named : String) return Model_Runner.Tools.Runner.Call_Kind
-   is (if Named = "run_checks" then Model_Runner.Tools.Runner.Reads
+   is (if Named = "run_checks" or else Graph_Tool (Named) then Model_Runner.Tools.Runner.Reads
        elsif Named = "delegate" then Model_Runner.Tools.Runner.Changes
        else Model_Runner.Tools.Builtin.Kind (Model_Runner.Tools.Builtin.Instance (Self), Named));
 
@@ -1153,9 +1356,11 @@ package body Model_Runner.CLI.Project_Commands is
          Last := Result'First + Text'Length - 1;
       end Put;
 
-      Found : Boolean;
-      Path  : constant String :=
-        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found);
+      Given_Path : Boolean;
+      Given : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Given_Path);
+      --  search_code with no folder searches the whole tree.
+      Path  : constant String := (if Given_Path then Given elsif Named = "search_code" then "." else "");
       Budget : constant Natural :=
         (if Self.Host = null then 0 else Self.Host.Tool_Budget);
 
@@ -1213,7 +1418,7 @@ package body Model_Runner.CLI.Project_Commands is
                begin
                   if Within_Project (Tail)
                     and then (Ada.Directories.Exists (Tail)
-                              or else (Named = "write_file"
+                              or else (Writes (Named)
                                        and then (Slash = 0
                                                  or else Ada.Directories.Exists (Tail (Tail'First .. Slash - 1)))))
                   then
@@ -1228,7 +1433,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  A write goes where the path says from the project's top, and
          --  nowhere a shorter end of it happens to match: a made-up
          --  /path/to/hi.py does not overwrite the project's hi.py.
-         if Named = "write_file" then
+         if Writes (Named) then
             declare
                Whole  : constant String := Path (Bare .. Path'Last);
                Slash  : constant Natural := Ada.Strings.Fixed.Index (Whole, "/", Ada.Strings.Backward);
@@ -1249,7 +1454,7 @@ package body Model_Runner.CLI.Project_Commands is
                begin
                   if Tail /= "" and then Within_Project (Tail)
                     and then (Ada.Directories.Exists (Tail)
-                              or else (Named = "write_file" and then Ada.Directories.Exists (Folder)
+                              or else (Writes (Named) and then Ada.Directories.Exists (Folder)
                                        and then (Folder /= "." or else Start = Bare)))
                   then
                      return Tail;
@@ -1261,7 +1466,7 @@ package body Model_Runner.CLI.Project_Commands is
             end loop;
             --  Nothing of it is the project's: a new file under a new
             --  directory, as written from the top.
-            return (if Named = "write_file" and then Within_Project (Path (Bare .. Path'Last))
+            return (if Writes (Named) and then Within_Project (Path (Bare .. Path'Last))
                       and then Ada.Strings.Fixed.Count (Path (Bare .. Path'Last), "/") <= 1
                     then Path (Bare .. Path'Last) else "");
          exception
@@ -1269,8 +1474,16 @@ package body Model_Runner.CLI.Project_Commands is
                return "";
          end;
       end Inside;
+      Found_Scope : Boolean;
    begin
       Outcome := Tr.Done;
+      --  Calls before the first change: the agent finding its way.
+      if not Self.Changed_Yet then
+         Self.Before_Change := Self.Before_Change + 1;
+      end if;
+      if Writes (Named) or else Named = "delegate" then
+         Self.Changed_Yet := True;
+      end if;
       --  Past the work's time, nothing more is done: the call is refused,
       --  and the run ends as out of time.
       if Self.Host /= null and then Wk.Time_Is_Up (Self.Host.all) then
@@ -1278,7 +1491,7 @@ package body Model_Runner.CLI.Project_Commands is
          Put ("error: the work's time is up; no further call is run");
          return;
       end if;
-      if Found and then Named in "read_file" | "list_directory" | "write_file" and then Inside /= "" then
+      if Given_Path and then File_Tool (Named) and then Inside /= "" then
          declare
             Quoted : constant String := '"' & Path & '"';
             At_Path : constant Natural := Ada.Strings.Fixed.Index (Arguments, Quoted);
@@ -1293,7 +1506,7 @@ package body Model_Runner.CLI.Project_Commands is
                        Result, Last, Outcome, Status);
                   --  Read from a shorter end of the path it gave: said, so
                   --  the agent knows which file it was.
-                  if Named /= "write_file" and then Taken /= "." and then Last >= Result'First
+                  if not Writes (Named) and then Taken /= "." and then Last >= Result'First
                     and then Ada.Strings.Fixed.Index (Path, "/" & Taken) /= Path'First
                   then
                      declare
@@ -1317,6 +1530,14 @@ package body Model_Runner.CLI.Project_Commands is
          --  A helper that answered may have changed anything its
          --  permissions let it.
          Outcome.Changed := Tr."=" (Outcome.Answer, Tr.Answered);
+      elsif Graph_Tool (Named) then
+         Self.Graph_Asks := Self.Graph_Asks + 1;
+         if Self.Host = null then
+            Outcome.Answer := Tr.Failed;
+            Put ("error: there is no project graph to ask here");
+         else
+            Put (Graph_Answer (Self.Host.Store_Of.all, Named, Arguments, Outcome));
+         end if;
       elsif Named = "run_checks" then
          if Self.Host = null then
             Outcome.Answer := Tr.Failed;
@@ -1326,7 +1547,11 @@ package body Model_Runner.CLI.Project_Commands is
                Report : Unbounded_String;
                Ran    : E.Error_Info;
             begin
-               Self.Host.Run_Checks (Self.Host.Task_Profile, Report, Ran);
+               Self.Check_Runs := Self.Check_Runs + 1;
+               Self.Host.Run_Checks
+                 (Self.Host.Task_Profile, Report, Ran,
+                  Affected => Model_Runner.Tools.Builtin.Text_Argument (Arguments, "scope", Found_Scope)
+                              = "affected");
                if E.Is_Error (Ran) then
                   if E."=" (Ran.Code, E.Framework_Execution_Refused) then
                      Refuse (Tr.Policy);
@@ -1338,20 +1563,20 @@ package body Model_Runner.CLI.Project_Commands is
                     else "error: the checks were not run: " & Refusal (Ran));
             end;
          end if;
-      elsif Named in "read_file" | "list_directory" | "write_file"
-        and then Pm.Path_Refusal (".", Path, Writing => Named = "write_file") /= ""
+      elsif File_Tool (Named)
+        and then Pm.Path_Refusal (".", Path, Writing => Writes (Named)) /= ""
       then
          Refuse
-           (case Pm.Path_Refused_As (".", Path, Writing => Named = "write_file") is
+           (case Pm.Path_Refused_As (".", Path, Writing => Writes (Named)) is
               when Pm.Path_Outside       => Tr.Outside_Project,
               when Pm.Path_Harness_Owned => Tr.Harness_Owned,
               when others                => Tr.Not_Permitted);
-         Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Named = "write_file"));
-      elsif Named in "read_file" | "list_directory" and then not May (Reading => True) then
+         Put ("error: " & Pm.Path_Refusal (".", Path, Writing => Writes (Named)));
+      elsif File_Tool (Named) and then not Writes (Named) and then not May (Reading => True) then
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not read " & Path
               & (if Pm.Sandbox_Refuses (Path, False) then " (" & Pm.Sandbox_Source & " confines it)" else ""));
-      elsif Named = "write_file" and then not May (Reading => False) then
+      elsif Writes (Named) and then not May (Reading => False) then
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not write " & Path
               & (if Pm.Sandbox_Refuses (Path, True) then " (" & Pm.Sandbox_Source & " confines it)" else "")
@@ -1362,7 +1587,7 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Kept : E.Error_Info := E.Success;
          begin
-            if Named = "write_file" and then Self.Host /= null then
+            if Writes (Named) and then Self.Host /= null then
                Wk.Keep_Before_Write (Self.Host.all, Path, Kept);
             end if;
             if E.Is_Error (Kept) then
@@ -1373,6 +1598,28 @@ package body Model_Runner.CLI.Project_Commands is
                Model_Runner.Tools.Builtin.Run
                  (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
                   Outcome, Status);
+               --  How the work went, counted as it goes.
+               if Named = "read_file" then
+                  Self.Whole_Reads := Self.Whole_Reads + 1;
+               elsif Named = "read_range" then
+                  Self.Part_Reads := Self.Part_Reads + 1;
+               elsif Named in "search_file" | "search_code" then
+                  Self.Searches := Self.Searches + 1;
+               end if;
+               --  A change said with what uses what was changed, so the
+               --  agent knows what else to look at without asking.
+               if Outcome.Changed and then Self.Host /= null and then E.Is_Ok (Status)
+                 and then Last >= Result'First
+               then
+                  declare
+                     Users : constant String := Users_Of_File (Self.Host.Store_Of.all, Path);
+                     Was   : constant String := Result (Result'First .. Last);
+                  begin
+                     if Users /= "" then
+                        Put (Was & ASCII.LF & "used by: " & Users);
+                     end if;
+                  end;
+               end if;
             end if;
          end;
       end if;
@@ -2180,6 +2427,9 @@ package body Model_Runner.CLI.Project_Commands is
 
    function Is_Project_Command (Word : String) return Boolean
    is (for some Known of Commands => Known.Name.all = Word);
+
+   function Runs_Mid_Message (Word : String) return Boolean
+   is (for some Known of Commands => Known.Name.all = Word and then Known.Mid_Message);
 
    --  A command's route, or No_Route for a word that is none.
    function Route_Of (Word : String) return Command_Route is

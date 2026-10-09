@@ -1,10 +1,33 @@
 separate (Model_Runner.Framework.Work)
 procedure Run_Checks
-  (Host    : in out Child_Host;
-   Profile : String;
-   Report  : out Ada.Strings.Unbounded.Unbounded_String;
-   Status  : out Model_Runner.Errors.Error_Info)
+  (Host     : in out Child_Host;
+   Profile  : String;
+   Report   : out Ada.Strings.Unbounded.Unbounded_String;
+   Status   : out Model_Runner.Errors.Error_Info;
+   Affected : Boolean := False)
 is
+   --  The files the work has changed so far, as the harness saw them.
+   function Changed_So_Far return Name_Lists.Vector is (Host.Edited);
+
+   --  What to run: the task's profile, or for the affected scope what the
+   --  change reaches -- where the agent may run that.
+   Changed : constant Name_Lists.Vector :=
+     (if Affected then Changed_So_Far else Name_Lists.Empty_Vector);
+   Chosen  : constant Verification.Choice :=
+     (if Affected and then not Changed.Is_Empty
+      then Verification.Choose (Host.Item.all, To_String (Host.Task_Id), Changed)
+      else (others => <>));
+   Narrow  : constant Boolean :=
+     Affected and then Length (Chosen.Profile) > 0 and then To_String (Chosen.Profile) /= Profile
+     and then May_Check (Host, Profile);
+   Running : constant String := (if Narrow then To_String (Chosen.Profile) else Profile);
+   Scope_Said : constant String :=
+     (if not Affected then ""
+      elsif Changed.Is_Empty then "scope: full, since nothing has been changed yet" & ASCII.LF
+      elsif Narrow then "scope: " & To_String (Chosen.Scope) & " -- " & To_String (Chosen.Reason) & ASCII.LF
+      else "scope: full -- " & (if Length (Chosen.Reason) > 0 then To_String (Chosen.Reason)
+                                else "what was changed reaches no narrower profile") & ASCII.LF);
+
    Change   : Stores.Transaction;
    Evidence : Unbounded_String;
    Passed   : Boolean;
@@ -49,8 +72,10 @@ begin
       --  Run for its task: credited to it, where its agents work in the
       --  project itself and the checks see what it holds.
       Verification.Run_Profile
-        (Host.Item.all, Change, Profile, (if Host.Apart then "" else To_String (Host.Task_Id)),
+        (Host.Item.all, Change, Running, (if Host.Apart then "" else To_String (Host.Task_Id)),
          Evidence, Passed, Status,
+         Given      => (if Narrow then Chosen.Given else Name_Lists.Empty_Vector),
+         Stands_For => (if Narrow then Profile else ""),
          Offline => not May (Host, Permissions.Use_Network, ""),
          Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0));
       if E.Is_Ok (Status) then
@@ -79,7 +104,7 @@ begin
    end;
 
    Report := To_Unbounded_String
-     (Profile & (if Passed then " passed" else " failed") & ", "
+     (Scope_Said & Running & (if Passed then " passed" else " failed") & ", "
       & To_String (Evidence));
    Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
    for Index in 1 .. Records.Field_Count (Value) loop

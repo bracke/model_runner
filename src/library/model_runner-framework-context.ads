@@ -161,6 +161,20 @@ package Model_Runner.Framework.Context is
    --  @return The count.
    function Excluded_Count (From : Built) return Natural;
 
+   --  One item left out, and why: over budget, or the same as one in.
+   --
+   --  @param From The context.
+   --  @param Index 1 .. Excluded_Count.
+   --  @return The item.
+   function Excluded_At (From : Built; Index : Positive) return Item;
+
+   --  Why that item was left out.
+   --
+   --  @param From The context.
+   --  @param Index 1 .. Excluded_Count.
+   --  @return The reason.
+   function Excluded_Why (From : Built; Index : Positive) return String;
+
    --  One item that went in, in the order it is rendered.
    --
    --  @param From The context.

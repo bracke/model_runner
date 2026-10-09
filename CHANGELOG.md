@@ -7,12 +7,23 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A file is changed in part, and only as it was read:** edit_file replaces one exact passage -- refused where it is not there, there more than once, or where the file's revision is not the one the edit names -- and says where, in which declarations, and the new revision; read_file ends with the file's revision. read_range reads numbered lines of a file, search_file finds the lines of one that hold a text, search_code those of every source under a folder. All shared by run's agent and /work's (Tools.Editing).
+- **A work agent asks the project, not the files:** find_symbol, find_references, dependencies, dependents and impact answer from the project's repository graph, brought up to date before each answer so one after a write is about the code as written; a write or an edit in /work is said with the units that use the file.
+- **run_checks scope=affected:** checks only what the work's changes so far reach -- the files it wrote, traced to their tests and the narrower profile verification.scope names for that width -- and says which scope ran and why; full, the default, is everything the task is held to.
+- **/brief TASK:** the context /work would give the task's agent, built as it builds it -- each item in, as what, how much it matters and its cost, and each left out and why.
+- **A task's context carries what uses the files it names:** the files of the units that depend on them, at low priority within the budget, found by the graph.
+- **The work record says how the work went:** calls before the first change, whole reads, reads of part, searches, graph questions and checks run.
 - **/why:** why a task can or cannot run, or -- with no task named -- what /work takes next, or why it takes nothing, from the project's next work rather than reconstructed: a task that can run is said with whether /work takes it first, one that cannot with its reason, a candidate with how to accept it, and a blocked or failed task with the reason the harness recorded when it moved it.
 - **/history [ID]:** what happened to a task, invocation or record, read from the project's event log -- the task's moves and every model run made for it -- or, with nothing named, the latest twenty events. A model run's start and end are events now (Invocation_Started, Invocation_Ended, naming the task, the agent and how it ended), so the log holds a /work run whole.
 - **The agent loop says a turn before its calls:** Observer.On_Turn gives how many calls a turn asked for before any runs, so a watcher says a batch from that rather than from noticing a second call; --trace-file writes it as a turn event.
 
 ### Changed
 
+- **A text is read whole only within a bound:** 4 MiB, a binary file refused as not text -- for the tools and for the project's own reads alike, where a path to a large log or a model file was allocated whole.
+- **What may run while a message is typed is the command table's to say:** every project command but /work, /init, /bootstrap and /reconfigure, the message kept; the input policy says so, where it said commands ran only between messages.
+- **Run_Sub's Last is the last index written,** as every runner's is, where it was a count.
+- **The file tools are described once,** by the built-in set, and /work offers those definitions rather than its own.
+- **A grammar holds twice the rules, names and character ranges:** the strict call grammar over the larger tool set no longer falls back to the loose one.
 - **A reply stops at its run's deadline:** a generation request carries a deadline, checked beside the cancellation between steps of the prompt and between tokens, and ends Time_Limit there; the agent loop gives each reply its run's --max-seconds deadline, so a long reply no longer runs past it, and the turn it cut short is not committed.
 - **The harness's notes compare whole:** what a call answered and what a write put in a file are kept as they are, not as 64-bit digests, so a note that an answer is the same as before is never a collision's.
 - **A call runs within its run:** a runner is given the context its calls run within -- the run's cancellation, its deadline from --max-seconds, and the tokens it has left (Runner.Tool_Context) -- and a program a built-in tool or the --tool-command runs is stopped with its group at the first of them, where it used to be waited out (the external runner had no bound at all). A call stopped so ends Timed_Out or Cancelled, and a run whose own limit stopped a call ends with it.

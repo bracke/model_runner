@@ -310,6 +310,7 @@ en.cli.interactive.help.impact = /impact FILE        what a change to a file rea
 en.cli.interactive.help.trace = /trace NODE         the traceability of a requirement, task or file
 en.cli.interactive.help.why = /why [TASK]          why a task can or cannot run, or what /work takes next
 en.cli.interactive.help.history = /history [ID]       what happened to a task, invocation or record, from the event log; with none, the latest
+en.cli.interactive.help.brief = /brief TASK          what /work would give the task's agent: each item in, as what, and each left out, and why
 en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the project from TEMPLATE, each input as NAME=VALUE; /init alone offers the templates and asks for what is needed. The plan (inputs, files, facts, and checks the policy would refuse) is shown before anything is written
 en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (the task it was proposed from) parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify and integrate take several, or all; reconsider takes a rejected task back to a candidate), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAME=VALUE (kind too), note ID TEXT (adds to its notes), grant ID CAPABILITY [roots=...], withhold ID CAPABILITY, link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE [REASON], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAME or a task's ID, drop NAME, a task's ID or all]
 en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones, or all for every one the plan can start, one after another -- [model=PATH [steps=N]]: a model file runs it apart, with file tools only, steps= at most the task's step limit -- [profile=NAME]: the map.model profile its context is planned with -- it shows its context, the agent's calls, the files changed, verification, and where the task ended
@@ -376,6 +377,9 @@ en.cli.why.refused = {name} refused {detail}
 en.cli.history.event = {index}  {other}  {value}  {name}  {detail}
 en.cli.history.none = no event names {name}
 en.cli.history.earlier = {count} earlier of {total} not shown
+en.cli.brief.head = {name}: {count} tokens of {total}
+en.cli.brief.in = in   {name} ({detail})
+en.cli.brief.out = out  {name}: {detail}
 en.cli.agent.ask = the model asks: {detail}
 en.cli.download.unresolved = the model could not be resolved on Hugging Face: {detail}
 en.cli.download.no_directory = no models directory to download into; set MODEL_RUNNER_MODELS to one
@@ -1825,6 +1829,7 @@ da.cli.interactive.help.impact = /impact FIL         hvad en ændring af en fil 
 da.cli.interactive.help.trace = /trace KNUDE        sporbarheden for et krav, en opgave eller en fil
 da.cli.interactive.help.why = /why [OPGAVE]        hvorfor en opgave kan eller ikke kan køre, eller hvad /work tager næst
 da.cli.interactive.help.history = /history [ID]       hvad der skete med en opgave, et kald eller en post, fra hændelsesloggen; uden, de seneste
+da.cli.interactive.help.brief = /brief OPGAVE        hvad /work ville give opgavens agent: hvert punkt med, som hvad, og hvert udeladt, og hvorfor
 da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projektet fra SKABELON, hvert input som NAVN=VÆRDI; /init alene tilbyder skabelonerne og spørger om det nødvendige. Planen (input, filer, fakta og kontroller politikken ville afvise) vises før noget skrives
 da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (opgaven den blev foreslået fra) parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify og integrate tager flere, eller all; reconsider tager en afvist opgave tilbage til kandidat), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAVN=VÆRDI (også kind), note ID TEKST (føjer til noterne), grant ID EVNE [roots=...], withhold ID EVNE, link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND [GRUND], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAVN eller en opgaves ID, drop NAVN, en opgaves ID eller all]
 da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare, eller all for hver den plan kan starte, den ene efter den anden -- [model=STI [steps=N]]: en modelfil kører den for sig, kun med filværktøjer, steps= højst opgavens skridtgrænse -- [profile=NAVN]: den map.model-profil dens kontekst planlægges med -- den viser sin kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
@@ -1867,6 +1872,9 @@ da.cli.why.refused = {name} afviste {detail}
 da.cli.history.event = {index}  {other}  {value}  {name}  {detail}
 da.cli.history.none = ingen hændelse nævner {name}
 da.cli.history.earlier = {count} tidligere af {total} ikke vist
+da.cli.brief.head = {name}: {count} tokens af {total}
+da.cli.brief.in = med  {name} ({detail})
+da.cli.brief.out = ude  {name}: {detail}
 da.cli.agent.ask = modellen spørger: {detail}
 da.cli.download.unresolved = modellen kunne ikke slås op på Hugging Face: {detail}
 da.cli.download.no_directory = ingen modelmappe at hente til; sæt MODEL_RUNNER_MODELS til en
@@ -3051,6 +3059,7 @@ qps.cli.interactive.help.impact = ⟦/ímpáçŧ FILE        wháŧ á çháñg�
 qps.cli.interactive.help.trace = ⟦/ŧŕáçé NODE         ŧhé ŧŕáçéábíĺíŧý óf á ŕéqúíŕéméñŧ, ŧáßk óŕ fíĺé⟧
 qps.cli.interactive.help.why = ⟦/ŵĥý [ŦÁßK]          ŵĥý á ŧáßk ćáñ óŕ ćáññóŧ ŕúñ, óŕ ŵĥáŧ /ŵóŕķ ŧáķéś ñéxŧ⟧
 qps.cli.interactive.help.history = ⟦/ĥíśŧóŕý [ÍĐ]       ŵĥáŧ ĥáppéñéď ŧó á ŧáśķ, íñvóćáŧíóñ óŕ ŕéćóŕď, fŕóm ŧĥé évéñŧ ĺóg; ŵíŧĥ ñóñé, ŧĥé ĺáŧéśŧ⟧
+qps.cli.interactive.help.brief = ⟦/ßŕíéf ŦÁßK          ŵĥáŧ /ŵóŕķ ŵóúĺď ĝívé ŧĥé ŧáśķ'ś áĝéñŧ: éáçĥ íŧéḿ íñ, áś ŵĥáŧ, áñď éáçĥ ĺéfŧ óúŧ, áñď ŵĥý⟧
 qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧáŕŧß ŧhé pŕójéçŧ fŕóm ŦEMPLAŦE, éáçh íñpúŧ áß NAME=VALÚE; /íñíŧ áĺóñé ófféŕß ŧhé ŧémpĺáŧéß áñð áßkß fóŕ wháŧ íß ñééðéð. Ŧhé pĺáñ (íñpúŧß, fíĺéß, fáçŧß, áñð çhéçkß ŧhé póĺíçý wóúĺð ŕéfúßé) íß ßhówñ béfóŕé áñýŧhíñg íß wŕíŧŧéñ⟧
 qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=ŦASK (ŧhé ŧáßk íŧ wáß pŕópóßéð fŕóm) páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID (áççépŧ, ŕéjéçŧ, çómpĺéŧé, véŕífý áñð íñŧégŕáŧé ŧáké ßévéŕáĺ, óŕ áĺĺ; ŕéçóñßíðéŕ ŧákéß á ŕéjéçŧéð ŧáßk báçk ŧó á çáñðíðáŧé), /ŧáßk çáñçéĺ ID [áñýwáý] -- /ŧáßk ßhów|áúðíŧ|çóñŧéxŧ ID [--véŕbóßé], /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE (kíñð ŧóó), ñóŧé ID ŦEXŦ (áððß ŧó íŧß ñóŧéß), gŕáñŧ ID ÇAPABILIŦY [ŕóóŧß=...], wíŧhhóĺð ID ÇAPABILIŦY, ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE [REASON], ðéŕívé -- /ŧáßk ðíff ID, /ŧáßk íñŧégŕáŧé ID [ŕéßóĺvéð|áñýwáý|ŕéßóĺvéð áñýwáý|ðíßçáŕð] -- /ŧáßk képŧ [ðíff|ŕéßŧóŕé NAME óŕ á ŧáßk'ß ID, ðŕóp NAME, á ŧáßk'ß ID óŕ áĺĺ]⟧
 qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß, óŕ áĺĺ fóŕ évéŕý óñé ŧhé pĺáñ çáñ ßŧáŕŧ, óñé áfŧéŕ áñóŧhéŕ -- [móðéĺ=PAŦH [ßŧépß=N]]: á móðéĺ fíĺé ŕúñß íŧ ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý, ßŧépß= áŧ móßŧ ŧhé ŧáßk'ß ßŧép ĺímíŧ -- [pŕófíĺé=NAME]: ŧhé máp.móðéĺ pŕófíĺé íŧß çóñŧéxŧ íß pĺáññéð wíŧh -- íŧ ßhówß íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺß, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
@@ -3117,6 +3126,9 @@ qps.cli.why.refused = ⟦{name} réfúśéd {detail}⟧
 qps.cli.history.event = ⟦{index}  {other}  {value}  {name}  {detail}⟧
 qps.cli.history.none = ⟦ñó évéñŧ ñáméś {name}⟧
 qps.cli.history.earlier = ⟦{count} éáŕĺíéŕ óf {total} ñóŧ śĥóŵñ⟧
+qps.cli.brief.head = ⟦{name}: {count} ŧóķéñś óf {total}⟧
+qps.cli.brief.in = ⟦  íñ   {name} ({detail})⟧
+qps.cli.brief.out = ⟦  óúŧ  {name}: {detail}⟧
 qps.cli.agent.ask = ⟦ŧhé móðéĺ áßkß: {detail}⟧
 qps.cli.download.unresolved = ⟦ŧhé móðéĺ çóúĺð ñóŧ ƀé ŕéßóĺvéð óñ Húggíñg Fáçé: {detail}⟧
 qps.cli.download.no_directory = ⟦ñó móðéĺß ðíŕéçŧóŕý ŧó ðówñĺóáð íñŧó; ßéŧ MODEL_RUNNER_MODELS ŧó óñé⟧

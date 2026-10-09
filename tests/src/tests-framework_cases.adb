@@ -10055,6 +10055,7 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Stuck), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/history " & To_String (Stuck), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/history TASK-999", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/brief " & To_String (Stuck), Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -10082,6 +10083,19 @@ package body Tests.Framework_Cases is
                        "/history did not give a task's moves and the run made for it: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "no event names TASK-999") > 0,
                        "/history of what nothing names did not say so");
+               --  /brief builds the task's context as /work would and says
+               --  what went in.
+               Assert (Ada.Strings.Fixed.Index (Text, To_String (Stuck) & ": ") > 0
+                       and then Ada.Strings.Fixed.Index (Text, " tokens of ") > 0
+                       and then Ada.Strings.Fixed.Index (Text, "in   " & To_String (Stuck)) > 0,
+                       "/brief did not show what a task's context holds: " & Text);
+               --  What may run while a message is typed is the table's to say.
+               Assert (Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/state")
+                       and then Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/brief")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/work")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/init")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/nonsense"),
+                       "a command ran mid-message against its table, or one that starts a run did");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

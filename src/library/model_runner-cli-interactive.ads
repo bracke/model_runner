@@ -140,9 +140,12 @@ package Model_Runner.CLI.Interactive is
    --  Offer one line of input to the turn.
    --
    --  This is the whole input policy: non-empty lines accumulate, separated
-   --  by line feeds; a blank line submits; and a line is read as a command
-   --  only when nothing is pending, so that a slash on the second line of a
-   --  prompt is the text it looks like rather than a command interrupting a
+   --  by line feeds; a blank line submits; a line is read as a command when
+   --  nothing is pending; and while something is, a line is a command only
+   --  where it is a project command the command table lets run mid-message
+   --  (Project_Commands.Runs_Mid_Message) -- run, and the pending message
+   --  kept to go on with. Anything else with a slash on a later line of a
+   --  prompt is the text it looks like, not a command interrupting a
    --  half-typed thought.
    --
    --  A line that would push the turn past Max_Turn_Bytes is refused and the

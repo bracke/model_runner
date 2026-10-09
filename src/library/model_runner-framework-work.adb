@@ -1042,6 +1042,9 @@ package body Model_Runner.Framework.Work is
       To      : constant String := Hostkit.Fs.Join (Before_Copy (Host.Item.all, To_String (Host.Task_Id)), Path);
    begin
       Status := E.Success;
+      if not Host.Edited.Contains (Path) then
+         Host.Edited.Append (Path);
+      end if;
       if Host.Apart or else Host.Kept_Before.Contains (Path) then
          return;
       end if;
@@ -1179,6 +1182,8 @@ package body Model_Runner.Framework.Work is
    -- Task_Profile --
    ------------------
 
+   function Store_Of (Host : Child_Host) return not null access Stores.Store is (Host.Item.all'Unchecked_Access);
+
    function Task_Profile (Host : Child_Host) return String
    is (Verification.Profile_Of (Host.Item.all, To_String (Host.Task_Id)));
 
@@ -1204,10 +1209,11 @@ package body Model_Runner.Framework.Work is
    ----------------
 
    procedure Run_Checks
-     (Host    : in out Child_Host;
-      Profile : String;
-      Report  : out Ada.Strings.Unbounded.Unbounded_String;
-      Status  : out Model_Runner.Errors.Error_Info)
+     (Host     : in out Child_Host;
+      Profile  : String;
+      Report   : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Affected : Boolean := False)
    is separate;
 
    ------------------

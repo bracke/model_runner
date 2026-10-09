@@ -265,6 +265,7 @@ is
    --  the project's next work, the one query every command reads it from.
    procedure Route_Why is separate;
    procedure Route_History is separate;
+   procedure Route_Brief is separate;
 
    --  The branches of the config route, in the order the
    --  dispatch tried them.
@@ -431,6 +432,7 @@ begin
       when State_Route => Route_State;
          when Why_Route => Route_Why;
          when History_Route => Route_History;
+         when Brief_Route => Route_Brief;
       when Config_Route => Route_Config;
       when Intents_Route => Route_Intents;
       when Results_Route => Route_Results;

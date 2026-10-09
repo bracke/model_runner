@@ -57,20 +57,20 @@ package Model_Runner.Grammar is
    --  Largest number of rules a grammar may define, counting the internal
    --  rules the compiler makes for grouped, repeated and optional parts, not
    --  only the named ones. A tight tool-call grammar over a broad tool set
-   --  reaches several hundred: the whole built-in set of seventeen tools,
+   --  reaches several hundred: the whole built-in set of twenty-four tools,
    --  each with its own argument schema, needs more than the first bound of
    --  256 and fits inside this one. A rule entry is a few words, so this
    --  costs a few kilobytes in a compiled grammar and nothing in a matcher.
-   Max_Rules : constant := 512;
+   Max_Rules : constant := 1024;
 
    --  Largest number of compiled elements, across every rule.
    Max_Elements : constant := 8192;
 
    --  Largest number of code-point ranges, across every set.
-   Max_Ranges : constant := 2048;
+   Max_Ranges : constant := 4096;
 
    --  Largest number of characters in every rule name together.
-   Max_Names : constant := 4096;
+   Max_Names : constant := 8192;
 
    --  How deep one stack may be, which bounds how deeply rules may nest at
    --  the point of matching rather than in the text.

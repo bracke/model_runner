@@ -38,6 +38,14 @@ package Model_Runner.Tools.Builtin is
    --  @return A JSON array of function definitions.
    function All_Definitions_Text return String;
 
+   --  One file tool's definition -- read_file, write_file, list_directory,
+   --  edit_file, read_range, search_file, search_code -- as every runner
+   --  offering it describes it.
+   --
+   --  @param Named The tool.
+   --  @return Its definition; "" for another name.
+   function Definition_Of (Named : String) return String;
+
    --  Something that turns a text into one vector, for the retrieve tool's
    --  semantic ranking. A caller that has a model loaded supplies one (see
    --  Use_Embedder); with it, retrieve ranks a folder's passages by how close
@@ -106,9 +114,10 @@ package Model_Runner.Tools.Builtin is
    --  @param Context What the calling run has left -- its cancellation, its
    --    deadline, its tokens -- which the sub-agent runs within: a child's
    --    budget is the least of its own and its parent's.
-   --  @param Result Buffer receiving the sub-agent's answer, written only
-   --    when it completed.
-   --  @param Last Number of bytes written.
+   --  @param Result Buffer receiving the sub-agent's answer from its first
+   --    index, written only when it completed.
+   --  @param Last The index of the last byte written, as a runner's Last
+   --    is; Result'First - 1 when none was.
    --  @param Ended How the sub-agent's run ended; Timed says a budget of
    --    time was the one that ran out.
    --  @param Status Success, or a diagnostic when the subtask could not run.

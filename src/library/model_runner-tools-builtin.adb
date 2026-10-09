@@ -16,6 +16,7 @@ with Http_Client.Errors;
 with Model_Runner.Cancellation;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Tools.DOC;
+with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.OOXML;
 with Model_Runner.Tools.PDF;
 with Model_Runner.Tools.RTF;
@@ -43,6 +44,13 @@ package body Model_Runner.Tools.Builtin is
    --  inside the call.
    Tool_Timeout : constant Duration := 30.0;
 
+   --  The tools that take a path in the tree, and of them those that write.
+   function File_Tool (Named : String) return Boolean is
+     (Named in "read_file" | "write_file" | "list_directory" | "edit_file" | "read_range"
+              | "search_file" | "search_code");
+   function Writes (Named : String) return Boolean is
+     (Named in "write_file" | "edit_file");
+
    ---------------------------------------------------------------------------
    --  Definitions
    --
@@ -52,6 +60,53 @@ package body Model_Runner.Tools.Builtin is
    ---------------------------------------------------------------------------
 
    package Sc renames Model_Runner.Tools.Schemas;
+
+   --  The file tools, each written once for every runner that offers it.
+   Read_Body : constant String :=
+     Sc.Definition ("read_file", "Read a text file and return its contents, and its revision after them.",
+                    [Sc.Text ("path")]);
+   Write_Body : constant String :=
+     Sc.Definition ("write_file", "Write text to a file, replacing it: for a new file, or one rewritten"
+                    & " whole -- edit_file changes part of one.",
+                    [Sc.Text ("path"), Sc.Text ("content")]);
+   List_Body : constant String :=
+     Sc.Definition ("list_directory", "List the entries of a directory.", [Sc.Text ("path")]);
+
+   --  The tools that change a file in place and read part of one or of a
+   --  tree.
+   Edit_Body : constant String :=
+     Sc.Definition
+       ("edit_file",
+        "Replace one exact passage of a file with new text -- the way to change part of a file"
+        & " without writing it all out. old_text must be in the file exactly once, as it is now;"
+        & " give revision, from read_file, to be refused if the file changed since you read it.",
+        [Sc.Text ("path"), Sc.Text ("old_text"), Sc.Text ("new_text"),
+         Sc.Text ("revision", Required => False)]);
+   Range_Body : constant String :=
+     Sc.Definition
+       ("read_range", "Read lines first_line to last_line of a file, numbered (last_line 0: to the end).",
+        [Sc.Text ("path"), Sc.Whole_Number ("first_line"), Sc.Whole_Number ("last_line", Required => False)]);
+   Search_File_Body : constant String :=
+     Sc.Definition
+       ("search_file", "Find the lines of a file that hold a text, with their numbers.",
+        [Sc.Text ("path"), Sc.Text ("pattern")]);
+   Search_Code_Body : constant String :=
+     Sc.Definition
+       ("search_code", "Find the lines that hold a text in every source file under a folder"
+        & " (path; the whole tree when not given), as path:line.",
+        [Sc.Text ("pattern"), Sc.Text ("path", Required => False)]);
+   Editing_Bodies : constant String :=
+     Edit_Body & ", " & Range_Body & ", " & Search_File_Body & ", " & Search_Code_Body;
+
+   function Definition_Of (Named : String) return String is
+     (if Named = "read_file" then Read_Body
+      elsif Named = "write_file" then Write_Body
+      elsif Named = "list_directory" then List_Body
+      elsif Named = "edit_file" then Edit_Body
+      elsif Named = "read_range" then Range_Body
+      elsif Named = "search_file" then Search_File_Body
+      elsif Named = "search_code" then Search_Code_Body
+      else "");
 
    Pure_Body : constant String :=
      Sc.Definition
@@ -83,14 +138,9 @@ package body Model_Runner.Tools.Builtin is
      & Sc.Definition ("memory_get", "Recall the value remembered under a key.",
                       [Sc.Text ("key")])
      & ", "
-     & Sc.Definition ("read_file", "Read a text file and return its contents.",
-                      [Sc.Text ("path")])
+     & Read_Body & ", " & Write_Body & ", " & List_Body
      & ", "
-     & Sc.Definition ("write_file", "Write text to a file, replacing it.",
-                      [Sc.Text ("path"), Sc.Text ("content")])
-     & ", "
-     & Sc.Definition ("list_directory", "List the entries of a directory.",
-                      [Sc.Text ("path")])
+     & Editing_Bodies
      & ", "
      & Sc.Definition
          ("retrieve",
@@ -1080,7 +1130,7 @@ package body Model_Runner.Tools.Builtin is
    begin
       if not Env.Exists (Pm.Agent_Root_Variable) then
          return "";
-      elsif Named not in "read_file" | "write_file" | "list_directory" then
+      elsif not File_Tool (Named) then
          --  Held where it works, it has the file tools and those that reach
          --  nothing, and the network only where its permissions grant
          --  use_network. A program is run for it by the harness -- its
@@ -1111,7 +1161,7 @@ package body Model_Runner.Tools.Builtin is
       end if;
       return Pm.Path_Refusal
         (Env.Value (Pm.Agent_Root_Variable), Path,
-         Writing => Named = "write_file",
+         Writing => Writes (Named),
          Allowed =>
            (if Env.Exists (Pm.Agent_Permissions_Variable)
             then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
@@ -1132,7 +1182,7 @@ package body Model_Runner.Tools.Builtin is
       end if;
       return Pm.Path_Refused_As
         (Env.Value (Pm.Agent_Root_Variable), Path,
-         Writing => Named = "write_file",
+         Writing => Writes (Named),
          Allowed =>
            (if Env.Exists (Pm.Agent_Permissions_Variable)
             then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
@@ -1175,7 +1225,7 @@ package body Model_Runner.Tools.Builtin is
          if Ada.Directories.Exists (Whole)
            --  A file to be written: where its directory is, and -- named
            --  under the project's own name -- at the top of it too.
-           or else (Named = "write_file"
+           or else (Writes (Named)
                     and then (Ada.Strings.Fixed.Index (Tail, "/") > 0 or else Named_Project)
                     and then Ada.Directories.Exists (Ada.Directories.Containing_Directory (Whole)))
          then
@@ -1188,6 +1238,7 @@ package body Model_Runner.Tools.Builtin is
          return "";
    end Rooted;
 
+   --  A file whole, and its revision after it, for edit_file to be given.
    function Read_File (Args : String) return Reply is
       Have : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have);
@@ -1197,8 +1248,83 @@ package body Model_Runner.Tools.Builtin is
       elsif not Ada.Directories.Exists (Path) then
          return Failure ("no file at " & Path);
       end if;
-      return Read_Capped (Path);
+      declare
+         Read : constant Reply := Read_Capped (Path);
+         Now  : constant String := Model_Runner.Tools.Editing.Revision_Of (Path);
+      begin
+         if Read.Failed or else Now = "" then
+            return Read;
+         end if;
+         declare
+            Text : constant String := Read.Text & ASCII.LF & "(revision " & Now & ")";
+         begin
+            return (Length => Text'Length, Failed => False, Changed => False,
+                    Halted => Read.Halted, Truncated => Read.Truncated, Tokens => 0, Text => Text);
+         end;
+      end;
    end Read_File;
+
+   --  What the editing package said, as a reply.
+   function As_Reply (Item : Model_Runner.Tools.Editing.Said) return Reply is
+      Text : constant String := U.To_String (Item.Text);
+   begin
+      return (Length => Text'Length, Failed => Item.Failed, Changed => Item.Changed,
+              Halted => Model_Runner.Tools.Runner.Answered, Truncated => Item.Truncated,
+              Tokens => 0, Text => Text);
+   end As_Reply;
+
+   function Edit_File (Args : String) return Reply is
+      Have_P, Have_O, Have_N, Have_R : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have_P);
+      Old  : constant String := Text_Argument (Args, "old_text", Have_O);
+      Neww : constant String := Text_Argument (Args, "new_text", Have_N);
+      Rev  : constant String := Text_Argument (Args, "revision", Have_R);
+   begin
+      if not (Have_P and then Have_O and then Have_N) then
+         return Failure ("edit_file needs a path, old_text and new_text");
+      end if;
+      return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev));
+   end Edit_File;
+
+   function Read_Range (Args : String) return Reply is
+      Have, Have_F, Have_L : Boolean;
+      Path  : constant String := Text_Argument (Args, "path", Have);
+      First, Last : Long_Long_Integer := 0;
+   begin
+      Integer_Argument (Args, "first_line", First, Have_F);
+      Integer_Argument (Args, "last_line", Last, Have_L);
+      if not (Have and then Have_F) then
+         return Failure ("read_range needs a path and a first_line");
+      end if;
+      return As_Reply
+        (Model_Runner.Tools.Editing.Read_Range
+           (Path, Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (First, 100_000_000))),
+            (if Have_L then Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (Last, 100_000_000)))
+             else 0)));
+   end Read_Range;
+
+   function Search_File (Args : String) return Reply is
+      Have_P, Have_T : Boolean;
+      Path    : constant String := Text_Argument (Args, "path", Have_P);
+      Pattern : constant String := Text_Argument (Args, "pattern", Have_T);
+   begin
+      if not (Have_P and then Have_T) then
+         return Failure ("search_file needs a path and a pattern");
+      end if;
+      return As_Reply (Model_Runner.Tools.Editing.Search_File (Path, Pattern));
+   end Search_File;
+
+   function Search_Code (Args : String) return Reply is
+      Have_P, Have_T : Boolean;
+      Path    : constant String := Text_Argument (Args, "path", Have_P);
+      Pattern : constant String := Text_Argument (Args, "pattern", Have_T);
+   begin
+      if not Have_T then
+         return Failure ("search_code needs a pattern");
+      end if;
+      return As_Reply
+        (Model_Runner.Tools.Editing.Search_Code ((if Have_P and then Path /= "" then Path else "."), Pattern));
+   end Search_Code;
 
    function Write_File (Args : String) return Reply is
       use Ada.Streams;
@@ -1320,6 +1446,16 @@ package body Model_Runner.Tools.Builtin is
       when others =>
          return Failure ("could not list the directory");
    end List_Directory;
+
+   --  A tool that takes a path in the tree, answered.
+   function File_Answer (Named, Args : String) return Reply is
+     (if Named = "read_file" then Read_File (Args)
+      elsif Named = "write_file" then Write_File (Args)
+      elsif Named = "list_directory" then List_Directory (Args)
+      elsif Named = "edit_file" then Edit_File (Args)
+      elsif Named = "read_range" then Read_Range (Args)
+      elsif Named = "search_file" then Search_File (Args)
+      else Search_Code (Args));
 
    function Shell (Args : String) return Reply is
       Have : Boolean;
@@ -1500,10 +1636,10 @@ package body Model_Runner.Tools.Builtin is
          --  has not done the task, whatever it said on the way.
          case Ended.State is
             when Completed =>
-               if Last = 0 then
+               if Last < Buffer'First then
                   return Spent (Failure ("the sub-agent ended without an answer, after " & Took));
                end if;
-               return Spent (Said (Buffer (1 .. Last)));
+               return Spent (Said (Buffer (Buffer'First .. Last)));
             when Cancelled =>
                return Spent (Halted_By (Tr.Cancelled, "the sub-agent was stopped: the run was cancelled"));
             when Exhausted =>
@@ -2079,6 +2215,7 @@ package body Model_Runner.Tools.Builtin is
       elsif Named in "calculator" | "string_length" | "reverse_text" | "lookup"
                    | "base64_encode" | "base64_decode" | "memory_get"
                    | "read_file" | "list_directory" | "http_get" | "web_search"
+                   | "read_range" | "search_file" | "search_code"
                    | "retrieve" | "ask_user"
       then
          return Model_Runner.Tools.Runner.Reads;
@@ -2096,7 +2233,7 @@ package body Model_Runner.Tools.Builtin is
       end if;
       return Named in "calculator" | "string_length" | "reverse_text"
           | "lookup" | "base64_encode" | "base64_decode" | "now"
-          | "read_file" | "list_directory"
+          | "read_file" | "list_directory" | "read_range" | "search_file" | "search_code"
           | "http_get" | "web_search"
         or else (Named = "retrieve" and then Self.Embed = null);
    end Parallel_Safe;
@@ -2125,7 +2262,7 @@ package body Model_Runner.Tools.Builtin is
       begin
          if Said /= "" then
             Refused :=
-              (if Called not in "read_file" | "write_file" | "list_directory"
+              (if not File_Tool (Called)
                then Tr.Not_Permitted
                else
                  (case Confined_Path_Verdict (Called, Args) is
@@ -2156,7 +2293,7 @@ package body Model_Runner.Tools.Builtin is
             return Memory_Put (Self, Arguments);
          elsif Named = "memory_get" then
             return Memory_Get (Self, Arguments);
-         elsif Named in "read_file" | "write_file" | "list_directory"
+         elsif File_Tool (Named)
            and then Rooted (Named, Arguments) /= ""
          then
             --  A path from the root that names a place in the project, as
@@ -2173,22 +2310,13 @@ package body Model_Runner.Tools.Builtin is
             begin
                if Confined (Named, Moved) /= "" then
                   return Failure (Confinement (Named, Moved));
-               elsif Named = "read_file" then
-                  return Prefixed (Taken_As, Read_File (Moved));
-               elsif Named = "write_file" then
-                  return Prefixed (Taken_As, Write_File (Moved));
-               else
-                  return Prefixed (Taken_As, List_Directory (Moved));
                end if;
+               return Prefixed (Taken_As, File_Answer (Named, Moved));
             end;
          elsif Confined (Named, Arguments) /= "" then
             return Failure (Confinement (Named, Arguments));
-         elsif Named = "read_file" then
-            return Read_File (Arguments);
-         elsif Named = "write_file" then
-            return Write_File (Arguments);
-         elsif Named = "list_directory" then
-            return List_Directory (Arguments);
+         elsif File_Tool (Named) then
+            return File_Answer (Named, Arguments);
          elsif Named = "shell" then
             return Shell (Arguments);
          elsif Named = "run_python" then

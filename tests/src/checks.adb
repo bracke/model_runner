@@ -2037,7 +2037,7 @@ package body Checks is
          --  of what a check is for, so overflowing it is now a failure that
          --  names itself, and the second time it was raised the failure is
          --  what said so.
-         Room  : constant := 1_600;
+         Room  : constant := 2_000;
          Width : constant := 64;
          Named : constant := 64;
 

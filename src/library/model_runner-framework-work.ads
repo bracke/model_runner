@@ -356,6 +356,12 @@ package Model_Runner.Framework.Work is
    --  @return Its name, or "" when none applies.
    function Task_Profile (Host : Child_Host) return String;
 
+   --  The project state the host works in, for a tool to ask of.
+   --
+   --  @param Host The host.
+   --  @return Its store.
+   function Store_Of (Host : Child_Host) return not null access Stores.Store;
+
    --  Whether the agent now working may run a verification profile: run_build
    --  for a profile whose name says build, run_static_analysis for one that
    --  says analysis or lint, run_tests for any other -- each within its
@@ -375,11 +381,17 @@ package Model_Runner.Framework.Work is
    --  @param Profile The profile.
    --  @param Report What the agent is told.
    --  @param Status A failure to run it at all.
+   --  @param Affected Whether to check only what the work so far
+   --    reaches: the files it changed, traced to the tests they touch, and
+   --    the narrower profile the configuration names for that width
+   --    (verification.scope) -- the task's own profile where nothing
+   --    narrower applies or nothing was changed. The report says which.
    procedure Run_Checks
-     (Host    : in out Child_Host;
-      Profile : String;
-      Report  : out Ada.Strings.Unbounded.Unbounded_String;
-      Status  : out Model_Runner.Errors.Error_Info);
+     (Host     : in out Child_Host;
+      Profile  : String;
+      Report   : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Affected : Boolean := False);
 
    --  Count tokens the agent now working generated against its budget.
    --
@@ -655,6 +667,10 @@ private
 
       --  The files copied aside before their first write.
       Kept_Before : Name_Lists.Vector;
+
+      --  Every file the agents asked to write, in the project or apart:
+      --  what a check of the affected scope traces.
+      Edited : Name_Lists.Vector;
 
       --  What the checks run for the agents wrote, path and fingerprint
       --  separated by a tab: the agents' changes are what is left.

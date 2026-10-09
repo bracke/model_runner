@@ -175,11 +175,12 @@ package body Model_Runner.CLI.Interactive is
          return;
       end if;
 
-      --  A project command, typed while a message is: run, and the message
-      --  kept to go on with -- not taken into it as its text. The
-      --  session's own commands, and a path, are still the text they are.
+      --  A project command its table lets run mid-message, typed while a
+      --  message is: run, and the message kept to go on with -- not taken
+      --  into it as its text. The session's own commands, a project command
+      --  that waits for the message, and a path are the text they are.
       if Item.Used > 0
-        and then Model_Runner.CLI.Project_Commands.Is_Project_Command
+        and then Model_Runner.CLI.Project_Commands.Runs_Mid_Message
                    (Trimmed (Trimmed'First
                              .. (if Ada.Strings.Fixed.Index (Trimmed, " ") = 0 then Trimmed'Last
                                  else Ada.Strings.Fixed.Index (Trimmed, " ") - 1)))

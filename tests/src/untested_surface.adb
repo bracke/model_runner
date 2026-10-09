@@ -108,7 +108,6 @@ package body Untested_Surface is
          | "Put_Statistics"
          | "Put_Table"
          | "Put_Words"
-         | "Read_Text"
          | "Record_Conversion"
          | "Recovery_Hint"
          | "Repack_Names"

@@ -21,6 +21,7 @@ with Model_Runner.Grammar;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
 
@@ -424,9 +425,9 @@ package body Tests.Tools_Cases is
                 Reason => Ada.Strings.Unbounded.To_Unbounded_String
                             (if Builtin."=" (Self.Ending, Builtin.Exhausted) then "step limit" else "answered"),
                 Steps  => 3, Calls => 2, Tokens => 40, others => <>);
-      Last := Natural'Min (Reply'Length, Result'Length);
-      Result (Result'First .. Result'First + Last - 1) :=
-        Reply (Reply'First .. Reply'First + Last - 1);
+      Last := Result'First + Natural'Min (Reply'Length, Result'Length) - 1;
+      Result (Result'First .. Last) :=
+        Reply (Reply'First .. Reply'First + Last - Result'First);
       Status := E.Success;
    end Run_Sub;
 
@@ -665,6 +666,102 @@ package body Tests.Tools_Cases is
       Assert (Ag.Reason_Words (Ag.Step_Limit) = "step limit", "a stop was not said in words");
    end Calls_Run_Within_The_Run;
 
+   --  A file is changed in part, and only as it was read: an exact passage
+   --  in one place, refused where it is not there, there twice, or where
+   --  the file changed since the revision the edit names; and said with
+   --  where and in what. Part of a file is read by its lines, a file and a
+   --  tree are searched, and a file too large to read whole is said to be.
+   procedure Files_Are_Edited_In_Part
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ed renames Model_Runner.Tools.Editing;
+      Dir  : constant String := "obj/editing_case";
+      Path : constant String := Dir & "/calc.adb";
+      Body_Text : constant String :=
+        "package body Calc is" & ASCII.LF
+        & "   function Add (A, B : Integer) return Integer is" & ASCII.LF
+        & "   begin" & ASCII.LF
+        & "      return A + B;" & ASCII.LF
+        & "   end Add;" & ASCII.LF
+        & "   function Twice (A : Integer) return Integer is (A + A);" & ASCII.LF
+        & "end Calc;" & ASCII.LF;
+
+      function Has (Item : Ed.Said; Part : String) return Boolean is
+        (Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Item.Text), Part) > 0);
+
+      procedure Put (Name, Text : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Name);
+         Ada.Text_IO.Put (F, Text);
+         Ada.Text_IO.Close (F);
+      end Put;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Put (Path, Body_Text);
+
+      declare
+         Read  : constant String := Ed.Revision_Of (Path);
+         Done  : constant Ed.Said := Ed.Edit (Path, "return A + B;", "return B + A;", Read);
+      begin
+         Assert (Read'Length = 16 and then not Done.Failed and then Done.Changed
+                 and then Has (Done, "line 4") and then Has (Done, "in Add"),
+                 "an edit of one passage was not made, or not said where: "
+                 & Ada.Strings.Unbounded.To_String (Done.Text));
+         --  The file has moved on from what was read: refused, untouched.
+         declare
+            Late : constant Ed.Said := Ed.Edit (Path, "return B + A;", "return 0;", Read);
+         begin
+            Assert (Late.Failed and then Has (Late, "changed since you read it")
+                    and then Ed.Revision_Of (Path) /= Read,
+                    "an edit of a file changed since it was read was made");
+         end;
+      end;
+      Assert (Ed.Edit (Path, "return A - B;", "x", "").Failed
+              and then Has (Ed.Edit (Path, "return A - B;", "x", ""), "is not in"),
+              "an edit of a passage not there was made");
+      Assert (Ed.Edit (Path, "Integer", "Natural", "").Failed
+              and then Has (Ed.Edit (Path, "Integer", "Natural", ""), "times"),
+              "an edit of a passage there more than once was made");
+
+      --  Lines by number, and searches.
+      Assert (Has (Ed.Read_Range (Path, 2, 3), "2:    function Add")
+              and then Has (Ed.Read_Range (Path, 2, 3), "3:    begin")
+              and then not Has (Ed.Read_Range (Path, 2, 3), "A + B"),
+              "a range of lines was not those lines");
+      Assert (Has (Ed.Search_File (Path, "Twice"), "6: ")
+              and then Has (Ed.Search_File (Path, "nowhere"), "no line"),
+              "a search of a file did not give the lines that hold it");
+      Assert (Has (Ed.Search_Code (Dir, "Twice"), "calc.adb:6:"),
+              "a search of a tree did not give path and line");
+
+      --  Too large to read whole, and not text: said, not read.
+      declare
+         Huge : constant String := Dir & "/huge.log";
+         F    : Ada.Text_IO.File_Type;
+         Line : constant String (1 .. 1023) := [others => 'x'];
+         Text : Ada.Strings.Unbounded.Unbounded_String;
+         Got  : E.Error_Info;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Huge);
+         for Index in 1 .. Ed.Text_Most / 1024 + 1 loop
+            Ada.Text_IO.Put_Line (F, Line);
+         end loop;
+         Ada.Text_IO.Close (F);
+         Ed.Read_Text (Huge, Text, Got);
+         Assert (E."=" (Got.Code, E.IO_File_Too_Large),
+                 "a file past the bound was read whole");
+         Put (Dir & "/blob.bin", "ab" & ASCII.NUL & "cd");
+         Ed.Read_Text (Dir & "/blob.bin", Text, Got);
+         Assert (E."=" (Got.Code, E.IO_Read_Failed), "a binary file was read as text");
+      end;
+      Ada.Directories.Delete_Tree (Dir);
+   end Files_Are_Edited_In_Part;
+
    --  Every built-in tool answers the same way every time.
    procedure Answers_Are_Fixed
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -723,8 +820,8 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 20,
-                 "the full set is not twenty tools");
+         Assert (Tools.Count (All_Defs) = 24,
+                 "the full set is not twenty-four tools");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");
@@ -965,8 +1062,13 @@ package body Tests.Tools_Cases is
       Assert (E.Is_Ok (Status), "read_file would not answer");
 
       declare
-         Result : constant String := Room (1 .. Last);
+         --  The file as read, and its revision on the line after it.
+         Whole  : constant String := Room (1 .. Last);
+         Break  : constant Natural := Ada.Strings.Fixed.Index (Whole, [1 => ASCII.LF], Ada.Strings.Backward);
+         Result : constant String := (if Break = 0 then Whole else Whole (Whole'First .. Break - 1));
       begin
+         Assert (Break > 0 and then Ada.Strings.Fixed.Index (Whole (Break .. Whole'Last), "(revision ") > 0,
+                 "a whole read did not end with the file's revision");
          Assert (Result'Length <= Tools.Max_Call_Bytes,
                  "the kept result does not fit the call buffer");
          Assert (Result'Length < Big'Length,
@@ -1862,6 +1964,10 @@ package body Tests.Tools_Cases is
         (T, Calls_Run_Within_The_Run'Access,
          "a call runs within its run: a child is held to how it ended, a tool offered only where it runs,"
          & " a process stopped at the run's cancellation and deadline");
+      Register_Routine
+        (T, Files_Are_Edited_In_Part'Access,
+         "a file is edited in part and only as it was read, read by lines, searched, and refused whole"
+         & " past the bound");
       Register_Routine
         (T, Delegate_Declines_Undelegated'Access,
          "delegate with no delegator declines rather than crashing or "

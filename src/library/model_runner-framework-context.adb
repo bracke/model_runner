@@ -601,6 +601,9 @@ package body Model_Runner.Framework.Context is
          Project : constant String :=
            Ada.Directories.Containing_Directory (Stores.Root (Item));
          Wanted  : constant String := Lower (To_String (Component));
+
+         --  The files the task names, for what uses them to follow.
+         Named_Files : Name_Lists.Vector;
       begin
          --  The kept graph, brought up to date: a stale one would offer the
          --  files and symbols as they were.
@@ -647,6 +650,9 @@ package body Model_Runner.Framework.Context is
                         Files.Read_Text (Hostkit.Fs.Join (Project, Word), Text, Got);
                         if E.Is_Ok (Got) then
                            Offer ("file:" & Word, "source", High, To_String (Text));
+                           if not Named_Files.Contains (Word) then
+                              Named_Files.Append (Word);
+                           end if;
                         end if;
                      end if;
                   exception
@@ -656,6 +662,60 @@ package body Model_Runner.Framework.Context is
                   end;
                   Start := Index + 1;
                end if;
+            end loop;
+         end;
+
+         --  And what uses those files: the units that depend on theirs, their
+         --  files offered after, so a change to what the task names is made
+         --  seeing its callers -- found by the graph, not by the model.
+         declare
+            Users_Offered : Natural := 0;
+            Users_Most    : constant := 6;
+
+            --  The files that declare a unit.
+            function Files_Of (Unit : String) return Name_Lists.Vector is
+               Found : Name_Lists.Vector;
+            begin
+               for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                  declare
+                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                  begin
+                     if To_String (One.Name) = Unit and then To_String (One.Kind) = "package"
+                       and then not Found.Contains (To_String (One.Path))
+                     then
+                        Found.Append (To_String (One.Path));
+                     end if;
+                  end;
+               end loop;
+               return Found;
+            end Files_Of;
+         begin
+            for Named of Named_Files loop
+               for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                  declare
+                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                  begin
+                     if To_String (One.Path) = Named and then To_String (One.Kind) = "package" then
+                        for User of Repository.Dependents_Of (Graph, To_String (One.Name)) loop
+                           for Path of Files_Of (User) loop
+                              exit when Users_Offered = Users_Most;
+                              if not Named_Files.Contains (Path) then
+                                 declare
+                                    Text : Unbounded_String;
+                                    Got  : E.Error_Info;
+                                 begin
+                                    Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Got);
+                                    if E.Is_Ok (Got) then
+                                       Offer ("file:" & Path, "user of " & Named, Low, To_String (Text));
+                                       Users_Offered := Users_Offered + 1;
+                                    end if;
+                                 end;
+                              end if;
+                           end loop;
+                        end loop;
+                     end if;
+                  end;
+               end loop;
             end loop;
          end;
 
@@ -1043,6 +1103,12 @@ package body Model_Runner.Framework.Context is
 
    function Included_At (From : Built; Index : Positive) return Item
    is (From.Included (Index));
+
+   function Excluded_At (From : Built; Index : Positive) return Item
+   is (From.Excluded (Index));
+
+   function Excluded_Why (From : Built; Index : Positive) return String
+   is (From.Reasons (Index));
 
    function Semantic (From : Built) return Boolean
    is (From.Semantic);

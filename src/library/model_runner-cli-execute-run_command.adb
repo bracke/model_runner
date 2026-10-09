@@ -581,7 +581,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
          & "that stands on its own -- the caller sees only your final answer, "
          & "not your steps, and you keep no memory of it once you answer.");
    begin
-      Last   := 0;
+      Last   := Result'First - 1;
       Status := E.Success;
       Ended  := (State => Bi.Failed, others => <>);
 
@@ -679,7 +679,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                               Result (Result'First .. Result'First + Take - 1)
                                 := Answer (Answer'First .. Answer'First
                                            + Take - 1);
-                              Last := Take;
+                              Last := Result'First + Take - 1;
                            end if;
                         end;
                         exit;

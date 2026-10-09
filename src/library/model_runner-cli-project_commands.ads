@@ -126,6 +126,15 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True when it is.
    function Is_Project_Command (Word : String) return Boolean;
 
+   --  Whether a project command may run while a message is being typed,
+   --  the message kept to go on with: what its entry in the command table
+   --  says -- every command but those that start a model's run or remake
+   --  the project's set-up, which wait for the message to be sent.
+   --
+   --  @param Word The command, slash and all.
+   --  @return Whether it runs mid-message.
+   function Runs_Mid_Message (Word : String) return Boolean;
+
    --  One help line for each command.
    --
    --  @param Screen Where to write.
