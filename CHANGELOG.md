@@ -8,6 +8,7 @@ Keep a Changelog and the project uses semantic versioning.
 ### Added
 
 - **/why:** why a task can or cannot run, or -- with no task named -- what /work takes next, or why it takes nothing, from the project's next work rather than reconstructed: a task that can run is said with whether /work takes it first, one that cannot with its reason, a candidate with how to accept it, and a blocked or failed task with the reason the harness recorded when it moved it.
+- **/history [ID]:** what happened to a task, invocation or record, read from the project's event log -- the task's moves and every model run made for it -- or, with nothing named, the latest twenty events. A model run's start and end are events now (Invocation_Started, Invocation_Ended, naming the task, the agent and how it ended), so the log holds a /work run whole.
 - **The agent loop says a turn before its calls:** Observer.On_Turn gives how many calls a turn asked for before any runs, so a watcher says a batch from that rather than from noticing a second call; --trace-file writes it as a turn event.
 
 ### Changed

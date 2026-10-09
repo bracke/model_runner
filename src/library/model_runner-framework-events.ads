@@ -74,7 +74,13 @@ package Model_Runner.Framework.Events is
       --  A move into or out of a state a project defined, whose meaning its
       --  configuration says: the detail says from where to where.
       Task_Moved,
-      Requirement_Moved);
+      Requirement_Moved,
+
+      --  A model's run for a task, begun and ended: the detail names the
+      --  task and agent, and how it ended -- so the log holds a /work run
+      --  whole, where the invocation records hold its calls.
+      Invocation_Started,
+      Invocation_Ended);
 
    --  One event, as read back.
    type Event is record

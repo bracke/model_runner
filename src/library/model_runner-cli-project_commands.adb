@@ -27,6 +27,7 @@ with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Git;
@@ -103,7 +104,8 @@ package body Model_Runner.CLI.Project_Commands is
       Instructions_Route,
       Sandbox_Route,
       Reconfiguring_Route,
-      Why_Route);
+      Why_Route,
+      History_Route);
 
    --  Every project command, once: its word and the catalog key of its
    --  help line, in the order help lists them, and the handler it goes to. Whether a word is a project
@@ -143,7 +145,8 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route),
       (new String'("/impact"),      new String'("cli.interactive.help.impact"), Repository_Route),
       (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route),
-      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route)];
+      (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route),
+      (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route)];
 
    --  The tools the work's agents may call; each is offered only where the
    --  agent's permissions give it.

@@ -10053,6 +10053,8 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Second), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/why TASK-404", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/why " & To_String (Stuck), Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/history " & To_String (Stuck), Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/history TASK-999", Screen, Agent);
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);
@@ -10073,6 +10075,13 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "refused write_file") > 0
                        and then Ada.Strings.Fixed.Index (Text, "(outside the project)") > 0,
                        "/why did not name the call a blocked task's last run had refused");
+               --  /history reads the log: the task's moves, and the run
+               --  made for it, which names it in its detail.
+               Assert (Ada.Strings.Fixed.Index (Text, "Task_Blocked  " & To_String (Stuck)) > 0
+                       and then Ada.Strings.Fixed.Index (Text, "Invocation_Started  INV-") > 0,
+                       "/history did not give a task's moves and the run made for it: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "no event names TASK-999") > 0,
+                       "/history of what nothing names did not say so");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

@@ -3,6 +3,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
@@ -526,6 +527,12 @@ package body Model_Runner.Framework.Invocations is
          end if;
          Stores.Put (Change, Invocations_Area, To_String (Id), Value);
       end;
+      declare
+         Event : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Events.Emit (Item, Change, Events.Invocation_Started, To_String (Id),
+                      Task_Id & " by " & Agent, Event, Status);
+      end;
    end Start;
 
    ------------
@@ -597,6 +604,14 @@ package body Model_Runner.Framework.Invocations is
          end;
       end if;
       Stores.Put (Change, Invocations_Area, Id, Value);
+      declare
+         Event : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Events.Emit (Item, Change, Events.Invocation_Ended, Id,
+                      Records.Get (Value, "task") & " " & Next
+                      & (if Failure /= "" then ": " & Failure else ""),
+                      Event, Status);
+      end;
    end Finish;
 
    ---------------
