@@ -1310,6 +1310,23 @@ package body Conformance is
                            goto Next_Repack;
                         end if;
 
+                        --  And not on Qwen3.5 in the three-bit grid format.
+                        --  Its gated delta rule carries a running state as
+                        --  RWKV6's time-mixing does, and the grid's values,
+                        --  rounded again to eight mantissa bits, perturb it
+                        --  enough to carry: 0.361 against the lossy 0.3 at
+                        --  the thirteenth of sixteen positions, the
+                        --  reference's own brain-float arm as far out as
+                        --  the engine's. Every other format clears it, and
+                        --  the exact and binary32 modes cross the same
+                        --  fixture at 1.4E-04.
+                        if Crossed (Which_Arch) = Tiny_Model.Qwen35
+                          and then Format = Tiny_Model.IQ3_XXS
+                          and then Repack = L.To_BF16
+                        then
+                           goto Next_Repack;
+                        end if;
+
                         --  And not on a stretched one, for the same kind of
                         --  reason a third time. Stretching the rotation
                         --  changes which positions a head can tell apart,

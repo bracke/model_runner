@@ -604,18 +604,25 @@ package body Model_Runner.Generation is
 
       --  A lookup proposes only where the context repeats, so on prose its
       --  rounds are too few for the timing above to see -- yet each costs
-      --  a mixture of experts most of a step more: Qwen3-Coder-30B made
-      --  37.0 tokens a second plain and 34.0 by lookup, 4% of its
-      --  proposals kept. While the run keeps less than Lookup_Keeps per
-      --  cent of what it proposed, a round that keeps nothing rests the
-      --  lookup for Lookup_Rest tokens, the rest doubling each time and
-      --  back to its least once a round keeps something. An edit keeps
-      --  three in five and never rests.
+      --  a mixture of experts most of a step more, its several positions
+      --  reading several tokens' experts: Qwen3-Coder-30B made 37.0 tokens
+      --  a second plain and 34.0 by lookup, 4% of its proposals kept. So a
+      --  mixture's lookup is thrifty: while the run keeps less than
+      --  Lookup_Keeps per cent of what it proposed, it proposes one token
+      --  at a time and only after Lookup_Low_Key matching, and a round that
+      --  keeps nothing rests it for Lookup_Rest tokens, the rest doubling
+      --  each time and back to its least once a round keeps something.
+      --  Prose 36.3 -> 36.2, fresh code 36.5 -> 36.3, an edit 33.1 ->
+      --  36.7. Not a dense model's, whose miss is nearly free: gemma-3-4b
+      --  writing code by lookup reads 31.5 as it was and 24.9 thrifty.
+      Thrifty           : constant Boolean :=
+        By_Context and then Settings.Experts > 0;
       Lookup_Rest       : Natural := 0;
       Lookup_Rest_Next  : Natural := 32;
       Lookup_Rest_Least : constant := 32;
       Lookup_Rest_Most  : constant := 1_024;
-      Lookup_Keeps      : constant := 25;
+      Lookup_Keeps      : constant := 50;
+      Lookup_Low_Key    : constant := 4;
 
       --  The first rounds of a reply are not timed: they bear what the
       --  first use of the kernels and the tables costs, and Qwen3.6's
@@ -1938,15 +1945,21 @@ package body Model_Runner.Generation is
                   if Lookup_Rest > 0 then
                      Lookup_Rest := Lookup_Rest - 1;
                   elsif not Paused then
-                     --  One at a time while little is kept: a round that
-                     --  keeps nothing then checks two positions, not five.
-                     Lookup.Propose
-                       (Said.all (1 .. Said_Count),
-                        Proposed.all
-                          (2 .. (if Outcome.Accepted * 100
-                                      < Lookup_Keeps * Outcome.Drafted
-                                 then 2 else Largest_Draft + 1)),
-                        Given);
+                     --  One at a time while little is kept, and only after a
+                     --  longer phrase: a round that keeps nothing then checks
+                     --  two positions, not five, and comes less often.
+                     declare
+                        Low : constant Boolean :=
+                          Thrifty
+                          and then Outcome.Accepted * 100
+                                   < Lookup_Keeps * Outcome.Drafted;
+                     begin
+                        Lookup.Propose
+                          (Said.all (1 .. Said_Count),
+                           Proposed.all (2 .. (if Low then 2 else Largest_Draft + 1)),
+                           Given,
+                           Key => (if Low then Lookup_Low_Key else Lookup.Default_Key));
+                     end;
                      Count := Count + Given;
                   end if;
                end;
@@ -2465,7 +2478,7 @@ package body Model_Runner.Generation is
                end if;
             end loop;
 
-            if By_Context and then Count > 1 then
+            if Thrifty and then Count > 1 then
                if Accepted > 1 then
                   Lookup_Rest_Next := Lookup_Rest_Least;
                elsif Outcome.Accepted * 100 < Lookup_Keeps * Outcome.Drafted then
