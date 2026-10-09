@@ -837,70 +837,74 @@ package body Model_Runner.CLI.Project_Commands is
       Conv.Close (Messages);
       Model_Runner.Tools.Close (Offered);
 
-      if Outcome.Reason = Model_Runner.Agent.Cancelled then
-         --  Stopped for work ended elsewhere, not by the person: the
-         --  session's own stop is not left asked for.
-         if Model_Runner.Framework.Execution.Work_Withdrawn
-           and then Model_Runner.Cancellation."/=" (Self.Cancel, null)
-         then
-            Self.Cancel.Reset;
-         end if;
-         Status := E.Make (E.Generation_Cancelled);
-      elsif Outcome.Reason = Model_Runner.Agent.Repeating then
-         --  Going round, not a request that was wrong.
-         Status := E.Make (E.Framework_Limit_Exceeded);
-         E.Add_Text (Status, "name", "the model");
-         declare
+      --  What the stop asks decides what the task is told: a person's stop
+      --  is a cancellation, a budget spent or a run going round is a limit
+      --  -- the task waits, blocked, for more or for another way -- and the
+      --  rest is the failure it was. The words are each reason's own.
+      declare
+         Traits : constant Model_Runner.Agent.Stop_Traits := Model_Runner.Agent.Traits_Of (Outcome.Reason);
+
+         --  What was refused and what failed on the way, said after why.
+         function On_The_Way return String is
             Met : Unbounded_String;
          begin
             for One of Watcher.Refused loop
                Append (Met, (if Met = Null_Unbounded_String then "" else "; ") & One);
             end loop;
-            E.Add_Text (Status, "detail", "it kept repeating calls it had already made, and got no"
-                        & " further"
-                        & (if Met = Null_Unbounded_String then ""
-                           else " -- on the way it was refused: " & To_String (Met))
-                        & (if Watcher.First_Error = Null_Unbounded_String then ""
-                           elsif Watcher.Errors_Count = 1
-                           then " -- one call failed on the way: " & To_String (Watcher.First_Error)
-                           else " -- calls failed on the way," & Natural'Image (Watcher.Errors_Count)
-                                & " in all, the first: " & To_String (Watcher.First_Error)));
-         end;
-      elsif Outcome.Reason = Model_Runner.Agent.Timed_Out then
-         Status := E.Make (E.Framework_Limit_Exceeded);
-         E.Add_Text (Status, "name", "time");
-         E.Add_Text (Status, "detail", "the work ran out of the time it was given");
-      elsif Outcome.Reason /= Model_Runner.Agent.Answered then
-         if E.Is_Error (Outcome.Error) then
-            Status := Outcome.Error;
-         elsif Outcome.Reason in Model_Runner.Agent.Step_Limit | Model_Runner.Agent.Token_Limit then
+            return (if Met = Null_Unbounded_String then ""
+                    else " -- on the way it was refused: " & To_String (Met))
+              & (if Watcher.First_Error = Null_Unbounded_String then ""
+                 elsif Watcher.Errors_Count = 1
+                 then " -- one call failed on the way: " & To_String (Watcher.First_Error)
+                 else " -- calls failed on the way," & Natural'Image (Watcher.Errors_Count)
+                      & " in all, the first: " & To_String (Watcher.First_Error));
+         end On_The_Way;
+      begin
+         if Traits.Finished then
+            null;
+         elsif Outcome.Reason = Model_Runner.Agent.Cancelled then
+            --  Stopped for work ended elsewhere, not by the person: the
+            --  session's own stop is not left asked for.
+            if Model_Runner.Framework.Execution.Work_Withdrawn
+              and then Model_Runner.Cancellation."/=" (Self.Cancel, null)
+            then
+               Self.Cancel.Reset;
+            end if;
+            Status := E.Make (E.Generation_Cancelled);
+         elsif Traits.Exhausted then
             --  A budget spent: the limit named, with what raises it.
             Status := E.Make (E.Framework_Limit_Exceeded);
-            if Outcome.Reason = Model_Runner.Agent.Token_Limit then
-               E.Add_Text (Status, "name", "the agent's token budget");
-               E.Add_Text (Status, "detail", "the model used all its tokens -- /config token_budget says which"
-                           & " setting holds for this task (its kind's task.token_budget.KIND, else"
-                           & " agents.token_budget, and a decision's ruling over either), and /reconfigure"
-                           & " of that one gives it more");
-            else
-               E.Add_Text (Status, "name", "the agent's steps");
-               E.Add_Text (Status, "detail", "the model used all its steps with a call still open -- /config"
-                           & " max_steps says which setting holds for this task (its kind's task.max_steps.KIND,"
-                           & " else agents.max_steps, and a decision's ruling over either), and /reconfigure"
-                           & " of that one gives it more");
-            end if;
+            case Outcome.Reason is
+               when Model_Runner.Agent.Timed_Out =>
+                  E.Add_Text (Status, "name", "time");
+                  E.Add_Text (Status, "detail", "the work ran out of the time it was given");
+               when Model_Runner.Agent.Token_Limit =>
+                  E.Add_Text (Status, "name", "the agent's token budget");
+                  E.Add_Text (Status, "detail", "the model used all its tokens -- /config token_budget says which"
+                              & " setting holds for this task (its kind's task.token_budget.KIND, else"
+                              & " agents.token_budget, and a decision's ruling over either), and /reconfigure"
+                              & " of that one gives it more");
+               when others =>
+                  E.Add_Text (Status, "name", "the agent's steps");
+                  E.Add_Text (Status, "detail", "the model used all its steps with a call still open -- /config"
+                              & " max_steps says which setting holds for this task (its kind's task.max_steps.KIND,"
+                              & " else agents.max_steps, and a decision's ruling over either), and /reconfigure"
+                              & " of that one gives it more");
+            end case;
+         elsif Outcome.Reason = Model_Runner.Agent.Repeating then
+            --  Going round wants another way, not a request that was wrong.
+            Status := E.Make (E.Framework_Limit_Exceeded);
+            E.Add_Text (Status, "name", "the model");
+            E.Add_Text (Status, "detail", "it kept repeating calls it had already made, and got no further"
+                        & On_The_Way);
+         elsif E.Is_Error (Outcome.Error) then
+            Status := Outcome.Error;
          else
             --  Why the model stopped without answering, in words.
             Status := E.Make (E.Generation_Invalid_Request);
             E.Add_Text
               (Status, "field",
                (case Outcome.Reason is
-                  when Model_Runner.Agent.Step_Limit =>
-                     "the model used all its steps with a call still open (agents.max_steps)",
-                  when Model_Runner.Agent.Token_Limit =>
-                     "the model used all its tokens (agents.token_budget)",
-                  when Model_Runner.Agent.Repeating =>
-                     "the model made only calls it had made already, and got no further",
                   when Model_Runner.Agent.Render_Failed =>
                      "the conversation would not render in the model's template",
                   when Model_Runner.Agent.Grammar_Failed =>
@@ -912,7 +916,7 @@ package body Model_Runner.CLI.Project_Commands is
                   when others =>
                      "the model stopped without answering"));
          end if;
-      end if;
+      end;
    end Run_Loop;
 
    --  What a refusal says, for the model to read.
