@@ -6919,13 +6919,14 @@ package body Checks is
       --  2048 columns that shares a block's scales round the wave; and
       --  Q4_K's, Q5_K's and Q6_K's compilations over a few positions at
       --  once, and Q4_K's gate and up at once for one and for a few --
-      --  and Q4_K's two few-position walks again as integers.
-      for Which in 1 .. 14 loop
+      --  and Q4_K's two few-position walks, Q5_K's and Q6_K's again as
+      --  integers.
+      for Which in 1 .. 16 loop
          declare
             Name : constant String :=
-              (if Which in 7 | 9 then "row_product_super6"
+              (if Which in 7 | 9 | 16 then "row_product_super6"
                elsif Which in 8 | 10 | 11 | 13 | 14 then "row_product_super"
-               elsif Which = 12 then "row_product_super5"
+               elsif Which in 12 | 15 then "row_product_super5"
                else
                  (case (Which - 1) mod 3 is
                      when 0 => "row_product_super",
@@ -6964,6 +6965,10 @@ package body Checks is
                   when 14 =>
                      Model_Runner.Shaders
                        .Row_Product_Super_Glu_Multi_Dots_Digest,
+                  when 15 =>
+                     Model_Runner.Shaders.Row_Product_Super5_Multi_Dots_Digest,
+                  when 16 =>
+                     Model_Runner.Shaders.Row_Product_Super6_Multi_Dots_Digest,
                   when others =>
                      Model_Runner.Shaders.Row_Product_Super6_Mid_Digest);
          begin

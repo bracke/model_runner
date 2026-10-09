@@ -81,10 +81,12 @@ compile round_vectors                round_vectors.comp    vulkan1.0
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super5_multi     row_product_super5.comp vulkan1.1 NUM_ROWS=8u MULTI
+compile_dots row_product_super5_multi_dots row_product_super5.comp vulkan1.1 NUM_ROWS=8u MULTI DOTS
 compile row_product_super6           row_product_super6.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super6_mid       row_product_super6.comp vulkan1.1 NUM_ROWS=2u SHARED_SCALES
 compile row_product_super6_long      row_product_super6.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u SHARED_SCALES
 compile row_product_super6_multi     row_product_super6.comp vulkan1.1 NUM_ROWS=8u MULTI SHARED_SCALES
+compile_dots row_product_super6_multi_dots row_product_super6.comp vulkan1.1 NUM_ROWS=8u MULTI SHARED_SCALES DOTS
 compile row_product_wave_iq3_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ3_S
 compile row_product_wave_iq2_xxs     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XXS
 compile row_product_wave_iq2_xs      row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XS

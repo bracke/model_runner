@@ -15,6 +15,9 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_basic : require
+#ifdef DOTS
+#extension GL_EXT_integer_dot_product : require
+#endif
 
 #ifndef NUM_ROWS
 #define NUM_ROWS 2u
@@ -34,6 +37,19 @@ layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
 layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
 layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
 layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+#ifdef DOTS
+//  The positions rounded to integers by round_vectors.comp, and their
+//  scales: see row_product_super.comp's DOTS.
+layout(std430, binding = 6) readonly  buffer Rounded  { uint  qw[]; };
+layout(std430, binding = 6) readonly  buffer Scales   { float qs[]; };
+#endif
+
+#ifdef DOTS
+//  Two rounded values at an even element, out of the word they share.
+uint pair_at (uint element) {
+    return (qw[element >> 2u] >> ((element & 2u) * 8u)) & 0xFFFFu;
+}
+#endif
 
 const uint LISTED_BY_POSITION = 2u;
 
@@ -118,6 +134,28 @@ void main() {
     for (uint i = ix; i < blocks; i += 4u) {
         //  Each position's sixteen activations: two each from four runs of
         //  sixteen in either half of the block, as the one-position walk.
+#ifdef DOTS
+        //  The same four pairs rounded, packed four bytes a region in the
+        //  order the weights' bytes lie, each region's scale, and the
+        //  region's sum the minimum term takes.
+        int qy[VEC][4];
+        vec4 dy[VEC];
+        vec4 bsum[VEC];
+        for (uint k = 0u; k < VEC; ++k) {
+            uint y1 = from_k[k] + i * 256u + y_offset;
+            uint z1 = y1 + 128u;
+            uint at4[4] = uint[4] (y1, y1 + 32u, z1, z1 + 32u);
+            for (uint j = 0u; j < 4u; ++j) {
+                qy[k][j] = int (pair_at (at4[j])
+                                | (pair_at (at4[j] + 16u) << 16u));
+                dy[k][j] = qs[2u * shape.columns + (at4[j] >> 5u)];
+            }
+            bsum[k] = dy[k] * vec4 (float (dotPacked4x8EXT (qy[k][0], 0x01010101)),
+                                    float (dotPacked4x8EXT (qy[k][1], 0x01010101)),
+                                    float (dotPacked4x8EXT (qy[k][2], 0x01010101)),
+                                    float (dotPacked4x8EXT (qy[k][3], 0x01010101)));
+        }
+#else
         vec4 ya[VEC], yb[VEC], za[VEC], zb[VEC];
         for (uint k = 0u; k < VEC; ++k) {
             uint y1 = from_k[k] + i * 256u + y_offset;
@@ -127,6 +165,7 @@ void main() {
             za[k] = vec4(x[z1], x[z1 + 1u], x[z1 + 16u], x[z1 + 17u]);
             zb[k] = vec4(x[z1 + 32u], x[z1 + 33u], x[z1 + 48u], x[z1 + 49u]);
         }
+#endif
 
         for (uint r = 0u; r < NUM_ROWS; ++r) {
             uint row = min(first_row + r, shape.rows - 1u);
@@ -163,6 +202,18 @@ void main() {
             qs64_lo += ((qh >> (2u * v_im)) & 0x10101010u);
             qs64_hi += ((qh >> (2u * v_im)) & 0x20202020u) >> 1u;
 
+#ifdef DOTS
+            vec4 mins = vec4 (s04.z, s04.w, s8f.z, s8f.w);
+            vec4 scl = vec4 (s04.x, s04.y, s8f.x, s8f.y);
+            for (uint k = 0u; k < VEC; ++k) {
+                vec4 sums = vec4 (float (dotPacked4x8EXT (qy[k][0], int (qs0_lo))),
+                                  float (dotPacked4x8EXT (qy[k][1], int (qs0_hi))),
+                                  float (dotPacked4x8EXT (qy[k][2], int (qs64_lo))),
+                                  float (dotPacked4x8EXT (qy[k][3], int (qs64_hi))));
+                temp[r][k] += dm.x * dot (sums * dy[k], scl)
+                              - dm.y * dot (mins, bsum[k]);
+            }
+#else
             vec4 lo0 = vec4 (unpack8 (qs0_lo));
             vec4 hi0 = vec4 (unpack8 (qs0_hi));
             vec4 lo1 = vec4 (unpack8 (qs64_lo));
@@ -181,6 +232,7 @@ void main() {
                                       + sz * s8f.x + sw * s8f.y)
                               - dm.y * smin;
             }
+#endif
         }
     }
 

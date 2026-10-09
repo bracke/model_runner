@@ -33,6 +33,7 @@ with Fixture_Mutation;
 with External_Model;
 with Fixture_Likeness;
 with Docs_Generation;
+with Restamping;
 with Shader_Generation;
 with Benchmarks;
 with GNAT.OS_Lib;
@@ -2666,6 +2667,34 @@ begin
             end if;
          end if;
       end;
+
+   elsif Command = "restamp" then
+      --  Record the fingerprints that moved under a change that leaves
+      --  the figures true, with the reason; see Restamping.
+      if Ada.Command_Line.Argument_Count not in 2 .. 3 then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, "usage: tests restamp WHY [ROOT]");
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+      else
+         declare
+            Moved : Natural;
+            Good  : Boolean;
+         begin
+            Restamping.Run
+              (Root =>
+                 (if Ada.Command_Line.Argument_Count = 3
+                  then Ada.Command_Line.Argument (3) else ".."),
+               Note  => Ada.Command_Line.Argument (2),
+               Moved => Moved,
+               Good  => Good);
+            if not Good then
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            else
+               Ada.Text_IO.Put_Line
+                 ("restamped" & Natural'Image (Moved) & " figure groups");
+            end if;
+         end;
+      end if;
 
    elsif Command = "shader" then
       --  Turn a compiled shader into the Ada constant the engine hands to a

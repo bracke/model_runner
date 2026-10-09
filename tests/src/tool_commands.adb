@@ -19,6 +19,7 @@ package body Tool_Commands is
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
    Name_Shader         : aliased constant String := "shader";
+   Name_Restamp        : aliased constant String := "restamp";
    Name_Fixtures       : aliased constant String := "fixtures";
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
@@ -106,6 +107,7 @@ package body Tool_Commands is
    Takes_Shader    : aliased constant String :=
      "SOURCE.comp COMPILED.spv [ROOT]";
    Takes_Fixtures  : aliased constant String := "[DIR]";
+   Takes_Restamp   : aliased constant String := "WHY [ROOT]";
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
    Takes_Schema    : aliased constant String := "SCHEMA";
@@ -159,6 +161,8 @@ package body Tool_Commands is
      "regenerate the documentation derived from the Ada registries";
    Says_Shader : aliased constant String :=
      "turn a compiled shader into the Ada constant the engine hands a device";
+   Says_Restamp : aliased constant String :=
+     "record the measured figures' moved fingerprints, saying why they stand";
    Says_Fixtures : aliased constant String :=
      "write the committed test fixtures";
    Says_Package : aliased constant String :=
@@ -233,7 +237,7 @@ package body Tool_Commands is
      " --mmproj --image --frames --fps --threads --device --dump --expect"
      & " --repeats ";
 
-   Held : constant array (1 .. 29) of Command :=
+   Held : constant array (1 .. 30) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -272,6 +276,8 @@ package body Tool_Commands is
       (Name_Docs'Access, Takes_Docs'Access, Says_Docs'Access,
        Opts_None'Access),
       (Name_Shader'Access, Takes_Shader'Access, Says_Shader'Access,
+       Opts_None'Access),
+      (Name_Restamp'Access, Takes_Restamp'Access, Says_Restamp'Access,
        Opts_None'Access),
       (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access,
        Opts_None'Access),

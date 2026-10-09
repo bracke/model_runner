@@ -558,12 +558,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param On True to read the copy, False the cache proper.
    procedure Prefer_Halves (Item : in out Engine; On : Boolean);
 
-   --  Which of a check round's Q4_K walks round their activations to
+   --  Which of a check round's K-quant walks round their activations to
    --  eight-bit integers and multiply them as integers: none, the
    --  feed-forward's gate and up only, or every one.
    type Walk_Rounding is (Rounds_None, Rounds_Feed_Forward, Rounds_Every);
 
-   --  Have a few positions' Q4_K walks multiply as integers.
+   --  Have a few positions' Q4_K, Q5_K and Q6_K walks multiply as
+   --  integers.
    --
    --  A walk of two to eight positions is bound by its arithmetic, not by
    --  the weights it reads, and the integer dot does four multiplies and
@@ -3514,6 +3515,10 @@ private
       --  where the device has the integer dot.
       Dots_Shader      : System.Address := System.Null_Address;
       Dots_Lines       : Many_Array := [others => System.Null_Address];
+      Dots_Shader5     : System.Address := System.Null_Address;
+      Dots_Lines5      : Many_Array := [others => System.Null_Address];
+      Dots_Shader6     : System.Address := System.Null_Address;
+      Dots_Lines6      : Many_Array := [others => System.Null_Address];
       Glu_Dots_Shader  : System.Address := System.Null_Address;
       Glu_Dots_Lines   : Many_Array := [others => System.Null_Address];
       Round_Shader     : System.Address := System.Null_Address;

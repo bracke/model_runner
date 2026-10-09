@@ -1682,13 +1682,13 @@ package body Tests.CLI_Cases is
       end if;
    end Device_Product_Matches_The_Processor;
 
-   --  A check round's Q4_K walk multiplied as integers answers what the
-   --  binary32 walk answers, to the rounding of its activations: each
-   --  position rounded to a byte a value, a scale for every thirty-two,
-   --  is a part in two hundred and fifty-four of the largest of them, and
-   --  a row's sum carries that as a fraction of its own size. Four and
-   --  eight positions, the two widths a round checks at. Skipped where no
-   --  device has the integer dot.
+   --  A check round's K-quant walk multiplied as integers answers what
+   --  the binary32 walk answers, to the rounding of its activations: each
+   --  position rounded to a byte a value, a scale for every thirty-two, is
+   --  a part in two hundred and fifty-four of the largest of them, and a
+   --  row's sum carries that as a fraction of its own size. Q4_K, Q5_K and
+   --  Q6_K, at four and eight positions, the two widths a round checks
+   --  at. Skipped where no device has the integer dot.
    procedure Device_Integer_Walks_Stay_Close
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1706,6 +1706,51 @@ package body Tests.CLI_Cases is
 
       Widths : constant array (1 .. 2) of Positive := [4, 8];
 
+      type Format is record
+         Packing : Products.Weight_Packing;
+         Name    : String (1 .. 4);
+         Bytes   : Positive;
+      end record;
+
+      Formats : constant array (1 .. 3) of Format :=
+        [(Products.Packed_Q4_K, "Q4_K", 144),
+         (Products.Packed_Q5_K, "Q5_K", 176),
+         (Products.Packed_Q6_K, "Q6_K", 210)];
+
+      --  A block's bytes from a pattern, but for its factors: Q4_K's and
+      --  Q5_K's scale of about a tenth and minimum of about a twentieth at
+      --  its front, Q6_K's scale of about a hundredth at its back. Q6_K's
+      --  weights are centred, and from a pattern alone a row's terms cancel
+      --  to a sum a hundredth of their size, which the rounding is not a
+      --  part in a hundred of: its sixes are held to the top half and its
+      --  sub-block scales to positive, so that its rows sum as the others'
+      --  do.
+      function Byte_At
+        (Which : Format; Index : Model_Runner.Bytes.Byte_Count)
+         return Model_Runner.Bytes.Byte
+      is
+         use type Model_Runner.Bytes.Byte;
+
+         At_Block : constant Natural :=
+           Natural ((Index - 1) mod Model_Runner.Bytes.Byte_Count (Which.Bytes));
+         Pattern  : constant Model_Runner.Bytes.Byte :=
+           Model_Runner.Bytes.Byte ((Long_Long_Integer (Index) * 37) mod 251);
+      begin
+         if Which.Bytes = 210 then
+            return (case At_Block is
+                      when 0 .. 127   => Pattern or 16#88#,
+                      when 128 .. 191 => Pattern or 16#AA#,
+                      when 192 .. 207 => Pattern mod 64 + 1,
+                      when 208 => 16#1F#, when 209 => 16#21#,
+                      when others => Pattern);
+         end if;
+
+         return (case At_Block is
+                   when 0 => 16#66#, when 1 => 16#2E#,
+                   when 2 => 16#66#, when 3 => 16#2A#,
+                   when others => Pattern);
+      end Byte_At;
+
       Held  : Devices.Inventory;
       Found : Boolean;
 
@@ -1722,29 +1767,7 @@ package body Tests.CLI_Cases is
             Opened : Devices.Context;
             Engine : Products.Engine;
             Ready  : Boolean;
-
-            --  Q4_K blocks of a hundred and forty-four bytes: a scale of
-            --  about a tenth and a minimum of about a twentieth, then
-            --  scales and nibbles from a pattern.
-            Weights : constant Model_Runner.Bytes.Byte_Array_Access :=
-              new Model_Runner.Bytes.Byte_Array
-                (1 .. Model_Runner.Bytes.Byte_Count (Rows * Cols / 256 * 144));
          begin
-            for Index in Weights'Range loop
-               declare
-                  At_Block : constant Natural :=
-                    Natural ((Index - 1) mod 144);
-               begin
-                  Weights (Index) :=
-                    (case At_Block is
-                       when 0 => 16#66#, when 1 => 16#2E#,
-                       when 2 => 16#66#, when 3 => 16#2A#,
-                       when others =>
-                         Model_Runner.Bytes.Byte
-                           ((Long_Long_Integer (Index) * 37) mod 251));
-               end;
-            end loop;
-
             Devices.Open (Opened, Held, Which, Ready);
             if Ready then
                Products.Open (Engine, Opened, Ready);
@@ -1757,51 +1780,76 @@ package body Tests.CLI_Cases is
             if Ready and then Products.Rounds_Walks (Engine)
                               = Products.Rounds_Every
             then
-               for Count of Widths loop
+               for Kind of Formats loop
                   declare
-                     Vectors : N.Real_Array
-                       (0 .. N.Element_Count (Count * Cols) - 1);
-                     Plain   : N.Real_Array
-                       (0 .. N.Element_Count (Count * Rows) - 1);
-                     Rounded : N.Real_Array
-                       (0 .. N.Element_Count (Count * Rows) - 1);
-                     Largest : N.Real := 0.0;
-                     Worst   : N.Real := 0.0;
-                     Ok      : Boolean;
-                     Halted  : Boolean;
+                     Weights : Model_Runner.Bytes.Byte_Array_Access :=
+                       new Model_Runner.Bytes.Byte_Array
+                         (1 .. Model_Runner.Bytes.Byte_Count
+                                 (Rows * Cols / 256 * Kind.Bytes));
                   begin
-                     for Index in Vectors'Range loop
-                        Vectors (Index) :=
-                          1.0 / N.Real (3 + Natural (Index) mod 29) - 0.11;
+                     for Index in Weights'Range loop
+                        Weights (Index) := Byte_At (Kind, Index);
                      end loop;
 
-                     Products.Round_Walks (Engine, Products.Rounds_None);
-                     Products.Multiply
-                       (Engine, Weights.all, 0, Products.Packed_Q4_K,
-                        Rows, Cols, Vectors, Count, Plain, Ok, Halted);
-                     Assert (Ok, "a device refused a binary32 walk");
+                     for Count of Widths loop
+                        declare
+                           Vectors : N.Real_Array
+                             (0 .. N.Element_Count (Count * Cols) - 1);
+                           Plain   : N.Real_Array
+                             (0 .. N.Element_Count (Count * Rows) - 1);
+                           Rounded : N.Real_Array
+                             (0 .. N.Element_Count (Count * Rows) - 1);
+                           Largest : N.Real := 0.0;
+                           Worst   : N.Real := 0.0;
+                           Ok      : Boolean;
+                           Halted  : Boolean;
+                        begin
+                           for Index in Vectors'Range loop
+                              Vectors (Index) :=
+                                1.0 / N.Real (3 + Natural (Index) mod 29)
+                                - 0.11;
+                           end loop;
 
-                     Products.Round_Walks (Engine, Products.Rounds_Every);
-                     Products.Multiply
-                       (Engine, Weights.all, 0, Products.Packed_Q4_K,
-                        Rows, Cols, Vectors, Count, Rounded, Ok, Halted);
-                     Assert (Ok, "a device refused an integer walk");
+                           Products.Round_Walks
+                             (Engine, Products.Rounds_None);
+                           Products.Multiply
+                             (Engine, Weights.all, 0, Kind.Packing,
+                              Rows, Cols, Vectors, Count, Plain, Ok, Halted);
+                           Assert (Ok, "a device refused a binary32 "
+                                   & Kind.Name & " walk");
 
-                     for Index in Plain'Range loop
-                        Largest := N.Real'Max (Largest, abs Plain (Index));
-                        Worst :=
-                          N.Real'Max
-                            (Worst, abs (Plain (Index) - Rounded (Index)));
+                           Products.Round_Walks
+                             (Engine, Products.Rounds_Every);
+                           Products.Multiply
+                             (Engine, Weights.all, 0, Kind.Packing,
+                              Rows, Cols, Vectors, Count, Rounded, Ok,
+                              Halted);
+                           Assert (Ok, "a device refused an integer "
+                                   & Kind.Name & " walk");
+
+                           for Index in Plain'Range loop
+                              Largest :=
+                                N.Real'Max (Largest, abs Plain (Index));
+                              Worst :=
+                                N.Real'Max
+                                  (Worst,
+                                   abs (Plain (Index) - Rounded (Index)));
+                           end loop;
+
+                           Assert (Largest > 0.0,
+                                   "a binary32 " & Kind.Name
+                                   & " walk answered nothing but zeroes");
+                           Assert (Worst <= 0.01 * Largest,
+                                   "an integer " & Kind.Name & " walk of"
+                                   & Natural'Image (Count) & " strayed"
+                                   & N.Real'Image (Worst)
+                                   & " from the binary32 walk's largest"
+                                   & N.Real'Image (Largest));
+                           Checked := Checked + 1;
+                        end;
                      end loop;
 
-                     Assert (Largest > 0.0,
-                             "a binary32 walk answered nothing but zeroes");
-                     Assert (Worst <= 0.01 * Largest,
-                             "an integer walk of" & Natural'Image (Count)
-                             & " strayed" & N.Real'Image (Worst)
-                             & " from the binary32 walk's largest"
-                             & N.Real'Image (Largest));
-                     Checked := Checked + 1;
+                     Model_Runner.Bytes.Free (Weights);
                   end;
                end loop;
             end if;
@@ -1810,12 +1858,6 @@ package body Tests.CLI_Cases is
                Products.Close (Engine);
                Devices.Close (Opened);
             end if;
-
-            declare
-               Gone : Model_Runner.Bytes.Byte_Array_Access := Weights;
-            begin
-               Model_Runner.Bytes.Free (Gone);
-            end;
          end;
 
          <<Next_Device>>
@@ -13457,8 +13499,8 @@ package body Tests.CLI_Cases is
          "a device computes the product the processor computes");
       Register_Routine
         (T, Device_Integer_Walks_Stay_Close'Access,
-         "a device's Q4_K walk as integers stays within its rounding of the"
-         & " binary32 walk");
+         "a device's K-quant walks as integers stay within their rounding of"
+         & " the binary32 walks");
       Register_Routine
         (T, Devices_Are_Reported_Either_Way'Access,
          "asking the machine what devices it has answers, either way");

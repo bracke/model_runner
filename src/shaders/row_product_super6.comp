@@ -16,6 +16,9 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_basic : require
+#ifdef DOTS
+#extension GL_EXT_integer_dot_product : require
+#endif
 #ifdef SHARED_SCALES
 #extension GL_KHR_shader_subgroup_shuffle : require
 #endif
@@ -40,6 +43,12 @@ layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
 layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
 layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
 layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+#ifdef DOTS
+//  The positions rounded to integers by round_vectors.comp, and their
+//  scales: see row_product_super.comp's DOTS.
+layout(std430, binding = 6) readonly  buffer Rounded  { uint  qw[]; };
+layout(std430, binding = 6) readonly  buffer Scales   { float qs[]; };
+#endif
 
 const uint LISTED_BY_POSITION = 2u;
 
@@ -129,6 +138,24 @@ void main() {
     }
 
     for (uint i = ix; i < blocks; i += 4u) {
+#ifdef DOTS
+        //  Each region's four rounded values and its scale, and the sum
+        //  of the four, which carries the thirty-two every weight is
+        //  centred by.
+        int qy[VEC][4];
+        vec4 dy[VEC];
+        vec4 ysum[VEC];
+        for (uint k = 0u; k < VEC; ++k) {
+            uint y1 = from_k[k] + i * 256u + y_offset;
+            uint xb = y1 >> 2u;
+            uint sb = 2u * shape.columns + (y1 >> 5u);
+            for (uint j = 0u; j < 4u; ++j) {
+                qy[k][j] = int (qw[xb + 8u * j]);
+                dy[k][j] = qs[sb + j];
+                ysum[k][j] = float (dotPacked4x8EXT (qy[k][j], 0x01010101));
+            }
+        }
+#else
         vec4 by0[VEC], by32[VEC], by64[VEC], by96[VEC];
         for (uint k = 0u; k < VEC; ++k) {
             uint xb = (from_k[k] + i * 256u + y_offset) >> 2u;
@@ -137,6 +164,7 @@ void main() {
             by64[k] = x4[xb + 16u];
             by96[k] = x4[xb + 24u];
         }
+#endif
 
         for (uint r = 0u; r < NUM_ROWS; ++r) {
             uint row = min (first_row + r, shape.rows - 1u);
@@ -156,10 +184,12 @@ void main() {
             uint q1u = (ql32 & 0x0F0F0F0Fu)        | ((qh & 0x0C0C0C0Cu) << 2u);
             uint q2u = ((ql0 >> 4u) & 0x0F0F0F0Fu) |  (qh & 0x30303030u);
             uint q3u = ((ql32 >> 4u) & 0x0F0F0F0Fu)| ((qh & 0xC0C0C0C0u) >> 2u);
+#ifndef DOTS
             vec4 q0 = vec4 (unpack8 (q0u)) - 32.0;
             vec4 q1 = vec4 (unpack8 (q1u)) - 32.0;
             vec4 q2 = vec4 (unpack8 (q2u)) - 32.0;
             vec4 q3 = vec4 (unpack8 (q3u)) - 32.0;
+#endif
 #ifdef SHARED_SCALES
             float mine = d * scale_at (sb + itid);
             uint lead = gl_SubgroupInvocationID & ~15u;
@@ -174,10 +204,25 @@ void main() {
             float sc3 = d * scale_at (sb + s_offset + 6u);
 #endif
 
+#ifdef DOTS
+            //  The six-bit values as they are joined, nought to sixty-three,
+            //  dotted as bytes; the centring is the region's sum times
+            //  thirty-two, taken away after.
+            vec4 sc = vec4 (sc0, sc1, sc2, sc3);
+            for (uint k = 0u; k < VEC; ++k) {
+                vec4 sums = vec4 (float (dotPacked4x8EXT (qy[k][0], int (q0u))),
+                                  float (dotPacked4x8EXT (qy[k][1], int (q1u))),
+                                  float (dotPacked4x8EXT (qy[k][2], int (q2u))),
+                                  float (dotPacked4x8EXT (qy[k][3], int (q3u))))
+                            - 32.0 * ysum[k];
+                temp[r][k] += dot (sums * dy[k], sc);
+            }
+#else
             for (uint k = 0u; k < VEC; ++k) {
                 temp[r][k] += dot (by0[k],  q0) * sc0 + dot (by32[k], q1) * sc1
                             + dot (by64[k], q2) * sc2 + dot (by96[k], q3) * sc3;
             }
+#endif
         }
     }
 

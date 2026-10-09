@@ -2825,7 +2825,27 @@ package body Model_Runner.Platform.Device.Products is
                             .Row_Product_Super_Glu_Multi_Dots;
                      Round : aliased constant Model_Runner.Shaders.Word_Array
                        := Model_Runner.Shaders.Round_Vectors;
+                     Five  : aliased constant Model_Runner.Shaders.Word_Array
+                       := Model_Runner.Shaders.Row_Product_Super5_Multi_Dots;
+                     Six   : aliased constant Model_Runner.Shaders.Word_Array
+                       := Model_Runner.Shaders.Row_Product_Super6_Multi_Dots;
                   begin
+                     Request.Size := Interfaces.C.size_t (Five'Length * 4);
+                     Request.Code := Five'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Dots_Shader5 := Made;
+                     end if;
+
+                     Request.Size := Interfaces.C.size_t (Six'Length * 4);
+                     Request.Code := Six'Address;
+                     if Create (Item.Logical, Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Dots_Shader6 := Made;
+                     end if;
+
                      Request.Size := Interfaces.C.size_t (Dots'Length * 4);
                      Request.Code := Dots'Address;
                      if Create (Item.Logical, Request'Address, Null_Handle,
@@ -4119,6 +4139,16 @@ package body Model_Runner.Platform.Device.Products is
                      Request.Stage.Module := Item.Dots_Shader;
                      Line (Wave_Lanes, C.unsigned (Count),
                            Item.Dots_Lines (Count));
+                  end if;
+                  if Item.Dots_Shader5 /= Null_Handle then
+                     Request.Stage.Module := Item.Dots_Shader5;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Dots_Lines5 (Count));
+                  end if;
+                  if Item.Dots_Shader6 /= Null_Handle then
+                     Request.Stage.Module := Item.Dots_Shader6;
+                     Line (Wave_Lanes, C.unsigned (Count),
+                           Item.Dots_Lines6 (Count));
                   end if;
                   if Item.Glu_Dots_Shader /= Null_Handle then
                      Request.Stage.Module := Item.Glu_Dots_Shader;
@@ -5552,6 +5582,8 @@ package body Model_Runner.Platform.Device.Products is
          Give_Back (Item.Many_Lines6 (Count), "vkDestroyPipeline");
          Give_Back (Item.Glu_Many_Lines (Count), "vkDestroyPipeline");
          Give_Back (Item.Dots_Lines (Count), "vkDestroyPipeline");
+         Give_Back (Item.Dots_Lines5 (Count), "vkDestroyPipeline");
+         Give_Back (Item.Dots_Lines6 (Count), "vkDestroyPipeline");
          Give_Back (Item.Glu_Dots_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.Long_Line6, "vkDestroyPipeline");
@@ -5745,6 +5777,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Glu_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Many_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Dots_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Dots_Shader5, "vkDestroyShaderModule");
+      Give_Back (Item.Dots_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Dots_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Round_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Round_Line, "vkDestroyPipeline");
@@ -5776,6 +5810,29 @@ package body Model_Runner.Platform.Device.Products is
    is (Item.Heads_Line /= Null_Handle);
 
    function Timed (Item : Engine) return Boolean is (Item.Timing);
+
+   --  The integer walk standing in for the binary32 walk Row_Line binds
+   --  for these, or none: see Round_Walks.
+   function Dots_Line
+     (Item : Engine; Packing : Weight_Packing; Count : Natural;
+      Columns : Natural) return Address
+   is (if Count not in Many_Count
+         or else Columns mod 256 /= 0
+         or else Columns > Round_Columns
+       then Null_Handle
+       elsif Packing = Packed_Q4_K
+         and then Row_Line (Item, Count, Packing, Columns)
+                  = Item.Many_Lines4 (Count)
+       then Item.Dots_Lines (Count)
+       elsif Packing = Packed_Q5_K
+         and then Row_Line (Item, Count, Packing, Columns)
+                  = Item.Many_Lines5 (Count)
+       then Item.Dots_Lines5 (Count)
+       elsif Packing = Packed_Q6_K
+         and then Row_Line (Item, Count, Packing, Columns)
+                  = Item.Many_Lines6 (Count)
+       then Item.Dots_Lines6 (Count)
+       else Null_Handle);
 
    procedure Round_Walks (Item : in out Engine; Rounding : Walk_Rounding)
    is
@@ -7768,14 +7825,8 @@ package body Model_Runner.Platform.Device.Products is
       --  would: see Round_Walks.
       Rounds : constant Boolean :=
         not Tiled
-        and then Count in Many_Count
-        and then Packing = Packed_Q4_K
-        and then Columns mod 256 = 0
-        and then Columns <= Round_Columns
         and then Rounds_Walks (Item) = Rounds_Every
-        and then Item.Dots_Lines (Count) /= Null_Handle
-        and then Row_Line (Item, Count, Packing, Columns)
-                 = Item.Many_Lines4 (Count);
+        and then Dots_Line (Item, Packing, Count, Columns) /= Null_Handle;
 
       --  The batch as the kernel that will run wants it.
       Vectors_Room : constant Natural :=
@@ -8125,7 +8176,7 @@ package body Model_Runner.Platform.Device.Products is
                         0, Null_Handle, 0, Null_Handle);
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,
-                        Item.Dots_Lines (Count));
+                        Dots_Line (Item, Packing, Count, Columns));
                   end;
                end if;
 
@@ -12852,24 +12903,23 @@ package body Model_Runner.Platform.Device.Products is
       function Dotted (Which : Positive) return Boolean
       is (Count in Many_Count
           and then Is_Product (Which)
-          and then Steps.Items (Which).Packing = Packed_Q4_K
           and then not Steps.Items (Which).Exact
           and then Steps.Items (Which).Columns mod 256 = 0
           and then Steps.Items (Which).Columns <= Round_Columns
           and then Rounds_Walks (Item) /= Rounds_None
           and then
             (if Steps.Items (Which).Glu
-             then Item.Glu_Dots_Lines (Count) /= Null_Handle
+             then Steps.Items (Which).Packing = Packed_Q4_K
+                  and then Item.Glu_Dots_Lines (Count) /= Null_Handle
              else Rounds_Walks (Item) = Rounds_Every
                   and then not Tiled (Which)
                   and then not Listed_Tiled (Which)
                   and then not Steps.Items (Which).Listed
                   and then Steps.Items (Which).Gathers = 0
                   and then Steps.Items (Which).Routed = 0
-                  and then Item.Dots_Lines (Count) /= Null_Handle
-                  and then Row_Line (Item, Count, Packed_Q4_K,
-                                     Steps.Items (Which).Columns)
-                           = Item.Many_Lines4 (Count)));
+                  and then Dots_Line (Item, Steps.Items (Which).Packing,
+                                      Count, Steps.Items (Which).Columns)
+                           /= Null_Handle));
 
       --  The stretch of the result buffer a step that readies heads reads:
       --  from the first byte of the steps it names to the last. It is bound
@@ -16425,7 +16475,8 @@ package body Model_Runner.Platform.Device.Products is
                if Dotted (Index) and then Barrier /= null then
                   Round_For (Index);
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Dots_Lines (Count));
+                    (Item.Buffer, Bind_Point_Compute,
+                     Dots_Line (Item, This.Packing, Count, This.Columns));
                else
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
