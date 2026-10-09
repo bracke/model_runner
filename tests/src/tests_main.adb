@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Model_Runner.CLI.Options;
 with Model_Runner.Presentation;
@@ -28,7 +29,9 @@ with AUnit.Test_Filters;
 
 with Tests.Suite;
 with Checks;
+with Agent_Trial;
 with Conformance;
+with Conformance.Parts;
 with Fixture_Mutation;
 with External_Model;
 with Fixture_Likeness;
@@ -1158,7 +1161,10 @@ begin
          --  They cost forty-four milliseconds and ninety, which is no reason
          --  to leave either out.
          if not Repository_Only then
-            Conformance.Run (Agreed, Short_Sweep => Short);
+            --  In parts, side by side, each a process of its own; added up.
+            Conformance.Parts.Run
+              (Agreed, Short_Sweep => Short, Program => Ada.Command_Line.Command_Name,
+               Integers => Conformance.Wanted_Integers);
             Report_Stage ("conformance", 4000.0);
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
@@ -1401,7 +1407,29 @@ begin
          Model_Runner.Backend.CPU.Use_Integer_Activations
            (Option ("--arith", "f32") = "int8");
 
-         Conformance.Run (Result);
+         --  One part, as a process the whole sweep started: run, its report
+         --  printed as its line, and nothing else -- the whole is the
+         --  parent's to judge and to hold to the README.
+         if Option ("--part", "") /= "" then
+            declare
+               Given : constant String := Option ("--part", "");
+               Slash : constant Natural := Ada.Strings.Fixed.Index (Given, "/");
+            begin
+               Conformance.Run
+                 (Result,
+                  Short_Sweep => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                                    Ada.Command_Line.Argument (Index) = "--short"),
+                  Part        => Positive'Value (Given (Given'First .. Slash - 1)),
+                  Parts       => Positive'Value (Given (Slash + 1 .. Given'Last)));
+               Ada.Text_IO.Put_Line (Conformance.Parts.Line_Of (Result));
+               return;
+            end;
+         end if;
+
+         --  The whole, in parts side by side.
+         Conformance.Parts.Run
+           (Result, Short_Sweep => False, Program => Ada.Command_Line.Command_Name,
+            Integers => Option ("--arith", "f32") = "int8");
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
@@ -3212,6 +3240,39 @@ begin
          if not Written then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
+      end;
+
+   elsif Command = "agent-trial" then
+      --  A real model on /work tasks, each in a project made fresh: how it
+      --  ended, the time, the calls, the work figures, what changed.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+         Clean : Boolean;
+      begin
+         if Option ("--model", "") = "" then
+            Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, "agent-trial: --model PATH is needed");
+            Ada.Command_Line.Set_Exit_Status (2);
+            return;
+         end if;
+         Agent_Trial.Run
+           (Model   => Option ("--model", ""),
+            --  The built program, by its .exe form where the host writes one.
+            Program => Ada.Directories.Full_Name
+                         (Option ("--program",
+                                  (if Ada.Directories.Exists ("../bin/model_runner.exe")
+                                   then "../bin/model_runner.exe" else "../bin/model_runner"))),
+            Options => Option ("--options", ""),
+            Only    => Option ("--task", ""),
+            Clean   => Clean);
+         Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 
    elsif Command = "fixtures" then

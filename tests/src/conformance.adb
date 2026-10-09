@@ -39,8 +39,6 @@ package body Conformance is
    -- Run --
    ---------
 
-   --  Whether this run was asked for the quantized arithmetic, from the
-   --  command line and from nothing else.
    function Wanted_Integers return Boolean is
    begin
       for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
@@ -51,8 +49,18 @@ package body Conformance is
       return False;
    end Wanted_Integers;
 
-   procedure Run (Result : out Report; Short_Sweep : Boolean := False) is
+   procedure Run
+     (Result      : out Report;
+      Short_Sweep : Boolean := False;
+      Part        : Positive := 1;
+      Parts       : Positive := 1)
+   is
       Image : B.Byte_Array_Access;
+
+      --  Whether an architecture is this part's: every Parts-th, from the
+      --  Part-th. A sweep split into parts runs each in a process of its
+      --  own, side by side, and their reports are added up.
+      function In_Part (Which : Positive) return Boolean is ((Which - 1) mod Parts = Part - 1);
 
       --  Whether the caller has already put the whole sweep into the
       --  quantized arithmetic. When it has, the narrow pass below would be
@@ -1158,8 +1166,9 @@ package body Conformance is
             for Which_Arch in Crossed'Range loop
                for Format in Tiny_Model.Weight_Format loop
                   --  A short sweep crosses binary32 alone; the count below
-                  --  is the same arithmetic over one format.
-                  if not Crosses (Format, Short_Sweep) then
+                  --  is the same arithmetic over one format. Another part's
+                  --  architecture is that part's to cross.
+                  if not Crosses (Format, Short_Sweep) or else not In_Part (Which_Arch) then
                      goto Next_Format;
                   end if;
 
@@ -1566,6 +1575,9 @@ package body Conformance is
 
          if Device_Ready then
             for Which_Arch in Crossed'Range loop
+               if not In_Part (Which_Arch) then
+                  goto Next_Device_Arch;
+               end if;
                for Format of Device_Formats loop
                   --  The short sweep's binary32 alone, here as above. The
                   --  cache arms below ride on the first device format,
@@ -1749,6 +1761,7 @@ package body Conformance is
 
                   B.Free (Image);
                end if;
+               <<Next_Device_Arch>>
             end loop;
          end if;
 
@@ -1782,7 +1795,18 @@ package body Conformance is
             Shapes : constant Natural :=
               Model_Shape'Pos (Model_Shape'Last) + 1;
 
-            Arches : constant Natural := Crossed'Length;
+            --  This part's architectures: all of them where the sweep is one.
+            function Part_Count return Natural is
+               Count : Natural := 0;
+            begin
+               for Index in Crossed'Range loop
+                  if In_Part (Index) then
+                     Count := Count + 1;
+                  end if;
+               end loop;
+               return Count;
+            end Part_Count;
+            Arches : constant Natural := Part_Count;
 
             --  Every crossed architecture, each in every shape a model comes
             --  in.
@@ -1828,11 +1852,12 @@ package body Conformance is
             Expected : Natural := 0;
 
          begin
-            for Kind of Crossed loop
+            for Index in Crossed'Range loop
                for Shape in Model_Shape loop
-                  if Tiny_Model.Cannot_Hold (Kind, Shape) then
+                  exit when not In_Part (Index);
+                  if Tiny_Model.Cannot_Hold (Crossed (Index), Shape) then
                      Skipped := Skipped + 1;
-                  elsif Kind in Tiny_Model.Jamba | Tiny_Model.Deepseek2 then
+                  elsif Crossed (Index) in Tiny_Model.Jamba | Tiny_Model.Deepseek2 then
                      Lossy_Skipped := Lossy_Skipped + 1;
                   end if;
                end loop;

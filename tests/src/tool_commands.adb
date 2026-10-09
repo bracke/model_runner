@@ -30,6 +30,7 @@ package body Tool_Commands is
    Name_Device_Bench   : aliased constant String := "device-bench";
    Name_Perplexity     : aliased constant String := "perplexity";
    Name_Agent_Eval     : aliased constant String := "agent-eval";
+   Name_Agent_Trial    : aliased constant String := "agent-trial";
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
 
@@ -40,7 +41,8 @@ package body Tool_Commands is
    Opts_Check     : aliased constant String :=
      " --repository --record-warnings --short ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
-   Opts_Conform   : aliased constant String := " --arith ";
+   Opts_Conform   : aliased constant String := " --arith --part --short ";
+   Opts_Trial     : aliased constant String := " --model --program --task --options ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --prompt-set --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
@@ -76,7 +78,9 @@ package body Tool_Commands is
    Takes_Check     : aliased constant String :=
      "[ROOT] [--repository] [--record-warnings] [--short]";
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
-   Takes_Conform   : aliased constant String := "[--arith MODE]";
+   Takes_Conform   : aliased constant String := "[--arith MODE] [--part K/N [--short]]";
+   Takes_Trial     : aliased constant String :=
+     "--model PATH [--program PATH] [--task edit|find] [--options ""OPTIONS""]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"
      & " [--threads N] [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
@@ -163,6 +167,8 @@ package body Tool_Commands is
      "turn a compiled shader into the Ada constant the engine hands a device";
    Says_Restamp : aliased constant String :=
      "record the measured figures' moved fingerprints, saying why they stand";
+   Says_Trial : aliased constant String :=
+     "run a real model on /work tasks in fresh projects and say how each went";
    Says_Fixtures : aliased constant String :=
      "write the committed test fixtures";
    Says_Package : aliased constant String :=
@@ -237,7 +243,7 @@ package body Tool_Commands is
      " --mmproj --image --frames --fps --threads --device --dump --expect"
      & " --repeats ";
 
-   Held : constant array (1 .. 30) of Command :=
+   Held : constant array (1 .. 31) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -296,7 +302,9 @@ package body Tool_Commands is
       (Name_Device_Bench'Access, Takes_Bench'Access, Says_Bench'Access,
        Opts_Bench'Access),
       (Name_Agent_Eval'Access, Takes_Agent_Eval'Access,
-       Says_Agent_Eval'Access, Opts_Agent_Eval'Access)];
+       Says_Agent_Eval'Access, Opts_Agent_Eval'Access),
+      (Name_Agent_Trial'Access, Takes_Trial'Access,
+       Says_Trial'Access, Opts_Trial'Access)];
 
    -----------
    -- Count --

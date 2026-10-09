@@ -281,6 +281,12 @@ package Conformance is
    is (Item.Ran and then Item.Failures = 0 and then Item.Refused = 0
        and then Item.Unlearned = 0);
 
+   --  Whether this run was asked for the quantized arithmetic, from the
+   --  command line and from nothing else.
+   --
+   --  @return Whether --arith int8 was given.
+   function Wanted_Integers return Boolean;
+
    --  Compare the engine against the reference on the synthetic model.
    --
    --  Several token sequences of different lengths are evaluated, so that the
@@ -294,6 +300,16 @@ package Conformance is
    --    repacking and cache still -- for a runner that cannot spend the
    --    hours the whole takes. Its completeness is held to the comparisons
    --    it asked for, where the full sweep's is held to its own arithmetic.
-   procedure Run (Result : out Report; Short_Sweep : Boolean := False);
+   --  @param Part Which part of the architectures to cross, from one.
+   --  @param Parts How many parts the sweep is split into; one for the
+   --    whole. A part crosses every Parts-th architecture from the Part-th,
+   --    through every format, shape, backend, repacking, cache and the
+   --    device, and its report counts what it crossed; the parts' reports
+   --    added up are the whole sweep's.
+   procedure Run
+     (Result      : out Report;
+      Short_Sweep : Boolean := False;
+      Part        : Positive := 1;
+      Parts       : Positive := 1);
 
 end Conformance;

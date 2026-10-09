@@ -207,6 +207,72 @@ package body Model_Runner.CLI.Execute.Run_Command is
       end if;
    end On_Result;
 
+   --  A helper's calls and results, written into its run's trace beside
+   --  the run's own: marked with how deep the helper is and which helper,
+   --  in the order they were made, so the trace holds the whole tree of a
+   --  run that delegates and not only its top.
+   type Helper_Watch
+     (Parent : access Agent_Watch;
+      Depth  : Positive;
+      Helper : Positive) is
+     limited new Model_Runner.Agent.Observer with null record;
+
+   overriding procedure On_Call
+     (Self      : in out Helper_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String);
+   overriding procedure On_Result
+     (Self      : in out Helper_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome);
+   overriding procedure On_Step (Self : in out Helper_Watch) is null;
+   overriding procedure On_Turn
+     (Self : in out Helper_Watch; Step : Positive; Calls : Positive) is null;
+
+   --  Where a helper's event stands: its depth and which helper it is.
+   function Under (Self : Helper_Watch'Class) return String is
+     (""",""depth"":" & Number ((Id => Self.Depth, others => <>))
+      & ",""helper"":" & Number ((Id => Self.Helper, others => <>)));
+
+   overriding procedure On_Call
+     (Self      : in out Helper_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String) is
+   begin
+      if Self.Parent /= null and then Self.Parent.Trace then
+         Record_Event
+           (Self.Parent.all,
+            """event"":""call"",""invocation"":" & Number (Call)
+            & ",""name"":""" & JSON_Escape (Named) & Under (Self)
+            & ",""arguments"":""" & JSON_Escape (Arguments) & """");
+      end if;
+   end On_Call;
+
+   overriding procedure On_Result
+     (Self      : in out Helper_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome)
+   is
+      pragma Unreferenced (Arguments);
+   begin
+      if Self.Parent /= null and then Self.Parent.Trace then
+         Record_Event
+           (Self.Parent.all,
+            """event"":""result"",""invocation"":" & Number (Call)
+            & ",""name"":""" & JSON_Escape (Named) & Under (Self)
+            & ",""outcome"":""" & Model_Runner.Tools.Runner.Answer_Kind'Image (Ended.Answer)
+            & """,""result"":""" & JSON_Escape (Result) & """");
+      end if;
+   end On_Result;
+
    --  Whether Whole contains Part.
    function Contains (Whole, Part : String) return Boolean is
    begin
@@ -553,6 +619,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
         --  delegator of its own, as a /work agent is where its permissions
         --  let it make children.
         Max_Depth : Natural := 1;
+
+        --  The run's trace, for helpers' calls to be written into; null for
+        --  none. And how many helpers the run has made, to tell them apart.
+        Watcher : access Agent_Watch := null;
+        Helpers : Natural := 0;
      end record;
 
    --  Two subtasks may overlap when the pool holds more than one open
@@ -670,23 +741,32 @@ package body Model_Runner.CLI.Execute.Run_Command is
                   --  Clear the session so the task starts from nothing, no
                   --  earlier subtask's state leaking in.
                   L.Reset (Self.Sessions (Slot));
-                  Model_Runner.Agent.Run
-                    (Source           => Self.Src.all,
-                     Session          => Self.Sessions (Slot),
-                     Messages         => Sub_Msgs,
-                     Offered          => Sub_Tools,
-                     Executor         => Sub_Runner,
-                     Generation       => Self.Req.all,
-                     Stop_Set         => Self.Stops.all,
-                     Sink             => null,
-                     Time             => Self.Time,
-                     Seeds            => Self.Seed,
-                     Cancel           => Context.Cancel,
-                     Max_Steps        => Self.Steps,
-                     Max_Seconds      => Seconds,
-                     Max_Total_Tokens => Tokens,
-                     Compact          => True,
-                     Result           => Loop_Out);
+                  Self.Helpers := Self.Helpers + 1;
+                  declare
+                     Seen : aliased Helper_Watch
+                       (Parent => Self.Watcher,
+                        Depth  => Context.Depth + 1,
+                        Helper => Self.Helpers);
+                  begin
+                     Model_Runner.Agent.Run
+                       (Source           => Self.Src.all,
+                        Session          => Self.Sessions (Slot),
+                        Watch            => (if Self.Watcher = null then null else Seen'Unchecked_Access),
+                        Messages         => Sub_Msgs,
+                        Offered          => Sub_Tools,
+                        Executor         => Sub_Runner,
+                        Generation       => Self.Req.all,
+                        Stop_Set         => Self.Stops.all,
+                        Sink             => null,
+                        Time             => Self.Time,
+                        Seeds            => Self.Seed,
+                        Cancel           => Context.Cancel,
+                        Max_Steps        => Self.Steps,
+                        Max_Seconds      => Seconds,
+                        Max_Total_Tokens => Tokens,
+                        Compact          => True,
+                        Result           => Loop_Out);
+                  end;
 
                   --  How it ended, by what its stop asks: only an answer is
                   --  a result.
