@@ -248,7 +248,8 @@ package body Model_Runner.Schema is
       In_Tags  : Boolean;
       Before  : String;
       After   : String;
-      Close   : String)
+      Close   : String;
+      In_Call : Boolean := False)
    is
       Used : Natural := 0;
 
@@ -618,7 +619,11 @@ package body Model_Runner.Schema is
       --  would have a quoted string, and the same rule as JSON otherwise.
       procedure Raw_Plain (Word : String) is
       begin
-         if Word = "string" then
+         if In_Call and then Word = "string" then
+            Put ("pystr");
+         elsif In_Call and then Word = "boolean" then
+            Put ("pybool");
+         elsif Word = "string" then
             Put ("text");
          else
             Plain (Word);
@@ -709,13 +714,23 @@ package body Model_Runner.Schema is
 
          Find_Member (Text, From, "const", At_Const, Failed);
          if not Failed and then At_Const /= 0 then
-            Refuse ("a const in a tag");
+            if In_Call then
+               --  A literal in a call is written as JSON writes it, which
+               --  for a string or a number is Python too.
+               Shape (From, 1);
+            else
+               Refuse ("a const in a tag");
+            end if;
             return;
          end if;
 
          Find_Member (Text, From, "enum", At_Enum, Failed);
          if not Failed and then At_Enum /= 0 then
-            Raw_Choice (At_Enum);
+            if In_Call then
+               Choice (At_Enum);
+            else
+               Raw_Choice (At_Enum);
+            end if;
             return;
          end if;
 
@@ -815,15 +830,22 @@ package body Model_Runner.Schema is
                   end if;
                   Count := Count + 1;
 
+                  --  In a call: name=value, the comma after it optional,
+                  --  so the last one closes the call without one and a
+                  --  trailing one is the Python it is.
                   Put ("(""");
                   Put (Before);
                   Put (Text (Key_First .. Key_Last));
                   Put (After);
                   Put (""" ws ");
                   Tag_Value (Value_First);
-                  Put (" ws """);
-                  Put (Close);
-                  Put (""" ws)");
+                  if In_Call then
+                     Put (" ws "",""? ws)");
+                  else
+                     Put (" ws """);
+                     Put (Close);
+                     Put (""" ws)");
+                  end if;
                   if not Wanted then
                      Put ("?");
                   end if;
@@ -1016,6 +1038,16 @@ package body Model_Runner.Schema is
       --  Text with a '<' in it where no tag follows: code compares with
       --  one, and a value that stopped at it cut an edit short mid-line.
       Put ("text ::= ( [^<] | ""<"" [^/] )*" & Character'Val (10));
+      --  A string in a Python call: JSON's, or single-quoted, or between
+      --  three quotes and across lines, as a call's longer text is
+      --  written; the escapes inside are read back by the call reader.
+      Put ("pystr ::= str | sqstr | tqstr" & Character'Val (10));
+      Put ("sqstr ::= ""'"" ( [^'\\\x0A] | ""\\"" [^\x0A] )* ""'"""
+           & Character'Val (10));
+      Put ("tqstr ::= ""\""\""\"""" ( [^\""\\] | ""\\"" [^\x00] "
+           & "| ""\"""" [^\""] | ""\""\"""" [^\""] )* ""\""\""\"""""
+           & Character'Val (10));
+      Put ("pybool ::= ""True"" | ""False""" & Character'Val (10));
 
       if Malformed then
          Status := E.Make (E.Grammar_Syntax_Error);
@@ -1069,5 +1101,19 @@ package body Model_Runner.Schema is
       Write (Text, Grammar, Last, Status, In_Tags => True,
              Before => Before, After => After, Close => Close);
    end To_Tag_Grammar;
+
+   ---------------------------
+   -- To_Call_Grammar --
+   ---------------------------
+
+   procedure To_Call_Grammar
+     (Text    : String;
+      Grammar : out String;
+      Last    : out Natural;
+      Status  : out E.Error_Info) is
+   begin
+      Write (Text, Grammar, Last, Status, In_Tags => True,
+             Before => "", After => "=", Close => "", In_Call => True);
+   end To_Call_Grammar;
 
 end Model_Runner.Schema;

@@ -379,9 +379,10 @@ package body Tests.Template_Cases is
               "a model's own template is read from the JSON envelope");
    end Templates_Are_Recognised_By_Their_Markers;
 
-   --  The gemma format offers tools in the first user turn, writes a call
-   --  in the <tool_call> JSON envelope, and folds a tool's answer into a
-   --  user turn -- Gemma having no system turn and no tool turn of its own.
+   --  The gemma format offers tools in the first user turn as Python
+   --  definitions, writes a call as Python in a ```tool_code block, and
+   --  folds a tool's answer into a user turn in a ```tool_output block --
+   --  Gemma having no system turn and no tool turn of its own.
    --
    --  The system message goes ahead of the tools and both ahead of what the
    --  user said, in the one turn, as the model's own template folds a
@@ -454,22 +455,26 @@ package body Tests.Template_Cases is
          R : constant String := Target (1 .. Last);
       begin
          Assert (Has (R, "<bos><start_of_turn>user" & LF & "Be brief." & LF & LF
-                          & "You have access to the following functions."),
+                          & "At each turn, if you decide to invoke any of the "
+                          & "function(s), it should be wrapped with "
+                          & "```tool_code```."),
                  "the system message does not open the first user turn "
                  & "ahead of the tools: " & R);
-         Assert (Has (R, "Functions:" & LF & "{""type"": ""function"""),
-                 "the tools were not offered as JSON: " & R);
-         Assert (Has (R, "}" & LF & LF & "hi<end_of_turn>"),
+         Assert (Has (R, "```python" & LF
+                          & "def calc(a: float = None) -> dict:" & LF
+                          & "    """"""d" & LF & LF & "    Args:" & LF
+                          & "      a: " & LF & "    """"""" & LF),
+                 "the tools were not offered as Python definitions: " & R);
+         Assert (Has (R, "```" & LF & LF & "hi<end_of_turn>"),
                  "the user's words do not close the first turn: " & R);
          Assert (not Has (R, "<start_of_turn>system"),
                  "a system turn was written, which Gemma has none of: " & R);
-         Assert (Has (R, "<start_of_turn>model" & LF & "<tool_call>" & LF
-                          & "{""name"": ""calc"", ""arguments"": "
-                          & "{""a"": 47, ""op"": ""*"", ""b"": 89}}" & LF
-                          & "</tool_call><end_of_turn>"),
-                 "the call was not written in the JSON envelope: " & R);
-         Assert (Has (R, "<start_of_turn>user" & LF & "<tool_response>" & LF
-                          & "4183" & LF & "</tool_response>" & LF
+         Assert (Has (R, "<start_of_turn>model" & LF & "```tool_code" & LF
+                          & "calc(a=47, op=""*"", b=89)" & LF
+                          & "```<end_of_turn>"),
+                 "the call was not written as Python: " & R);
+         Assert (Has (R, "<start_of_turn>user" & LF & "```tool_output" & LF
+                          & "4183" & LF & "```" & LF
                           & "<end_of_turn>"),
                  "the tool's answer was not folded into a user turn: " & R);
          Assert (R (R'Last - 20 .. R'Last) = "<start_of_turn>model" & LF,
@@ -3773,9 +3778,9 @@ package body Tests.Template_Cases is
    begin
       Register_Routine
         (T, Gemma_Renders_Tool_Calls'Access,
-         "the gemma format offers tools in the first user turn, writes a "
-         & "call in the <tool_call> JSON envelope, and folds a tool's "
-         & "answer into a user turn");
+         "the gemma format offers tools in the first user turn as Python, "
+         & "writes a call as Python in a tool_code block, and folds a "
+         & "tool's answer into a user turn");
       Register_Routine
         (T, MiniCPM_Renders_Tool_Calls'Access,
          "the minicpm format offers tools and writes a call as a function "

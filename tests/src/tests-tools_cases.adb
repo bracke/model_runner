@@ -1831,6 +1831,121 @@ package body Tests.Tools_Cases is
       Tools.Close (Asked);
    end Recipient_JSON_Calls_Parse;
 
+   --  Python_Code reads Gemma's form: calls written as Python in a
+   --  ```tool_code block, keyword arguments read as a JSON object -- a
+   --  string in any of Python's quotes, True, None, a list -- with a
+   --  print(..) around a call and a module before its name taken off. A
+   --  "```" inside a string is the string's, not the end of the block. A
+   --  positional argument names nothing and is refused; a reply with no
+   --  block is read as open JSON.
+   procedure Python_Code_Calls_Parse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF     : constant Character := ASCII.LF;
+      Asked  : Tools.Calls;
+      Status : E.Error_Info;
+   begin
+      Tools.Read_Calls
+        (Asked,
+         "I will add them." & LF & "```tool_code" & LF
+         & "calculator(a=47, op='+', b=89.)" & LF
+         & "print(api.lookup(words=[""x"", 'y\'s'], exact=True, "
+         & "near=None,))" & LF & "```",
+         Status, Syntax => Tools.Python_Code);
+      Assert (E.Is_Ok (Status), "the Python calls would not read");
+      Assert (Tools.Count (Asked) = 2,
+              "not two calls:" & Tools.Count (Asked)'Image);
+      Assert (Tools.Called (Asked, 1) = "calculator",
+              "wrong first name: " & Tools.Called (Asked, 1));
+      Assert (Tools.Arguments (Asked, 1)
+              = "{""a"": 47, ""op"": ""+"", ""b"": 89.0}",
+              "wrong first args: " & Tools.Arguments (Asked, 1));
+      Assert (Tools.Called (Asked, 2) = "lookup",
+              "wrong second name: " & Tools.Called (Asked, 2));
+      Assert (Tools.Arguments (Asked, 2)
+              = "{""words"": [""x"", ""y's""], ""exact"": true, "
+                & """near"": null}",
+              "wrong second args: " & Tools.Arguments (Asked, 2));
+      Tools.Close (Asked);
+
+      --  Text across lines in triple quotes, a fence inside it.
+      Tools.Read_Calls
+        (Asked,
+         "```tool_code" & LF & "write_file(path=""a.md"", content="""""""
+         & "one" & LF & "```ada" & LF & "two" & LF & "```"""""")" & LF
+         & "```",
+         Status, Syntax => Tools.Python_Code);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1,
+              "a triple-quoted string holding a fence did not read");
+      Assert (Tools.Arguments (Asked, 1)
+              = "{""path"": ""a.md"", ""content"": "
+                & """one\n```ada\ntwo\n```""}",
+              "wrong triple-quoted args: " & Tools.Arguments (Asked, 1));
+      Tools.Close (Asked);
+
+      Tools.Read_Calls
+        (Asked, "```tool_code" & LF & "calculator(47, op=""+"")" & LF & "```",
+         Status, Syntax => Tools.Python_Code);
+      Assert (E.Is_Error (Status)
+              and then E."=" (Status.Code, E.Tools_Call_Malformed),
+              "a positional argument was read as a call");
+      Tools.Close (Asked);
+
+      Tools.Read_Calls
+        (Asked, "{""name"": ""now"", ""arguments"": {}}",
+         Status, Syntax => Tools.Python_Code);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+              and then Tools.Called (Asked, 1) = "now",
+              "the open JSON was not read where no block was written");
+      Tools.Close (Asked);
+
+      Tools.Read_Calls
+        (Asked, "Here is code:" & LF & "```ada" & LF & "X := 1;" & LF & "```",
+         Status, Syntax => Tools.Python_Code);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 0,
+              "a fence of code in an answer was read as a call");
+      Tools.Close (Asked);
+   end Python_Code_Calls_Parse;
+
+   --  Gemma's form is shaped by the grammar: prose that may show code in
+   --  fences of its own, then calls in ```tool_code blocks naming a tool on
+   --  offer, each argument as its schema says. A call missing a required
+   --  argument, a choice off the schema's list, or a name not offered is
+   --  refused; so is the JSON envelope.
+   procedure Python_Calls_Are_Shaped
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := ASCII.LF;
+      Call : constant String :=
+        "Adding." & LF & "```tool_code" & LF
+        & "calculator(a=47, op=""+"", b=89)" & LF & "```";
+   begin
+      Assert (Full_Set_Takes_In (Tools.Python_Code, Call),
+              "a well-formed Python call was refused");
+      Assert (Full_Set_Takes_In
+                (Tools.Python_Code,
+                 "Like this:" & LF & "```ada" & LF & "X := 1;" & LF & "```"
+                 & LF & "and `Y`." & LF & LF & Call),
+              "code fenced in prose was refused ahead of a call");
+      Assert (Full_Set_Takes_In (Tools.Python_Code, "Just an answer, `X`."),
+              "an answer ending on a backtick was refused");
+      Assert (not Full_Set_Takes_In
+                (Tools.Python_Code,
+                 "```tool_code" & LF & "calculator(a=47, b=89)" & LF & "```"),
+              "a call missing a required argument was taken");
+      Assert (not Full_Set_Takes_In
+                (Tools.Python_Code,
+                 "```tool_code" & LF & "calculator(a=47, op=""plus"", b=89)"
+                 & LF & "```"),
+              "a choice off the schema's list was taken");
+      Assert (not Full_Set_Takes_In
+                (Tools.Python_Code,
+                 "```tool_code" & LF & "nonesuch(a=1)" & LF & "```"),
+              "a tool not offered was taken");
+   end Python_Calls_Are_Shaped;
+
    --  Open_JSON reads the envelope, and the object a model trained on no
    --  envelope writes instead: bare on a line, or in a ```json fence, with
    --  prose around it. It is read only where it names a function and
@@ -2147,6 +2262,13 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Recipient_JSON_Calls_Parse'Access,
          "the recipient form parses Functionary's calls");
+      Register_Routine
+        (T, Python_Code_Calls_Parse'Access,
+         "Gemma's Python calls in a tool_code block read as JSON arguments");
+      Register_Routine
+        (T, Python_Calls_Are_Shaped'Access,
+         "Gemma's Python calls are shaped by the call grammar, code fences "
+         & "in prose kept");
       Register_Routine
         (T, Function_XML_Calls_Parse'Access,
          "a MiniCPM function/param reply reads as calls with JSON arguments");

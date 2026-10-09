@@ -133,7 +133,9 @@ package body Model_Runner.Agent is
       --  reply, since those families reason in one. Left free before,
       --  because that block's '<' was one the grammar's prose refused, a
       --  0.8B wrote <parameter/op> and lost the argument; shaped, it
-      --  cannot. Open_JSON alone is left free where tools are offered --
+      --  cannot. Gemma's Python calls are shaped the same way, the block
+      --  that opens one the only fence prose may not hold.
+      --  Open_JSON alone is left free where tools are offered --
       --  its point is to read the object a model writes without any
       --  envelope, and the grammar's prose would admit that object and
       --  shape nothing -- and shaped by the answer schema where none are,

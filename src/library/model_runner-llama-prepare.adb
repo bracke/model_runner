@@ -221,6 +221,37 @@ begin
             Set_Template_Format (Item, Model_Runner.Templates.Recognise (Source_Text));
          end if;
 
+         --  Gemma's own template has no tool half -- the tools offered never
+         --  reach the prompt, and a tool's answer is a role it refuses -- so
+         --  where it is the template, the carried gemma format renders
+         --  instead. That format writes every conversation without tools
+         --  byte for byte as Gemma's own does, crossed against jinja2 in the
+         --  suite, and the tools as Gemma was taught them. Only Gemma's: a
+         --  carried format is not held to another family's own template
+         --  that way, and a template that reads tools is left as it is.
+         if E.Is_Ok (Item.Chat_Status)
+           and then not Model_Runner.Templates.Reads_Tools (Item.Chat)
+           and then Model_Runner.Templates.Recognise (Source_Text)
+                    = Model_Runner.Templates.Format_Name
+                        (Model_Runner.Templates.Format_Gemma)
+         then
+            declare
+               Name    : constant String :=
+                 Model_Runner.Templates.Format_Name
+                   (Model_Runner.Templates.Format_Gemma);
+               Carried : E.Error_Info;
+            begin
+               Model_Runner.Templates.Close (Item.Chat);
+               Model_Runner.Templates.Compile
+                 (Item.Chat, Model_Runner.Templates.Built_In (Name),
+                  Bounds, Carried);
+               Item.Chat_Status := Carried;
+               if E.Is_Ok (Carried) then
+                  Item.Chat_Stood_In := True;
+               end if;
+            end;
+         end if;
+
          --  A template outside the subset that is nonetheless written in
          --  a format this build carries -- its own text says which, by
          --  the turn markers and the call shape in it -- is rendered with

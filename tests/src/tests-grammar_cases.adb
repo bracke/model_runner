@@ -423,6 +423,73 @@ package body Tests.Grammar_Cases is
               "parameters that are not an object were accepted as tags");
    end Schemas_Become_Tag_Grammars;
 
+   --  The same schema as a Python call's keyword arguments, as Gemma writes
+   --  them: each name=value in the schema's order, a comma after each that
+   --  the last may leave off, a string in any of Python's quotes -- three of
+   --  them across lines -- a truth as True or False, an enum's choice
+   --  quoted, an optional argument left out.
+   procedure Schemas_Become_Call_Grammars
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Sch renames Model_Runner.Schema;
+      LF : constant Character := ASCII.LF;
+
+      Calc : constant String :=
+        "{""type"": ""object"", ""properties"": {"
+        & """a"": {""type"": ""integer""}, "
+        & """op"": {""type"": ""string"", ""enum"": [""+"", ""-""]}, "
+        & """note"": {""type"": ""string""}, "
+        & """loud"": {""type"": ""boolean""}}, "
+        & """required"": [""a"", ""op""]}";
+
+      procedure Check (Text : String; Wanted : Boolean; Why : String) is
+         Room   : String (1 .. Sch.Max_Grammar_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+         Item   : G.Compiled;
+         State  : G.Matcher;
+         Taken  : Boolean := True;
+      begin
+         Sch.To_Call_Grammar (Calc, Room, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "the schema was refused as a call: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+         G.Compile (Item, Room (1 .. Last), Status);
+         Assert (E.Is_Ok (Status),
+                 "the call grammar would not compile: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
+         G.Start (Item, State, Status);
+         for Index in Text'Range loop
+            if not G.Accepts (Item, State, Text (Index .. Index)) then
+               Taken := False;
+               exit;
+            end if;
+            G.Advance (Item, State, Text (Index .. Index), Status);
+            exit when E.Is_Error (Status);
+         end loop;
+         if Taken then
+            Taken := G.Is_Complete (Item, State);
+         end if;
+         Assert (Taken = Wanted,
+                 (if Wanted then "the call grammar refused "
+                  else "the call grammar took ")
+                 & """" & Text & """: " & Why);
+         G.Close (Item);
+      end Check;
+   begin
+      Check ("a=47, op=""+""", True, "the two required, no trailing comma");
+      Check ("a=47, op=""-"", note='it\'s', loud=True,", True,
+             "every argument, single quotes, a truth, a trailing comma");
+      Check ("a=1, op=""+"", note=""""""one" & LF & "two""""""", True,
+             "a string in three quotes across lines");
+      Check ("a=47", False, "a required argument missing");
+      Check ("a=1, op=""*""", False, "an op outside the enum");
+      Check ("a=1, op=""+"", loud=true", False, "a truth spelled as JSON");
+      Check ("op=""+"", a=1", False, "the arguments out of the schema's order");
+   end Schemas_Become_Call_Grammars;
+
    procedure Schemas_Become_Grammars_That_Hold
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -571,6 +638,10 @@ package body Tests.Grammar_Cases is
         (T, Schemas_Become_Tag_Grammars'Access,
          "a JSON schema becomes the tag shape of a call's parameters, each "
          & "in its tag in order, holding what the schema says and no more");
+      Register_Routine
+        (T, Schemas_Become_Call_Grammars'Access,
+         "a JSON schema becomes a Python call's keyword arguments, in order, "
+         & "Python's quotes and truths, holding what the schema says");
       Register_Routine
         (T, Schemas_Become_Grammars_That_Hold'Access,
          "a JSON schema becomes a grammar that takes what the schema "

@@ -277,9 +277,9 @@ package Model_Runner.Templates is
    --    means the model's own template.
    --  @return The syntax that format's calls are read in; the <tool_call>
    --    JSON envelope for every format that does not say otherwise. Gemma's
-   --    is Open_JSON: the envelope its format asks for, and the bare or
-   --    fenced object the model writes instead, having been trained on no
-   --    envelope at all.
+   --    is Python_Code: a call written as Python in a ```tool_code block,
+   --    as its format asks, and the open JSON it now and then writes
+   --    instead.
    function Syntax_Of (Name : String) return Model_Runner.Tools.Call_Syntax;
 
    --  The chat formats this build carries, in the order they are offered.

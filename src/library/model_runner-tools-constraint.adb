@@ -11,6 +11,10 @@ package body Model_Runner.Tools.Constraint is
    Prose_Only : constant String :=
      "root ::= ( [^<] | ""<"" [^/] )*" & ASCII.LF;
 
+   --  Any text at all: where a form cannot be shaped, a reply that is not
+   --  held to it, rather than one held away from its own calls.
+   Free_Text : constant String := "root ::= [^\x00]*" & ASCII.LF;
+
    --  The loose grammar's fixed part: the call envelope around a general
    --  JSON value, with the one hole -- the name rule -- filled from the
    --  tools offered. This is the fallback, used when a tool's argument
@@ -565,6 +569,141 @@ package body Model_Runner.Tools.Constraint is
       end if;
    end Build_Recipient;
 
+   ------------------
+   -- Build_Python --
+   ------------------
+
+   --  Gemma's form: prose, then calls written as Python in ```tool_code
+   --  blocks, each call a tool on offer with its keyword arguments shaped
+   --  by the tool's schema (Schema.To_Call_Grammar). Prose may hold any
+   --  fence but the one that opens a call: the rule spells out every way a
+   --  run of backticks can stop being "```tool_code", so code an answer
+   --  shows in a fence of its own is still prose, and a reply may end on
+   --  any of those prefixes. With an answer schema, a reply is calls or
+   --  that answer.
+   procedure Build_Python
+     (Offered       : Definitions;
+      Answer_Schema : String;
+      Scratch       : Text_Access;
+      B             : in out Builder;
+      Ok            : out Boolean)
+   is
+      Count_Of : constant Natural := Count (Offered);
+      Fence    : constant String := "```tool_code";
+   begin
+      Ok := True;
+
+      if Answer_Schema /= "" then
+         Put (B, "root ::= ( calls ws ) | answer" & ASCII.LF);
+      else
+         Put (B, "root ::= prose ( calls ws )?" & ASCII.LF);
+      end if;
+
+      --  "`" [^`], "``" [^`], "```" [^t], "```t" [^o], ... "```tool_cod" [^e].
+      Put (B, "prose ::= ( [^`]");
+      for Length in 1 .. Fence'Length - 1 loop
+         Put (B, " | """ & Fence (1 .. Length) & """ [^"
+              & Fence (Length + 1) & "]");
+      end loop;
+      Put (B, " )* prose_end?" & ASCII.LF);
+      Put (B, "prose_end ::= ");
+      for Length in 1 .. Fence'Length - 1 loop
+         if Length > 1 then
+            Put (B, " | ");
+         end if;
+         Put (B, """" & Fence (1 .. Length) & """");
+      end loop;
+      Put (B, "" & ASCII.LF);
+
+      Put (B, "calls ::= block ( ws block )*" & ASCII.LF);
+      Put (B, "block ::= """ & Fence & "\x0A"" ws call ( ws call )* ws ""```"""
+           & ASCII.LF);
+      Put (B, "call ::= ");
+      for Index in 1 .. Count_Of loop
+         if Index > 1 then
+            Put (B, " | ");
+         end if;
+         Put (B, "call_" & Image (Index));
+      end loop;
+      Put (B, "" & ASCII.LF);
+
+      for Index in 1 .. Count_Of loop
+         declare
+            Def          : constant String := Definition (Offered, Index);
+            First, Last  : Natural;
+            Present      : Boolean;
+            Grammar_Last : Natural;
+            St           : E.Error_Info;
+         begin
+            Parameters_Of (Def, First, Last, Present);
+            if not Present then
+               Ok := False;
+               return;
+            end if;
+
+            Model_Runner.Schema.To_Call_Grammar
+              (Def (First .. Last), Scratch.all, Grammar_Last, St);
+            if E.Is_Error (St) or else Grammar_Last = 0 then
+               Ok := False;
+               return;
+            end if;
+
+            declare
+               Text        : String renames Scratch.all (1 .. Grammar_Last);
+               Body_First  : Natural;
+               Body_Last   : Natural;
+               Found       : Boolean;
+            begin
+               Schema_Body (Text, Body_First, Body_Last, Found);
+               if not Found then
+                  Ok := False;
+                  return;
+               end if;
+               Put (B, "call_" & Image (Index) & " ::= """
+                    & Tool_Name (Offered, Index) & "("" ws args_"
+                    & Image (Index) & " "")""" & ASCII.LF);
+               Put (B, "args_" & Image (Index) & " ::= "
+                    & Text (Body_First .. Body_Last) & ASCII.LF);
+
+               --  The shared helpers, once, from the last tool.
+               if Index = Count_Of and then Body_Last + 1 < Text'Last then
+                  Put (B, Text (Body_Last + 2 .. Text'Last));
+               end if;
+            end;
+         end;
+      end loop;
+
+      if Answer_Schema /= "" then
+         declare
+            Grammar_Last : Natural;
+            St           : E.Error_Info;
+         begin
+            Model_Runner.Schema.To_Grammar
+              (Answer_Schema, Scratch.all, Grammar_Last, St);
+            if E.Is_Error (St) or else Grammar_Last = 0 then
+               Ok := False;
+               return;
+            end if;
+            declare
+               Text        : String renames Scratch.all (1 .. Grammar_Last);
+               First, Last : Natural;
+               Found       : Boolean;
+            begin
+               Schema_Body (Text, First, Last, Found);
+               if not Found then
+                  Ok := False;
+                  return;
+               end if;
+               Put (B, "answer ::= " & Text (First .. Last) & ASCII.LF);
+            end;
+         end;
+      end if;
+
+      if B.Full then
+         Ok := False;
+      end if;
+   end Build_Python;
+
    ------------------------
    -- Compile_Call_Grammar --
    ------------------------
@@ -579,6 +718,31 @@ package body Model_Runner.Tools.Constraint is
    is
       Tool_Count : constant Natural := Count (Offered);
    begin
+      if Syntax = Model_Runner.Tools.Python_Code and then Tool_Count > 0 then
+         --  Gemma's Python calls. A tool whose schema will not compile
+         --  leaves the reply free, as Gemma's was before: its reader also
+         --  takes the open JSON a Gemma writes now and then.
+         declare
+            Scratch : Text_Access :=
+              new String (1 .. Model_Runner.Schema.Max_Grammar_Bytes);
+            Shaped  : Builder :=
+              (Room => new String (1 .. 256 * 1024), others => <>);
+            Ok      : Boolean;
+         begin
+            Build_Python (Offered, Answer_Schema, Scratch, Shaped, Ok);
+            if Ok then
+               Model_Runner.Grammar.Compile
+                 (Into, Shaped.Room (1 .. Shaped.Used), Status);
+            end if;
+            if not Ok or else E.Is_Error (Status) then
+               Model_Runner.Grammar.Compile (Into, Free_Text, Status);
+            end if;
+            Free (Scratch);
+            Free (Shaped.Room);
+         end;
+         return;
+      end if;
+
       if Syntax = Model_Runner.Tools.Recipient_JSON then
          --  Functionary's ">>>" recipient form. With no tools offered the
          --  reply is prose; with tools, a tight grammar holds the model to a

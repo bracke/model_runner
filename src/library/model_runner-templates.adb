@@ -191,14 +191,19 @@ package body Model_Runner.Templates is
          --  Gemma has no system turn: its own template folds a system
          --  message into the first user turn, ahead of what the user said
          --  and a blank line apart, and this does the same. Tools go the
-         --  same way, since there is nowhere else for them: the model was
-         --  trained on no tool format of its own, so the first user turn
-         --  says what functions there are, as JSON one a line, and asks for
-         --  a call as a JSON object in <tool_call> tags -- the envelope
-         --  Tools.Read_Calls reads and the call grammar constrains. An
-         --  assistant turn that asked for tools writes each call that way;
-         --  a run of tool answers is folded into one user turn between
-         --  <tool_response> tags, Gemma having no tool role either.
+         --  same way, since there is nowhere else for them. Gemma has no tool
+         --  tokens; it was taught to call a function by writing the call in
+         --  Python, in a ```tool_code block, and to read its result from a
+         --  ```tool_output one, so that is what the first user turn asks
+         --  for, in the words Google gives for it: the functions as Python
+         --  definitions with their docstrings, a parameter the schema does
+         --  not require given a default of None. Asked for JSON in tags
+         --  instead, a 4B wrote fenced calls of its own invention and the
+         --  tools' answers with them. An assistant turn that called writes
+         --  each call as Python in its block; a run of tool answers is
+         --  folded into one user turn, a ```tool_output block each, Gemma
+         --  having no tool role either. Tools.Read_Calls reads the calls in
+         --  its Python_Code syntax and the call grammar holds them to it.
          --
          --  A turn's content is trimmed, as the model's own template
          --  trims it; the system message folded in front is not, as it
@@ -222,9 +227,9 @@ package body Model_Runner.Templates is
            & " and turns[loop.index0 - 1].role != 'tool' %}"
            & "<start_of_turn>user" & LF
            & "{% endif %}"
-           & "<tool_response>" & LF
+           & "```tool_output" & LF
            & "{{ message.content }}" & LF
-           & "</tool_response>" & LF
+           & "```" & LF
            & "{% if loop.last"
            & " or turns[loop.index0 + 1].role != 'tool' %}"
            & "<end_of_turn>" & LF
@@ -249,10 +254,23 @@ package body Model_Runner.Templates is
            --  the models' own templates read one.
            & "{% if tool_call.function is defined %}"
            & "{% set tool_call = tool_call.function %}{% endif %}"
-           & "<tool_call>" & LF
-           & "{""name"": ""{{ tool_call.name }}"", ""arguments"": "
-           & "{{ tool_call.arguments | tojson }}}" & LF
-           & "</tool_call>"
+           --  Each call a block of its own, on a line of its own after
+           --  what the turn said, its arguments as Python keywords: a
+           --  string, a number, a list or a mapping as JSON writes it,
+           --  which reads as the same Python, and a truth value or a null
+           --  as Python spells them.
+           & "{% if not loop.first or (message.content is string"
+           & " and message.content | trim) +%}" & LF
+           & "{% endif %}"
+           & "```tool_code" & LF
+           & "{{ tool_call.name }}("
+           & "{% for key, value in tool_call.arguments.items() %}"
+           & "{% if not loop.first %}, {% endif %}{{ key }}="
+           & "{% if value is boolean %}{% if value %}True{% else %}False"
+           & "{% endif %}{% elif value is none %}None"
+           & "{% else %}{{ value | tojson }}{% endif %}"
+           & "{% endfor %})" & LF
+           & "```"
            & "{% endfor %}"
            & "{% endif %}"
            & "<end_of_turn>" & LF
@@ -269,19 +287,42 @@ package body Model_Runner.Templates is
            & "{{ messages[0]['content'] }}" & LF & LF
            & "{% endif %}"
            & "{% if tools %}"
-           & "You have access to the following functions. To call one, "
-           & "reply with a JSON object inside <tool_call> tags and nothing "
-           & "else:" & LF
-           & "<tool_call>" & LF
-           & "{""name"": ""function-name"", ""arguments"": "
-           & "{""parameter-name"": ""value""}}" & LF
-           & "</tool_call>" & LF
-           & "The function's result comes back inside <tool_response> tags; "
-           & "wait for it, then answer from it. If no function is needed, "
-           & "answer directly." & LF
-           & "Functions:" & LF
-           & "{% for tool in tools %}{{ tool | tojson }}" & LF
-           & "{% endfor %}" & LF & LF
+           & "At each turn, if you decide to invoke any of the function(s), "
+           & "it should be wrapped with ```tool_code```. The python methods "
+           & "described below are imported and available, you can only use "
+           & "defined methods. The generated code should be readable and "
+           & "efficient. The response to a method will be wrapped in "
+           & "```tool_output``` use it to call more tools or generate a "
+           & "helpful, friendly response. When using a ```tool_code``` "
+           & "think step by step why and how it should be used." & LF & LF
+           & "The following Python methods are available:" & LF & LF
+           & "```python" & LF
+           & "{% for tool in tools %}"
+           & "{% if tool.function is defined %}"
+           & "{% set tool = tool.function %}{% endif %}"
+           & "def {{ tool.name }}("
+           & "{% for name, schema in tool.parameters.properties.items() %}"
+           & "{% if not loop.first %}, {% endif %}{{ name }}"
+           & "{% if schema.type is defined %}: "
+           & "{% if schema.type == 'string' %}str"
+           & "{% elif schema.type == 'integer' %}int"
+           & "{% elif schema.type == 'number' %}float"
+           & "{% elif schema.type == 'boolean' %}bool"
+           & "{% elif schema.type == 'array' %}list"
+           & "{% else %}dict{% endif %}{% endif %}"
+           & "{% if tool.parameters.required is not defined"
+           & " or name not in tool.parameters.required %} = None{% endif %}"
+           & "{% endfor %}) -> dict:" & LF
+           & "    """"""{{ tool.description }}" & LF
+           & "{% if tool.parameters.properties +%}" & LF
+           & "    Args:" & LF
+           & "{% for name, schema in tool.parameters.properties.items() %}"
+           & "      {{ name }}: {{ schema.description | default('') }}" & LF
+           & "{% endfor %}"
+           & "{% endif %}"
+           & "    """"""" & LF & LF
+           & "{% endfor %}"
+           & "```" & LF & LF
            & "{% endif %}"
            & "{% endif %}"
            --  Content given as parts is walked as the model's own template
@@ -710,7 +751,7 @@ package body Model_Runner.Templates is
        elsif Name = Format_Name (Format_MiniCPM)
        then Model_Runner.Tools.Function_XML
        elsif Name = Format_Name (Format_Gemma)
-       then Model_Runner.Tools.Open_JSON
+       then Model_Runner.Tools.Python_Code
        elsif Name = Format_Name (Format_Functionary)
        then Model_Runner.Tools.Recipient_JSON
        else Model_Runner.Tools.Tool_Call_JSON);

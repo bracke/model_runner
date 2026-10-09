@@ -2,6 +2,8 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Unchecked_Deallocation;
 
+with Model_Runner.Tools.Python_Calls;
+
 package body Model_Runner.Tools is
 
    package E renames Model_Runner.Errors;
@@ -16,6 +18,13 @@ package body Model_Runner.Tools is
    --  model that answers in another one wrote no call this can read.
    Call_Opens  : constant String := "<tool_call>";
    Call_Closes : constant String := "</tool_call>";
+
+   --  What opens a call written as Python, and what closes it: a fenced
+   --  block, as Gemma writes one. The block named tool_call is the same
+   --  block, as Gemma's own instructions name it once.
+   Code_Opens  : constant String := "```tool_code";
+   Code_Named  : constant String := "```tool_call";
+   Code_Closes : constant String := "```";
 
    procedure Free_Storage is
      new Ada.Unchecked_Deallocation (String, Storage_Access);
@@ -618,6 +627,26 @@ package body Model_Runner.Tools is
       is (Position + Marker'Length - 1 <= Reply'Last
           and then Reply (Position .. Position + Marker'Length - 1) = Marker);
    begin
+      if Syntax = Python_Code then
+         --  The prose before the first fenced call, or the whole reply
+         --  when it wrote none -- and then a <tool_call> it wrote instead.
+         First := Reply'First;
+         for Start in Reply'First .. Reply'Last - Code_Opens'Length + 1 loop
+            if Reply (Start .. Start + Code_Opens'Length - 1) in Code_Opens | Code_Named
+            then
+               Last := Start - 1;
+               while Last >= Reply'First
+                 and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+               loop
+                  Last := Last - 1;
+               end loop;
+               return;
+            end if;
+         end loop;
+         Last := Reply'First + Spoken_Length (Reply) - 1;
+         return;
+      end if;
+
       if Syntax /= Recipient_JSON then
          --  The prose before the first block, as a span from the start.
          First := Reply'First;
@@ -1632,6 +1661,77 @@ package body Model_Runner.Tools is
                end if;
             end loop;
          end;
+
+      when Python_Code =>
+         --  Gemma's form: each ```tool_code block holds one or more calls
+         --  written as Python, read into a name and a JSON object. A reply
+         --  with no such block is read as the open JSON a model trained on
+         --  no envelope writes, since a Gemma now and then writes that
+         --  instead.
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Marks (Index, Code_Opens) or else Marks (Index, Code_Named) then
+               --  Read call by call up to the fence that closes the block,
+               --  not to the first "```": an edit's text may hold one.
+               declare
+                  Rest      : constant String :=
+                    Reply (Index + Code_Opens'Length .. Reply'Last);
+                  From      : Positive := Rest'First;
+                  Name      : String (1 .. 256);
+                  Name_Last : Natural;
+                  Args      : String (1 .. Max_Call_Bytes);
+                  Args_Last : Natural;
+                  Found     : Boolean;
+                  Read      : Boolean;
+               begin
+                  loop
+                     Python_Calls.Read_Call
+                       (Rest, From, Name, Name_Last, Args, Args_Last,
+                        Found, Read);
+                     exit when not Found;
+                     if not Read then
+                        Status := E.Make (E.Tools_Call_Malformed);
+                        E.Add_Integer
+                          (Status, "index", Long_Long_Integer (Item.Used + 1));
+                        return;
+                     end if;
+                     declare
+                        Room    : String (1 .. Max_Call_Bytes);
+                        Written : Natural;
+                        Reading : E.Error_Info;
+                     begin
+                        Rewrite (Args (1 .. Args_Last), Room, Written, Reading);
+                        if E.Is_Error (Reading) then
+                           Status := E.Make (E.Tools_Call_Malformed);
+                           E.Add_Integer
+                             (Status, "index", Long_Long_Integer (Item.Used + 1));
+                           return;
+                        end if;
+                        Store (Name (1 .. Name_Last), Room (1 .. Written));
+                     end;
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  end loop;
+
+                  --  A block that never closes is a reply that stopped in
+                  --  the middle of a call.
+                  if not Marks (From, Code_Closes) then
+                     Status := E.Make (E.Tools_Call_Malformed);
+                     E.Add_Integer
+                       (Status, "index", Long_Long_Integer (Item.Used + 1));
+                     return;
+                  end if;
+                  Index := From + Code_Closes'Length;
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
+
+         if Item.Used = 0 then
+            Read_Calls (Item, Reply, Status, Open_JSON);
+         end if;
 
       when Recipient_JSON =>
          --  Functionary's recipient form. The reply is a run of blocks, each

@@ -100,4 +100,25 @@ package Model_Runner.Schema is
       Last    : out Natural;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  The same schema as the keyword arguments of a Python call, the way
+   --  Gemma writes one in a tool_code block: each property as its name,
+   --  '=', and its value, a comma after it that the last may leave off, in
+   --  the order the schema names them and a property it does not require
+   --  allowed to be absent.
+   --
+   --  A value is a Python literal: a string in double, single or triple
+   --  quotes, a boolean as True or False, a number as anywhere, an enum's
+   --  choices as JSON writes them -- a quoted string is Python too -- and
+   --  an object or an array as JSON.
+   --
+   --  @param Text The schema, as JSON.
+   --  @param Grammar Receives the grammar; empty on failure.
+   --  @param Last Length of the grammar written.
+   --  @param Status As To_Grammar.
+   procedure To_Call_Grammar
+     (Text    : String;
+      Grammar : out String;
+      Last    : out Natural;
+      Status  : out Model_Runner.Errors.Error_Info);
+
 end Model_Runner.Schema;
