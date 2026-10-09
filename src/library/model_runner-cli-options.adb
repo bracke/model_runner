@@ -1781,6 +1781,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+                     Result.Max_Tokens_Set := True;
 
                   elsif Name = "--context-size" then
                      Natural_Value (Flag_Context, 1, 1_048_576,

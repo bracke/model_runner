@@ -49,7 +49,8 @@ package Model_Runner.Agent_Runtime is
    function Brief (Item : Contract) return String;
 
    --  The files a contract says the helper must write, one a word, commas or
-   --  spaces apart.
+   --  spaces apart -- the words that name a file, with a folder or an
+   --  extension; outputs described in words name none.
    --
    --  @param Item The contract.
    --  @return The paths.

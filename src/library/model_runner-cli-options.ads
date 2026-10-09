@@ -330,6 +330,10 @@ package Model_Runner.CLI.Options is
       Delegate_System_Path : Model_Runner.Text.Bounded;
 
       Max_Tokens   : Natural := 256;
+
+      --  Whether --max-tokens was given: an agent's reply is allowed more
+      --  than a plain run's where it was not.
+      Max_Tokens_Set : Boolean := False;
       Context_Size : Natural := 0;
 
       --  Close the tool loop rather than leaving it open. Without this a run

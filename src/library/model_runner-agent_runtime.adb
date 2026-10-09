@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Editing;
 
@@ -45,10 +46,18 @@ package body Model_Runner.Agent_Runtime is
       Outputs : constant String := To_String (Item.Outputs);
       Result  : Paths.Vector;
       Start   : Natural := Outputs'First;
+      --  A word that names a file: a folder or an extension in it, and
+      --  nothing a sentence has. Outputs described in words -- "the result
+      --  of 6 * 7" -- name no file, and none is held to be written.
+      function Path_Like (Word : String) return Boolean is
+        ((Ada.Strings.Fixed.Index (Word, "/") > 0
+          or else (Ada.Strings.Fixed.Index (Word, ".") > Word'First
+                   and then Ada.Strings.Fixed.Index (Word, ".") < Word'Last))
+         and then (for all C of Word => C not in '*' | '?' | '"' | '(' | ')'));
    begin
       for Index in Outputs'First .. Outputs'Last + 1 loop
          if Index > Outputs'Last or else Outputs (Index) in ',' | ' ' | ASCII.LF then
-            if Index > Start then
+            if Index > Start and then Path_Like (Outputs (Start .. Index - 1)) then
                Result.Append (Outputs (Start .. Index - 1));
             end if;
             Start := Index + 1;

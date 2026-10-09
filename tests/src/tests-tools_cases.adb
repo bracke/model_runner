@@ -861,6 +861,9 @@ package body Tests.Tools_Cases is
          Assert (Rt.Unwritten (Outputs, Before) = "obj/rt_b.txt",
                  "an output not written was not named, or a written one was: " & Rt.Unwritten (Outputs, Before));
          Ada.Directories.Delete_File ("obj/rt_a.txt");
+         Assert (Rt.Output_Paths
+                   (Rt.Contract_Of ("{""task"": ""t"", ""outputs"": ""the result of 6 * 7""}", Found)).Is_Empty,
+                 "outputs described in words were taken for files");
          Assert (Has (Rt.Helper_Rules, "status: done") and then Has (Rt.Helper_Opening ("reviewer"), "as its reviewer"),
                  "a helper was not told how to work and report");
       end;

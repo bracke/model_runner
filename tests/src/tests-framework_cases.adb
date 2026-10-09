@@ -10151,6 +10151,25 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run ("/history " & To_String (Stuck), Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/history TASK-999", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/brief " & To_String (Stuck), Screen, Agent);
+            --  A change of the project's state is said before the session
+            --  model's next turn, once; nothing changed, nothing is said.
+            declare
+               Seen  : Natural := Model_Runner.CLI.Project_Commands.Project_Revision;
+               Start : constant Natural := Seen;
+            begin
+               Model_Runner.CLI.Project_Commands.Run
+                 ("/task new Watch the weather kind=analysis", Screen, Agent);
+               declare
+                  Note : constant String := Model_Runner.CLI.Project_Commands.Changes_Since (Seen);
+               begin
+                  Assert (Start > 0 and then Seen > Start
+                          and then Ada.Strings.Fixed.Index (Note, "the project's state changed") > 0
+                          and then Ada.Strings.Fixed.Index (Note, "Task_Candidate_Created") > 0,
+                          "a change of the project was not said before the next turn: " & Note);
+                  Assert (Model_Runner.CLI.Project_Commands.Changes_Since (Seen) = "",
+                          "a change already said was said again");
+               end;
+            end;
             Set_Output (Standard_Output);
             Set_Error (Standard_Error);
             Close (Said);

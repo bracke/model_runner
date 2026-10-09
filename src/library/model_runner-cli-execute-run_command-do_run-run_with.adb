@@ -896,7 +896,12 @@ begin
          end;
 
          Request.Sampling := Item.Sampling;
-         Request.Max_Tokens := Item.Max_Tokens;
+         --  An agent's reply holds its reasoning and its call: a reasoning
+         --  model spent the plain run's 256 tokens reasoning and was cut off
+         --  inside the call it was writing. As a /work agent's, at least
+         --  1024 unless a length was named.
+         Request.Max_Tokens :=
+           (if Item.Max_Tokens_Set then Item.Max_Tokens else Natural'Max (Item.Max_Tokens, 1024));
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
          Request.Batch_Size := Item.Batch_Size;
