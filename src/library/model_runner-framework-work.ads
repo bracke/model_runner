@@ -164,11 +164,81 @@ package Model_Runner.Framework.Work is
    --  @param Named The tool.
    --  @param Arguments Its arguments.
    --  @param Answer What it answered.
+   --  @param Number The entry Note_Start made for it, to fill in; nought
+   --    for a new entry.
    procedure Note_Call
      (Host      : in out Child_Host;
       Named     : String;
       Arguments : String;
-      Answer    : String);
+      Answer    : String;
+      Number    : Natural := 0);
+
+   --  Record a call that may change state as started, before it runs, on
+   --  the invocation now running; Note_Call with Number fills it in. A run
+   --  that stops between leaves it said, and recovery names it.
+   --
+   --  @param Host The host.
+   --  @param Named The tool.
+   --  @param Arguments Its arguments.
+   --  @param Number The entry, for Note_Call; nought where none was made.
+   procedure Note_Start
+     (Host      : in out Child_Host;
+      Named     : String;
+      Arguments : String;
+      Number    : out Natural);
+
+   --  What a task's run is to be, worked out from the project state before
+   --  its agent is called: the task and its kind, what the agent may do --
+   --  write, check and by which profile, hand parts to helpers and how
+   --  many, propose tasks, split the task -- its parts, and its budgets.
+   --  The instructions the agent is given are this, rendered; and it is
+   --  one object a caller can show, or set what a run did against.
+   type Execution_Plan is record
+      Task_Id      : Ada.Strings.Unbounded.Unbounded_String;
+      Kind         : Ada.Strings.Unbounded.Unbounded_String;
+      May_Write    : Boolean := False;
+      May_Check    : Boolean := False;
+      Profile      : Ada.Strings.Unbounded.Unbounded_String;
+      May_Delegate : Boolean := False;
+      Max_Helpers  : Natural := 0;
+      May_Propose  : Boolean := False;
+      May_Split    : Boolean := False;
+      Apart        : Boolean := False;
+
+      --  What may be done, in plain words, as the agent is told it.
+      Permitted    : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Its parts, a line each: identifier, title and state.
+      Parts        : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The most tool calls and steps a run may take, and the seconds it
+      --  is given; nought for no bound.
+      Max_Calls    : Natural := 0;
+      Max_Steps    : Natural := 0;
+      Seconds      : Natural := 0;
+   end record;
+
+   --  The plan for a task's run, by the permissions its agent holds.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Allowed The agent's permissions.
+   --  @param Apart Whether it works apart, in a workspace.
+   --  @param Helpers Whether the runner can make helpers.
+   --  @return The plan.
+   function Plan_For
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Allowed : Permissions.Permission_Set;
+      Apart   : Boolean;
+      Helpers : Boolean := True) return Execution_Plan;
+
+   --  A plan as the agent is told it: how to answer, what it may do, its
+   --  budget where it has one, and its parts.
+   --
+   --  @param Plan The plan.
+   --  @return The text.
+   function Rendered (Plan : Execution_Plan) return String;
 
    --  What a task's agent is told after its context -- how to answer, the
    --  tools it holds and what it may do -- as /work would tell it now: the

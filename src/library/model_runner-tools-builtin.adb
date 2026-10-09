@@ -385,22 +385,28 @@ package body Model_Runner.Tools.Builtin is
    --  where it fails rather than leaving it to be read back out of the
    --  words. The words of a failure still begin "error: ", for the model.
    type Reply (Length : Natural) is record
-      Failed : Boolean;
-      Text   : String (1 .. Length);
+      Failed  : Boolean;
+      Changed : Boolean := False;
+      Text    : String (1 .. Length);
    end record;
 
    --  An answer.
    function Said (Text : String) return Reply
-   is ((Length => Text'Length, Failed => False, Text => Text));
+   is ((Length => Text'Length, Failed => False, Changed => False, Text => Text));
+
+   --  An answer that changed what later calls read: a file written anew.
+   function Changed_It (Text : String) return Reply
+   is ((Length => Text'Length, Failed => False, Changed => True, Text => Text));
 
    --  A failure, in the words the model is told it in.
    function Failure (Text : String) return Reply
-   is ((Length => Text'Length + 7, Failed => True, Text => "error: " & Text));
+   is ((Length => Text'Length + 7, Failed => True, Changed => False,
+        Text => "error: " & Text));
 
    --  The same answer with words before it, failed or not as it was.
    function Prefixed (Before : String; Item : Reply) return Reply
    is ((Length => Before'Length + Item.Length, Failed => Item.Failed,
-        Text => Before & Item.Text));
+        Changed => Item.Changed, Text => Before & Item.Text));
 
    function Calculator (Args : String) return Reply is
       A, B : Long_Long_Integer;
@@ -1186,6 +1192,42 @@ package body Model_Runner.Tools.Builtin is
               elsif not Have_P then "a path"
               else "content: the whole new text of " & Path));
       end if;
+      --  A file that already holds exactly this is left as it is, and said
+      --  so: a write of what is there changes nothing, and is no progress.
+      if Ada.Directories.Exists (Path)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File)
+        and then Natural (Ada.Directories.Size (Path)) = Content'Length
+      then
+         declare
+            Held : Stream_IO.File_Type;
+            Room : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
+            Last : Stream_Element_Offset := 0;
+            Same : Boolean := True;
+         begin
+            Stream_IO.Open (Held, Stream_IO.In_File, Path);
+            if Content'Length > 0 then
+               Stream_IO.Read (Held, Room, Last);
+            end if;
+            Stream_IO.Close (Held);
+            Same := Natural (Last) = Content'Length;
+            for Index in 1 .. Last loop
+               exit when not Same;
+               Same := Character'Val (Room (Index))
+                       = Content (Content'First + Natural (Index) - 1);
+            end loop;
+            if Same then
+               return Said ("unchanged: " & Path & " already holds these"
+                            & Natural'Image (Content'Length) & " bytes");
+            end if;
+         exception
+            when others =>
+               --  Unread, it is written as any other.
+               if Stream_IO.Is_Open (Held) then
+                  Stream_IO.Close (Held);
+               end if;
+         end;
+      end if;
+
       --  A new file's directory made with it: a file under src/ is asked
       --  for whether or not src/ is there yet.
       declare
@@ -1212,7 +1254,7 @@ package body Model_Runner.Tools.Builtin is
          Stream_IO.Write (File, Block);
       end;
       Stream_IO.Close (File);
-      return Said ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path);
+      return Changed_It ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path);
    exception
       when others =>
          if Stream_IO.Is_Open (File) then
@@ -2126,10 +2168,15 @@ package body Model_Runner.Tools.Builtin is
       --  said it failed.
       Outcome :=
         (if Refused /= Tr.Not_Refused
-         then (Answer => Tr.Refused, Refusal => Refused)
+         then (Answer => Tr.Refused, Refusal => Refused, Changed => False)
          elsif Given.Failed
-         then (Answer => Tr.Failed, Refusal => Tr.Not_Refused)
-         else Tr.Done);
+         then (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False)
+         --  A write says whether it changed the file; any other tool that
+         --  may change state is taken to have.
+         else (Answer => Tr.Answered, Refusal => Tr.Not_Refused,
+               Changed => Given.Changed
+                          or else (Named /= "write_file"
+                                   and then Tr."=" (Kind (Self, Named), Tr.Changes))));
       if Text'Length > Result'Length then
          Status := E.Make (E.Tools_Too_Large);
          return;

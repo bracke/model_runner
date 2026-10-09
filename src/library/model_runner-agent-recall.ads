@@ -115,6 +115,23 @@ package Model_Runner.Agent.Recall is
    --  The longest record written.
    Record_Most : constant := 1_536;
 
+   --  Pairs of fingerprints seen -- a call and what it answered, a path and
+   --  what was written to it -- kept across every change, so that an answer
+   --  the same as one before a change, or a file put back as an earlier
+   --  write left it, is noticed.
+   type Sightings is tagged limited private;
+
+   --  Whether a pair was seen before; it is seen from now on either way.
+   --
+   --  @param Self The sightings.
+   --  @param Of_What The call, or the path.
+   --  @param Was What it answered, or what was written.
+   --  @return True when the pair was seen before this.
+   function Seen_Again
+     (Self    : in out Sightings;
+      Of_What : Interfaces.Unsigned_64;
+      Was     : Interfaces.Unsigned_64) return Boolean;
+
 private
 
    type Entry_Row is record
@@ -128,6 +145,16 @@ private
 
    type Work_Log is tagged limited record
       Rows : Entry_Rows;
+      Used : Natural := 0;
+   end record;
+
+   type Pair is record
+      Of_What, Was : Interfaces.Unsigned_64 := 0;
+   end record;
+   type Pairs is array (1 .. 4 * Most) of Pair;
+
+   type Sightings is tagged limited record
+      Held : Pairs;
       Used : Natural := 0;
    end record;
 

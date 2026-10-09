@@ -143,6 +143,8 @@ package Model_Runner.Framework.Invocations is
    --  @param Arguments Its arguments.
    --  @param Answer What it answered.
    --  @param Status Framework_Not_Found when there is no such invocation.
+   --  @param Number The entry Note_Start made for it, to fill in; nought
+   --    for a new entry.
    procedure Note_Call
      (Item      : Stores.Store;
       Change    : in out Stores.Transaction;
@@ -150,7 +152,40 @@ package Model_Runner.Framework.Invocations is
       Named     : String;
       Arguments : String;
       Answer    : String;
+      Status    : out Model_Runner.Errors.Error_Info;
+      Number    : Natural := 0);
+
+   --  What a call's entry says in place of its answer while it runs.
+   Unanswered : constant String := "(started; not answered)";
+
+   --  Record a call that may change state as started, before it runs: an
+   --  entry as Note_Call writes, its answer Unanswered, for Note_Call to
+   --  fill in by Number once it has answered. A run that stops between
+   --  leaves the entry saying so, and recovery names it.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The invocation, started and not ended.
+   --  @param Named The tool.
+   --  @param Arguments Its arguments.
+   --  @param Number The entry's number, for Note_Call.
+   --  @param Status Framework_Not_Found when there is no such invocation.
+   procedure Note_Start
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Id        : String;
+      Named     : String;
+      Arguments : String;
+      Number    : out Natural;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The calls an invocation started and never answered, as their entries
+   --  name them: the tool and the start of its arguments.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return Them; empty for none.
+   function Unanswered_Calls (Item : Stores.Store; Id : String) return Name_Lists.Vector;
 
    --  Where an invocation stands: started, completed, failed or cancelled.
    --

@@ -49,14 +49,19 @@ package Model_Runner.Tools.Runner is
    type Refusal_Kind is
      (Not_Refused, Outside_Project, Harness_Owned, Not_Permitted, Policy);
 
-   --  A call's ending, beside the text the model is given.
+   --  A call's ending, beside the text the model is given. Changed says
+   --  whether the state later calls read is different for it: a write of
+   --  what a file already held changed nothing, and a run of a program or
+   --  a child agent is taken to have changed what it may.
    type Call_Outcome is record
       Answer  : Answer_Kind := Answered;
       Refusal : Refusal_Kind := Not_Refused;
+      Changed : Boolean := False;
    end record;
 
    --  An answer that did what it was asked.
-   Done : constant Call_Outcome := (Answer => Answered, Refusal => Not_Refused);
+   Done : constant Call_Outcome :=
+     (Answer => Answered, Refusal => Not_Refused, Changed => False);
 
    --  Run one call and write back what the model should be told.
    --

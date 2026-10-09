@@ -133,7 +133,7 @@ package body Model_Runner.Agent.Recall is
 
       function Of_Section (Row : Entry_Row; Which : Section) return Boolean
       is (case Which is
-            when Changed => Row.Ended.Answer = Tr.Answered and then Row.Kind = Tr.Changes,
+            when Changed => Row.Ended.Answer = Tr.Answered and then Row.Ended.Changed,
             when Read    => Row.Ended.Answer = Tr.Answered and then Row.Kind /= Tr.Changes,
             when Failing => Row.Ended.Answer = Tr.Failed,
             when Refused => Row.Ended.Answer = Tr.Refused);
@@ -175,5 +175,27 @@ package body Model_Runner.Agent.Recall is
       return (if Length (Said) <= Record_Most then To_String (Said)
               else Slice (Said, 1, Record_Most - 4) & " ..." & ASCII.LF);
    end Record_Text;
+
+   ----------------
+   -- Seen_Again --
+   ----------------
+
+   function Seen_Again
+     (Self    : in out Sightings;
+      Of_What : Interfaces.Unsigned_64;
+      Was     : Interfaces.Unsigned_64) return Boolean
+   is
+   begin
+      for Index in 1 .. Self.Used loop
+         if Self.Held (Index).Of_What = Of_What and then Self.Held (Index).Was = Was then
+            return True;
+         end if;
+      end loop;
+      if Self.Used < Self.Held'Last then
+         Self.Used := Self.Used + 1;
+         Self.Held (Self.Used) := (Of_What => Of_What, Was => Was);
+      end if;
+      return False;
+   end Seen_Again;
 
 end Model_Runner.Agent.Recall;

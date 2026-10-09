@@ -3676,10 +3676,11 @@ package body Tests.Template_Cases is
          end loop;
       end Rounds;
    begin
-      Work.Note ("write_file", "a.adb", Tr.Changes, Tr.Done);
-      Work.Note ("run_checks", "", Tr.Reads, (Answer => Tr.Failed, Refusal => Tr.Not_Refused));
+      Work.Note ("write_file", "a.adb", Tr.Changes,
+                 (Answer => Tr.Answered, Refusal => Tr.Not_Refused, Changed => True));
+      Work.Note ("run_checks", "", Tr.Reads, (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False));
       Work.Note ("read_file", "/etc/passwd", Tr.Reads,
-                 (Answer => Tr.Refused, Refusal => Tr.Outside_Project));
+                 (Answer => Tr.Refused, Refusal => Tr.Outside_Project, Changed => False));
       declare
          Said : constant String := Work.Record_Text;
       begin

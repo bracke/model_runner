@@ -944,13 +944,44 @@ package body Model_Runner.Framework.Work is
    --  What a task's root agent is told after its context, from what it may
    --  do: the tools it holds, how to answer, its permissions and its parts.
    --  The one text /work gives and /task context shows.
+   function Plan_For
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Allowed : Permissions.Permission_Set;
+      Apart   : Boolean;
+      Helpers : Boolean := True) return Execution_Plan
+   is separate;
+
+   function Rendered (Plan : Execution_Plan) return String is
+   begin
+      return Instructions_For (Plan.May_Propose, Plan.May_Split, Plan.May_Write,
+                               May_Delegate => Plan.May_Delegate, May_Check => Plan.May_Check)
+        & ASCII.LF & "## What you may do" & ASCII.LF
+        & "You may " & To_String (Plan.Permitted) & "."
+        & (if Plan.May_Write
+           then " Change only the files you may write; a change to any other file fails the work."
+           else "")
+        & (if Plan.May_Propose then "" else " You may not propose tasks or parts.")
+        & ASCII.LF
+        --  Its budget, where it has one: a small model told how many calls
+        --  it has spends them on the work.
+        & (if Plan.Max_Calls = 0 then ""
+           else "You have at most" & Natural'Image (Plan.Max_Calls) & " tool calls." & ASCII.LF)
+        & (if Plan.Parts = Null_Unbounded_String then ""
+           else ASCII.LF & "## Your parts" & ASCII.LF & To_String (Plan.Parts)
+                & "Those complete are done: do what is left of the task itself, and do not split"
+                & " it into them again." & ASCII.LF);
+   end Rendered;
+
+   --  What a task's root agent is told after its context, from what it may
+   --  do: its plan, rendered.
    function Instructions_With
      (Item    : Stores.Store;
       Task_Id : String;
       Allowed : Permissions.Permission_Set;
       Apart   : Boolean;
       Helpers : Boolean := True) return String
-   is separate;
+   is (Rendered (Plan_For (Item, Task_Id, Allowed, Apart, Helpers)));
 
    -----------------------
    -- Instructions_Of --
@@ -1249,19 +1280,47 @@ package body Model_Runner.Framework.Work is
      (Host      : in out Child_Host;
       Named     : String;
       Arguments : String;
-      Answer    : String)
+      Answer    : String;
+      Number    : Natural := 0)
    is
       Change : Stores.Transaction;
       Status : E.Error_Info;
    begin
       if not Host.Calls.Is_Empty then
          Invocations.Note_Call
-           (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Answer, Status);
+           (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Answer, Status,
+            Number => Number);
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
       end if;
    end Note_Call;
+
+   ----------------
+   -- Note_Start --
+   ----------------
+
+   procedure Note_Start
+     (Host      : in out Child_Host;
+      Named     : String;
+      Arguments : String;
+      Number    : out Natural)
+   is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      Number := 0;
+      if not Host.Calls.Is_Empty then
+         Invocations.Note_Start
+           (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Number, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Host.Item.all, Change, Status);
+         end if;
+         if E.Is_Error (Status) then
+            Number := 0;
+         end if;
+      end if;
+   end Note_Start;
 
    ----------------
    -- Open_Child --

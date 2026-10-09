@@ -4802,6 +4802,31 @@ package body Tests.Framework_Cases is
       Assert (Iv.State_Of (Store, To_String (First)) = "started",
               "a started call is not recorded as started");
 
+      --  A call that may change state is in the record before it runs; it
+      --  is named unanswered until its answer fills its entry in.
+      declare
+         Number : Natural;
+         Other  : Natural;
+      begin
+         Iv.Note_Start (Store, Change, To_String (First), "write_file",
+                        "{""path"": ""a.txt""}", Number, Status);
+         S.Commit (Store, Change, Status);
+         Iv.Note_Start (Store, Change, To_String (First), "shell",
+                        "{""command"": ""make""}", Other, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Number = 1 and then Other = 2
+                 and then Natural (Iv.Unanswered_Calls (Store, To_String (First)).Length) = 2,
+                 "calls noted as started were not named unanswered");
+         Iv.Note_Call (Store, Change, To_String (First), "write_file",
+                       "{""path"": ""a.txt""}", "wrote 4 bytes", Status, Number => Number);
+         S.Commit (Store, Change, Status);
+         Assert (Natural (Iv.Unanswered_Calls (Store, To_String (First)).Length) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Iv.Unanswered_Calls (Store, To_String (First)).First_Element,
+                             "shell") = 1,
+                 "an answered call was still named unanswered, or the other was not");
+      end;
+
       Iv.Finish (Store, Change, To_String (First), Iv.Failed,
                  (Prompt_Tokens => 10, Output_Tokens => 2, Seconds => 1), "",
                  "the model stopped", Status);

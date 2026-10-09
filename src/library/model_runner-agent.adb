@@ -35,6 +35,19 @@ package body Model_Runner.Agent is
    -- Run --
    ---------
 
+   --------------
+   -- Class_Of --
+   --------------
+
+   function Class_Of (Status : Model_Runner.Errors.Error_Info) return Failure_Class
+   is (case Status.Code is
+         when E.Template_Output_Too_Large => Too_Large_To_Render,
+         when E.Generation_Context_Exhausted | E.Generation_Prompt_Too_Long => Context_Exhausted,
+         when E.Generation_Cancelled => Interrupted,
+         when E.Tools_Call_Malformed => Unreadable_Call,
+         when others =>
+           (if E.Is_Error (Status) then Backend_Error else Other_Failure));
+
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
       Session    : in out Model_Runner.Llama.Session;
@@ -125,6 +138,25 @@ package body Model_Runner.Agent is
       --  And the work as it went, for a compacted conversation to carry.
       Work : Model_Runner.Agent.Recall.Work_Log;
 
+      --  What calls answered and what was written where, across every
+      --  change; and how many answered calls in a row have changed
+      --  nothing. A run going nowhere is told so -- the harness says what
+      --  it sees rather than waiting for the step budget to run out.
+      Sighted : Model_Runner.Agent.Recall.Sightings;
+      Quiet   : Natural := 0;
+
+      --  Whether any call has changed state yet: before one, an answer
+      --  the same as before is no news.
+      Made_Change : Boolean := False;
+
+      --  Calls made in the turns before this one: a call's number in the
+      --  run is this and its place in its turn.
+      Invocations : Natural := 0;
+
+      --  Calls in a row that change nothing before the run is told so, and
+      --  told again at every as many more.
+      Quiet_Note : constant := 8;
+
       --  Turns in a row that only repeated calls: going round is the
       --  second such turn, not the first.
       Stalled : Natural := 0;
@@ -133,6 +165,11 @@ package body Model_Runner.Agent is
       --  down as they are used; when none are left, such an error stops the
       --  loop as it always did.
       Retries_Left : Natural := Max_Retries;
+
+      --  Times a reply whose call would not read is given back to the
+      --  model, and what the last reply's reading said.
+      Chances_Left : Natural := 2;
+      Reading      : E.Error_Info;
 
       --  FNV-1a over the name, a separator, and the arguments.
       function Digest (Named : String; Args : String)
@@ -254,9 +291,9 @@ package body Model_Runner.Agent is
             --  caller asked for that. Each compaction that drops something
             --  invalidates the committed positions, so the session is reset
             --  before rendering again.
-            while Compact
-              and then E.Is_Error (Status)
-              and then Status.Code = E.Template_Output_Too_Large
+            while E.Is_Error (Status)
+              and then Recovery_For (Class_Of (Status), Compact, Retries_Left, 0)
+                       = Compact_And_Retry
             loop
                declare
                   Gone : Natural;
@@ -310,14 +347,30 @@ package body Model_Runner.Agent is
             --  An unfinished turn is not committed, and the session is reset
             --  so the next attempt re-evaluates the committed conversation.
             L.Reset (Session);
-            if Retries_Left > 0 then
-               --  A retry: the committed conversation is unchanged, so the
-               --  loop renders it again and generates again. The step is not
-               --  counted, only the retry.
-               Retries_Left := Retries_Left - 1;
-               Result.Retries := Result.Retries + 1;
-               goto Next_Iteration;
-            end if;
+            case Recovery_For (Class_Of (Last_Result.Error), Compact, Retries_Left, 0) is
+               when Retry_Same =>
+                  --  A retry: the committed conversation is unchanged, so
+                  --  the loop renders it again and generates again. The step
+                  --  is not counted, only the retry.
+                  Retries_Left := Retries_Left - 1;
+                  Result.Retries := Result.Retries + 1;
+                  goto Next_Iteration;
+               when Compact_And_Retry =>
+                  --  Out of context: room made by dropping the oldest turns,
+                  --  and the step tried again -- where it was tried again as
+                  --  it was, and ran out the same way.
+                  declare
+                     Gone : Natural;
+                  begin
+                     Conv.Compact (Messages, Keep_Recent, Gone, Work.Record_Text);
+                     if Gone > 0 then
+                        Result.Compactions := Result.Compactions + 1;
+                        goto Next_Iteration;
+                     end if;
+                  end;
+               when Return_To_Model | Stop =>
+                  null;
+            end case;
             Result.Reason := Generation_Failed;
             Result.Error := Last_Result.Error;
             exit Step_Loop;
@@ -334,8 +387,8 @@ package body Model_Runner.Agent is
          --  in the template's own spelling.
          declare
             Status  : E.Error_Info;
-            Reading : E.Error_Info;
          begin
+            Reading := E.Success;
             if Have_Tools then
                Conv.Append_Reply
                  (Messages, Gen.Generated_Text (Last_Result), Status, Reading,
@@ -368,6 +421,34 @@ package body Model_Runner.Agent is
          Result.Generated_Tokens :=
            Result.Generated_Tokens + Last_Result.Generated_Tokens;
          Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
+
+         --  A call written so that it could not be read: the model is told,
+         --  and tries again, twice at most -- where the reply was taken as
+         --  an answer with no call in it and the run ended.
+         --  Only where a call is marked as one: the open syntax reads a bare
+         --  or fenced object as a call, and an answer showing a sample of
+         --  JSON is no broken call.
+         if E.Is_Error (Reading)
+           and then Model_Runner.Tools."/=" (Tool_Syntax, Model_Runner.Tools.Open_JSON)
+           and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
+           and then Result.Steps < Max_Steps
+           and then Recovery_For (Class_Of (Reading), Compact, Retries_Left, Chances_Left)
+                    = Return_To_Model
+         then
+            declare
+               Told : E.Error_Info;
+            begin
+               Chances_Left := Chances_Left - 1;
+               Conv.Append
+                 (Messages, Conv.User_Role,
+                  "Your tool call could not be read: " & E.Error_Code'Image (Reading.Code)
+                  & ". Write the call again, exactly in the format the tools were offered"
+                  & " in, or answer without a call.", Told);
+               if E.Is_Ok (Told) then
+                  goto Next_Iteration;
+               end if;
+            end;
+         end if;
 
          declare
             Turn  : constant Positive := Conv.Length (Messages);
@@ -429,7 +510,7 @@ package body Model_Runner.Agent is
                --  A note in a call's place: refused by what, or failed.
                Failed_Note : constant Model_Runner.Tools.Runner.Call_Outcome :=
                  (Answer => Model_Runner.Tools.Runner.Failed,
-                  Refusal => Model_Runner.Tools.Runner.Not_Refused);
+                  Refusal => Model_Runner.Tools.Runner.Not_Refused, Changed => False);
 
                Repeat_Note : constant String :=
                  "error: this exact call was already made in this "
@@ -453,7 +534,10 @@ package body Model_Runner.Agent is
                      Items (Call).Named := U.To_Unbounded_String (Named);
                      Items (Call).Args  := U.To_Unbounded_String (Args);
                      if Watch /= null then
-                        Watch.On_Call (Named, Args);
+                        Watch.On_Call
+                          ((Id => Invocations + Call, In_Turn => Call, Of_Turn => Asked,
+                            Changes => Effect = Model_Runner.Tools.Runner.Changes),
+                           Named, Args);
                      end if;
 
                      --  The same call earlier in this very turn: its answer,
@@ -529,7 +613,7 @@ package body Model_Runner.Agent is
                                     & "without it");
                                  Items (Call).Ended :=
                                    (Answer  => Model_Runner.Tools.Runner.Refused,
-                                    Refusal => Model_Runner.Tools.Runner.Not_Permitted);
+                                    Refusal => Model_Runner.Tools.Runner.Not_Permitted, Changed => False);
 
                               when Allow =>
                                  --  After a call that changes state, in
@@ -665,32 +749,86 @@ package body Model_Runner.Agent is
                      declare
                         Source : constant Positive :=
                           (if Items (Call).Copy_Of > 0 then Items (Call).Copy_Of else Call);
-                        Reply : constant String :=
+                        Said_By_Tool : constant String :=
                           (if Items (Source).Failed
                            then "error: the tool's answer was too large to "
                                 & "return"
                            else U.To_String (Items (Source).Text));
                         Ended : constant Model_Runner.Tools.Runner.Call_Outcome :=
                           (if Items (Source).Failed then Failed_Note else Items (Source).Ended);
-                     begin
-                        --  Kept by the call, for a repeat of it, and in the
-                        --  record of the work: by the path it named, where
-                        --  it named one.
-                        Made.Keep
-                          (Digest (Named, Squeezed (U.To_String (Items (Call).Args))), Reply, Ended);
-                        declare
-                           Named_Path : Boolean;
-                           Path       : constant String :=
-                             Model_Runner.Tools.Builtin.Text_Argument
-                               (U.To_String (Items (Call).Args), "path", Named_Path);
+
+                        Args    : constant String := U.To_String (Items (Call).Args);
+                        Key     : constant Interfaces.Unsigned_64 := Digest (Named, Squeezed (Args));
+                        Ran_Now : constant Boolean :=
+                          Items (Call).Kind /= As_Note and then Items (Call).Copy_Of = 0;
+
+                        --  What the harness sees in this call, said after
+                        --  its answer: a check answering exactly as before
+                        --  the last change, a file put back as an earlier
+                        --  write left it, a run of calls changing nothing.
+                        function Seen return String is
+                           Has_Path, Has_Content : Boolean;
+                           Path    : constant String :=
+                             Model_Runner.Tools.Builtin.Text_Argument (Args, "path", Has_Path);
+                           Content : constant String :=
+                             Model_Runner.Tools.Builtin.Text_Argument (Args, "content", Has_Content);
+                           Again   : constant Boolean :=
+                             Ran_Now
+                             and then Ended.Answer = Model_Runner.Tools.Runner.Answered
+                             and then Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
+                             and then Sighted.Seen_Again (Key, Digest ("", Said_By_Tool));
+                           Back    : constant Boolean :=
+                             Ran_Now and then Ended.Changed and then Has_Path and then Has_Content
+                             and then Sighted.Seen_Again
+                                        (Digest ("path", Path), Digest ("", Content));
                         begin
-                           Work.Note (Named, (if Named_Path then Path else ""),
-                                      Executor.Kind (Named), Ended);
-                        end;
-                        Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
-                        if Watch /= null then
-                           Watch.On_Result (Named, Reply, Ended);
+                           if Again and then Made_Change then
+                              return ASCII.LF & "(note from the harness: this answers exactly as it"
+                                & " did before your last change)";
+                           elsif Back then
+                              return ASCII.LF & "(note from the harness: this puts " & Path
+                                & " back as an earlier write of yours left it)";
+                           elsif Quiet > 0 and then Quiet mod Quiet_Note = 0 then
+                              return ASCII.LF & "(note from the harness:" & Natural'Image (Quiet)
+                                & " calls in a row have changed nothing; if what you need is in"
+                                & " hand, act on it or give your answer)";
+                           end if;
+                           return "";
+                        end Seen;
+                     begin
+                        if Ran_Now then
+                           if Ended.Changed then
+                              Quiet := 0;
+                              Made_Change := True;
+                           elsif Ended.Answer = Model_Runner.Tools.Runner.Answered then
+                              Quiet := Quiet + 1;
+                           end if;
                         end if;
+                        declare
+                           Reply : constant String := Said_By_Tool & Seen;
+                        begin
+                           --  Kept by the call, for a repeat of it, and in the
+                           --  record of the work: by the path it named, where
+                           --  it named one.
+                           Made.Keep
+                             (Digest (Named, Squeezed (U.To_String (Items (Call).Args))), Reply, Ended);
+                           declare
+                              Named_Path : Boolean;
+                              Path       : constant String :=
+                                Model_Runner.Tools.Builtin.Text_Argument
+                                  (U.To_String (Items (Call).Args), "path", Named_Path);
+                           begin
+                              Work.Note (Named, (if Named_Path then Path else ""),
+                                         Executor.Kind (Named), Ended);
+                           end;
+                           Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
+                           if Watch /= null then
+                              Watch.On_Result
+                                ((Id => Invocations + Call, In_Turn => Call, Of_Turn => Asked,
+                                  Changes => Executor.Kind (Named) = Model_Runner.Tools.Runner.Changes),
+                                 Named, Args, Reply, Ended);
+                           end if;
+                        end;
                      end;
 
                      Result.Calls := Result.Calls + 1;
@@ -708,6 +846,8 @@ package body Model_Runner.Agent is
                   exit Step_Loop;
                end if;
             end;
+
+            Invocations := Invocations + Asked;
 
             --  A turn that only repeated calls it had already made is going
             --  in circles. Stop rather than let it spend the step budget on

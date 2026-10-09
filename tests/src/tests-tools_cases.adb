@@ -9,6 +9,7 @@ with Zlib;
 with Ada.Environment_Variables;
 with Interfaces;
 
+with Model_Runner.Agent;
 with Model_Runner.Agent.Recall;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Permissions;
@@ -1536,6 +1537,15 @@ package body Tests.Tools_Cases is
       Write : constant Interfaces.Unsigned_64 := 22;
       Made  : Model_Runner.Agent.Recall.Memory;
    begin
+      --  What was seen once is seen again; a new pair is not.
+      declare
+         Sighted : Model_Runner.Agent.Recall.Sightings;
+      begin
+         Assert (not Sighted.Seen_Again (1, 10) and then not Sighted.Seen_Again (1, 11)
+                 and then Sighted.Seen_Again (1, 10) and then not Sighted.Seen_Again (2, 10),
+                 "a pair seen before was not noticed, or a new one was taken for it");
+      end;
+
       Made.Remember (Read);
       Assert (Made.Holds (Read) and then not Made.Answered (Read),
               "a call made was not held, or held answered before it was");
@@ -1551,7 +1561,7 @@ package body Tests.Tools_Cases is
       Made.Keep (Write, "wrote 8 bytes", Tr.Done);
 
       Made.Remember (Read);
-      Made.Keep (Read, "new text", (Answer => Tr.Failed, Refusal => Tr.Not_Refused));
+      Made.Keep (Read, "new text", (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False));
       Assert (Made.Answer (Read) = "new text"
               and then Made.Ended (Read).Answer = Tr.Failed,
               "the read after the change did not keep its own answer and ending");
@@ -1571,6 +1581,7 @@ package body Tests.Tools_Cases is
       package Env renames Ada.Environment_Variables;
       use type Tr.Call_Kind;
       use type Tr.Call_Outcome;
+      use type Tr.Answer_Kind;
 
       Runner : Builtin.Instance;
       Root   : constant String := "tools-outcome-root";
@@ -1598,8 +1609,23 @@ package body Tests.Tools_Cases is
 
       Assert (Ended ("calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}") = Tr.Done,
               "an answered call did not end answered");
+      --  A write changes the file; the same write again changes nothing,
+      --  and says so.
+      declare
+         First  : constant Tr.Call_Outcome :=
+           Ended ("write_file", "{""path"": ""tools-outcome-write.txt"", ""content"": ""same""}");
+         Second : constant Tr.Call_Outcome :=
+           Ended ("write_file", "{""path"": ""tools-outcome-write.txt"", ""content"": ""same""}");
+         Third  : constant Tr.Call_Outcome :=
+           Ended ("write_file", "{""path"": ""tools-outcome-write.txt"", ""content"": ""other""}");
+      begin
+         Ada.Directories.Delete_File ("tools-outcome-write.txt");
+         Assert (First.Changed and then not Second.Changed and then Third.Changed
+                 and then Second.Answer = Tr.Answered,
+                 "a write of what a file already held was not told from one that changed it");
+      end;
       Assert (Ended ("read_file", "{""path"": ""no-such-file-anywhere.txt""}")
-              = (Answer => Tr.Failed, Refusal => Tr.Not_Refused),
+              = (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False),
               "a read of a file not there did not end failed");
 
       --  Held where the harness said: refused, and by what.
@@ -1619,18 +1645,49 @@ package body Tests.Tools_Cases is
          Env.Clear (Pm.Agent_Root_Variable);
          Env.Clear (Pm.Agent_Permissions_Variable);
          Ada.Directories.Delete_Tree (Root);
-         Assert (Outside = (Answer => Tr.Refused, Refusal => Tr.Outside_Project),
+         Assert (Outside = (Answer => Tr.Refused, Refusal => Tr.Outside_Project, Changed => False),
                  "a path out of the tree was not refused as outside the project");
-         Assert (State = (Answer => Tr.Refused, Refusal => Tr.Harness_Owned),
+         Assert (State = (Answer => Tr.Refused, Refusal => Tr.Harness_Owned, Changed => False),
                  "a write into the state was not refused as the harness's");
-         Assert (Program = (Answer => Tr.Refused, Refusal => Tr.Not_Permitted),
+         Assert (Program = (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Changed => False),
                  "a program an agent may not run was not refused as not permitted");
       end;
    end Built_In_Calls_Say_How_They_Ended;
 
+   --  What the loop does about a failure is the harness's decision, by
+   --  the failure's class: room made for one that ran out of it, a backend
+   --  error tried again while retries last, an unreadable call given back
+   --  while chances last, and the rest an end.
+   procedure Failures_Are_Recovered_By_Their_Class
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package A renames Model_Runner.Agent;
+      use type A.Recovery_Action;
+      use type A.Failure_Class;
+   begin
+      Assert (A.Class_Of (E.Make (E.Template_Output_Too_Large)) = A.Too_Large_To_Render
+              and then A.Class_Of (E.Make (E.Generation_Context_Exhausted)) = A.Context_Exhausted
+              and then A.Class_Of (E.Make (E.Generation_Cancelled)) = A.Interrupted
+              and then A.Class_Of (E.Make (E.Tools_Call_Malformed)) = A.Unreadable_Call
+              and then A.Class_Of (E.Make (E.IO_Read_Failed)) = A.Backend_Error,
+              "a failure was put in the wrong class");
+      Assert (A.Recovery_For (A.Context_Exhausted, True, 0, 0) = A.Compact_And_Retry
+              and then A.Recovery_For (A.Context_Exhausted, False, 3, 3) = A.Stop
+              and then A.Recovery_For (A.Backend_Error, True, 1, 0) = A.Retry_Same
+              and then A.Recovery_For (A.Backend_Error, True, 0, 2) = A.Stop
+              and then A.Recovery_For (A.Unreadable_Call, False, 0, 1) = A.Return_To_Model
+              and then A.Recovery_For (A.Unreadable_Call, False, 5, 0) = A.Stop
+              and then A.Recovery_For (A.Interrupted, True, 5, 5) = A.Stop,
+              "a failure was not answered as its class is");
+   end Failures_Are_Recovered_By_Their_Class;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Failures_Are_Recovered_By_Their_Class'Access,
+         "a failure in the agent loop is recovered from as its class says");
       Register_Routine
         (T, A_Change_Makes_Earlier_Calls_Run_Again'Access,
          "a call that changes state makes every call before it run again, "

@@ -109,29 +109,52 @@ package Model_Runner.Agent is
    --  time.
    type Observer is limited interface;
 
+   --  One call the model made, as the loop knows it: its number in the run
+   --  -- every call its own, in the order made, a repeat too -- and its
+   --  place among the calls its turn asked for. A watcher reads which call
+   --  a result answers, and whether calls came several at once, from this
+   --  rather than working it out from the order things arrived in.
+   type Invocation is record
+      Id      : Positive := 1;
+      In_Turn : Positive := 1;
+      Of_Turn : Positive := 1;
+
+      --  Whether the runner says the call may change state: a watcher
+      --  that keeps a record notes such a call as started before it runs.
+      Changes : Boolean := False;
+   end record;
+
    --  A call the model made, about to be run.
    --
    --  @param Self The observer.
+   --  @param Call Which call.
    --  @param Named The function the model called.
    --  @param Arguments The arguments, as one line of JSON.
    procedure On_Call
      (Self      : in out Observer;
+      Call      : Invocation;
       Named     : String;
       Arguments : String) is abstract;
 
    --  What running that call returned, about to be fed back to the model.
+   --  The results of a turn come in the order its calls were made.
    --
    --  @param Self The observer.
+   --  @param Call Which call it answers.
    --  @param Named The function that was run.
+   --  @param Arguments Its arguments, as On_Call had them.
    --  @param Result The text the tool answered with.
    --  @param Ended How it ended -- answered, failed, or refused and by
-   --    what -- for a watcher to act on rather than the words; a repeat
-   --    answered from an earlier call ends as that call did.
+   --    what, and whether it changed state -- for a watcher to act on
+   --    rather than the words; a repeat answered from an earlier call
+   --    ends as that call did.
    procedure On_Result
-     (Self   : in out Observer;
-      Named  : String;
-      Result : String;
-      Ended  : Model_Runner.Tools.Runner.Call_Outcome) is abstract;
+     (Self      : in out Observer;
+      Call      : Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome) is abstract;
 
    --  A step has finished: the model's turn and every tool result it drew are
    --  in the history now. Called once at the close of each step that ran
@@ -178,6 +201,50 @@ package Model_Runner.Agent is
 
    --  A reference to whatever is gating the loop's calls.
    type Approver_Reference is access all Approver'Class;
+
+   --  What went wrong in a step, as the loop decides what to do about it:
+   --  a conversation too large to render, a generation that ran out of
+   --  context, a backend that failed in a way trying again may mend, a
+   --  reply whose call could not be read, a cancellation, or anything else.
+   type Failure_Class is
+     (Too_Large_To_Render, Context_Exhausted, Backend_Error, Unreadable_Call,
+      Interrupted, Other_Failure);
+
+   --  What the loop does about it: make room and try the step again, try
+   --  it again as it was, tell the model what went wrong and let it try
+   --  again, or stop.
+   type Recovery_Action is (Compact_And_Retry, Retry_Same, Return_To_Model, Stop);
+
+   --  The class of a failure's diagnostic.
+   --
+   --  @param Status What failed.
+   --  @return Its class.
+   function Class_Of (Status : Model_Runner.Errors.Error_Info) return Failure_Class;
+
+   --  The loop's answer to a failure: the harness decides, not the model.
+   --  Room is made where the caller lets the loop compact; a backend error
+   --  is tried again while retries are left; a call that would not read is
+   --  given back to the model while chances are left; nothing else is
+   --  tried again.
+   --
+   --  @param Failure What went wrong.
+   --  @param May_Compact Whether the loop may drop old turns.
+   --  @param Retries_Left Generation retries left.
+   --  @param Chances_Left Times left to give an unreadable call back.
+   --  @return What to do.
+   function Recovery_For
+     (Failure      : Failure_Class;
+      May_Compact  : Boolean;
+      Retries_Left : Natural;
+      Chances_Left : Natural) return Recovery_Action
+   is (case Failure is
+         when Too_Large_To_Render | Context_Exhausted =>
+           (if May_Compact then Compact_And_Retry else Stop),
+         when Backend_Error =>
+           (if Retries_Left > 0 then Retry_Same else Stop),
+         when Unreadable_Call =>
+           (if Chances_Left > 0 then Return_To_Model else Stop),
+         when Interrupted | Other_Failure => Stop);
 
    --  Run a conversation to an answer.
    --

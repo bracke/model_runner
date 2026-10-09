@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Records;
@@ -609,7 +610,8 @@ package body Model_Runner.Framework.Invocations is
       Named     : String;
       Arguments : String;
       Answer    : String;
-      Status    : out Model_Runner.Errors.Error_Info)
+      Status    : out Model_Runner.Errors.Error_Info;
+      Number    : Natural := 0)
    is
       Value  : Records.Item;
       Staged : Boolean;
@@ -641,12 +643,85 @@ package body Model_Runner.Framework.Invocations is
             Calls := Calls + 1;
          end if;
       end loop;
-      Records.Set
-        (Value, "call." & [1 .. Integer'Max (0, 4 - Image (Calls + 1)'Length) => '0']
-                & Image (Calls + 1),
-         Named & ASCII.HT & Start_Of (Arguments) & ASCII.HT & Start_Of (Answer));
+      --  The entry its start made, where there is one; the next otherwise.
+      declare
+         At_Entry : constant Positive := (if Number > 0 then Number else Calls + 1);
+      begin
+         Records.Set
+           (Value, "call." & [1 .. Integer'Max (0, 4 - Image (At_Entry)'Length) => '0']
+                   & Image (At_Entry),
+            Named & ASCII.HT & Start_Of (Arguments) & ASCII.HT & Start_Of (Answer));
+      end;
       Stores.Put (Change, Invocations_Area, Id, Value);
    end Note_Call;
+
+   ----------------
+   -- Note_Start --
+   ----------------
+
+   procedure Note_Start
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Id        : String;
+      Named     : String;
+      Arguments : String;
+      Number    : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Calls  : Natural := 0;
+   begin
+      Number := 0;
+      Stores.Pending (Change, Invocations_Area, Id, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Invocations_Area, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "call.") = 1 then
+            Calls := Calls + 1;
+         end if;
+      end loop;
+      Note_Call (Item, Change, Id, Named, Arguments, Unanswered, Status, Number => Calls + 1);
+      if E.Is_Ok (Status) then
+         Number := Calls + 1;
+      end if;
+   end Note_Start;
+
+   ----------------------
+   -- Unanswered_Calls --
+   ----------------------
+
+   function Unanswered_Calls (Item : Stores.Store; Id : String) return Name_Lists.Vector is
+      Value  : Records.Item;
+      Read   : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Stores.Read (Item, Invocations_Area, Id, Value, Read);
+      if E.Is_Error (Read) then
+         return Result;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Said  : constant String := Records.Get (Value, Field);
+            Tab   : constant Natural := Ada.Strings.Fixed.Index (Said, [1 => ASCII.HT], Ada.Strings.Backward);
+         begin
+            if Ada.Strings.Fixed.Index (Field, "call.") = 1 and then Tab > 0
+              and then Said (Tab + 1 .. Said'Last) = Unanswered
+            then
+               Result.Append
+                 (Ada.Strings.Fixed.Translate
+                    (Said (Said'First .. Tab - 1),
+                     Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], " ")));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Unanswered_Calls;
 
    --------------
    -- State_Of --

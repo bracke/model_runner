@@ -252,6 +252,8 @@ package body Model_Runner.CLI.Project_Commands is
       Item   : String;
       Closed : out Boolean);
 
+   type Started_Entries is array (1 .. 64) of Natural;
+
    type Watch
      (Screen : not null access Pres.Console;
       Host   : Host_Access)
@@ -277,12 +279,13 @@ package body Model_Runner.CLI.Project_Commands is
       First_Error  : Unbounded_String;
       Errors_Count : Natural := 0;
 
-      --  The arguments of the calls asked for and not yet answered, oldest
-      --  first: a reply may ask for several before any is answered.
-      Asked : Names.Vector;
-
       --  The run's own stop, asked for when its work is ended elsewhere.
       Stop  : Model_Runner.Cancellation.Token_Reference := null;
+
+      --  The entries the state holds for this turn's calls that may change
+      --  it, noted as started before they ran, by their place in the turn:
+      --  each answer fills its own in.
+      Started : Started_Entries := [others => 0];
 
       --  The agent the run started with, and the last answer shown: a
       --  helper's lines are marked with its identifier, and an answer the
@@ -290,25 +293,28 @@ package body Model_Runner.CLI.Project_Commands is
       Root  : Unbounded_String;
       Shown : Unbounded_String;
 
-      --  The call last shown, and whether calls came several at once: a
-      --  result not right after its own call is shown with the call's name.
-      Last_Call : Unbounded_String;
-      Batched   : Boolean := False;
-
-      --  Calls asked together, counted, and results answered: each answer
-      --  of a batch names the call it answers by its number.
-      Calls_Asked    : Natural := 0;
-      Calls_Answered : Natural := 0;
    end record;
 
    overriding procedure On_Call
-     (Self : in out Watch; Named : String; Arguments : String);
+     (Self      : in out Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String);
 
    overriding procedure On_Result
-     (Self   : in out Watch;
-      Named  : String;
-      Result : String;
-      Ended  : Model_Runner.Tools.Runner.Call_Outcome);
+     (Self      : in out Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome);
+
+   --  A call's place in its turn as it is shown, where its turn asked for
+   --  several: " #2". Nothing for the first, as its call was shown.
+   function Place (Call : Model_Runner.Agent.Invocation) return String
+   is (if Call.Of_Turn > 1 and then Call.In_Turn > 1
+       then " #" & Ada.Strings.Fixed.Trim (Positive'Image (Call.In_Turn), Ada.Strings.Both)
+       else "");
 
    --  Whose line it is: nothing for the agent the run started with, the
    --  helper's identifier for a helper's.
@@ -328,7 +334,10 @@ package body Model_Runner.CLI.Project_Commands is
    end Whose;
 
    overriding procedure On_Call
-     (Self : in out Watch; Named : String; Arguments : String) is
+     (Self      : in out Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String) is
       use type Model_Runner.Cancellation.Token_Reference;
    begin
       --  Its task ended elsewhere -- cancelled from another process -- the
@@ -336,36 +345,33 @@ package body Model_Runner.CLI.Project_Commands is
       if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
          Self.Stop.Request;
       end if;
-      Self.Batched := Self.Batched or else not Self.Asked.Is_Empty;
-      if Self.Asked.Is_Empty then
-         Self.Calls_Asked := 0;
-         Self.Calls_Answered := 0;
-      end if;
-      Self.Calls_Asked := Self.Calls_Asked + 1;
-      Self.Asked.Append (Arguments);
       if Self.Output /= null then
          Drop_Held (Self.Output.all);
       end if;
       --  The second of several asked at once: said so, as their answers
       --  come after them all, in the order asked.
-      if Self.Calls_Asked = 2 then
+      if Call.In_Turn = 2 then
          Pres.Put_Note (Self.Screen.all, "cli.agent.calls_at_once");
       end if;
-      --  A call after another unanswered is numbered, as its answer is.
-      Pres.Put_Tool_Call (Self.Screen.all,
-                          Whose (Self) & Named
-                          & (if Self.Calls_Asked > 1
-                             then " #" & Ada.Strings.Fixed.Trim (Natural'Image (Self.Calls_Asked), Ada.Strings.Both)
-                             else ""),
-                          Arguments);
-      Self.Last_Call := To_Unbounded_String (Whose (Self) & Named);
+      --  Each of several asked at once is numbered, as its answer is.
+      Pres.Put_Tool_Call (Self.Screen.all, Whose (Self) & Named & Place (Call), Arguments);
+      --  A call that may change state is in the record before it runs, so
+      --  a run that stops in it leaves it said.
+      if Call.In_Turn in Self.Started'Range then
+         Self.Started (Call.In_Turn) := 0;
+         if Self.Host /= null and then Call.Changes then
+            Self.Host.Note_Start (Named, Arguments, Self.Started (Call.In_Turn));
+         end if;
+      end if;
    end On_Call;
 
    overriding procedure On_Result
-     (Self   : in out Watch;
-      Named  : String;
-      Result : String;
-      Ended  : Model_Runner.Tools.Runner.Call_Outcome)
+     (Self      : in out Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome)
    is
       package Tr renames Model_Runner.Tools.Runner;
       use type Tr.Answer_Kind;
@@ -378,17 +384,8 @@ package body Model_Runner.CLI.Project_Commands is
       Owner : constant String := Whose (Self);
       --  Every answer named by its call; of several asked at once, by its
       --  number among them too.
-      Label : constant String :=
-        Owner & Named
-        --  The first as its call was shown, with no number: the others as theirs.
-        & (if Self.Batched and then Self.Calls_Answered > 0
-           then " #" & Ada.Strings.Fixed.Trim (Natural'Image (Self.Calls_Answered + 1),
-                                                              Ada.Strings.Both)
-           else "")
-        & ": ";
+      Label : constant String := Owner & Named & Place (Call) & ": ";
    begin
-      Self.Calls_Answered := Self.Calls_Answered + 1;
-      Self.Last_Call := Null_Unbounded_String;
       if Ended.Answer /= Tr.Answered then
          Self.Last_Error := To_Unbounded_String (Named & ": " & Detail);
          Self.Errors_Count := Self.Errors_Count + 1;
@@ -403,7 +400,9 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Tool_Result (Self.Screen.all, Label & Result);
       end if;
       Self.Shown := To_Unbounded_String (Result);
-      if Named = "write_file" and then Ended.Answer = Tr.Answered then
+      --  A write that changed a file: one of what the file already held is
+      --  no work done.
+      if Named = "write_file" and then Ended.Answer = Tr.Answered and then Ended.Changed then
          Self.Wrote := True;
       end if;
       --  Refused by a permission, a sandbox, the execution policy or the
@@ -416,13 +415,8 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       if Self.Host /= null then
          Self.Host.Note_Call
-           (Named, (if Self.Asked.Is_Empty then "" else Self.Asked.First_Element), Result);
-      end if;
-      if not Self.Asked.Is_Empty then
-         Self.Asked.Delete_First;
-      end if;
-      if Self.Asked.Is_Empty then
-         Self.Batched := False;
+           (Named, Arguments, Result,
+            Number => (if Call.In_Turn in Self.Started'Range then Self.Started (Call.In_Turn) else 0));
       end if;
    end On_Result;
 
@@ -513,11 +507,16 @@ package body Model_Runner.CLI.Project_Commands is
                      & " result. Say everything it needs in task. role names"
                      & " what it is for, and gives it that role's permissions where the"
                      & " project names the role; need is required (the default),"
-                     & " optional or advisory.",
+                     & " optional or advisory. inputs names the files it starts from,"
+                     & " outputs the files it must write -- checked after -- and"
+                     & " acceptance when the part is done.",
                      [Sc.Text ("task"),
                       Sc.Text ("role", Required => False, Choices => Role_Choices),
                       Sc.Text ("need", Required => False,
-                               Choices => ["required", "optional", "advisory"])])
+                               Choices => ["required", "optional", "advisory"]),
+                      Sc.Text ("inputs", Required => False),
+                      Sc.Text ("outputs", Required => False),
+                      Sc.Text ("acceptance", Required => False)])
            else "")
         & "]";
    end Offered_Text;
@@ -899,21 +898,59 @@ package body Model_Runner.CLI.Project_Commands is
       --  The call failed, in the words given.
       function Fails (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused);
+         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
          return Text;
       end Fails;
 
       --  The call refused: no helper may be made here.
       function Refuses (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted);
+         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Changed => False);
          return Text;
       end Refuses;
 
       Found    : Boolean;
       Ignored  : Boolean;
-      Brief    : constant String :=
+      Asked    : constant String :=
         Model_Runner.Tools.Builtin.Text_Argument (Arguments, "task", Found);
+
+      --  The contract beside the task: what the helper starts from, what it
+      --  must write, and when it is done -- each said in the brief as what
+      --  it is, and the outputs checked by the harness after, not taken
+      --  from the helper's word.
+      Inputs     : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "inputs", Ignored);
+      Outputs    : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "outputs", Ignored);
+      Acceptance : constant String :=
+        Model_Runner.Tools.Builtin.Text_Argument (Arguments, "acceptance", Ignored);
+      Brief      : constant String :=
+        Asked
+        & (if Inputs = "" then "" else ASCII.LF & "Start from: " & Inputs)
+        & (if Outputs = "" then ""
+           else ASCII.LF & "Write: " & Outputs & " -- the part is done when these are written")
+        & (if Acceptance = "" then "" else ASCII.LF & "Done when: " & Acceptance);
+
+      --  The outputs named, one a word, commas or spaces apart.
+      function Output_Paths return Names.Vector is
+         Result : Names.Vector;
+         Start  : Natural := Outputs'First;
+      begin
+         for Index in Outputs'First .. Outputs'Last + 1 loop
+            if Index > Outputs'Last or else Outputs (Index) in ',' | ' ' | ASCII.LF then
+               if Index > Start then
+                  Result.Append (Outputs (Start .. Index - 1));
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return Result;
+      end Output_Paths;
+
+      Named_Outputs : constant Names.Vector := Output_Paths;
+
+      --  What each output held before the helper ran.
+      Before : Names.Vector;
       Role     : constant String :=
         Model_Runner.Tools.Builtin.Text_Argument (Arguments, "role", Ignored);
       Need     : constant String :=
@@ -922,7 +959,7 @@ package body Model_Runner.CLI.Project_Commands is
       Told     : Unbounded_String;
    begin
       Ended := Tr.Done;
-      if not Found or else Brief = "" then
+      if not Found or else Asked = "" then
          return Fails ("error: delegate needs a task string");
       --  A role is one the project names, where it names any; a tool's
       --  name is never one.
@@ -940,6 +977,9 @@ package body Model_Runner.CLI.Project_Commands is
       elsif Self.Host = null then
          return Refuses ("error: no helper can be made here; do the work with the other tools");
       end if;
+      for Path of Named_Outputs loop
+         Before.Append (Wk.File_Print (Path));
+      end loop;
 
       --  Nothing more is started for work already cancelled.
       if Model_Runner.Framework.Execution.Work_Withdrawn then
@@ -999,12 +1039,39 @@ package body Model_Runner.CLI.Project_Commands is
             --  The helper's last run is the call's ending: failed where it
             --  failed, however its answer reads.
             if not Retry and then E.Is_Error (Ran) then
-               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused);
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
             end if;
             exit when not Retry;
             Retry_Of := Id;
          end;
       end loop;
+
+      --  The outputs it was to write, checked: written where their content
+      --  is not what it was, and the call failed where one is not.
+      if not Named_Outputs.Is_Empty then
+         declare
+            Written, Missing : Unbounded_String;
+         begin
+            for Index in Named_Outputs.First_Index .. Named_Outputs.Last_Index loop
+               if Wk.File_Print (Named_Outputs (Index)) /= Before (Index) then
+                  Append (Written, (if Written = Null_Unbounded_String then "" else ", ")
+                                   & Named_Outputs (Index));
+               else
+                  Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ")
+                                   & Named_Outputs (Index));
+               end if;
+            end loop;
+            Append (Told, ASCII.LF & "(the harness checked the outputs:"
+                          & (if Written = Null_Unbounded_String then ""
+                             else " written: " & To_String (Written) & ";")
+                          & (if Missing = Null_Unbounded_String then ""
+                             else " not written: " & To_String (Missing) & ";")
+                          & ")");
+            if Missing /= Null_Unbounded_String then
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Changed => False);
+            end if;
+         end;
+      end if;
       return To_String (Told);
    end Delegate;
 
@@ -1028,7 +1095,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  The call refused, by what.
       procedure Refuse (By : Tr.Refusal_Kind) is
       begin
-         Outcome := (Answer => Tr.Refused, Refusal => By);
+         Outcome := (Answer => Tr.Refused, Refusal => By, Changed => False);
       end Refuse;
 
       procedure Put (Text : String) is
@@ -1204,6 +1271,9 @@ package body Model_Runner.CLI.Project_Commands is
               & (if Budget = 1 then " tool call" else " tool calls") & " is spent; give your answer now");
       elsif Named = "delegate" then
          Put (Delegate (Self, Arguments, Outcome));
+         --  A helper that answered may have changed anything its
+         --  permissions let it.
+         Outcome.Changed := Tr."=" (Outcome.Answer, Tr.Answered);
       elsif Named = "run_checks" then
          if Self.Host = null then
             Outcome.Answer := Tr.Failed;

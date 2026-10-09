@@ -76,13 +76,26 @@ package body Model_Runner.CLI.Execute.Run_Command is
      end record;
 
    overriding procedure On_Call
-     (Self : in out Agent_Watch; Named : String; Arguments : String);
+     (Self      : in out Agent_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String);
    overriding procedure On_Result
-     (Self   : in out Agent_Watch;
-      Named  : String;
-      Result : String;
-      Ended  : Model_Runner.Tools.Runner.Call_Outcome);
+     (Self      : in out Agent_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome);
+
    overriding procedure On_Step (Self : in out Agent_Watch);
+
+   --  A call's number in the run, as the trace writes it.
+   function Number (Call : Model_Runner.Agent.Invocation) return String is
+      Raw : constant String := Positive'Image (Call.Id);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Number;
 
    overriding procedure On_Step (Self : in out Agent_Watch) is
    begin
@@ -114,23 +127,30 @@ package body Model_Runner.CLI.Execute.Run_Command is
    end Record_Event;
 
    overriding procedure On_Call
-     (Self : in out Agent_Watch; Named : String; Arguments : String) is
+     (Self      : in out Agent_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String) is
    begin
       Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
       if Self.Trace then
          Record_Event
            (Self,
-            """event"":""call"",""name"":""" & JSON_Escape (Named)
+            """event"":""call"",""invocation"":" & Number (Call)
+            & ",""name"":""" & JSON_Escape (Named)
             & """,""arguments"":""" & JSON_Escape (Arguments) & """");
       end if;
    end On_Call;
 
    overriding procedure On_Result
-     (Self   : in out Agent_Watch;
-      Named  : String;
-      Result : String;
-      Ended  : Model_Runner.Tools.Runner.Call_Outcome)
+     (Self      : in out Agent_Watch;
+      Call      : Model_Runner.Agent.Invocation;
+      Named     : String;
+      Arguments : String;
+      Result    : String;
+      Ended     : Model_Runner.Tools.Runner.Call_Outcome)
    is
+      pragma Unreferenced (Arguments);
       package Tr renames Model_Runner.Tools.Runner;
 
       --  How it ended, as the trace names it: answered, failed, or the
@@ -150,9 +170,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
       if Self.Trace then
          Record_Event
            (Self,
-            """event"":""result"",""name"":""" & JSON_Escape (Named)
+            """event"":""result"",""invocation"":" & Number (Call)
+            & ",""name"":""" & JSON_Escape (Named)
             & """,""outcome"":""" & Said
-            & """,""result"":""" & JSON_Escape (Result) & """");
+            & """,""changed"":" & (if Ended.Changed then "true" else "false")
+            & ",""result"":""" & JSON_Escape (Result) & """");
       end if;
    end On_Result;
 

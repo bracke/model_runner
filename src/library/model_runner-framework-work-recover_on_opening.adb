@@ -132,6 +132,12 @@ begin
                   "abandoned: nothing was running it", Read);
                if E.Is_Ok (Read) then
                   Said.Append (Name & " was abandoned");
+                  --  A call it had started and not seen answered: whether
+                  --  it took effect is not known, and it is said by name.
+                  for Call of Invocations.Unanswered_Calls (Item, Name) loop
+                     Said.Append
+                       (Name & " stopped in a call that may have changed the project: " & Call);
+                  end loop;
                end if;
             end if;
          end;

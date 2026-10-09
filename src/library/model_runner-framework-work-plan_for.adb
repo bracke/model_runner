@@ -1,10 +1,10 @@
 separate (Model_Runner.Framework.Work)
-function Instructions_With
+function Plan_For
   (Item    : Stores.Store;
    Task_Id : String;
    Allowed : Permissions.Permission_Set;
    Apart   : Boolean;
-   Helpers : Boolean := True) return String
+   Helpers : Boolean := True) return Execution_Plan
 is
    May_Write   : constant Boolean :=
      Allowed (Permissions.Write_Source).Granted or else Allowed (Permissions.Write_Specs).Granted;
@@ -94,6 +94,13 @@ is
    end Said_Permissions;
 
    Parts : Unbounded_String;
+   Kind  : constant String := Kind_Of_Task (Item, Task_Id);
+
+   --  The agents' bound on calls, or the kind's own.
+   function Bound (Word : String; Otherwise : Natural) return Natural
+   is (Number_Of ((if Tasks.Kind_Policy (Item, Kind, Word) /= ""
+                   then Tasks.Kind_Policy (Item, Kind, Word)
+                   else Scalar (Item, "agents." & Word)), Otherwise));
 begin
    for Child of Tasks.Children (Item, Task_Id) loop
       declare
@@ -105,16 +112,27 @@ begin
                  & Tasks.State_Of (Item, Child) & ASCII.LF);
       end;
    end loop;
-   return Instructions_For (May_Propose, May_Split, May_Write,
-                            May_Delegate => May_Delegate, May_Check => May_Check)
-     & ASCII.LF & "## What you may do" & ASCII.LF
-     & "You may " & Said_Permissions & "."
-     & (if May_Write then " Change only the files you may write; a change to any other file fails the work."
-        else "")
-     & (if May_Propose then "" else " You may not propose tasks or parts.")
-     & ASCII.LF
-     & (if Parts = Null_Unbounded_String then ""
-        else ASCII.LF & "## Your parts" & ASCII.LF & To_String (Parts)
-             & "Those complete are done: do what is left of the task itself, and do not split"
-             & " it into them again." & ASCII.LF);
-end Instructions_With;
+   return
+     (Task_Id      => To_Unbounded_String (Task_Id),
+      Kind         => To_Unbounded_String (Kind),
+      May_Write    => May_Write,
+      May_Check    => May_Check,
+      Profile      =>
+        To_Unbounded_String
+          (if Tasks.Kind_Policy (Item, Kind, "profile") /= "" then Tasks.Kind_Policy (Item, Kind, "profile")
+           else Scalar (Item, "verification.default")),
+      May_Delegate => May_Delegate,
+      Max_Helpers  =>
+        (if May_Delegate
+         then Natural'Min (Allowed (Permissions.Create_Children).Max_Children,
+                           Agents.Limits_Of (Item).Max_Children)
+         else 0),
+      May_Propose  => May_Propose,
+      May_Split    => May_Split,
+      Apart        => Apart,
+      Permitted    => To_Unbounded_String (Said_Permissions),
+      Parts        => Parts,
+      Max_Calls    => Bound ("max_tool_calls", 0),
+      Max_Steps    => Bound ("max_steps", 24),
+      Seconds      => Time_Allowed (Item, Task_Id));
+end Plan_For;
