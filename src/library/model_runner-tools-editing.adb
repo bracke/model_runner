@@ -643,6 +643,15 @@ package body Model_Runner.Tools.Editing is
             Upto  : constant Positive := At_Line + Natural'Max (1, Lines_In (New_Text)) - 1;
             Names : constant String := Declarations_In (Whole, At_Line, Upto);
          begin
+            --  The file as it was: nothing edited, said as the exact match
+            --  says it -- "edited" with the revision it already had sent a
+            --  model resending its own text, as though it had changed.
+            if Whole = Text then
+               return (Text => U.To_Unbounded_String
+                         ("unchanged: new_text is what the file already holds there (line"
+                          & Natural'Image (At_Line) & "), so nothing was edited"),
+                       others => <>);
+            end if;
             Replace (Path, Whole, Put, Base);
             if Put.Failed then
                return Put;

@@ -1148,6 +1148,17 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Finish;
 
+   -----------
+   -- Spoil --
+   -----------
+
+   procedure Spoil (Change : in out Transaction; Why : Model_Runner.Errors.Error_Info) is
+   begin
+      if E.Is_Ok (Change.Spoiled) then
+         Change.Spoiled := Why;
+      end if;
+   end Spoil;
+
    ------------
    -- Commit --
    ------------
@@ -1158,6 +1169,11 @@ package body Model_Runner.Framework.Stores is
       Status : out Model_Runner.Errors.Error_Info) is
    begin
       Status := E.Success;
+      if E.Is_Error (Change.Spoiled) then
+         Status := Change.Spoiled;
+         Change := No_Changes;
+         return;
+      end if;
       if Change_Count (Change) = 0 then
          return;
       end if;

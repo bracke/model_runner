@@ -369,7 +369,17 @@ package Model_Runner.Framework.Stores is
    --  @param Point Where.
    procedure Crash_At (Point : Crash_Point);
 
-   --  Stage, mark and finish a transaction, and empty it.
+   --  Mark a transaction as one that must not be committed: something that
+   --  was to be part of it could not be staged -- a record it updates would
+   --  not read -- and the rest of it without that is a state nobody meant.
+   --  The first reason given is kept.
+   --
+   --  @param Change The transaction.
+   --  @param Why What could not be staged.
+   procedure Spoil (Change : in out Transaction; Why : Model_Runner.Errors.Error_Info);
+
+   --  Stage, mark and finish a transaction, and empty it; a spoiled one is
+   --  refused with its reason, and emptied, nothing of it applied.
    --
    --  @param Item The store.
    --  @param Change The transaction, empty afterwards when Status is a
@@ -473,11 +483,16 @@ private
    type Transaction is record
       Operations : Operation_Vectors.Vector;
       Id         : Unbounded_String;
+
+      --  Why it must not be committed, where something staging into it
+      --  failed: Commit then refuses it whole.
+      Spoiled    : Model_Runner.Errors.Error_Info := Model_Runner.Errors.Success;
    end record;
 
    No_Changes : constant Transaction :=
      (Operations => Operation_Vectors.Empty_Vector,
-      Id         => Null_Unbounded_String);
+      Id         => Null_Unbounded_String,
+      Spoiled    => Model_Runner.Errors.Success);
 
    type Store is new Ada.Finalization.Limited_Controlled with record
       Root         : Unbounded_String;

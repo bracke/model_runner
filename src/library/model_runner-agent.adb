@@ -726,6 +726,18 @@ package body Model_Runner.Agent is
                         Made.Forget (Key);
                      end if;
 
+                     --  A change that failed changed nothing: refused again
+                     --  while what it found stands, and let run once that
+                     --  has moved -- the file edited elsewhere, or by another
+                     --  call -- not refused for good on a state long gone.
+                     if Effect = Model_Runner.Tools.Runner.Changes and then Made.Answered (Key)
+                       and then Made.Ended (Key).Answer /= Model_Runner.Tools.Runner.Answered
+                       and then Made.Stamp_Of (Key) /= ""
+                       and then Made.Stamp_Of (Key) /= Executor.Stamp (Named, Args)
+                     then
+                        Made.Forget (Key);
+                     end if;
+
                      if Call = Asked and then Cut_Last then
                         --  Cut off before it was whole: told, not run.
                         Items (Call).Text := U.To_Unbounded_String
@@ -1024,6 +1036,8 @@ package body Model_Runner.Agent is
                            Made.Keep (Model_Runner.Agent.Recall.Identity (Named, Args), Reply, Ended,
                                       Stamp =>
                                         (if Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
+                                           or else (Executor.Kind (Named) = Model_Runner.Tools.Runner.Changes
+                                                    and then Ended.Answer /= Model_Runner.Tools.Runner.Answered)
                                          then Executor.Stamp (Named, Args) else ""));
                            declare
                               Named_Path : Boolean;

@@ -113,9 +113,11 @@ package body Model_Runner.Tools.Registry is
       (W ("web_search"), Network, True, Varies, Pure, True, No_Path,
        W (Sc.Definition
          ("web_search", "Search the web and return the results page.", [Sc.Text ("query")]))),
-      --  A helper may write anything; it overlaps where its delegator can
-      --  run two at once, which the runner says.
-      (W ("delegate"), Delegation, True, Changes, Anything, True, No_Path, null),
+      --  A helper may read, write and run anything, so two never overlap,
+      --  nor one with any other call: a read beside a helper writing the
+      --  file it read raced it, and two helpers shared their parent's
+      --  counter and trace unguarded.
+      (W ("delegate"), Delegation, True, Changes, Anything, False, No_Path, null),
       --  Somebody may answer the same question differently.
       (W ("ask_user"), Ask_User, True, Varies, Pure, False, No_Path,
        W (Sc.Definition

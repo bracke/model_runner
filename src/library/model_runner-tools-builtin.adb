@@ -10,6 +10,7 @@ with GNAT.OS_Lib;
 
 with Hostkit.Metadata;
 
+with Model_Runner.Conversation;
 with Model_Runner.Processes;
 
 with Http_Client.Clients;
@@ -106,34 +107,17 @@ package body Model_Runner.Tools.Builtin is
       return Text'Last + 1;
    end After_String;
 
+   --  The string that opens at Index, as it means: decoded as the call's
+   --  identity decodes it (Conversation.Unescaped), \uXXXX and surrogate
+   --  pairs included -- two readings of one call's JSON told the agent loop
+   --  two calls apart that the tool ran as one.
    function String_Content (Text : String; Index : Positive) return String is
-      Room : String (1 .. Text'Length);
-      Used : Natural := 0;
-      I    : Natural := Index + 1;
-
-      procedure Put (C : Character) is
-      begin
-         Used := Used + 1;
-         Room (Used) := C;
-      end Put;
+      I : Natural := Index + 1;
    begin
       while I <= Text'Last and then Text (I) /= '"' loop
-         if Text (I) = '\' and then I < Text'Last then
-            case Text (I + 1) is
-               when 'n'    => Put (ASCII.LF);
-               when 't'    => Put (ASCII.HT);
-               when 'r'    => Put (ASCII.CR);
-               when 'b'    => Put (ASCII.BS);
-               when 'f'    => Put (ASCII.FF);
-               when others => Put (Text (I + 1));
-            end case;
-            I := I + 2;
-         else
-            Put (Text (I));
-            I := I + 1;
-         end if;
+         I := I + (if Text (I) = '\' and then I < Text'Last then 2 else 1);
       end loop;
-      return Room (1 .. Used);
+      return Model_Runner.Conversation.Unescaped (Text (Index + 1 .. Natural'Min (I - 1, Text'Last)));
    end String_Content;
 
    procedure Locate
@@ -1634,7 +1618,7 @@ package body Model_Runner.Tools.Builtin is
         (if U.Length (Asked.Role) = 0 then Rt.Brief (Asked)
          else "Your role: " & U.To_String (Asked.Role) & ASCII.LF & Rt.Brief (Asked));
       Outputs : constant Rt.Paths.Vector := Asked.Outputs;
-      Before  : constant Rt.Paths.Vector := Rt.Prints (Outputs);
+      Before  : constant Rt.Paths.Vector := Rt.Prints (Outputs, U.To_String (Self.Base));
    begin
       if not Have then
          return Failure ("delegate needs a task string");
@@ -1680,7 +1664,7 @@ package body Model_Runner.Tools.Builtin is
                end if;
                --  What it was to write and did not: failed, whatever it said.
                declare
-                  Missing : constant String := Rt.Unwritten (Outputs, Before);
+                  Missing : constant String := Rt.Unwritten (Outputs, Before, U.To_String (Self.Base));
                begin
                   if Missing /= "" then
                      return Spent (Failure ("the sub-agent did not write " & Missing & ", which it was to"
@@ -2306,8 +2290,6 @@ package body Model_Runner.Tools.Builtin is
    begin
       if not Rg.Parallel (Named) then
          return False;
-      elsif Named = "delegate" then
-         return Self.Sub /= null and then Self.Sub.Parallel_Delegates;
       elsif Named = "retrieve" then
          return Self.Embed = null;
       end if;
@@ -2429,8 +2411,10 @@ package body Model_Runner.Tools.Builtin is
         Model_Runner.Tools.Editing.On_Disk
           (U.To_String (Self.Base), (if Has_Path and then Path /= "" then Path else "."));
    begin
+      --  Of what a file tool reads, or would change: a change that failed
+      --  is stamped too, and may run again once what it found has moved.
       if Rg.Touches (Named) /= Model_Runner.Tools.Runner.Files
-        or else Rg.Kind_Of (Named) /= Model_Runner.Tools.Runner.Reads
+        or else Rg.Kind_Of (Named) not in Model_Runner.Tools.Runner.Reads | Model_Runner.Tools.Runner.Changes
       then
          return "";
       end if;

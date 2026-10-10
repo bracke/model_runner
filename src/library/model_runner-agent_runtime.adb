@@ -70,12 +70,12 @@ package body Model_Runner.Agent_Runtime is
    -- Prints --
    ------------
 
-   function Prints (Of_Files : Paths.Vector) return Paths.Vector is
+   function Prints (Of_Files : Paths.Vector; Base : String := "") return Paths.Vector is
       Result : Paths.Vector;
    begin
       for Path of Of_Files loop
          declare
-            Now : constant String := Model_Runner.Tools.Editing.Revision_Of (Path);
+            Now : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
          begin
             Result.Append (if Now = "" then "-" else Now);
          end;
@@ -87,8 +87,8 @@ package body Model_Runner.Agent_Runtime is
    -- Unwritten --
    ---------------
 
-   function Unwritten (Of_Files : Paths.Vector; Before : Paths.Vector) return String is
-      Now    : constant Paths.Vector := Prints (Of_Files);
+   function Unwritten (Of_Files : Paths.Vector; Before : Paths.Vector; Base : String := "") return String is
+      Now    : constant Paths.Vector := Prints (Of_Files, Base);
       Result : Unbounded_String;
    begin
       for Index in Of_Files.First_Index .. Of_Files.Last_Index loop

@@ -173,6 +173,19 @@ package body Model_Runner.Framework.Work is
       return Found and then Model_Runner.Text.To_String (Given.Text_Value) = "time";
    end Out_Of_Time;
 
+   --  Whether a run was ended for going round: its model repeating calls
+   --  it had made, and getting no further.
+   function Went_Round (Ran : E.Error_Info) return Boolean is
+      Found : Boolean;
+      Given : E.Parameter;
+   begin
+      if not E."=" (Ran.Code, E.Framework_Limit_Exceeded) then
+         return False;
+      end if;
+      E.Find_Parameter (Ran, "name", Found, Given);
+      return Found and then Model_Runner.Text.To_String (Given.Text_Value) = "the model";
+   end Went_Round;
+
    --  Whether a run was stopped by whoever started it.
    function Interrupted (Ran : E.Error_Info) return Boolean
    is (E."=" (Ran.Code, E.Generation_Cancelled));
@@ -277,7 +290,10 @@ package body Model_Runner.Framework.Work is
       Stores.Pending (Change, Tasks_Area, Task_Id & ".state", Held, Staged);
       if not Staged then
          Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Status);
+         --  Not staged is not left out quietly: the change it was to be
+         --  part of is refused whole.
          if E.Is_Error (Status) then
+            Stores.Spoil (Change, Status);
             return;
          end if;
          Records.Set_Revision (Held, Records.Revision (Held) + 1);
@@ -451,7 +467,10 @@ package body Model_Runner.Framework.Work is
       Stores.Pending (Change, Runtime_Area, "agent." & Agent, Held, Staged);
       if not Staged then
          Stores.Read (Item, Runtime_Area, "agent." & Agent, Held, Status);
+         --  An agent's state is what completion reads: not staged, the
+         --  change it was to be part of is refused whole.
          if E.Is_Error (Status) then
+            Stores.Spoil (Change, Status);
             return;
          end if;
          Records.Set_Revision (Held, Records.Revision (Held) + 1);
@@ -1376,6 +1395,16 @@ package body Model_Runner.Framework.Work is
    -- Spend --
    -----------
 
+   --  Kept as the first record the state could not keep.
+   procedure Keep_Unkept (Host : in out Child_Host; Status : E.Error_Info) is
+   begin
+      if E.Is_Error (Status) and then E.Is_Ok (Host.Unkept) then
+         Host.Unkept := Status;
+      end if;
+   end Keep_Unkept;
+
+   function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info is (Host.Unkept);
+
    procedure Spend
      (Host          : in out Child_Host;
       Tokens        : Natural;
@@ -1391,7 +1420,12 @@ package body Model_Runner.Framework.Work is
          Host.Root_Over := True;
          Status := E.Success;
       end if;
-      Stores.Commit (Host.Item.all, Change, Status);
+      --  Not charged is not committed half, and is kept to be said: the
+      --  budget is what stops the next run.
+      if E.Is_Ok (Status) then
+         Stores.Commit (Host.Item.all, Change, Status);
+      end if;
+      Keep_Unkept (Host, Status);
       if Natural (Host.Open.Length) = 1 then
          Host.Root_Out := Host.Root_Out + Tokens;
          Host.Root_Prompt := Natural'Max (Host.Root_Prompt, Prompt_Tokens);
@@ -1420,6 +1454,7 @@ package body Model_Runner.Framework.Work is
          if E.Is_Ok (Status) then
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
+         Keep_Unkept (Host, Status);
       end if;
    end Note_Call;
 
@@ -1431,12 +1466,13 @@ package body Model_Runner.Framework.Work is
      (Host      : in out Child_Host;
       Named     : String;
       Arguments : String;
-      Number    : out Natural)
+      Number    : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info)
    is
       Change : Stores.Transaction;
-      Status : E.Error_Info;
    begin
       Number := 0;
+      Status := E.Success;
       if not Host.Calls.Is_Empty then
          Invocations.Note_Start
            (Host.Item.all, Change, Host.Calls.Last_Element, Named, Arguments, Number, Status);
@@ -1489,16 +1525,25 @@ package body Model_Runner.Framework.Work is
          Agents.Finish
            (Host.Item.all, Change, Host.Open.Last_Element, False, "",
             "its parent stopped before it answered", Status);
+         --  A helper not ended is not committed with the others ended:
+         --  all of them, or none and said.
+         if E.Is_Error (Status) then
+            Stores.Spoil (Change, Status);
+         end if;
          if Host.Calls.Last_Element /= "" then
             Invocations.Finish
               (Host.Item.all, Change, Host.Calls.Last_Element, Invocations.Failed,
                (others => 0), "", "its parent stopped before it answered", Status);
+            if E.Is_Error (Status) then
+               Stores.Spoil (Change, Status);
+            end if;
          end if;
          Host.Open.Delete_Last;
          Host.Calls.Delete_Last;
          Host.Opened.Delete_Last;
       end loop;
       Stores.Commit (Host.Item.all, Change, Status);
+      Keep_Unkept (Host, Status);
    end Abandon;
 
    ------------------

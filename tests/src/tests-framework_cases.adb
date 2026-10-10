@@ -9859,7 +9859,8 @@ package body Tests.Framework_Cases is
       Budget  : Natural;
       Retry   : Boolean := False;
 
-      procedure Ask (Need, Said : String; Retry_Of : String := ""; Close : Boolean := True) is
+      procedure Ask (Need, Said : String; Retry_Of : String := ""; Close : Boolean := True;
+                     Ran : E.Error_Info := E.Success) is
       begin
          Children.Open_Child
            ("reviewer", Need, "look at hello", Retry_Of, Id, Context, Budget, Parent_Status);
@@ -9869,7 +9870,7 @@ package body Tests.Framework_Cases is
                     and then Budget > 0 and then Children.Current = To_String (Id),
                     "a child was not given a context and budget of its own");
             if Close then
-               Children.Close_Child (Said, 10, E.Success, Parent_Told, Retry);
+               Children.Close_Child (Said, 10, Ran, Parent_Told, Retry);
                Assert (Children.Current = Root, "a closed child was still the one working");
             end if;
          end if;
@@ -10031,6 +10032,15 @@ package body Tests.Framework_Cases is
             Assert (Retry, "a required child that failed was not run again");
             Ask ("required", Child_Fails, To_String (Id));
             Assert (not Retry, "a child was run again past the limit");
+            --  One that went round is not run again: it would go round the
+            --  same way.
+            declare
+               Round : E.Error_Info := E.Make (E.Framework_Limit_Exceeded);
+            begin
+               E.Add_Text (Round, "name", "the model");
+               Ask ("required", "", Ran => Round);
+               Assert (not Retry, "a child that went round was run again");
+            end;
          when Fails_Then_Good =>
             Ask ("required", Child_Fails);
             Ask ("required", Child_Done, To_String (Id));
@@ -10811,10 +10821,11 @@ package body Tests.Framework_Cases is
                  "the call did not record what it could use: " & R.Get (Root_Call, "tool_policy"));
       end;
 
+      --  Two runs of one child, and one that went round, not run again.
       Work (Fails_Twice);
       Assert (To_String (Done.Final_State) = "blocked"
               and then Contains (To_String (Done.Reason), "failed")
-              and then Natural (Done.Children.Length) = 2,
+              and then Natural (Done.Children.Length) = 3,
               "a required child that failed twice did not hold its parent: "
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
 
@@ -10969,6 +10980,33 @@ package body Tests.Framework_Cases is
    --  its toolchain, a tool that answers otherwise now is a run of the
    --  checks, not the earlier evidence copied -- which was stale the moment
    --  it was made, and kept being made.
+   --  A transaction something could not be staged into is refused whole:
+   --  nothing of it applied, the reason said, and the next one free of it.
+   procedure Spoiled_Change_Is_Refused
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Why    : E.Error_Info := E.Make (E.Framework_Transaction_Failed);
+   begin
+      Task_Project (Store, "spoiled", "");
+      Tk.Create (Store, Change, Fields ("Kept out", "analysis"), "user", "", Id, Status);
+      E.Add_Text (Why, "path", "agent.AG-1", E.Param_Path);
+      S.Spoil (Change, Why);
+      S.Commit (Store, Change, Status);
+      Assert (E."=" (Status.Code, E.Framework_Transaction_Failed)
+              and then Tk.State_Of (Store, To_String (Id)) = "",
+              "a spoiled change was committed, or not refused with its reason: " & Code_Of (Status));
+      Tk.Create (Store, Change, Fields ("Let in", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) /= "",
+              "a change after a spoiled one was refused too: " & Code_Of (Status));
+      S.Close (Store);
+   end Spoiled_Change_Is_Refused;
+
    --  A check's FILE:LINE is quoted from the project: the one file the
    --  name means, each line once; a name two files end in, or none, is not.
    procedure Check_Output_Quotes_Lines
@@ -11488,6 +11526,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Unknown_Events_Are_Left'Access,
          "an event of a kind this build does not know is left unconsumed and said");
+      Register_Routine
+        (T, Spoiled_Change_Is_Refused'Access,
+         "a transaction something could not be staged into is refused whole");
       Register_Routine
         (T, Check_Output_Quotes_Lines'Access,
          "a check's FILE:LINE is quoted from the one project file it names");

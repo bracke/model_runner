@@ -627,12 +627,6 @@ package body Model_Runner.CLI.Execute.Run_Command is
         Helpers : Natural := 0;
      end record;
 
-   --  Two subtasks may overlap when the pool holds more than one open
-   --  session (which the CLI opens only on a backend that evaluates two at
-   --  once, so this need not check the backend again).
-   overriding function Parallel_Delegates
-     (Self : Model_Delegator) return Boolean is (Self.Ready > 1);
-
    overriding procedure Run_Sub
      (Self        : in out Model_Delegator;
       Instruction : String;

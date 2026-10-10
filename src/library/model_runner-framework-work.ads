@@ -183,11 +183,15 @@ package Model_Runner.Framework.Work is
    --  @param Named The tool.
    --  @param Arguments Its arguments.
    --  @param Number The entry, for Note_Call; nought where none was made.
+   --  @param Status A failure putting it in the state: the call must then
+   --    not run, or a run stopped in it would leave nothing to say it may
+   --    have taken effect.
    procedure Note_Start
      (Host      : in out Child_Host;
       Named     : String;
       Arguments : String;
-      Number    : out Natural);
+      Number    : out Natural;
+      Status    : out Model_Runner.Errors.Error_Info);
 
    --  One part of a task, as its plan holds it.
    type Planned_Part is record
@@ -463,6 +467,14 @@ package Model_Runner.Framework.Work is
    --  @param Host The host.
    --  @return True after a run of the checks that failed, until one passes.
    function Checks_Failing (Host : Child_Host) return Boolean;
+
+   --  The first record of the work the state could not keep, or success:
+   --  tokens spent, a call's answer, a helper ended. No call that changes
+   --  state is let start after one, and the work ends saying it.
+   --
+   --  @param Host The host.
+   --  @return The failure.
+   function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info;
 
    --  Count tokens the agent now working generated against its budget.
    --
@@ -772,6 +784,11 @@ private
 
       --  Whether the root went over its token budget.
       Root_Over   : Boolean := False;
+
+      --  The first record of the work the state could not keep -- tokens
+      --  spent, a call's answer, a helper ended: what budgets, recovery and
+      --  completion read, not a log. No change starts after it.
+      Unkept      : Model_Runner.Errors.Error_Info := Model_Runner.Errors.Success;
 
       --  The root, then each child still open, innermost last.
       Open    : Name_Lists.Vector;

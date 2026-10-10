@@ -1,5 +1,6 @@
 with Ada.Text_IO;
 with Ada.Characters.Handling;
+with Ada.Containers.Ordered_Maps;
 with Ada.Exceptions;
 with Ada.Directories;
 with Ada.Environment_Variables;
@@ -195,31 +196,6 @@ package body Model_Runner.CLI.Project_Commands is
       Status : out E.Error_Info;
       Base   : String := "") renames Model_Runner.Tools.Editing.Read_Text;
 
-   --  Every other tool refused, and said so.
-   type Fence (Screen : not null access Pres.Console) is
-     limited new Model_Runner.Agent.Approver with record
-      --  What the agent may call: its capabilities, as the registry reads
-      --  them -- the same that chose what it was offered.
-      Can : Model_Runner.Tools.Registry.Capabilities := Model_Runner.Tools.Registry.Nothing;
-   end record;
-
-   overriding function Consider
-     (Self : in out Fence; Named : String; Arguments : String)
-      return Model_Runner.Agent.Verdict;
-
-   overriding function Consider
-     (Self : in out Fence; Named : String; Arguments : String)
-      return Model_Runner.Agent.Verdict
-   is
-      pragma Unreferenced (Arguments);
-   begin
-      if Model_Runner.Tools.Registry.Allows (Self.Can, Named) then
-         return Model_Runner.Agent.Allow;
-      end if;
-      Pres.Put_Note (Self.Screen.all, "cli.agent.denied", [Loc.Named ("name", Named)]);
-      return Model_Runner.Agent.Deny;
-   end Consider;
-
    package Wk renames Model_Runner.Framework.Work;
    package Pm renames Model_Runner.Framework.Permissions;
 
@@ -259,7 +235,9 @@ package body Model_Runner.CLI.Project_Commands is
       Item   : String;
       Closed : out Boolean);
 
-   type Started_Entries is array (1 .. 64) of Natural;
+   --  The entries the state holds for calls that may change it, noted as
+   --  started before they ran, by the call's number in the run.
+   package Started_Maps is new Ada.Containers.Ordered_Maps (Positive, Natural);
 
    type Watch
      (Screen : not null access Pres.Console;
@@ -289,10 +267,21 @@ package body Model_Runner.CLI.Project_Commands is
       --  The run's own stop, asked for when its work is ended elsewhere.
       Stop  : Model_Runner.Cancellation.Token_Reference := null;
 
-      --  The entries the state holds for this turn's calls that may change
-      --  it, noted as started before they ran, by their place in the turn:
-      --  each answer fills its own in.
-      Started : Started_Entries := [others => 0];
+      --  The entries the state holds for calls that may change it, noted
+      --  as started before they ran, by the call's number in the run: each
+      --  answer fills its own in. A turn holds up to Conversation.Max_Calls,
+      --  and an array by place in the turn held the first 64.
+      Started : Started_Maps.Map;
+
+      --  The call shown last, which the approver is asked about next, and
+      --  whether it may change state.
+      Pending         : Natural := 0;
+      Pending_Changes : Boolean := False;
+
+      --  Why a call that may change state was not let run: its start could
+      --  not be put in the state, so a run stopped in it would leave
+      --  nothing to say it may have taken effect.
+      Unrecorded : E.Error_Info := E.Success;
 
       --  The agent the run started with, and the last answer shown: a
       --  helper's lines are marked with its identifier, and an answer the
@@ -301,6 +290,22 @@ package body Model_Runner.CLI.Project_Commands is
       Shown : Unbounded_String;
 
    end record;
+
+   --  Every other tool refused, and said so; and a call that may change
+   --  state let run only once its start is in the state.
+   type Fence (Screen : not null access Pres.Console) is
+     limited new Model_Runner.Agent.Approver with record
+      --  What the agent may call: its capabilities, as the registry reads
+      --  them -- the same that chose what it was offered.
+      Can : Model_Runner.Tools.Registry.Capabilities := Model_Runner.Tools.Registry.Nothing;
+
+      --  The run's watcher, which knows the call asked about, and its host.
+      Watcher : access Watch := null;
+   end record;
+
+   overriding function Consider
+     (Self : in out Fence; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict;
 
    overriding procedure On_Turn
      (Self  : in out Watch;
@@ -378,13 +383,49 @@ package body Model_Runner.CLI.Project_Commands is
       Pres.Put_Tool_Call (Self.Screen.all, Whose (Self) & Named & Place (Call), Arguments);
       --  A call that may change state is in the record before it runs, so
       --  a run that stops in it leaves it said.
-      if Call.In_Turn in Self.Started'Range then
-         Self.Started (Call.In_Turn) := 0;
-         if Self.Host /= null and then Call.Changes then
-            Self.Host.Note_Start (Named, Arguments, Self.Started (Call.In_Turn));
-         end if;
-      end if;
+      --  Which call the approver is asked about next: its start is put in
+      --  the state there, where a failure can keep it from running.
+      Self.Pending := Call.Id;
+      Self.Pending_Changes := Call.Changes;
    end On_Call;
+
+   overriding function Consider
+     (Self : in out Fence; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict
+   is
+   begin
+      if not Model_Runner.Tools.Registry.Allows (Self.Can, Named) then
+         Pres.Put_Note (Self.Screen.all, "cli.agent.denied", [Loc.Named ("name", Named)]);
+         return Model_Runner.Agent.Deny;
+      end if;
+      --  A call that may change state is in the record before it runs, so
+      --  a run that stops in it leaves it said; where it cannot be put
+      --  there, it does not run, and the run stops saying why.
+      --  Nor after the state failed to keep the work's record: what it
+      --  would change could not be accounted for either.
+      if Self.Watcher /= null and then Self.Watcher.Host /= null and then Self.Watcher.Pending_Changes
+        and then E.Is_Error (Wk.Unkept (Self.Watcher.Host.all))
+      then
+         Self.Watcher.Unrecorded := Wk.Unkept (Self.Watcher.Host.all);
+         return Model_Runner.Agent.Halt;
+      end if;
+      if Self.Watcher /= null and then Self.Watcher.Host /= null and then Self.Watcher.Pending_Changes
+        and then Self.Watcher.Pending > 0
+      then
+         declare
+            Number : Natural;
+            Status : E.Error_Info;
+         begin
+            Self.Watcher.Host.Note_Start (Named, Arguments, Number, Status);
+            if E.Is_Error (Status) then
+               Self.Watcher.Unrecorded := Status;
+               return Model_Runner.Agent.Halt;
+            end if;
+            Self.Watcher.Started.Include (Self.Watcher.Pending, Number);
+         end;
+      end if;
+      return Model_Runner.Agent.Allow;
+   end Consider;
 
    overriding procedure On_Result
      (Self      : in out Watch;
@@ -437,7 +478,7 @@ package body Model_Runner.CLI.Project_Commands is
       if Self.Host /= null then
          Self.Host.Note_Call
            (Named, Arguments, Result,
-            Number => (if Call.In_Turn in Self.Started'Range then Self.Started (Call.In_Turn) else 0),
+            Number => (if Self.Started.Contains (Call.Id) then Self.Started (Call.Id) else 0),
             --  How it ended, kept with it, for /why and /result to say.
             Ended  =>
               (case Ended.Answer is
@@ -719,6 +760,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  whatever directory the process is in.
       Runner.Set_Base (Tree);
       Guard.Can := Work_Capabilities (Host);
+      Guard.Watcher := Watcher'Unchecked_Access;
       Answer := Null_Unbounded_String;
       Tokens := 0;
       Prompt_Tokens := 0;
@@ -948,6 +990,10 @@ package body Model_Runner.CLI.Project_Commands is
                               & " else agents.max_steps, and a decision's ruling over either), and /reconfigure"
                               & " of that one gives it more");
             end case;
+         elsif Outcome.Reason = Model_Runner.Agent.Declined and then E.Is_Error (Watcher.Unrecorded) then
+            --  A call that may change state, kept from running because its
+            --  start could not be put in the state: that failure is why.
+            Status := Watcher.Unrecorded;
          elsif Outcome.Reason = Model_Runner.Agent.Repeating then
             --  Going round wants another way, not a request that was wrong.
             Status := E.Make (E.Framework_Limit_Exceeded);
@@ -1022,7 +1068,10 @@ package body Model_Runner.CLI.Project_Commands is
       Named_Outputs : constant Rt.Paths.Vector := Contract.Outputs;
 
       --  What each output held before the helper ran.
-      Before   : constant Rt.Paths.Vector := Rt.Prints (Named_Outputs);
+      --  Read in the tree the helper writes in: a workspace's, where the
+      --  work is apart, not the process's directory -- read there, a helper
+      --  that wrote its output was said not to have.
+      Before   : constant Rt.Paths.Vector := Rt.Prints (Named_Outputs, Self.Base);
       Role     : constant String := To_String (Contract.Role);
       Need     : constant String := To_String (Contract.Need);
       Retry_Of : Unbounded_String;
@@ -1118,7 +1167,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  is not what it was, and the call failed where one is not.
       if not Named_Outputs.Is_Empty then
          declare
-            Missing_Said : constant String := Rt.Unwritten (Named_Outputs, Before);
+            Missing_Said : constant String := Rt.Unwritten (Named_Outputs, Before, Self.Base);
             Written, Missing : Unbounded_String;
          begin
             Missing := To_Unbounded_String (Missing_Said);

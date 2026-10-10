@@ -436,9 +436,6 @@ package body Tests.Tools_Cases is
       Ended       : out Builtin.Sub_Outcome;
       Status      : out E.Error_Info);
 
-   overriding function Parallel_Delegates
-     (Self : Counting_Delegator) return Boolean is (False);
-
    overriding procedure Run_Sub
      (Self        : in out Counting_Delegator;
       Instruction : String;
@@ -829,6 +826,15 @@ package body Tests.Tools_Cases is
                        & Ada.Strings.Unbounded.To_String (Text));
             end;
          end;
+         --  Matched loosely, and what it would put there is what is there:
+         --  said unchanged, not edited.
+         declare
+            Same : constant Ed.Said := Ed.Edit (Loose_Path, "    X := 3;", "    X := 3;", "");
+         begin
+            Assert (not Same.Failed and then not Same.Changed and then Has (Same, "unchanged"),
+                    "a loose edit that changed nothing was said to have edited: "
+                    & Ada.Strings.Unbounded.To_String (Same.Text));
+         end;
          Put (Loose_Path, "   A := 1;" & ASCII.LF & "   A := 1;" & ASCII.LF);
          declare
             Twice : constant Ed.Said := Ed.Edit (Loose_Path, "    A := 1;", "    A := 2;", "");
@@ -1015,6 +1021,25 @@ package body Tests.Tools_Cases is
          Assert (Rt.Unwritten (Outputs, Before) = "obj/rt_b.txt",
                  "an output not written was not named, or a written one was: " & Rt.Unwritten (Outputs, Before));
          Ada.Directories.Delete_File ("obj/rt_a.txt");
+         --  Read in the tree the helper writes in -- a workspace's -- not
+         --  the process's directory: written there, an output is written.
+         declare
+            Tree : constant String := Ada.Directories.Full_Name ("obj/rt-tree");
+         begin
+            if Ada.Directories.Exists (Tree) then
+               Ada.Directories.Delete_Tree (Tree);
+            end if;
+            Ada.Directories.Create_Path (Tree & "/obj");
+            Before := Rt.Prints (Outputs, Tree);
+            Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Tree & "/obj/rt_a.txt");
+            Ada.Text_IO.Put_Line (F, "written in the tree");
+            Ada.Text_IO.Close (F);
+            Assert (Rt.Unwritten (Outputs, Before, Tree) = "obj/rt_b.txt"
+                    and then Rt.Unwritten (Outputs, Rt.Prints (Outputs), "") = "obj/rt_a.txt, obj/rt_b.txt",
+                    "an output written in the helper's tree was read in another: "
+                    & Rt.Unwritten (Outputs, Before, Tree));
+            Ada.Directories.Delete_Tree (Tree);
+         end;
          --  A list argument is read as the list it is, and one written as
          --  a string is not taken for one.
          declare
@@ -1516,7 +1541,7 @@ package body Tests.Tools_Cases is
       Assert (not Runner.Parallel_Safe ("write_file"),
               "write_file must not be parallel-safe");
       Assert (not Runner.Parallel_Safe ("delegate"),
-              "delegate must not be parallel-safe (one sub-session)");
+              "delegate must not be parallel-safe (a helper may read, write and run anything)");
       Assert (not Runner.Parallel_Safe ("ask_user"),
               "ask_user must not be parallel-safe (one console)");
    end Parallel_Safety_Is_Marked;
@@ -2335,6 +2360,22 @@ package body Tests.Tools_Cases is
               and then Rc.Identity ("read_file", "{""path"": ""a b""}")
                        /= Rc.Identity ("read_file", "{""path"": ""ab""}"),
               "different calls were taken for the same, or space inside a string was dropped");
+      --  One string however it is escaped is one call -- \/ and /, \u0041 and
+      --  A -- as the tools read it; a quote escaped inside a string is not
+      --  taken for the string's end.
+      Assert (Rc.Identity ("read_file", "{""path"": ""src\/a.adb"", ""line"": 1}")
+              = Rc.Identity ("read_file", "{""path"": ""src/a.adb"", ""line"": 1}")
+              and then Rc.Identity ("read_file", "{""path"": ""\u0041.adb""}")
+                       = Rc.Identity ("read_file", "{""path"": ""A.adb""}")
+              and then Rc.Identity ("read_file", "{""a"": ""x\"",\""b\"":\""y""}")
+                       /= Rc.Identity ("read_file", "{""a"": ""x"", ""b"": ""y""}"),
+              "one string spelled two ways was taken for two calls, or an escaped quote ended a string");
+      declare
+         Have : Boolean;
+      begin
+         Assert (Builtin.Text_Argument ("{""path"": ""\u0041\/b.adb""}", "path", Have) = "A/b.adb" and then Have,
+                 "a \u escape in an argument was not read as its character");
+      end;
       Assert (Rc.Canonical ("{""b"": [ {""d"":1, ""c"":2} ], ""a"": null}") = "{""a"":null,""b"":[{""c"":2,""d"":1}]}"
               and then Rc.Canonical ("not json  at all") = "notjsonatall",
               "arguments were not put in canonical order, or text that is not JSON was not squeezed: "
@@ -2722,8 +2763,12 @@ package body Tests.Tools_Cases is
                     "a file changed under a read kept its stamp: " & Before);
             Assert (Tree /= "" and then Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}") /= Tree,
                     "a tree with a file changed in it kept its stamp");
-            Assert (Runner.Stamp ("calculator", "{}") = "" and then Runner.Stamp ("write_file", Args) = "",
-                    "a call that reads no files was given a stamp");
+            --  A file change is stamped too, by the file it would change: one
+            --  that failed may run again once that has moved.
+            Assert (Runner.Stamp ("calculator", "{}") = ""
+                    and then Runner.Stamp ("write_file", Args) = Runner.Stamp ("read_file", Args)
+                    and then Runner.Stamp ("edit_file", Args) = Runner.Stamp ("read_file", Args),
+                    "a call that touches no files was given a stamp, or a file change none");
          end;
          Ada.Directories.Delete_File (Path);
       end;

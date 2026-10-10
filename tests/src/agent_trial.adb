@@ -191,6 +191,11 @@ package body Agent_Trial is
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
+
+      --  Each run of each task in a line -- how it ended, its time, its
+      --  calls, the thoughts closed at their budget -- for a table that
+      --  sets one commit's runs beside another's.
+      Rows      : array (Tasks'Range) of Unbounded_String;
    begin
       Clean := True;
       for Round in 1 .. Repeats loop
@@ -445,6 +450,27 @@ package body Agent_Trial is
                               end loop;
                               Ada.Text_IO.Close (File);
                            end if;
+                           declare
+                              Text   : constant String := To_String (Outcome);
+                              Mark   : constant String := "thoughts closed at their budget:";
+                              At_It  : constant Natural := Ada.Strings.Fixed.Index (To_String (Figures), Mark);
+                              Closed : constant String :=
+                                (if At_It = 0 then "0"
+                                 else Ada.Strings.Fixed.Trim
+                                   (To_String (Figures) (At_It + Mark'Length .. Length (Figures)), Ada.Strings.Both));
+                              Ending : constant String :=
+                                (if Ada.Strings.Fixed.Index (Text, "complete") > 0 then "complete"
+                                 elsif Ada.Strings.Fixed.Index (Text, "ran out of time") > 0 then "out of time"
+                                 elsif Ada.Strings.Fixed.Index (Text, "blocked") > 0 then "blocked"
+                                 elsif Ada.Strings.Fixed.Index (Text, "failed") > 0 then "failed"
+                                 else "other");
+                           begin
+                              Append (Rows (Which),
+                                      "  run" & Integer'Image (Round) & ": " & Ending
+                                      & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
+                                      & Integer'Image (Integer (Took)) & " s," & Natural'Image (Calls) & " calls, "
+                                      & Closed & " thoughts closed" & LF);
+                           end;
                            Ada.Text_IO.Put_Line
                              ("agent-trial " & Name
                               & (if Repeats = 1 then ""
@@ -490,6 +516,7 @@ package body Agent_Trial is
                Ada.Text_IO.Put_Line
                  ("agent-trial " & To_String (Tasks (Which).Name) & ": complete in"
                   & Natural'Image (Completed (Which)) & " of" & Integer'Image (Repeats) & " runs");
+               Ada.Text_IO.Put (To_String (Rows (Which)));
             end if;
          end loop;
       end if;

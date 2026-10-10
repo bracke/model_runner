@@ -127,6 +127,9 @@ is
    --  Whether it went over its token budget.
    Over_Budget : Boolean := False;
 
+   --  The first record of the work the state could not keep, if any.
+   Not_Kept : E.Error_Info := E.Success;
+
    --  What the call used, as the agent reports it.
    Used    : Invocations.Usage;
 
@@ -759,6 +762,7 @@ begin
          Abandon (Host);
          By_Checks := Host.Written;
          Over_Budget := Host.Root_Over;
+         Not_Kept := Unkept (Host);
          Used :=
            (Prompt_Tokens =>
               (if Host.Root_Prompt > 0 then Host.Root_Prompt else Context.Cost (Built)),
@@ -921,6 +925,16 @@ begin
       return;
    end if;
 
+   --  What the work did the state could not keep -- its spending, a
+   --  call's answer, a helper ended: set aside, saying so, whatever the
+   --  agent said; what budgets and recovery read is not what happened.
+   if E.Is_Error (Not_Kept) then
+      Stop_Children (Item, Change, To_String (Result.Agent_Id), "the state could not keep the work's record");
+      Conclude ("blocked", "the project's state could not keep the record of its work: " & Why_Of (Not_Kept),
+                "failed");
+      return;
+   end if;
+
    --  Stopped by whoever started it: the agent and what it made are
    --  cancelled, and the task is put aside, not failed -- nothing is
    --  known against it -- until it is accepted again.
@@ -956,7 +970,13 @@ begin
       declare
          Child_Why : Unbounded_String;
       begin
-         if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) then
+         --  Gone round itself after: that is why it ended, said first --
+         --  it went on working past the helper, and then got nowhere; the
+         --  task fails for it, the helper's failure named after.
+         if not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) and then Went_Round (Ran) then
+            Conclude ("failed", Why_Of (Ran) & "; before that, " & To_String (Child_Why), "failed");
+            return;
+         elsif not Agents.May_Complete (Item, To_String (Result.Agent_Id), Child_Why) then
             Conclude ((if To_String (Frozen.On_Child_Failure) = "fail" then "failed" else "blocked"),
                       Child_Failure (To_String (Child_Why), Why_Of (Ran),
                                      To_String (Frozen.On_Child_Failure)), "failed");

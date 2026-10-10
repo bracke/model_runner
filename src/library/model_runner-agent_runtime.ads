@@ -59,16 +59,20 @@ package Model_Runner.Agent_Runtime is
    --  or not text -- to hold against later.
    --
    --  @param Of_Files The files.
+   --  @param Base The tree they are in, as the tools that write them have
+   --    it -- a workspace's, where the work is apart; "" for the process's
+   --    own directory.
    --  @return Their prints, in the same order.
-   function Prints (Of_Files : Paths.Vector) return Paths.Vector;
+   function Prints (Of_Files : Paths.Vector; Base : String := "") return Paths.Vector;
 
    --  Of files and what they held, those that hold the same now: the outputs
    --  a helper was to write and did not.
    --
    --  @param Of_Files The files.
    --  @param Before Their prints before.
+   --  @param Base The tree they are in, as Prints took it.
    --  @return Them, comma-separated; "" when every one was written.
-   function Unwritten (Of_Files : Paths.Vector; Before : Paths.Vector) return String;
+   function Unwritten (Of_Files : Paths.Vector; Before : Paths.Vector; Base : String := "") return String;
 
    --  How a helper works and reports, wherever it was made: do what it is
    --  asked and nothing more, change files only with the tools that change

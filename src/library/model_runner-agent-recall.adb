@@ -1,5 +1,8 @@
 with Ada.Containers.Indefinite_Vectors;
 
+with Model_Runner.Conversation;
+with Model_Runner.Text;
+
 package body Model_Runner.Agent.Recall is
 
    package Member_Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
@@ -33,7 +36,9 @@ package body Model_Runner.Agent.Recall is
          return Arguments (At_Char);
       end Peek;
 
-      --  A string as written, quotes and escapes and all.
+      --  A string as it means, spelled one way: its escapes undone and
+      --  written again as JSON writes them, so src\/a and src/a, or \u0041
+      --  and A, are one call -- as the tools read them, the same.
       function Text return String is
          First : Positive;
       begin
@@ -52,7 +57,8 @@ package body Model_Runner.Agent.Recall is
             raise Bad;
          end if;
          At_Char := At_Char + 1;
-         return Arguments (First .. At_Char - 1);
+         return Model_Runner.Text.JSON_Quoted
+           (Model_Runner.Conversation.Unescaped (Arguments (First + 1 .. At_Char - 2)));
       end Text;
 
       function Value return String;

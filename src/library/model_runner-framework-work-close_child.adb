@@ -135,7 +135,13 @@ begin
       Host.Calls.Delete_Last;
       Host.Opened.Delete_Last;
 
+      --  Not run again where it went round: the same model on the same
+      --  brief goes round the same way, and the parent's time goes with
+      --  it -- a helper sent to fix an overflow repeated one edit until
+      --  stopped, was run again, and did it again. The parent hears of it
+      --  at once, and may do the part itself.
       Retry := not Good and then not Interrupted (Ran) and then not Out_Of_Time (Ran)
+        and then not Went_Round (Ran)
         and then Agents."=" (Child.Need, Agents.Required)
         and then Runs_Before (Id) < Retries;
       Told := To_Unbounded_String
