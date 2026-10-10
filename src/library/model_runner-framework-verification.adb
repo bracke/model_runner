@@ -1162,6 +1162,13 @@ package body Model_Runner.Framework.Verification is
             end if;
          end;
       end loop;
+      --  What could not be read, as a line of its own: an incomplete view
+      --  of the project is another state than a whole one, whatever the
+      --  files read say -- and evidence taken on it says so.
+      for Said of Repository.Unread_Paths (Files) loop
+         Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                         & "unread" & Tab & Said);
+      end loop;
       return To_String (Result);
    end File_Lines;
 
@@ -1355,28 +1362,70 @@ package body Model_Runner.Framework.Verification is
    end Why_Failed;
 
    ----------------
-   -- Is_Current --
+   -- Applicable --
    ----------------
 
-   function Is_Current
+   function Applicable
      (Item          : Stores.Store;
       Evidence      : String;
-      Reasons       : out Name_Lists.Vector;
-      Configuration : String := "") return Boolean
+      Configuration : String := "") return Applicability_Report
    is
       Value    : Records.Item;
       Status   : E.Error_Info;
       Settings : constant Records.Item := Config (Item);
+      Result   : Applicability_Report;
+
+      --  A reason, and its kind where it is the first.
+      procedure Note (Kind : Applicability; Reason : String) is
+      begin
+         if Result.Reasons.Is_Empty then
+            Result.Kind := Kind;
+         end if;
+         Result.Reasons.Append (Reason);
+      end Note;
    begin
-      Reasons.Clear;
       Stores.Read (Item, Verification_Area, Evidence, Value, Status);
       if E.Is_Error (Status) then
-         Reasons.Append (Evidence & " is not there");
-         return False;
+         Note ((if E."=" (Status.Code, E.Framework_Not_Found) then Missing else Corrupt),
+               (if E."=" (Status.Code, E.Framework_Not_Found) then Evidence & " is not there"
+                else Evidence & " will not read (" & E.Error_Code'Image (Status.Code) & ")"));
+         return Result;
+      end if;
+
+      --  Taken for a task in one attempt at it, it is that attempt's: a
+      --  task run again -- reopened, retried -- is held to checks of its
+      --  own, which, the files unchanged, the reuse index answers without
+      --  running anything. Evidence for a requirement or the project is
+      --  no attempt's.
+      if Records.Get (Value, "task") /= "" and then Records.Get (Value, "generation") /= "" then
+         declare
+            State : Records.Item;
+            Read  : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Records.Get (Value, "task") & ".state", State, Read);
+            if E.Is_Ok (Read) and then Records.Get (State, "generation") /= ""
+              and then Records.Get (State, "generation") /= Records.Get (Value, "generation")
+            then
+               Note (Stale_Generation, Evidence & " was taken in an earlier attempt at " & Records.Get (Value, "task")
+                               & " (generation " & Records.Get (Value, "generation") & ", now "
+                               & Records.Get (State, "generation") & ")");
+            end if;
+         end;
+      end if;
+
+      --  Whole-project evidence over a project not wholly read is not
+      --  current, however the read files stand: what it did not see may
+      --  be what fails.
+      if Records.Get (Value, "workspace") = "" and then Records.Get (Value, "scope_files") = ""
+        and then Repository.Unread_Count (Repository.Now (Item)) > 0
+      then
+         Note (Incomplete_Repository,
+               "the project is not wholly read -- " & Repository.Unread_At (Repository.Now (Item), 1)
+               & " -- so " & Evidence & " stands for none of it");
       end if;
 
       if Records.Get (Value, "workspace") /= "" then
-         Reasons.Append (Evidence & " was taken in a workspace, before its work was taken in");
+         Note (Workspace_Only, Evidence & " was taken in a workspace, before its work was taken in");
       elsif Records.Get (Value, "repository_revision") /= Repository_Now (Item)
         and then not Outside_Scope (Item, Value)
       then
@@ -1408,7 +1457,7 @@ package body Model_Runner.Framework.Verification is
                   end if;
                end loop;
             end if;
-            Reasons.Append ("the files have changed since " & Evidence
+            Note (Stale_Repository, "the files have changed since " & Evidence
                             & (if Changed = Null_Unbounded_String then ""
                                else ": " & To_String (Changed) & (if Count > 5 then " and others" else "")));
          end;
@@ -1420,7 +1469,7 @@ package body Model_Runner.Framework.Verification is
               /= (if Configuration /= "" then Configuration
                   else Configurations.Verification_Fingerprint (Settings))
          then
-            Reasons.Append ("the configuration of its checks has changed since " & Evidence);
+            Note (Stale_Configuration, "the configuration of its checks has changed since " & Evidence);
          end if;
 
       --  Taken before what bears on checks was told apart: held to nothing
@@ -1430,7 +1479,7 @@ package body Model_Runner.Framework.Verification is
       elsif Records.Get (Value, "configuration_fingerprint")
               /= Records.Get (Settings, "configuration_fingerprint")
       then
-         Reasons.Append ("the configuration has changed since " & Evidence);
+         Note (Stale_Configuration, "the configuration has changed since " & Evidence);
       end if;
 
       --  The environment its checks were given, as it is passed now.
@@ -1462,7 +1511,7 @@ package body Model_Runner.Framework.Verification is
                      end if;
                   end;
                end loop;
-               Reasons.Append ("the environment its checks are given has changed since " & Evidence
+               Note (Stale_Environment, "the environment its checks are given has changed since " & Evidence
                                & (if Differ = Null_Unbounded_String then ""
                                   else ": " & To_String (Differ) & " differs -- a session started"
                                        & " from another shell has its own"));
@@ -1484,7 +1533,7 @@ package body Model_Runner.Framework.Verification is
                        and then Version_Of (Item, Scratch, Rules, Field (Field'First + 5 .. Field'Last))
                                   /= Records.Get (Value, Field)
                      then
-                        Reasons.Append (Field (Field'First + 5 .. Field'Last)
+                        Note (Stale_Toolchain, Field (Field'First + 5 .. Field'Last)
                                         & " has changed since " & Evidence);
                      end if;
                   end;
@@ -1509,7 +1558,7 @@ package body Model_Runner.Framework.Verification is
                   if E.Is_Error (Read)
                     or else To_String (Held.Meaning) /= Records.Get (Value, Field)
                   then
-                     Reasons.Append (Id & " has changed its meaning since " & Evidence);
+                     Note (Stale_Authority, Id & " has changed its meaning since " & Evidence);
                   end if;
                end;
             elsif Starts (Field, "requirement.") then
@@ -1526,13 +1575,29 @@ package body Model_Runner.Framework.Verification is
                     or else To_String (Held.Meaning)
                             /= Records.Get (Value, "meaning." & Id)
                   then
-                     Reasons.Append (Id & " has changed its meaning since " & Evidence);
+                     Note (Stale_Authority, Id & " has changed its meaning since " & Evidence);
                   end if;
                end;
             end if;
          end;
       end loop;
-      return Reasons.Is_Empty;
+      return Result;
+   end Applicable;
+
+   ----------------
+   -- Is_Current --
+   ----------------
+
+   function Is_Current
+     (Item          : Stores.Store;
+      Evidence      : String;
+      Reasons       : out Name_Lists.Vector;
+      Configuration : String := "") return Boolean
+   is
+      Report : constant Applicability_Report := Applicable (Item, Evidence, Configuration);
+   begin
+      Reasons := Report.Reasons;
+      return Report.Kind = Current;
    end Is_Current;
 
    ------------
@@ -1544,23 +1609,55 @@ package body Model_Runner.Framework.Verification is
       Task_Id : String;
       Profile : String) return String
    is
-      Result : Unbounded_String;
+      --  Latest by the number in its name, not by where the name sorts:
+      --  VER-1000000 sorts before VER-999999. Walked from the highest down,
+      --  the first that is this task's profile's is the answer, and the
+      --  rest are not read -- every record was, on every gate.
+      type Numbered is record
+         Number : Natural := 0;
+         Name   : Unbounded_String;
+      end record;
+      function Before (Left, Right : Numbered) return Boolean is (Left.Number > Right.Number);
+      package Numbered_Lists is new Ada.Containers.Vectors (Positive, Numbered);
+      package Highest_First is new Numbered_Lists.Generic_Sorting (Before);
+
+      function Number_Of (Name : String) return Natural is
+         Value : Natural := 0;
+         Seen  : Boolean := False;
+      begin
+         for C of Name loop
+            if C in '0' .. '9' then
+               Seen := True;
+               exit when Value > Natural'Last / 10 - 9;
+               Value := Value * 10 + (Character'Pos (C) - Character'Pos ('0'));
+            elsif Seen then
+               exit;
+            end if;
+         end loop;
+         return Value;
+      end Number_Of;
+
+      Listed : Numbered_Lists.Vector;
    begin
       for Name of Stores.Names (Item, Verification_Area) loop
+         Listed.Append (Numbered'(Number_Of (Name), To_Unbounded_String (Name)));
+      end loop;
+      Highest_First.Sort (Listed);
+      for One of Listed loop
          declare
             Value  : Records.Item;
             Status : E.Error_Info;
          begin
-            Stores.Read (Item, Verification_Area, Name, Value, Status);
+            Stores.Read (Item, Verification_Area, To_String (One.Name), Value, Status);
             if E.Is_Ok (Status) and then Records.Get (Value, "task") = Task_Id
               and then (Records.Get (Value, "profile") = Profile
                         or else Records.Get (Value, "stands_for") = Profile)
             then
-               Result := To_Unbounded_String (Name);
+               return To_String (One.Name);
             end if;
          end;
       end loop;
-      return To_String (Result);
+      return "";
    end Latest;
 
    ------------
@@ -1586,6 +1683,19 @@ package body Model_Runner.Framework.Verification is
          Selected :=
            (Width  => Traceability.Full_Suite,
             Reason => To_Unbounded_String ("nothing it changed can be traced"),
+            others => <>);
+      --  Less known is not less reached: a file that could not be read
+      --  takes its units, uses and tests out of the graph, and a change
+      --  then seemed to reach less than it may. The whole suite, and why.
+      elsif Repository.Unread_Count (Repository.Now (Item)) > 0 then
+         Selected :=
+           (Width  => Traceability.Full_Suite,
+            Reason => To_Unbounded_String
+              ("the project's graph is incomplete -- " & Repository.Unread_At (Repository.Now (Item), 1)
+               & (if Repository.Unread_Count (Repository.Now (Item)) > 1
+                  then " and" & Natural'Image (Repository.Unread_Count (Repository.Now (Item)) - 1) & " more"
+                  else "")
+               & " -- so what a change reaches cannot be traced"),
             others => <>);
       else
          declare
@@ -1695,7 +1805,6 @@ package body Model_Runner.Framework.Verification is
                  (if Profile = "" then "" else Latest (Item, Task_Id, Profile));
                Value    : Records.Item;
                Status   : E.Error_Info;
-               Reasons  : Name_Lists.Vector;
             begin
                if Profile = "" then
                   Judge (Name, False, "no verification profile applies to it");
@@ -1703,12 +1812,23 @@ package body Model_Runner.Framework.Verification is
                   Judge (Name, False, "profile " & Profile & " has not been run for it");
                else
                   Stores.Read (Item, Verification_Area, Evidence, Value, Status);
-                  if Records.Get (Value, "passed") /= "true" then
+                  --  Not to be read is not failed: said as what it is, the
+                  --  state's fault and not the work's.
+                  if E.Is_Error (Status) then
+                     Judge (Name, False, Evidence & " cannot be used: its record will not read ("
+                            & E.Error_Code'Image (Status.Code) & ")");
+                  elsif Records.Get (Value, "passed") /= "true" then
                      Judge (Name, False, Evidence & " did not pass");
-                  elsif not Is_Current (Item, Evidence, Reasons) then
-                     Judge (Name, False, Reasons.First_Element);
                   else
-                     Judge (Name, True, "");
+                     declare
+                        Stands : constant Applicability_Report := Applicable (Item, Evidence);
+                     begin
+                        if Stands.Kind = Current then
+                           Judge (Name, True, "");
+                        else
+                           Judge (Name, False, Stands.Reasons.First_Element);
+                        end if;
+                     end;
                   end if;
                end if;
             end;
@@ -1787,18 +1907,28 @@ package body Model_Runner.Framework.Verification is
                Evidence : constant String := Latest (Item, Task_Id, Profile);
                Value    : Records.Item;
                Status   : E.Error_Info;
-               Reasons  : Name_Lists.Vector;
             begin
                if Evidence = "" then
                   Judge (Name, False, "profile " & Profile & " has not been run for it");
                else
                   Stores.Read (Item, Verification_Area, Evidence, Value, Status);
-                  if Records.Get (Value, "passed") /= "true" then
+                  --  Not to be read is not failed: said as what it is, the
+                  --  state's fault and not the work's.
+                  if E.Is_Error (Status) then
+                     Judge (Name, False, Evidence & " cannot be used: its record will not read ("
+                            & E.Error_Code'Image (Status.Code) & ")");
+                  elsif Records.Get (Value, "passed") /= "true" then
                      Judge (Name, False, Evidence & " did not pass");
-                  elsif not Is_Current (Item, Evidence, Reasons) then
-                     Judge (Name, False, Reasons.First_Element);
                   else
-                     Judge (Name, True, "");
+                     declare
+                        Stands : constant Applicability_Report := Applicable (Item, Evidence);
+                     begin
+                        if Stands.Kind = Current then
+                           Judge (Name, True, "");
+                        else
+                           Judge (Name, False, Stands.Reasons.First_Element);
+                        end if;
+                     end;
                   end if;
                end if;
             end;

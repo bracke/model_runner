@@ -209,6 +209,11 @@ package body Model_Runner.Framework.Repository is
       for Item of From.Files loop
          Append (Text, Item.Path & Tab & Item.Fingerprint & ASCII.LF);
       end loop;
+      --  And what could not be read: a view missing a file is another
+      --  state than a whole one, though what it read is the same.
+      for Said of From.Unread loop
+         Append (Text, "unread" & Tab & Said & ASCII.LF);
+      end loop;
       return Fingerprint (To_String (Text));
    end Graph_Fingerprint;
 

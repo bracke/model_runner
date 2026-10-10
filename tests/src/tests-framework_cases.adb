@@ -4458,6 +4458,8 @@ package body Tests.Framework_Cases is
       Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
       Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
       Tk.Move (Store, Change, To_String (Id), "verification", "", Status => Status);
+      --  Its attempt committed first: the checks are that attempt's.
+      S.Commit (Store, Change, Status);
       Model_Runner.Framework.Verification.Run_Profile
         (Store, Change, "passing", To_String (Id), Evidence, Passed, Status);
       S.Commit (Store, Change, Status);
@@ -4478,7 +4480,8 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
       Assert (To_String (Held.State) = "implemented",
-              "a requirement was verified without its own evidence");
+              "a requirement was verified without its own evidence: " & To_String (Held.State)
+              & " task " & Tk.State_Of (Store, To_String (Id)));
 
       Model_Runner.Framework.Verification.Verify_Requirement (Store, Change, To_String (Req), Evidence, Passed, Status);
       S.Commit (Store, Change, Status);
@@ -11071,6 +11074,116 @@ package body Tests.Framework_Cases is
 
    package Or_ch renames Model_Runner.Framework.Orchestration;
 
+   --  Evidence applies by one definition, and says how it does not: an
+   --  earlier attempt's, taken on a project not wholly read, or a record
+   --  that will not read; the latest by its number, not where its name
+   --  sorts; and a graph missing a file widens the checks, not narrows.
+   procedure Evidence_Applies_By_One_Rule
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vf renames Model_Runner.Framework.Verification;
+      use type Vf.Applicability;
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Id       : Unbounded_String;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+   begin
+      Task_Project (Store, "applies",
+                    "set execution.allowed = true" & LF
+                    & "profile probing = probe: true" & LF
+                    & "scalar verification.default = probing" & LF);
+      Tk.Create (Store, Change, Fields ("Try", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Vf.Run_Profile (Store, Change, "probing", To_String (Id), Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Current,
+              "evidence just taken for a task's attempt did not apply: " & Code_Of (Status));
+
+      --  Run again, it is another attempt: the first's evidence is not its.
+      Tk.Move (Store, Change, To_String (Id), "blocked", "set aside", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "running",
+              "the task was not run again: " & Code_Of (Status));
+      Assert (Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Stale_Generation,
+              "an earlier attempt's evidence applied to a later one");
+
+      --  The latest by number: a record numbered past six digits is later.
+      declare
+         Held : R.Item;
+      begin
+         S.Read (Store, F.Verification_Area, To_String (Evidence), Held, Status);
+         for Name of Model_Runner.Framework.Name_Lists.Vector'(["VER-999999", "VER-1000000"]) loop
+            R.Set (Held, "profile", "probing");
+            S.Put (Change, F.Verification_Area, Name, Held);
+         end loop;
+         S.Commit (Store, Change, Status);
+         Assert (Vf.Latest (Store, To_String (Id), "probing") = "VER-1000000",
+                 "the latest evidence was taken by where its name sorts: "
+                 & Vf.Latest (Store, To_String (Id), "probing") & " " & Code_Of (Status));
+      end;
+
+      --  A record that will not read is unusable, not failed.
+      declare
+         Path : constant String := S.Root (Store) & "/verification/" & To_String (Evidence) & ".rec";
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, "not a record");
+         Ada.Text_IO.Close (File);
+         Assert (Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Corrupt,
+                 "evidence that will not read was taken for some other state");
+      end;
+
+      --  A file that cannot be read: the graph incomplete, the checks the
+      --  whole suite, saying why; and whole-project evidence not current.
+      if Hostkit.Metadata.Mode_Bits_Are_Native then
+         declare
+            Hidden : constant String := Fresh_Root (Store) & "/src/hidden.adb";
+            Ignored : Boolean;
+            Choice  : Vf.Choice;
+
+            function Can_Read (Path : String) return Boolean is
+               File : Ada.Text_IO.File_Type;
+            begin
+               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+               Ada.Text_IO.Close (File);
+               return True;
+            exception
+               when others =>
+                  return False;
+            end Can_Read;
+         begin
+            Dirs.Create_Path (Fresh_Root (Store) & "/src");
+            Put_File (Hidden, "package Hidden is end Hidden;");
+            Ignored := Hostkit.Metadata.Set_Permissions (Hidden, 0);
+            --  Root reads it anyway: nothing to see there.
+            if not Can_Read (Hidden) then
+               Choice := Vf.Choose (Store, To_String (Id), ["src/other.adb"]);
+               Assert (Ada.Strings.Fixed.Index (To_String (Choice.Reason), "graph is incomplete") > 0
+                       and then Ada.Strings.Fixed.Index (To_String (Choice.Reason), "src/hidden.adb") > 0,
+                       "a graph missing a file did not widen the checks: " & To_String (Choice.Reason));
+               Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+               S.Commit (Store, Change, Status);
+               Assert (Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Incomplete_Repository,
+                       "evidence over a project not wholly read was taken as current");
+            end if;
+            Ignored := Hostkit.Metadata.Set_Permissions (Hidden, 8#644#);
+            Dirs.Delete_File (Hidden);
+         end;
+      end if;
+      S.Close (Store);
+   end Evidence_Applies_By_One_Rule;
+
    --  Evidence is reused only where it would be current: held strict to
    --  its toolchain, a tool that answers otherwise now is a run of the
    --  checks, not the earlier evidence copied -- which was stale the moment
@@ -11631,6 +11744,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Check_Output_Quotes_Lines'Access,
          "a check's FILE:LINE is quoted from the one project file it names");
+      Register_Routine
+        (T, Evidence_Applies_By_One_Rule'Access,
+         "evidence applies by one rule, and says how it does not");
       Register_Routine
         (T, Strict_Reuse_Follows_The_Toolchain'Access,
          "held strict to its toolchain, evidence is not reused once a tool answers otherwise");

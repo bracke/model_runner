@@ -263,6 +263,34 @@ package Model_Runner.Framework.Verification is
    --  @return True when one was.
    function Passed_After (Item : Stores.Store; Evidence : String) return Boolean;
 
+   --  How evidence stands to the work now, by the first thing that keeps
+   --  it from applying: not there, not to be read, an earlier attempt's,
+   --  taken on a project not wholly read, taken in a workspace, the files
+   --  changed, its checks' configuration, environment or tools changed,
+   --  or what it was held to changed its meaning.
+   type Applicability is
+     (Current, Missing, Corrupt, Stale_Generation, Incomplete_Repository, Workspace_Only,
+      Stale_Repository, Stale_Configuration, Stale_Environment, Stale_Toolchain, Stale_Authority);
+
+   --  The first kind, and every reason in words.
+   type Applicability_Report is record
+      Kind    : Applicability := Current;
+      Reasons : Name_Lists.Vector;
+   end record;
+
+   --  How evidence stands: one definition of whether it applies, which
+   --  Is_Current, the gates and /why all read.
+   --
+   --  @param Item The store.
+   --  @param Evidence The evidence.
+   --  @param Configuration The verification fingerprint to hold it to:
+   --    empty for the one in force, or one being staged.
+   --  @return The report.
+   function Applicable
+     (Item          : Stores.Store;
+      Evidence      : String;
+      Configuration : String := "") return Applicability_Report;
+
    --  Whether evidence still applies: the same files, configuration and
    --  requirement revisions as when it was gathered.
    --

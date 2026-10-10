@@ -1185,6 +1185,23 @@ package body Model_Runner.Framework.Work is
    -- May --
    ---------
 
+   --  What the project allows the task's work as its configuration and
+   --  the task's own permissions stand now: the most any agent of it holds.
+   --  By the agent's own role: a helper's role may be granted what a
+   --  worker's is not. No task to read it by, nothing more is held to.
+   function Allowed_Now (Host : Child_Host; Role : String) return Permissions.Permission_Set is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
+      if E.Is_Error (Read) then
+         return Permissions.Unrestricted;
+      end if;
+      return Permissions.Effective (Host.Item.all, Records.Get (Defined, "kind"),
+                                    (if Role = "" then "worker" else Role),
+                                    Task_Level => Records.Get (Defined, "permissions"));
+   end Allowed_Now;
+
    function May
      (Host : Child_Host;
       What : Permissions.Capability;
@@ -1195,6 +1212,11 @@ package body Model_Runner.Framework.Work is
    begin
       Agents.Read (Host.Item.all, Current (Host), Held, Status);
       return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path)
+        --  And as the project allows its work now: what the agent was
+        --  given when it started is the most it has, and a permission
+        --  taken away since -- /reconfigure from another terminal -- is
+        --  gone at once, not at the next run. A grant waits for the next.
+        and then Permissions.Allows (Allowed_Now (Host, To_String (Held.Role)), What, Path)
         --  Children only where one could be made: room for one, a level
         --  below.
         and then (Permissions."/=" (What, Permissions.Create_Children)
