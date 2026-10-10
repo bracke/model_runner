@@ -34,6 +34,7 @@ with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
+with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;

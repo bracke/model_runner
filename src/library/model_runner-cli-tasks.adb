@@ -5572,6 +5572,21 @@ package body Model_Runner.CLI.Tasks is
          for Id of Done.Became_Ready loop
             Pres.Put_Note (Screen, "cli.task.ready", [Loc.Named ("name", Id)]);
          end loop;
+         if not Done.Unknown.Is_Empty then
+            declare
+               Words : Unbounded_String;
+            begin
+               for Word of Done.Unknown loop
+                  if Index (Words, Word) = 0 then
+                     Append (Words, (if Words = Null_Unbounded_String then "" else ", ") & Word);
+                  end if;
+               end loop;
+               Pres.Put_Note
+                 (Screen, "cli.project.unknown_events",
+                  [Loc.Named ("count", T.Image (Long_Long_Integer (Done.Unknown.Length))),
+                   Loc.Named ("detail", To_String (Words))]);
+            end;
+         end if;
       end Step;
 
       --  What can start now, what waits, and what needs judgment.

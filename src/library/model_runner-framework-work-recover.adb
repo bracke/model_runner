@@ -27,13 +27,16 @@ begin
                Named  : Unbounded_String;
                Lines  : Unbounded_String;
             begin
+               --  Nothing kept, or nothing readable, is not nothing changed.
                if not Ada.Directories.Exists (Mark) then
-                  return "";
+                  return "; what it changed in the project cannot be told: what the files were"
+                    & " when it started was not kept";
                end if;
                Files.Read_Text (Mark, Was, Read);
                Files.Discard (Mark);
                if E.Is_Error (Read) then
-                  return "";
+                  return "; what it changed in the project cannot be told: what the files were"
+                    & " when it started cannot be read";
                end if;
                for Line of Lines_Of (To_String (Was)) loop
                   declare

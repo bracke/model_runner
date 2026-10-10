@@ -626,6 +626,7 @@ begin
       --  opening after a kill to compare with.
       if not Isolated then
          declare
+            use type Hostkit.Durability.Outcome;
             Lines : Unbounded_String;
             Kept  : E.Error_Info;
          begin
@@ -633,7 +634,25 @@ begin
                Append (Lines, Configurations.Value_Maps.Key (Position) & ASCII.HT
                        & Configurations.Value_Maps.Element (Position) & ASCII.LF);
             end loop;
-            Files.Write_Text (Before_File (Item, Task_Id), To_String (Lines), Kept);
+            --  Whole and on the device before the agent touches a file: a
+            --  kill is what it is kept for, and one that comes first would
+            --  leave nothing, or half, to compare with.
+            Files.Write_Whole (Before_File (Item, Task_Id), To_String (Lines), Kept);
+            if E.Is_Ok (Kept)
+              and then (Hostkit.Durability.Sync_File (Before_File (Item, Task_Id)) = Hostkit.Durability.Failed
+                        or else Hostkit.Durability.Sync_Directory
+                                  (Ada.Directories.Containing_Directory (Before_File (Item, Task_Id)))
+                                = Hostkit.Durability.Failed)
+            then
+               Files.Write_Failed (Before_File (Item, Task_Id), Kept);
+            end if;
+            if E.Is_Error (Kept) then
+               Conclude ("blocked",
+                         "what the files were before it started cannot be kept, so what it changed"
+                         & " could not be told after a kill: " & E.Text_Of (Kept, "path"),
+                         "failed");
+               return;
+            end if;
          end;
       end if;
       if Files.Make_Directory (Scratch) then

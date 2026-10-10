@@ -4,6 +4,7 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
+with Hostkit.Durability;
 with Hostkit.Fs;
 
 with Model_Runner.Agent_Runtime;
@@ -1569,6 +1570,12 @@ package body Model_Runner.Framework.Work is
             end;
          end if;
       end;
+
+      --  The run over, its baseline goes with it: left, it would stand for
+      --  what the files were before a later run that kept none.
+      if Tasks.State_Of (Item, Task_Id) /= "running" then
+         Files.Discard (Before_File (Item, Task_Id));
+      end if;
    end Execute;
 
    -------------

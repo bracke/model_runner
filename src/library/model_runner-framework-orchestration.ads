@@ -32,6 +32,11 @@ package Model_Runner.Framework.Orchestration is
       Became_Ready    : Name_Lists.Vector;
       Requirements    : Name_Lists.Vector;
       Evidence        : Name_Lists.Vector;
+
+      --  Events of a kind this build does not know, by their kind words:
+      --  not acted on, not even by a rule for any event, and left
+      --  unconsumed for a build that knows them.
+      Unknown         : Name_Lists.Vector;
    end record;
 
    --  The tasks to start, in order.
@@ -67,6 +72,13 @@ package Model_Runner.Framework.Orchestration is
      (Item   : in out Stores.Store;
       Result : out Step_Report;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  The events of a kind this build does not know that wait unconsumed,
+   --  by their kind words, one an event.
+   --
+   --  @param Item The store.
+   --  @return The kind words.
+   function Unknown_Waiting (Item : Stores.Store) return Name_Lists.Vector;
 
    --  Plan which ready tasks to start.
    --

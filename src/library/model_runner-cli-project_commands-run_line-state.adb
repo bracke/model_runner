@@ -410,6 +410,24 @@ begin
                Image (Model_Runner.Framework.Consistency.Length
                         (Model_Runner.Framework.Consistency.Check (Store))));
    end;
+   --  Events a later build wrote, left for it: said, or they would wait
+   --  unseen.
+   declare
+      Unknown : constant Model_Runner.Framework.Name_Lists.Vector :=
+        Model_Runner.Framework.Orchestration.Unknown_Waiting (Store);
+      Words   : Unbounded_String;
+   begin
+      if not Unknown.Is_Empty then
+         for Word of Unknown loop
+            if Index (Words, Word) = 0 then
+               Append (Words, (if Words = Null_Unbounded_String then "" else ", ") & Word);
+            end if;
+         end loop;
+         Pres.Put_Note (Screen, "cli.project.unknown_events",
+                        [Loc.Named ("count", Image (Natural (Unknown.Length))),
+                         Loc.Named ("detail", To_String (Words))]);
+      end if;
+   end;
    --  Done and not verified: each, and how it is.
    for Id of Nt.List (Store, Nt.Requirement, "implemented") loop
       Pres.Put_Note (Screen, "cli.project.not_verified",

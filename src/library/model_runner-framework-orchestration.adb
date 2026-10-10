@@ -63,6 +63,32 @@ package body Model_Runner.Framework.Orchestration is
       end loop;
    end Rules;
 
+   ---------------------
+   -- Unknown_Waiting --
+   ---------------------
+
+   function Unknown_Waiting (Item : Stores.Store) return Name_Lists.Vector is
+      Listed : constant Events.Event_List := Events.Since (Item, 0);
+   begin
+      return Result : Name_Lists.Vector do
+         for Index in 1 .. Events.Length (Listed) loop
+            declare
+               Happened : constant Events.Event := Events.Element (Listed, Index);
+               Fresh    : Boolean;
+               Scratch  : Stores.Transaction;
+               Status   : E.Error_Info;
+            begin
+               if not Happened.Known then
+                  Events.Consume (Item, Scratch, Consumer, To_String (Happened.Id), Fresh, Status);
+                  if E.Is_Ok (Status) and then Fresh then
+                     Result.Append (To_String (Happened.Kind_Word));
+                  end if;
+               end if;
+            end;
+         end loop;
+      end return;
+   end Unknown_Waiting;
+
    ----------
    -- Step --
    ----------
@@ -121,7 +147,11 @@ package body Model_Runner.Framework.Orchestration is
             if E.Is_Error (Status) then
                return;
             end if;
-            if Fresh then
+            if Fresh and then not Happened.Known then
+               --  Written by a later build: what it calls for is that
+               --  build's to say, so it is left for it, and said.
+               Result.Unknown.Append (To_String (Happened.Kind_Word));
+            elsif Fresh then
                Result.Events_Seen := Result.Events_Seen + 1;
                Fresh_Ids.Append (To_String (Happened.Id));
                Fresh_Kinds.Append (To_String (Happened.Kind_Word));

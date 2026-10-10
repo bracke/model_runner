@@ -57,6 +57,7 @@ with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
 with Hostkit.Fs;
+with Hostkit.Metadata;
 with Hostkit.Pty;
 with Hostkit.Spawn;
 with Hostkit.Terminal_Control;
@@ -5776,6 +5777,19 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status) and then Back.Contains (To_String (Ids (5)))
               and then Tk.State_Of (Store, To_String (Ids (5))) = "blocked",
               "a running task with no agent was left running: " & Code_Of (Status));
+      --  Moved to running by hand, it kept no baseline of the files: what
+      --  it changed is not said to be nothing, but unknown.
+      declare
+         Listed : constant Ev.Event_List := Ev.Since (Store, 0);
+         Said   : Boolean := False;
+      begin
+         for Index in 1 .. Ev.Length (Listed) loop
+            Said := Said or else Ada.Strings.Fixed.Index
+              (To_String (Ev.Element (Listed, Index).Detail),
+               "what it changed in the project cannot be told") > 0;
+         end loop;
+         Assert (Said, "a task stopped with no baseline kept was said to have changed nothing");
+      end;
 
       Tk.Move (Store, Change, To_String (Ids (5)), "accepted", "", Status => Status);
       Tk.Move (Store, Change, To_String (Ids (5)), "running", "", Status => Status);
@@ -10864,6 +10878,78 @@ package body Tests.Framework_Cases is
 
    package Or_ch renames Model_Runner.Framework.Orchestration;
 
+   --  Evidence is reused only where it would be current: held strict to
+   --  its toolchain, a tool that answers otherwise now is a run of the
+   --  checks, not the earlier evidence copied -- which was stale the moment
+   --  it was made, and kept being made.
+   procedure Strict_Reuse_Follows_The_Toolchain
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vf renames Model_Runner.Framework.Verification;
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Held     : R.Item;
+      Outside  : constant String := Dirs.Full_Name ("obj/strict-tool-version.txt");
+
+      procedure Version (Said : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Outside);
+         Ada.Text_IO.Put_Line (F, Said);
+         Ada.Text_IO.Close (F);
+      end Version;
+
+      function Reused return String is
+      begin
+         S.Read (Store, F.Verification_Area, To_String (Evidence), Held, Status);
+         return R.Get (Held, "reused_from");
+      end Reused;
+   begin
+      --  A tool whose version the test sets: a script, so a host with no
+      --  POSIX shell has nothing to run it with.
+      if not Dirs.Exists ("/bin/sh") then
+         return;
+      end if;
+      Version ("probe 1.0");
+      Task_Project (Store, "strict-reuse",
+                    "set execution.allowed = ./probe.sh" & LF
+                    & "profile probing = probe: ./probe.sh" & LF
+                    & "scalar verification.default = probing" & LF
+                    & "scalar verification.toolchain = strict" & LF);
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Script  : Ada.Text_IO.File_Type;
+         Ignored : Boolean;
+      begin
+         Ada.Text_IO.Create (Script, Ada.Text_IO.Out_File, Project & "/probe.sh");
+         Ada.Text_IO.Put_Line (Script, "#!/bin/sh");
+         Ada.Text_IO.Put_Line (Script, "cat " & Outside);
+         Ada.Text_IO.Close (Script);
+         Ignored := Hostkit.Metadata.Set_Permissions (Project & "/probe.sh", 8#755#);
+      end;
+      Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Passed and then Reused = "",
+              "the first run of the checks did not pass, or was taken as reused: " & Code_Of (Status));
+      Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Reused /= "", "nothing changed, and the evidence was not reused");
+
+      --  The tool upgraded: run again, and the evidence says the new one.
+      Version ("probe 2.0");
+      Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Reused = "" and then R.Get (Held, "tool../probe.sh") = "probe 2.0",
+              "evidence taken under another toolchain was reused, held strict: "
+              & Reused & " / " & R.Get (Held, "tool../probe.sh"));
+      S.Close (Store);
+      Dirs.Delete_File (Outside);
+   end Strict_Reuse_Follows_The_Toolchain;
+
    --  A rule is read into an event and an action once, where it is set:
    --  one naming an action or an event there is none of is refused there,
    --  by name, and a project's configuration holding one is not made --
@@ -10933,6 +11019,55 @@ package body Tests.Framework_Cases is
    --  Events are acted on once, by the rules, without a model; dispatch
    --  starts the most important ready tasks that fit, one writer to a
    --  component; and what needs judgment is listed.
+   --  An event a later build wrote is that build's to act on: this one
+   --  acts on it by no rule, not even one for any event, leaves it
+   --  unconsumed, and says it waits.
+   procedure Unknown_Events_Are_Left
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Done   : Or_ch.Step_Report;
+   begin
+      Task_Project (Store, "unknown-events", "");
+      Or_ch.Step (Store, Done, Status);
+      Ev.Emit (Store, Change, Ev.Project_Initialized, "PROJECT", "", Id, Status);
+      if E.Is_Ok (Status) then
+         S.Commit (Store, Change, Status);
+      end if;
+      Assert (E.Is_Ok (Status), "the event was not written: " & Code_Of (Status));
+      --  Rewritten as a kind this build has no name for.
+      declare
+         Listed  : constant Ev.Event_List := Ev.Since (Store, 0);
+         Last    : constant Ev.Event := Ev.Element (Listed, Ev.Length (Listed));
+         Name    : constant String := "event-" & Ada.Strings.Fixed.Tail
+                                        (Ada.Strings.Fixed.Trim (Last.Sequence'Image, Ada.Strings.Both), 9, '0');
+         Written : R.Item;
+      begin
+         S.Read (Store, F.Events_Area, Name, Written, Status);
+         Assert (E.Is_Ok (Status), "the event was not read back as " & Name & ": " & Code_Of (Status));
+         R.Set (Written, "event_kind", "Hologram_Landed");
+         R.Set_Revision (Written, R.Revision (Written) + 1);
+         S.Put (Change, F.Events_Area, Name, Written);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the event was not rewritten: " & Code_Of (Status));
+      end;
+      Or_ch.Step (Store, Done, Status);
+      Assert (E.Is_Ok (Status) and then Done.Events_Seen = 0 and then Done.Actions_Taken = 0
+              and then Natural (Done.Unknown.Length) = 1
+              and then Done.Unknown (1) = "Hologram_Landed",
+              "an event of an unknown kind was acted on, or not said:"
+              & Done.Events_Seen'Image & Done.Actions_Taken'Image & Done.Unknown.Length'Image);
+      Or_ch.Step (Store, Done, Status);
+      Assert (Natural (Done.Unknown.Length) = 1
+              and then Natural (Or_ch.Unknown_Waiting (Store).Length) = 1,
+              "an event of an unknown kind was consumed, and a build knowing it would never see it");
+      S.Close (Store);
+   end Unknown_Events_Are_Left;
+
    procedure Orchestration_Is_Routine
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11186,6 +11321,12 @@ package body Tests.Framework_Cases is
         (T, Automation_Rules_Are_Read'Access,
          "an automation rule is read where it is set, and one naming no action or no event is"
          & " refused there by name");
+      Register_Routine
+        (T, Unknown_Events_Are_Left'Access,
+         "an event of a kind this build does not know is left unconsumed and said");
+      Register_Routine
+        (T, Strict_Reuse_Follows_The_Toolchain'Access,
+         "held strict to its toolchain, evidence is not reused once a tool answers otherwise");
       Register_Routine
         (T, Orchestration_Is_Routine'Access,
          "routine progression is rule-driven, once, and dispatched by"

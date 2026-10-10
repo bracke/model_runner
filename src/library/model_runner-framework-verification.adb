@@ -735,12 +735,30 @@ package body Model_Runner.Framework.Verification is
                               Same := Same and then Records.Has (Prior, Records.Field_Name (Value, Index));
                            end if;
                         end loop;
+                        --  Where the policy holds evidence to the toolchain it
+                        --  was taken with, the same tools answering the same:
+                        --  reused under one since changed, the evidence was
+                        --  stale as soon as it was made, and the checks were
+                        --  never run on the new one. Reuse is held to what
+                        --  currentness is held to, at least.
+                        if Records.Get (Settings, "scalar.verification.toolchain") = "strict" then
+                           for Index in 1 .. Records.Field_Count (Value) loop
+                              if Starts (Records.Field_Name (Value, Index), "tool.") then
+                                 Same := Same and then Records.Get (Prior, Records.Field_Name (Value, Index))
+                                                       = Records.Get (Value, Records.Field_Name (Value, Index));
+                              end if;
+                           end loop;
+                        end if;
                      end if;
                      if Same then
                         for Index in 1 .. Records.Field_Count (Prior) loop
                            declare
                               Field : constant String := Records.Field_Name (Prior, Index);
                            begin
+                              --  The tools as the reused checks ran with them:
+                              --  what the evidence was taken with. Held strict,
+                              --  they are the ones answering now, or it was not
+                              --  reused.
                               if Starts (Field, "check.") or else Starts (Field, "parameters.")
                                 or else Starts (Field, "diagnostic.") or else Starts (Field, "tool.")
                               then
