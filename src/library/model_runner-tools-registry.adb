@@ -242,6 +242,21 @@ package body Model_Runner.Tools.Registry is
       return "";
    end Definition;
 
+   -------------------
+   -- Offered_Names --
+   -------------------
+
+   function Offered_Names (Can : Capabilities) return String is
+      Said : U.Unbounded_String;
+   begin
+      for One of Table loop
+         if One.Offered and then Can (One.Needs) then
+            U.Append (Said, (if U.Length (Said) = 0 then "" else ", ") & One.Name.all);
+         end if;
+      end loop;
+      return U.To_String (Said);
+   end Offered_Names;
+
    -------------
    -- Offered --
    -------------

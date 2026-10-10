@@ -63,6 +63,14 @@ package Model_Runner.Tools.Registry is
      (Can   : Capabilities;
       Roles : Schemas.Choice_Lists.Vector := Schemas.Choice_Lists.Empty_Vector) return String;
 
+   --  The names of the tools a capability set is offered, a comma and a
+   --  space apart, in the order Offered gives them: what an agent is told
+   --  its tools are.
+   --
+   --  @param Can What the environment can do.
+   --  @return The names.
+   function Offered_Names (Can : Capabilities) return String;
+
    --  Whether a tool is one the harness knows, offered or run by name.
    --
    --  @param Named The tool.

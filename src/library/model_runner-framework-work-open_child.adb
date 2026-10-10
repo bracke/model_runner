@@ -87,15 +87,11 @@ begin
                end if;
             end;
          end loop;
-         declare
-            Policy : constant String :=
-              Tool_Policy (Host.Item.all, To_String (Child_Id), Host.Max_Calls, To_String (Host.Task_Id),
-                           Host.Apart);
-            Tools_End : constant Natural := Ada.Strings.Fixed.Index (Policy, ";");
          begin
             return ASCII.LF & "## What you may do" & ASCII.LF
               & "Your tools -- these and no others: "
-              & (if Tools_End > 7 then Policy (Policy'First + 7 .. Tools_End - 1) else "read_file, list_directory")
+              & Model_Runner.Tools.Registry.Offered_Names
+                  (Tools_Of (Host.Item.all, To_String (Child_Id), To_String (Host.Task_Id), Host.Apart))
               & "." & ASCII.LF
               & "You may " & (if Said = Null_Unbounded_String then "only read what you are given"
                               else To_String (Said))

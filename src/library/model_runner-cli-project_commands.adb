@@ -695,6 +695,7 @@ package body Model_Runner.CLI.Project_Commands is
       Calls    : Natural := 0;
       Asked_To_Report : Boolean := False;
       Asked_To_Fix    : Boolean := False;
+      Asked_To_Mend   : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
 
@@ -803,6 +804,27 @@ package body Model_Runner.CLI.Project_Commands is
                "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
                & " error is in its answer above -- run the checks again, and report status: done only"
                & " when they pass.", Status);
+            exit when E.Is_Error (Status);
+         --  A report the harness cannot take -- a required line missing, a
+         --  status none of its words -- handed back once, saying what is
+         --  wrong, as an unreadable call is: a 8B wrote status: blocked and
+         --  parts: with no summary:, and the task was blocked for it.
+         elsif Outcome.Reason = Model_Runner.Agent.Answered and then Host /= null
+           and then Round < (if Root then 3 else 2) and then not Asked_To_Mend
+           and then Conv.Length (Messages) > 0
+           and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
+           and then Wk.Report_Refusal
+                      (Root, Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))))
+                    /= ""
+         then
+            Asked_To_Mend := True;
+            Conv.Append
+              (Messages, Conv.User_Role,
+               "Your report could not be taken: "
+               & Wk.Report_Refusal
+                   (Root, Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))))
+               & ". Finish again with the report lines as you were told -- status:, summary: and"
+               & " changed_files:, each on a line of its own.", Status);
             exit when E.Is_Error (Status);
          elsif Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote
            and then Round < (if Root then 3 else 2)

@@ -5111,6 +5111,16 @@ package body Tests.Framework_Cases is
               "an answer missing a required field was taken");
       Assert (Iv.Name_Of (Iv.Contract_Of ("mine", "answer")) = "mine",
               "a contract does not know its name");
+      --  What a report lacks, said so it can be handed back: the root's and
+      --  a helper's, each by its own contract.
+      Assert (Ada.Strings.Fixed.Index
+                (Model_Runner.Framework.Work.Report_Refusal
+                   (True, "status: blocked" & LF & "parts: Add needs revising"), "summary") > 0
+              and then Model_Runner.Framework.Work.Report_Refusal
+                         (True, "status: done" & LF & "summary: done it" & LF & "changed_files: none") = ""
+              and then Model_Runner.Framework.Work.Report_Refusal
+                         (False, "status: done" & LF & "summary: found it" & LF & "findings: one") = "",
+              "what a report lacks was not said, or a report that holds was refused");
    end Invocations_Are_Recorded;
 
    ---------------------------------------------------------------------------

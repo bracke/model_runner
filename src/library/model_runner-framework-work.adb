@@ -24,6 +24,7 @@ with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
@@ -75,7 +76,7 @@ package body Model_Runner.Framework.Work is
        & "Do the task now with your tools, paths relative to the project. Change part"
        & " of a file with edit_file -- the exact text to replace and what replaces it"
        & " -- and make a new file with write_file; describing a change does not make"
-       & " it. Ask find_symbol, find_references and dependents where a name is"
+       & " it. Ask find -- kind symbol, references or used_by -- where a name is"
        & " declared and used, rather than reading files to find it."
        & (if May_Delegate
           then " Hand a part better done apart -- a review, an investigation -- to a helper"
@@ -730,6 +731,32 @@ package body Model_Runner.Framework.Work is
    --  tools it is offered -- reading always, checks, writing and helpers
    --  where its permissions let it -- what those permissions are, and how
    --  many calls it may make.
+   function Tools_Of
+     (Item : Stores.Store; Agent_Id : String; Task_Id : String; Apart : Boolean;
+      Hosted : Boolean := True) return Model_Runner.Tools.Registry.Capabilities
+   is
+      package Rg renames Model_Runner.Tools.Registry;
+      Held : Agents.Agent;
+      Read : E.Error_Info;
+      Can  : Rg.Capabilities := Rg.Nothing;
+   begin
+      Can (Rg.Read_Files) := True;
+      Can (Rg.Project_Graph) := Hosted;
+      Agents.Read (Item, Agent_Id, Held, Read);
+      if E.Is_Error (Read) then
+         return Can;
+      end if;
+      Can (Rg.Project_Checks) := Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id, Apart);
+      Can (Rg.Write_Files) :=
+        Permissions.Allows (Held.Allowed, Permissions.Write_Source)
+        or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs);
+      Can (Rg.Delegation) :=
+        Hosted and then Permissions.Allows (Held.Allowed, Permissions.Create_Children)
+        and then Held.Allowed (Permissions.Create_Children).Max_Children > 0
+        and then Held.Depth + 1 <= Held.Allowed (Permissions.Create_Children).Max_Depth;
+      return Can;
+   end Tools_Of;
+
    function Tool_Policy
      (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural; Task_Id : String; Apart : Boolean;
       Hosted : Boolean := True)
@@ -737,28 +764,16 @@ package body Model_Runner.Framework.Work is
    is
       Held : Agents.Agent;
       Read : E.Error_Info;
+      --  The tools as the registry offers them, by the names the agent is
+      --  shown: the narrow ones find took over were named here after they
+      --  were no longer offered, and a helper was told of tools it had not.
       Said : Unbounded_String :=
-        To_Unbounded_String ("tools: read_file, list_directory, read_range, search_file, search_code"
-                             & (if Hosted then ", find_symbol, find_references, dependencies, dependents, impact"
-                                else ""));
+        To_Unbounded_String
+          ("tools: " & Model_Runner.Tools.Registry.Offered_Names (Tools_Of (Item, Agent_Id, Task_Id, Apart, Hosted)));
    begin
       Agents.Read (Item, Agent_Id, Held, Read);
       if E.Is_Error (Read) then
          return To_String (Said);
-      end if;
-      if Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id, Apart) then
-         Append (Said, ", run_checks");
-      end if;
-      if Permissions.Allows (Held.Allowed, Permissions.Write_Source)
-        or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs)
-      then
-         Append (Said, ", edit_file, write_file");
-      end if;
-      if Hosted and then Permissions.Allows (Held.Allowed, Permissions.Create_Children)
-        and then Held.Allowed (Permissions.Create_Children).Max_Children > 0
-        and then Held.Depth + 1 <= Held.Allowed (Permissions.Create_Children).Max_Depth
-      then
-         Append (Said, ", delegate");
       end if;
       Append (Said, "; calls: " & (if Max_Calls = 0 then "bounded by steps"
                                    else Trim (Natural'Image (Max_Calls))));
@@ -889,6 +904,19 @@ package body Model_Runner.Framework.Work is
        ("child_result",
         "status = done|failed" & ASCII.LF & "summary" & ASCII.LF
         & "findings?" & ASCII.LF & "changed_files?");
+
+   --------------------
+   -- Report_Refusal --
+   --------------------
+
+   function Report_Refusal (Root : Boolean; Answer : String) return String is
+      Said : Invocations.Claims;
+      Held : E.Error_Info;
+   begin
+      Invocations.Hold ((if Root then Invocations.Work_Claim else Child_Claim), Answer, Said, Held);
+      return (if E.Is_Ok (Held) then ""
+              else E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail"));
+   end Report_Refusal;
 
    -----------
    -- Audit --

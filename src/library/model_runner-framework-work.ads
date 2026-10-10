@@ -434,6 +434,15 @@ package Model_Runner.Framework.Work is
    --  @return True when the work may not change it.
    function Judged_By (Host : Child_Host; Path : String) return Boolean;
 
+   --  What an answer's report lacks to be taken, as the harness reads it:
+   --  the root's against the work's contract, a helper's against a
+   --  helper's. "" where it holds.
+   --
+   --  @param Root Whether it is the root's answer.
+   --  @param Answer The answer.
+   --  @return The field and what is wrong with it; "" when it holds.
+   function Report_Refusal (Root : Boolean; Answer : String) return String;
+
    --  Whether the last checks the work ran failed: what it reports done
    --  then is not, by its own checks.
    --
