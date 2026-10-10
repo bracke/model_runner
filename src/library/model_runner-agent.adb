@@ -389,18 +389,7 @@ package body Model_Runner.Agent is
                Budgeted : constant Boolean :=
                  Think_Budget > 0 and then Think_Budget < Full
                  and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off);
-               Closing  : constant String := ASCII.LF & "</think>" & ASCII.LF & ASCII.LF;
-
-               --  Whether a reply's text is inside a thought it has not
-               --  closed: opened in it, or by the prompt's own opening.
-               function Open_Thought (Text : String) return Boolean is
-                  Tail : constant String :=
-                    Rendered.all (Natural'Max (Rendered.all'First, Rendered.all'Last - 15) .. Rendered.all'Last);
-               begin
-                  return Ada.Strings.Fixed.Index (Text, "</think>") = 0
-                    and then (Ada.Strings.Fixed.Index (Text, "<think>") > 0
-                              or else Ada.Strings.Fixed.Index (Tail, "<think>") > 0);
-               end Open_Thought;
+               Closing  : String renames Thought_Closing;
             begin
                if Budgeted then
                   Request.Max_Tokens := Think_Budget;
@@ -425,7 +414,7 @@ package body Model_Runner.Agent is
                Thought_Tokens := 0;
                if Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
                  and then Last_Result.Generated_Tokens < Full
-                 and then Open_Thought (Gen.Generated_Text (Last_Result))
+                 and then Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all)
                then
                   Thought_Before := U.To_Unbounded_String (Gen.Generated_Text (Last_Result) & Closing);
                   Thought_Tokens := Last_Result.Generated_Tokens;
@@ -1128,5 +1117,17 @@ package body Model_Runner.Agent is
          Result.Reason := Generation_Failed;
          Result.Error := E.Unexpected (Failure, "agent");
    end Run;
+
+------------------
+   -- Thought_Open --
+   ------------------
+
+   function Thought_Open (Reply, Prompt : String) return Boolean is
+      Tail : constant String := Prompt (Natural'Max (Prompt'First, Prompt'Last - 15) .. Prompt'Last);
+   begin
+      return Ada.Strings.Fixed.Index (Reply, "</think>") = 0
+        and then (Ada.Strings.Fixed.Index (Reply, "<think>") > 0
+                  or else Ada.Strings.Fixed.Index (Tail, "<think>") > 0);
+   end Thought_Open;
 
 end Model_Runner.Agent;

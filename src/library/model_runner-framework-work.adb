@@ -1518,6 +1518,12 @@ package body Model_Runner.Framework.Work is
       --  spells it: qwen3-8b wrote elif, then else if, ten edits running,
       --  told only that elif is undefined.
       function Ada_Slips (Path, Line : String) return String is
+         --  What the output says went wrong: an overflow or a range check,
+         --  where a guard that does not stop the sum it guards is the
+         --  usual cause.
+         Overflowed : constant Boolean :=
+           Ada.Strings.Fixed.Index (Text, "overflow check failed") > 0
+           or else Ada.Strings.Fixed.Index (Text, "range check failed") > 0;
          Lower : String := Ada.Characters.Handling.To_Lower (Line);
          Said  : Unbounded_String;
 
@@ -1581,6 +1587,17 @@ package body Model_Runner.Framework.Work is
          end if;
          if Ada.Strings.Fixed.Index (Lower, "==") > 0 then
             Say ("=, not ==");
+         end if;
+         --  A plain and or or in a line that overflowed: both sides are
+         --  worked out whatever the first is. qwen3-8b guarded
+         --  Integer'Last - B with B > 0 and, and it overflowed for every
+         --  negative B, run after run.
+         if Overflowed and then Has_Word ("and") and then Ada.Strings.Fixed.Index (Lower, "and then") = 0 then
+            Say ("and works out both sides even where the first is False; a guard that keeps the second"
+                 & " from overflowing needs and then");
+         end if;
+         if Overflowed and then Has_Word ("or") and then Ada.Strings.Fixed.Index (Lower, "or else") = 0 then
+            Say ("or works out both sides even where the first is True; a guard needs or else");
          end if;
          if Ada.Strings.Fixed.Index (Lower, "+=") > 0 or else Ada.Strings.Fixed.Index (Lower, "-=") > 0
            or else Ada.Strings.Fixed.Index (Lower, "++") > 0

@@ -279,6 +279,18 @@ package Model_Runner.Agent is
    --  A reference to the memory carried between runs.
    type Memory_Reference is access all Run_Memory'Class;
 
+   --  What closes a thought held to its budget, the rest of the reply
+   --  asked for after it.
+   Thought_Closing : constant String := ASCII.LF & "</think>" & ASCII.LF & ASCII.LF;
+
+   --  Whether a reply is inside a thought it has not closed: one it opened,
+   --  or one the prompt opened for it, its last bytes holding the opening.
+   --
+   --  @param Reply What the reply has said.
+   --  @param Prompt The prompt it follows.
+   --  @return True when the thought is open.
+   function Thought_Open (Reply, Prompt : String) return Boolean;
+
    --  What went wrong in a step, as the loop decides what to do about it:
    --  a conversation too large to render, a generation that ran out of
    --  context, a backend that failed in a way trying again may mend, a

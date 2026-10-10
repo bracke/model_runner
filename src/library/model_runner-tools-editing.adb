@@ -414,6 +414,72 @@ package body Model_Runner.Tools.Editing is
       return U.To_String (Found);
    end Declarations_In;
 
+   --  Where a passage that is not in a file would be: the file's lines from
+   --  where a line of it stands, as read_file numbers them, as many as the
+   --  passage has and two more -- a model told only "not there" read the
+   --  file again, or went on from memory, and edited from a copy it no
+   --  longer had. "" where no line of it is there.
+   function Nearest (Text, Old_Text : String) return String is
+      package Line_Lists is new Ada.Containers.Indefinite_Vectors (Positive, String);
+
+      function Lines_Of (Item : String) return Line_Lists.Vector is
+         Result : Line_Lists.Vector;
+         Start  : Positive := Item'First;
+      begin
+         for Index in Item'First .. Item'Last + 1 loop
+            if Index > Item'Last or else Item (Index) = ASCII.LF then
+               Result.Append (Item (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+         return Result;
+      end Lines_Of;
+
+      function Bare (Item : String) return String is
+         First : Natural := Item'First;
+         Last  : Natural := Item'Last;
+      begin
+         while First <= Last and then Item (First) in ' ' | ASCII.HT | ASCII.CR loop
+            First := First + 1;
+         end loop;
+         while Last >= First and then Item (Last) in ' ' | ASCII.HT | ASCII.CR loop
+            Last := Last - 1;
+         end loop;
+         return Item (First .. Last);
+      end Bare;
+
+      --  A line without the CR a CRLF file ends it with.
+      function Without_CR (Item : String) return String
+      is (if Item'Length > 0 and then Item (Item'Last) = ASCII.CR then Item (Item'First .. Item'Last - 1)
+          else Item);
+
+      File  : constant Line_Lists.Vector := Lines_Of (Text);
+      Given : constant Line_Lists.Vector := Lines_Of (Old_Text);
+      Said  : U.Unbounded_String;
+   begin
+      for Offset in 1 .. Natural (Given.Length) loop
+         if Bare (Given (Offset)) /= "" then
+            for At_Line in 1 .. Natural (File.Length) loop
+               if Bare (File (At_Line)) = Bare (Given (Offset)) then
+                  declare
+                     First : constant Positive := Natural'Max (1, At_Line - Offset + 1);
+                     Last  : constant Natural :=
+                       Natural'Min (Natural (File.Length), First + Natural (Given.Length) + 1);
+                  begin
+                     U.Append (Said, "; where its line" & Natural'Image (Offset) & " is, the file reads:");
+                     for Index in First .. Last loop
+                        U.Append (Said, ASCII.LF & Ada.Strings.Fixed.Trim (Natural'Image (Index), Ada.Strings.Left)
+                                  & ": " & Without_CR (File (Index)));
+                     end loop;
+                     return U.To_String (Said);
+                  end;
+               end if;
+            end loop;
+         end if;
+      end loop;
+      return "";
+   end Nearest;
+
    ------------------
    -- Edit_Loosely --
    ------------------
@@ -676,7 +742,8 @@ package body Model_Runner.Tools.Editing is
                   end if;
                end;
                return Failing ("old_text is not in " & Path & " as it is now (revision " & Now
-                               & "): read the part you mean to change again, and give it exactly");
+                               & "): read the part you mean to change again, and give it exactly"
+                               & Nearest (Text, Old_Text));
             elsif Times > 1 then
                return Failing ("old_text is in " & Path & Natural'Image (Times)
                                & " times: give more of the text around the one you mean");

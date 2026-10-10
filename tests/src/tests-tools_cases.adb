@@ -883,6 +883,25 @@ package body Tests.Tools_Cases is
          Try ("return A + B;" & ASCII.LF & "   null;", "   return A + B;" & ASCII.LF & "   null;",
               "new lines given already standing at the line's indentation were moved");
       end;
+      --  Not there: said with the file's lines where a line of it stands.
+      declare
+         Gone_Path : constant String := Dir & "/gone.adb";
+      begin
+         Put (Gone_Path, "begin" & ASCII.LF & "   X := 1;" & ASCII.LF & "   Y := 2;" & ASCII.LF & "end P;" & ASCII.LF);
+         declare
+            Missed : constant Ed.Said := Ed.Edit (Gone_Path, "   W := 0;" & ASCII.LF & "   X := 1;" & ASCII.LF
+                                                  & "   Z := 9;", "x", "");
+         begin
+            Assert (Missed.Failed and then Has (Missed, "where its line 2 is, the file reads:")
+                    and then Has (Missed, ASCII.LF & "1: begin" & ASCII.LF & "2:    X := 1;")
+                    and then Has (Missed, "4: end P;"),
+                    "a passage not there was not said with the lines where it would be: "
+                    & Ada.Strings.Unbounded.To_String (Missed.Text));
+         end;
+         Assert (not Has (Ed.Edit (Gone_Path, "Q := 7;", "x", ""), "the file reads"),
+                 "a passage none of whose lines is there was said with lines");
+      end;
+
       --  There twice, exactly or loosely: edited where it starts within
       --  the lines last read, where only one place does; refused without.
       declare
@@ -2343,6 +2362,16 @@ package body Tests.Tools_Cases is
                  and then not Sighted.Seen_Again ("a" & ASCII.NUL & "t", "en"),
                  "a pair seen before was not noticed, or a new one was taken for it");
       end;
+
+      --  A thought is open where the reply opened it, or the prompt did,
+      --  and it is not closed; a prompt that closed an empty one leaves none.
+      Assert (Model_Runner.Agent.Thought_Open ("<think>\nmulling", "<|im_start|>assistant\n")
+              and then Model_Runner.Agent.Thought_Open ("mulling", "<|im_start|>assistant\n<think>\n")
+              and then not Model_Runner.Agent.Thought_Open ("<think>\nmulled</think>\ncall", "assistant\n")
+              and then not Model_Runner.Agent.Thought_Open
+                             ("answer", "<|im_start|>assistant\n<think>\n\n</think>\n\n")
+              and then not Model_Runner.Agent.Thought_Open ("plain answer", ""),
+              "a thought was taken as open where it was closed or never opened, or the other way");
 
       --  The harness's notes on a call: a file put back at a revision seen
       --  earlier, by an edit; a read answering as before the last change,

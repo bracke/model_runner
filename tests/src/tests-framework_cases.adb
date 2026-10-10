@@ -10987,6 +10987,8 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Put_Line (Out_File, "   begin");
       Ada.Text_IO.Put_Line (Out_File, "      if A > Integer'Last - B then");
       Ada.Text_IO.Put_Line (Out_File, "      elif A /= 0 && B /= 0 then  -- not ""elif"" here");
+      Ada.Text_IO.Put_Line (Out_File, "      if B > 0 and A > Integer'Last - B then");
+      Ada.Text_IO.Put_Line (Out_File, "      if B > 0 and then A > Integer'Last - B then");
       Ada.Text_IO.Close (Out_File);
       declare
          Said : constant String := Wk.Quoted_Lines
@@ -11005,6 +11007,19 @@ package body Tests.Framework_Cases is
          Assert (Ada.Strings.Fixed.Index (Said, " -- in Ada: elsif, not elif; and then, not &&") > 0
                  and then Ada.Strings.Fixed.Index (Said, "/=, not") = 0,
                  "a quoted line's slips were not said as Ada spells them, or what was right was: " & Said);
+      end;
+      --  A plain and in a line that overflowed is said to need and then;
+      --  one with and then, or a line that did not overflow, is not.
+      declare
+         Plain   : constant String := Wk.Quoted_Lines ("calc.adb:6 overflow check failed", Root, ["src/calc.adb"]);
+         Guarded : constant String := Wk.Quoted_Lines ("calc.adb:7 overflow check failed", Root, ["src/calc.adb"]);
+         Calm    : constant String := Wk.Quoted_Lines ("calc.adb:6:4: warning: x", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Plain, "needs and then") > 0
+                 and then Ada.Strings.Fixed.Index (Guarded, "in Ada") = 0
+                 and then Ada.Strings.Fixed.Index (Calm, "in Ada") = 0,
+                 "a guard's plain and was not said where it overflowed, or said where it did not: "
+                 & Plain & " / " & Guarded & " / " & Calm);
       end;
       Remove_Tree (Root);
    end Check_Output_Quotes_Lines;

@@ -548,6 +548,9 @@ package body Model_Runner.CLI.Project_Commands is
       Searches      : Natural := 0;
       Graph_Asks    : Natural := 0;
       Check_Runs    : Natural := 0;
+
+      --  Replies whose thought reached its budget and was closed for them.
+      Thoughts_Closed : Natural := 0;
    end record;
 
    --  Those, in a line.
@@ -794,6 +797,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  Held back and never a call: the reply's own text, written.
          Release_Held (Sink);
          Calls := Calls + Outcome.Calls;
+         Runner.Thoughts_Closed := Runner.Thoughts_Closed + Outcome.Thoughts_Closed;
          Tokens := Tokens + Outcome.Generated_Tokens;
          if Length (Outcome.Work_Record) > 0 then
             Recorded := Outcome.Work_Record;
@@ -1149,7 +1153,9 @@ package body Model_Runner.CLI.Project_Commands is
       & ", reads of part:" & Natural'Image (Self.Part_Reads)
       & ", searches:" & Natural'Image (Self.Searches)
       & ", graph questions:" & Natural'Image (Self.Graph_Asks)
-      & ", checks run:" & Natural'Image (Self.Check_Runs));
+      & ", checks run:" & Natural'Image (Self.Check_Runs)
+      & (if Self.Thoughts_Closed = 0 then ""
+         else ", thoughts closed at their budget:" & Natural'Image (Self.Thoughts_Closed)));
 
    overriding procedure Run
      (Self      : in out Work_Tools;
