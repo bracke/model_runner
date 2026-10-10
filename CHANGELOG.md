@@ -24,6 +24,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **An edit a passage's indentation was off by is made where it matches:** old_text not in the file as given, but there line for line once the spaces at the ends of lines are left out, and in one place only, is edited there -- the new text moved by how far the given one was off, to the file's indentation -- and the answer says it was matched so; in two places, or none, it is refused as before. qwen3-8b copied lines from read_file one space too deep and its edit was refused twenty times running.
+- **read_file's numbered lines are the number and a tab:** "6" and a tab before the line, where "6: " ran its space into the line's indentation.
+- **tests agent-trial bounds the work inside its wait:** its projects set agents.max_seconds=1200, within the half hour the trial waits, so a run the harness has to end says why rather than reading "did not end".
+
 - **A file is changed whole or not at all:** edit_file and write_file put a file's new contents in place through one routine (Editing.Replace) -- written to a hidden sibling, made durable, its permission bits kept, and renamed over the file in one step, its folder synced -- where both opened the file for writing and wrote into it, so a crash, a full disk or an interrupt could leave it empty or cut short. A folder that cannot be made, or a file standing where it should be, is said as that, where the cause was dropped and "could not write the file" said.
 - **A change says its revisions as values:** a call that reads or changes a file says, beside its words, the file's revision as read or before and after, and whether it made the file (Call_Outcome.Before_Revision, After_Revision, Created).
 - **A change over one not seen is refused:** the built-in file tools keep each file's revision as their agent last read or wrote it, and a write or an edit of one that has changed since -- by an editor, a helper, another process -- is refused, saying both revisions, until it is read again; run's agent and /work's alike. A new file is written freely.

@@ -138,14 +138,20 @@ package body Agent_Trial is
    --  the main alone passed a body rewritten as another unit, which only
    --  the link finds; and a build alone passed an Add left as it was, which
    --  only the test finds.
+   --  The work's own bound, inside the half hour the trial waits for it:
+   --  past that a run read "did not end", and nothing said why; ended by
+   --  the harness, it says.
+   Time_Bound : constant String := " scalar.agents.max_seconds=1200";
+
    function Check_Line (Tested : Boolean) return String is
      (if Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main;"
            & " test: gnatmake -q -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
-           & " confirm=yes"
+           & Time_Bound & " confirm=yes"
       else "/reconfigure add set.execution.allowed gnatmake "
-           & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"" confirm=yes");
+           & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"""
+           & Time_Bound & " confirm=yes");
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is

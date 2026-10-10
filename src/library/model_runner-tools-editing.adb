@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
@@ -371,6 +372,151 @@ package body Model_Runner.Tools.Editing is
       return U.To_String (Found);
    end Declarations_In;
 
+   ------------------
+   -- Edit_Loosely --
+   ------------------
+
+   --  Old_Text matched in Text line for line with the spaces and tabs at
+   --  each line's ends left out, where it matches in exactly one place:
+   --  the lines there replaced by New_Text, each line of it moved by how
+   --  far the first given line's indentation was from the file's. Failed,
+   --  saying nothing, where it matches nowhere or more than once.
+   function Edit_Loosely
+     (Path, Text, Now, Old_Text, New_Text : String;
+      Base : String) return Said
+   is
+      package Line_Lists is new Ada.Containers.Vectors (Positive, U.Unbounded_String, U."=");
+
+      function Lines_Of (Item : String) return Line_Lists.Vector is
+         Result : Line_Lists.Vector;
+         Start  : Positive := Item'First;
+      begin
+         for Index in Item'First .. Item'Last + 1 loop
+            if Index > Item'Last or else Item (Index) = ASCII.LF then
+               Result.Append (U.To_Unbounded_String (Item (Start .. Index - 1)));
+               Start := Index + 1;
+            end if;
+         end loop;
+         return Result;
+      end Lines_Of;
+
+      function Bare (Item : String) return String is
+         First : Natural := Item'First;
+         Last  : Natural := Item'Last;
+      begin
+         while First <= Last and then Item (First) in ' ' | ASCII.HT | ASCII.CR loop
+            First := First + 1;
+         end loop;
+         while Last >= First and then Item (Last) in ' ' | ASCII.HT | ASCII.CR loop
+            Last := Last - 1;
+         end loop;
+         return Item (First .. Last);
+      end Bare;
+
+      function Indent (Item : String) return Natural is
+         Count : Natural := 0;
+      begin
+         for C of Item loop
+            exit when C /= ' ';
+            Count := Count + 1;
+         end loop;
+         return Count;
+      end Indent;
+
+      File  : constant Line_Lists.Vector := Lines_Of (Text);
+      Given : Line_Lists.Vector := Lines_Of (Old_Text);
+      At_Line : Natural := 0;
+      Found   : Natural := 0;
+      Refused : constant Said := (Failed => True, others => <>);
+   begin
+      --  Blank lines at the ends of what was given are no part of it.
+      while not Given.Is_Empty and then Bare (U.To_String (Given.First_Element)) = "" loop
+         Given.Delete_First;
+      end loop;
+      while not Given.Is_Empty and then Bare (U.To_String (Given.Last_Element)) = "" loop
+         Given.Delete_Last;
+      end loop;
+      if Given.Is_Empty or else Natural (Given.Length) > Natural (File.Length) then
+         return Refused;
+      end if;
+      for Start in 1 .. Natural (File.Length) - Natural (Given.Length) + 1 loop
+         if (for all Offset in 0 .. Natural (Given.Length) - 1 =>
+               Bare (U.To_String (File (Start + Offset))) = Bare (U.To_String (Given (1 + Offset))))
+         then
+            Found := Found + 1;
+            At_Line := Start;
+         end if;
+      end loop;
+      if Found /= 1 then
+         return Refused;
+      end if;
+
+      declare
+         Shift : constant Integer :=
+           Indent (U.To_String (File (At_Line))) - Indent (U.To_String (Given.First_Element));
+         Moved : U.Unbounded_String;
+         Fresh : constant Line_Lists.Vector := Lines_Of (New_Text);
+         After : U.Unbounded_String;
+      begin
+         for Index in 1 .. Natural (Fresh.Length) loop
+            declare
+               Line : constant String := U.To_String (Fresh (Index));
+               Lead : constant Natural := Indent (Line);
+            begin
+               U.Append (Moved, (if Index = 1 then "" else [1 => ASCII.LF]));
+               if Line = "" then
+                  null;
+               elsif Shift >= 0 then
+                  U.Append (Moved, [1 .. Shift => ' '] & Line);
+               else
+                  U.Append (Moved, Line (Line'First + Natural'Min (Lead, -Shift) .. Line'Last));
+               end if;
+            end;
+         end loop;
+         for Index in 1 .. Natural (File.Length) loop
+            if Index = At_Line then
+               U.Append (After, Moved);
+            elsif Index in At_Line + 1 .. At_Line + Natural (Given.Length) - 1 then
+               goto Next_Line;
+            else
+               U.Append (After, File (Index));
+            end if;
+            if Index < Natural (File.Length) then
+               U.Append (After, ASCII.LF);
+            end if;
+            <<Next_Line>>
+         end loop;
+         declare
+            Whole : constant String := U.To_String (After);
+            Put   : Said;
+            Upto  : constant Positive := At_Line + Natural'Max (1, Lines_In (New_Text)) - 1;
+            Names : constant String := Declarations_In (Whole, At_Line, Upto);
+         begin
+            Replace (Path, Whole, Put, Base);
+            if Put.Failed then
+               return Put;
+            end if;
+            return
+              (Before_Revision => U.To_Unbounded_String (Now),
+               After_Revision  => U.To_Unbounded_String (Revision (Whole)),
+               Text    => U.To_Unbounded_String
+                 ("edited " & Path & " at line" & Natural'Image (At_Line) & ":"
+                  & Natural'Image (Natural (Given.Length)) & " line"
+                  & (if Natural (Given.Length) = 1 then "" else "s") & " replaced by"
+                  & Natural'Image (Lines_In (New_Text))
+                  & (if Names = "" then "" else "; in " & Names)
+                  & "; old_text matched with the spaces at its lines' ends left out"
+                  & (if Shift = 0 then ""
+                     else ", and the new text moved" & Natural'Image (abs Shift) & " space"
+                          & (if abs Shift = 1 then "" else "s") & (if Shift > 0 then " in" else " out")
+                          & " to the file's indentation")
+                  & "; revision now " & Revision (Whole)),
+               Changed => True,
+               others  => <>);
+         end;
+      end;
+   end Edit_Loosely;
+
    ----------
    -- Edit --
    ----------
@@ -398,6 +544,18 @@ package body Model_Runner.Tools.Editing is
             Times   : constant Natural := Ada.Strings.Fixed.Count (Text, Old_Text);
          begin
             if At_Text = 0 then
+               --  Not there as given, but there line for line once the spaces
+               --  at the ends of lines are left out, and in one place only:
+               --  edited there, the new text moved by how far the given one
+               --  was off. A model copying lines got the indentation one
+               --  space wrong, twenty times running.
+               declare
+                  Loose : constant Said := Edit_Loosely (Path, Text, Now, Old_Text, New_Text, Base);
+               begin
+                  if not Loose.Failed then
+                     return Loose;
+                  end if;
+               end;
                return Failing ("old_text is not in " & Path & " as it is now (revision " & Now
                                & "): read the part you mean to change again, and give it exactly");
             elsif Times > 1 then
@@ -476,7 +634,10 @@ package body Model_Runner.Tools.Editing is
          for Index in Text'First .. Text'Last + 1 loop
             if Index > Text'Last or else Text (Index) = ASCII.LF then
                if Line >= First and then Line <= Upto then
-                  U.Append (Result.Text, Image (Line) & ": " & Text (Start .. Index - 1) & ASCII.LF);
+                  --  The number and the line a tab apart: written "6: ", the
+                  --  space after the colon ran into the line's indentation,
+                  --  and a model copying the line gave one space too many.
+                  U.Append (Result.Text, Image (Line) & ASCII.HT & Text (Start .. Index - 1) & ASCII.LF);
                end if;
                exit when Line >= Upto;
                Line := Line + 1;

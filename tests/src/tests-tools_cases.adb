@@ -760,8 +760,8 @@ package body Tests.Tools_Cases is
               "an edit of a passage there more than once was made");
 
       --  Lines by number, and searches.
-      Assert (Has (Ed.Read_Range (Path, 2, 3), "2:    function Add")
-              and then Has (Ed.Read_Range (Path, 2, 3), "3:    begin")
+      Assert (Has (Ed.Read_Range (Path, 2, 3), "2" & ASCII.HT & "   function Add")
+              and then Has (Ed.Read_Range (Path, 2, 3), "3" & ASCII.HT & "   begin")
               and then not Has (Ed.Read_Range (Path, 2, 3), "A + B"),
               "a range of lines was not those lines");
       Assert (Has (Ed.Search_File (Path, "Twice"), "6: ")
@@ -789,6 +789,44 @@ package body Tests.Tools_Cases is
          Put (Dir & "/blob.bin", "ab" & ASCII.NUL & "cd");
          Ed.Read_Text (Dir & "/blob.bin", Text, Got);
          Assert (E."=" (Got.Code, E.IO_Read_Failed), "a binary file was read as text");
+      end;
+
+      --  Not there as given, but there line for line with the spaces at the
+      --  lines' ends left out, and in one place: edited there, the new text
+      --  moved to the file's indentation and said so. In two places, not.
+      declare
+         Loose_Path : constant String := Dir & "/loose.adb";
+      begin
+         Put (Loose_Path,
+              "procedure P is" & ASCII.LF & "begin" & ASCII.LF & "   X := 1;" & ASCII.LF
+              & "   Y := 2;" & ASCII.LF & "end P;" & ASCII.LF);
+         declare
+            Before : Ada.Strings.Unbounded.Unbounded_String;
+            Text   : Ada.Strings.Unbounded.Unbounded_String;
+            Got    : E.Error_Info;
+         begin
+            Ed.Read_Text (Loose_Path, Before, Got);
+            declare
+               Was  : constant String := Ada.Strings.Unbounded.To_String (Before);
+               At_X : constant Natural := Ada.Strings.Fixed.Index (Was, "   X := 1;");
+               Want : constant String :=
+                 Was (Was'First .. At_X - 1) & "   X := 3;" & ASCII.LF & "   Y := 4;"
+                 & Was (At_X + 21 .. Was'Last);
+               Done : constant Ed.Said :=
+                 Ed.Edit (Loose_Path, "    X := 1;" & ASCII.LF & "    Y := 2;",
+                          "    X := 3;" & ASCII.LF & "    Y := 4;", "");
+            begin
+               Ed.Read_Text (Loose_Path, Text, Got);
+               Assert (not Done.Failed and then Has (Done, "matched with the spaces")
+                       and then Ada.Strings.Unbounded.To_String (Text) = Want,
+                       "a passage there but for its lines' indentation was not edited in the file's: "
+                       & Ada.Strings.Unbounded.To_String (Done.Text) & " -> "
+                       & Ada.Strings.Unbounded.To_String (Text));
+            end;
+         end;
+         Put (Loose_Path, "   A := 1;" & ASCII.LF & "   A := 1;" & ASCII.LF);
+         Assert (Ed.Edit (Loose_Path, "  A := 1;", "  A := 2;", "").Failed,
+                 "a passage there loosely in two places was edited in one");
       end;
       Ada.Directories.Delete_Tree (Dir);
    end Files_Are_Edited_In_Part;
