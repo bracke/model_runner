@@ -185,6 +185,33 @@ package Model_Runner.Framework.Events is
       Fresh    : out Boolean;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  The sequence through which a consumer has settled every event: what
+   --  it reads next starts after it. Kept as done.through in its record,
+   --  a field the record has always allowed, and no event's own mark is
+   --  dropped, so a build that knows nothing of it reads the record as it
+   --  did.
+   --
+   --  @param Item The store.
+   --  @param Consumer Who is acting.
+   --  @return The sequence; 0 where nothing is settled yet.
+   function Settled (Item : Stores.Store; Consumer : String) return Natural;
+
+   --  Stage how far a consumer has settled every event, in the transaction
+   --  that consumes them.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Consumer Who is acting.
+   --  @param Through The sequence: every event at or below it consumed, or
+   --    of no concern to the consumer. Never moved back.
+   --  @param Status Framework_Name_Invalid, or a read failure of its record.
+   procedure Settle
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Consumer : String;
+      Through  : Natural;
+      Status   : out Model_Runner.Errors.Error_Info);
+
 private
 
    package Event_Vectors is new Ada.Containers.Vectors

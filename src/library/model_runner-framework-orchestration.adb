@@ -68,7 +68,7 @@ package body Model_Runner.Framework.Orchestration is
    ---------------------
 
    function Unknown_Waiting (Item : Stores.Store) return Name_Lists.Vector is
-      Listed : constant Events.Event_List := Events.Since (Item, 0);
+      Listed : constant Events.Event_List := Events.Since (Item, Events.Settled (Item, Consumer));
    begin
       return Result : Name_Lists.Vector do
          for Index in 1 .. Events.Length (Listed) loop
@@ -100,9 +100,12 @@ package body Model_Runner.Framework.Orchestration is
    is
       use type Automation.Action;
       package Action_Lists is new Ada.Containers.Vectors (Positive, Automation.Action);
+      package Sequence_Lists is new Ada.Containers.Vectors (Positive, Natural);
 
       In_Force : Automation.Rule_Lists.Vector;
-      Listed   : constant Events.Event_List := Events.Since (Item, 0);
+
+      --  Read on from what is settled: the log is not read whole each step.
+      Listed   : constant Events.Event_List := Events.Since (Item, Events.Settled (Item, Consumer));
       Change   : Stores.Transaction;
       Wanted   : Action_Lists.Vector;
 
@@ -124,6 +127,13 @@ package body Model_Runner.Framework.Orchestration is
       --  The events not yet acted on, and the kinds they are.
       Fresh_Ids   : Name_Lists.Vector;
       Fresh_Kinds : Name_Lists.Vector;
+
+      --  The first event listed that this step leaves unsettled -- of an
+      --  unknown kind, or with an action that failed -- by sequence; what
+      --  is settled moves up to just before it.
+      Unsettled   : Natural := Natural'Last;
+      Fresh_Seqs  : Sequence_Lists.Vector;
+      Last_Listed : Natural := 0;
 
       --  The actions that failed: their events stay to be acted on again.
       Broken      : Action_Lists.Vector;
@@ -147,14 +157,17 @@ package body Model_Runner.Framework.Orchestration is
             if E.Is_Error (Status) then
                return;
             end if;
+            Last_Listed := Natural'Max (Last_Listed, Happened.Sequence);
             if Fresh and then not Happened.Known then
                --  Written by a later build: what it calls for is that
                --  build's to say, so it is left for it, and said.
                Result.Unknown.Append (To_String (Happened.Kind_Word));
+               Unsettled := Natural'Min (Unsettled, Happened.Sequence);
             elsif Fresh then
                Result.Events_Seen := Result.Events_Seen + 1;
                Fresh_Ids.Append (To_String (Happened.Id));
                Fresh_Kinds.Append (To_String (Happened.Kind_Word));
+               Fresh_Seqs.Append (Happened.Sequence);
                for Action of Actions_For (To_String (Happened.Kind_Word)) loop
                   if not Wanted.Contains (Action) then
                      Wanted.Append (Action);
@@ -229,8 +242,10 @@ package body Model_Runner.Framework.Orchestration is
       --  action failed waits for the next step. Everything else it calls
       --  for is taken again then, which each action is safe to be.
       for Index in 1 .. Natural (Fresh_Ids.Length) loop
-         if (for all Action of Actions_For (Fresh_Kinds (Index)) => not Broken.Contains (Action))
+         if not (for all Action of Actions_For (Fresh_Kinds (Index)) => not Broken.Contains (Action))
          then
+            Unsettled := Natural'Min (Unsettled, Fresh_Seqs (Index));
+         else
             declare
                Fresh : Boolean;
             begin
@@ -241,6 +256,11 @@ package body Model_Runner.Framework.Orchestration is
             end;
          end if;
       end loop;
+      Events.Settle (Item, Change, Consumer,
+                     (if Unsettled = Natural'Last then Last_Listed else Unsettled - 1), Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       Stores.Commit (Item, Change, Status);
       if E.Is_Ok (Status) and then E.Is_Error (Failed) then
          Status := Failed;

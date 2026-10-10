@@ -5629,6 +5629,53 @@ package body Tests.Framework_Cases is
    --  evidence recorded; an answer outside the contract, a blocked one and
    --  a broken agent each end it as they should; a task whose agent
    --  stopped is put back; a running task can be cancelled.
+   --  A run in the project itself that cannot keep what the files were
+   --  does not start its agent: a kill then would leave nothing to tell
+   --  what it changed by.
+   procedure Work_Without_Baseline_Does_Not_Start
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Id     : Unbounded_String;
+      Model  : Cx.Model_Profile;
+   begin
+      Task_Project (Store, "work-baseline", "");
+      Model := Cx.Profile (Store, "");
+      Tk.Create (Store, Change, Fields ("Work", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+
+      --  A folder, with something in it, where the baseline goes: it cannot
+      --  be renamed over.
+      declare
+         Mark   : constant String := S.Root (Store) & "/runtime/before-" & To_String (Id);
+         Inside : Ada.Text_IO.File_Type;
+      begin
+         Dirs.Create_Path (Mark);
+         Ada.Text_IO.Create (Inside, Ada.Text_IO.Out_File, Mark & "/held");
+         Ada.Text_IO.Close (Inside);
+      end;
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String
+                                    ("status: done" & LF & "summary: wrote hello" & LF
+                                     & "changed_files: src/hello.adb"),
+                                  Broken => False),
+                  Model, Done, Status);
+      Assert (To_String (Done.Final_State) = "blocked"
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "cannot be kept") > 0,
+              "a run that could not keep its baseline was not blocked: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      Assert (not Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
+              "the agent of a run with no baseline kept wrote to the project");
+      S.Close (Store);
+   end Work_Without_Baseline_Does_Not_Start;
+
    procedure Work_Runs_A_Task_Through
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10238,6 +10285,36 @@ package body Tests.Framework_Cases is
 
    --  /work as typed in a session: by its identifier, and by words of its
    --  title, runs the task on the agent the session hands it.
+   --  An event as a later build would write it: of a kind this one has no
+   --  name for, Hologram_Landed, about Subject.
+   procedure Later_Build_Event (Store : in out S.Store; Subject : String) is
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+   begin
+      Ev.Emit (Store, Change, Ev.Project_Initialized, Subject, "", Id, Status);
+      if E.Is_Ok (Status) then
+         S.Commit (Store, Change, Status);
+      end if;
+      Assert (E.Is_Ok (Status), "the event was not written: " & Code_Of (Status));
+      --  Rewritten as a kind this build has no name for.
+      declare
+         Listed  : constant Ev.Event_List := Ev.Since (Store, 0);
+         Last    : constant Ev.Event := Ev.Element (Listed, Ev.Length (Listed));
+         Name    : constant String := "event-" & Ada.Strings.Fixed.Tail
+                                        (Ada.Strings.Fixed.Trim (Last.Sequence'Image, Ada.Strings.Both), 9, '0');
+         Written : R.Item;
+      begin
+         S.Read (Store, F.Events_Area, Name, Written, Status);
+         Assert (E.Is_Ok (Status), "the event was not read back as " & Name & ": " & Code_Of (Status));
+         R.Set (Written, "event_kind", "Hologram_Landed");
+         R.Set_Revision (Written, R.Revision (Written) + 1);
+         S.Put (Change, F.Events_Area, Name, Written);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the event was not rewritten: " & Code_Of (Status));
+      end;
+   end Later_Build_Event;
+
    procedure Session_Work_Line_Runs_The_Task
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10312,6 +10389,9 @@ package body Tests.Framework_Cases is
             Status, Ended => "refused: outside the project");
          S.Commit (Store, Change, Status);
       end;
+      --  And an event a later build wrote about it, for /history and
+      --  /state to say is waiting for one.
+      Later_Build_Event (Store, To_String (Stuck));
       declare
          Root : constant String := Fresh_Root (Store);
       begin
@@ -10443,6 +10523,13 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "Task_Blocked  " & To_String (Stuck)) > 0
                        and then Ada.Strings.Fixed.Index (Text, "Invocation_Started  INV-") > 0,
                        "/history did not give a task's moves and the run made for it: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "Hologram_Landed  " & To_String (Stuck)) > 0
+                       and then Ada.Strings.Fixed.Index
+                                  (Text, "of a kind this build does not know: left unconsumed") > 0
+                       and then Ada.Strings.Fixed.Index
+                                  (Text, "1 events of a kind this build does not know wait for a build"
+                                         & " that does: Hologram_Landed") > 0,
+                       "an event a later build wrote was not said as waiting for one: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "no event names TASK-999") > 0,
                        "/history of what nothing names did not say so");
                Assert (Ada.Strings.Fixed.Index (Text, "scalar.agents.max_steps: ") > 0
@@ -11028,33 +11115,21 @@ package body Tests.Framework_Cases is
       pragma Unreferenced (T);
       Store  : S.Store;
       Status : E.Error_Info;
-      Change : S.Transaction;
-      Id     : Unbounded_String;
       Done   : Or_ch.Step_Report;
    begin
       Task_Project (Store, "unknown-events", "");
       Or_ch.Step (Store, Done, Status);
-      Ev.Emit (Store, Change, Ev.Project_Initialized, "PROJECT", "", Id, Status);
-      if E.Is_Ok (Status) then
-         S.Commit (Store, Change, Status);
-      end if;
-      Assert (E.Is_Ok (Status), "the event was not written: " & Code_Of (Status));
-      --  Rewritten as a kind this build has no name for.
+      --  Settled through the last event: the next step reads on from there.
       declare
-         Listed  : constant Ev.Event_List := Ev.Since (Store, 0);
-         Last    : constant Ev.Event := Ev.Element (Listed, Ev.Length (Listed));
-         Name    : constant String := "event-" & Ada.Strings.Fixed.Tail
-                                        (Ada.Strings.Fixed.Trim (Last.Sequence'Image, Ada.Strings.Both), 9, '0');
-         Written : R.Item;
+         Listed : constant Ev.Event_List := Ev.Since (Store, 0);
       begin
-         S.Read (Store, F.Events_Area, Name, Written, Status);
-         Assert (E.Is_Ok (Status), "the event was not read back as " & Name & ": " & Code_Of (Status));
-         R.Set (Written, "event_kind", "Hologram_Landed");
-         R.Set_Revision (Written, R.Revision (Written) + 1);
-         S.Put (Change, F.Events_Area, Name, Written);
-         S.Commit (Store, Change, Status);
-         Assert (E.Is_Ok (Status), "the event was not rewritten: " & Code_Of (Status));
+         Assert (Ev.Settled (Store, "orchestrator")
+                 = Ev.Element (Listed, Ev.Length (Listed)).Sequence
+                 and then Ev.Length (Ev.Since (Store, Ev.Settled (Store, "orchestrator"))) = 0,
+                 "a step did not settle the events it acted on:"
+                 & Ev.Settled (Store, "orchestrator")'Image);
       end;
+      Later_Build_Event (Store, "PROJECT");
       Or_ch.Step (Store, Done, Status);
       Assert (E.Is_Ok (Status) and then Done.Events_Seen = 0 and then Done.Actions_Taken = 0
               and then Natural (Done.Unknown.Length) = 1
@@ -11065,6 +11140,14 @@ package body Tests.Framework_Cases is
       Assert (Natural (Done.Unknown.Length) = 1
               and then Natural (Or_ch.Unknown_Waiting (Store).Length) = 1,
               "an event of an unknown kind was consumed, and a build knowing it would never see it");
+      --  And what is settled stops short of it.
+      declare
+         Listed : constant Ev.Event_List := Ev.Since (Store, 0);
+      begin
+         Assert (Ev.Settled (Store, "orchestrator")
+                 < Ev.Element (Listed, Ev.Length (Listed)).Sequence,
+                 "what is settled passed an event of an unknown kind");
+      end;
       S.Close (Store);
    end Unknown_Events_Are_Left;
 
@@ -11414,6 +11497,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Workspaces_Isolate_And_Integrate'Access,
          "workspace work is isolated, integrated by right, and verified after");
+      Register_Routine
+        (T, Work_Without_Baseline_Does_Not_Start'Access,
+         "a run that cannot keep what the files were does not start its agent");
       Register_Routine
         (T, Work_Runs_A_Task_Through'Access,
          "one task runs from ready through verification to where it ends");

@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Records;
@@ -20,6 +21,31 @@ package body Model_Runner.Framework.Events is
 
    function Consumer_Name (Consumer : String) return String
    is ("consumed." & Consumer);
+
+   --  The sequence an event's identifier carries: EVT-000000012 is 12;
+   --  Natural'Last for one that carries none, so it is never taken as
+   --  settled.
+   function Sequence_Of (Event_Id : String) return Natural is
+      Digits_At : constant Natural := Ada.Strings.Fixed.Index (Event_Id, "-");
+   begin
+      if Digits_At = 0 or else Digits_At = Event_Id'Last
+        or else (for some C of Event_Id (Digits_At + 1 .. Event_Id'Last) => C not in '0' .. '9')
+        or else Event_Id'Last - Digits_At > 9
+      then
+         return Natural'Last;
+      end if;
+      return Natural'Value (Event_Id (Digits_At + 1 .. Event_Id'Last));
+   end Sequence_Of;
+
+   --  The sequence a consumer's record says it settled through.
+   function Through_Of (Held : Records.Item) return Natural is
+      Said : constant String := Records.Get (Held, "done.through");
+   begin
+      if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9') then
+         return Natural'Value (Said);
+      end if;
+      return 0;
+   end Through_Of;
 
    ---------------
    -- Kind_Name --
@@ -122,6 +148,14 @@ package body Model_Runner.Framework.Events is
       Result : Event_List;
    begin
       for Name of Stores.Names (Item, Events_Area) loop
+         --  The sequence is in the name: one at or before After is not read.
+         if After > 0 and then Name'Length = 15
+           and then Name (Name'First .. Name'First + 5) = "event-"
+           and then (for all C of Name (Name'First + 6 .. Name'Last) => C in '0' .. '9')
+           and then Natural'Value (Name (Name'First + 6 .. Name'Last)) <= After
+         then
+            goto Next_Name;
+         end if;
          declare
             Value  : Records.Item;
             Status : E.Error_Info;
@@ -163,6 +197,7 @@ package body Model_Runner.Framework.Events is
                end;
             end if;
          end;
+         <<Next_Name>>
       end loop;
       return Result;
    end Since;
@@ -219,7 +254,9 @@ package body Model_Runner.Framework.Events is
          end if;
       end if;
 
-      if Records.Has (Held, "done." & Event_Id) then
+      if Records.Has (Held, "done." & Event_Id)
+        or else Sequence_Of (Event_Id) <= Through_Of (Held)
+      then
          return;
       end if;
 
@@ -227,5 +264,62 @@ package body Model_Runner.Framework.Events is
       Stores.Put (Change, Runtime_Area, Name, Held);
       Fresh := True;
    end Consume;
+
+-------------
+   -- Settled --
+   -------------
+
+   function Settled (Item : Stores.Store; Consumer : String) return Natural is
+      Name   : constant String := Consumer_Name (Consumer);
+      Held   : Records.Item;
+      Status : E.Error_Info;
+   begin
+      if not Stores.Is_Name (Name) or else not Stores.Exists (Item, Runtime_Area, Name) then
+         return 0;
+      end if;
+      Stores.Read (Item, Runtime_Area, Name, Held, Status);
+      return (if E.Is_Ok (Status) then Through_Of (Held) else 0);
+   end Settled;
+
+   ------------
+   -- Settle --
+   ------------
+
+   procedure Settle
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Consumer : String;
+      Through  : Natural;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Name   : constant String := Consumer_Name (Consumer);
+      Held   : Records.Item;
+      Staged : Boolean;
+   begin
+      Status := E.Success;
+      if not Stores.Is_Name (Name) then
+         Status := E.Make (E.Framework_Name_Invalid);
+         E.Add_Text (Status, "value", Consumer);
+         return;
+      end if;
+      Stores.Pending (Change, Runtime_Area, Name, Held, Staged);
+      if not Staged then
+         if Stores.Exists (Item, Runtime_Area, Name) then
+            Stores.Read (Item, Runtime_Area, Name, Held, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Records.Set_Revision (Held, Records.Revision (Held) + 1);
+         else
+            Held := Records.Create (Schemas.Consumption_Schema, 1, "CONSUMER", 1);
+            Records.Set (Held, "consumer", Consumer);
+         end if;
+      end if;
+      if Through <= Through_Of (Held) then
+         return;
+      end if;
+      Records.Set (Held, "done.through", Nine (Through));
+      Stores.Put (Change, Runtime_Area, Name, Held);
+   end Settle;
 
 end Model_Runner.Framework.Events;

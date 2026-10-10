@@ -69,6 +69,11 @@ procedure Route_History is
                                   Loc.Named ("value", To_String (Event.Kind_Word)),
                                   Loc.Named ("name", To_String (Event.Subject)),
                                   Loc.Named ("detail", To_String (Event.Detail))]);
+                  --  Written by a later build, and waiting for one: said
+                  --  where it is listed, not left to look like any other.
+                  if not Event.Known then
+                     Pres.Put_Note (Screen, "cli.history.unknown_kind", []);
+                  end if;
                end;
             end if;
          end if;

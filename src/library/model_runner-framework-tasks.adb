@@ -1676,7 +1676,14 @@ package body Model_Runner.Framework.Tasks is
         (if Records.Get (Settings, "scalar.task.derived_kind") /= ""
          then Records.Get (Settings, "scalar.task.derived_kind")
          else "implementation");
-      Listed    : constant Events.Event_List := Events.Since (Item, 0);
+
+      --  Read on from what is settled, not the whole log each time.
+      Listed    : constant Events.Event_List := Events.Since (Item, Events.Settled (Item, Deriver));
+
+      --  The first event of a kind this build does not know: what is
+      --  settled stops short of it, for a build that does.
+      Unknown_At : Natural := Natural'Last;
+      Last_Seen  : Natural := 0;
 
       --  The component that is the whole project: the first the
       --  configuration lists, else the project's name.
@@ -1754,6 +1761,10 @@ package body Model_Runner.Framework.Tasks is
             Happened : constant Events.Event := Events.Element (Listed, Index);
             Fresh    : Boolean;
          begin
+            Last_Seen := Natural'Max (Last_Seen, Happened.Sequence);
+            if not Happened.Known then
+               Unknown_At := Natural'Min (Unknown_At, Happened.Sequence);
+            end if;
             if Happened.Known
               and then Happened.Kind in Events.Requirement_Accepted
                                       | Events.Requirement_Revised
@@ -1933,6 +1944,8 @@ package body Model_Runner.Framework.Tasks is
             end if;
          end;
       end loop;
+      Events.Settle (Item, Change, Deriver,
+                     (if Unknown_At = Natural'Last then Last_Seen else Unknown_At - 1), Status);
    end Derive;
 
    --  The tasks a task waits for, as the transaction will leave it.

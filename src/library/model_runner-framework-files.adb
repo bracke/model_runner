@@ -141,6 +141,8 @@ package body Model_Runner.Framework.Files is
       if E.Is_Ok (Status)
         and then not Hostkit.Fs.Replace_File (Path & Partial_Suffix, Path)
       then
+         --  Not left beside it: the file is what it was.
+         Discard (Path & Partial_Suffix);
          Write_Failed (Path, Status);
       end if;
    end Write_Whole;

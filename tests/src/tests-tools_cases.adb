@@ -830,8 +830,14 @@ package body Tests.Tools_Cases is
             end;
          end;
          Put (Loose_Path, "   A := 1;" & ASCII.LF & "   A := 1;" & ASCII.LF);
-         Assert (Ed.Edit (Loose_Path, "  A := 1;", "  A := 2;", "").Failed,
-                 "a passage there loosely in two places was edited in one");
+         declare
+            Twice : constant Ed.Said := Ed.Edit (Loose_Path, "    A := 1;", "    A := 2;", "");
+         begin
+            --  Said to be there twice, and where -- not "not there".
+            Assert (Twice.Failed and then Has (Twice, "2 times, at lines 1, 2"),
+                    "a passage there loosely in two places was edited in one, or not said to be in two: "
+                    & Ada.Strings.Unbounded.To_String (Twice.Text));
+         end;
       end;
       Ada.Directories.Delete_Tree (Dir);
    end Files_Are_Edited_In_Part;

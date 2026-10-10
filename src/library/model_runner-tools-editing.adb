@@ -421,7 +421,9 @@ package body Model_Runner.Tools.Editing is
    --  each line's ends left out, where it matches in exactly one place:
    --  the lines there replaced by New_Text, each line of it moved by how
    --  far the first given line's indentation was from the file's. Failed,
-   --  saying nothing, where it matches nowhere or more than once.
+   --  saying nothing, where it matches nowhere; failed saying the lines it
+   --  starts at where it matches more than once -- "not there" sent a
+   --  model resending the same edit until it was stopped.
    function Edit_Loosely
      (Path, Text, Now, Old_Text, New_Text : String;
       Base : String) return Said
@@ -468,6 +470,7 @@ package body Model_Runner.Tools.Editing is
       Given : Line_Lists.Vector := Lines_Of (Old_Text);
       At_Line : Natural := 0;
       Found   : Natural := 0;
+      Starts  : U.Unbounded_String;
       Refused : constant Said := (Failed => True, others => <>);
    begin
       --  Blank lines at the ends of what was given are no part of it.
@@ -486,9 +489,16 @@ package body Model_Runner.Tools.Editing is
          then
             Found := Found + 1;
             At_Line := Start;
+            U.Append (Starts, (if Found = 1 then "" else ",") & Natural'Image (Start));
          end if;
       end loop;
-      if Found /= 1 then
+      if Found > 1 then
+         return Failing
+           ("old_text is not in " & Path & " exactly, and with the spaces at the ends of lines left out it"
+            & " is there" & Natural'Image (Found) & " times, at lines" & U.To_String (Starts)
+            & ": give more of the text around the one you mean, exactly as read_file shows it after"
+            & " the ""N: """);
+      elsif Found = 0 then
          return Refused;
       end if;
 
@@ -603,7 +613,7 @@ package body Model_Runner.Tools.Editing is
                declare
                   Loose : constant Said := Edit_Loosely (Path, Text, Now, Old_Text, New_Text, Base);
                begin
-                  if not Loose.Failed then
+                  if not Loose.Failed or else U.Length (Loose.Text) > 0 then
                      return Loose;
                   end if;
                end;
