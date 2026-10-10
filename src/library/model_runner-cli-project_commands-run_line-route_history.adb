@@ -12,7 +12,9 @@ procedure Route_History is
         (if Given /= "" and then Given'Length <= 6 and then (for all C of Given => C in '0' .. '9')
          then "TASK-" & [1 .. Integer'Max (0, 3 - Given'Length) => '0'] & Given
          else Given);
-      Log   : constant Ev.Event_List := Ev.Since (Store, 0);
+      --  Nothing named: the latest alone are read, not the log whole.
+      Log   : constant Ev.Event_List :=
+        (if Asked = "" then Ev.Latest (Store, Shown_At_Most) else Ev.Since (Store, 0));
 
       --  Whether Text names Asked as a whole identifier, not the front of
       --  a longer one.
@@ -50,11 +52,15 @@ procedure Route_History is
          Pres.Put_Note (Screen, "cli.history.none", [Loc.Named ("name", Asked)]);
          return;
       end if;
-      if Matching > Shown_At_Most then
-         Pres.Put_Note (Screen, "cli.history.earlier",
-                        [Loc.Named ("count", Image (Matching - Shown_At_Most)),
-                         Loc.Named ("total", Image (Matching))]);
-      end if;
+      declare
+         Total : constant Natural := (if Asked = "" then Ev.Count (Store) else Matching);
+      begin
+         if Total > Shown_At_Most then
+            Pres.Put_Note (Screen, "cli.history.earlier",
+                           [Loc.Named ("count", Image (Total - Shown_At_Most)),
+                            Loc.Named ("total", Image (Total))]);
+         end if;
+      end;
       for Index in 1 .. Ev.Length (Log) loop
          if About (Index) then
             if Skipped < Matching - Shown_At_Most then

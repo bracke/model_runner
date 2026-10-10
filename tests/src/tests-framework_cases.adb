@@ -11128,6 +11128,21 @@ package body Tests.Framework_Cases is
                  and then Ev.Length (Ev.Since (Store, Ev.Settled (Store, "orchestrator"))) = 0,
                  "a step did not settle the events it acted on:"
                  & Ev.Settled (Store, "orchestrator")'Image);
+         --  The marks it covers are dropped, and an event under it is
+         --  still not fresh when it comes again.
+         declare
+            Held    : R.Item;
+            Again   : Boolean;
+            Scratch : S.Transaction;
+         begin
+            S.Read (Store, Model_Runner.Framework.Runtime_Area, "consumed.orchestrator", Held, Status);
+            Assert (E.Is_Ok (Status)
+                    and then (for all Index in 1 .. R.Field_Count (Held) =>
+                                Ada.Strings.Fixed.Index (R.Field_Name (Held, Index), "done.EVT-") = 0),
+                    "the marks of settled events were kept: " & Code_Of (Status));
+            Ev.Consume (Store, Scratch, "orchestrator", To_String (Ev.Element (Listed, 1).Id), Again, Status);
+            Assert (E.Is_Ok (Status) and then not Again, "a settled event was taken as fresh");
+         end;
       end;
       Later_Build_Event (Store, "PROJECT");
       Or_ch.Step (Store, Done, Status);
@@ -11140,6 +11155,17 @@ package body Tests.Framework_Cases is
       Assert (Natural (Done.Unknown.Length) = 1
               and then Natural (Or_ch.Unknown_Waiting (Store).Length) = 1,
               "an event of an unknown kind was consumed, and a build knowing it would never see it");
+      --  The latest read alone, and the log counted unread.
+      declare
+         All_Of : constant Ev.Event_List := Ev.Since (Store, 0);
+         Two    : constant Ev.Event_List := Ev.Latest (Store, 2);
+      begin
+         Assert (Ev.Count (Store) = Ev.Length (All_Of) and then Ev.Length (Two) = 2
+                 and then Ev.Element (Two, 2).Id = Ev.Element (All_Of, Ev.Length (All_Of)).Id
+                 and then Ev.Element (Two, 1).Id = Ev.Element (All_Of, Ev.Length (All_Of) - 1).Id
+                 and then Ev.Length (Ev.Latest (Store, 1000)) = Ev.Length (All_Of),
+                 "the latest events, or the count of them, were not the log's");
+      end;
       --  And what is settled stops short of it.
       declare
          Listed : constant Ev.Event_List := Ev.Since (Store, 0);

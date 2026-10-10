@@ -839,6 +839,50 @@ package body Tests.Tools_Cases is
                     & Ada.Strings.Unbounded.To_String (Twice.Text));
          end;
       end;
+      --  New lines for a passage that starts after a line's indentation:
+      --  set at that indentation, each kept where it stood from the first,
+      --  whether the first was given with no indentation or its own; lines
+      --  given already standing there are put in as given.
+      declare
+         Laid_Path : constant String := Dir & "/laid.adb";
+
+         --  The file, its line ends read as LF: a host may write CRLF.
+         function Now return String is
+            Text : Ada.Strings.Unbounded.Unbounded_String;
+            Got  : E.Error_Info;
+            Kept : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Ed.Read_Text (Laid_Path, Text, Got);
+            for C of Ada.Strings.Unbounded.To_String (Text) loop
+               if C /= ASCII.CR then
+                  Ada.Strings.Unbounded.Append (Kept, C);
+               end if;
+            end loop;
+            return Ada.Strings.Unbounded.To_String (Kept);
+         end Now;
+
+         procedure Try (New_Text, Want, Why : String) is
+            Done : Ed.Said;
+         begin
+            Put (Laid_Path, "begin" & ASCII.LF & "   return A + B;" & ASCII.LF & "end P;" & ASCII.LF);
+            Done := Ed.Edit (Laid_Path, "return A + B;", New_Text, "");
+            Assert (not Done.Failed
+                    --  Put ends the file with a line break of its own.
+                    and then Ada.Strings.Fixed.Index
+                               (Now, "begin" & ASCII.LF & Want & ASCII.LF & "end P;" & ASCII.LF) = 1,
+                    Why & ": " & Ada.Strings.Unbounded.To_String (Done.Text) & " -> " & Now);
+         end Try;
+
+         Laid : constant String :=
+           "   if X then" & ASCII.LF & "      return 1;" & ASCII.LF & "   end if;";
+      begin
+         Try ("if X then" & ASCII.LF & "   return 1;" & ASCII.LF & "end if;", Laid,
+              "new lines given from the margin were not set at the line's indentation");
+         Try ("   if X then" & ASCII.LF & "      return 1;" & ASCII.LF & "   end if;", Laid,
+              "new lines given with an indentation of their own went in at twice it");
+         Try ("return A + B;" & ASCII.LF & "   null;", "   return A + B;" & ASCII.LF & "   null;",
+              "new lines given already standing at the line's indentation were moved");
+      end;
       Ada.Directories.Delete_Tree (Dir);
    end Files_Are_Edited_In_Part;
 

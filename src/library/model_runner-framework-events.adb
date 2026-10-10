@@ -19,6 +19,9 @@ package body Model_Runner.Framework.Events is
       return [1 .. Integer'Max (0, 9 - Plain'Length) => '0'] & Plain;
    end Nine;
 
+   package Sequence_Lists is new Ada.Containers.Vectors (Positive, Natural);
+   package Sequence_Sorting is new Sequence_Lists.Generic_Sorting;
+
    function Consumer_Name (Consumer : String) return String
    is ("consumed." & Consumer);
 
@@ -202,6 +205,42 @@ package body Model_Runner.Framework.Events is
       return Result;
    end Since;
 
+   --  The sequences of the events the log holds, read from their names,
+   --  in order.
+   function Sequences (Item : Stores.Store) return Sequence_Lists.Vector is
+   begin
+      return Result : Sequence_Lists.Vector do
+         for Name of Stores.Names (Item, Events_Area) loop
+            if Name'Length = 15 and then Name (Name'First .. Name'First + 5) = "event-"
+              and then (for all C of Name (Name'First + 6 .. Name'Last) => C in '0' .. '9')
+            then
+               Result.Append (Natural'Value (Name (Name'First + 6 .. Name'Last)));
+            end if;
+         end loop;
+         Sequence_Sorting.Sort (Result);
+      end return;
+   end Sequences;
+
+   ------------
+   -- Latest --
+   ------------
+
+   function Latest (Item : Stores.Store; Count : Positive) return Event_List is
+      Held : constant Sequence_Lists.Vector := Sequences (Item);
+   begin
+      if Natural (Held.Length) <= Count then
+         return Since (Item, 0);
+      end if;
+      return Since (Item, Held (Natural (Held.Length) - Count));
+   end Latest;
+
+   -----------
+   -- Count --
+   -----------
+
+   function Count (Item : Stores.Store) return Natural
+   is (Natural (Sequences (Item).Length));
+
    function Length (From : Event_List) return Natural
    is (Natural (From.Events.Length));
 
@@ -319,6 +358,28 @@ package body Model_Runner.Framework.Events is
          return;
       end if;
       Records.Set (Held, "done.through", Nine (Through));
+      --  Each event's own mark at or below it said again by it: dropped,
+      --  so the record holds what is unsettled, not one field an event
+      --  ever handled.
+      declare
+         Covered : Name_Lists.Vector;
+      begin
+         for Index in 1 .. Records.Field_Count (Held) loop
+            declare
+               Field : constant String := Records.Field_Name (Held, Index);
+            begin
+               if Field'Length > 5 and then Field (Field'First .. Field'First + 4) = "done."
+                 and then Field /= "done.through"
+                 and then Sequence_Of (Field (Field'First + 5 .. Field'Last)) <= Through
+               then
+                  Covered.Append (Field);
+               end if;
+            end;
+         end loop;
+         for Field of Covered loop
+            Records.Remove (Held, Field);
+         end loop;
+      end;
       Stores.Put (Change, Runtime_Area, Name, Held);
    end Settle;
 

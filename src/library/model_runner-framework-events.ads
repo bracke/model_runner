@@ -153,6 +153,19 @@ package Model_Runner.Framework.Events is
    --  @return The events.
    function Since (Item : Stores.Store; After : Natural) return Event_List;
 
+   --  The latest events, oldest first: those before them are not read.
+   --
+   --  @param Item The store.
+   --  @param Count How many at most.
+   --  @return The events.
+   function Latest (Item : Stores.Store; Count : Positive) return Event_List;
+
+   --  How many events the log holds, none of them read.
+   --
+   --  @param Item The store.
+   --  @return The number.
+   function Count (Item : Stores.Store) return Natural;
+
    --  How many events a list holds.
    --
    --  @param From The list.
@@ -187,9 +200,8 @@ package Model_Runner.Framework.Events is
 
    --  The sequence through which a consumer has settled every event: what
    --  it reads next starts after it. Kept as done.through in its record,
-   --  a field the record has always allowed, and no event's own mark is
-   --  dropped, so a build that knows nothing of it reads the record as it
-   --  did.
+   --  a field the record has always allowed; the marks of the events it
+   --  covers are dropped as it moves.
    --
    --  @param Item The store.
    --  @param Consumer Who is acting.

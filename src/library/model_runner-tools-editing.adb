@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Exceptions;
@@ -627,9 +628,100 @@ package body Model_Runner.Tools.Editing is
                        others => <>);
             end if;
             declare
+               --  Where the line the passage starts on starts, and whether
+               --  only its indentation comes before the passage.
+               Line_Start : constant Positive :=
+                 (if Ada.Strings.Fixed.Index (Text (Text'First .. At_Text - 1), [1 => ASCII.LF],
+                                              Ada.Strings.Backward) = 0
+                  then Text'First
+                  else Ada.Strings.Fixed.Index (Text (Text'First .. At_Text - 1), [1 => ASCII.LF],
+                                                Ada.Strings.Backward) + 1);
+               Lead : constant Natural := At_Text - Line_Start;
+               Only_Indent : constant Boolean :=
+                 Lead > 0 and then (for all C of Text (Line_Start .. At_Text - 1) => C = ' ');
+
+               function Indent_Of (Line : String) return Natural is
+                  Count : Natural := 0;
+               begin
+                  for C of Line loop
+                     exit when C /= ' ';
+                     Count := Count + 1;
+                  end loop;
+                  return Count;
+               end Indent_Of;
+
+               --  New lines given for a passage that starts after a line's
+               --  indentation are laid out as the model sees them: from
+               --  their first line, which either has an indentation of its
+               --  own or none. Put in as given, the lines after the first
+               --  stood at the margin -- or the first at twice its depth --
+               --  and every edit of the file after went by a ragged copy.
+               --  Moved where the first given line has an indentation of its
+               --  own, or where a later one stands left of the line's: so the
+               --  first line stands at the line's indentation and the rest
+               --  keep where they stood from it. Lines that already stand at
+               --  or right of the line's indentation, after a first line that
+               --  has none, are as the model meant them, and put in as given.
+               Moved   : U.Unbounded_String;
+               Shifted : Boolean := False;
+
+               function Blank (Line : String) return Boolean
+               is (for all C of Line => C in ' ' | ASCII.HT | ASCII.CR);
+
+               procedure Lay_Out is
+                  package Text_Lines is new Ada.Containers.Indefinite_Vectors (Positive, String);
+                  Lines : Text_Lines.Vector;
+                  Start : Positive := New_Text'First;
+                  First_Indent : Natural;
+                  Leftmost     : Natural := Natural'Last;
+                  Shift        : Integer;
+               begin
+                  for Index in New_Text'First .. New_Text'Last + 1 loop
+                     if Index > New_Text'Last or else New_Text (Index) = ASCII.LF then
+                        Lines.Append (New_Text (Start .. Index - 1));
+                        Start := Index + 1;
+                     end if;
+                  end loop;
+                  First_Indent := Indent_Of (Lines.First_Element);
+                  for Index in 2 .. Natural (Lines.Length) loop
+                     if not Blank (Lines (Index)) then
+                        Leftmost := Natural'Min (Leftmost, Indent_Of (Lines (Index)));
+                     end if;
+                  end loop;
+                  if First_Indent = 0 and then (Leftmost = Natural'Last or else Leftmost >= Lead) then
+                     return;
+                  end if;
+                  Shift := Lead - First_Indent;
+                  for Index in 1 .. Natural (Lines.Length) loop
+                     declare
+                        Line : constant String := Lines (Index);
+                        Own  : constant Natural := Indent_Of (Line);
+                     begin
+                        U.Append (Moved, (if Index = 1 then "" else [1 => ASCII.LF]));
+                        if Blank (Line) then
+                           U.Append (Moved, Line);
+                        elsif Shift >= 0 then
+                           U.Append (Moved, [1 .. Shift => ' '] & Line);
+                        else
+                           U.Append (Moved, Line (Line'First + Natural'Min (Own, -Shift) .. Line'Last));
+                        end if;
+                     end;
+                  end loop;
+                  Shifted := True;
+               end Lay_Out;
+
+               function Laid_Out return String is
+               begin
+                  if Only_Indent and then Ada.Strings.Fixed.Index (New_Text, [1 => ASCII.LF]) > 0 then
+                     Lay_Out;
+                  end if;
+                  return (if Shifted
+                          then Text (Text'First .. Line_Start - 1) & U.To_String (Moved)
+                          else Text (Text'First .. At_Text - 1) & New_Text);
+               end Laid_Out;
+
                After : constant String :=
-                 Text (Text'First .. At_Text - 1) & New_Text
-                 & Text (At_Text + Old_Text'Length .. Text'Last);
+                 Laid_Out & Text (At_Text + Old_Text'Length .. Text'Last);
                From  : constant Positive := Line_At (Text, At_Text);
                Upto  : constant Positive := From + Natural'Max (1, Lines_In (New_Text)) - 1;
                Names : constant String := Declarations_In (After, From, Upto);
@@ -648,6 +740,10 @@ package body Model_Runner.Tools.Editing is
                      & (if Lines_In (Old_Text) = 1 then "" else "s") & " replaced by"
                      & Natural'Image (Lines_In (New_Text))
                      & (if Names = "" then "" else "; in " & Names)
+                     & (if Shifted then "; the new lines were set at that line's indentation ("
+                                         & Ada.Strings.Fixed.Trim (Natural'Image (Lead), Ada.Strings.Left)
+                                         & " spaces), each kept where it stood from the first"
+                        else "")
                      & "; revision now " & Revision (After) & Kept_Note (Put)),
                   Changed => True,
                   Durable => Put.Durable,

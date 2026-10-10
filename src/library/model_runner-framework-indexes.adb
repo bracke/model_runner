@@ -49,7 +49,8 @@ package body Model_Runner.Framework.Indexes is
    --  What the indexes are built from: the repository's fingerprint and
    --  the last change the state recorded.
    function Source_Of (Item : Stores.Store; Found : Repository.Graph) return String is
-      Listed : constant Events.Event_List := Events.Since (Item, 0);
+      --  The newest alone: the log is not read whole for one name.
+      Listed : constant Events.Event_List := Events.Latest (Item, 1);
       Last   : constant String :=
         (if Events.Length (Listed) = 0 then "0"
          else To_String (Events.Element (Listed, Events.Length (Listed)).Id));
