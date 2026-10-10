@@ -8,6 +8,7 @@ with Interfaces;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Hostkit.Host;
 with Hostkit.Metadata;
 
 package body Model_Runner.Tools.Editing is
@@ -166,6 +167,31 @@ package body Model_Runner.Tools.Editing is
       else Ada.Strings.Fixed.Count (Text, [1 => ASCII.LF])
            + (if Text (Text'Last) = ASCII.LF then 0 else 1));
 
+   --  A number for each partial file this process writes.
+   protected Partial_Number is
+      procedure Take (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end Partial_Number;
+
+   protected body Partial_Number is
+      procedure Take (Number : out Natural) is
+      begin
+         Count := Count + 1;
+         Number := Count;
+      end Take;
+   end Partial_Number;
+
+   function Next_Partial return Natural is
+      Number : Natural;
+   begin
+      Partial_Number.Take (Number);
+      return Number;
+   end Next_Partial;
+
+   function Trim (Text : String) return String
+   is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
+
    -------------
    -- Replace --
    -------------
@@ -180,10 +206,14 @@ package body Model_Runner.Tools.Editing is
       Disk   : constant String := On_Disk (Base, Path);
       Folder : constant String := Ada.Directories.Containing_Directory (Disk);
       --  Hidden beside it, where a crash may leave it, and on the same
-      --  filesystem, which the rename needs.
+      --  filesystem, which the rename needs; named for this process and this
+      --  write, so two writers of one file never share it -- one named for
+      --  the file alone let a second process empty the first's before it
+      --  was renamed in.
       Partial : constant String :=
         (if Folder = "" then "" else Folder & "/") & "." & Ada.Directories.Simple_Name (Disk)
-        & ".model_runner-partial";
+        & ".model_runner-partial." & Trim (Integer'Image (Hostkit.Host.Own_Process_Id))
+        & "." & Trim (Natural'Image (Next_Partial));
       There  : constant Boolean :=
         Ada.Directories.Exists (Disk)
         and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File);
@@ -249,10 +279,11 @@ package body Model_Runner.Tools.Editing is
             return;
       end;
       declare
-         Synced : constant Hostkit.Durability.Outcome := Hostkit.Durability.Sync_File (Partial);
-         pragma Unreferenced (Synced);
+         use type Hostkit.Durability.Outcome;
       begin
-         null;
+         --  Failed, not unsupported: a host with no such sync has done all
+         --  it can.
+         Result.Durable := Hostkit.Durability.Sync_File (Partial) /= Hostkit.Durability.Failed;
       end;
       --  What the file was allowed keeps being allowed: a script stays one.
       if There then
@@ -263,7 +294,7 @@ package body Model_Runner.Tools.Editing is
          begin
             if Available then
                Kept := Hostkit.Metadata.Set_Permissions (Partial, Bits);
-               pragma Unreferenced (Kept);
+               Result.Permissions_Kept := Kept;
             end if;
          end;
       end if;
@@ -275,14 +306,24 @@ package body Model_Runner.Tools.Editing is
          return;
       end if;
       declare
-         Synced : constant Hostkit.Durability.Outcome :=
-           Hostkit.Durability.Sync_Directory (if Folder = "" then "." else Folder);
-         pragma Unreferenced (Synced);
+         use type Hostkit.Durability.Outcome;
       begin
-         null;
+         Result.Durable := Result.Durable
+           and then Hostkit.Durability.Sync_Directory (if Folder = "" then "." else Folder)
+                    /= Hostkit.Durability.Failed;
       end;
       Result.Changed := True;
    end Replace;
+
+   ---------------
+   -- Kept_Note --
+   ---------------
+
+   function Kept_Note (Item : Said) return String
+   is ((if Item.Durable then ""
+        else " -- but it could not be made durable: a crash now may lose it")
+       & (if Item.Permissions_Kept then ""
+          else " -- and its permission bits could not be kept"));
 
    ---------------------
    -- Declarations_In --
@@ -518,8 +559,10 @@ package body Model_Runner.Tools.Editing is
                      else ", and the new text moved" & Natural'Image (abs Shift) & " space"
                           & (if abs Shift = 1 then "" else "s") & (if Shift > 0 then " in" else " out")
                           & " to the file's indentation")
-                  & "; revision now " & Revision (Whole)),
+                  & "; revision now " & Revision (Whole) & Kept_Note (Put)),
                Changed => True,
+               Durable => Put.Durable,
+               Permissions_Kept => Put.Permissions_Kept,
                others  => <>);
          end;
       end;
@@ -580,15 +623,12 @@ package body Model_Runner.Tools.Editing is
                From  : constant Positive := Line_At (Text, At_Text);
                Upto  : constant Positive := From + Natural'Max (1, Lines_In (New_Text)) - 1;
                Names : constant String := Declarations_In (After, From, Upto);
+               Put   : Said;
             begin
-               declare
-                  Put : Said;
-               begin
-                  Replace (Path, After, Put, Base);
-                  if Put.Failed then
-                     return Put;
-                  end if;
-               end;
+               Replace (Path, After, Put, Base);
+               if Put.Failed then
+                  return Put;
+               end if;
                return
                  (Before_Revision => U.To_Unbounded_String (Now),
                   After_Revision  => U.To_Unbounded_String (Revision (After)),
@@ -598,8 +638,10 @@ package body Model_Runner.Tools.Editing is
                      & (if Lines_In (Old_Text) = 1 then "" else "s") & " replaced by"
                      & Natural'Image (Lines_In (New_Text))
                      & (if Names = "" then "" else "; in " & Names)
-                     & "; revision now " & Revision (After)),
+                     & "; revision now " & Revision (After) & Kept_Note (Put)),
                   Changed => True,
+                  Durable => Put.Durable,
+                  Permissions_Kept => Put.Permissions_Kept,
                   others  => <>);
             end;
          end;

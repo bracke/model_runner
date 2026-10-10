@@ -203,11 +203,20 @@ package Model_Runner.Tools.Builtin is
    --  sub-agent sharing the caller's, would race on it -- so the caller gives
    --  it only to a runner whose memory calls do not overlap.
    --
+   --  A file not there yet is no notes yet. One that is there and cannot
+   --  be read, or does not parse to its last byte, is said, and the runner
+   --  holds no notes: notes asked to be kept that cannot be found again
+   --  are not an empty store.
+   --
    --  @param Self The runner.
    --  @param Path The file to keep the notes in, or "" for memory in this
    --    runner alone.
+   --  @param Status IO_Read_Failed, with why, where the file is there and
+   --    cannot be read or is damaged.
    procedure Use_Memory_File
-     (Self : in out Instance; Path : String);
+     (Self   : in out Instance;
+      Path   : String;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  Answer one call to a built-in tool.
    --
@@ -268,6 +277,14 @@ package Model_Runner.Tools.Builtin is
       Last      : out Natural;
       Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  Whether this runner carries out a tool the registry names: every tool
+   --  but those a project's work carries out itself -- its checks and the
+   --  questions to its graph -- is handled here, by one row each.
+   --
+   --  @param Named The tool.
+   --  @return Whether a call to it is carried out here.
+   function Handles (Named : String) return Boolean;
 
    --  Name the directory the file tools work in: a relative path a call
    --  gives is under it, said to the model as it gave it. Without one they

@@ -77,6 +77,18 @@ package Model_Runner.Tools.Registry is
    --  @return Whether it is.
    function Known (Named : String) return Boolean;
 
+   --  How many tools the registry describes.
+   --
+   --  @return The count.
+   function Count return Positive;
+
+   --  A tool's name, by its place in the registry.
+   --
+   --  @param Index The place, 1 .. Count.
+   --  @return The name.
+   function Name_At (Index : Positive) return String
+   with Pre => Index <= Count;
+
    --  What a known tool needs.
    --
    --  @param Named The tool, known.

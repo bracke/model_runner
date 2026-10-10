@@ -1073,8 +1073,18 @@ begin
             --  Back memory with a file when one was named, so what the
             --  run writes with memory_put is there for a later run.
             if not T.Is_Empty (Item.Memory_File_Path) then
-               Built_Runner.Use_Memory_File
-                 (T.To_String (Item.Memory_File_Path));
+               declare
+                  Opened : E.Error_Info;
+               begin
+                  Built_Runner.Use_Memory_File
+                    (T.To_String (Item.Memory_File_Path), Opened);
+                  --  Notes asked to be kept that cannot be found again end
+                  --  the run, said, rather than go on as an empty memory.
+                  if E.Is_Error (Opened) then
+                     Fail (Opened);
+                     return;
+                  end if;
+               end;
             end if;
 
             --  And of those, only what the runner as wired can carry

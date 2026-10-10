@@ -66,6 +66,10 @@ package body Model_Runner.Tools.Builtin is
 
    package Rg renames Model_Runner.Tools.Registry;
 
+   --  A tool's name, as a table holds it.
+   type Word is access constant String;
+   function W (Text : String) return Word is (new String'(Text));
+
    --  The definitions, from the registry: the four pure tools the eval
    --  offers, and every built-in one.
    function Definitions_Text return String is
@@ -329,9 +333,17 @@ package body Model_Runner.Tools.Builtin is
             I := I + 1;
          end if;
          while I <= Raw'Last and then Raw (I) in '0' .. '9' loop
-            Acc := Acc * 10
-              + Long_Long_Integer
-                  (Character'Pos (Raw (I)) - Character'Pos ('0'));
+            declare
+               Digit : constant Long_Long_Integer :=
+                 Long_Long_Integer (Character'Pos (Raw (I)) - Character'Pos ('0'));
+            begin
+               --  Past what a whole number here holds: no number, said by
+               --  the caller, not an overflow raised out of the parse.
+               if Acc > (Long_Long_Integer'Last - Digit) / 10 then
+                  return;
+               end if;
+               Acc := Acc * 10 + Digit;
+            end;
             Seen := True;
             I := I + 1;
          end loop;
@@ -438,23 +450,44 @@ package body Model_Runner.Tools.Builtin is
       A, B : Long_Long_Integer;
       Found_A, Found_B, Found_Op : Boolean;
       Op : constant String := Text_Argument (Args, "op", Found_Op);
+
+      --  Whether an argument is there, a number past the range or not.
+      function Given (Key : String) return Boolean is
+         First, Last : Natural;
+         Present     : Boolean;
+      begin
+         Locate (Args, Key, First, Last, Present);
+         return Present and then Last >= First and then Args (First) in '0' .. '9' | '-';
+      end Given;
+
+      --  Worked in twice the width and held to the range: every grammatical
+      --  call has an answer, a result past the range among them.
+      type Wide is range -(2 ** 127) .. 2 ** 127 - 1;
+      function Fitted (Value : Wide) return Reply
+      is (if Value in Wide (Long_Long_Integer'First) .. Wide (Long_Long_Integer'Last)
+          then Said (Image (Long_Long_Integer (Value)))
+          else Failure ("the result is outside the supported range of whole numbers ("
+                        & Image (Long_Long_Integer'First) & " .. " & Image (Long_Long_Integer'Last) & ")"));
    begin
       Integer_Argument (Args, "a", A, Found_A);
       Integer_Argument (Args, "b", B, Found_B);
-      if not (Found_A and then Found_B and then Found_Op) then
+      if (not Found_A and then Given ("a")) or else (not Found_B and then Given ("b")) then
+         return Failure ("a number given is outside the supported range of whole numbers ("
+                         & Image (Long_Long_Integer'First) & " .. " & Image (Long_Long_Integer'Last) & ")");
+      elsif not (Found_A and then Found_B and then Found_Op) then
          return Failure ("calculator needs integers a and b and an op");
       end if;
       if Op = "+" then
-         return Said (Image (A + B));
+         return Fitted (Wide (A) + Wide (B));
       elsif Op = "-" then
-         return Said (Image (A - B));
+         return Fitted (Wide (A) - Wide (B));
       elsif Op = "*" then
-         return Said (Image (A * B));
+         return Fitted (Wide (A) * Wide (B));
       elsif Op = "/" then
          if B = 0 then
             return Failure ("division by zero");
          else
-            return Said (Image (A / B));
+            return Fitted (Wide (A) / Wide (B));
          end if;
       else
          return Failure ("op must be one of + - * /");
@@ -611,10 +644,9 @@ package body Model_Runner.Tools.Builtin is
       return Ada.Calendar.Formatting.Image (Ada.Calendar.Clock);
    end Now_Text;
 
-   --  Read a whole file as its raw bytes, so the memory store round-trips
-   --  exactly (Read_Capped would rewrite line endings). Returns "" on any
-   --  trouble, which reads as an empty store.
-   function Read_Bytes (Path : String) return String is
+   --  A readable file's raw bytes -- a note may hold any, a NUL among them,
+   --  which the text reader refuses.
+   function Raw_Bytes (Path : String) return String is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
       File : Stream_IO.File_Type;
@@ -623,77 +655,73 @@ package body Model_Runner.Tools.Builtin is
       declare
          Length : constant Natural := Natural (Size (File));
          Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Length));
-         Last   : Stream_Element_Offset;
+         Last   : Stream_Element_Offset := 0;
          Result : String (1 .. Length);
       begin
-         Read (File, Block, Last);
+         if Length > 0 then
+            Read (File, Block, Last);
+         end if;
          Close (File);
          for I in 1 .. Natural (Last) loop
-            Result (I) :=
-              Character'Val (Block (Stream_Element_Offset (I)));
+            Result (I) := Character'Val (Block (Stream_Element_Offset (I)));
          end loop;
          return Result (1 .. Natural (Last));
       end;
-   exception
-      when others =>
-         if Is_Open (File) then
-            Close (File);
-         end if;
-         return "";
-   end Read_Bytes;
+   end Raw_Bytes;
 
    --  Write the runner's notes to its store file, each note as its key length
    --  and key then its value length and value, so a value with any byte in it
-   --  -- a newline, a brace -- reads back whole with no escaping.
-   procedure Save_Store (Self : Instance) is
-      use Ada.Streams;
-      use Ada.Streams.Stream_IO;
-      File : Stream_IO.File_Type;
-
-      procedure Put (S : String) is
-         Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
-      begin
-         for I in S'Range loop
-            Block (Stream_Element_Offset (I - S'First + 1)) :=
-              Stream_Element (Character'Pos (S (I)));
-         end loop;
-         Write (File, Block);
-      end Put;
+   --  -- a newline, a brace -- reads back whole with no escaping. Put in
+   --  place whole or not at all, as a source file is (Editing.Replace): a
+   --  save that failed half way emptied the notes a later run would read.
+   --  Answers why it could not be kept, or "".
+   function Save_Store (Self : Instance) return String is
+      Text : U.Unbounded_String;
+      Put  : Model_Runner.Tools.Editing.Said;
    begin
-      Create (File, Out_File, U.To_String (Self.Store));
       for I in 1 .. Self.Used loop
          declare
             Key   : constant String := U.To_String (Self.Memory (I).Key);
             Value : constant String := U.To_String (Self.Memory (I).Value);
          begin
-            Put (Image (Long_Long_Integer (Key'Length)) & " " & Key
-                 & Image (Long_Long_Integer (Value'Length)) & " " & Value);
+            U.Append (Text, Image (Long_Long_Integer (Key'Length)) & " " & Key
+                      & Image (Long_Long_Integer (Value'Length)) & " " & Value);
          end;
       end loop;
-      Close (File);
-   exception
-      when others =>
-         if Is_Open (File) then
-            Close (File);
-         end if;
+      Model_Runner.Tools.Editing.Replace (U.To_String (Self.Store), U.To_String (Text), Put);
+      if Put.Failed then
+         return U.To_String (Put.Text);
+      elsif not Put.Durable then
+         return "the memory file was written but could not be made durable";
+      end if;
+      return "";
    end Save_Store;
 
-   --  Read the notes from the store into the runner. A file that is missing
-   --  or will not parse leaves the runner with no notes rather than failing:
-   --  the whole file is read into notes of its own first and the runner's
-   --  are replaced only when every record in it parsed, so a file damaged
-   --  part way does not leave the runner holding the part before the damage
-   --  as though it were all there was.
-   procedure Load_Store (Self : in out Instance) is
+   --  Read the notes from the store into the runner. A file that is not
+   --  there is no notes yet; one that is there and will not read, or will
+   --  not parse to its last byte, is said -- Failed, and why -- with the
+   --  runner left holding no notes, not taken for an empty store: notes
+   --  asked to be kept that could not be found again are not nothing.
+   procedure Load_Store (Self : in out Instance; Refusal : out U.Unbounded_String) is
       Path : constant String := U.To_String (Self.Store);
+      Held : U.Unbounded_String;
+      Got  : E.Error_Info;
    begin
       Self.Used := 0;
+      Refusal := U.Null_Unbounded_String;
       if Path = "" or else not Ada.Directories.Exists (Path) then
+         return;
+      end if;
+      --  Bytes as they are, read within the bound every text is.
+      Model_Runner.Tools.Editing.Read_Text (Path, Held, Got);
+      if E.Is_Error (Got) and then E.Text_Of (Got, "detail") /= "it is not text" then
+         Refusal := U.To_Unbounded_String ("the memory file " & Path & " could not be read");
          return;
       end if;
 
       declare
-         Data : constant String := Read_Bytes (Path);
+         Data : constant String :=
+           (if E.Is_Ok (Got) then U.To_String (Held) else Raw_Bytes (Path));
          Pos  : Natural := Data'First;
 
          Read      : Notes;
@@ -732,6 +760,13 @@ package body Model_Runner.Tools.Builtin is
             end if;
             return N;
          end Read_Length;
+
+         procedure Damaged is
+         begin
+            Refusal := U.To_Unbounded_String
+              ("the memory file " & Path & " is damaged at byte" & Natural'Image (Pos - Data'First + 1)
+               & ": it is not notes this reads, and nothing of it was taken");
+         end Damaged;
       begin
          while Pos <= Data'Last loop
             declare
@@ -739,6 +774,7 @@ package body Model_Runner.Tools.Builtin is
                K_Len  : constant Natural := Read_Length (Good_K);
             begin
                if not Good_K or else K_Len > Left then
+                  Damaged;
                   return;
                end if;
                declare
@@ -749,6 +785,7 @@ package body Model_Runner.Tools.Builtin is
                   Pos   := Pos + K_Len;
                   V_Len := Read_Length (Good_V);
                   if not Good_V or else V_Len > Left then
+                     Damaged;
                      return;
                   end if;
                   declare
@@ -772,16 +809,37 @@ package body Model_Runner.Tools.Builtin is
       end;
    end Load_Store;
 
-   procedure Use_Memory_File (Self : in out Instance; Path : String) is
+   procedure Use_Memory_File
+     (Self   : in out Instance;
+      Path   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Refusal : U.Unbounded_String;
    begin
+      Status := E.Success;
       Self.Store := U.To_Unbounded_String (Path);
-      Load_Store (Self);
+      Load_Store (Self, Refusal);
+      if U.Length (Refusal) > 0 then
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         E.Add_Text (Status, "detail", U.To_String (Refusal));
+      end if;
    end Use_Memory_File;
 
    function Memory_Put (Self : in out Instance; Args : String) return Reply is
       Have_K, Have_V : Boolean;
       Key   : constant String := Text_Argument (Args, "key", Have_K);
       Value : constant String := Text_Argument (Args, "value", Have_V);
+
+      --  "ok" once kept where it was asked to be: a note the file could not
+      --  take is said, not answered ok -- the next run would not find it.
+      function Kept return Reply is
+         Why : constant String :=
+           (if U.Length (Self.Store) > 0 then Save_Store (Self) else "");
+      begin
+         return (if Why = "" then Said ("ok")
+                 else Failure ("the note holds for this run, but was not kept for a later one: " & Why));
+      end Kept;
    begin
       if not (Have_K and then Have_V) then
          return Failure ("memory_put needs a key and a value");
@@ -789,10 +847,7 @@ package body Model_Runner.Tools.Builtin is
       for I in 1 .. Self.Used loop
          if U.To_String (Self.Memory (I).Key) = Key then
             Self.Memory (I).Value := U.To_Unbounded_String (Value);
-            if U.Length (Self.Store) > 0 then
-               Save_Store (Self);
-            end if;
-            return Said ("ok");
+            return Kept;
          end if;
       end loop;
       if Self.Used >= Max_Notes then
@@ -802,10 +857,7 @@ package body Model_Runner.Tools.Builtin is
       Self.Memory (Self.Used) :=
         (Key => U.To_Unbounded_String (Key),
          Value => U.To_Unbounded_String (Value));
-      if U.Length (Self.Store) > 0 then
-         Save_Store (Self);
-      end if;
-      return Said ("ok");
+      return Kept;
    end Memory_Put;
 
    function Memory_Get (Self : in out Instance; Args : String) return Reply is
@@ -849,11 +901,14 @@ package body Model_Runner.Tools.Builtin is
       end loop;
       return False;
    exception
+      --  Not opened, not known to be binary: read as text, its failure is
+      --  said -- taken for binary, a file that would not open was passed
+      --  over as an image is.
       when others =>
          if Stream_IO.Is_Open (File) then
             Stream_IO.Close (File);
          end if;
-         return True;
+         return False;
    end Is_Binary;
 
    --  The most of a PDF's bytes read to pull text from -- a whole document,
@@ -1312,7 +1367,8 @@ package body Model_Runner.Tools.Builtin is
             Put);
       end if;
       return With_Revisions
-        (Changed_It ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path), Put);
+        (Changed_It ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path
+                     & Model_Runner.Tools.Editing.Kept_Note (Put)), Put);
    end Write_File;
 
    function List_Directory (Args : String; Base : String) return Reply is
@@ -1387,15 +1443,29 @@ package body Model_Runner.Tools.Builtin is
    end Read_Any;
 
    --  A tool that takes a path in the tree, answered.
+   --  The file tools, each by the registry's name for it: what carries out
+   --  a call, given its arguments and the tree they are under.
+   type File_Handler is access function (Args : String; Base : String) return Reply;
+   type File_Handled is record
+      Name : Word;
+      Run  : File_Handler;
+   end record;
+
+   File_Handlers : constant array (Positive range <>) of File_Handled :=
+     [(W ("read_file"), Read_Any'Access), (W ("find"), Find'Access),
+      (W ("write_file"), Write_File'Access), (W ("list_directory"), List_Directory'Access),
+      (W ("edit_file"), Edit_File'Access), (W ("read_range"), Read_Range'Access),
+      (W ("search_file"), Search_File'Access), (W ("search_code"), Search_Code'Access)];
+
    function File_Answer (Named, Args : String; Base : String) return Reply is
-     (if Named = "read_file" then Read_Any (Args, Base)
-      elsif Named = "find" then Find (Args, Base)
-      elsif Named = "write_file" then Write_File (Args, Base)
-      elsif Named = "list_directory" then List_Directory (Args, Base)
-      elsif Named = "edit_file" then Edit_File (Args, Base)
-      elsif Named = "read_range" then Read_Range (Args, Base)
-      elsif Named = "search_file" then Search_File (Args, Base)
-      else Search_Code (Args, Base));
+   begin
+      for One of File_Handlers loop
+         if One.Name.all = Named then
+            return One.Run (Args, Base);
+         end if;
+      end loop;
+      return Failure ("no file tool by the name """ & Named & """");
+   end File_Answer;
 
    function Shell (Args : String) return Reply is
       Have : Boolean;
@@ -1793,6 +1863,37 @@ package body Model_Runner.Tools.Builtin is
       --  labelled with its path under the folder the tool was given. A name
       --  beginning with a dot is skipped -- "." and ".." and hidden trees
       --  like .git -- and the file and passage caps bound the whole walk.
+      --  What could not be read -- a folder that would not list, a text file
+      --  that would not read -- counted and the first named, and said with
+      --  whatever is answered: passages ranked from part of the folder are
+      --  not the folder's best, and none found is not none there.
+      Unread_Files   : Natural := 0;
+      Unread_Folders : Natural := 0;
+      First_Unread   : U.Unbounded_String;
+
+      procedure Unread (Path : String; Folder : Boolean) is
+      begin
+         if Folder then
+            Unread_Folders := Unread_Folders + 1;
+         else
+            Unread_Files := Unread_Files + 1;
+         end if;
+         if U.Length (First_Unread) = 0 then
+            First_Unread := U.To_Unbounded_String (Path);
+         end if;
+      end Unread;
+
+      function Missed return String
+      is (if Unread_Files + Unread_Folders = 0 then ""
+          else ASCII.LF & "(incomplete:"
+               & (if Unread_Files > 0 then Natural'Image (Unread_Files) & " file"
+                    & (if Unread_Files = 1 then "" else "s") else "")
+               & (if Unread_Files > 0 and then Unread_Folders > 0 then " and" else "")
+               & (if Unread_Folders > 0 then Natural'Image (Unread_Folders) & " folder"
+                    & (if Unread_Folders = 1 then "" else "s") else "")
+               & " could not be read, " & U.To_String (First_Unread) & " the first -- what they hold"
+               & " was not searched)");
+
       procedure Walk (Dir : String; Prefix : String) is
          Search : Ada.Directories.Search_Type;
          Item   : Ada.Directories.Directory_Entry_Type;
@@ -1901,6 +2002,9 @@ package body Model_Runner.Tools.Builtin is
                        (if Read.Failed then ""
                         else Model_Runner.Tools.Text_Util.Strip_Tags (Read.Text));
                   begin
+                     if Read.Failed then
+                        Unread (Prefix & Name, Folder => False);
+                     end if;
                      if Text'Length > 0 then
                         Split (Prefix & Name, Skip_Front (Text));
                      end if;
@@ -1917,6 +2021,8 @@ package body Model_Runner.Tools.Builtin is
                   begin
                      if not Unreadable then
                         Split (Prefix & Name, Body_Text);
+                     else
+                        Unread (Prefix & Name, Folder => False);
                      end if;
                   end;
                end if;
@@ -1925,7 +2031,7 @@ package body Model_Runner.Tools.Builtin is
          Ada.Directories.End_Search (Search);
       exception
          when others =>
-            null;
+            Unread (Dir, Folder => True);
       end Walk;
 
    begin
@@ -1944,7 +2050,7 @@ package body Model_Runner.Tools.Builtin is
       Walk (Folder, "");
 
       if N_Chunks = 0 then
-         return Said ("no readable text files in that folder");
+         return Said ("no readable text files in that folder" & Missed);
       end if;
 
       --  Document frequency of each term across the passages.
@@ -2094,9 +2200,9 @@ package body Model_Runner.Tools.Builtin is
          end loop;
 
          if Found = 0 then
-            return Said ("no passage in that folder matched the query");
+            return Said ("no passage in that folder matched the query" & Missed);
          end if;
-         return Said (Capped (U.To_String (Out_S)));
+         return Said (Capped (U.To_String (Out_S)) & Missed);
       end;
    end Retrieve;
 
@@ -2327,6 +2433,73 @@ package body Model_Runner.Tools.Builtin is
          return "unreadable " & Where;
    end Stamp;
 
+   --  The rest of the built-in tools, each by the registry's name for it:
+   --  what carries out a call, given the runner and its arguments. With
+   --  the file tools above, every tool the registry describes that this
+   --  runner carries has a row here, which the suite holds to (Handles);
+   --  what a tool is -- its definition, its effect, what it needs -- is the
+   --  registry's row, and only how it is done is here.
+   type Handler is access function (Self : in out Instance; Args : String) return Reply;
+   type Handled is record
+      Name : Word;
+      Run  : Handler;
+   end record;
+
+   --  Those that need nothing of the runner, as handlers.
+   generic
+      with function Tool (Args : String) return Reply;
+   function Plain (Self : in out Instance; Args : String) return Reply;
+
+   function Plain (Self : in out Instance; Args : String) return Reply is
+      pragma Unreferenced (Self);
+   begin
+      return Tool (Args);
+   end Plain;
+
+   function On_Calculator is new Plain (Calculator);
+   function On_String_Length is new Plain (String_Length);
+   function On_Reverse_Text is new Plain (Reverse_Text);
+   function On_Lookup is new Plain (Lookup);
+   function On_Base64_Encode is new Plain (Base64_Encode);
+   function On_Base64_Decode is new Plain (Base64_Decode);
+   function On_Shell is new Plain (Shell);
+   function On_Run_Python is new Plain (Run_Python);
+   function On_Http_Get is new Plain (Http_Get);
+   function On_Web_Search is new Plain (Web_Search);
+
+   function On_Now (Self : in out Instance; Args : String) return Reply is
+      pragma Unreferenced (Self, Args);
+   begin
+      return Said (Now_Text);
+   end On_Now;
+
+   function On_Sql (Self : in out Instance; Args : String) return Reply
+   is (Sql (Args, U.To_String (Self.Base)));
+
+   function On_Retrieve (Self : in out Instance; Args : String) return Reply
+   is (Retrieve (Args, Self.Embed, U.To_String (Self.Base)));
+
+   Handlers : constant array (Positive range <>) of Handled :=
+     [(W ("calculator"), On_Calculator'Access), (W ("string_length"), On_String_Length'Access),
+      (W ("reverse_text"), On_Reverse_Text'Access), (W ("lookup"), On_Lookup'Access),
+      (W ("base64_encode"), On_Base64_Encode'Access), (W ("base64_decode"), On_Base64_Decode'Access),
+      (W ("now"), On_Now'Access),
+      (W ("memory_put"), Memory_Put'Access), (W ("memory_get"), Memory_Get'Access),
+      (W ("shell"), On_Shell'Access), (W ("run_python"), On_Run_Python'Access),
+      (W ("http_get"), On_Http_Get'Access), (W ("web_search"), On_Web_Search'Access),
+      (W ("sql"), On_Sql'Access), (W ("retrieve"), On_Retrieve'Access),
+      (W ("delegate"), Delegate'Access), (W ("ask_user"), Ask_User'Access)];
+
+   -------------
+   -- Handles --
+   -------------
+
+   function Handles (Named : String) return Boolean is
+   begin
+      return (for some One of Handlers => One.Name.all = Named)
+        or else (for some One of File_Handlers => One.Name.all = Named);
+   end Handles;
+
    overriding procedure Run
      (Self      : in out Instance;
       Named     : String;
@@ -2364,25 +2537,7 @@ package body Model_Runner.Tools.Builtin is
 
       function Answer return Reply is
       begin
-         if Named = "calculator" then
-            return Calculator (Arguments);
-         elsif Named = "string_length" then
-            return String_Length (Arguments);
-         elsif Named = "reverse_text" then
-            return Reverse_Text (Arguments);
-         elsif Named = "lookup" then
-            return Lookup (Arguments);
-         elsif Named = "base64_encode" then
-            return Base64_Encode (Arguments);
-         elsif Named = "base64_decode" then
-            return Base64_Decode (Arguments);
-         elsif Named = "now" then
-            return Said (Now_Text);
-         elsif Named = "memory_put" then
-            return Memory_Put (Self, Arguments);
-         elsif Named = "memory_get" then
-            return Memory_Get (Self, Arguments);
-         elsif File_Tool (Named)
+         if File_Tool (Named)
            and then Rooted (Named, Arguments) /= ""
          then
             --  A path from the root that names a place in the project, as
@@ -2432,25 +2587,13 @@ package body Model_Runner.Tools.Builtin is
                   return Given;
                end;
             end;
-         elsif Named = "shell" then
-            return Shell (Arguments);
-         elsif Named = "run_python" then
-            return Run_Python (Arguments);
-         elsif Named = "http_get" then
-            return Http_Get (Arguments);
-         elsif Named = "web_search" then
-            return Web_Search (Arguments);
-         elsif Named = "sql" then
-            return Sql (Arguments, U.To_String (Self.Base));
-         elsif Named = "retrieve" then
-            return Retrieve (Arguments, Self.Embed, U.To_String (Self.Base));
-         elsif Named = "delegate" then
-            return Delegate (Self, Arguments);
-         elsif Named = "ask_user" then
-            return Ask_User (Self, Arguments);
-         else
-            return Failure ("no tool by the name """ & Named & """");
          end if;
+         for One of Handlers loop
+            if One.Name.all = Named then
+               return One.Run (Self, Arguments);
+            end if;
+         end loop;
+         return Failure ("no tool by the name """ & Named & """");
       end Answer;
 
       --  The run's limits, for a tool that waits to answer to.

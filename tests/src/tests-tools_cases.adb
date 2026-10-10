@@ -1207,7 +1207,8 @@ package body Tests.Tools_Cases is
       declare
          Writer : Builtin.Instance;
       begin
-         Writer.Use_Memory_File (Store);
+         Writer.Use_Memory_File (Store, Status);
+         Assert (E.Is_Ok (Status), "a memory file not there yet was refused");
          Writer.Run
            ("memory_put", "{""key"":""greeting"",""value"":""hello world""}",
             Room, Last, Status);
@@ -1219,7 +1220,7 @@ package body Tests.Tools_Cases is
       declare
          Reader : Builtin.Instance;
       begin
-         Reader.Use_Memory_File (Store);
+         Reader.Use_Memory_File (Store, Status);
          Reader.Run ("memory_get", "{""key"":""greeting""}",
                      Room, Last, Status);
          Assert (E.Is_Ok (Status) and then Room (1 .. Last) = "hello world",
@@ -1229,8 +1230,8 @@ package body Tests.Tools_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Memory_Persists_To_A_File;
 
-   --  A store file that will not parse leaves the runner with no notes and
-   --  raises nothing: a sound record followed by a damaged one keeps
+   --  A store file that will not parse is said, leaves the runner with no
+   --  notes and raises nothing: a sound record followed by a damaged one keeps
    --  neither, a length longer than any number is refused, and one that
    --  reaches the largest number is refused rather than added to a position
    --  past it.
@@ -1259,17 +1260,22 @@ package body Tests.Tools_Cases is
          Stream_IO.Close (F);
       end Write;
 
-      --  What a fresh runner reading the store says for the key.
+      --  What a fresh runner reading the store says for the key -- and, where
+      --  the store would not read, that it said so: "refused".
       function Recalled (Key : String) return String is
          Reader : Builtin.Instance;
+         Opened : E.Error_Info;
       begin
-         Reader.Use_Memory_File (Store);
+         Reader.Use_Memory_File (Store, Opened);
          Reader.Run ("memory_get", "{""key"":""" & Key & """}",
                      Room, Last, Status);
-         return Room (1 .. Last);
+         return (if E.Is_Error (Opened)
+                   and then Room (1 .. Last) = "error: nothing remembered under that key"
+                 then "refused"
+                 elsif E.Is_Error (Opened) then "refused, yet held notes"
+                 else Room (1 .. Last));
       end Recalled;
 
-      Nothing : constant String := "error: nothing remembered under that key";
    begin
       if Ada.Directories.Exists (Dir) then
          Ada.Directories.Delete_Tree (Dir);
@@ -1279,17 +1285,30 @@ package body Tests.Tools_Cases is
       Write ("1 a1 b");
       Assert (Recalled ("a") = "b", "a sound store was not read");
 
+      --  Damaged: said, and nothing of it taken -- not an empty store.
       Write ("1 a1 b" & "3 cd");
-      Assert (Recalled ("a") = Nothing,
-              "a store damaged after its first record kept that record");
+      Assert (Recalled ("a") = "refused",
+              "a store damaged after its first record kept that record, or was not said damaged");
 
       Write ("99999999999999999999999 a1 b");
-      Assert (Recalled ("a") = Nothing,
-              "a length past any number was read as one");
+      Assert (Recalled ("a") = "refused",
+              "a length past any number was read as one, or not said");
 
       Write ("1 a" & Natural'Image (Natural'Last) (2 .. 11) & " b");
-      Assert (Recalled ("a") = Nothing,
-              "a value length reaching the largest number was read");
+      Assert (Recalled ("a") = "refused",
+              "a value length reaching the largest number was read, or not said");
+
+      --  A note the file cannot take is said, not answered ok.
+      declare
+         Blocked : Builtin.Instance;
+         Opened  : E.Error_Info;
+      begin
+         Write ("1 a1 b");
+         Blocked.Use_Memory_File (Store & "/inner.mem", Opened);
+         Blocked.Run ("memory_put", "{""key"":""k"",""value"":""v""}", Room, Last, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (1 .. Last), "was not kept for a later one") > 0,
+                 "a note the memory file could not take was answered ok: " & Room (1 .. Last));
+      end;
 
       Ada.Directories.Delete_Tree (Dir);
    end Damaged_Memory_File_Leaves_No_Notes;
@@ -2335,6 +2354,40 @@ package body Tests.Tools_Cases is
               and then Runner.Kind ("now") = Tr.Varies
               and then Runner.Kind ("no such tool") = Tr.Changes,
               "a built-in tool's kind is not what it does");
+      --  Every grammatical call has an answer: a number past the range, a
+      --  result past it, and the one division past it are said, not raised.
+      declare
+         Room   : String (1 .. Tools.Max_Call_Bytes);
+         Last   : Natural;
+         Status : E.Error_Info;
+         function Calc (A, Op, B : String) return String is
+         begin
+            Runner.Run ("calculator", "{""a"": " & A & ", ""op"": """ & Op & """, ""b"": " & B & "}",
+                        Room, Last, Status);
+            return Room (1 .. Last);
+         end Calc;
+      begin
+         Assert (Ada.Strings.Fixed.Index (Calc ("99999999999999999999999", "+", "1"), "outside the supported") > 0
+                 and then Ada.Strings.Fixed.Index (Calc ("9223372036854775807", "+", "1"), "outside the supported") > 0
+                 and then Ada.Strings.Fixed.Index (Calc ("-9223372036854775808", "/", "-1"), "outside the supported")
+                          > 0
+                 and then Calc ("6", "*", "7") = "42",
+                 "a number or a result past the range was not said: " & Calc ("9223372036854775807", "+", "1"));
+      end;
+
+      --  Every tool the registry describes is carried out by one row --
+      --  here, or for a project's checks and graph questions by its work.
+      declare
+         package Rg renames Model_Runner.Tools.Registry;
+      begin
+         for Index in 1 .. Rg.Count loop
+            Assert (Builtin.Handles (Rg.Name_At (Index))
+                    or else Rg.Needs (Rg.Name_At (Index)) in Rg.Project_Graph | Rg.Project_Checks,
+                    "a tool the registry describes is carried out nowhere: " & Rg.Name_At (Index));
+         end loop;
+      end;
+      Assert (not Builtin.Handles ("no_such_tool"), "a tool the registry does not name was handled");
+
       --  What answers anew though nothing here changed is never answered
       --  from before: somebody may answer a question differently, and the
       --  web is not the harness's.
@@ -2418,6 +2471,21 @@ package body Tests.Tools_Cases is
          Placed.Run ("write_file", "{""path"": ""fresh.txt"", ""content"": ""new""}", Room, Last, Ended, Status);
          Assert (Ended.Created and then Ended.Before_Revision = Tr.No_Revision,
                  "a file made was not said to be made");
+         --  Made durable, and no partial file of its making left beside it.
+         declare
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+            Left   : Boolean := False;
+         begin
+            Ada.Directories.Start_Search (Search, Tree, "*model_runner-partial*");
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               Left := True;
+            end loop;
+            Ada.Directories.End_Search (Search);
+            Assert (not Left and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "durable") = 0,
+                    "a write left its partial file behind, or was said not durable: " & Room (Room'First .. Last));
+         end;
          Placed.Run ("write_file", "{""path"": ""note.txt/inner.txt"", ""content"": ""x""}", Room, Last, Ended, Status);
          Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "could not make the folder") > 0,
                  "a folder that could not be made was not said: " & Room (Room'First .. Last));
@@ -2432,11 +2500,22 @@ package body Tests.Tools_Cases is
             Ignored : Boolean;
             Found  : Model_Runner.Tools.Editing.Said;
          begin
+            --  One left by a run that stopped before giving it back its
+            --  permissions, given them back and gone first.
+            if Ada.Directories.Exists (Locked) then
+               Ignored := Hostkit.Metadata.Set_Permissions (Locked, 8#644#);
+               Ada.Directories.Delete_File (Locked);
+            end if;
             Ada.Text_IO.Create (Outside, Ada.Text_IO.Out_File, Locked);
             Ada.Text_IO.Put (Outside, "needle");
             Ada.Text_IO.Close (Outside);
             if Hostkit.Metadata.Set_Permissions (Locked, 0) then
                Found := Model_Runner.Tools.Editing.Search_Code (Tree, "needle");
+               --  And retrieve says so too, beside what it ranked.
+               Placed.Run ("retrieve", "{""folder"": ""."", ""query"": ""needle""}", Room, Last, Ended, Status);
+               Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "(incomplete:") > 0
+                       or else Ada.Strings.Fixed.Index (Room (Room'First .. Last), "needle") > 0,
+                       "retrieve over a file it could not read said nothing of it: " & Room (Room'First .. Last));
                Ignored := Hostkit.Metadata.Set_Permissions (Locked, 8#644#);
                --  Root reads it anyway: then it is found, and nothing is said.
                Assert (Found.Incomplete
@@ -2640,7 +2719,8 @@ package body Tests.Tools_Cases is
          "the runner marks which tools may overlap and which may not");
       Register_Routine
         (T, Damaged_Memory_File_Leaves_No_Notes'Access,
-         "a damaged memory file leaves no notes and raises nothing");
+         "a damaged memory file is said, leaves no notes and raises nothing; a note the file"
+         & " cannot take is said");
       Register_Routine
         (T, Memory_Persists_To_A_File'Access,
          "a note written with a memory file behind it is read back by a "

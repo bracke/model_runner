@@ -80,7 +80,21 @@ package Model_Runner.Tools.Editing is
       Before_Revision : Ada.Strings.Unbounded.Unbounded_String;
       After_Revision  : Ada.Strings.Unbounded.Unbounded_String;
       Created   : Boolean := False;
+
+      --  For a change put in place: whether it was made durable -- the file
+      --  and its folder synced -- and whether the file's permission bits
+      --  were kept. A change in place that is not durable is not undone,
+      --  and not taken for plain success either: said (Kept_Note).
+      Durable          : Boolean := True;
+      Permissions_Kept : Boolean := True;
    end record;
+
+   --  What a change that is in place could not be, in words to add to its
+   --  answer: "" where it was durable and kept the file's permissions.
+   --
+   --  @param Item The change.
+   --  @return The words, starting " -- ".
+   function Kept_Note (Item : Said) return String;
 
    --  Put a file's whole new contents in place: written beside it, made
    --  durable, its permission bits kept, and renamed over it in one step,

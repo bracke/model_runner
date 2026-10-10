@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
 with Ada.Characters.Handling;
@@ -832,9 +833,16 @@ package body Model_Runner.Agent is
                                  end if;
                                  Items (Idx).Done := True;
                               exception
-                                 when others =>
-                                    Items (Idx).Failed := True;
-                                    Items (Idx).Done   := True;
+                                 when Fault : others =>
+                                    --  A tool that raised: a failed call,
+                                    --  said, not an answer too large.
+                                    Items (Idx).Text := U.To_Unbounded_String
+                                      ("error: " & U.To_String (Items (Idx).Named) & " failed: "
+                                       & Ada.Exceptions.Exception_Name (Fault)
+                                       & (if Ada.Exceptions.Exception_Message (Fault) = "" then ""
+                                          else " -- " & Ada.Exceptions.Exception_Message (Fault)));
+                                    Items (Idx).Ended := Failed_Note;
+                                    Items (Idx).Done  := True;
                               end;
                            end loop;
                         end Worker;
@@ -878,6 +886,15 @@ package body Model_Runner.Agent is
                               Items (Call).Text :=
                                 U.To_Unbounded_String (Buf (1 .. Fill));
                            end if;
+                        exception
+                           when Fault : others =>
+                              --  A tool that raised is a call that failed,
+                              --  said to the model; it does not end the run.
+                              Items (Call).Text := U.To_Unbounded_String
+                                ("error: " & Named & " failed: " & Ada.Exceptions.Exception_Name (Fault)
+                                 & (if Ada.Exceptions.Exception_Message (Fault) = "" then ""
+                                    else " -- " & Ada.Exceptions.Exception_Message (Fault)));
+                              Items (Call).Ended := Failed_Note;
                         end;
                      end if;
 
