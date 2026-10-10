@@ -21,7 +21,8 @@ package Agent_Trial is
    --  @param Program The program to run, as built.
    --  @param Options More of the program's options, as one string; "" for
    --    none -- --no-think, among them.
-   --  @param Only One task to run, by name; "" for all of them.
+   --  @param Only One task to run, by name -- edit, find or delegate; ""
+   --    for all of them.
    --  @param Clean Whether every task ended complete.
    procedure Run
      (Model   : String;

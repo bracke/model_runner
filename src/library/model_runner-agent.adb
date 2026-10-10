@@ -215,6 +215,10 @@ package body Model_Runner.Agent is
       --  Times a reply whose call would not read is given back to the
       --  model, and what the last reply's reading said.
       Chances_Left : Natural := 2;
+
+      --  How often a reply cut off at its length limit, with no call and no
+      --  answer in it yet, may be told to go on.
+      Cut_Notes_Left : Natural := 2;
       Reading      : E.Error_Info;
 
       --  Whether a reply's text closes the call it ends in, in the syntax the
@@ -507,6 +511,30 @@ package body Model_Runner.Agent is
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
               and then not Closes_Call (Gen.Generated_Text (Last_Result));
          begin
+            --  Stopped at its length limit before it called or answered -- a
+            --  reasoning model mid-thought: not an answer. It is told so and
+            --  goes on, twice at most; it was taken for the answer, and the
+            --  work ended with no report.
+            if Asked = 0 and then Last_Result.Reason = Gen.Maximum_Tokens
+              and then Cut_Notes_Left > 0 and then Result.Steps < Max_Steps
+              --  Its own length, not the run's budget, which ends it.
+              and then (Max_Total_Tokens = 0 or else Spent < Max_Total_Tokens)
+            then
+               declare
+                  Told : E.Error_Info;
+               begin
+                  Cut_Notes_Left := Cut_Notes_Left - 1;
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "Your reply reached its length limit before it was finished, with no tool call and"
+                     & " no answer in it. Go on: make your next tool call, or give your answer -- and"
+                     & " think less before it.", Told);
+                  if E.Is_Ok (Told) then
+                     goto Next_Iteration;
+                  end if;
+               end;
+            end if;
+
             --  Nothing left to run: the model has answered.
             exit Step_Loop when Asked = 0;
 

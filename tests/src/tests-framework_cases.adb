@@ -5094,6 +5094,14 @@ package body Tests.Framework_Cases is
               and then Iv.Claim (Said, "issues") = "",
               "an answer keeping to its contract was not read: "
               & Code_Of (Status));
+      --  A field of the answer's own ends the one before it: what it
+      --  found is not taken for files it changed.
+      Iv.Hold (Iv.Work_Claim,
+               "status: done" & LF & "summary: found them" & LF & "changed_files: none" & LF
+               & "findings:" & LF & "- Unit using Calc: Main (src/main.adb)", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = "none",
+              "a field the contract does not name ran into the one before it: "
+              & Iv.Claim (Said, "changed_files"));
       Iv.Hold (Iv.Work_Claim, "status: finished" & LF & "summary: x", Said,
                Status);
       Assert (Status.Code = E.Framework_Contract_Violation,
@@ -10293,6 +10301,13 @@ package body Tests.Framework_Cases is
             Model_Runner.CLI.Project_Commands.Run
               ("/reconfigure scalar.agents.max_steps=12 confirm=yes", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Run ("/config diff", Screen, Agent);
+            --  A quoted value ends at its quote, and a set's items may
+            --  follow it: the check is the command quoted, and echo allowed.
+            Model_Runner.CLI.Project_Commands.Run
+              ("/reconfigure profile.tests=""check: echo ok"" add set.execution.allowed echo confirm=yes",
+               Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/config profile.tests", Screen, Agent);
+            Model_Runner.CLI.Project_Commands.Run ("/config set.execution.allowed", Screen, Agent);
             Model_Runner.CLI.Project_Commands.Help (Screen);
             --  A change of the project's state is said before the session
             --  model's next turn, once; nothing changed, nothing is said.
@@ -10343,6 +10358,10 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "scalar.agents.max_steps: ") > 0
                        and then Ada.Strings.Fixed.Index (Text, "-> 12") > 0,
                        "/config diff did not say the setting that changed: " & Text);
+               Assert (Ada.Strings.Fixed.Index (Text, "profile.tests: check: echo ok" & ASCII.LF) > 0
+                       and then Ada.Strings.Fixed.Index (Text, "echo ok add") = 0
+                       and then Ada.Strings.Fixed.Index (Text, ", echo") > 0,
+                       "a quoted value ran on past its quote, or the set's items after it were lost: " & Text);
                Assert (Ada.Strings.Fixed.Index (Text, "more apply where this session is not") > 0,
                        "/help in a project did not leave out what applies only outside one");
                --  /brief builds the task's context as /work would and says

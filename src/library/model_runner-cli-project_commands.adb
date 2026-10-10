@@ -741,7 +741,10 @@ package body Model_Runner.CLI.Project_Commands is
       Request.Add_Beginning := False;
       Request.Retain_Text := True;
 
-      for Round in 1 .. (if Root then 3 else 1) loop
+      --  A helper gets a second round too: one that wrote its file and then
+      --  went round repeating ended with no report, and was failed for
+      --  that, where asked once it reports.
+      for Round in 1 .. (if Root then 3 else 2) loop
          Model_Runner.Agent.Run
            (Source      => Self.Prepared.all,
             Session     => Self.Session.all,
@@ -762,6 +765,10 @@ package body Model_Runner.CLI.Project_Commands is
             Thinking    => Self.Item.Thinking,
             Approve     => Guard'Unchecked_Access,
             Watch       => Watcher'Unchecked_Access,
+            --  Out of context, the oldest turns go and the record of the
+            --  work stands in for them, as run's agent has it: a model that
+            --  reasoned at length filled the context and the task failed.
+            Compact     => True,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written.
          Release_Held (Sink);
@@ -777,7 +784,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  Given up -- or said done -- on checks that failed, with time
          --  left: sent back once to fix what they reported. A small model
          --  that saw one compile error ended the task failed at once.
-         if Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
+         if Root and then Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
            and then not Asked_To_Fix and then Host /= null and then Host.Checks_Failing
            and then Host.Time_Left > 0.0
          then
@@ -788,7 +795,8 @@ package body Model_Runner.CLI.Project_Commands is
                & " error is in its answer above -- run the checks again, and report status: done only"
                & " when they pass.", Status);
             exit when E.Is_Error (Status);
-         elsif Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote and then Round < 3
+         elsif Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote
+           and then Round < (if Root then 3 else 2)
            and then not Asked_To_Report
          then
             Asked_To_Report := True;
@@ -799,7 +807,7 @@ package body Model_Runner.CLI.Project_Commands is
                & " changed_files:.", Status);
             exit when E.Is_Error (Status);
          else
-            exit when Calls > 0 or else Round = 3
+            exit when Calls > 0 or else Round = 3 or else not Root
               or else Outcome.Reason /= Model_Runner.Agent.Answered;
             Conv.Append
               (Messages, Conv.User_Role,
@@ -2858,7 +2866,16 @@ package body Model_Runner.CLI.Project_Commands is
                null;
             elsif Is_Setting (Part) and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
                Result.Settings.Append (Part);
-               Continues := True;
+               --  A value written in quotes ends at its closing quote; one
+               --  written bare runs on. Run on past the quotes, the words
+               --  after it were taken into it: add set.execution.allowed
+               --  gnatmake became part of a check's command.
+               declare
+                  Name : constant String := Part (Part'First .. Ada.Strings.Fixed.Index (Part, "=") - 1);
+               begin
+                  Continues := Ada.Strings.Fixed.Index (Line, Name & "=""") = 0
+                    and then Ada.Strings.Fixed.Index (Line, Name & "='") = 0;
+               end;
             elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
                --  A value runs on to the next NAME=, as /reconfigure takes
                --  one: notes=for users is one value, not a word dropped.

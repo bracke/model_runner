@@ -1269,6 +1269,35 @@ package body Model_Runner.Tools is
          end if;
       end As_JSON_Value;
 
+      --  A tag's value as the parameter's schema has it: where the tool
+      --  offered says the parameter is an array or an object, the JSON the
+      --  model wrote for it -- as the family's own template writes one --
+      --  and otherwise as above. A list a Qwen wrote in a tag was taken for
+      --  a string holding one, and refused.
+      function As_Typed_Value (Tool, Key, Raw : String) return String is
+      begin
+         if Offered /= null and then Raw /= "" and then Raw (Raw'First) in '[' | '{' then
+            for Index in 1 .. Count (Offered.all) loop
+               if Tool_Name (Offered.all, Index) = Tool
+                 and then Python_Calls.Parameter_Type (Definition (Offered.all, Index), Key)
+                          in "array" | "object"
+               then
+                  declare
+                     Room    : String (1 .. Max_Call_Bytes);
+                     Written : Natural;
+                     Reading : E.Error_Info;
+                  begin
+                     Rewrite (Raw, Room, Written, Reading);
+                     if E.Is_Ok (Reading) then
+                        return Room (1 .. Written);
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end if;
+         return As_JSON_Value (Raw);
+      end As_Typed_Value;
+
       --  Read one <function ...> ... </function> block into a call: its name
       --  from the function's attribute, its arguments from a JSON object
       --  built of the <param name="p">v</param> children.
@@ -1438,8 +1467,9 @@ package body Model_Runner.Tools is
                            end if;
                            Add (As_JSON_String (Key));
                            Add (": ");
-                           Add (As_JSON_Value
-                                  ((if V_Last >= V_First
+                           Add (As_Typed_Value
+                                  (Name, Key,
+                                   (if V_Last >= V_First
                                     then Reply (V_First .. V_Last) else "")));
                            Count := Count + 1;
                         end if;

@@ -393,6 +393,13 @@ package body Model_Runner.Framework.Invocations is
             elsif Name /= "" and then Rules.Fields.Contains (Name) then
                Current := To_Unbounded_String (Name);
                Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
+            elsif Name'Length in 1 .. 32
+              and then (for all C of Name => C in 'a' .. 'z' | '0' .. '9' | '_')
+            then
+               --  A field of the answer's own -- findings: -- ends the one
+               --  before it and is none of its items: a list of what it
+               --  found was taken for files it said it changed.
+               Current := Null_Unbounded_String;
             elsif Current /= Null_Unbounded_String and then Item_Of (Line) /= "" then
                declare
                   Held : constant String := Result.Values (To_String (Current));

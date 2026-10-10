@@ -24,6 +24,16 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A reply cut off mid-thought goes on:** a reply that reached its length limit with no call and no answer in it -- a reasoning model mid-thought -- is told so and continues, twice at most, within the run's budget; qwen3-8b's was taken for its answer and the task blocked for having no report.
+
+- **/work compacts a full conversation:** out of context, its agent drops the oldest turns and keeps the record of the work in their place, as run's agent does -- where a qwen3.5-4b that reasoned at length filled its context and the task failed on "a prompt of 67 tokens plus 1024 generated tokens exceeds the 654 that remain".
+- **A report's own fields end the one before them:** a line shaped as a field the contract does not name -- findings: -- ends the field above it, so what an analysis found is not read as files it says it changed (it failed "it says it changed findings:, Unit using package Calc: Main").
+- **A tag's value takes its parameter's type:** where the tools offered say a parameter is an array or an object, the JSON a model writes in its tag is that value (Python_Calls.Parameter_Type) -- delegate's outputs from a Qwen were read as a string holding a list, refused, and the call repeated until the run stopped. Text that looks like JSON where the schema says text stays text.
+
+- **A quoted value ends at its quote:** profile.checks="build: make" add set.execution.allowed make no longer takes "add set.execution.allowed make" into the check's command -- in the command reader and in /reconfigure, which also takes an add or remove group after a quoted setting. /reconfigure's own hint for a program the change would not let run wrote two add groups in a row, which no line read as asked; it joins the programs into one now.
+- **A helper is asked once for its report:** a helper that wrote its file and then went round repeating is asked to finish with its report lines, as the root is, where it was failed for having none. The push-back over failed checks stays the root's.
+- **tests agent-trial checks the task, and delegates:** the edit task's project carries a test of Add at Integer's limits and near them, built and run among its checks -- an Add left as it was builds, and is no longer complete for building; and a third task, delegate, has a helper write docs/calc.md, named in its outputs, with new files counted in what changed.
+
 - **/work sends an agent back once over failed checks:** a root agent that ends -- failed or done -- while the work's last run_checks failed, with time left, is told once that the work is not done and to fix what the checks reported, run them again and report done only when they pass (Work.Checks_Failing). A 4B that saw one compile error ended its task failed at once.
 - **retrieve and sql work in the tools' tree:** a relative folder or database is under the directory Set_Base names, as the file tools' paths are.
 - **Tree stamps see an edit that keeps the size:** a file in a stamped folder is stamped by the filesystem's own change record -- modification and change times to the nanosecond, size, file number (Hostkit.Metadata.Change_Stamp, statx on Linux) -- and by size and time only where the host gives nothing finer.

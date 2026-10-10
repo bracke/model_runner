@@ -985,6 +985,14 @@ package body Tests.Tools_Cases is
               and then Pc.Request_Of ("/task new X notes=for the sky").Settings.First_Element
                        = "notes=for the sky",
               "a list was not split at its commas, or a value did not run on");
+      --  A quoted value ends at its quote: a word after it is a word.
+      declare
+         Asked : constant Cl.Request := Pc.Request_Of ("/task new X notes=""for the sky"" extra");
+      begin
+         Assert (Asked.Settings.First_Element = "notes=for the sky"
+                 and then Asked.Positional.Contains ("extra"),
+                 "a quoted value took the word after its quote: " & Cl.Canonical (Asked));
+      end;
    end Command_Lines_Read_Back;
 
    --  Every built-in tool answers the same way every time.
@@ -1941,6 +1949,38 @@ package body Tests.Tools_Cases is
             Status, Syntax => Tools.Python_Code, Offered => Defs'Access);
          Assert (E.Is_Error (Status), "an argument in its place after a keyword was read");
          Tools.Close (Asked);
+         --  A list a Qwen writes in a tag is the list its schema says it
+         --  is, where the tools offered are known; text that looks like
+         --  JSON where the schema says text stays text.
+         declare
+            Offered_Defs : aliased Tools.Definitions;
+         begin
+            Tools.Read
+              (Offered_Defs,
+               "[{""type"": ""function"", ""function"": {""name"": ""delegate"", ""description"": ""d"","
+               & " ""parameters"": {""type"": ""object"", ""properties"": {""task"": {""type"": ""string""},"
+               & " ""outputs"": {""type"": ""array"", ""items"": {""type"": ""string""}}}}}}]",
+               Status);
+            Tools.Read_Calls
+              (Asked, "<tool_call>" & LF & "<function=delegate>" & LF & "<parameter=task>" & LF
+               & "[not a list]" & LF & "</parameter>" & LF & "<parameter=outputs>" & LF
+               & "[""docs/calc.md""]" & LF & "</parameter>" & LF & "</function>" & LF & "</tool_call>",
+               Status, Syntax => Tools.Qwen_XML, Offered => Offered_Defs'Access);
+            Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+                    and then Tools.Arguments (Asked, 1)
+                             = "{""task"": ""[not a list]"", ""outputs"": [""docs/calc.md""]}",
+                    "a list in a tag was not read as its schema says: "
+                    & (if Tools.Count (Asked) = 1 then Tools.Arguments (Asked, 1) else "none"));
+            Tools.Close (Asked);
+            Assert (Model_Runner.Tools.Python_Calls.Parameter_Type (Tools.Definition (Offered_Defs, 1), "outputs")
+                    = "array"
+                    and then Model_Runner.Tools.Python_Calls.Parameter_Type
+                               (Tools.Definition (Offered_Defs, 1), "task") = "string"
+                    and then Model_Runner.Tools.Python_Calls.Parameter_Type
+                               (Tools.Definition (Offered_Defs, 1), "none") = "",
+                    "a parameter's type was not the one its definition gives");
+            Tools.Close (Offered_Defs);
+         end;
          Assert (Model_Runner.Tools.Python_Calls.Parameter_At
                    ("{""function"": {""name"": ""f"", ""parameters"": {""type"": ""object"", ""properties"": "
                     & "{""x"": {""type"": ""object"", ""properties"": {""in"": {}}}, ""y"": {}}}}}", 2) = "y",

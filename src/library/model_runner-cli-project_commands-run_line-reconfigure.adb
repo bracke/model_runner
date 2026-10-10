@@ -15,6 +15,24 @@ procedure Reconfigure (Store : in out S.Store) is
             Name  : Unbounded_String;
             Value : Unbounded_String;
             Words_Given : Names.Vector;
+
+            --  Whether the value being read was quoted, and closed with it;
+            --  and an add or remove group after it, being read.
+            Closed      : Boolean := False;
+            Group       : Unbounded_String;
+            Group_Name  : Unbounded_String;
+            Group_Items : Unbounded_String;
+
+            procedure Close_Group is
+            begin
+               if Group /= "" and then Group_Name /= Null_Unbounded_String then
+                  Changes.Include (To_String (Group_Name) & (if Group = "add" then "+" else "-"),
+                                   To_String (Group_Items));
+               end if;
+               Group := Null_Unbounded_String;
+               Group_Name := Null_Unbounded_String;
+               Group_Items := Null_Unbounded_String;
+            end Close_Group;
          begin
             for Index in First .. Natural (All_Words.Length) loop
                declare
@@ -41,6 +59,23 @@ procedure Reconfigure (Store : in out S.Store) is
                begin
                   if Part = "confirm=yes" then
                      null;
+                  --  After a value closed by its quote: add NAME ITEM ... or
+                  --  remove NAME ITEM ..., another set changed in the step.
+                  elsif Closed and then Group = "" and then Part in "add" | "remove" then
+                     Group := To_Unbounded_String (Part);
+                  elsif Group /= "" and then Group_Name = Null_Unbounded_String then
+                     Group_Name := To_Unbounded_String (Part);
+                  elsif Group /= "" and then not Is_Setting (Part) then
+                     Append (Group_Items, (if Group_Items = Null_Unbounded_String then "" else ",") & Part);
+                  elsif Closed and then not Is_Setting (Part) then
+                     Read := E.Make (E.CLI_Invalid_Option_Value);
+                     E.Add_Text (Read, "option", Part);
+                     E.Add_Text (Read, "value",
+                                 "a word after a quoted value is no part of it; a set's items go"
+                                 & " after add NAME or remove NAME");
+                     Pres.Report (Screen, Read);
+                     Failed := True;
+                     return;
                   --  A setting starts: named with its kind, or -- as the
                   --  first word -- named any way at all, to be found or
                   --  refused by name rather than dropped.
@@ -65,9 +100,13 @@ procedure Reconfigure (Store : in out S.Store) is
                      if Name /= Null_Unbounded_String then
                         Changes.Include (To_String (Name), To_String (Value));
                      end if;
+                     Close_Group;
                      Name := To_Unbounded_String (Part (Part'First .. Equal - 1));
                      Value := To_Unbounded_String (Part (Equal + 1 .. Part'Last));
-                  elsif Name /= Null_Unbounded_String then
+                     --  Written in quotes, the value ends at its quote.
+                     Closed := Ada.Strings.Fixed.Index (Line, To_String (Name) & "=""") > 0
+                       or else Ada.Strings.Fixed.Index (Line, To_String (Name) & "='") > 0;
+                  elsif Name /= Null_Unbounded_String and then not Closed then
                      Append (Value, " " & Part);
                   else
                      --  A name with no value: a value is what a change is.
@@ -87,6 +126,7 @@ procedure Reconfigure (Store : in out S.Store) is
             if Name /= Null_Unbounded_String then
                Changes.Include (To_String (Name), To_String (Value));
             end if;
+            Close_Group;
          end;
    end Settings_From;
    Failed : Boolean;
@@ -240,11 +280,19 @@ begin
                   then
                      Allow := Null_Unbounded_String;
                   end if;
-                  if Key (Key'Last) in '+' | '-' then
-                     Append (Asked, (if Key (Key'Last) = '+' then "add " else "remove ")
-                                    & Key (Key'First .. Key'Last - 1) & " "
-                                    & Ada.Strings.Fixed.Translate
-                                        (Value, Ada.Strings.Maps.To_Mapping (",", " ")) & " ");
+                  if Key = "set.execution.allowed+" and then Allow /= Null_Unbounded_String then
+                     --  The programs joined to the add the change makes
+                     --  already: one group, first, as the step takes it.
+                     Asked := "add set.execution.allowed "
+                       & Ada.Strings.Fixed.Translate
+                           (Value & "," & To_String (Allow), Ada.Strings.Maps.To_Mapping (",", " "))
+                       & " " & Asked;
+                     Allow := Null_Unbounded_String;
+                  elsif Key (Key'Last) in '+' | '-' then
+                     Asked := (if Key (Key'Last) = '+' then "add " else "remove ")
+                       & Key (Key'First .. Key'Last - 1) & " "
+                       & Ada.Strings.Fixed.Translate
+                           (Value, Ada.Strings.Maps.To_Mapping (",", " ")) & " " & Asked;
                   else
                      Append (Asked, Key & "="
                                     & (if Ada.Strings.Fixed.Index (Value, " ") > 0

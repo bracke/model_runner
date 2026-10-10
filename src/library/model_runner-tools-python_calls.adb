@@ -555,4 +555,111 @@ package body Model_Runner.Tools.Python_Calls is
       return "";
    end Parameter_At;
 
+   --------------------
+   -- Parameter_Type --
+   --------------------
+
+   function Parameter_Type (Definition : String; Name : String) return String is
+      Mark  : constant String := """properties""";
+      P     : Natural := Definition'First;
+      Depth : Natural := 0;
+
+      procedure Over_String is
+      begin
+         P := P + 1;
+         while P <= Definition'Last and then Definition (P) /= '"' loop
+            if Definition (P) = '\' then
+               P := P + 1;
+            end if;
+            P := P + 1;
+         end loop;
+         P := P + 1;
+      end Over_String;
+
+      --  The string value of "type" among the members at the top of the
+      --  object that opens at P.
+      function Type_In return String is
+         Inner : Natural := 0;
+      begin
+         P := P + 1;
+         while P <= Definition'Last loop
+            case Definition (P) is
+               when '"' =>
+                  declare
+                     Key_First : constant Positive := P + 1;
+                  begin
+                     Over_String;
+                     if Inner = 0 and then Definition (Key_First .. P - 2) = "type" then
+                        while P <= Definition'Last and then Definition (P) /= '"' loop
+                           exit when Definition (P) in ',' | '}';
+                           P := P + 1;
+                        end loop;
+                        if P <= Definition'Last and then Definition (P) = '"' then
+                           declare
+                              Value_First : constant Positive := P + 1;
+                           begin
+                              Over_String;
+                              return Definition (Value_First .. P - 2);
+                           end;
+                        end if;
+                     end if;
+                  end;
+               when '{' | '[' =>
+                  Inner := Inner + 1;
+                  P := P + 1;
+               when '}' | ']' =>
+                  exit when Inner = 0;
+                  Inner := Inner - 1;
+                  P := P + 1;
+               when others =>
+                  P := P + 1;
+            end case;
+         end loop;
+         return "";
+      end Type_In;
+   begin
+      loop
+         if P + Mark'Length - 1 > Definition'Last then
+            return "";
+         end if;
+         exit when Definition (P .. P + Mark'Length - 1) = Mark;
+         P := P + 1;
+      end loop;
+      P := P + Mark'Length;
+      while P <= Definition'Last and then Definition (P) /= '{' loop
+         P := P + 1;
+      end loop;
+      P := P + 1;
+      while P <= Definition'Last loop
+         case Definition (P) is
+            when '"' =>
+               declare
+                  Key_First : constant Positive := P + 1;
+                  At_Top    : constant Boolean := Depth = 0;
+               begin
+                  Over_String;
+                  if At_Top and then Definition (Key_First .. P - 2) = Name then
+                     while P <= Definition'Last and then Definition (P) /= '{' loop
+                        P := P + 1;
+                     end loop;
+                     return (if P <= Definition'Last then Type_In else "");
+                  end if;
+               end;
+            when '{' | '[' =>
+               Depth := Depth + 1;
+               P := P + 1;
+            when '}' | ']' =>
+               exit when Depth = 0;
+               Depth := Depth - 1;
+               P := P + 1;
+            when others =>
+               P := P + 1;
+         end case;
+      end loop;
+      return "";
+   exception
+      when Constraint_Error =>
+         return "";
+   end Parameter_Type;
+
 end Model_Runner.Tools.Python_Calls;

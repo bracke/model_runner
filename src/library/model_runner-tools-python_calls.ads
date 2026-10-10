@@ -56,4 +56,11 @@ package Model_Runner.Tools.Python_Calls is
    --  @return The name; "" where there is no such parameter.
    function Parameter_At (Definition : String; Place : Positive) return String;
 
+   --  The JSON type a tool's definition gives one of its parameters.
+   --
+   --  @param Definition The tool's definition, as JSON.
+   --  @param Name The parameter.
+   --  @return Its type, as "array"; "" where the definition gives none.
+   function Parameter_Type (Definition : String; Name : String) return String;
+
 end Model_Runner.Tools.Python_Calls;

@@ -24,29 +24,39 @@ package body Agent_Trial is
    Arrow : constant String :=
      Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#92#) & " ";
 
-   --  A task: its name, its kind, and what it asks.
+   --  A task: its name, its kind, what it asks, and whether its project
+   --  carries a test of what it asks -- which fails until the task is done,
+   --  so only the task that changes Add has it.
    type Trial_Task is record
-      Name  : Unbounded_String;
-      Kind  : Unbounded_String;
-      Notes : Unbounded_String;
+      Name   : Unbounded_String;
+      Kind   : Unbounded_String;
+      Notes  : Unbounded_String;
+      Tested : Boolean;
    end record;
 
-   function T (Name, Kind, Notes : String) return Trial_Task is
-     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes)));
+   function T (Name, Kind, Notes : String; Tested : Boolean := False) return Trial_Task is
+     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested));
 
-   --  The tasks: one that changes part of a file, and one that only finds
-   --  -- the two things a coding agent most does.
-   Tasks : constant array (1 .. 2) of Trial_Task :=
+   --  The tasks: one that changes part of a file, one that only finds --
+   --  the two things a coding agent most does -- and one handed to a helper,
+   --  its output named, which is how a run delegates.
+   Tasks : constant array (1 .. 3) of Trial_Task :=
      [T ("edit", "implementation",
          "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
-         & " Integer'First when it would overflow below, instead of raising. Change only Add."),
+         & " Integer'First when it would overflow below, instead of raising. Change only Add.",
+         Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
-         & " declared. Report them. Change no file.")];
+         & " declared. Report them. Change no file."),
+      T ("delegate", "implementation",
+         "Hand this part to a helper with the delegate tool, its outputs [""docs/calc.md""]: write"
+         & " docs/calc.md, a short paragraph each on what Add and Times in src/calc.ads do. Do not"
+         & " write docs/calc.md yourself. When the helper has finished, check that docs/calc.md is"
+         & " there, and report.")];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
-   procedure Make_Project (Root : String) is
+   procedure Make_Project (Root : String; Tested : Boolean) is
       procedure Put (Name, Text : String) is
          File : Ada.Text_IO.File_Type;
       begin
@@ -93,6 +103,24 @@ package body Agent_Trial is
            & "      for I in 1 .. B loop" & LF & "         Result := Add (Result, A);" & LF
            & "      end loop;" & LF & "      return Result;" & LF & "   end Times;" & LF & LF
            & "end Calc;" & LF);
+      --  What Add is to do, said as a program: it fails until Add holds
+      --  to Integer's limits, so a task that leaves Add as it was is not
+      --  complete for building -- and near them, not only at them: an Add
+      --  that saturated only from Integer'Last itself passed a test of the
+      --  limits alone.
+      if Tested then
+         Put ("src/test_add.adb",
+              "with Calc;" & LF & "procedure Test_Add is" & LF & "begin" & LF
+              & "   if Calc.Add (Integer'Last, 1) /= Integer'Last" & LF
+              & "     or else Calc.Add (Integer'First, -1) /= Integer'First" & LF
+              & "     or else Calc.Add (Integer'Last - 1, 5) /= Integer'Last" & LF
+              & "     or else Calc.Add (5, Integer'Last - 1) /= Integer'Last" & LF
+              & "     or else Calc.Add (Integer'First + 1, -5) /= Integer'First" & LF
+              & "     or else Calc.Add (Integer'Last, Integer'First) /= -1" & LF
+              & "     or else Calc.Add (2, 3) /= 5" & LF & "   then" & LF
+              & "      raise Program_Error with ""Add does not hold to Integer's limits"";" & LF
+              & "   end if;" & LF & "end Test_Add;" & LF);
+      end if;
       Put ("src/main.adb",
            "with Ada.Text_IO;" & LF & "with Calc;" & LF & "procedure Main is" & LF & "begin" & LF
            & "   Ada.Text_IO.Put_Line (Integer'Image (Calc.Times (6, 7)));" & LF & "end Main;" & LF);
@@ -103,14 +131,21 @@ package body Agent_Trial is
       Ada.Directories.Create_Path (Root & "/obj");
    end Make_Project;
 
-   --  The project's check: the program built, bound and linked, where a
-   --  compiler is here. /init's own is the command true, which checks
-   --  nothing, and a model that wrote Ada that would not compile was told
-   --  its work had passed; a semantic check of the main alone passed a
-   --  body rewritten as another unit, which only the link finds.
-   Check_Line : constant String :=
-     "/reconfigure add set.execution.allowed gnatmake "
-     & "profile.checks=""check: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"" confirm=yes";
+   --  The project's checks, where a compiler is here: the program built,
+   --  bound and linked, and Add's test built and run. /init's own is the
+   --  command true, which checks nothing, and a model that wrote Ada that
+   --  would not compile was told its work had passed; a semantic check of
+   --  the main alone passed a body rewritten as another unit, which only
+   --  the link finds; and a build alone passed an Add left as it was, which
+   --  only the test finds.
+   function Check_Line (Tested : Boolean) return String is
+     (if Tested
+      then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
+           & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main;"
+           & " test: gnatmake -q -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
+           & " confirm=yes"
+      else "/reconfigure add set.execution.allowed gnatmake "
+           & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"" confirm=yes");
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is
@@ -222,7 +257,7 @@ package body Agent_Trial is
                Words  : Hostkit.String_Vectors.Vector;
                Worked : Boolean := False;
             begin
-               Make_Project (Root);
+               Make_Project (Root, One.Tested);
                if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                   Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
                   Clean := False;
@@ -271,7 +306,7 @@ package body Agent_Trial is
                         Send ("");
                         if Wait_For ("initialized", 30.0)
                           and then (Hostkit.Process.Locate ("gnatmake") = ""
-                                    or else (Send_Then (Check_Line)
+                                    or else (Send_Then (Check_Line (One.Tested))
                                              and then Wait_For ("is now revision", 30.0)))
                         then
                            Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
@@ -363,10 +398,27 @@ package body Agent_Trial is
                      Said  : Unbounded_String;
                      File  : Ada.Text_IO.File_Type;
                   begin
+                     --  New files counted with the changed: what a helper
+                     --  wrote is new.
+                     declare
+                        Marked : Hostkit.String_Vectors.Vector;
+                        Ignore : Hostkit.Process.Process_Outcome;
+                     begin
+                        for Word of Hostkit.String_Vectors.Vector'
+                          ([To_Unbounded_String ("-C"), To_Unbounded_String (Root), To_Unbounded_String ("add"),
+                            To_Unbounded_String ("--intent-to-add"), To_Unbounded_String ("--"),
+                            To_Unbounded_String ("src"), To_Unbounded_String ("docs")])
+                        loop
+                           Marked.Append (Word);
+                        end loop;
+                        Ignore := Hostkit.Process.Run_Captured
+                          ("git", Marked, Stdout_Path => Hostkit.Fs.Null_Device,
+                           Stderr_Path => Hostkit.Fs.Null_Device);
+                     end;
                      for Word of Hostkit.String_Vectors.Vector'
                        ([To_Unbounded_String ("-C"), To_Unbounded_String (Root), To_Unbounded_String ("diff"),
                          To_Unbounded_String ("--shortstat"), To_Unbounded_String ("--"),
-                         To_Unbounded_String ("src")])
+                         To_Unbounded_String ("src"), To_Unbounded_String ("docs")])
                      loop
                         Line.Append (Word);
                      end loop;
