@@ -157,11 +157,15 @@ package Model_Runner.Tools is
    --    this can read -- the calls read before it are kept -- Tools_Too_Many
    --    or Tools_Too_Large.
    --  @param Syntax The shape the calls are written in.
+   --  @param Offered The tools offered: in Python_Code, an argument written
+   --    without its keyword is the parameter its definition names in that
+   --    place; null where none are known, and such an argument is refused.
    procedure Read_Calls
      (Item   : in out Calls;
       Reply  : String;
       Status : out Model_Runner.Errors.Error_Info;
-      Syntax : Call_Syntax := Tool_Call_JSON);
+      Syntax : Call_Syntax := Tool_Call_JSON;
+      Offered : access constant Definitions'Class := null);
 
    --  Release the calls.
    --

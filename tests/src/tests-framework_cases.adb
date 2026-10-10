@@ -9919,6 +9919,8 @@ package body Tests.Framework_Cases is
                        and then Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0
                        and then Ada.Strings.Fixed.Index (To_String (Report), "exists") > 0,
                        "the checks' report does not say what failed: " & To_String (Report));
+               Assert (Children.Checks_Failing,
+                       "checks that failed were not held as failing, for the work to be sent back");
                --  Asked for what its changes reach before it has changed
                --  anything: the whole, and said why; after a write, the
                --  scope traced from it, said.

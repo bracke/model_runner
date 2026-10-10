@@ -18,7 +18,8 @@ package body Model_Runner.Tools.Python_Calls is
       Args      : out String;
       Args_Last : out Natural;
       Found     : out Boolean;
-      Ok        : out Boolean)
+      Ok        : out Boolean;
+      Offered   : access constant Definitions'Class := null)
    is
       P    : Natural := From;
       Used : Natural := 0;
@@ -345,9 +346,26 @@ package body Model_Runner.Tools.Python_Calls is
          end loop;
       end Callee;
 
+      --  The name of the parameter in a place of the called tool's, from
+      --  the definitions offered; "" where none are, or it has none there.
+      function Positional_Name (Called : String; Place : Positive) return String is
+      begin
+         if Offered = null then
+            return "";
+         end if;
+         for Index in 1 .. Count (Offered.all) loop
+            if Tool_Name (Offered.all, Index) = Called then
+               return Parameter_At (Definition (Offered.all, Index), Place);
+            end if;
+         end loop;
+         return "";
+      end Positional_Name;
+
       First, Last : Natural;
       Wrapped     : Boolean := False;
       Keys        : Natural := 0;
+      Keyed       : Boolean := False;
+      Placed      : Natural := 0;
    begin
       Name_Last := 0;
       Args_Last := 0;
@@ -402,20 +420,42 @@ package body Model_Runner.Tools.Python_Calls is
          exit when Here = ')';
          declare
             Key_First, Key_Last : Natural;
+            Arg_Start : constant Natural := P;
+            Keyword   : Boolean := False;
          begin
-            --  An argument with no keyword names nothing the arguments
-            --  object could carry.
-            Word (Key_First, Key_Last);
-            Skip;
-            if Here /= '=' or else Ahead ("==") then
-               raise Not_A_Call;
+            --  name=value, or a value alone: the parameter in its place.
+            if Is_Start (Here) then
+               Word (Key_First, Key_Last);
+               Skip;
+               Keyword := Here = '=' and then not Ahead ("==");
             end if;
-            P := P + 1;
-            if Keys > 0 then
-               Put (",");
+            if Keyword then
+               Keyed := True;
+               P := P + 1;
+               if Keys > 0 then
+                  Put (",");
+               end if;
+               Keys := Keys + 1;
+               Put ("""" & Text (Key_First .. Key_Last) & """:");
+            else
+               --  After a keyword none may stand alone, as in Python; and
+               --  one is named by the definition, or the call is unread.
+               P := Arg_Start;
+               Placed := Placed + 1;
+               declare
+                  Called : constant String := Name (Name'First .. Name'First + Name_Last - 1);
+                  Named  : constant String := Positional_Name (Called, Placed);
+               begin
+                  if Keyed or else Named = "" then
+                     raise Not_A_Call;
+                  end if;
+                  if Keys > 0 then
+                     Put (",");
+                  end if;
+                  Keys := Keys + 1;
+                  Put ("""" & Named & """:");
+               end;
             end if;
-            Keys := Keys + 1;
-            Put ("""" & Text (Key_First .. Key_Last) & """:");
             Value (0);
             Skip;
             if Here = ',' then
@@ -446,5 +486,73 @@ package body Model_Runner.Tools.Python_Calls is
          Args_Last := 0;
          From      := Text'Last + 1;
    end Read_Call;
+
+   ------------------
+   -- Parameter_At --
+   ------------------
+
+   function Parameter_At (Definition : String; Place : Positive) return String is
+      Mark  : constant String := """properties""";
+      P     : Natural := Definition'First;
+      Depth : Natural := 0;
+      Seen  : Natural := 0;
+
+      --  Past the string that opens at P.
+      procedure Over_String is
+      begin
+         P := P + 1;
+         while P <= Definition'Last and then Definition (P) /= '"' loop
+            if Definition (P) = '\' then
+               P := P + 1;
+            end if;
+            P := P + 1;
+         end loop;
+         P := P + 1;
+      end Over_String;
+   begin
+      --  The properties object.
+      loop
+         if P + Mark'Length - 1 > Definition'Last then
+            return "";
+         end if;
+         exit when Definition (P .. P + Mark'Length - 1) = Mark;
+         P := P + 1;
+      end loop;
+      P := P + Mark'Length;
+      while P <= Definition'Last and then Definition (P) /= '{' loop
+         P := P + 1;
+      end loop;
+      P := P + 1;
+
+      --  Its keys at its own depth, in order.
+      while P <= Definition'Last loop
+         case Definition (P) is
+            when '"' =>
+               if Depth = 0 then
+                  declare
+                     Key_First : constant Positive := P + 1;
+                  begin
+                     Over_String;
+                     Seen := Seen + 1;
+                     if Seen = Place then
+                        return Definition (Key_First .. P - 2);
+                     end if;
+                  end;
+               else
+                  Over_String;
+               end if;
+            when '{' | '[' =>
+               Depth := Depth + 1;
+               P := P + 1;
+            when '}' | ']' =>
+               exit when Depth = 0;
+               Depth := Depth - 1;
+               P := P + 1;
+            when others =>
+               P := P + 1;
+         end case;
+      end loop;
+      return "";
+   end Parameter_At;
 
 end Model_Runner.Tools.Python_Calls;

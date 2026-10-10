@@ -421,6 +421,13 @@ package Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False);
 
+   --  Whether the last checks the work ran failed: what it reports done
+   --  then is not, by its own checks.
+   --
+   --  @param Host The host.
+   --  @return True after a run of the checks that failed, until one passes.
+   function Checks_Failing (Host : Child_Host) return Boolean;
+
    --  Count tokens the agent now working generated against its budget.
    --
    --  @param Host The host.
@@ -692,6 +699,9 @@ private
 
       --  Whether the agents write in a workspace apart from the project.
       Apart   : Boolean := False;
+
+      --  Whether the last checks run for the work failed.
+      Checks_Failed : Boolean := False;
 
       --  The files copied aside before their first write.
       Kept_Before : Name_Lists.Vector;

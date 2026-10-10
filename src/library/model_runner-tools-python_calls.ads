@@ -12,8 +12,11 @@
 --  now and then, is the call inside it, and a name with a module before it
 --  -- api.get_weather -- is its last part.
 --
---  What is not a literal -- an expression, a variable, an argument with no
---  keyword -- is no call this can read: the model is told, as for any call
+--  An argument with no keyword is the tool's parameter in that place, in
+--  the order its definition names them, where the tools offered are given:
+--  calculator(47, op="+") is a=47. What is not a literal -- an expression,
+--  a variable -- and an argument with no keyword where no definition says
+--  what it is, is no call this can read: the model is told, as for any call
 --  that does not read, rather than given a guess.
 --
 --  Task safety: no state.
@@ -32,6 +35,8 @@ package Model_Runner.Tools.Python_Calls is
    --  @param Found Whether there was a call left; False with Ok True when
    --    only whitespace, or the closing fence, was.
    --  @param Ok False when what stands there is not a call this reads.
+   --  @param Offered The tools offered, whose definitions name a positional
+   --    argument; null where none are known, and then one is refused.
    procedure Read_Call
      (Text      : String;
       From      : in out Positive;
@@ -40,6 +45,15 @@ package Model_Runner.Tools.Python_Calls is
       Args      : out String;
       Args_Last : out Natural;
       Found     : out Boolean;
-      Ok        : out Boolean);
+      Ok        : out Boolean;
+      Offered   : access constant Definitions'Class := null);
+
+   --  The name of a tool's parameter in a place, in the order its
+   --  definition's properties name them.
+   --
+   --  @param Definition The tool's definition, as JSON.
+   --  @param Place Which, from 1.
+   --  @return The name; "" where there is no such parameter.
+   function Parameter_At (Definition : String; Place : Positive) return String;
 
 end Model_Runner.Tools.Python_Calls;

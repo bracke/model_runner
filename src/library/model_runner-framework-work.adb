@@ -1256,6 +1256,8 @@ package body Model_Runner.Framework.Work is
    -- Run_Checks --
    ----------------
 
+   function Checks_Failing (Host : Child_Host) return Boolean is (Host.Checks_Failed);
+
    procedure Run_Checks
      (Host     : in out Child_Host;
       Profile  : String;

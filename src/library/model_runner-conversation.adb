@@ -604,11 +604,12 @@ package body Model_Runner.Conversation is
       Status  : out E.Error_Info;
       Reading : out E.Error_Info;
       Syntax  : Model_Runner.Tools.Call_Syntax :=
-        Model_Runner.Tools.Tool_Call_JSON)
+        Model_Runner.Tools.Tool_Call_JSON;
+      Offered : access constant Model_Runner.Tools.Definitions'Class := null)
    is
       Asked : Model_Runner.Tools.Calls;
    begin
-      Model_Runner.Tools.Read_Calls (Asked, Reply, Reading, Syntax => Syntax);
+      Model_Runner.Tools.Read_Calls (Asked, Reply, Reading, Syntax => Syntax, Offered => Offered);
 
       if E.Is_Error (Reading)
         or else Model_Runner.Tools.Count (Asked) = 0

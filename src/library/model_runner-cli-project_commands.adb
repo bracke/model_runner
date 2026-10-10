@@ -694,6 +694,7 @@ package body Model_Runner.CLI.Project_Commands is
       Outcome  : Model_Runner.Agent.Outcome;
       Calls    : Natural := 0;
       Asked_To_Report : Boolean := False;
+      Asked_To_Fix    : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
 
@@ -773,7 +774,21 @@ package body Model_Runner.CLI.Project_Commands is
          --  Written, then only repeating what is done: the work is there,
          --  and what is missing is its report -- asked for once, not the
          --  work failed for it.
-         if Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote and then Round < 3
+         --  Given up -- or said done -- on checks that failed, with time
+         --  left: sent back once to fix what they reported. A small model
+         --  that saw one compile error ended the task failed at once.
+         if Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
+           and then not Asked_To_Fix and then Host /= null and then Host.Checks_Failing
+           and then Host.Time_Left > 0.0
+         then
+            Asked_To_Fix := True;
+            Conv.Append
+              (Messages, Conv.User_Role,
+               "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
+               & " error is in its answer above -- run the checks again, and report status: done only"
+               & " when they pass.", Status);
+            exit when E.Is_Error (Status);
+         elsif Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote and then Round < 3
            and then not Asked_To_Report
          then
             Asked_To_Report := True;

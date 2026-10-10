@@ -431,7 +431,7 @@ package body Model_Runner.Agent is
             if Have_Tools then
                Conv.Append_Reply
                  (Messages, Gen.Generated_Text (Last_Result), Status, Reading,
-                  Syntax => Tool_Syntax);
+                  Syntax => Tool_Syntax, Offered => Offered'Unchecked_Access);
             else
                Conv.Append
                  (Messages, Conv.Assistant_Role,

@@ -8,6 +8,8 @@ with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 
+with Hostkit.Metadata;
+
 with Model_Runner.Processes;
 
 with Http_Client.Clients;
@@ -1630,7 +1632,7 @@ package body Model_Runner.Tools.Builtin is
    end Delegate;
 
    function Retrieve
-     (Args : String; Embed : Embedder_Reference) return Reply
+     (Args : String; Embed : Embedder_Reference; Base : String) return Reply
    is
       Max_Chunks : constant := 2048;  --  passages held across the folder
       Max_Terms  : constant := 24;    --  distinct query words scored
@@ -1642,7 +1644,9 @@ package body Model_Runner.Tools.Builtin is
       Max_Width  : constant := 8192;  --  widest embedding vector held
 
       Have_F, Have_Q : Boolean;
-      Folder : constant String := Text_Argument (Args, "folder", Have_F);
+      Given  : constant String := Text_Argument (Args, "folder", Have_F);
+      --  Under the tools' tree, where one is named.
+      Folder : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Given);
       Query  : constant String := Text_Argument (Args, "query", Have_Q);
 
       function Low (S : String) return String
@@ -2158,9 +2162,11 @@ package body Model_Runner.Tools.Builtin is
         ("https://lite.duckduckgo.com/lite/?q=" & Encode_Query (Query));
    end Web_Search;
 
-   function Sql (Args : String) return Reply is
+   function Sql (Args : String; Base : String) return Reply is
       Have_D, Have_Q : Boolean;
-      Database : constant String := Text_Argument (Args, "database", Have_D);
+      --  Under the tools' tree, where one is named.
+      Database : constant String :=
+        Model_Runner.Tools.Editing.On_Disk (Base, Text_Argument (Args, "database", Have_D));
       Query    : constant String := Text_Argument (Args, "query", Have_Q);
    begin
       if not (Have_D and then Have_Q) then
@@ -2267,8 +2273,21 @@ package body Model_Runner.Tools.Builtin is
                      Walk (Full);
                   else
                      Files := Files + 1;
-                     Mix (Full & Ada.Directories.File_Size'Image (Size (Found))
-                          & Ada.Calendar.Formatting.Image (Modification_Time (Found), Include_Time_Fraction => True));
+                     --  The filesystem's own change stamp, to the
+                     --  nanosecond, where the host gives one: a quick edit
+                     --  that keeps the size is seen. Size and time else.
+                     declare
+                        Available : Boolean;
+                        Changed   : constant String := Hostkit.Metadata.Change_Stamp (Full, Available);
+                     begin
+                        if Available then
+                           Mix (Full & Changed);
+                        else
+                           Mix (Full & Ada.Directories.File_Size'Image (Size (Found))
+                                & Ada.Calendar.Formatting.Image (Modification_Time (Found),
+                                                                 Include_Time_Fraction => True));
+                        end if;
+                     end;
                   end if;
                end if;
             end;
@@ -2392,9 +2411,9 @@ package body Model_Runner.Tools.Builtin is
          elsif Named = "web_search" then
             return Web_Search (Arguments);
          elsif Named = "sql" then
-            return Sql (Arguments);
+            return Sql (Arguments, U.To_String (Self.Base));
          elsif Named = "retrieve" then
-            return Retrieve (Arguments, Self.Embed);
+            return Retrieve (Arguments, Self.Embed, U.To_String (Self.Base));
          elsif Named = "delegate" then
             return Delegate (Self, Arguments);
          elsif Named = "ask_user" then

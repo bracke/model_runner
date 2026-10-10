@@ -971,7 +971,8 @@ package body Model_Runner.Tools is
      (Item   : in out Calls;
       Reply  : String;
       Status : out E.Error_Info;
-      Syntax : Call_Syntax := Tool_Call_JSON)
+      Syntax : Call_Syntax := Tool_Call_JSON;
+      Offered : access constant Definitions'Class := null)
    is
       Index : Natural;
 
@@ -1687,7 +1688,7 @@ package body Model_Runner.Tools is
                   loop
                      Python_Calls.Read_Call
                        (Rest, From, Name, Name_Last, Args, Args_Last,
-                        Found, Read);
+                        Found, Read, Offered);
                      exit when not Found;
                      if not Read then
                         Status := E.Make (E.Tools_Call_Malformed);

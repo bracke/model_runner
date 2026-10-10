@@ -103,6 +103,7 @@ begin
       end;
    end;
 
+   Host.Checks_Failed := not Passed;
    Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
 
    --  A profile whose every check is the command true -- what /init writes

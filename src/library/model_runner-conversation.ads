@@ -143,13 +143,16 @@ package Model_Runner.Conversation is
    --    told which of the two it has.
    --  @param Syntax The shape the reply's calls are written in, passed to the
    --    tools reader (see Model_Runner.Tools.Read_Calls).
+   --  @param Offered The tools offered, which name a call's arguments
+   --    written in their places; null where none are known.
    procedure Append_Reply
      (Item    : in out History;
       Reply   : String;
       Status  : out Model_Runner.Errors.Error_Info;
       Reading : out Model_Runner.Errors.Error_Info;
       Syntax  : Model_Runner.Tools.Call_Syntax :=
-        Model_Runner.Tools.Tool_Call_JSON);
+        Model_Runner.Tools.Tool_Call_JSON;
+      Offered : access constant Model_Runner.Tools.Definitions'Class := null);
 
    --  Set or replace the system message, which is always message 1.
    --

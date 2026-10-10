@@ -25,6 +25,7 @@ with Model_Runner.CLI.Command_Lines;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Processes;
 with Model_Runner.Agent_Runtime;
+with Model_Runner.Tools.Python_Calls;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Editing;
@@ -1921,6 +1922,32 @@ package body Tests.Tools_Cases is
               "a positional argument was read as a call");
       Tools.Close (Asked);
 
+      --  Given the tools offered, an argument in its place is the
+      --  parameter the definition names there; one after a keyword is not.
+      declare
+         Defs : aliased Tools.Definitions;
+      begin
+         Tools.Read (Defs, Builtin.All_Definitions_Text, Status);
+         Tools.Read_Calls
+           (Asked, "```tool_code" & LF & "calculator(47, ""+"", b=89)" & LF & "```",
+            Status, Syntax => Tools.Python_Code, Offered => Defs'Access);
+         Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+                 and then Tools.Arguments (Asked, 1) = "{""a"": 47, ""op"": ""+"", ""b"": 89}",
+                 "arguments in their places were not named by the definition: "
+                 & (if Tools.Count (Asked) = 1 then Tools.Arguments (Asked, 1) else "none"));
+         Tools.Close (Asked);
+         Tools.Read_Calls
+           (Asked, "```tool_code" & LF & "calculator(a=47, ""+"")" & LF & "```",
+            Status, Syntax => Tools.Python_Code, Offered => Defs'Access);
+         Assert (E.Is_Error (Status), "an argument in its place after a keyword was read");
+         Tools.Close (Asked);
+         Assert (Model_Runner.Tools.Python_Calls.Parameter_At
+                   ("{""function"": {""name"": ""f"", ""parameters"": {""type"": ""object"", ""properties"": "
+                    & "{""x"": {""type"": ""object"", ""properties"": {""in"": {}}}, ""y"": {}}}}}", 2) = "y",
+                 "a definition's second parameter was not the one it names second");
+         Tools.Close (Defs);
+      end;
+
       Tools.Read_Calls
         (Asked, "{""name"": ""now"", ""arguments"": {}}",
          Status, Syntax => Tools.Python_Code);
@@ -2272,7 +2299,7 @@ package body Tests.Tools_Cases is
             Tree   : constant String := Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}");
          begin
             Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path);
-            Ada.Text_IO.Put (File, "two!");
+            Ada.Text_IO.Put (File, "two");
             Ada.Text_IO.Close (File);
             Assert (Before /= "" and then Runner.Stamp ("read_file", Args) /= Before,
                     "a file changed under a read kept its stamp: " & Before);
