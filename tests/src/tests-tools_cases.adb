@@ -760,8 +760,8 @@ package body Tests.Tools_Cases is
               "an edit of a passage there more than once was made");
 
       --  Lines by number, and searches.
-      Assert (Has (Ed.Read_Range (Path, 2, 3), "2" & ASCII.HT & "   function Add")
-              and then Has (Ed.Read_Range (Path, 2, 3), "3" & ASCII.HT & "   begin")
+      Assert (Has (Ed.Read_Range (Path, 2, 3), "2:    function Add")
+              and then Has (Ed.Read_Range (Path, 2, 3), "3:    begin")
               and then not Has (Ed.Read_Range (Path, 2, 3), "A + B"),
               "a range of lines was not those lines");
       Assert (Has (Ed.Search_File (Path, "Twice"), "6: ")
@@ -1969,6 +1969,17 @@ package body Tests.Tools_Cases is
               "a positional argument was read as a call");
       Tools.Close (Asked);
 
+      --  A raw tab or line break inside a string of a model's call is the
+      --  escape it stands for, not a call dropped as no JSON.
+      Tools.Read_Calls
+        (Asked, "<tool_call>{""name"": ""edit_file"", ""arguments"": {""old_text"": """ & ASCII.HT
+                & "X := 1;" & LF & "Y"", ""new_text"": ""Z""}}</tool_call>", Status);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1
+              and then Ada.Strings.Fixed.Index (Tools.Arguments (Asked, 1), "\tX := 1;\nY") > 0,
+              "a call with a raw tab in a string was not read: "
+              & (if Tools.Count (Asked) = 1 then Tools.Arguments (Asked, 1) else E.Error_Code'Image (Status.Code)));
+      Tools.Close (Asked);
+
       --  Given the tools offered, an argument in its place is the
       --  parameter the definition names there; one after a keyword is not.
       declare
@@ -2380,6 +2391,19 @@ package body Tests.Tools_Cases is
                  and then Ended.Before_Revision /= Tr.No_Revision
                  and then Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("mine")),
                  "a write after reading again was not made, or did not say its revisions");
+
+         --  Nothing written over something: refused, the file kept; an
+         --  empty new file is a file.
+         Placed.Run ("write_file", "{""path"": ""note.txt"", ""content"": """"}", Room, Last, Ended, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "would empty note.txt") > 0
+                 and then Ada.Directories.">" (Ada.Directories.Size (Tree & "/note.txt"), 0),
+                 "an empty write emptied a file that held text: " & Room (Room'First .. Last));
+         if Ada.Directories.Exists (Tree & "/empty.txt") then
+            Ada.Directories.Delete_File (Tree & "/empty.txt");
+         end if;
+         Placed.Run ("write_file", "{""path"": ""empty.txt"", ""content"": """"}", Room, Last, Ended, Status);
+         Assert (Ended.Created, "an empty new file was refused");
+         Ada.Directories.Delete_File (Tree & "/empty.txt");
 
          --  A file made: said as made; a folder that cannot be made: said
          --  why, not only that the write failed.

@@ -1120,6 +1120,11 @@ package body Model_Runner.CLI.Project_Commands is
                           & ")");
             if Missing /= Null_Unbounded_String then
                Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
+               --  The harness's finding first, where a small model reads: it
+               --  went by a helper's "done" on the first line, and claimed
+               --  the file the helper never wrote.
+               Told := "the helper's part is not done, whatever it says: it did not write "
+                 & Missing & ASCII.LF & Told;
             end if;
          end;
       end if;

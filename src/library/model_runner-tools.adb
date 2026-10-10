@@ -1,4 +1,5 @@
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Strings.Maps;
 with Ada.Unchecked_Deallocation;
 
@@ -427,6 +428,41 @@ package body Model_Runner.Tools is
          Last := 0;
       end if;
    end Rewrite;
+
+   --  A model's JSON with the raw tabs and line breaks inside its strings
+   --  written as the escapes they stand for. JSON allows none raw, and a
+   --  definition with one is refused; but a model writing code into a call
+   --  puts one there easily -- a tab copied from what it read -- and its
+   --  call was dropped as no JSON at all.
+   function Controls_Escaped (Text : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Inside : Boolean := False;
+      Index  : Natural := Text'First;
+   begin
+      while Index <= Text'Last loop
+         declare
+            C : constant Character := Text (Index);
+         begin
+            if Inside and then C = '\' and then Index < Text'Last then
+               Ada.Strings.Unbounded.Append (Result, Text (Index .. Index + 1));
+               Index := Index + 1;
+            elsif C = '"' then
+               Inside := not Inside;
+               Ada.Strings.Unbounded.Append (Result, C);
+            elsif Inside and then C = ASCII.HT then
+               Ada.Strings.Unbounded.Append (Result, "\t");
+            elsif Inside and then C = ASCII.LF then
+               Ada.Strings.Unbounded.Append (Result, "\n");
+            elsif Inside and then C = ASCII.CR then
+               Ada.Strings.Unbounded.Append (Result, "\r");
+            else
+               Ada.Strings.Unbounded.Append (Result, C);
+            end if;
+         end;
+         Index := Index + 1;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Controls_Escaped;
 
    ---------------------------------------------------------------------------
    --  Reading what was written back
@@ -1017,7 +1053,7 @@ package body Model_Runner.Tools is
             return;
          end if;
 
-         Rewrite (Inner, Room, Written, Reading);
+         Rewrite (Controls_Escaped (Inner), Room, Written, Reading);
          if E.Is_Error (Reading) then
             if Announced then
                Status := E.Make (E.Tools_Call_Malformed);
@@ -1287,7 +1323,7 @@ package body Model_Runner.Tools is
                      Written : Natural;
                      Reading : E.Error_Info;
                   begin
-                     Rewrite (Raw, Room, Written, Reading);
+                     Rewrite (Controls_Escaped (Raw), Room, Written, Reading);
                      if E.Is_Ok (Reading) then
                         return Room (1 .. Written);
                      end if;
@@ -1838,7 +1874,7 @@ package body Model_Runner.Tools is
                                     Written : Natural;
                                     Reading : E.Error_Info;
                                  begin
-                                    Rewrite (Reply (Open .. Shut),
+                                    Rewrite (Controls_Escaped (Reply (Open .. Shut)),
                                              Room, Written, Reading);
                                     if E.Is_Error (Reading) then
                                        Status :=

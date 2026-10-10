@@ -1281,6 +1281,22 @@ package body Model_Runner.Tools.Builtin is
               elsif not Have_P then "a path"
               else "content: the whole new text of " & Path));
       end if;
+      --  Nothing written over something: an empty write of a file that holds
+      --  text is refused, not taken -- a 4B wrote "" over the source it was
+      --  to fix, and every check after failed on an empty unit.
+      declare
+         Disk : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Path);
+      begin
+         if Content = "" and then Ada.Directories.Exists (Disk)
+           and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File)
+           and then Ada.Directories.">" (Ada.Directories.Size (Disk), 0)
+         then
+            return Failure
+              ("write_file with no content would empty " & Path & ", which holds"
+               & Ada.Directories.File_Size'Image (Ada.Directories.Size (Disk))
+               & " bytes; write its whole new text -- or, where the file should go, say so in your report");
+         end if;
+      end;
       --  Put in place whole or not at all (Editing.Replace), as bytes, the
       --  way the file is read back: a text file would end the content with
       --  a line break the model never wrote.

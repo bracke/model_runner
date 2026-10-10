@@ -24,8 +24,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A raw tab or line break in a model's call is read:** inside a string of a call a model wrote, one is taken as the escape it stands for, where the call was dropped as no JSON -- qwen3-8b copied a tab from what it read into old_text; a tool definition is held to JSON as before.
+
+- **An empty write does not empty a file:** write_file with no content over a file that holds text is refused, saying what it would empty and that a file which should go is said in the report; an empty new file is still made. gemma-3-4b wrote "" over the source it was to fix, and every check after failed on an empty unit.
+- **A helper's missing outputs are said first:** where a helper did not write an output it was given, the delegate's answer opens with "the helper's part is not done, whatever it says: it did not write docs/calc.md", where it opened with the helper's own "done" and the harness's check came last -- a 4B went by the first line and claimed the file itself.
+
 - **An edit a passage's indentation was off by is made where it matches:** old_text not in the file as given, but there line for line once the spaces at the ends of lines are left out, and in one place only, is edited there -- the new text moved by how far the given one was off, to the file's indentation -- and the answer says it was matched so; in two places, or none, it is refused as before. qwen3-8b copied lines from read_file one space too deep and its edit was refused twenty times running.
-- **read_file's numbered lines are the number and a tab:** "6" and a tab before the line, where "6: " ran its space into the line's indentation.
 - **tests agent-trial bounds the work inside its wait:** its projects set agents.max_seconds=1200, within the half hour the trial waits, so a run the harness has to end says why rather than reading "did not end".
 
 - **A file is changed whole or not at all:** edit_file and write_file put a file's new contents in place through one routine (Editing.Replace) -- written to a hidden sibling, made durable, its permission bits kept, and renamed over the file in one step, its folder synced -- where both opened the file for writing and wrote into it, so a crash, a full disk or an interrupt could leave it empty or cut short. A folder that cannot be made, or a file standing where it should be, is said as that, where the cause was dropped and "could not write the file" said.

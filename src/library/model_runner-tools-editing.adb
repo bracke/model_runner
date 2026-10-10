@@ -634,10 +634,11 @@ package body Model_Runner.Tools.Editing is
          for Index in Text'First .. Text'Last + 1 loop
             if Index > Text'Last or else Text (Index) = ASCII.LF then
                if Line >= First and then Line <= Upto then
-                  --  The number and the line a tab apart: written "6: ", the
-                  --  space after the colon ran into the line's indentation,
-                  --  and a model copying the line gave one space too many.
-                  U.Append (Result.Text, Image (Line) & ASCII.HT & Text (Start .. Index - 1) & ASCII.LF);
+                  --  The number, a colon and a space before the line: a tab
+                  --  there was copied into old_text, where JSON allows no raw
+                  --  tab; the space a model may copy into the indentation is
+                  --  one an edit matched loosely takes in its stride.
+                  U.Append (Result.Text, Image (Line) & ": " & Text (Start .. Index - 1) & ASCII.LF);
                end if;
                exit when Line >= Upto;
                Line := Line + 1;
