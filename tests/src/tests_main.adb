@@ -3271,7 +3271,12 @@ begin
                                    then "../bin/model_runner.exe" else "../bin/model_runner"))),
             Options => Option ("--options", ""),
             Only    => Option ("--task", ""),
-            Clean   => Clean);
+            Clean   => Clean,
+            Repeats =>
+              (if Option ("--repeats", "1")'Length in 1 .. 3
+                 and then (for all C of Option ("--repeats", "1") => C in '0' .. '9')
+                 and then Natural'Value (Option ("--repeats", "1")) >= 1
+               then Natural'Value (Option ("--repeats", "1")) else 1));
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 

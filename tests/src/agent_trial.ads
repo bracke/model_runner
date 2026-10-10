@@ -23,12 +23,16 @@ package Agent_Trial is
    --    none -- --no-think, among them.
    --  @param Only One task to run, by name -- edit, find or delegate; ""
    --    for all of them.
-   --  @param Clean Whether every task ended complete.
+   --  @param Clean Whether every task ended complete, in every run.
+   --  @param Repeats How many times each task is run, each in its project
+   --    made afresh; past one, each run's session is kept beside the
+   --    project and how many runs of each task ended complete is said.
    procedure Run
      (Model   : String;
       Program : String;
       Options : String;
       Only    : String;
-      Clean   : out Boolean);
+      Clean   : out Boolean;
+      Repeats : Positive := 1);
 
 end Agent_Trial;

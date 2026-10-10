@@ -24,6 +24,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A /work reply has room to think:** up to 4096 tokens, or a quarter of the context where that is less, where every reply had 1024 -- a reasoning model was cut off mid-thought before it called; 1024 still where thinking is turned off, and the run's budget bounds the whole.
+- **tests agent-trial --repeats N:** each task run N times, each in its project made afresh, each run's session kept beside it, and how many of each task's runs ended complete said at the end -- one run of a small model is a sample, and a change is told from luck by a count.
+
 - **A reply cut off mid-thought goes on:** a reply that reached its length limit with no call and no answer in it -- a reasoning model mid-thought -- is told so and continues, twice at most, within the run's budget; qwen3-8b's was taken for its answer and the task blocked for having no report.
 
 - **/work compacts a full conversation:** out of context, its agent drops the oldest turns and keeps the record of the work in their place, as run's agent does -- where a qwen3.5-4b that reasoned at length filled its context and the task failed on "a prompt of 67 tokens plus 1024 generated tokens exceeds the 654 that remain".

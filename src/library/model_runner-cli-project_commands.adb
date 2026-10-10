@@ -731,7 +731,16 @@ package body Model_Runner.CLI.Project_Commands is
          return;
       end if;
 
-      Request.Max_Tokens := Natural'Max (Self.Item.Max_Tokens, 1024);
+      --  Room for a reply: a reasoning model thinks before it calls, and at
+      --  1024 tokens qwen3-8b was cut off mid-thought; so up to 4096, or a
+      --  quarter of the context where that is less -- 1024 at least, and
+      --  1024 where thinking is turned off. A model that answers sooner
+      --  stops sooner; the run's budget bounds the whole.
+      Request.Max_Tokens :=
+        Natural'Max
+          (Self.Item.Max_Tokens,
+           (if Model_Runner.Templates."=" (Self.Item.Thinking, Model_Runner.Templates.Thinking_Off) then 1024
+            else Natural'Max (1024, Natural'Min (4096, L.Capacity (Self.Session.all) / 4))));
       Request.Sampling := Self.Item.Sampling;
       Request.Seed := Self.Item.Seed;
       Request.Has_Seed := Self.Item.Has_Seed;
