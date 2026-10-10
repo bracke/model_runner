@@ -10969,6 +10969,36 @@ package body Tests.Framework_Cases is
    --  its toolchain, a tool that answers otherwise now is a run of the
    --  checks, not the earlier evidence copied -- which was stale the moment
    --  it was made, and kept being made.
+   --  A check's FILE:LINE is quoted from the project: the one file the
+   --  name means, each line once; a name two files end in, or none, is not.
+   procedure Check_Output_Quotes_Lines
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Root : constant String := Dirs.Full_Name (Scratch & "/quoted");
+      Out_File : Ada.Text_IO.File_Type;
+   begin
+      Remove_Tree (Root);
+      Dirs.Create_Path (Root & "/src/a");
+      Dirs.Create_Path (Root & "/src/b");
+      Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "/src/calc.adb");
+      Ada.Text_IO.Put_Line (Out_File, "package body Calc is");
+      Ada.Text_IO.Put_Line (Out_File, "   function Add (A, B : Integer) return Integer is");
+      Ada.Text_IO.Put_Line (Out_File, "   begin");
+      Ada.Text_IO.Put_Line (Out_File, "      if A > Integer'Last - B then");
+      Ada.Text_IO.Close (Out_File);
+      declare
+         Said : constant String := Wk.Quoted_Lines
+           ("raised CONSTRAINT_ERROR : calc.adb:4 overflow check failed" & LF
+            & "calc.adb:4:12: again" & LF & "util.adb:1: two of them" & LF & "gone.adb:3: none",
+            Root, ["src/calc.adb", "src/a/util.adb", "src/b/util.adb"]);
+      begin
+         Assert (Said = LF & "src/calc.adb line 4 is: if A > Integer'Last - B then",
+                 "a check's FILE:LINE was not quoted once, from the one file it names: " & Said);
+      end;
+      Remove_Tree (Root);
+   end Check_Output_Quotes_Lines;
+
    procedure Strict_Reuse_Follows_The_Toolchain
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11433,6 +11463,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Unknown_Events_Are_Left'Access,
          "an event of a kind this build does not know is left unconsumed and said");
+      Register_Routine
+        (T, Check_Output_Quotes_Lines'Access,
+         "a check's FILE:LINE is quoted from the one project file it names");
       Register_Routine
         (T, Strict_Reuse_Follows_The_Toolchain'Access,
          "held strict to its toolchain, evidence is not reused once a tool answers otherwise");

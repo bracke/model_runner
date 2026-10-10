@@ -367,6 +367,11 @@ private
       --  another process -- is refused, not made over what it did not see.
       Seen   : Revisions;
 
+      --  The lines of each file this runner's agent last read in part, as
+      --  FIRST:LAST ("" after a whole read): a passage an edit finds in more
+      --  than one place is taken where it starts within them.
+      Read_At : Revisions;
+
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;
 

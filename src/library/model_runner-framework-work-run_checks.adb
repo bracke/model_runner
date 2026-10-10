@@ -28,6 +28,11 @@ is
       else "scope: full -- " & (if Length (Chosen.Reason) > 0 then To_String (Chosen.Reason)
                                 else "what was changed reaches no narrower profile") & ASCII.LF);
 
+   --  The project's files, as the checks left them: what a FILE:LINE in
+   --  their output is looked up among.
+   Known    : Name_Lists.Vector;
+   Project_Dir : Unbounded_String;
+
    Change   : Stores.Transaction;
    Evidence : Unbounded_String;
    Passed   : Boolean;
@@ -61,6 +66,7 @@ begin
         Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
       Before  : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
    begin
+      Project_Dir := To_Unbounded_String (Project);
       --  Off the network unless the agent may use it.
       --  Within the time the work has left: a check does not carry it
       --  past its bound.
@@ -91,6 +97,7 @@ begin
          After : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
       begin
          for Position in After.Iterate loop
+            Known.Append (Configurations.Value_Maps.Key (Position));
             declare
                Path : constant String := Configurations.Value_Maps.Key (Position);
                Now  : constant String := Configurations.Value_Maps.Element (Position);
@@ -155,7 +162,8 @@ begin
                begin
                   Results.Read (Host.Item.all, Parts (7), Log, Held);
                   if E.Is_Ok (Held) then
-                     Append (Report, ASCII.LF & Tail (To_String (Log.Payload), 30));
+                     Append (Report, ASCII.LF & Tail (To_String (Log.Payload), 30)
+                             & Quoted_Lines (Tail (To_String (Log.Payload), 30), To_String (Project_Dir), Known));
                   end if;
                end;
             end if;

@@ -1501,6 +1501,113 @@ package body Model_Runner.Framework.Work is
       Stores.Commit (Host.Item.all, Change, Status);
    end Abandon;
 
+   ------------------
+   -- Quoted_Lines --
+   ------------------
+
+   function Quoted_Lines (Text : String; Project : String; Known : Name_Lists.Vector) return String is
+      Said  : Unbounded_String;
+      Given : Natural := 0;
+      Seen  : Name_Lists.Vector;
+      Index : Natural := Text'First;
+
+      function Name_Char (C : Character) return Boolean
+      is (C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '/' | '-');
+
+      --  The project file a name means: itself, or the one file whose
+      --  path ends in it.
+      function Resolved (Name : String) return String is
+         Found : Unbounded_String;
+         Count : Natural := 0;
+      begin
+         for Path of Known loop
+            if Path = Name then
+               return Path;
+            elsif Path'Length > Name'Length
+              and then Path (Path'Last - Name'Length .. Path'Last) = "/" & Name
+            then
+               Found := To_Unbounded_String (Path);
+               Count := Count + 1;
+            end if;
+         end loop;
+         return (if Count = 1 then To_String (Found) else "");
+      end Resolved;
+
+      --  Line Number of a project file, without its line end.
+      function Line_Of (Path : String; Number : Positive) return String is
+         Held    : Unbounded_String;
+         Got     : E.Error_Info;
+         At_Line : Positive := 1;
+         Start   : Positive;
+      begin
+         Files.Read_Text (Hostkit.Fs.Join (Project, Path), Held, Got);
+         if E.Is_Error (Got) then
+            return "";
+         end if;
+         declare
+            Whole : constant String := To_String (Held);
+         begin
+            Start := Whole'First;
+            for Position in Whole'Range loop
+               if Whole (Position) = ASCII.LF then
+                  if At_Line = Number then
+                     return Ada.Strings.Fixed.Trim
+                       (Whole (Start .. Position - 1), Ada.Strings.Maps.Null_Set,
+                        Ada.Strings.Maps.To_Set (ASCII.CR));
+                  end if;
+                  At_Line := At_Line + 1;
+                  Start := Position + 1;
+               end if;
+            end loop;
+            return (if At_Line = Number and then Start <= Whole'Last then Whole (Start .. Whole'Last) else "");
+         end;
+      end Line_Of;
+   begin
+      while Index <= Text'Last and then Given < 3 loop
+         if Text (Index) = ':' and then Index > Text'First and then Name_Char (Text (Index - 1))
+           and then Index < Text'Last and then Text (Index + 1) in '0' .. '9'
+         then
+            declare
+               First : Natural := Index - 1;
+               Last  : Natural := Index + 1;
+            begin
+               while First > Text'First and then Name_Char (Text (First - 1)) loop
+                  First := First - 1;
+               end loop;
+               while Last < Text'Last and then Text (Last + 1) in '0' .. '9' loop
+                  Last := Last + 1;
+               end loop;
+               declare
+                  Name   : constant String := Text (First .. Index - 1);
+                  Number : constant String := Text (Index + 1 .. Last);
+                  Path   : constant String :=
+                    (if Ada.Strings.Fixed.Index (Name, ".") > 0 and then Number'Length <= 7
+                     then Resolved (Name) else "");
+               begin
+                  if Path /= "" and then not Seen.Contains (Path & ":" & Number)
+                    and then Natural'Value (Number) > 0
+                  then
+                     Seen.Append (Path & ":" & Number);
+                     declare
+                        Line : constant String := Line_Of (Path, Natural'Value (Number));
+                     begin
+                        if Line /= "" then
+                           Append (Said, ASCII.LF & Path & " line " & Number & " is: "
+                                   & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both));
+                           Given := Given + 1;
+                        end if;
+                     end;
+                  end if;
+               end;
+               Index := Last + 1;
+            end;
+         else
+            Index := Index + 1;
+         end if;
+      end loop;
+      return To_String (Said);
+   end Quoted_Lines;
+
    -------------
    -- Execute --
    -------------

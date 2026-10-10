@@ -126,8 +126,16 @@ package Model_Runner.Tools.Editing is
    --  @param Expected The revision the caller read, or "".
    --  @param Base The directory a relative path is under; "" for the
    --    process's own.
+   --  @param Near_First The first of the lines the caller last read of the
+   --    file, or 0: a passage there more than once, exactly or loosely, is
+   --    edited where it starts within them, where only one place does.
+   --  @param Near_Last The last of those lines.
    --  @return What happened.
-   function Edit (Path, Old_Text, New_Text, Expected : String; Base : String := "") return Said;
+   function Edit
+     (Path, Old_Text, New_Text, Expected : String;
+      Base       : String := "";
+      Near_First : Natural := 0;
+      Near_Last  : Natural := 0) return Said;
 
    --  Lines First .. Last of a file, numbered; Last of nought for to the
    --  end. At most Range_Most of them.

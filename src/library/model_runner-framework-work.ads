@@ -270,6 +270,20 @@ package Model_Runner.Framework.Work is
    --  @return The words.
    function Permitted_Words (Plan : Execution_Plan) return String;
 
+   --  The lines of the project a check's output names as FILE:LINE --
+   --  calc.adb:5 -- quoted from the file, three at most, each on a line of
+   --  its own: a model read "overflow check failed" at calc.adb:5 and
+   --  reasoned about another expression for pages, the line itself never
+   --  read again.
+   --
+   --  @param Text The output.
+   --  @param Project The project's directory.
+   --  @param Known The project's files, relative to it: a name is the one
+   --    whose path it is or ends in.
+   --  @return The lines, each a line break and "PATH line N is: TEXT"; ""
+   --    where none.
+   function Quoted_Lines (Text : String; Project : String; Known : Name_Lists.Vector) return String;
+
    --  What a task's agent is told after its context -- how to answer, the
    --  tools it holds and what it may do -- as /work would tell it now: the
    --  text /task context shows.

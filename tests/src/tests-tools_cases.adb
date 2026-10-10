@@ -883,6 +883,41 @@ package body Tests.Tools_Cases is
          Try ("return A + B;" & ASCII.LF & "   null;", "   return A + B;" & ASCII.LF & "   null;",
               "new lines given already standing at the line's indentation were moved");
       end;
+      --  There twice, exactly or loosely: edited where it starts within
+      --  the lines last read, where only one place does; refused without.
+      declare
+         Twice_Path : constant String := Dir & "/twice.adb";
+         Text       : Ada.Strings.Unbounded.Unbounded_String;
+         Got        : E.Error_Info;
+      begin
+         Put (Twice_Path, "   A := 1;" & ASCII.LF & "   B := 2;" & ASCII.LF & "   A := 1;" & ASCII.LF);
+         declare
+            Exact : constant Ed.Said := Ed.Edit (Twice_Path, "A := 1;", "A := 3;", "", "", 2, 3);
+         begin
+            Ed.Read_Text (Twice_Path, Text, Got);
+            Assert (not Exact.Failed and then Has (Exact, "within the lines you last read")
+                    and then Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Text), "A := 1;") > 0
+                    and then Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Text), "A := 3;")
+                             > Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Text), "B := 2;"),
+                    "a passage there twice was not edited where the lines last read hold it: "
+                    & Ada.Strings.Unbounded.To_String (Exact.Text));
+         end;
+         Put (Twice_Path, "   A := 1;" & ASCII.LF & "   B := 2;" & ASCII.LF & "   A := 1;" & ASCII.LF);
+         declare
+            Loose : constant Ed.Said := Ed.Edit (Twice_Path, "    A := 1;", "    A := 3;", "", "", 1, 2);
+         begin
+            Ed.Read_Text (Twice_Path, Text, Got);
+            Assert (not Loose.Failed and then Has (Loose, "within the lines you last read")
+                    and then Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Text), "A := 3;")
+                             < Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Text), "B := 2;"),
+                    "a passage there twice loosely was not edited where the lines last read hold it: "
+                    & Ada.Strings.Unbounded.To_String (Loose.Text));
+         end;
+         Put (Twice_Path, "   A := 1;" & ASCII.LF & "   B := 2;" & ASCII.LF & "   A := 1;" & ASCII.LF);
+         Assert (Ed.Edit (Twice_Path, "A := 1;", "A := 4;", "").Failed
+                 and then Ed.Edit (Twice_Path, "A := 1;", "A := 4;", "", "", 1, 3).Failed,
+                 "a passage there twice was edited with no lines read, or lines holding both, to tell which");
+      end;
       Ada.Directories.Delete_Tree (Dir);
    end Files_Are_Edited_In_Part;
 
@@ -2466,9 +2501,11 @@ package body Tests.Tools_Cases is
          Ended  : Tr.Call_Outcome;
          Status : E.Error_Info;
       begin
-         if not Ada.Directories.Exists (Tree) then
-            Ada.Directories.Create_Path (Tree);
+         --  Afresh: a run stopped part way leaves its files.
+         if Ada.Directories.Exists (Tree) then
+            Ada.Directories.Delete_Tree (Tree);
          end if;
+         Ada.Directories.Create_Path (Tree);
          Placed.Set_Base (Tree);
          Placed.Run ("write_file", "{""path"": ""note.txt"", ""content"": ""placed""}", Room, Last, Ended, Status);
          Assert (E.Is_Ok (Status) and then Ada.Directories.Exists (Tree & "/note.txt")
@@ -2480,6 +2517,18 @@ package body Tests.Tools_Cases is
                  "a read was not of the tree named: " & Room (Room'First .. Last));
          Assert (Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("placed")),
                  "a read did not say, as a value, the revision it read");
+
+         --  A passage there twice is edited where the lines it last read
+         --  hold it.
+         Placed.Run ("write_file", "{""path"": ""twice.txt"", ""content"": ""x\ny\nx\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("read_file", "{""path"": ""twice.txt"", ""first_line"": 3, ""last_line"": 3}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""twice.txt"", ""old_text"": ""x"", ""new_text"": ""z""}",
+                     Room, Last, Ended, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "within the lines you last read") > 0,
+                 "an edit there twice was not taken where the lines last read hold it: "
+                 & Room (Room'First .. Last));
 
          --  Changed under it since it read it: refused, not made over what
          --  it did not see; read again, it may.

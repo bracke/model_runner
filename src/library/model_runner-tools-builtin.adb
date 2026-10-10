@@ -1284,6 +1284,21 @@ package body Model_Runner.Tools.Builtin is
       return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev, Base));
    end Edit_File;
 
+   --  An edit, taken where it starts within lines last read when it is
+   --  in more than one place.
+   function Edit_File_Near (Args : String; Base : String; First, Last : Natural) return Reply is
+      Have_P, Have_O, Have_N, Have_R : Boolean;
+      Path : constant String := Text_Argument (Args, "path", Have_P);
+      Old  : constant String := Text_Argument (Args, "old_text", Have_O);
+      Neww : constant String := Text_Argument (Args, "new_text", Have_N);
+      Rev  : constant String := Text_Argument (Args, "revision", Have_R);
+   begin
+      if not (Have_P and then Have_O and then Have_N) then
+         return Failure ("edit_file needs a path, old_text and new_text");
+      end if;
+      return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev, Base, First, Last));
+   end Edit_File_Near;
+
    function Read_Range (Args : String; Base : String) return Reply is
       Have, Have_F, Have_L : Boolean;
       Path  : constant String := Text_Argument (Args, "path", Have);
@@ -2576,8 +2591,44 @@ package body Model_Runner.Tools.Builtin is
                      & " change what is there");
                end if;
                declare
-                  Given : constant Reply := File_Answer (Named, Arguments, U.To_String (Self.Base));
+                  --  The lines last read of the file, where they were a part.
+                  Near : constant String :=
+                    (if Named = "edit_file" and then Have and then Self.Read_At.Has (Path)
+                     then Self.Read_At.Get (Path) else "");
+                  Colon : constant Natural := Ada.Strings.Fixed.Index (Near, ":");
+
+                  function Answered return Reply is
+                  begin
+                     if Colon > Near'First and then Colon < Near'Last then
+                        return Edit_File_Near
+                          (Arguments, U.To_String (Self.Base),
+                           Natural'Value (Near (Near'First .. Colon - 1)),
+                           Natural'Value (Near (Colon + 1 .. Near'Last)));
+                     end if;
+                     return File_Answer (Named, Arguments, U.To_String (Self.Base));
+                  end Answered;
+
+                  Given : constant Reply := Answered;
                begin
+                  --  Which lines it read: a part, kept; the whole, none.
+                  if Have and then not Given.Failed and then Named in "read_file" | "read_range" then
+                     declare
+                        First, Last : Long_Long_Integer := 0;
+                        Have_F, Have_L : Boolean;
+                     begin
+                        Integer_Argument (Arguments, "first_line", First, Have_F);
+                        Integer_Argument (Arguments, "last_line", Last, Have_L);
+                        if Have_F and then First in 1 .. 100_000_000 then
+                           Self.Read_At.Put
+                             (Path, Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (First), Ada.Strings.Left) & ":"
+                                    & (if Have_L and then Last in First .. 100_000_000
+                                       then Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Last), Ada.Strings.Left)
+                                       else "100000000"));
+                        else
+                           Self.Read_At.Put (Path, "");
+                        end if;
+                     end;
+                  end if;
                   --  The file as the agent now knows it, read or written.
                   if Have and then not Given.Failed
                     and then Given.After_Revision /= Model_Runner.Tools.Runner.No_Revision

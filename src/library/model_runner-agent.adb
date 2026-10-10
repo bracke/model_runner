@@ -701,7 +701,16 @@ package body Model_Runner.Agent is
                              and then Made.Ended (Key).Answer = Model_Runner.Tools.Runner.Answered;
                         begin
                            Items (Call).Text := U.To_Unbounded_String
-                             (if Worked then Made.Answer (Key) else Repeat_Note);
+                             (if Worked then Made.Answer (Key)
+                              --  A change that failed, given again: what it
+                              --  was given is not in the file as given, so
+                              --  the way on is to see the file as it is. One
+                              --  model resent such an edit until stopped.
+                              elsif Effect = Model_Runner.Tools.Runner.Changes
+                              then Repeat_Note & "; for a change that failed, read the file again"
+                                   & " whole -- read_file with only its path -- and give the text"
+                                   & " exactly as it shows now"
+                              else Repeat_Note);
                            Items (Call).Ended :=
                              (if Worked then Made.Ended (Key) else Failed_Note);
                         end;

@@ -427,7 +427,8 @@ package body Model_Runner.Tools.Editing is
    --  model resending the same edit until it was stopped.
    function Edit_Loosely
      (Path, Text, Now, Old_Text, New_Text : String;
-      Base : String) return Said
+      Base : String;
+      Near_First, Near_Last : Natural) return Said
    is
       package Line_Lists is new Ada.Containers.Vectors (Positive, U.Unbounded_String, U."=");
 
@@ -472,6 +473,7 @@ package body Model_Runner.Tools.Editing is
       At_Line : Natural := 0;
       Found   : Natural := 0;
       Starts  : U.Unbounded_String;
+      Settled_By_Read : Boolean := False;
       Refused : constant Said := (Failed => True, others => <>);
    begin
       --  Blank lines at the ends of what was given are no part of it.
@@ -493,6 +495,29 @@ package body Model_Runner.Tools.Editing is
             U.Append (Starts, (if Found = 1 then "" else ",") & Natural'Image (Start));
          end if;
       end loop;
+      --  There more than once, and once only within the lines last read:
+      --  that one is meant.
+      if Found > 1 and then Near_First > 0 then
+         declare
+            Within : Natural := 0;
+            Where  : Natural := 0;
+         begin
+            for Start in 1 .. Natural (File.Length) - Natural (Given.Length) + 1 loop
+               if Start in Near_First .. Near_Last
+                 and then (for all Offset in 0 .. Natural (Given.Length) - 1 =>
+                             Bare (U.To_String (File (Start + Offset))) = Bare (U.To_String (Given (1 + Offset))))
+               then
+                  Within := Within + 1;
+                  Where := Start;
+               end if;
+            end loop;
+            if Within = 1 then
+               Found := 1;
+               At_Line := Where;
+               Settled_By_Read := True;
+            end if;
+         end;
+      end if;
       if Found > 1 then
          return Failing
            ("old_text is not in " & Path & " exactly, and with the spaces at the ends of lines left out it"
@@ -566,6 +591,9 @@ package body Model_Runner.Tools.Editing is
                   & Natural'Image (Lines_In (New_Text))
                   & (if Names = "" then "" else "; in " & Names)
                   & "; old_text matched with the spaces at its lines' ends left out"
+                  & (if Settled_By_Read
+                     then ", in more than one place, and edited in the one within the lines you last read"
+                     else "")
                   & (if Shift = 0 then ""
                      else ", and the new text moved" & Natural'Image (abs Shift) & " space"
                           & (if abs Shift = 1 then "" else "s") & (if Shift > 0 then " in" else " out")
@@ -583,7 +611,12 @@ package body Model_Runner.Tools.Editing is
    -- Edit --
    ----------
 
-   function Edit (Path, Old_Text, New_Text, Expected : String; Base : String := "") return Said is
+   function Edit
+     (Path, Old_Text, New_Text, Expected : String;
+      Base       : String := "";
+      Near_First : Natural := 0;
+      Near_Last  : Natural := 0) return Said
+   is
       Held   : U.Unbounded_String;
       Status : E.Error_Info;
    begin
@@ -602,8 +635,31 @@ package body Model_Runner.Tools.Editing is
             return Failing ("old_text is empty: give the exact text to replace (write_file makes a new file)");
          end if;
          declare
-            At_Text : constant Natural := Ada.Strings.Fixed.Index (Text, Old_Text);
-            Times   : constant Natural := Ada.Strings.Fixed.Count (Text, Old_Text);
+            --  There more than once, and once only starting within the
+            --  lines last read: that one is meant.
+            function Near return Natural is
+               Within : Natural := 0;
+               Where  : Natural := 0;
+               From   : Natural := Ada.Strings.Fixed.Index (Text, Old_Text);
+            begin
+               if Near_First = 0 then
+                  return 0;
+               end if;
+               while From > 0 loop
+                  if Line_At (Text, From) in Near_First .. Near_Last then
+                     Within := Within + 1;
+                     Where := From;
+                  end if;
+                  From := Ada.Strings.Fixed.Index (Text, Old_Text, From + 1);
+               end loop;
+               return (if Within = 1 then Where else 0);
+            end Near;
+
+            Times_There : constant Natural := Ada.Strings.Fixed.Count (Text, Old_Text);
+            Chosen      : constant Natural := (if Times_There > 1 then Near else 0);
+            At_Text : constant Natural :=
+              (if Chosen > 0 then Chosen else Ada.Strings.Fixed.Index (Text, Old_Text));
+            Times   : constant Natural := (if Chosen > 0 then 1 else Times_There);
          begin
             if At_Text = 0 then
                --  Not there as given, but there line for line once the spaces
@@ -612,7 +668,8 @@ package body Model_Runner.Tools.Editing is
                --  was off. A model copying lines got the indentation one
                --  space wrong, twenty times running.
                declare
-                  Loose : constant Said := Edit_Loosely (Path, Text, Now, Old_Text, New_Text, Base);
+                  Loose : constant Said :=
+                    Edit_Loosely (Path, Text, Now, Old_Text, New_Text, Base, Near_First, Near_Last);
                begin
                   if not Loose.Failed or else U.Length (Loose.Text) > 0 then
                      return Loose;
@@ -740,6 +797,10 @@ package body Model_Runner.Tools.Editing is
                      & (if Lines_In (Old_Text) = 1 then "" else "s") & " replaced by"
                      & Natural'Image (Lines_In (New_Text))
                      & (if Names = "" then "" else "; in " & Names)
+                     & (if Chosen > 0
+                        then "; old_text is in the file" & Natural'Image (Times_There)
+                             & " times, and was edited in the one within the lines you last read"
+                        else "")
                      & (if Shifted then "; the new lines were set at that line's indentation ("
                                          & Ada.Strings.Fixed.Trim (Natural'Image (Lead), Ada.Strings.Left)
                                          & " spaces), each kept where it stood from the first"
