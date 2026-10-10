@@ -1859,6 +1859,16 @@ begin
          if E.Is_Ok (Status) then
             Stores.Commit (Item, Change, Status);
          end if;
+         --  The files taken in kept with their records, or put back.
+         declare
+            Settled : E.Error_Info;
+         begin
+            Workspaces.Settle_Integration
+              (Item, To_String (Result.Workspace_Id), Kept => E.Is_Ok (Status), Status => Settled);
+            if E.Is_Ok (Status) then
+               Status := Settled;
+            end if;
+         end;
          if E.Is_Error (Status) then
             return;
          end if;

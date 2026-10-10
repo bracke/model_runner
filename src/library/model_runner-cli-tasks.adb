@@ -5138,7 +5138,7 @@ package body Model_Runner.CLI.Tasks is
                end if;
                --  Afresh: what that attempt answered is not told the next.
                if E.Is_Ok (Outcome) then
-                  Model_Runner.Framework.Work.Forget_Last_Answer (Store, First_Word);
+                  Model_Runner.Framework.Work.Forget_Last_Answer (Store, First_Word, Outcome);
                end if;
                if E.Is_Error (Outcome) then
                   Fail (Outcome);
@@ -6628,6 +6628,11 @@ package body Model_Runner.CLI.Tasks is
                            At_Task : constant Natural := Ada.Strings.Fixed.Index (Name, "TASK-");
                            Stop    : Natural := At_Task + 5;
                         begin
+                           --  No task's: nothing to record of whose work, and
+                           --  the files kept as they are.
+                           if At_Task = 0 then
+                              Ws.Settle_Restore (Store, Name, Kept => True, Status => Outcome);
+                           end if;
                            if At_Task > 0 then
                               while Stop <= Name'Last and then Name (Stop) in '0' .. '9' loop
                                  Stop := Stop + 1;
@@ -6660,17 +6665,33 @@ package body Model_Runner.CLI.Tasks is
                                             else Swaps mod 2 = 0);
                                  end Holds_Work;
                                  Undo  : constant Boolean := not Holds_Work;
+
+                                 --  What the restore could not keep of whose work
+                                 --  the project now holds: the first failure,
+                                 --  said, the files being put back already.
+                                 Got   : E.Error_Info;
+                                 Noted : E.Error_Info := E.Success;
+
+                                 procedure Keep_Noted (Said : E.Error_Info) is
+                                 begin
+                                    if E.Is_Error (Said) and then E.Is_Ok (Noted) then
+                                       Noted := Said;
+                                    end if;
+                                 end Keep_Noted;
                               begin
                                  --  Its work gone from the project: kept in its
                                  --  history, so nothing there is credited to it.
                                  if Undo and then State /= "" then
-                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name);
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name, Got);
+                                    Keep_Noted (Got);
                                  --  Its work back in the project: undone no more,
                                  --  and the files as they are now its.
                                  elsif State /= "" then
-                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, "");
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, "", Got);
+                                    Keep_Noted (Got);
                                     Model_Runner.Framework.Work.Note_Restored
-                                      (Store, Owner, Ws.Kept_Files (Store, Name));
+                                      (Store, Owner, Ws.Kept_Files (Store, Name), Got);
+                                    Keep_Noted (Got);
                                  end if;
                                  --  Work a restore brings back of another task --
                                  --  what its file holds is that task's again --
@@ -6686,15 +6707,26 @@ package body Model_Runner.CLI.Tasks is
                                                        .Contains (File)
                                           then
                                              if Now_Holder = Other then
-                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, "");
+                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, "", Got);
+                                                Keep_Noted (Got);
                                              elsif Now_Holder /= "" and then State_Field (Other, "undone_by") = ""
                                              then
-                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, Name);
+                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, Name, Got);
+                                                Keep_Noted (Got);
                                              end if;
                                           end if;
                                        end loop;
                                     end;
                                  end loop;
+                                 --  The files kept with what is said of whose they
+                                 --  are, or put back without it.
+                                 Model_Runner.Framework.Workspaces.Settle_Restore
+                                   (Store, Name, Kept => E.Is_Ok (Noted), Status => Got);
+                                 Keep_Noted (Got);
+                                 if E.Is_Error (Noted) then
+                                    Fail (Noted);
+                                    return;
+                                 end if;
                                  if State /= "" then
                                     Pres.Put_Note
                                       (Screen, "cli.task.after_restore",

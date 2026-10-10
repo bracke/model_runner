@@ -6,6 +6,7 @@ with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Agent.Recall;
+with Model_Runner.Bytes;
 with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tools.Builtin;
@@ -116,6 +117,7 @@ package body Model_Runner.Agent is
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Think_Budget : Natural := 0;
+      Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
       Result     : out Outcome)
    is
@@ -395,6 +397,24 @@ package body Model_Runner.Agent is
                   Request.Max_Tokens := Think_Budget;
                end if;
                Gen.Release (Last_Result);
+               Thought_Before := U.Null_Unbounded_String;
+               Thought_Tokens := 0;
+               --  A scripted reply, taken as a model's that ended where it
+               --  meant to.
+               if Script /= null then
+                  declare
+                     Said : constant String := Script.Next_Reply;
+                  begin
+                     Last_Result :=
+                       (Reason           => Gen.End_Of_Sequence,
+                        Generated_Tokens => Natural'Max (1, Said'Length / 4),
+                        Text             => new Model_Runner.Bytes.Byte_Array'
+                                              (Model_Runner.Bytes.To_Bytes (Said)),
+                        Text_Length      => Said'Length,
+                        others           => <>);
+                  end;
+                  goto Generated;
+               end if;
                Gen.Generate
                  (Source   => Source,
                   Session  => Session,
@@ -410,8 +430,6 @@ package body Model_Runner.Agent is
                   Bounds   => Bounds,
                   Pictures => Pictures,
                   Outcome  => Last_Result);
-               Thought_Before := U.Null_Unbounded_String;
-               Thought_Tokens := 0;
                if Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
                  and then Last_Result.Generated_Tokens < Full
                  and then Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all)
@@ -444,6 +462,7 @@ package body Model_Runner.Agent is
                         Outcome  => Last_Result);
                   end;
                end if;
+               <<Generated>>
             end;
             Free (Rendered);
          end;
@@ -561,6 +580,27 @@ package body Model_Runner.Agent is
          --  Only where a call is marked as one: the open syntax reads a bare
          --  or fenced object as a call, and an answer showing a sample of
          --  JSON is no broken call.
+         --  More calls in one reply than are read: none of them run, and
+         --  told so with the limit -- the reply was taken for an answer, the
+         --  run ended, and not one of its calls was said to be missing.
+         if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Many)
+           and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
+           and then Result.Steps < Max_Steps and then Chances_Left > 0
+         then
+            declare
+               Told : E.Error_Info;
+            begin
+               Chances_Left := Chances_Left - 1;
+               Conv.Append
+                 (Messages, Conv.User_Role,
+                  "Your reply made more tool calls than one reply may --" & Natural'Image (Model_Runner.Tools.Max_Calls)
+                  & " at most -- so none of them was run. Make them over several replies, at most that"
+                  & " many in each.", Told);
+               if E.Is_Ok (Told) then
+                  goto Next_Iteration;
+               end if;
+            end;
+         end if;
          if E.Is_Error (Reading)
            and then Model_Runner.Tools."/=" (Tool_Syntax, Model_Runner.Tools.Open_JSON)
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0

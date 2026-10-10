@@ -7,6 +7,7 @@ with Hostkit.Fs;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -470,6 +471,80 @@ package body Model_Runner.Framework.Verification is
    -- Run_Profile --
    -----------------
 
+   --  The evidence a run may be reused from is found by what makes it the
+   --  same -- its profile, the files it ran on, its checks, configuration,
+   --  environment and network -- not by looking back through the last
+   --  twenty records, where how much else was checked since decided it:
+   --  runtime/evidence-reuse/KEY names the latest evidence taken so. What
+   --  it names is still held to every sameness the run is; a key that
+   --  names nothing, or something since gone, is only checks run again.
+   function Reuse_Index (Item : Stores.Store; Value : Records.Item; Profile, Revision : String) return String is
+      type Hash is mod 2 ** 64;
+      Sum : Hash := 16#CBF29CE484222325#;
+      Hex : constant String := "0123456789abcdef";
+      Out_Text : String (1 .. 16);
+
+      procedure Mix (Text : String) is
+      begin
+         for C of Text loop
+            Sum := (Sum xor Hash (Character'Pos (C))) * 16#100000001B3#;
+         end loop;
+         Sum := (Sum xor 16#0A#) * 16#100000001B3#;
+      end Mix;
+   begin
+      Mix (Profile);
+      Mix (Revision);
+      for Field of Name_Lists.Vector'(["checks_fingerprint", "configuration_fingerprint",
+                                       "environment_fingerprint", "network"])
+      loop
+         Mix (Records.Get (Value, Field));
+      end loop;
+      for Index in reverse Out_Text'Range loop
+         Out_Text (Index) := Hex (Hex'First + Natural (Sum mod 16));
+         Sum := Sum / 16;
+      end loop;
+      return Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "evidence-reuse"),
+                              Out_Text);
+   end Reuse_Index;
+
+   -----------------------
+   -- Prune_Reuse_Index --
+   -----------------------
+
+   function Prune_Reuse_Index (Item : Stores.Store) return Natural is
+      Folder : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "evidence-reuse");
+      Search : Ada.Directories.Search_Type;
+      Found  : Ada.Directories.Directory_Entry_Type;
+      Gone   : Name_Lists.Vector;
+   begin
+      if not Ada.Directories.Exists (Folder) then
+         return 0;
+      end if;
+      Ada.Directories.Start_Search (Search, Folder, "", [Ada.Directories.Ordinary_File => True, others => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Found);
+         declare
+            Path : constant String := Ada.Directories.Full_Name (Found);
+            Text : Unbounded_String;
+            Got  : E.Error_Info;
+         begin
+            Files.Read_Text (Path, Text, Got);
+            if E.Is_Error (Got)
+              or else not Stores.Exists
+                            (Item, Verification_Area, Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both))
+            then
+               Gone.Append (Path);
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      for Path of Gone loop
+         Files.Discard (Path);
+      end loop;
+      return Natural (Gone.Length);
+   end Prune_Reuse_Index;
+
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -681,12 +756,26 @@ package body Model_Runner.Framework.Verification is
          if Workspace = "" then
             declare
                Now   : constant String := Repository_Now (Item);
-               Names : constant Name_Lists.Vector := Stores.Names (Item, Verification_Area);
-               Seen  : Natural := 0;
+
+               --  The one the index names for what this run is, if any.
+               function Indexed return Name_Lists.Vector is
+                  Text : Unbounded_String;
+                  Got  : E.Error_Info;
+                  Path : constant String := Reuse_Index (Item, Value, Profile, Now);
+               begin
+                  return Result : Name_Lists.Vector do
+                     if Ada.Directories.Exists (Path) then
+                        Files.Read_Text (Path, Text, Got);
+                        if E.Is_Ok (Got) and then Length (Text) > 0 then
+                           Result.Append (Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both));
+                        end if;
+                     end if;
+                  end return;
+               end Indexed;
+
+               Names : constant Name_Lists.Vector := Indexed;
             begin
                for Position in reverse 1 .. Natural (Names.Length) loop
-                  exit when Seen >= 20;
-                  Seen := Seen + 1;
                   declare
                      Name  : constant String := Names (Position);
                      Id    : constant String :=
@@ -938,6 +1027,21 @@ package body Model_Runner.Framework.Verification is
          Records.Set (Value, "passed", (if Passed then "true" else "false"));
          Records.Set (Value, "ended_at", Timestamp);
          Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
+         --  Named in the reuse index under what it is: a later run the same
+         --  finds it there. An entry not written is only checks run again.
+         if Workspace = "" and then Records.Get (Value, "state_changed") = ""
+           and then Records.Get (Value, "scope_files") = ""
+         then
+            declare
+               Path    : constant String :=
+                 Reuse_Index (Item, Value, Profile, Records.Get (Value, "repository_revision"));
+               Ignored : E.Error_Info;
+            begin
+               if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
+                  Files.Write_Whole (Path, To_String (Evidence), Ignored);
+               end if;
+            end;
+         end if;
       end;
    end Run_Profile;
 

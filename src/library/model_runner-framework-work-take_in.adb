@@ -13,6 +13,8 @@ is
    Taken  : Name_Lists.Vector;
    Passed : Boolean := False;
    Held   : E.Error_Info;
+   --  Whether its files were taken in, their records yet to be committed.
+   Integrated : Boolean := False;
 begin
    Result := (Task_Id => To_Unbounded_String (Task_Id), others => <>);
 
@@ -227,6 +229,9 @@ begin
    end if;
    Workspaces.Integrate (Item, Change, Id, True, Taken, Status, Semantic_Accepted,
                          Text_Resolved);
+   --  Its files in the project, its records not yet: settled below, kept
+   --  or put back as the commit goes.
+   Integrated := E.Is_Ok (Status);
 
    --  A conflict found: kept in the task's history, each time, apart
    --  from the change that did not happen.
@@ -289,6 +294,20 @@ begin
    end if;
    if E.Is_Ok (Status) then
       Stores.Commit (Item, Change, Status);
+   end if;
+   --  The files taken in kept with the records that say so, or put back
+   --  without them: never one without the other past here.
+   if Integrated then
+      declare
+         Settled : E.Error_Info;
+      begin
+         Workspaces.Settle_Integration (Item, Id, Kept => E.Is_Ok (Status), Status => Settled);
+         if E.Is_Error (Settled) and then E.Is_Error (Status) then
+            E.Add_Text (Status, "detail", E.Text_Of (Settled, "detail"));
+         elsif E.Is_Error (Settled) then
+            Status := Settled;
+         end if;
+      end;
    end if;
    if E.Is_Ok (Status) then
       Workspaces.Release (Item, Id);

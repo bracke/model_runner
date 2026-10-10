@@ -2894,12 +2894,13 @@ package body Tests.Framework_Cases is
          declare
             Held : R.Item;
          begin
-            Model_Runner.Framework.Work.Note_Undone (Store, Only, "given-up-" & Only & "-WS-000001");
+            Model_Runner.Framework.Work.Note_Undone (Store, Only, "given-up-" & Only & "-WS-000001", Status);
+            Assert (E.Is_Ok (Status), "a task's work put back out was not noted: " & Code_Of (Status));
             S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
             Assert (R.Get (Held, "undone_by") = "given-up-" & Only & "-WS-000001",
                     "a task whose work was put back out was not noted so: " & R.Get (Held, "undone_by"));
             --  Given up to be done afresh: its last answer is told no more.
-            Model_Runner.Framework.Work.Forget_Last_Answer (Store, Only);
+            Model_Runner.Framework.Work.Forget_Last_Answer (Store, Only, Status);
             S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
             Assert (R.Get (Held, "last_result") = "", "a task's last answer was kept after it was forgotten");
             --  A copy of its work put back: the file as it is now is its,
@@ -2909,7 +2910,7 @@ package body Tests.Framework_Cases is
             begin
                Put_File (Project & "/restored.txt", "its work" & ASCII.LF);
                Model_Runner.Framework.Work.Note_Restored
-                 (Store, Only, Model_Runner.Framework.Name_Lists.To_Vector ("restored.txt", 1));
+                 (Store, Only, Model_Runner.Framework.Name_Lists.To_Vector ("restored.txt", 1), Status);
                Assert (Model_Runner.Framework.Work.Holder_Of (Store, "restored.txt") = Only,
                        "a file put back as a task's work was not found to be its");
                Put_File (Project & "/restored.txt", "edited since" & ASCII.LF);
@@ -5014,6 +5015,25 @@ package body Tests.Framework_Cases is
       Cx.Build (Store, "TASK-NONE-001", Profile, Two, Status);
       Assert (Status.Code = E.Framework_Not_Found,
               "a context was built for no task");
+      --  A requirement it serves that will not read: no context, not one
+      --  standing for the task without it.
+      --  Read afresh: the store opened again with it gone.
+      declare
+         Kept    : constant String := S.Root (Store) & "/requirements/" & To_String (Req) & ".rec";
+         Aside   : constant String := Kept & ".aside";
+         Project : constant String := Fresh_Root (Store);
+         Report  : S.Recovery_Report;
+         Gone    : Boolean;
+      begin
+         S.Close (Store);
+         Dirs.Rename (Kept, Aside);
+         S.Open (Store, Project, Report, Status);
+         Gone := not Dirs.Exists (Kept);
+         Cx.Build (Store, To_String (Id), Profile, Two, Status);
+         Dirs.Rename (Aside, Kept);
+         Assert (E.Is_Error (Status), "a context was built without a requirement its task serves: "
+                 & Code_Of (Status) & Gone'Image);
+      end;
       S.Close (Store);
    end Contexts_Are_Budgeted;
 
@@ -6054,6 +6074,67 @@ package body Tests.Framework_Cases is
          --  said once, none the second time it is asked.
          Assert (Ws.Last_Replaced_Copy = "" and then Ws.Last_Replaced_Copy = "",
                  "an earlier copy was said to be replaced where none was");
+      end;
+
+      --  Taken in, and stopped before its records were committed: the next
+      --  opening puts the files back as they were -- content and mode, and
+      --  a new file gone -- so the project and the state say one thing;
+      --  taken in again and committed, the journal goes and the files stay.
+      Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Shared  : constant String := Fresh_Root (Store) & "/src/shared.adb";
+         Journal : constant String := S.Root (Store) & "/runtime/integrating-" & To_String (Made.Id);
+         Back    : Model_Runner.Framework.Name_Lists.Vector;
+         Settled : E.Error_Info;
+         Known   : Boolean;
+         Ignored : Boolean;
+      begin
+         Ignored := Hostkit.Metadata.Set_Permissions (Shared, 8#755#);
+         Put_File (To_String (Made.Path) & "/src/shared.adb", "four");
+         Put_File (To_String (Made.Path) & "/src/brand_new.adb", "new");
+         --  Unarmed, a crash point is nothing.
+         S.Crash_Here (S.Mid_Integration);
+         --  Stopped with one file written and the other not: put back.
+         S.Crash_At (S.Mid_Integration);
+         begin
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+            Assert (False, "a taking in armed to stop did not stop");
+         exception
+            when S.Simulated_Crash =>
+               null;
+         end;
+         Change := S.No_Changes;
+         Ws.Recover_Integrations (Store, Back, Settled);
+         Assert (E.Is_Ok (Settled) and then Back.Contains (To_String (Made.Id))
+                 and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "three") > 0
+                 and then not Dirs.Exists (Fresh_Root (Store) & "/src/brand_new.adb")
+                 and then not Dirs.Exists (Journal),
+                 "a taking in stopped part way was not put back whole: " & Code_Of (Settled));
+         Back.Clear;
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         Assert (E.Is_Ok (Status) and then Dirs.Exists (Journal)
+                 and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "four") > 0,
+                 "an integration did not write its journal before its files: " & Code_Of (Status));
+         Change := S.No_Changes;
+         Ws.Recover_Integrations (Store, Back, Settled);
+         Assert (E.Is_Ok (Settled) and then Back.Contains (To_String (Made.Id))
+                 and then not Dirs.Exists (Journal)
+                 and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "three") > 0
+                 and then not Dirs.Exists (Fresh_Root (Store) & "/src/brand_new.adb"),
+                 "a taking in stopped before its commit was not put back: " & Code_Of (Settled));
+         if Hostkit.Metadata.Mode_Bits_Are_Native then
+            Assert (Hostkit.Metadata.File_Permission_Bits (Shared, Known) mod 8#1000# = 8#755# and then Known,
+                    "a file put back lost its mode");
+         end if;
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         S.Commit (Store, Change, Status);
+         Ws.Settle_Integration (Store, To_String (Made.Id), Kept => E.Is_Ok (Status), Status => Settled);
+         Assert (E.Is_Ok (Status) and then E.Is_Ok (Settled) and then not Dirs.Exists (Journal)
+                 and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "four") > 0
+                 and then Dirs.Exists (Fresh_Root (Store) & "/src/brand_new.adb")
+                 and then Taken.Contains ("src/shared.adb") and then Taken.Contains ("src/brand_new.adb"),
+                 "a taking in committed was not kept whole, or its journal stayed");
       end;
 
       --  A project with a file that cannot be read is not copied into a
@@ -9997,8 +10078,22 @@ package body Tests.Framework_Cases is
                                 and then not Model_Runner.Framework.Workspaces.Was_Restored
                                                (Kept_Store, Copies.First_Element),
                                 "a restore whose mark was not written was said to be done");
+                        Assert (Ada.Strings.Fixed.Trim
+                                  (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "after",
+                                "a restore whose mark was not written left its files put back");
                         Dirs.Delete_Directory (Mark);
                      end;
+                     --  Put back, and what is said of whose work it is not
+                     --  kept: the files back as they were, the copy not marked.
+                     Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
+                     Model_Runner.Framework.Workspaces.Settle_Restore
+                       (Kept_Store, Copies.First_Element, Kept => False, Status => Status);
+                     Assert (E.Is_Ok (Status)
+                             and then Ada.Strings.Fixed.Trim
+                                        (Read_Whole (Project & "/src/kept.txt"), Ada.Strings.Both) = "after"
+                             and then not Model_Runner.Framework.Workspaces.Was_Restored
+                                            (Kept_Store, Copies.First_Element),
+                             "a restore settled as not kept was not put back: " & Code_Of (Status));
                      Model_Runner.Framework.Workspaces.Restore_Kept (Kept_Store, Copies.First_Element, Got);
                      Assert (Model_Runner.Framework.Workspaces.Kept_Copies (Kept_Store).Contains (Aside),
                              "what a restore overwrote was not kept aside");
@@ -11043,6 +11138,8 @@ package body Tests.Framework_Cases is
                                                     ["src/calc.adb"]);
       begin
          Assert (Ada.Strings.Fixed.Index (Said, " -- in Ada: elsif, not elif; and then, not &&") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Said, "as Ada writes it: elsif A /= 0 and then B /= 0 then  -- not ""elif"" here") > 0
                  and then Ada.Strings.Fixed.Index (Said, "/=, not") = 0,
                  "a quoted line's slips were not said as Ada spells them, or what was right was: " & Said);
       end;
@@ -11054,6 +11151,8 @@ package body Tests.Framework_Cases is
          Calm    : constant String := Wk.Quoted_Lines ("calc.adb:6:4: warning: x", Root, ["src/calc.adb"]);
       begin
          Assert (Ada.Strings.Fixed.Index (Plain, "needs and then") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Plain, "as Ada writes it: if B > 0 and then A > Integer'Last - B then") > 0
                  and then Ada.Strings.Fixed.Index (Guarded, "in Ada") = 0
                  and then Ada.Strings.Fixed.Index (Calm, "in Ada") = 0,
                  "a guard's plain and was not said where it overflowed, or said where it did not: "

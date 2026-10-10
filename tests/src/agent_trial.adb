@@ -9,6 +9,7 @@ with Ada.Text_IO;
 with Hostkit;
 with Hostkit.Descriptors;
 with Hostkit.Fs;
+with Hostkit.Metadata;
 with Hostkit.Process;
 with Hostkit.Pty;
 with Hostkit.Spawn;
@@ -196,6 +197,29 @@ package body Agent_Trial is
       --  calls, the thoughts closed at their budget -- for a table that
       --  sets one commit's runs beside another's.
       Rows      : array (Tasks'Range) of Unbounded_String;
+
+      --  The program as it was when the trial began, copied aside and run
+      --  from there: a build during an hour of runs replaced it under them,
+      --  and a run started then read half a file, or another program.
+      function Copied return String is
+         --  With the program's own extension: a host that runs only an
+         --  .exe runs this one.
+         Aside : constant String :=
+           Ada.Directories.Full_Name
+             ("obj/agent-trial-program"
+              & (if Ada.Directories.Extension (Program) = "" then ""
+                 else "." & Ada.Directories.Extension (Program)));
+         Ignored : Boolean;
+      begin
+         Ada.Directories.Copy_File (Program, Aside);
+         Ignored := Hostkit.Metadata.Set_Permissions (Aside, 8#755#);
+         return Aside;
+      exception
+         when others =>
+            return Program;
+      end Copied;
+
+      Own_Copy : constant String := Copied;
    begin
       Clean := True;
       for Round in 1 .. Repeats loop
@@ -306,7 +330,7 @@ package body Agent_Trial is
                            end if;
                         end loop;
                      end;
-                     if Hostkit.Spawn."/=" (Hostkit.Spawn.Start (Program, Words, Spawned, Child),
+                     if Hostkit.Spawn."/=" (Hostkit.Spawn.Start (Own_Copy, Words, Spawned, Child),
                                             Hostkit.Spawn.Spawn_Ok)
                      then
                         Ada.Text_IO.Put_Line ("agent-trial: " & Program & " did not start");

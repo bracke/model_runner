@@ -9,6 +9,7 @@ with Hostkit.Fs;
 
 with Model_Runner.Framework.Records;
 with Model_Runner.Text;
+with Model_Runner.Tools.Editing;
 
 package body Model_Runner.Framework.Files is
 
@@ -137,14 +138,19 @@ package body Model_Runner.Framework.Files is
       Text   : String;
       Status : out E.Error_Info) is
    begin
-      Write_Text (Path & Partial_Suffix, Text, Status);
-      if E.Is_Ok (Status)
-        and then not Hostkit.Fs.Replace_File (Path & Partial_Suffix, Path)
-      then
-         --  Not left beside it: the file is what it was.
-         Discard (Path & Partial_Suffix);
-         Write_Failed (Path, Status);
-      end if;
+      --  The one replacement the agent's edits take too (Editing.Replace):
+      --  a partial file of this writer's own beside it, synced, renamed
+      --  over, the folder synced and the file's permissions kept -- one
+      --  fixed PATH.partial was shared by any two writers of a path.
+      declare
+         Put : Model_Runner.Tools.Editing.Said;
+      begin
+         Model_Runner.Tools.Editing.Replace (Path, Text, Put);
+         Status := E.Success;
+         if Put.Failed then
+            Write_Failed (Path, Status);
+         end if;
+      end;
    end Write_Whole;
 
    -----------------------

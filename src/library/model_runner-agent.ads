@@ -279,6 +279,21 @@ package Model_Runner.Agent is
    --  A reference to the memory carried between runs.
    type Memory_Reference is access all Run_Memory'Class;
 
+   --  Replies given in place of the model's, one a step: the conversation
+   --  is rendered as for a model and each reply taken from here instead of
+   --  generated, so what the loop does with a reply -- the calls it runs,
+   --  the notes it adds, what it refuses -- can be held to a script.
+   type Reply_Script is abstract tagged limited null record;
+
+   --  The next reply.
+   --
+   --  @param Self The script.
+   --  @return The reply's text, as a model would have written it.
+   function Next_Reply (Self : in out Reply_Script) return String is abstract;
+
+   --  A reference to a script of replies.
+   type Script_Reference is access all Reply_Script'Class;
+
    --  What closes a thought held to its budget, the rest of the reply
    --  asked for after it.
    Thought_Closing : constant String := ASCII.LF & "</think>" & ASCII.LF & ASCII.LF;
@@ -418,6 +433,7 @@ package Model_Runner.Agent is
    --  @param Think_Budget The tokens a reply may think for before its
    --    thought is closed for it and the rest of the reply is asked for:
    --    a reasoning model spent minutes a call thinking. 0 for no bound.
+   --  @param Script Replies to take in place of generating them, or null.
    --  @param Carry What an earlier run on this conversation held of its
    --    calls, carried on and added to; null for a run that starts afresh.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
@@ -452,6 +468,7 @@ package Model_Runner.Agent is
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Think_Budget : Natural := 0;
+      Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
       Result     : out Outcome);
 

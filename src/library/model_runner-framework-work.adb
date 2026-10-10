@@ -321,13 +321,15 @@ package body Model_Runner.Framework.Work is
    -- Note_Undone --
    -----------------
 
-   procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String) is
+   procedure Note_Undone
+     (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info)
+   is
       Change : Stores.Transaction;
-      Status : E.Error_Info;
       Held   : Records.Item;
       Got    : E.Error_Info;
       Event  : Unbounded_String;
    begin
+      Status := E.Success;
       Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Got);
       Annotate (Item, Change, Task_Id, "undone_by", Copy);
       --  In its history too, where it changes how its work stands.
@@ -336,6 +338,9 @@ package body Model_Runner.Framework.Work is
                       (if Copy /= "" then "its work undone in the project: " & Copy & " was put back over it"
                        else "its work back in the project, as a kept copy put it there"),
                       Event, Status);
+         if E.Is_Error (Status) then
+            Stores.Spoil (Change, Status);
+         end if;
       end if;
       Stores.Commit (Item, Change, Status);
    end Note_Undone;
@@ -344,9 +349,11 @@ package body Model_Runner.Framework.Work is
    -- Note_Restored --
    -------------------
 
-   procedure Note_Restored (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector) is
+   procedure Note_Restored
+     (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Change  : Stores.Transaction;
-      Status  : E.Error_Info;
       Held    : Records.Item;
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
       Prints  : Unbounded_String;
@@ -406,9 +413,10 @@ package body Model_Runner.Framework.Work is
    -- Forget_Last_Answer --
    ------------------------
 
-   procedure Forget_Last_Answer (Item : in out Stores.Store; Task_Id : String) is
+   procedure Forget_Last_Answer
+     (Item : in out Stores.Store; Task_Id : String; Status : out Model_Runner.Errors.Error_Info)
+   is
       Change : Stores.Transaction;
-      Status : E.Error_Info;
    begin
       Annotate (Item, Change, Task_Id, "last_result", "");
       Stores.Commit (Item, Change, Status);
@@ -1649,6 +1657,60 @@ package body Model_Runner.Framework.Work is
          then
             Say ("X := X + 1, not += or ++");
          end if;
+         --  And the line as Ada writes it, to copy: told and then eleven
+         --  times, qwen3-8b kept its and -- the words did not reach it, a
+         --  line it can take as it stands may.
+         declare
+            Fixed : Unbounded_String;
+            At_C  : Natural := Lower'First;
+
+            --  Lower's place in Line: To_Lower numbers from one.
+            function Of_Line (Index : Positive) return Character
+            is (Line (Line'First + (Index - Lower'First)));
+
+            function Starts (Index : Positive; Word : String) return Boolean
+            is (Index + Word'Length - 1 <= Lower'Last
+                and then Lower (Index .. Index + Word'Length - 1) = Word);
+
+            function Word_At (Index : Positive; Word : String) return Boolean
+            is (Starts (Index, Word)
+                and then (Index = Lower'First or else not Name_Char (Lower (Index - 1)))
+                and then (Index + Word'Length > Lower'Last or else not Name_Char (Lower (Index + Word'Length))));
+         begin
+            while At_C <= Lower'Last loop
+               if Word_At (At_C, "elif") then
+                  Append (Fixed, "elsif");
+                  At_C := At_C + 4;
+               elsif Word_At (At_C, "elseif") then
+                  Append (Fixed, "elsif");
+                  At_C := At_C + 6;
+               elsif Starts (At_C, "&&") then
+                  Append (Fixed, "and then");
+                  At_C := At_C + 2;
+               elsif Starts (At_C, "||") then
+                  Append (Fixed, "or else");
+                  At_C := At_C + 2;
+               elsif Starts (At_C, "!=") then
+                  Append (Fixed, "/=");
+                  At_C := At_C + 2;
+               elsif Starts (At_C, "==") then
+                  Append (Fixed, "=");
+                  At_C := At_C + 2;
+               elsif Overflowed and then Word_At (At_C, "and") and then not Starts (At_C + 3, " then") then
+                  Append (Fixed, "and then");
+                  At_C := At_C + 3;
+               elsif Overflowed and then Word_At (At_C, "or") and then not Starts (At_C + 2, " else") then
+                  Append (Fixed, "or else");
+                  At_C := At_C + 2;
+               else
+                  Append (Fixed, Of_Line (At_C));
+                  At_C := At_C + 1;
+               end if;
+            end loop;
+            if To_String (Fixed) /= Line then
+               Say ("as Ada writes it: " & Ada.Strings.Fixed.Trim (To_String (Fixed), Ada.Strings.Both));
+            end if;
+         end;
          return To_String (Said);
       end Ada_Slips;
 

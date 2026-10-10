@@ -599,7 +599,10 @@ package Model_Runner.Framework.Work is
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @param Copy The kept copy put back.
-   procedure Note_Undone (Item : in out Stores.Store; Task_Id, Copy : String);
+   --  @param Status A failure keeping it: the task's history does not say
+   --    what the project holds of its work.
+   procedure Note_Undone
+     (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info);
 
    --  Note in a task's history that a copy of its work was put back in the
    --  project: the files as they are now are its, as if taken in.
@@ -607,7 +610,11 @@ package Model_Runner.Framework.Work is
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @param Files The files put back, as the project names them.
-   procedure Note_Restored (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector);
+   --  @param Status A failure keeping it: what integration holds the task's
+   --    files to is not what they are.
+   procedure Note_Restored
+     (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  The task whose work a file holds now, by what it holds: the one whose
    --  taking in -- or a copy of its work put back -- left it just so.
@@ -622,7 +629,10 @@ package Model_Runner.Framework.Work is
    --
    --  @param Item The store.
    --  @param Task_Id The task.
-   procedure Forget_Last_Answer (Item : in out Stores.Store; Task_Id : String);
+   --  @param Status A failure forgetting it: the next attempt would be told
+   --    the last one's answer.
+   procedure Forget_Last_Answer
+     (Item : in out Stores.Store; Task_Id : String; Status : out Model_Runner.Errors.Error_Info);
 
    --  A file's content as a fingerprint, as what a task took in is kept.
    --

@@ -140,6 +140,13 @@ package Model_Runner.Framework.Verification is
    --  @return The profile's name, or the empty string for none.
    function Profile_Of (Item : Stores.Store; Task_Id : String) return String;
 
+   --  The reuse index rid of entries naming evidence no longer there: one
+   --  file a distinct run, it is pruned at opening rather than let grow.
+   --
+   --  @param Item The store.
+   --  @return How many entries went.
+   function Prune_Reuse_Index (Item : Stores.Store) return Natural;
+
    --  Run a profile for a task, and keep the evidence.
    --
    --  @param Item The store.

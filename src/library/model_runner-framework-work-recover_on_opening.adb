@@ -144,7 +144,31 @@ begin
       end if;
    end loop;
 
-   --  5: workspaces, against their directories and their tasks.
+   --  5: workspaces. First an integration a stop left between its files
+   --  and its records: kept where the state says it was taken in, put
+   --  back where it does not -- before anything reads the project's files.
+   declare
+      Back  : Name_Lists.Vector;
+      Taken : E.Error_Info;
+   begin
+      Workspaces.Recover_Integrations (Item, Back, Taken);
+      for Id of Back loop
+         Said.Append (Id & ": its taking in stopped part way, and the files it had written were put back");
+      end loop;
+      if E.Is_Error (Taken) then
+         Said.Append (E.Text_Of (Taken, "detail"));
+      end if;
+   end;
+
+   --  The evidence reuse index rid of what names evidence gone.
+   declare
+      Pruned : constant Natural := Verification.Prune_Reuse_Index (Item);
+      pragma Unreferenced (Pruned);
+   begin
+      null;
+   end;
+
+   --  And against their directories and their tasks.
    declare
       Home : constant String :=
         Hostkit.Fs.Join (Stores.Root (Item), "workspaces");

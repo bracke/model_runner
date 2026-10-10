@@ -1497,6 +1497,12 @@ package body Model_Runner.Framework.Tasks is
                  (Value, "requirement." & Requirement,
                   "revision" & Natural'Image (Held.Revision) & ", "
                   & To_String (Held.Meaning));
+            else
+               --  Served, and not to be read: said, not left out -- what is
+               --  built from the view, a context among it, fails on it
+               --  rather than stand for the task without it.
+               Records.Set (Value, "requirement." & Requirement,
+                            "unreadable: " & E.Error_Code'Image (Read.Code));
             end if;
          end;
       end loop;

@@ -52,7 +52,9 @@ private package Model_Runner.Framework.Files is
       Status : out Model_Runner.Errors.Error_Info);
 
    --  Write a file so that it is either what it was or what it is now:
-   --  written beside itself and renamed over.
+   --  written beside itself in a partial file of this writer's own, synced,
+   --  renamed over, the folder synced and the file's permissions kept --
+   --  Tools.Editing.Replace, the replacement the agent's edits take.
    --
    --  @param Path The file.
    --  @param Text Its bytes.

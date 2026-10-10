@@ -118,6 +118,50 @@ package Model_Runner.Framework.Workspaces is
       Id             : String;
       Unsettled_Only : Boolean := False) return Name_Lists.Vector;
 
+   --  Settle an integration once the change it staged is committed, or is
+   --  not: the files taken in stay and its journal goes, or they are put
+   --  back as they were. Integrate changes the project's files before its
+   --  records are committed, and writes a journal first -- what each file
+   --  was, and what it is to be -- so that the two never say different
+   --  things for longer than a commit takes.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @param Kept Whether the integration's change was committed.
+   --  @param Status A file that could not be put back; the journal is then
+   --    kept, for the next opening to put it back.
+   procedure Settle_Integration
+     (Item   : Stores.Store;
+      Id     : String;
+      Kept   : Boolean;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Settle putting a kept copy back once whose work it is has been
+   --  recorded, or has not: kept, its journal goes; not, the files are put
+   --  back as they were and the copy is not marked put back.
+   --
+   --  @param Item The store.
+   --  @param Name The kept copy.
+   --  @param Kept Whether what is said of the tasks was kept.
+   --  @param Status A file that could not be put back.
+   procedure Settle_Restore
+     (Item   : Stores.Store;
+      Name   : String;
+      Kept   : Boolean;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  At opening: every integration a stop left between its files and its
+   --  commit settled -- kept where the state says its workspace was taken
+   --  in, put back where it does not.
+   --
+   --  @param Item The store.
+   --  @param Put_Back The workspaces whose taking in was put back.
+   --  @param Status A file that could not be put back.
+   procedure Recover_Integrations
+     (Item     : Stores.Store;
+      Put_Back : out Name_Lists.Vector;
+      Status   : out Model_Runner.Errors.Error_Info);
+
    --  Remove an integrated workspace's tree, once its integration is
    --  kept: until then the work is still there to take in again.
    --

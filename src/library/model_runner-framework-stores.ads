@@ -358,7 +358,10 @@ package Model_Runner.Framework.Stores is
    --  it is applied; and with some of it applied and the rest not. Opening
    --  the store finishes or forgets what it finds, as it does after a real
    --  crash, and a test asserts the state holds together after either.
-   type Crash_Point is (No_Crash, After_Journal, After_Mark, Mid_Apply);
+   --  Mid_Integration stops a workspace's taking in with some of its files
+   --  written and the rest not, its records not committed: the opening
+   --  after puts the files back.
+   type Crash_Point is (No_Crash, After_Journal, After_Mark, Mid_Apply, Mid_Integration);
 
    --  Raised where a commit is stopped short at a Crash_Point.
    Simulated_Crash : exception;
@@ -368,6 +371,12 @@ package Model_Runner.Framework.Stores is
    --
    --  @param Point Where.
    procedure Crash_At (Point : Crash_Point);
+
+   --  Stop here, where Crash_At armed this point: for what writes beside
+   --  the store -- a workspace's taking in -- to be stopped as a commit is.
+   --
+   --  @param Point This place.
+   procedure Crash_Here (Point : Crash_Point);
 
    --  Mark a transaction as one that must not be committed: something that
    --  was to be part of it could not be staged -- a record it updates would

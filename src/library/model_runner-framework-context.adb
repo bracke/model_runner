@@ -508,6 +508,11 @@ package body Model_Runner.Framework.Context is
                      end if;
                   end loop;
                   Offer (Parent & "#whole", "parent", Mandatory, To_String (Text));
+               else
+                  --  Mandatory, and not to be had: no context, rather than
+                  --  one that claims to stand for the task without it.
+                  Status := Read;
+                  return;
                end if;
             end;
          end if;
@@ -532,6 +537,11 @@ package body Model_Runner.Framework.Context is
                             Id & ": " & To_String (Held.Text)
                             & (if Length (Held.Criteria) = 0 then ""
                                else ASCII.LF & "Acceptance: " & To_String (Held.Criteria)));
+                  else
+                     --  A requirement it serves that will not read: what the
+                     --  work is held to is missing, and the context with it.
+                     Status := Read;
+                     return;
                   end if;
                end;
             elsif Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "decision."
@@ -549,6 +559,9 @@ package body Model_Runner.Framework.Context is
                      Offer (Id & "@" & Image (Held.Revision), "decision", Mandatory,
                             Id & " " & To_String (Held.Title) & ": "
                             & To_String (Held.Text));
+                  else
+                     Status := Read;
+                     return;
                   end if;
                end;
             end if;

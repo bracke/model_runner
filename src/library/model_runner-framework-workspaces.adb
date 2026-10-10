@@ -10,6 +10,7 @@ with Ada.Unchecked_Deallocation;
 
 with Hostkit;
 with Hostkit.Fs;
+with Hostkit.Metadata;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
@@ -18,6 +19,7 @@ with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Tools.Editing;
 
 package body Model_Runner.Framework.Workspaces is
 
@@ -1052,7 +1054,11 @@ package body Model_Runner.Framework.Workspaces is
          Stores.Read (Item, Workspaces_Area, Id, Value, Status);
          --  A record there and not readable is left for the consistency
          --  check to find, not written over with one field of its own.
+         --  And the change it was to be part of refused whole: an
+         --  integration staged without its workspace's status would say
+         --  it was taken in while the workspace stood active.
          if E.Is_Error (Status) and then E."/=" (Status.Code, E.Framework_Not_Found) then
+            Stores.Spoil (Change, Status);
             return;
          end if;
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
@@ -1067,6 +1073,261 @@ package body Model_Runner.Framework.Workspaces is
    ---------------
    -- Integrate --
    ---------------
+
+   --  Where an integration's journal is kept, and what each file it
+   --  touches was: runtime/integrating-WS and runtime/integrating-WS.before.
+   function Journal_Of (Item : Stores.Store; Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "integrating-" & Id));
+
+   function Saved_Of (Item : Stores.Store; Id, Path : String) return String
+   is (Hostkit.Fs.Join (Journal_Of (Item, Id) & ".before", Path));
+
+   --  A project file written as the agent's edits are written -- a partial
+   --  file of its own, synced, renamed over, its permissions kept -- and,
+   --  made new, given Mode where one is known: a script put back keeps its
+   --  executable bit.
+   procedure Put_File (Target, Text : String; Mode : Natural; Has_Mode : Boolean; Status : out E.Error_Info) is
+      Put : Model_Runner.Tools.Editing.Said;
+   begin
+      Status := E.Success;
+      if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+         Files.Write_Failed (Target, Status);
+         return;
+      end if;
+      Model_Runner.Tools.Editing.Replace (Target, Text, Put);
+      if Put.Failed then
+         Files.Write_Failed (Target, Status);
+      elsif Put.Created and then Has_Mode then
+         declare
+            Ignored : constant Boolean := Hostkit.Metadata.Set_Permissions (Target, Mode);
+            pragma Unreferenced (Ignored);
+         begin
+            null;
+         end;
+      end if;
+   end Put_File;
+
+   --  A journal's line in its fields, a tab apart.
+   function Split_Tabs (Line : String) return Name_Lists.Vector is
+      Start : Positive := Line'First;
+   begin
+      return Result : Name_Lists.Vector do
+         for Index in Line'First .. Line'Last + 1 loop
+            if Index > Line'Last or else Line (Index) = ASCII.HT then
+               Result.Append (Line (Start .. Index - 1));
+               Start := Index + 1;
+            end if;
+         end loop;
+      end return;
+   end Split_Tabs;
+
+   --  The project's files put back as an integration's journal says they
+   --  were: present, from the copy kept, with their mode; absent, removed.
+   --  What cannot be is named in Status, and the journal kept for another
+   --  try; all of it put back, the journal goes.
+   procedure Roll_Back (Item : Stores.Store; Id : String; Status : out E.Error_Info) is
+      Text    : Unbounded_String;
+      Read_It : E.Error_Info;
+      Left    : Unbounded_String;
+      Project : constant String := Project_Of (Item);
+   begin
+      Status := E.Success;
+      if not Dirs.Exists (Journal_Of (Item, Id)) then
+         return;
+      end if;
+      Files.Read_Text (Journal_Of (Item, Id), Text, Read_It);
+      if E.Is_Error (Read_It) then
+         Status := Read_It;
+         return;
+      end if;
+      for Line of Lines_Of (To_String (Text)) loop
+         declare
+            Fields : constant Name_Lists.Vector := Split_Tabs (Line);
+         begin
+            if Natural (Fields.Length) >= 2 and then Fields (1) /= "task" then
+               declare
+                  Path   : constant String := Fields (1);
+                  Target : constant String := Hostkit.Fs.Join (Project, Path);
+                  Done   : Boolean := True;
+               begin
+                  if Fields (2) = "absent" then
+                     Done := Files.Delete_If_Present (Target);
+                  else
+                     declare
+                        Was   : Unbounded_String;
+                        Got   : E.Error_Info;
+                        Wrote : E.Error_Info;
+                        Mode  : constant String := (if Natural (Fields.Length) >= 3 then Fields (3) else "-");
+                     begin
+                        Files.Read_Text (Saved_Of (Item, Id, Path), Was, Got);
+                        if E.Is_Ok (Got) then
+                           Put_File (Target, To_String (Was),
+                                     (if Mode /= "-" and then (for all C of Mode => C in '0' .. '9')
+                                      then Natural'Value (Mode) else 0),
+                                     Mode /= "-" and then (for all C of Mode => C in '0' .. '9'), Wrote);
+                        end if;
+                        Done := E.Is_Ok (Got) and then E.Is_Ok (Wrote);
+                     end;
+                  end if;
+                  if not Done then
+                     Append (Left, (if Length (Left) = 0 then "" else ", ") & Path);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      if Length (Left) > 0 then
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
+         E.Add_Text (Status, "detail", "what " & Id & " took in could not all be put back: " & To_String (Left));
+         return;
+      end if;
+      Files.Discard (Journal_Of (Item, Id));
+      Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+   end Roll_Back;
+
+   --  A journal begun for files about to be written in the project: each
+   --  one's content kept aside and its mode, or that it was absent; the
+   --  journal written last, so that there, it names copies all kept.
+   procedure Begin_Journal
+     (Item   : Stores.Store;
+      Id     : String;
+      Owner  : String;
+      Paths  : Name_Lists.Vector;
+      Absent : out Name_Lists.Vector;
+      Status : out E.Error_Info)
+   is
+      Project : constant String := Project_Of (Item);
+      Journal : Unbounded_String := To_Unbounded_String ("task" & ASCII.HT & Owner & ASCII.LF);
+   begin
+      Absent.Clear;
+      Status := E.Success;
+      for Path of Paths loop
+         declare
+            Target : constant String := Hostkit.Fs.Join (Project, Path);
+            Text   : Unbounded_String;
+            Read   : E.Error_Info;
+            Saved  : E.Error_Info;
+         begin
+            if Dirs.Exists (Target) then
+               Files.Read_Text (Target, Text, Read);
+               if E.Is_Error (Read) then
+                  Status := Read;
+                  Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  return;
+               end if;
+               if not Files.Make_Directory (Dirs.Containing_Directory (Saved_Of (Item, Id, Path))) then
+                  Files.Write_Failed (Saved_Of (Item, Id, Path), Status);
+                  Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  return;
+               end if;
+               Files.Write_Whole (Saved_Of (Item, Id, Path), To_String (Text), Saved);
+               if E.Is_Error (Saved) then
+                  Status := Saved;
+                  Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  return;
+               end if;
+               declare
+                  Known : Boolean;
+                  Mode  : constant Natural := Hostkit.Metadata.File_Permission_Bits (Target, Known);
+               begin
+                  Append (Journal, Path & ASCII.HT & "present" & ASCII.HT
+                          & (if Known then Ada.Strings.Fixed.Trim (Natural'Image (Mode), Ada.Strings.Left)
+                             else "-") & ASCII.LF);
+               end;
+            else
+               Absent.Append (Path);
+               Append (Journal, Path & ASCII.HT & "absent" & ASCII.LF);
+            end if;
+         end;
+      end loop;
+      Files.Write_Whole (Journal_Of (Item, Id), To_String (Journal), Status);
+      if E.Is_Error (Status) then
+         Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+      end if;
+   end Begin_Journal;
+
+   ------------------------
+   -- Settle_Integration --
+   ------------------------
+
+   procedure Settle_Integration
+     (Item   : Stores.Store;
+      Id     : String;
+      Kept   : Boolean;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Success;
+      if Kept then
+         Files.Discard (Journal_Of (Item, Id));
+         Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+      else
+         Roll_Back (Item, Id, Status);
+      end if;
+   end Settle_Integration;
+
+   --------------------------
+   -- Recover_Integrations --
+   --------------------------
+
+   procedure Recover_Integrations
+     (Item     : Stores.Store;
+      Put_Back : out Name_Lists.Vector;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Runtime : constant String := Hostkit.Fs.Join (Stores.Root (Item), "runtime");
+      Search  : Dirs.Search_Type;
+      Found   : Dirs.Directory_Entry_Type;
+      Ids     : Name_Lists.Vector;
+      Mark    : constant String := "integrating-";
+   begin
+      Put_Back.Clear;
+      Status := E.Success;
+      if not Dirs.Exists (Runtime) then
+         return;
+      end if;
+      Dirs.Start_Search (Search, Runtime, Mark & "*", [Dirs.Ordinary_File => True, others => False]);
+      while Dirs.More_Entries (Search) loop
+         Dirs.Get_Next_Entry (Search, Found);
+         declare
+            Name : constant String := Dirs.Simple_Name (Found);
+         begin
+            Ids.Append (Name (Name'First + Mark'Length .. Name'Last));
+         end;
+      end loop;
+      Dirs.End_Search (Search);
+      for Id of Ids loop
+         declare
+            Held : Workspace;
+            Got  : E.Error_Info;
+            Back : E.Error_Info;
+         begin
+            Read (Item, Id, Held, Got);
+            --  A kept copy put back: done where it is marked so -- what is
+            --  said of the task reads the mark -- put back where not.
+            if Id'Length > 8 and then Id (Id'First .. Id'First + 7) = "restore-" then
+               if Was_Restored (Item, Id (Id'First + 8 .. Id'Last)) then
+                  Settle_Integration (Item, Id, True, Back);
+               else
+                  Roll_Back (Item, Id, Back);
+                  if E.Is_Ok (Back) then
+                     Put_Back.Append (Id);
+                  end if;
+               end if;
+            elsif E.Is_Ok (Got) and then To_String (Held.Status) = "integrated" then
+               Settle_Integration (Item, Id, True, Back);
+            else
+               Roll_Back (Item, Id, Back);
+               if E.Is_Ok (Back) then
+                  Put_Back.Append (Id);
+               end if;
+            end if;
+            if E.Is_Error (Back) and then E.Is_Ok (Status) then
+               Status := Back;
+            end if;
+         end;
+      end loop;
+   end Recover_Integrations;
 
    procedure Integrate
      (Item      : Stores.Store;
@@ -1111,13 +1372,24 @@ package body Model_Runner.Framework.Workspaces is
             --  settled since can be told from what is not.
             declare
                Kept    : Unbounded_String;
-               Ignored : E.Error_Info;
+               Noted   : E.Error_Info;
             begin
                for Path of Clashes loop
                   Append (Kept, Path & ASCII.HT
                           & Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) & ASCII.LF);
                end loop;
-               Files.Write_Text (Conflict_Record (Item, Id), To_String (Kept), Ignored);
+               --  What conflicted, and how the workspace held it then, is
+               --  what settling it is later told by: not kept, there is no
+               --  conflict to settle, only a failure said.
+               Files.Write_Whole (Conflict_Record (Item, Id), To_String (Kept), Noted);
+               if E.Is_Error (Noted) then
+                  Status := E.Make (E.Framework_Transaction_Failed);
+                  E.Add_Text (Status, "path", Conflict_Record (Item, Id), E.Param_Path);
+                  E.Add_Text (Status, "detail",
+                              "the integration's conflicts could not be recorded, which settling them is"
+                              & " told by: nothing was taken in");
+                  return;
+               end if;
 
                --  For each, the two changes joined with the lines both
                --  touched marked, beside the tree -- merge/PATH -- for a
@@ -1188,62 +1460,34 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
 
-      --  All or nothing: what each file was is kept, and put back should
-      --  any of them fail to be written.
+      --  All or nothing, and so across a stop: what each file was is kept
+      --  in a journal before any is written -- its content and its mode --
+      --  and put back should any fail to be written, or the change these
+      --  files go with not be committed (Settle_Integration), or the
+      --  process stop between (Recover_Integrations). The files written
+      --  first and the records after said two things a stop could leave
+      --  apart, and a retry skipped what was already copied, taking in
+      --  less than it said.
       declare
-         Wanted : constant Name_Lists.Vector := Changes (Item, Id);
-         Before : Maps.Map;
-         Absent : Name_Lists.Vector;
+         Wanted  : constant Name_Lists.Vector := Changes (Item, Id);
+         Absent  : Name_Lists.Vector;
 
-         --  Everything taken so far back as it was. What cannot be is said
-         --  with the failure that stopped the taking in: the project holds
-         --  part of the work there.
+         --  Everything taken so far back as it was, from the journal. What
+         --  cannot be is said with the failure that stopped the taking in.
          procedure Put_Back is
-            Wrote : E.Error_Info;
-            Left  : Unbounded_String;
+            Back : E.Error_Info;
          begin
-            for Path of Taken loop
-               declare
-                  Target : constant String := Hostkit.Fs.Join (Project, Path);
-                  Back   : Boolean := True;
-               begin
-                  if Absent.Contains (Path) then
-                     Back := Files.Delete_If_Present (Target);
-                  elsif Before.Contains (Path) then
-                     Files.Write_Text (Target, Before (Path), Wrote);
-                     Back := E.Is_Ok (Wrote);
-                  end if;
-                  if not Back then
-                     Append (Left, (if Length (Left) = 0 then "" else ", ") & Path);
-                  end if;
-               end;
-            end loop;
-            if Length (Left) > 0 then
-               E.Add_Text (Status, "detail",
-                           "and what was taken in before it could not all be put back: "
-                           & To_String (Left));
+            Roll_Back (Item, Id, Back);
+            if E.Is_Error (Back) then
+               E.Add_Text (Status, "detail", "and " & E.Text_Of (Back, "detail"));
             end if;
             Taken.Clear;
          end Put_Back;
       begin
-         for Path of Wanted loop
-            declare
-               Target : constant String := Hostkit.Fs.Join (Project, Path);
-               Text   : Unbounded_String;
-               Read   : E.Error_Info;
-            begin
-               if Dirs.Exists (Target) then
-                  Files.Read_Text (Target, Text, Read);
-                  if E.Is_Error (Read) then
-                     Status := Read;
-                     return;
-                  end if;
-                  Before.Include (Path, To_String (Text));
-               else
-                  Absent.Append (Path);
-               end if;
-            end;
-         end loop;
+         Begin_Journal (Item, Id, To_String (Held.Task_Id), Wanted, Absent, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
 
          for Path of Wanted loop
             declare
@@ -1259,11 +1503,6 @@ package body Model_Runner.Framework.Workspaces is
                end if;
                Taken.Append (Path);
                if Dirs.Exists (From) then
-                  if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
-                     Files.Write_Failed (Target, Status);
-                     Put_Back;
-                     return;
-                  end if;
                   --  Changed in the project since, on other lines: the two
                   --  joined; otherwise the workspace's copy, as settled.
                   declare
@@ -1301,14 +1540,35 @@ package body Model_Runner.Framework.Workspaces is
                               Put_Back;
                               return;
                         end;
-                        Files.Write_Text (Target, To_String (Joined), Wrote);
+                        Put_File (Target, To_String (Joined), 0, False, Wrote);
                         if E.Is_Error (Wrote) then
                            Status := Wrote;
                            Put_Back;
                            return;
                         end if;
                      else
-                        Dirs.Copy_File (From, Target);
+                        --  The workspace's copy, written as an edit is, a
+                        --  new file given the workspace file's mode.
+                        declare
+                           Content : Unbounded_String;
+                           Got     : E.Error_Info;
+                           Known   : Boolean;
+                           Mode    : constant Natural := Hostkit.Metadata.File_Permission_Bits (From, Known);
+                        begin
+                           Files.Read_Text (From, Content, Got);
+                           if E.Is_Ok (Got) then
+                              Put_File (Target, To_String (Content), Mode, Known, Wrote);
+                           elsif E."=" (Got.Code, E.IO_File_Too_Large) then
+                              --  Past what is read whole: copied as it was.
+                              Got := E.Success;
+                              Dirs.Copy_File (From, Target);
+                           end if;
+                           if E.Is_Error (Got) or else E.Is_Error (Wrote) then
+                              Status := (if E.Is_Error (Got) then Got else Wrote);
+                              Put_Back;
+                              return;
+                           end if;
+                        end;
                      end if;
                   end;
                elsif not Files.Delete_If_Present (Target) then
@@ -1322,6 +1582,9 @@ package body Model_Runner.Framework.Workspaces is
                   Put_Back;
                   return;
             end;
+            --  Outside the file's own failure: a stop here is a stop, not a
+            --  write that failed and was put back.
+            Stores.Crash_Here (Stores.Mid_Integration);
             <<Next_Path>>
          end loop;
       end;
@@ -1629,12 +1892,43 @@ package body Model_Runner.Framework.Workspaces is
             Dirs.Copy_File (Hostkit.Fs.Join (Project, Path), Target);
          end;
       end loop;
+      --  What the project held of these files kept in a journal before
+      --  they are written, as a taking in keeps it: a stop part way, or
+      --  records of whose work it is that cannot be kept after, puts them
+      --  back (Settle_Restore, Recover_Integrations), where files written
+      --  first and records after could say two things.
+      declare
+         Absent : Name_Lists.Vector;
+      begin
+         Begin_Journal (Item, "restore-" & Name, Name, Listed, Absent, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end;
       for Path of Listed loop
          declare
-            Target : constant String := Hostkit.Fs.Join (Project, Path);
+            Target  : constant String := Hostkit.Fs.Join (Project, Path);
+            From    : constant String := Hostkit.Fs.Join (Where, Path);
+            Content : Unbounded_String;
+            Got     : E.Error_Info;
+            Wrote   : E.Error_Info := E.Success;
+            Known   : Boolean;
+            Mode    : constant Natural := Hostkit.Metadata.File_Permission_Bits (From, Known);
+            Back    : E.Error_Info;
          begin
-            Dirs.Create_Path (Dirs.Containing_Directory (Target));
-            Dirs.Copy_File (Hostkit.Fs.Join (Where, Path), Target);
+            Files.Read_Text (From, Content, Got);
+            if E.Is_Ok (Got) then
+               Put_File (Target, To_String (Content), Mode, Known, Wrote);
+            elsif E."=" (Got.Code, E.IO_File_Too_Large) then
+               Got := E.Success;
+               Dirs.Create_Path (Dirs.Containing_Directory (Target));
+               Dirs.Copy_File (From, Target);
+            end if;
+            if E.Is_Error (Got) or else E.Is_Error (Wrote) then
+               Status := (if E.Is_Error (Got) then Got else Wrote);
+               Roll_Back (Item, "restore-" & Name, Back);
+               return;
+            end if;
          end;
       end loop;
       --  Marked as put back, for what is said of the task afterwards; the
@@ -1648,8 +1942,16 @@ package body Model_Runner.Framework.Workspaces is
          Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Marked);
          if E.Is_Error (Marked) then
             Status := Marked;
-            E.Add_Text (Status, "detail",
-                        "the files of " & Name & " were put back but not marked so");
+            --  Not marked, not put back: the files back as they were.
+            declare
+               Back : E.Error_Info;
+            begin
+               Roll_Back (Item, "restore-" & Name, Back);
+               E.Add_Text (Status, "detail",
+                           "the files of " & Name & " could not be marked put back"
+                           & (if E.Is_Ok (Back) then ", so they were left as they were"
+                              else ", and " & E.Text_Of (Back, "detail")));
+            end;
             return;
          end if;
          if Dirs.Exists (Hostkit.Fs.Join (Aside, Restored_Mark)) then
@@ -1662,7 +1964,32 @@ package body Model_Runner.Framework.Workspaces is
          Status := E.Make (E.Framework_Transaction_Failed);
          E.Add_Text (Status, "name", Name);
          E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Message (Occurrence));
+         declare
+            Back : E.Error_Info;
+         begin
+            Roll_Back (Item, "restore-" & Name, Back);
+         end;
    end Restore_Kept;
+
+   --------------------
+   -- Settle_Restore --
+   --------------------
+
+   procedure Settle_Restore
+     (Item   : Stores.Store;
+      Name   : String;
+      Kept   : Boolean;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Success;
+      if Kept then
+         Settle_Integration (Item, "restore-" & Name, True, Status);
+      else
+         Roll_Back (Item, "restore-" & Name, Status);
+         --  Not put back: not marked so.
+         Files.Discard (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark));
+      end if;
+   end Settle_Restore;
 
    ----------------
    -- Prune_Kept --

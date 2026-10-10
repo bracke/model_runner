@@ -131,6 +131,9 @@ begin
       if E.Is_Ok (Status) then
          Stores.Commit (Host.Item.all, Change, Status);
       end if;
+      --  A helper not ended in the state is one completion waits on for
+      --  good: kept to be said, and no change starts after it.
+      Keep_Unkept (Host, Status);
       Host.Open.Delete_Last;
       Host.Calls.Delete_Last;
       Host.Opened.Delete_Last;
