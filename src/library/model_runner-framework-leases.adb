@@ -1,4 +1,6 @@
+with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 
 with Hostkit.Host;
 with Hostkit.Process;
@@ -11,6 +13,53 @@ package body Model_Runner.Framework.Leases is
    package E renames Model_Runner.Errors;
 
    Prefix : constant String := "lease.";
+
+   --  The leases this process's own running work holds, by resource and
+   --  owner; asked from the work's task and its watchers alike.
+   package Key_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (String, Ada.Strings.Hash, "=");
+
+   protected Running_Here is
+      procedure Add (Key : String);
+      procedure Remove (Key : String);
+      function Has (Key : String) return Boolean;
+   private
+      Keys : Key_Sets.Set;
+   end Running_Here;
+
+   protected body Running_Here is
+      procedure Add (Key : String) is
+      begin
+         Keys.Include (Key);
+      end Add;
+
+      procedure Remove (Key : String) is
+      begin
+         Keys.Exclude (Key);
+      end Remove;
+
+      function Has (Key : String) return Boolean is (Keys.Contains (Key));
+   end Running_Here;
+
+   function Key_Of (Resource, Owner : String) return String is (Resource & ASCII.NUL & Owner);
+
+   -------------
+   -- Working --
+   -------------
+
+   procedure Working (Resource : String; Owner : String) is
+   begin
+      Running_Here.Add (Key_Of (Resource, Owner));
+   end Working;
+
+   ------------------
+   -- Done_Working --
+   ------------------
+
+   procedure Done_Working (Resource : String; Owner : String) is
+   begin
+      Running_Here.Remove (Key_Of (Resource, Owner));
+   end Done_Working;
 
    --  The lease on a resource, if there is one that can be read.
    procedure Held_Lease
@@ -53,6 +102,12 @@ package body Model_Runner.Framework.Leases is
                                      Hostkit.Process.Present);
    begin
       if Alive then
+         return True;
+      --  This process, and its own work still running under the lease:
+      --  held, run out or not.
+      elsif Here and then Process = Own_Process
+        and then Running_Here.Has (Key_Of (Records.Get (Value, "resource"), Records.Get (Value, "owner")))
+      then
          return True;
       elsif Records.Get (Value, "expires_at") <= Timestamp then
          return False;

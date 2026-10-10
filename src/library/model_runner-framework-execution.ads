@@ -98,8 +98,23 @@ package Model_Runner.Framework.Execution is
       Resource : String := "";
       Owner    : String := "");
 
+   --  Why the calling task's work was stopped, once it was. Each task
+   --  keeps its own watch -- Watch and Watch_Lease set the caller's -- so
+   --  two executions on two tasks never stop each other.
+   type Stop_Reason is
+     (Not_Stopped,                 --  running, or nothing watched
+      Lease_Lost,                  --  its lease no longer names its owner
+      Stop_Requested,              --  another process asked it to stop
+      Cancel_Requested_Elsewhere); --  ... and for its task to be cancelled
+
+   --  Why the work watched was stopped: asked of the lease and the stop
+   --  file at most once a second, and kept once known.
+   --
+   --  @return The reason; Not_Stopped while it runs.
+   function Stopped_For return Stop_Reason;
+
    --  Whether the work watched has been ended elsewhere: its lease no
-   --  longer names its owner.
+   --  longer names its owner, or another process asked it to stop.
    --
    --  @return True when it has.
    function Work_Withdrawn return Boolean;

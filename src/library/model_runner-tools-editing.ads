@@ -66,13 +66,39 @@ package Model_Runner.Tools.Editing is
    --  @return Its revision.
    function Revision_Of (Path : String; Base : String := "") return String;
 
-   --  What a tool said, and how it went.
+   --  What a tool said, and how it went: for a change, also the file's
+   --  revision before and after it, and whether it made the file -- as
+   --  values, beside the words the model reads.
    type Said is record
       Text      : Ada.Strings.Unbounded.Unbounded_String;
       Failed    : Boolean := False;
       Changed   : Boolean := False;
       Truncated : Boolean := False;
+      --  For a search: whether some of what it was to look through could
+      --  not be read, so no match is not no match.
+      Incomplete : Boolean := False;
+      Before_Revision : Ada.Strings.Unbounded.Unbounded_String;
+      After_Revision  : Ada.Strings.Unbounded.Unbounded_String;
+      Created   : Boolean := False;
    end record;
+
+   --  Put a file's whole new contents in place: written beside it, made
+   --  durable, its permission bits kept, and renamed over it in one step,
+   --  so a crash, a full disk or an interrupt leaves it as it was or as it
+   --  is now and never cut short; the folder made where it is not there.
+   --  A file that holds the contents already is left as it is.
+   --
+   --  @param Path The file, as a tool was given it.
+   --  @param Content Its new contents, as bytes.
+   --  @param Result Changed, Created, the revisions before and after --
+   --    before "" for a file made -- or Failed, with what failed and why.
+   --  @param Base The directory a relative path is under; "" for the
+   --    process's own.
+   procedure Replace
+     (Path    : String;
+      Content : String;
+      Result  : out Said;
+      Base    : String := "");
 
    --  Replace the one place a passage is in a file. Refused, and nothing
    --  written, where Expected is given and the file's revision is another,

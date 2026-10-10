@@ -18,6 +18,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Numerics;
 with Model_Runner.Grammar;
+with Hostkit.Metadata;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
@@ -2320,7 +2321,64 @@ package body Tests.Tools_Cases is
          Placed.Run ("read_file", "{""path"": ""note.txt""}", Room, Last, Ended, Status);
          Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "placed") > 0,
                  "a read was not of the tree named: " & Room (Room'First .. Last));
+         Assert (Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("placed")),
+                 "a read did not say, as a value, the revision it read");
+
+         --  Changed under it since it read it: refused, not made over what
+         --  it did not see; read again, it may.
+         declare
+            Outside : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Open (Outside, Ada.Text_IO.Out_File, Tree & "/note.txt");
+            Ada.Text_IO.Put (Outside, "theirs");
+            Ada.Text_IO.Close (Outside);
+         end;
+         Placed.Run ("write_file", "{""path"": ""note.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "has changed since you last read") > 0,
+                 "a write over a change made since the agent read the file was made: " & Room (Room'First .. Last));
+         Placed.Run ("read_file", "{""path"": ""note.txt""}", Room, Last, Ended, Status);
+         Placed.Run ("write_file", "{""path"": ""note.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed and then not Ended.Created
+                 and then Ended.Before_Revision /= Tr.No_Revision
+                 and then Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("mine")),
+                 "a write after reading again was not made, or did not say its revisions");
+
+         --  A file made: said as made; a folder that cannot be made: said
+         --  why, not only that the write failed.
+         if Ada.Directories.Exists (Tree & "/fresh.txt") then
+            Ada.Directories.Delete_File (Tree & "/fresh.txt");
+         end if;
+         Placed.Run ("write_file", "{""path"": ""fresh.txt"", ""content"": ""new""}", Room, Last, Ended, Status);
+         Assert (Ended.Created and then Ended.Before_Revision = Tr.No_Revision,
+                 "a file made was not said to be made");
+         Placed.Run ("write_file", "{""path"": ""note.txt/inner.txt"", ""content"": ""x""}", Room, Last, Ended, Status);
+         Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "could not make the folder") > 0,
+                 "a folder that could not be made was not said: " & Room (Room'First .. Last));
+         Ada.Directories.Delete_File (Tree & "/fresh.txt");
          Ada.Directories.Delete_File (Tree & "/note.txt");
+
+         --  A search that could not look everywhere does not say what is
+         --  absent.
+         declare
+            Locked : constant String := Tree & "/locked.txt";
+            Outside : Ada.Text_IO.File_Type;
+            Ignored : Boolean;
+            Found  : Model_Runner.Tools.Editing.Said;
+         begin
+            Ada.Text_IO.Create (Outside, Ada.Text_IO.Out_File, Locked);
+            Ada.Text_IO.Put (Outside, "needle");
+            Ada.Text_IO.Close (Outside);
+            if Hostkit.Metadata.Set_Permissions (Locked, 0) then
+               Found := Model_Runner.Tools.Editing.Search_Code (Tree, "needle");
+               Ignored := Hostkit.Metadata.Set_Permissions (Locked, 8#644#);
+               --  Root reads it anyway: then it is found, and nothing is said.
+               Assert (Found.Incomplete
+                       or else Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Found.Text), "needle") > 0,
+                       "a search that could not read a file said nothing holds the text: "
+                       & Ada.Strings.Unbounded.To_String (Found.Text));
+            end if;
+            Ada.Directories.Delete_File (Locked);
+         end;
       end;
 
       --  A file read is stamped by what the file holds, so one changed

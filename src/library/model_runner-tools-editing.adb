@@ -1,8 +1,13 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Interfaces;
+
+with Hostkit.Durability;
+with Hostkit.Fs;
+with Hostkit.Metadata;
 
 package body Model_Runner.Tools.Editing is
 
@@ -160,25 +165,123 @@ package body Model_Runner.Tools.Editing is
       else Ada.Strings.Fixed.Count (Text, [1 => ASCII.LF])
            + (if Text (Text'Last) = ASCII.LF then 0 else 1));
 
-   --  Write a text as bytes, exactly.
-   procedure Write_Bytes (Path : String; Text : String) is
+   -------------
+   -- Replace --
+   -------------
+
+   procedure Replace
+     (Path    : String;
+      Content : String;
+      Result  : out Said;
+      Base    : String := "")
+   is
       use Ada.Streams;
-      File  : Stream_IO.File_Type;
-      Block : Stream_Element_Array (1 .. Stream_Element_Offset (Text'Length));
+      Disk   : constant String := On_Disk (Base, Path);
+      Folder : constant String := Ada.Directories.Containing_Directory (Disk);
+      --  Hidden beside it, where a crash may leave it, and on the same
+      --  filesystem, which the rename needs.
+      Partial : constant String :=
+        (if Folder = "" then "" else Folder & "/") & "." & Ada.Directories.Simple_Name (Disk)
+        & ".model_runner-partial";
+      There  : constant Boolean :=
+        Ada.Directories.Exists (Disk)
+        and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File);
+      Before : constant String := (if There then Revision_Of (Path, Base) else "");
+      After  : constant String := Revision (Content);
+      File   : Stream_IO.File_Type;
+
+      procedure Fail (Text : String) is
+      begin
+         Result := Failing (Text);
+         Result.Before_Revision := U.To_Unbounded_String (Before);
+         Result.After_Revision := U.To_Unbounded_String (Before);
+      end Fail;
    begin
-      for Index in Block'Range loop
-         Block (Index) := Stream_Element (Character'Pos (Text (Text'First + Natural (Index) - 1)));
-      end loop;
-      Stream_IO.Create (File, Stream_IO.Out_File, Path);
-      Stream_IO.Write (File, Block);
-      Stream_IO.Close (File);
-   exception
-      when others =>
-         if Stream_IO.Is_Open (File) then
-            Stream_IO.Close (File);
+      Result := (others => <>);
+      Result.Before_Revision := U.To_Unbounded_String (Before);
+      Result.After_Revision := U.To_Unbounded_String (After);
+      Result.Created := not There;
+      if There and then Before = After then
+         return;
+      end if;
+
+      --  Its folder made with it -- and the reason said where it cannot be.
+      if Folder /= "" and then Ada.Directories.Exists (Folder)
+        and then Ada.Directories."/=" (Ada.Directories.Kind (Folder), Ada.Directories.Directory)
+      then
+         Fail ("could not make the folder for " & Path & ": "
+               & Ada.Directories.Simple_Name (Folder) & " is a file");
+         return;
+      elsif Folder /= "" and then not Ada.Directories.Exists (Folder) then
+         begin
+            Ada.Directories.Create_Path (Folder);
+         exception
+            when Failure : others =>
+               Fail ("could not make the folder for " & Path & ": "
+                     & Ada.Exceptions.Exception_Message (Failure));
+               return;
+         end;
+      end if;
+
+      --  Written whole beside itself, made durable, and renamed over it in
+      --  one step: a crash, a full disk or an interrupt leaves the file as
+      --  it was or as it is now, never cut short -- as the project's own
+      --  state is written.
+      declare
+         Block : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
+      begin
+         for Index in Block'Range loop
+            Block (Index) := Stream_Element (Character'Pos (Content (Content'First + Natural (Index) - 1)));
+         end loop;
+         Stream_IO.Create (File, Stream_IO.Out_File, Partial);
+         Stream_IO.Write (File, Block);
+         Stream_IO.Close (File);
+      exception
+         when Failure : others =>
+            if Stream_IO.Is_Open (File) then
+               Stream_IO.Close (File);
+            end if;
+            if Ada.Directories.Exists (Partial) then
+               Ada.Directories.Delete_File (Partial);
+            end if;
+            Fail ("could not write " & Path & ": " & Ada.Exceptions.Exception_Message (Failure));
+            return;
+      end;
+      declare
+         Synced : constant Hostkit.Durability.Outcome := Hostkit.Durability.Sync_File (Partial);
+         pragma Unreferenced (Synced);
+      begin
+         null;
+      end;
+      --  What the file was allowed keeps being allowed: a script stays one.
+      if There then
+         declare
+            Available : Boolean;
+            Bits      : constant Natural := Hostkit.Metadata.File_Permission_Bits (Disk, Available);
+            Kept      : Boolean;
+         begin
+            if Available then
+               Kept := Hostkit.Metadata.Set_Permissions (Partial, Bits);
+               pragma Unreferenced (Kept);
+            end if;
+         end;
+      end if;
+      if not Hostkit.Fs.Replace_File (Partial, Disk) then
+         if Ada.Directories.Exists (Partial) then
+            Ada.Directories.Delete_File (Partial);
          end if;
-         raise;
-   end Write_Bytes;
+         Fail ("could not put the new " & Path & " in place of the old");
+         return;
+      end if;
+      declare
+         Synced : constant Hostkit.Durability.Outcome :=
+           Hostkit.Durability.Sync_Directory (if Folder = "" then "." else Folder);
+         pragma Unreferenced (Synced);
+      begin
+         null;
+      end;
+      Result.Changed := True;
+   end Replace;
 
    ---------------------
    -- Declarations_In --
@@ -312,9 +415,18 @@ package body Model_Runner.Tools.Editing is
                Upto  : constant Positive := From + Natural'Max (1, Lines_In (New_Text)) - 1;
                Names : constant String := Declarations_In (After, From, Upto);
             begin
-               Write_Bytes (On_Disk (Base, Path), After);
+               declare
+                  Put : Said;
+               begin
+                  Replace (Path, After, Put, Base);
+                  if Put.Failed then
+                     return Put;
+                  end if;
+               end;
                return
-                 (Text    => U.To_Unbounded_String
+                 (Before_Revision => U.To_Unbounded_String (Now),
+                  After_Revision  => U.To_Unbounded_String (Revision (After)),
+                  Text    => U.To_Unbounded_String
                     ("edited " & Path & " at line" & Natural'Image (From) & ":"
                      & Natural'Image (Lines_In (Old_Text)) & " line"
                      & (if Lines_In (Old_Text) = 1 then "" else "s") & " replaced by"
@@ -378,6 +490,8 @@ package body Model_Runner.Tools.Editing is
          end if;
          U.Append (Result.Text, "(" & Path & ":" & Natural'Image (Total) & " lines, revision "
                    & Revision (Text) & ")");
+         Result.Before_Revision := U.To_Unbounded_String (Revision (Text));
+         Result.After_Revision := Result.Before_Revision;
          return Result;
       end;
    end Read_Range;
@@ -449,6 +563,25 @@ package body Model_Runner.Tools.Editing is
       Result : Said;
       Hits   : Natural := 0;
 
+      --  What could not be searched -- a folder that would not list, a file
+      --  too large or that would not read -- counted and the first named:
+      --  no match among what was searched is not no match.
+      Unread_Files   : Natural := 0;
+      Unread_Folders : Natural := 0;
+      First_Unread   : U.Unbounded_String;
+
+      procedure Unread (Path : String; Folder : Boolean) is
+      begin
+         if Folder then
+            Unread_Folders := Unread_Folders + 1;
+         else
+            Unread_Files := Unread_Files + 1;
+         end if;
+         if U.Length (First_Unread) = 0 then
+            First_Unread := U.To_Unbounded_String (Path);
+         end if;
+      end Unread;
+
       function Passed_Over (Name : String) return Boolean is
         (Name'Length = 0 or else Name (Name'First) = '.'
          or else Name in "obj" | "bin" | "alire" | "node_modules" | "target" | "__pycache__");
@@ -477,6 +610,10 @@ package body Model_Runner.Tools.Editing is
                      Read_Text (Full, Held, Status, Base);
                      if E.Is_Ok (Status) then
                         Search_Text (U.To_String (Held), Pattern, Full & ":", Result, Hits);
+                     elsif E.Text_Of (Status, "detail") /= "it is not text" then
+                        --  A binary file holds no source text; any other
+                        --  that would not read might have.
+                        Unread (Full, Folder => False);
                      end if;
                   end;
                end if;
@@ -485,7 +622,7 @@ package body Model_Runner.Tools.Editing is
          Ada.Directories.End_Search (Search);
       exception
          when others =>
-            null;
+            Unread (Here, Folder => True);
       end Walk;
    begin
       if Pattern = "" then
@@ -496,7 +633,29 @@ package body Model_Runner.Tools.Editing is
          return Failing ("no folder at " & Folder);
       end if;
       Walk (Folder);
-      if Hits = 0 then
+      if Unread_Files + Unread_Folders > 0 then
+         --  Said whatever was found: a search that could not look
+         --  everywhere does not say what is absent.
+         declare
+            Missed : constant String :=
+              (if Unread_Files > 0 then Natural'Image (Unread_Files) & " file"
+                 & (if Unread_Files = 1 then "" else "s") else "")
+              & (if Unread_Files > 0 and then Unread_Folders > 0 then " and" else "")
+              & (if Unread_Folders > 0 then Natural'Image (Unread_Folders) & " folder"
+                 & (if Unread_Folders = 1 then "" else "s") else "");
+         begin
+            Result.Incomplete := True;
+            if Hits = 0 then
+               Result.Text := U.To_Unbounded_String
+                 ("no file searched under " & Folder & " holds that -- but" & Missed
+                  & " could not be searched (" & U.To_String (First_Unread)
+                  & " the first), so it may be there");
+            else
+               U.Append (Result.Text, "(and" & Missed & " could not be searched, "
+                         & U.To_String (First_Unread) & " the first)");
+            end if;
+         end;
+      elsif Hits = 0 then
          Result.Text := U.To_Unbounded_String ("no file under " & Folder & " holds that");
       elsif Result.Truncated then
          U.Append (Result.Text, "(the first" & Natural'Image (Search_Most) & " only; a longer pattern narrows it)");

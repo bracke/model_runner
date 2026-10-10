@@ -3,6 +3,8 @@ with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Task_Attributes;
+with Ada.Task_Identification;
 
 with Hostkit.Fs;
 with Hostkit.Host;
@@ -88,22 +90,69 @@ package body Model_Runner.Framework.Execution is
    -- Watch --
    -----------
 
-   Watched : Model_Runner.Cancellation.Token_Reference := null;
+   --  What stops the work of one task, and why: the token whoever runs it
+   --  cancels, the lease it holds and its owner, and the reason it was
+   --  stopped once it was -- one record, the stop file only one way of
+   --  setting it. Each task has its own, made at its first use, so two
+   --  executions on two tasks never share it, where one process-wide set
+   --  of these let one execution only be watched at a time.
+   type Control is record
+      Watched       : Model_Runner.Cancellation.Token_Reference := null;
+      Store         : access constant Stores.Store := null;
+      Lease         : Unbounded_String;
+      Owner         : Unbounded_String;
+      Last_Asked    : Ada.Calendar.Time := Ada.Calendar.Clock;
+      Reason        : Stop_Reason := Not_Stopped;
+      --  Why the last watched work was stopped, kept when its watch ends,
+      --  for the run to be concluded as asked.
+      Ended_For     : Stop_Reason := Not_Stopped;
+      --  Whether the group of the command now running could not be
+      --  recorded: then nothing could stop it should this process be
+      --  killed, so it is stopped now, and the run says why.
+      Group_Unrecorded : Boolean := False;
+   end record;
+   type Control_Access is access Control;
+
+   package Task_Controls is new Ada.Task_Attributes (Control_Access, null);
+
+   --  The calling task's own control, made at its first use: what Watch
+   --  and Watch_Lease set.
+   function Own return not null Control_Access is
+      Mine : Control_Access := Task_Controls.Value;
+   begin
+      if Mine = null then
+         Mine := new Control;
+         Task_Controls.Set_Value (Mine);
+      end if;
+      return Mine;
+   end Own;
+
+   --  The control the calling task's work is under: its own where it set
+   --  one; else the environment task's, where a run's work is done -- a
+   --  worker task running a call the agent made alongside others watches
+   --  nothing of its own, and is stopped with the work it serves.
+   function Current return not null Control_Access is
+      Mine : constant Control_Access := Task_Controls.Value;
+   begin
+      if Mine /= null then
+         return Mine;
+      end if;
+      declare
+         Main : constant Control_Access :=
+           Task_Controls.Value (Ada.Task_Identification.Environment_Task);
+      begin
+         return (if Main /= null then Main else Own);
+      end;
+   end Current;
+
+   -----------
+   -- Watch --
+   -----------
 
    procedure Watch (Token : Model_Runner.Cancellation.Token_Reference) is
    begin
-      Watched := Token;
+      Own.Watched := Token;
    end Watch;
-
-   --  The work watched, and when its lease was last asked after.
-   Watched_Store : access constant Stores.Store := null;
-   Watched_Lease : Unbounded_String;
-   Watched_Owner : Unbounded_String;
-   Last_Asked    : Ada.Calendar.Time := Ada.Calendar.Clock;
-   Withdrawn     : Boolean := False;
-
-   --  Whether what withdrew it asked for its task to be cancelled.
-   Outside_Cancel : Boolean := False;
 
    -----------------
    -- Watch_Lease --
@@ -112,39 +161,51 @@ package body Model_Runner.Framework.Execution is
    procedure Watch_Lease
      (Item     : access constant Stores.Store;
       Resource : String := "";
-      Owner    : String := "") is
+      Owner    : String := "")
+   is
+      Here : constant not null Control_Access := Own;
    begin
-      Watched_Store := Item;
-      Watched_Lease := To_Unbounded_String (Resource);
-      Watched_Owner := To_Unbounded_String (Owner);
-      Withdrawn := False;
-      --  Kept when the watch ends, for the run to be concluded as asked.
-      if Item /= null then
-         Outside_Cancel := False;
+      --  The work this task runs under a lease holds it while it runs
+      --  (Leases.Working); the one watched before, no longer.
+      if Length (Here.Lease) > 0 then
+         Leases.Done_Working (To_String (Here.Lease), To_String (Here.Owner));
       end if;
-      Last_Asked := Ada.Calendar.Clock;
+      if Item /= null and then Resource /= "" then
+         Leases.Working (Resource, Owner);
+      end if;
+      Here.Store := Item;
+      Here.Lease := To_Unbounded_String (Resource);
+      Here.Owner := To_Unbounded_String (Owner);
+      --  A new watch starts unstopped; why the last one stopped is kept
+      --  when the watch ends, for the run to be concluded as asked.
+      Here.Ended_For := (if Item = null then Here.Reason else Not_Stopped);
+      Here.Reason := Not_Stopped;
+      Here.Last_Asked := Ada.Calendar.Clock;
    end Watch_Lease;
 
-   --------------------
-   -- Work_Withdrawn --
-   --------------------
+   -----------------
+   -- Stopped_For --
+   -----------------
 
-   function Work_Withdrawn return Boolean is
+   function Stopped_For return Stop_Reason is
+      Here : constant not null Control_Access := Current;
    begin
-      if Watched_Store = null or else Withdrawn then
-         return Withdrawn;
+      if Here.Reason /= Not_Stopped or else Here.Store = null then
+         return Here.Reason;
       end if;
-      if Ada.Calendar.Clock - Last_Asked >= 1.0 then
-         Last_Asked := Ada.Calendar.Clock;
-         Withdrawn := Leases.Holder (Watched_Store.all, To_String (Watched_Lease))
-                        /= To_String (Watched_Owner);
+      if Ada.Calendar.Clock - Here.Last_Asked >= 1.0 then
+         Here.Last_Asked := Ada.Calendar.Clock;
+         if Leases.Holder (Here.Store.all, To_String (Here.Lease)) /= To_String (Here.Owner) then
+            Here.Reason := Lease_Lost;
+            return Here.Reason;
+         end if;
 
          --  Or asked to stop by another process, which cannot change the
          --  state while this one holds it.
          declare
-            Lease   : constant String := To_String (Watched_Lease);
+            Lease   : constant String := To_String (Here.Lease);
             Request : constant String :=
-              Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Watched_Store.all), "runtime"),
+              Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Here.Store.all), "runtime"),
                                "stop." & (if Lease'Length > 5
                                             and then Lease (Lease'First .. Lease'First + 4) = "task."
                                           then Lease (Lease'First + 5 .. Lease'Last) else Lease));
@@ -153,18 +214,19 @@ package body Model_Runner.Framework.Execution is
                --  Seen, it is heeded: a request that cannot then be read
                --  or taken away still stops the work, as a stop and not a
                --  cancel where what it said cannot be told.
-               Withdrawn := True;
+               Here.Reason := Stop_Requested;
                declare
                   Said : Unbounded_String;
                   Read : E.Error_Info;
                begin
                   Files.Read_Text (Request, Said, Read);
-                  Outside_Cancel := E.Is_Ok (Read)
-                    and then Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0;
+                  if E.Is_Ok (Read) and then Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0 then
+                     Here.Reason := Cancel_Requested_Elsewhere;
+                  end if;
                   Ada.Directories.Delete_File (Request);
                exception
                   when others =>
-                     --  Heeded already: Withdrawn is set, and only what it said is unknown.
+                     --  Heeded already: only what it said is unknown.
                      null;
                end;
             end if;
@@ -175,8 +237,15 @@ package body Model_Runner.Framework.Execution is
                null;
          end;
       end if;
-      return Withdrawn;
-   end Work_Withdrawn;
+      return Here.Reason;
+   end Stopped_For;
+
+   --------------------
+   -- Work_Withdrawn --
+   --------------------
+
+   function Work_Withdrawn return Boolean
+   is (Stopped_For in Lease_Lost | Stop_Requested | Cancel_Requested_Elsewhere);
 
    --  Where a work run keeps the process group of what it runs, for a
    --  later opening to stop should the run be killed: runtime/group.TASK.
@@ -186,20 +255,15 @@ package body Model_Runner.Framework.Execution is
                                       and then Lease (Lease'First .. Lease'First + 4) = "task."
                                     then Lease (Lease'First + 5 .. Lease'Last) else Lease)));
 
-   --  Whether the group of the command now running could not be recorded:
-   --  then nothing could stop it should this process be killed, so it is
-   --  stopped now, and the run says why.
-   Group_Unrecorded : Boolean := False;
-
    --  Told the process a command started as, which leads its own group.
    procedure Record_Group (Process_Id : Integer) is
       Wrote : E.Error_Info;
    begin
-      if Watched_Store /= null and then Length (Watched_Lease) > 0 then
+      if Current.Store /= null and then Length (Current.Lease) > 0 then
          Files.Write_Text
-           (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)),
+           (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)),
             Trim (Integer'Image (Process_Id)), Wrote);
-         Group_Unrecorded := E.Is_Error (Wrote);
+         Current.Group_Unrecorded := E.Is_Error (Wrote);
       end if;
    end Record_Group;
 
@@ -269,19 +333,20 @@ package body Model_Runner.Framework.Execution is
          (if Cancel then "cancel" else "stop"), Ignored);
    end Ask_To_Stop;
 
-   function Cancel_Asked_From_Outside return Boolean is (Outside_Cancel);
+   function Cancel_Asked_From_Outside return Boolean
+   is (Current.Reason = Cancel_Requested_Elsewhere or else Current.Ended_For = Cancel_Requested_Elsewhere);
 
    function Cancel_Requested return Boolean
-   is (Model_Runner.Cancellation."/=" (Watched, null)
-       and then Model_Runner.Cancellation.Is_Cancelled (Watched));
+   is (Model_Runner.Cancellation."/=" (Current.Watched, null)
+       and then Model_Runner.Cancellation.Is_Cancelled (Current.Watched));
 
    --  Whether the run has been cancelled, asked while a command waits: by
    --  whoever runs it, or by the work being ended elsewhere.
    function Stop_Asked return Boolean
-   is ((Model_Runner.Cancellation."/=" (Watched, null)
-        and then Model_Runner.Cancellation.Is_Cancelled (Watched))
+   is ((Model_Runner.Cancellation."/=" (Current.Watched, null)
+        and then Model_Runner.Cancellation.Is_Cancelled (Current.Watched))
        or else Work_Withdrawn
-       or else Group_Unrecorded);
+       or else Current.Group_Unrecorded);
 
    --  Whether this host can take the network away from one program: asked
    --  once, by trying.
@@ -572,7 +637,7 @@ package body Model_Runner.Framework.Execution is
                            & " process slots are taken");
                return;
             end if;
-            Group_Unrecorded := False;
+            Current.Group_Unrecorded := False;
             Happened :=
               Hostkit.Process.Run_Captured
                 (Program           => Program,
@@ -585,15 +650,15 @@ package body Model_Runner.Framework.Execution is
                  Timeout_Ms        => Rules.Timeout * 1000,
                  Cancelled         => Stop_Asked'Access,
                  Started           => Record_Group'Access);
-            if Watched_Store /= null and then Length (Watched_Lease) > 0 then
-               Files.Discard (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)));
+            if Current.Store /= null and then Length (Current.Lease) > 0 then
+               Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
             end if;
             if Slot /= "" then
                Files.Discard (Slot);
             end if;
-            if Group_Unrecorded then
-               Group_Unrecorded := False;
-               Files.Write_Failed (Group_File (Stores.Root (Item), To_String (Watched_Lease)), Status);
+            if Current.Group_Unrecorded then
+               Current.Group_Unrecorded := False;
+               Files.Write_Failed (Group_File (Stores.Root (Item), To_String (Current.Lease)), Status);
                E.Add_Text (Status, "detail", Command & ": " & Unrecorded_Said);
                return;
             end if;
@@ -688,7 +753,7 @@ package body Model_Runner.Framework.Execution is
          Append (Command, " " & Word);
       end loop;
 
-      Group_Unrecorded := False;
+      Current.Group_Unrecorded := False;
       Happened :=
         Hostkit.Process.Run_Captured
           (Program           => "env",
@@ -701,19 +766,19 @@ package body Model_Runner.Framework.Execution is
            Timeout_Ms        => Timeout * 1000,
            Cancelled         => Stop_Asked'Access,
            Started           => Record_Group'Access);
-      if Watched_Store /= null and then Length (Watched_Lease) > 0 then
-         Files.Discard (Group_File (Stores.Root (Watched_Store.all), To_String (Watched_Lease)));
+      if Current.Store /= null and then Length (Current.Lease) > 0 then
+         Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
       end if;
       Result := (Command     => Command,
                  Directory   => To_Unbounded_String (Directory),
                  Started     => Happened.Started,
                  Timed_Out   => Happened.Timed_Out,
-                 Exit_Status => (if Group_Unrecorded then -1 else Happened.Exit_Status),
+                 Exit_Status => (if Current.Group_Unrecorded then -1 else Happened.Exit_Status),
                  Seconds     => Natural (Ada.Calendar.Clock - Began),
-                 Output      => (if Group_Unrecorded then To_Unbounded_String (Unrecorded_Said)
+                 Output      => (if Current.Group_Unrecorded then To_Unbounded_String (Unrecorded_Said)
                                  else Null_Unbounded_String),
                  others      => <>);
-      Group_Unrecorded := False;
+      Current.Group_Unrecorded := False;
 
       --  What it said on its error stream, kept -- the end of it, which is
       --  where a program says why it stopped -- rather than thrown away.

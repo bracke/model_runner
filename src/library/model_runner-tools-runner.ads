@@ -123,25 +123,44 @@ package Model_Runner.Tools.Runner is
    type Refusal_Kind is
      (Not_Refused, Outside_Project, Harness_Owned, Not_Permitted, Policy);
 
+   --  A file's revision as Tools.Editing writes one, sixteen hexadecimal
+   --  digits; blank for none.
+   subtype Revision_Mark is String (1 .. 16);
+   No_Revision : constant Revision_Mark := [others => ' '];
+
+   --  A revision's text as a Revision_Mark.
+   --
+   --  @param Revision The revision, as Tools.Editing writes one.
+   --  @return The mark; blank where the text is not a revision.
+   function Mark (Revision : String) return Revision_Mark
+   is (if Revision'Length = 16 then Revision_Mark (Revision) else No_Revision);
+
    --  A call's ending, beside the text the model is given. Changed says
    --  whether the state later calls read is different for it: a write of
    --  what a file already held changed nothing, and a run of a program or
    --  a child agent is taken to have changed what it may.
    --  Truncated says the text the model is given is not all the tool
    --  said; Tokens, what a child agent the call started generated, which
-   --  is the caller's budget spent.
+   --  is the caller's budget spent. For a call that read or wrote a file:
+   --  its revision as it read it, or before and after the change, and
+   --  whether the call made it -- as values, for the harness to hold the
+   --  next change to, beside the words.
    type Call_Outcome is record
       Answer    : Answer_Kind := Answered;
       Refusal   : Refusal_Kind := Not_Refused;
       Changed   : Boolean := False;
       Truncated : Boolean := False;
       Tokens    : Natural := 0;
+      Before_Revision : Revision_Mark := No_Revision;
+      After_Revision  : Revision_Mark := No_Revision;
+      Created   : Boolean := False;
    end record;
 
    --  An answer that did what it was asked.
    Done : constant Call_Outcome :=
      (Answer => Answered, Refusal => Not_Refused, Changed => False,
-      Truncated => False, Tokens => 0);
+      Truncated => False, Tokens => 0, Before_Revision => No_Revision,
+      After_Revision => No_Revision, Created => False);
 
    --  Run one call and write back what the model should be told.
    --

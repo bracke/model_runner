@@ -10,6 +10,23 @@ with Model_Runner.Framework.Stores;
 --  reported as stale, rather than held for ever by an owner that is gone.
 package Model_Runner.Framework.Leases is
 
+   --  Say that this process's own work is running under a lease: while it
+   --  is, the lease holds though its time has run out -- the time is a
+   --  bound on a holder nobody can see, not on one that is plainly working,
+   --  and a run that went past its estimate lost its own hold. A lease
+   --  this process took for work that is no longer running here -- a
+   --  session that ended -- runs out as any other.
+   --
+   --  @param Resource The resource.
+   --  @param Owner Who holds it.
+   procedure Working (Resource : String; Owner : String);
+
+   --  Say that work under a lease is no longer running in this process.
+   --
+   --  @param Resource The resource.
+   --  @param Owner Who held it.
+   procedure Done_Working (Resource : String; Owner : String);
+
    --  Take a resource, or renew a lease the owner already holds.
    --
    --  @param Item The store.

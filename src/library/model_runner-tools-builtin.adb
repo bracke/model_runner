@@ -393,6 +393,10 @@ package body Model_Runner.Tools.Builtin is
       Halted    : Model_Runner.Tools.Runner.Answer_Kind := Model_Runner.Tools.Runner.Answered;
       Truncated : Boolean := False;
       Tokens    : Natural := 0;
+      --  For a call that read or wrote a file: its revision then.
+      Before_Revision : Model_Runner.Tools.Runner.Revision_Mark := Model_Runner.Tools.Runner.No_Revision;
+      After_Revision  : Model_Runner.Tools.Runner.Revision_Mark := Model_Runner.Tools.Runner.No_Revision;
+      Created   : Boolean := False;
       Text      : String (1 .. Length);
    end record;
 
@@ -412,19 +416,23 @@ package body Model_Runner.Tools.Builtin is
    --  The same reply, said to be cut short.
    function Cut (Item : Reply) return Reply
    is ((Length => Item.Length, Failed => Item.Failed, Changed => Item.Changed,
-        Halted => Item.Halted, Truncated => True, Tokens => Item.Tokens, Text => Item.Text));
+        Halted => Item.Halted, Truncated => True, Tokens => Item.Tokens,
+        Before_Revision => Item.Before_Revision, After_Revision => Item.After_Revision,
+        Created => Item.Created, Text => Item.Text));
 
    --  A failure where the call's context stopped it: How says how.
    function Halted_By
      (How : Model_Runner.Tools.Runner.Answer_Kind; Text : String) return Reply
    is ((Length => Text'Length + 7, Failed => True, Changed => False,
-        Halted => How, Truncated => False, Tokens => 0, Text => "error: " & Text));
+        Halted => How, Truncated => False, Tokens => 0, Text => "error: " & Text, others => <>));
 
    --  The same answer with words before it, failed or not as it was.
    function Prefixed (Before : String; Item : Reply) return Reply
    is ((Length => Before'Length + Item.Length, Failed => Item.Failed,
         Changed => Item.Changed, Halted => Item.Halted, Truncated => Item.Truncated,
-        Tokens => Item.Tokens, Text => Before & Item.Text));
+        Tokens => Item.Tokens,
+        Before_Revision => Item.Before_Revision, After_Revision => Item.After_Revision,
+        Created => Item.Created, Text => Before & Item.Text));
 
    function Calculator (Args : String) return Reply is
       A, B : Long_Long_Integer;
@@ -1026,7 +1034,8 @@ package body Model_Runner.Tools.Builtin is
          --  A failure with its exit status and what it said on its
          --  standard error; an answer as it printed it.
          return (Length => Text'Length, Failed => not Pr.Succeeded (Ran), Changed => False,
-                 Halted => Tr.Answered, Truncated => Ran.Truncated, Tokens => 0, Text => Text);
+                 Halted => Tr.Answered, Truncated => Ran.Truncated, Tokens => 0, Text => Text,
+                 others => <>);
       end;
    end Capture;
 
@@ -1177,7 +1186,10 @@ package body Model_Runner.Tools.Builtin is
             Text : constant String := Read.Text & ASCII.LF & "(revision " & Now & ")";
          begin
             return (Length => Text'Length, Failed => False, Changed => False,
-                    Halted => Read.Halted, Truncated => Read.Truncated, Tokens => 0, Text => Text);
+                    Halted => Read.Halted, Truncated => Read.Truncated, Tokens => 0,
+                    Before_Revision => Model_Runner.Tools.Runner.Mark (Now),
+                    After_Revision  => Model_Runner.Tools.Runner.Mark (Now),
+                    Created => False, Text => Text);
          end;
       end;
    end Read_File;
@@ -1188,8 +1200,21 @@ package body Model_Runner.Tools.Builtin is
    begin
       return (Length => Text'Length, Failed => Item.Failed, Changed => Item.Changed,
               Halted => Model_Runner.Tools.Runner.Answered, Truncated => Item.Truncated,
-              Tokens => 0, Text => Text);
+              Tokens => 0,
+              Before_Revision => Model_Runner.Tools.Runner.Mark (U.To_String (Item.Before_Revision)),
+              After_Revision  => Model_Runner.Tools.Runner.Mark (U.To_String (Item.After_Revision)),
+              Created => Item.Created, Text => Text);
    end As_Reply;
+
+   --  A reply with the revisions a change left, as values.
+   function With_Revisions (Given : Reply; Put : Model_Runner.Tools.Editing.Said) return Reply is
+      Result : Reply := Given;
+   begin
+      Result.Before_Revision := Model_Runner.Tools.Runner.Mark (U.To_String (Put.Before_Revision));
+      Result.After_Revision := Model_Runner.Tools.Runner.Mark (U.To_String (Put.After_Revision));
+      Result.Created := Put.Created;
+      return Result;
+   end With_Revisions;
 
    function Edit_File (Args : String; Base : String) return Reply is
       Have_P, Have_O, Have_N, Have_R : Boolean;
@@ -1245,12 +1270,10 @@ package body Model_Runner.Tools.Builtin is
    end Search_Code;
 
    function Write_File (Args : String; Base : String) return Reply is
-      use Ada.Streams;
       Have_P, Have_C : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Content : constant String := Text_Argument (Args, "content", Have_C);
-      File    : Stream_IO.File_Type;
-      Disk    : constant String := Model_Runner.Tools.Editing.On_Disk (Base, Path);
+      Put     : Model_Runner.Tools.Editing.Said;
    begin
       if not (Have_P and then Have_C) then
          return Failure ("write_file needs "
@@ -1258,75 +1281,22 @@ package body Model_Runner.Tools.Builtin is
               elsif not Have_P then "a path"
               else "content: the whole new text of " & Path));
       end if;
-      --  A file that already holds exactly this is left as it is, and said
-      --  so: a write of what is there changes nothing, and is no progress.
-      if Ada.Directories.Exists (Disk)
-        and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File)
-        and then Natural (Ada.Directories.Size (Disk)) = Content'Length
-      then
-         declare
-            Held : Stream_IO.File_Type;
-            Room : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
-            Last : Stream_Element_Offset := 0;
-            Same : Boolean := True;
-         begin
-            Stream_IO.Open (Held, Stream_IO.In_File, Disk);
-            if Content'Length > 0 then
-               Stream_IO.Read (Held, Room, Last);
-            end if;
-            Stream_IO.Close (Held);
-            Same := Natural (Last) = Content'Length;
-            for Index in 1 .. Last loop
-               exit when not Same;
-               Same := Character'Val (Room (Index))
-                       = Content (Content'First + Natural (Index) - 1);
-            end loop;
-            if Same then
-               return Said ("unchanged: " & Path & " already holds these"
-                            & Natural'Image (Content'Length) & " bytes");
-            end if;
-         exception
-            when others =>
-               --  Unread, it is written as any other.
-               if Stream_IO.Is_Open (Held) then
-                  Stream_IO.Close (Held);
-               end if;
-         end;
+      --  Put in place whole or not at all (Editing.Replace), as bytes, the
+      --  way the file is read back: a text file would end the content with
+      --  a line break the model never wrote.
+      Model_Runner.Tools.Editing.Replace (Path, Content, Put, Base);
+      if Put.Failed then
+         return As_Reply (Put);
+      elsif not Put.Changed then
+         --  A file that already holds exactly this is left as it is, and
+         --  said so: a write of what is there changes nothing, and is no
+         --  progress.
+         return With_Revisions
+           (Said ("unchanged: " & Path & " already holds these" & Natural'Image (Content'Length) & " bytes"),
+            Put);
       end if;
-
-      --  A new file's directory made with it: a file under src/ is asked
-      --  for whether or not src/ is there yet.
-      declare
-         Folder : constant String := Ada.Directories.Containing_Directory (Disk);
-      begin
-         if Folder /= "" and then not Ada.Directories.Exists (Folder) then
-            Ada.Directories.Create_Path (Folder);
-         end if;
-      exception
-         when others =>
-            null;
-      end;
-      --  Written as bytes, the way the file is read back: a text file
-      --  would end the content with a line break the model never wrote.
-      Stream_IO.Create (File, Stream_IO.Out_File, Disk);
-      declare
-         Block : Stream_Element_Array
-           (1 .. Stream_Element_Offset (Content'Length));
-      begin
-         for Index in Block'Range loop
-            Block (Index) := Stream_Element
-              (Character'Pos (Content (Content'First + Natural (Index) - 1)));
-         end loop;
-         Stream_IO.Write (File, Block);
-      end;
-      Stream_IO.Close (File);
-      return Changed_It ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path);
-   exception
-      when others =>
-         if Stream_IO.Is_Open (File) then
-            Stream_IO.Close (File);
-         end if;
-         return Failure ("could not write the file");
+      return With_Revisions
+        (Changed_It ("wrote" & Natural'Image (Content'Length) & " bytes to " & Path), Put);
    end Write_File;
 
    function List_Directory (Args : String; Base : String) return Reply is
@@ -1588,7 +1558,9 @@ package body Model_Runner.Tools.Builtin is
          function Spent (Item : Reply) return Reply
          is ((Length => Item.Length, Failed => Item.Failed, Changed => Item.Changed,
               Halted => Item.Halted, Truncated => Item.Truncated,
-              Tokens => Ended.Tokens, Text => Item.Text));
+              Tokens => Ended.Tokens,
+              Before_Revision => Item.Before_Revision, After_Revision => Item.After_Revision,
+        Created => Item.Created, Text => Item.Text));
 
          function Took return String is
            (Image (Long_Long_Integer (Ended.Steps)) & " steps and "
@@ -2205,6 +2177,22 @@ package body Model_Runner.Tools.Builtin is
       return True;
    end Parallel_Safe;
 
+   ---------------
+   -- Revisions --
+   ---------------
+
+   protected body Revisions is
+      procedure Put (Path : String; Revision : String) is
+      begin
+         Held.Include (Path, Revision);
+      end Put;
+
+      function Has (Path : String) return Boolean is (Held.Contains (Path));
+
+      function Get (Path : String) return String
+      is (if Held.Contains (Path) then Held.Element (Path) else "");
+   end Revisions;
+
    --------------
    -- Set_Base --
    --------------
@@ -2401,7 +2389,33 @@ package body Model_Runner.Tools.Builtin is
          elsif Confined (Named, Arguments) /= "" then
             return Failure (Confinement (Named, Arguments));
          elsif File_Tool (Named) then
-            return File_Answer (Named, Arguments, U.To_String (Self.Base));
+            declare
+               Have : Boolean;
+               Path : constant String := Text_Argument (Arguments, "path", Have);
+               Now  : constant String :=
+                 (if Writes (Named) and then Have and then Self.Seen.Has (Path)
+                  then Model_Runner.Tools.Editing.Revision_Of (Path, U.To_String (Self.Base)) else "");
+            begin
+               --  Changed under it since it last read or wrote it: made over
+               --  what it did not see, the other change would be lost.
+               if Now /= "" and then Now /= Self.Seen.Get (Path) then
+                  return Failure
+                    (Path & " has changed since you last read or wrote it (revision " & Self.Seen.Get (Path)
+                     & " then, " & Now & " now), by something other than you: read it again, then"
+                     & " change what is there");
+               end if;
+               declare
+                  Given : constant Reply := File_Answer (Named, Arguments, U.To_String (Self.Base));
+               begin
+                  --  The file as the agent now knows it, read or written.
+                  if Have and then not Given.Failed
+                    and then Given.After_Revision /= Model_Runner.Tools.Runner.No_Revision
+                  then
+                     Self.Seen.Put (Path, Given.After_Revision);
+                  end if;
+                  return Given;
+               end;
+            end;
          elsif Named = "shell" then
             return Shell (Arguments);
          elsif Named = "run_python" then
@@ -2453,9 +2467,11 @@ package body Model_Runner.Tools.Builtin is
          --  may change state is taken to have.
          else (Answer => Tr.Answered, Refusal => Tr.Not_Refused,
                Changed => Given.Changed
-                          or else (Named /= "write_file"
+                          or else (Rg."/=" (Rg.Path_Of (Named), Rg.Writes_Path)
                                    and then Tr."=" (Kind (Self, Named), Tr.Changes)),
-               Truncated => Given.Truncated, Tokens => Given.Tokens));
+               Truncated => Given.Truncated, Tokens => Given.Tokens,
+               Before_Revision => Given.Before_Revision, After_Revision => Given.After_Revision,
+               Created => Given.Created));
       if Text'Length > Result'Length then
          Status := E.Make (E.Tools_Too_Large);
          return;

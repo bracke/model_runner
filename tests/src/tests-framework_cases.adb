@@ -1795,6 +1795,30 @@ package body Tests.Framework_Cases is
       Ls.Acquire (Store, Change, "workspace-2", "agent-b", 600, Status);
       Assert (E.Is_Ok (Status), "a stale lease could not be taken over");
 
+      --  One this process took and whose time is up holds while its own
+      --  work runs under it, and runs out once that work is done.
+      declare
+         Mine : R.Item := R.Create (Model_Runner.Framework.Schemas.Lease_Schema, 1, "LEASE", 1);
+      begin
+         R.Set (Mine, "resource", "workspace-9");
+         R.Set (Mine, "owner", "agent-z");
+         R.Set (Mine, "acquired_at", "2020-01-01T00:00:00Z");
+         R.Set (Mine, "expires_at", "2020-01-01T00:10:00Z");
+         R.Set (Mine, "process", Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id),
+                                                          Ada.Strings.Both));
+         R.Set (Mine, "host", Hostkit.Host.Node_Name);
+         S.Put (Change, F.Runtime_Area, "lease.workspace-9", Mine);
+         S.Commit (Store, Change, Status);
+      end;
+      Assert (Ls.Holder (Store, "workspace-9") = "",
+              "a lease whose time was up held with no work running under it");
+      Ls.Working ("workspace-9", "agent-z");
+      Assert (Ls.Holder (Store, "workspace-9") = "agent-z",
+              "a live worker lost its own lease when its time ran out");
+      Ls.Done_Working ("workspace-9", "agent-z");
+      Assert (Ls.Holder (Store, "workspace-9") = "",
+              "a lease held on after its work was done");
+
       --  One whose process is gone from this machine is stale at once,
       --  however long it had to run; one of a process still there holds.
       Assert (Hostkit.Process."=" (Hostkit.Process.Presence_Of (Hostkit.Host.Own_Process_Id),
@@ -8915,9 +8939,41 @@ package body Tests.Framework_Cases is
       delay 1.1;
       Assert (Model_Runner.Framework.Execution.Work_Withdrawn,
               "work whose lease went was not seen withdrawn");
+      Assert (Model_Runner.Framework.Execution."="
+                (Model_Runner.Framework.Execution.Stopped_For, Model_Runner.Framework.Execution.Lease_Lost),
+              "work whose lease went was not said stopped for it");
       Model_Runner.Framework.Execution.Watch_Lease (null);
       Assert (not Model_Runner.Framework.Execution.Work_Withdrawn,
               "unwatched work was taken for withdrawn");
+
+      --  Each task its own watch: a task that set one is not stopped by
+      --  the main task's; one that set none -- a worker running a call for
+      --  the main task's work -- is stopped with it.
+      declare
+         Stop : aliased Model_Runner.Cancellation.Token;
+         Own_Stopped, Worker_Stopped : Boolean := True;
+      begin
+         Stop.Request;
+         Model_Runner.Framework.Execution.Watch (Stop'Unchecked_Access);
+         declare
+            task Own_Watch;
+            task body Own_Watch is
+            begin
+               Model_Runner.Framework.Execution.Watch (null);
+               Own_Stopped := Model_Runner.Framework.Execution.Cancel_Requested;
+            end Own_Watch;
+            task Worker;
+            task body Worker is
+            begin
+               Worker_Stopped := Model_Runner.Framework.Execution.Cancel_Requested;
+            end Worker;
+         begin
+            null;
+         end;
+         Model_Runner.Framework.Execution.Watch (null);
+         Assert (not Own_Stopped and then Worker_Stopped,
+                 "a task's own watch was the main task's, or a worker was not stopped with the work it serves");
+      end;
       S.Close (Store);
    end State_Is_The_Harness_Own;
 

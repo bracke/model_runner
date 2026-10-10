@@ -1,3 +1,5 @@
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
@@ -312,6 +314,18 @@ package Model_Runner.Tools.Builtin is
 
 private
 
+   package Revision_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (String, String, Ada.Strings.Hash, "=");
+
+   --  The revisions, kept by calls that may run side by side.
+   protected type Revisions is
+      procedure Put (Path : String; Revision : String);
+      function Has (Path : String) return Boolean;
+      function Get (Path : String) return String;
+   private
+      Held : Revision_Maps.Map;
+   end Revisions;
+
    --  The scratchpad: a bounded set of key-value notes the memory tools
    --  keep. Small on purpose -- a model's working memory, not a store.
    Max_Notes : constant := 64;
@@ -330,6 +344,11 @@ private
       --  The directory a relative path a file tool is given is under; ""
       --  for the process's own.
       Base   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Each file's revision as this runner's agent last read or wrote
+      --  it: a change to one that has moved since -- an editor, a helper,
+      --  another process -- is refused, not made over what it did not see.
+      Seen   : Revisions;
 
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;
