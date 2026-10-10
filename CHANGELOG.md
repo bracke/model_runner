@@ -24,6 +24,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A file put back is noticed by its revision:** every revision of a file the agent reads or changes is kept as seen, and a change that leaves the file at one seen before is said -- "this puts src/calc.adb back to a version it had earlier in this work" -- by edit_file as by write_file, and back to a version only read as to one written; the note compared write_file's content alone, and qwen3-8b swapped Add between two versions with edit_file eight times unsaid.
+- **A check that fails the same way again is said to:** whether an answer is the one given before the last change is asked with the evidence records it names left out -- each run of the checks names a new one, so a check failing exactly as before never read as the same answer.
+
 - **A note is "ok" only once kept:** memory_put saves through the same whole-or-nothing replacement source files take (Editing.Replace) -- it wrote into the memory file directly, every failure dropped -- and a note the file could not take is answered "the note holds for this run, but was not kept for a later one", not "ok". A memory file that is there and will not read, or is damaged, is said (Use_Memory_File's status) and ends a run that named it, where it was taken for an empty store; one not there yet is still no notes.
 - **A change in place says what it could not be:** Editing.Replace says whether the file and its folder were synced and whether the file's permission bits were kept, and the edit's or write's answer adds " -- but it could not be made durable" or " -- and its permission bits could not be kept" where not; a host with no such sync is not taken to have failed.
 - **Each write its own partial file:** the file a change is written to before it is renamed in is named for the process and the write, where it was named for the file alone and a second writer could empty the first's before the rename.

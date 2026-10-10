@@ -918,27 +918,57 @@ package body Model_Runner.Agent is
                         --  its answer: a check answering exactly as before
                         --  the last change, a file put back as an earlier
                         --  write left it, a run of calls changing nothing.
+                        --  An answer with the evidence records it names left out:
+                        --  a check run again names a new one each time, and
+                        --  failing the same way read as an answer never given.
+                        function Without_Evidence (Text : String) return String is
+                           Kept : U.Unbounded_String;
+                           At_C : Natural := Text'First;
+                        begin
+                           while At_C <= Text'Last loop
+                              if At_C + 4 <= Text'Last and then Text (At_C .. At_C + 3) = "VER-"
+                                and then Text (At_C + 4) in '0' .. '9'
+                              then
+                                 U.Append (Kept, "VER-#");
+                                 At_C := At_C + 4;
+                                 while At_C <= Text'Last and then Text (At_C) in '0' .. '9' loop
+                                    At_C := At_C + 1;
+                                 end loop;
+                              else
+                                 U.Append (Kept, Text (At_C));
+                                 At_C := At_C + 1;
+                              end if;
+                           end loop;
+                           return U.To_String (Kept);
+                        end Without_Evidence;
+
                         function Seen return String is
-                           Has_Path, Has_Content : Boolean;
-                           Path    : constant String :=
+                           Has_Path : Boolean;
+                           Path     : constant String :=
                              Model_Runner.Tools.Builtin.Text_Argument (Args, "path", Has_Path);
-                           Content : constant String :=
-                             Model_Runner.Tools.Builtin.Text_Argument (Args, "content", Has_Content);
-                           Again   : constant Boolean :=
+                           Again    : constant Boolean :=
                              Ran_Now
                              and then Ended.Answer = Model_Runner.Tools.Runner.Answered
                              and then Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
-                             and then Sighted.Seen_Again (Key, Said_By_Tool);
-                           Back    : constant Boolean :=
-                             Ran_Now and then Ended.Changed and then Has_Path and then Has_Content
-                             and then Sighted.Seen_Again ("path" & ASCII.NUL & Path, Content);
+                             and then Sighted.Seen_Again (Key, Without_Evidence (Said_By_Tool));
+                           --  A file's revisions, read or written, are kept as
+                           --  seen; a change that leaves it at one seen before
+                           --  puts it back -- by edit_file as by write_file, to
+                           --  a version read as to one written.
+                           Had_It   : constant Boolean :=
+                             Ran_Now and then Has_Path
+                             and then Ended.Answer = Model_Runner.Tools.Runner.Answered
+                             and then Ended.After_Revision /= Model_Runner.Tools.Runner.No_Revision
+                             and then Sighted.Seen_Again ("revision" & ASCII.NUL & Path, Ended.After_Revision);
+                           Back     : constant Boolean := Ended.Changed and then Had_It;
                         begin
                            if Again and then Made_Change then
                               return ASCII.LF & "(note from the harness: this answers exactly as it"
                                 & " did before your last change)";
                            elsif Back then
                               return ASCII.LF & "(note from the harness: this puts " & Path
-                                & " back as an earlier write of yours left it)";
+                                & " back to a version it had earlier in this work, revision "
+                                & Ended.After_Revision & ")";
                            elsif Quiet > 0 and then Quiet mod Quiet_Note = 0 then
                               return ASCII.LF & "(note from the harness:" & Natural'Image (Quiet)
                                 & " calls in a row have changed nothing; if what you need is in"
