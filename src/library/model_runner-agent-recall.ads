@@ -183,6 +183,17 @@ package Model_Runner.Agent.Recall is
       Of_What : String;
       Was     : String) return Boolean;
 
+   --  What the loop holds of its calls, carried from one run of it to the
+   --  next on the same conversation: /work runs it again to hand back a
+   --  report or send the work back over its checks, and the second run
+   --  forgot every call and revision the first had seen.
+   type Carried is new Run_Memory with record
+      Made        : Memory;
+      Work        : Work_Log;
+      Sighted     : Sightings;
+      Made_Change : Boolean := False;
+   end record;
+
 private
 
    type Entry_Row is record

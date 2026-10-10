@@ -11,6 +11,7 @@ with Hostkit.Fs;
 with Hostkit.Terminal_Control;
 
 with Model_Runner.Agent;
+with Model_Runner.Agent.Recall;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Platform.Signals;
@@ -696,6 +697,8 @@ package body Model_Runner.CLI.Project_Commands is
       Calls    : Natural := 0;
       Asked_To_Report : Boolean := False;
       Asked_To_Fix    : Boolean := False;
+      --  What the loop holds of its calls, carried from round to round.
+      Rounds_Memory   : aliased Model_Runner.Agent.Recall.Carried;
       Asked_To_Mend   : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
@@ -756,6 +759,8 @@ package body Model_Runner.CLI.Project_Commands is
       --  went round repeating ended with no report, and was failed for
       --  that, where asked once it reports.
       for Round in 1 .. (if Root then 3 else 2) loop
+         --  One memory of the calls across the rounds: a second round
+         --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
            (Source      => Self.Prepared.all,
             Session     => Self.Session.all,
@@ -780,6 +785,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  work stands in for them, as run's agent has it: a model that
             --  reasoned at length filled the context and the task failed.
             Compact     => True,
+            Carry       => Rounds_Memory'Unchecked_Access,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written.
          Release_Held (Sink);

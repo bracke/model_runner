@@ -24,6 +24,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **/work's rounds share what the loop saw:** a task's agent is run again on the same conversation to hand back a report or to send the work back over failing checks, and each run began with no memory of the calls made, the answers given or the revisions each file was seen at -- a repeat or a file put back went unnoticed across the rounds. The loop now takes what an earlier run held (Agent.Run's Carry, Recall.Carried) and /work carries it from round to round.
 - **A failed check's FILE:LINE is quoted from the project:** run_checks follows a failure's output with each project line it names -- "src/calc.adb line 5 is: if A > Integer'Last - B then" -- three at most, from the one file the name means (Work.Quoted_Lines); qwen3-8b read "calc.adb:5 overflow check failed" and reasoned about other expressions for pages, never reading line 5 again.
 - **A passage in more than one place is edited where the lines last read hold it:** edit_file takes the lines the agent last read of the file in part (Builtin keeps them, Editing.Edit takes them) and, where only one of the places -- exact or loose -- starts within them, edits that one and says so; with no lines read, or lines holding more than one, it is refused as before.
 - **A change that failed, given again, is pointed at the file:** the repeat refusal for an edit or a write adds to read the file again whole and give the text exactly as it shows now.

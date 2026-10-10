@@ -115,6 +115,7 @@ package body Model_Runner.Agent is
         Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Carry      : Memory_Reference := null;
       Result     : out Outcome)
    is
       Words : constant access constant Vocab.Vocabulary :=
@@ -180,21 +181,28 @@ package body Model_Runner.Agent is
       --  noticed rather than run again -- a real tool may not be
       --  idempotent, and a model that repeats itself is not making
       --  progress -- with what each answered and how it ended. See Recall.
-      Made : Model_Runner.Agent.Recall.Memory;
+      --  Held here, or carried from an earlier run of the loop on this
+      --  conversation.
+      Own   : aliased Model_Runner.Agent.Recall.Carried;
+      State : constant access Model_Runner.Agent.Recall.Carried :=
+        (if Carry = null then Own'Access
+         else Model_Runner.Agent.Recall.Carried (Carry.all)'Unchecked_Access);
+
+      Made : Model_Runner.Agent.Recall.Memory renames State.Made;
 
       --  And the work as it went, for a compacted conversation to carry.
-      Work : Model_Runner.Agent.Recall.Work_Log;
+      Work : Model_Runner.Agent.Recall.Work_Log renames State.Work;
 
       --  What calls answered and what was written where, across every
       --  change; and how many answered calls in a row have changed
       --  nothing. A run going nowhere is told so -- the harness says what
       --  it sees rather than waiting for the step budget to run out.
-      Sighted : Model_Runner.Agent.Recall.Sightings;
+      Sighted : Model_Runner.Agent.Recall.Sightings renames State.Sighted;
       Quiet   : Natural := 0;
 
       --  Whether any call has changed state yet: before one, an answer
       --  the same as before is no news.
-      Made_Change : Boolean := False;
+      Made_Change : Boolean renames State.Made_Change;
 
       --  Calls made in the turns before this one: a call's number in the
       --  run is this and its place in its turn.

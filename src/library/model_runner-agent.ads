@@ -265,6 +265,16 @@ package Model_Runner.Agent is
    --  A reference to whatever is gating the loop's calls.
    type Approver_Reference is access all Approver'Class;
 
+   --  What the loop holds of the calls made -- what each answered, the
+   --  revisions each file was seen at, whether anything has changed --
+   --  kept by a caller that runs the loop again on the same conversation,
+   --  so the second run knows what the first saw. Recall.Carried is the
+   --  one there is.
+   type Run_Memory is abstract tagged limited null record;
+
+   --  A reference to the memory carried between runs.
+   type Memory_Reference is access all Run_Memory'Class;
+
    --  What went wrong in a step, as the loop decides what to do about it:
    --  a conversation too large to render, a generation that ran out of
    --  context, a backend that failed in a way trying again may mend, a
@@ -389,6 +399,8 @@ package Model_Runner.Agent is
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Pictures The pictures the task shows, or none: the same rows
    --    stand behind the prompt's markers at every step.
+   --  @param Carry What an earlier run on this conversation held of its
+   --    calls, carried on and added to; null for a run that starts afresh.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
@@ -420,6 +432,7 @@ package Model_Runner.Agent is
         Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Carry      : Memory_Reference := null;
       Result     : out Outcome);
 
 end Model_Runner.Agent;
