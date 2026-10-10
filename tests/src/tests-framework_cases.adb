@@ -10434,7 +10434,8 @@ package body Tests.Framework_Cases is
                Assert (Ada.Strings.Fixed.Index (Text, "scalar.agents.max_steps: ") > 0
                        and then Ada.Strings.Fixed.Index (Text, "-> 12") > 0,
                        "/config diff did not say the setting that changed: " & Text);
-               Assert (Ada.Strings.Fixed.Index (Text, "profile.tests: check: echo ok" & ASCII.LF) > 0
+               --  Its line's end not asked for: a host writes CRLF.
+               Assert (Ada.Strings.Fixed.Index (Text, "profile.tests: check: echo ok") > 0
                        and then Ada.Strings.Fixed.Index (Text, "echo ok add") = 0
                        and then Ada.Strings.Fixed.Index (Text, ", echo") > 0,
                        "a quoted value ran on past its quote, or the set's items after it were lost: " & Text);

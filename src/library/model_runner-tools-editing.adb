@@ -454,6 +454,11 @@ package body Model_Runner.Tools.Editing is
       declare
          Shift : constant Integer :=
            Indent (U.To_String (File (At_Line))) - Indent (U.To_String (Given.First_Element));
+         --  The line ending of the lines replaced, kept: a file of CRLF lines
+         --  given new LF lines had two endings.
+         First_Line : constant String := U.To_String (File (At_Line));
+         Ends_CR    : constant Boolean :=
+           First_Line'Length > 0 and then First_Line (First_Line'Last) = ASCII.CR;
          Moved : U.Unbounded_String;
          Fresh : constant Line_Lists.Vector := Lines_Of (New_Text);
          After : U.Unbounded_String;
@@ -470,6 +475,9 @@ package body Model_Runner.Tools.Editing is
                   U.Append (Moved, [1 .. Shift => ' '] & Line);
                else
                   U.Append (Moved, Line (Line'First + Natural'Min (Lead, -Shift) .. Line'Last));
+               end if;
+               if Ends_CR and then (Line = "" or else Line (Line'Last) /= ASCII.CR) then
+                  U.Append (Moved, ASCII.CR);
                end if;
             end;
          end loop;

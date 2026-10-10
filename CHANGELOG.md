@@ -24,6 +24,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A loose edit keeps the file's line endings:** where the lines it replaces end CRLF, the lines it puts in do too, where they ended LF and the file had two endings -- found by the Windows runner.
+
 - **A raw tab or line break in a model's call is read:** inside a string of a call a model wrote, one is taken as the escape it stands for, where the call was dropped as no JSON -- qwen3-8b copied a tab from what it read into old_text; a tool definition is held to JSON as before.
 
 - **An empty write does not empty a file:** write_file with no content over a file that holds text is refused, saying what it would empty and that a file which should go is said in the report; an empty new file is still made. gemma-3-4b wrote "" over the source it was to fix, and every check after failed on an empty unit.

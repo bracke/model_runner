@@ -807,11 +807,16 @@ package body Tests.Tools_Cases is
          begin
             Ed.Read_Text (Loose_Path, Before, Got);
             declare
+               --  The file's own line ending -- CRLF where the host writes
+               --  text so -- on the lines put in.
                Was  : constant String := Ada.Strings.Unbounded.To_String (Before);
                At_X : constant Natural := Ada.Strings.Fixed.Index (Was, "   X := 1;");
+               At_Y : constant Natural := Ada.Strings.Fixed.Index (Was, "   Y := 2;");
+               Ends : constant String :=
+                 (if Was (At_X + 10) = ASCII.CR then ASCII.CR & ASCII.LF else [1 => ASCII.LF]);
                Want : constant String :=
-                 Was (Was'First .. At_X - 1) & "   X := 3;" & ASCII.LF & "   Y := 4;"
-                 & Was (At_X + 21 .. Was'Last);
+                 Was (Was'First .. At_X - 1) & "   X := 3;" & Ends & "   Y := 4;"
+                 & Was (At_Y + 10 .. Was'Last);
                Done : constant Ed.Said :=
                  Ed.Edit (Loose_Path, "    X := 1;" & ASCII.LF & "    Y := 2;",
                           "    X := 3;" & ASCII.LF & "    Y := 4;", "");
@@ -2458,9 +2463,19 @@ package body Tests.Tools_Cases is
             Before : constant String := Runner.Stamp ("read_file", Args);
             Tree   : constant String := Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}");
          begin
-            Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path);
-            Ada.Text_IO.Put (File, "two");
-            Ada.Text_IO.Close (File);
+            --  The same size where the host stamps a file to the nanosecond;
+            --  where it gives only size and time, an edit the same size within
+            --  its time's grain is one the tree's stamp cannot see -- so there
+            --  the size moves.
+            declare
+               Fine : Boolean;
+               Held : constant String := Hostkit.Metadata.Change_Stamp (Path, Fine);
+               pragma Unreferenced (Held);
+            begin
+               Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path);
+               Ada.Text_IO.Put (File, (if Fine then "two" else "three"));
+               Ada.Text_IO.Close (File);
+            end;
             Assert (Before /= "" and then Runner.Stamp ("read_file", Args) /= Before,
                     "a file changed under a read kept its stamp: " & Before);
             Assert (Tree /= "" and then Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}") /= Tree,
