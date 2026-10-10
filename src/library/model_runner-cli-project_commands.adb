@@ -786,6 +786,10 @@ package body Model_Runner.CLI.Project_Commands is
             --  reasoned at length filled the context and the task failed.
             Compact     => True,
             Carry       => Rounds_Memory'Unchecked_Access,
+            --  Half the reply to think in, the rest to act: past that the
+            --  thought is closed for it. qwen3-8b thought for minutes a call
+            --  and ran out of the work's time after seven.
+            Think_Budget => Request.Max_Tokens / 2,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written.
          Release_Held (Sink);

@@ -115,6 +115,7 @@ package body Model_Runner.Agent is
         Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Think_Budget : Natural := 0;
       Carry      : Memory_Reference := null;
       Result     : out Outcome)
    is
@@ -193,11 +194,10 @@ package body Model_Runner.Agent is
       --  And the work as it went, for a compacted conversation to carry.
       Work : Model_Runner.Agent.Recall.Work_Log renames State.Work;
 
-      --  What calls answered and what was written where, across every
-      --  change; and how many answered calls in a row have changed
-      --  nothing. A run going nowhere is told so -- the harness says what
-      --  it sees rather than waiting for the step budget to run out.
-      Sighted : Model_Runner.Agent.Recall.Sightings renames State.Sighted;
+      --  How many answered calls in a row have changed nothing. A run
+      --  going nowhere is told so -- the harness says what it sees rather
+      --  than waiting for the step budget to run out (Recall.Note_For, over
+      --  what State has seen).
       Quiet   : Natural := 0;
 
       --  Whether any call has changed state yet: before one, an answer
@@ -207,10 +207,6 @@ package body Model_Runner.Agent is
       --  Calls made in the turns before this one: a call's number in the
       --  run is this and its place in its turn.
       Invocations : Natural := 0;
-
-      --  Calls in a row that change nothing before the run is told so, and
-      --  told again at every as many more.
-      Quiet_Note : constant := 8;
 
       --  Turns in a row that only repeated calls: going round is the
       --  second such turn, not the first.
@@ -232,6 +228,16 @@ package body Model_Runner.Agent is
       --  The most a reply may be, where the context has less room than the
       --  request asks and nothing old is left to drop: what remains.
       Reply_Cap : Natural := Natural'Last;
+
+      --  A thought closed at its budget: what the reply said before the
+      --  closing, and the tokens it took; nothing where none was.
+      Thought_Before : U.Unbounded_String;
+      Thought_Tokens : Natural := 0;
+
+      --  The reply as a whole: what came before a closed thought, and what
+      --  the generation after it said.
+      function Reply_Text return String
+      is (U.To_String (Thought_Before) & Gen.Generated_Text (Last_Result));
       Reading      : E.Error_Info;
 
       --  Whether a reply's text closes the call it ends in, in the syntax the
@@ -373,22 +379,83 @@ package body Model_Runner.Agent is
             end if;
             Request.Max_Tokens := Natural'Min (Request.Max_Tokens, Reply_Cap);
 
-            Gen.Release (Last_Result);
-            Gen.Generate
-              (Source   => Source,
-               Session  => Session,
-               Prompt   => Rendered.all,
-               Item     => Request,
-               Stop_Set => Stop_Set,
-               Rules    => Rules,
-               Sink     => Sink,
-               Observer => null,
-               Time     => Time,
-               Seeds    => Seeds,
-               Cancel   => Cancel,
-               Bounds   => Bounds,
-               Pictures => Pictures,
-               Outcome  => Last_Result);
+            declare
+               --  A thought held to its budget: the reply is asked for that
+               --  much first, and where it is still thinking there, the
+               --  thought is closed for it and the rest of the reply is
+               --  asked for after. qwen3-8b thought 3,000 tokens before
+               --  each call and made seven calls in twenty minutes.
+               Full     : constant Natural := Request.Max_Tokens;
+               Budgeted : constant Boolean :=
+                 Think_Budget > 0 and then Think_Budget < Full
+                 and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off);
+               Closing  : constant String := ASCII.LF & "</think>" & ASCII.LF & ASCII.LF;
+
+               --  Whether a reply's text is inside a thought it has not
+               --  closed: opened in it, or by the prompt's own opening.
+               function Open_Thought (Text : String) return Boolean is
+                  Tail : constant String :=
+                    Rendered.all (Natural'Max (Rendered.all'First, Rendered.all'Last - 15) .. Rendered.all'Last);
+               begin
+                  return Ada.Strings.Fixed.Index (Text, "</think>") = 0
+                    and then (Ada.Strings.Fixed.Index (Text, "<think>") > 0
+                              or else Ada.Strings.Fixed.Index (Tail, "<think>") > 0);
+               end Open_Thought;
+            begin
+               if Budgeted then
+                  Request.Max_Tokens := Think_Budget;
+               end if;
+               Gen.Release (Last_Result);
+               Gen.Generate
+                 (Source   => Source,
+                  Session  => Session,
+                  Prompt   => Rendered.all,
+                  Item     => Request,
+                  Stop_Set => Stop_Set,
+                  Rules    => Rules,
+                  Sink     => Sink,
+                  Observer => null,
+                  Time     => Time,
+                  Seeds    => Seeds,
+                  Cancel   => Cancel,
+                  Bounds   => Bounds,
+                  Pictures => Pictures,
+                  Outcome  => Last_Result);
+               Thought_Before := U.Null_Unbounded_String;
+               Thought_Tokens := 0;
+               if Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
+                 and then Last_Result.Generated_Tokens < Full
+                 and then Open_Thought (Gen.Generated_Text (Last_Result))
+               then
+                  Thought_Before := U.To_Unbounded_String (Gen.Generated_Text (Last_Result) & Closing);
+                  Thought_Tokens := Last_Result.Generated_Tokens;
+                  Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
+                  declare
+                     Continued : constant String := Rendered.all & U.To_String (Thought_Before);
+                  begin
+                     Request.Max_Tokens := Full - Thought_Tokens;
+                     --  The whole reply so far is the turn's, not the
+                     --  conversation's: held back with its opening.
+                     Request.Hold_Back := Request.Hold_Back + U.Length (Thought_Before);
+                     Gen.Release (Last_Result);
+                     Gen.Generate
+                       (Source   => Source,
+                        Session  => Session,
+                        Prompt   => Continued,
+                        Item     => Request,
+                        Stop_Set => Stop_Set,
+                        Rules    => Rules,
+                        Sink     => Sink,
+                        Observer => null,
+                        Time     => Time,
+                        Seeds    => Seeds,
+                        Cancel   => Cancel,
+                        Bounds   => Bounds,
+                        Pictures => Pictures,
+                        Outcome  => Last_Result);
+                  end;
+               end if;
+            end;
             Free (Rendered);
          end;
 
@@ -468,12 +535,12 @@ package body Model_Runner.Agent is
             Reading := E.Success;
             if Have_Tools then
                Conv.Append_Reply
-                 (Messages, Gen.Generated_Text (Last_Result), Status, Reading,
+                 (Messages, Reply_Text, Status, Reading,
                   Syntax => Tool_Syntax, Offered => Offered'Unchecked_Access);
             else
                Conv.Append
                  (Messages, Conv.Assistant_Role,
-                  Gen.Generated_Text (Last_Result), Status);
+                  Reply_Text, Status);
             end if;
 
             --  An empty reply -- no words and no call -- is not a failure of
@@ -496,7 +563,7 @@ package body Model_Runner.Agent is
 
          Result.Steps := Result.Steps + 1;
          Result.Generated_Tokens :=
-           Result.Generated_Tokens + Last_Result.Generated_Tokens;
+           Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
          Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
 
          --  A call written so that it could not be read: the model is told,
@@ -543,7 +610,7 @@ package body Model_Runner.Agent is
             --  file cut short.
             Cut_Last : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
-              and then not Closes_Call (Gen.Generated_Text (Last_Result));
+              and then not Closes_Call (Reply_Text);
          begin
             --  Stopped at its length limit before it called or answered -- a
             --  reasoning model mid-thought: not an answer. It is told so and
@@ -935,63 +1002,20 @@ package body Model_Runner.Agent is
                         --  its answer: a check answering exactly as before
                         --  the last change, a file put back as an earlier
                         --  write left it, a run of calls changing nothing.
-                        --  An answer with the evidence records it names left out:
-                        --  a check run again names a new one each time, and
-                        --  failing the same way read as an answer never given.
-                        function Without_Evidence (Text : String) return String is
-                           Kept : U.Unbounded_String;
-                           At_C : Natural := Text'First;
-                        begin
-                           while At_C <= Text'Last loop
-                              if At_C + 4 <= Text'Last and then Text (At_C .. At_C + 3) = "VER-"
-                                and then Text (At_C + 4) in '0' .. '9'
-                              then
-                                 U.Append (Kept, "VER-#");
-                                 At_C := At_C + 4;
-                                 while At_C <= Text'Last and then Text (At_C) in '0' .. '9' loop
-                                    At_C := At_C + 1;
-                                 end loop;
-                              else
-                                 U.Append (Kept, Text (At_C));
-                                 At_C := At_C + 1;
-                              end if;
-                           end loop;
-                           return U.To_String (Kept);
-                        end Without_Evidence;
-
                         function Seen return String is
                            Has_Path : Boolean;
                            Path     : constant String :=
                              Model_Runner.Tools.Builtin.Text_Argument (Args, "path", Has_Path);
-                           Again    : constant Boolean :=
-                             Ran_Now
-                             and then Ended.Answer = Model_Runner.Tools.Runner.Answered
-                             and then Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads
-                             and then Sighted.Seen_Again (Key, Without_Evidence (Said_By_Tool));
-                           --  A file's revisions, read or written, are kept as
-                           --  seen; a change that leaves it at one seen before
-                           --  puts it back -- by edit_file as by write_file, to
-                           --  a version read as to one written.
-                           Had_It   : constant Boolean :=
-                             Ran_Now and then Has_Path
-                             and then Ended.Answer = Model_Runner.Tools.Runner.Answered
-                             and then Ended.After_Revision /= Model_Runner.Tools.Runner.No_Revision
-                             and then Sighted.Seen_Again ("revision" & ASCII.NUL & Path, Ended.After_Revision);
-                           Back     : constant Boolean := Ended.Changed and then Had_It;
                         begin
-                           if Again and then Made_Change then
-                              return ASCII.LF & "(note from the harness: this answers exactly as it"
-                                & " did before your last change)";
-                           elsif Back then
-                              return ASCII.LF & "(note from the harness: this puts " & Path
-                                & " back to a version it had earlier in this work, revision "
-                                & Ended.After_Revision & ")";
-                           elsif Quiet > 0 and then Quiet mod Quiet_Note = 0 then
-                              return ASCII.LF & "(note from the harness:" & Natural'Image (Quiet)
-                                & " calls in a row have changed nothing; if what you need is in"
-                                & " hand, act on it or give your answer)";
-                           end if;
-                           return "";
+                           return Model_Runner.Agent.Recall.Note_For
+                             (State.all, Key, (if Has_Path then Path else ""), Said_By_Tool,
+                              Ran     => Ran_Now,
+                              Reads   => Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads,
+                              Answered => Ended.Answer = Model_Runner.Tools.Runner.Answered,
+                              Changed => Ended.Changed,
+                              After   => (if Ended.After_Revision = Model_Runner.Tools.Runner.No_Revision then ""
+                                          else String (Ended.After_Revision)),
+                              Quiet   => Quiet);
                         end Seen;
                      begin
                         if Ran_Now then

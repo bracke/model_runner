@@ -194,6 +194,40 @@ package Model_Runner.Agent.Recall is
       Made_Change : Boolean := False;
    end record;
 
+   --  Calls in a row that change nothing before the run is told so, and
+   --  told again at every as many more.
+   Quiet_Note : constant := 8;
+
+   --  What the harness sees in a call, said after its answer: a read
+   --  answering exactly as before the last change, a file put back at a
+   --  revision seen earlier in the work, a run of calls changing nothing.
+   --  Every answer read and every revision is kept as seen, in Self, so a
+   --  later run carrying it sees them too.
+   --
+   --  @param Self What the loop holds; its Made_Change says whether a call
+   --    has changed anything yet, this one included.
+   --  @param Key The call's identity.
+   --  @param Path The file it is about, or "".
+   --  @param Said What it answered.
+   --  @param Ran Whether it ran now, not answered from an earlier call.
+   --  @param Reads Whether it is a call that reads.
+   --  @param Answered Whether it answered, not failed.
+   --  @param Changed Whether it changed something.
+   --  @param After The file's revision after it, or "".
+   --  @param Quiet How many answered calls in a row have changed nothing.
+   --  @return The note, a line break first; "" where there is none.
+   function Note_For
+     (Self     : in out Carried;
+      Key      : String;
+      Path     : String;
+      Said     : String;
+      Ran      : Boolean;
+      Reads    : Boolean;
+      Answered : Boolean;
+      Changed  : Boolean;
+      After    : String;
+      Quiet    : Natural) return String;
+
 private
 
    type Entry_Row is record

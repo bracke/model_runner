@@ -430,4 +430,68 @@ package body Model_Runner.Agent.Recall is
       return False;
    end Seen_Again;
 
+   --------------
+   -- Note_For --
+   --------------
+
+   function Note_For
+     (Self     : in out Carried;
+      Key      : String;
+      Path     : String;
+      Said     : String;
+      Ran      : Boolean;
+      Reads    : Boolean;
+      Answered : Boolean;
+      Changed  : Boolean;
+      After    : String;
+      Quiet    : Natural) return String
+   is
+      --  An answer with the evidence records it names left out: a check
+      --  run again names a new one each time, and failing the same way read
+      --  as an answer never given.
+      function Without_Evidence (Text : String) return String is
+         Kept : Ada.Strings.Unbounded.Unbounded_String;
+         At_C : Natural := Text'First;
+      begin
+         while At_C <= Text'Last loop
+            if At_C + 4 <= Text'Last and then Text (At_C .. At_C + 3) = "VER-"
+              and then Text (At_C + 4) in '0' .. '9'
+            then
+               Ada.Strings.Unbounded.Append (Kept, "VER-#");
+               At_C := At_C + 4;
+               while At_C <= Text'Last and then Text (At_C) in '0' .. '9' loop
+                  At_C := At_C + 1;
+               end loop;
+            else
+               Ada.Strings.Unbounded.Append (Kept, Text (At_C));
+               At_C := At_C + 1;
+            end if;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (Kept);
+      end Without_Evidence;
+
+      Again  : constant Boolean :=
+        Ran and then Answered and then Reads
+        and then Self.Sighted.Seen_Again (Key, Without_Evidence (Said));
+      --  A file's revisions, read or written, are kept as seen; a change
+      --  that leaves it at one seen before puts it back -- by edit_file as
+      --  by write_file, to a version read as to one written.
+      Had_It : constant Boolean :=
+        Ran and then Path /= "" and then Answered and then After /= ""
+        and then Self.Sighted.Seen_Again ("revision" & ASCII.NUL & Path, After);
+      Back   : constant Boolean := Changed and then Had_It;
+   begin
+      if Again and then Self.Made_Change then
+         return ASCII.LF & "(note from the harness: this answers exactly as it did before your last change)";
+      elsif Back then
+         return ASCII.LF & "(note from the harness: this puts " & Path
+           & " back to a version it had earlier in this work, revision " & After & ")";
+      elsif Quiet > 0 and then Quiet mod Quiet_Note = 0 then
+         return ASCII.LF & "(note from the harness:" & Natural'Image (Quiet)
+           & " calls in a row have changed nothing; if what you need is in hand, act on it or give"
+           & " your answer)";
+      end if;
+      return "";
+   end Note_For;
+
 end Model_Runner.Agent.Recall;

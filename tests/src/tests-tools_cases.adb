@@ -2344,6 +2344,41 @@ package body Tests.Tools_Cases is
                  "a pair seen before was not noticed, or a new one was taken for it");
       end;
 
+      --  The harness's notes on a call: a file put back at a revision seen
+      --  earlier, by an edit; a read answering as before the last change,
+      --  its evidence names aside; quiet calls counted -- and carried into
+      --  a second run on the same conversation, as /work's rounds are.
+      declare
+         Kept : Model_Runner.Agent.Recall.Carried;
+
+         function Note (Path, Said : String; Reads, Changed : Boolean; After : String;
+                        Quiet : Natural := 0) return String
+         is (Rc.Note_For (Kept, Rc.Identity ((if Reads then "run_checks" else "edit_file"), Path), Path, Said,
+                          Ran => True, Reads => Reads, Answered => True, Changed => Changed,
+                          After => After, Quiet => Quiet));
+      begin
+         Assert (Note ("calc.adb", "edited", False, True, "aaaaaaaaaaaaaaaa") = "",
+                 "a first edit was noted");
+         Kept.Made_Change := True;
+         Assert (Note ("", "checks failed, VER-000001", True, False, "") = ""
+                 and then Note ("calc.adb", "edited", False, True, "bbbbbbbbbbbbbbbb") = "",
+                 "a first check, or an edit to a new revision, was noted");
+         declare
+            --  A second run, carrying what the first saw.
+            Again : constant String := Note ("calc.adb", "edited", False, True, "aaaaaaaaaaaaaaaa");
+            Same  : constant String := Note ("", "checks failed, VER-000002", True, False, "");
+         begin
+            Assert (Ada.Strings.Fixed.Index (Again, "back to a version it had earlier") > 0
+                    and then Ada.Strings.Fixed.Index (Again, "aaaaaaaaaaaaaaaa") > 0,
+                    "a file put back at a revision seen earlier was not noted: " & Again);
+            Assert (Ada.Strings.Fixed.Index (Same, "answers exactly as it did before") > 0,
+                    "a check failing as before, under a new evidence name, was not noted: " & Same);
+         end;
+         Assert (Ada.Strings.Fixed.Index (Note ("", "x", True, False, "", Quiet => Rc.Quiet_Note),
+                                          "calls in a row have changed nothing") > 0,
+                 "calls in a row changing nothing were not noted");
+      end;
+
       Made.Remember (Read);
       Assert (Made.Holds (Read) and then not Made.Answered (Read),
               "a call made was not held, or held answered before it was");

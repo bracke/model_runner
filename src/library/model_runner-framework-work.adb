@@ -1514,6 +1514,82 @@ package body Model_Runner.Framework.Work is
       function Name_Char (C : Character) return Boolean
       is (C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '/' | '-');
 
+      --  What an Ada line holds of another language's spelling, said as Ada
+      --  spells it: qwen3-8b wrote elif, then else if, ten edits running,
+      --  told only that elif is undefined.
+      function Ada_Slips (Path, Line : String) return String is
+         Lower : String := Ada.Characters.Handling.To_Lower (Line);
+         Said  : Unbounded_String;
+
+         function Ada_Source return Boolean
+         is (Path'Length > 4
+             and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last)) in ".adb" | ".ads");
+
+         --  Whether Word stands in the line as a word of its own.
+         function Has_Word (Word : String) return Boolean is
+            At_Word : Natural := Ada.Strings.Fixed.Index (Lower, Word);
+         begin
+            while At_Word > 0 loop
+               if (At_Word = Lower'First or else not Name_Char (Lower (At_Word - 1)))
+                 and then (At_Word + Word'Length > Lower'Last
+                           or else not Name_Char (Lower (At_Word + Word'Length)))
+               then
+                  return True;
+               end if;
+               At_Word := Ada.Strings.Fixed.Index (Lower, Word, At_Word + 1);
+            end loop;
+            return False;
+         end Has_Word;
+
+         procedure Say (Words : String) is
+         begin
+            Append (Said, (if Said = Null_Unbounded_String then " -- in Ada: " else "; ") & Words);
+         end Say;
+      begin
+         if not Ada_Source then
+            return "";
+         end if;
+         --  Strings and comments are not code.
+         declare
+            Quoted : Boolean := False;
+         begin
+            for Index in Lower'Range loop
+               if Lower (Index) = '"' then
+                  Quoted := not Quoted;
+               elsif Quoted then
+                  Lower (Index) := ' ';
+               elsif Index < Lower'Last and then Lower (Index .. Index + 1) = "--" then
+                  Lower (Index .. Lower'Last) := [others => ' '];
+                  exit;
+               end if;
+            end loop;
+         end;
+         if Has_Word ("elif") or else Has_Word ("elseif") then
+            Say ("elsif, not elif");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "else if ") > 0 then
+            Say ("else if opens a second if, which needs an end if of its own; one chain is elsif");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "&&") > 0 then
+            Say ("and then, not &&");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "||") > 0 then
+            Say ("or else, not ||");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "!=") > 0 then
+            Say ("/=, not !=");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "==") > 0 then
+            Say ("=, not ==");
+         end if;
+         if Ada.Strings.Fixed.Index (Lower, "+=") > 0 or else Ada.Strings.Fixed.Index (Lower, "-=") > 0
+           or else Ada.Strings.Fixed.Index (Lower, "++") > 0
+         then
+            Say ("X := X + 1, not += or ++");
+         end if;
+         return To_String (Said);
+      end Ada_Slips;
+
       --  The project file a name means: itself, or the one file whose
       --  path ends in it.
       function Resolved (Name : String) return String is
@@ -1593,7 +1669,7 @@ package body Model_Runner.Framework.Work is
                      begin
                         if Line /= "" then
                            Append (Said, ASCII.LF & Path & " line " & Number & " is: "
-                                   & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both));
+                                   & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both) & Ada_Slips (Path, Line));
                            Given := Given + 1;
                         end if;
                      end;

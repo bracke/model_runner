@@ -138,6 +138,10 @@ package Model_Runner.Agent is
       --  within its space, or one that was not asked to compact.
       Compactions : Natural := 0;
 
+      --  How many replies' thoughts reached Think_Budget and were closed
+      --  for them.
+      Thoughts_Closed : Natural := 0;
+
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
 
@@ -399,6 +403,9 @@ package Model_Runner.Agent is
    --  @param Bounds Session limits applied to rendering and generation.
    --  @param Pictures The pictures the task shows, or none: the same rows
    --    stand behind the prompt's markers at every step.
+   --  @param Think_Budget The tokens a reply may think for before its
+   --    thought is closed for it and the rest of the reply is asked for:
+   --    a reasoning model spent minutes a call thinking. 0 for no bound.
    --  @param Carry What an earlier run on this conversation held of its
    --    calls, carried on and added to; null for a run that starts afresh.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
@@ -432,6 +439,7 @@ package Model_Runner.Agent is
         Model_Runner.Generation.No_Pictures;
       Bounds     : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
+      Think_Budget : Natural := 0;
       Carry      : Memory_Reference := null;
       Result     : out Outcome);
 
