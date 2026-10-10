@@ -1265,6 +1265,40 @@ package body Model_Runner.Framework.Work is
 
    function Checks_Failing (Host : Child_Host) return Boolean is (Host.Checks_Failed);
 
+   ---------------
+   -- Judged_By --
+   ---------------
+
+   function Judged_By (Host : Child_Host; Path : String) return Boolean is
+      Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
+      Bare    : constant String :=
+        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
+         then Path (Path'First + 2 .. Path'Last) else Path);
+      Existing : constant Boolean := Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare));
+   begin
+      if Kind_Of_Task (Host.Item.all, To_String (Host.Task_Id)) = "test" or else not Existing then
+         --  A new file judges nothing yet: tests may be added.
+         return False;
+      elsif Repository.Under_Roots (Repository.Roots_Of (Host.Item.all).Tests, Bare) then
+         return True;
+      end if;
+      --  A word of a check's command that is this file.
+      declare
+         Checks : constant Verification.Check_List :=
+           Verification.Parse_Profile
+             (Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host)));
+      begin
+         for At_Check in 1 .. Verification.Length (Checks) loop
+            for Word of Execution.Words_Of (To_String (Verification.Element (Checks, At_Check).Command)) loop
+               if Word = Bare or else Word = "./" & Bare then
+                  return True;
+               end if;
+            end loop;
+         end loop;
+      end;
+      return False;
+   end Judged_By;
+
    procedure Run_Checks
      (Host     : in out Child_Host;
       Profile  : String;

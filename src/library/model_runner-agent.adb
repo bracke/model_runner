@@ -219,6 +219,10 @@ package body Model_Runner.Agent is
       --  How often a reply cut off at its length limit, with no call and no
       --  answer in it yet, may be told to go on.
       Cut_Notes_Left : Natural := 2;
+
+      --  The most a reply may be, where the context has less room than the
+      --  request asks and nothing old is left to drop: what remains.
+      Reply_Cap : Natural := Natural'Last;
       Reading      : E.Error_Info;
 
       --  Whether a reply's text closes the call it ends in, in the syntax the
@@ -358,6 +362,7 @@ package body Model_Runner.Agent is
                Request.Max_Tokens :=
                  Natural'Min (Generation.Max_Tokens, Max_Total_Tokens - Spent);
             end if;
+            Request.Max_Tokens := Natural'Min (Request.Max_Tokens, Reply_Cap);
 
             Gen.Release (Last_Result);
             Gen.Generate
@@ -400,8 +405,28 @@ package body Model_Runner.Agent is
                      Conv.Compact (Messages, Keep_Recent, Gone, Work.Record_Text);
                      if Gone > 0 then
                         Result.Compactions := Result.Compactions + 1;
+                        --  Room made: the reply may be as long as asked again.
+                        Reply_Cap := Natural'Last;
                         goto Next_Iteration;
                      end if;
+                     --  Nothing old left to drop: the reply made to fit what
+                     --  room there is, where that is room enough to answer in.
+                     --  A conversation of few long turns filled the context
+                     --  and the task failed with room for 1,900 tokens left.
+                     declare
+                        function Number (Name : String) return Natural is
+                           Text : constant String := E.Text_Of (Last_Result.Error, Name);
+                        begin
+                           return (if Text'Length in 1 .. 9 and then (for all C of Text => C in '0' .. '9')
+                                   then Natural'Value (Text) else 0);
+                        end Number;
+                        Room : constant Integer := Number ("available") - Number ("prompt");
+                     begin
+                        if Room >= 256 and then Room < Request.Max_Tokens then
+                           Reply_Cap := Room;
+                           goto Next_Iteration;
+                        end if;
+                     end;
                   end;
                when Return_To_Model | Stop =>
                   null;

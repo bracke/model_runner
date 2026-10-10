@@ -1405,6 +1405,13 @@ package body Model_Runner.CLI.Project_Commands is
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not read " & Path
               & (if Pm.Sandbox_Refuses (Path, False) then " (" & Pm.Sandbox_Source & " confines it)" else ""));
+      elsif Writes (Named) and then Self.Host /= null and then Self.Host.Judged_By (Path) then
+         --  The checks the work is judged by are not its to change: where
+         --  one is wrong, it says so, and a person decides.
+         Refuse (Tr.Not_Permitted);
+         Put ("error: " & Path & " is one of the checks this task is judged by, and its work may not"
+              & " change it. If the check is wrong, do not work around it: finish with status: blocked"
+              & " and say in the summary what is wrong with it, for a person to decide.");
       elsif Writes (Named) and then not May (Reading => False) then
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not write " & Path

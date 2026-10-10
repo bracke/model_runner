@@ -9929,6 +9929,16 @@ package body Tests.Framework_Cases is
                        "the checks' report does not say what failed: " & To_String (Report));
                Assert (Children.Checks_Failing,
                        "checks that failed were not held as failing, for the work to be sent back");
+               --  The checks it is judged by are not its to change: a test
+               --  already under the test roots; a new one, and its own
+               --  source, are its to write.
+               Dirs.Create_Path (Project & "/tests");
+               Put_File (Project & "/tests/hello_test.adb", "with Hello;");
+               Assert (Children.Judged_By ("tests/hello_test.adb")
+                       and then not Children.Judged_By ("tests/new_test.adb")
+                       and then not Children.Judged_By ("src/hello.adb"),
+                       "the checks a task is judged by were not told from what it may change");
+               Dirs.Delete_File (Project & "/tests/hello_test.adb");
                --  Asked for what its changes reach before it has changed
                --  anything: the whole, and said why; after a write, the
                --  scope traced from it, said.

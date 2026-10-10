@@ -24,6 +24,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A reply fits the room left:** where a turn would not fit the context and compacting has nothing old left to drop, the agent's reply is made as long as the room that remains, 256 tokens at least, and the turn tried again; room made later lets it be as long as asked. qwen3-8b's few long turns filled the context and its task failed on "a prompt of 6168 tokens plus 2048 generated tokens exceeds the 8192".
+
+- **A task's agent may not change the checks it is judged by:** a write or an edit of a file its task's check commands name, or of one already under the project's test roots (repository.tests), is refused, and the agent is told that where the check is wrong it finishes blocked and says what is wrong with it, for a person to decide (Work.Judged_By). A new test is its to add, and a task of kind test is judged by none of its own. gemma-3-4b rewrote the test of the function it was asked to fix until the test could not fail.
+
 - **The optional report lines are a line each, said what each is for:** proposed_tasks, parts, decisions, specifications, waits_for, verify and instead, where they were listed on one line a comma apart -- a 4B copied that line whole, "verify: yes, instead: (...)", and the answer was refused.
 
 - **A /work reply has room to think:** up to 4096 tokens, or a quarter of the context where that is less, where every reply had 1024 -- a reasoning model was cut off mid-thought before it called; 1024 still where thinking is turned off, and the run's budget bounds the whole.

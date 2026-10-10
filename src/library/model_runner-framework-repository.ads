@@ -218,6 +218,14 @@ package Model_Runner.Framework.Repository is
    --  @return The roots.
    function Roots_Of (Item : Stores.Store) return Roots;
 
+   --  Whether a path within the project is one some roots name: under a
+   --  folder they name anywhere in it, or matching a *pattern.
+   --
+   --  @param Listed The roots, as Roots_Of gives them.
+   --  @param Path The path, relative to the project.
+   --  @return True when one names it.
+   function Under_Roots (Listed : Name_Lists.Vector; Path : String) return Boolean;
+
    --  A path as the project names it: relative to its directory, with
    --  ./ and a/../ taken out and a whole path into the project made
    --  relative; the project itself is the empty path. One that leads out

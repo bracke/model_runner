@@ -476,6 +476,15 @@ package body Model_Runner.Framework.Repository is
       return Result;
    end Roots_Of;
 
+   function Named_By (Listed : Name_Lists.Vector; Path : String) return Boolean;
+
+   -----------------
+   -- Under_Roots --
+   -----------------
+
+   function Under_Roots (Listed : Name_Lists.Vector; Path : String) return Boolean
+   is (Named_By (Listed, Path));
+
    --  Whether a path within the project is one a root names.
    function Named_By (Listed : Name_Lists.Vector; Path : String) return Boolean is
       Name : constant String := "/" & Lower (Path) & "/";

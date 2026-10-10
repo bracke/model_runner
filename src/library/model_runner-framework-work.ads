@@ -421,6 +421,19 @@ package Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False);
 
+   --  Whether a file is one of the checks the work is judged by, which its
+   --  agent may not change: a file the task's check commands name, or one
+   --  already under the project's test roots (repository.tests). Changed to
+   --  pass, a check judges nothing -- a 4B rewrote the test of the function
+   --  it was asked to fix until it could not fail. Where a check is wrong,
+   --  the agent says so and a person decides. A task of kind test, whose
+   --  work is its tests, is judged by none of its own.
+   --
+   --  @param Host The host.
+   --  @param Path The file, relative to the project.
+   --  @return True when the work may not change it.
+   function Judged_By (Host : Child_Host; Path : String) return Boolean;
+
    --  Whether the last checks the work ran failed: what it reports done
    --  then is not, by its own checks.
    --
