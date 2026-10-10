@@ -24,6 +24,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The optional report lines are a line each, said what each is for:** proposed_tasks, parts, decisions, specifications, waits_for, verify and instead, where they were listed on one line a comma apart -- a 4B copied that line whole, "verify: yes, instead: (...)", and the answer was refused.
+
 - **A /work reply has room to think:** up to 4096 tokens, or a quarter of the context where that is less, where every reply had 1024 -- a reasoning model was cut off mid-thought before it called; 1024 still where thinking is turned off, and the run's budget bounds the whole.
 - **tests agent-trial --repeats N:** each task run N times, each in its project made afresh, each run's session kept beside it, and how many of each task's runs ended complete said at the end -- one run of a small model is a sample, and a change is told from luck by a count.
 

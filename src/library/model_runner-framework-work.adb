@@ -89,16 +89,23 @@ package body Model_Runner.Framework.Work is
        & "summary: one line on what you did" & ASCII.LF
        & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF)
        & "If you could not do it, status: failed, and the summary says why; blocked is for a"
-       & " decision only a person can make. Lines you may add:"
+       & " decision only a person can make."
+       --  One line each, said what it is for: written as a list on one
+       --  line, a 4B copied it whole -- verify: yes, instead: (...) -- and
+       --  the answer was refused.
+       & " Only where one applies, add it on a line of its own:" & ASCII.LF
        & (if May_Propose
-          then " proposed_tasks: (more work found, TITLE; kind=K a line)"
-               & (if May_Split then ", parts: (too large to do as one: say blocked, a part a line)" else "")
-               & ", decisions:, specifications:"
-          else " issues: (more work found, a line each)")
-       & ", waits_for: (a task to wait for), verify: yes"
-       & (if May_Delegate then ", instead: (how you did a failed helper's part)" else "")
-       & "."
-       & ASCII.LF);
+          then "proposed_tasks: TITLE; kind=KIND -- more work you found, one a line" & ASCII.LF
+               & (if May_Split
+                  then "parts: TITLE -- the task is too large to do as one: say status: blocked, a part a line"
+                       & ASCII.LF
+                  else "")
+               & "decisions: a decision the work needs a person to take, one a line" & ASCII.LF
+               & "specifications: a specification the work needs, one a line" & ASCII.LF
+          else "issues: more work you found, one a line" & ASCII.LF)
+       & "waits_for: TASK-ID -- a task this one has to wait for" & ASCII.LF
+       & "verify: yes -- not done, but have what you changed checked all the same" & ASCII.LF
+       & (if May_Delegate then "instead: how you did a failed helper's part yourself" & ASCII.LF else ""));
 
    function Instructions return String is (Instructions_For (May_Propose => True));
 
