@@ -125,11 +125,17 @@ package body Agent_Trial is
       Put ("src/main.adb",
            "with Ada.Text_IO;" & LF & "with Calc;" & LF & "procedure Main is" & LF & "begin" & LF
            & "   Ada.Text_IO.Put_Line (Integer'Image (Calc.Times (6, 7)));" & LF & "end Main;" & LF);
+      --  Where the check's compiler writes, apart from the sources: kept
+      --  in version control as a directory, empty, so a workspace -- a
+      --  worktree, which holds only what is tracked -- has it too; what is
+      --  built there is not tracked. In a workspace without it every check
+      --  failed, "cannot find object directory".
+      Ada.Directories.Create_Path (Root & "/obj");
+      Put ("obj/.gitkeep", "");
+      Put (".gitignore", "obj/*" & LF & "!obj/.gitkeep" & LF);
       Git ("init -q");
       Git ("add -A");
       Git ("commit -qm start");
-      --  Where the check's compiler writes, apart from the sources.
-      Ada.Directories.Create_Path (Root & "/obj");
    end Make_Project;
 
    --  The project's checks, where a compiler is here: the program built,
