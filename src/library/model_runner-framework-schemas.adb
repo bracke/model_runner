@@ -251,7 +251,8 @@ package body Model_Runner.Framework.Schemas is
           Rule ("rendered", Identifier_Field, True),
           Rule ("included.*", Text_Field, False),
           Rule ("excluded.*", Text_Field, False),
-          Rule ("applies.*", Number_Field, False)]),
+          Rule ("applies.*", Number_Field, False),
+          Rule ("meaning.*", Text_Field, False)]),
 
       (Id      => new String'(Invocation_Schema),
        Version => 1,

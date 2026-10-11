@@ -286,6 +286,15 @@ package Model_Runner.Tools.Builtin is
    --  @param Base The directory, absolute; "" for the process's own.
    procedure Set_Base (Self : in out Instance; Base : String);
 
+   --  Hold a file as seen at a revision, as a read of it would: a change
+   --  that finds it otherwise is refused until it is read again. For what
+   --  the agent was shown before its first call -- its context's files.
+   --
+   --  @param Self The runner.
+   --  @param Path The file, as the agent names it.
+   --  @param Revision Its revision as shown.
+   procedure Note_Seen (Self : in out Instance; Path : String; Revision : String);
+
    --  The directory the file tools work in, as Set_Base named it; "" for
    --  the process's own.
    --

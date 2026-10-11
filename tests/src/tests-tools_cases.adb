@@ -2623,6 +2623,23 @@ package body Tests.Tools_Cases is
          Assert (Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("placed")),
                  "a read did not say, as a value, the revision it read");
 
+         --  Shown before any call, at the revision it was read at: written
+         --  over as it stands, and refused where it changed since.
+         declare
+            Outside : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (Outside, Ada.Text_IO.Out_File, Tree & "/shown.txt");
+            Ada.Text_IO.Put (Outside, "as shown");
+            Ada.Text_IO.Close (Outside);
+            Placed.Note_Seen ("shown.txt", Model_Runner.Tools.Editing.Revision_Of (Tree & "/shown.txt"));
+            Placed.Run ("write_file", "{""path"": ""shown.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
+            Assert (Ended.Changed, "a file shown as it stands was refused: " & Room (Room'First .. Last));
+            Placed.Note_Seen ("shown.txt", Model_Runner.Tools.Editing.Revision ("an older excerpt"));
+            Placed.Run ("write_file", "{""path"": ""shown.txt"", ""content"": ""again""}", Room, Last, Ended, Status);
+            Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "has changed since you last read") > 0,
+                    "a file changed since it was shown was written over: " & Room (Room'First .. Last));
+         end;
+
          --  A passage there twice is edited where the lines it last read
          --  hold it.
          Placed.Run ("write_file", "{""path"": ""twice.txt"", ""content"": ""x\ny\nx\n""}",

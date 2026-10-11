@@ -1437,6 +1437,71 @@ package body Model_Runner.Framework.Work is
 
    function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info is (Host.Unkept);
 
+   function Authority_Changed (Item : Stores.Store; Manifest_Id : String) return String is
+      Held    : Records.Item;
+      Read    : E.Error_Info;
+      Changed : Unbounded_String;
+   begin
+      if Manifest_Id = "" then
+         return "";
+      end if;
+      Stores.Read (Item, Invocations_Area, "manifest." & Manifest_Id, Held, Read);
+      if E.Is_Error (Read) then
+         return "";
+      end if;
+      for Index in 1 .. Records.Field_Count (Held) loop
+         declare
+            Field : constant String := Records.Field_Name (Held, Index);
+         begin
+            if Field'Length > 8 and then Field (Field'First .. Field'First + 7) = "meaning." then
+               declare
+                  Id   : constant String := Field (Field'First + 8 .. Field'Last);
+                  Now  : Intent.Entity;
+                  Got  : E.Error_Info;
+               begin
+                  Intent.Read (Item, (if Id'Length > 4 and then Id (Id'First .. Id'First + 3) = "DEC-"
+                                      then Intent.Decision else Intent.Requirement), Id, Now, Got);
+                  if E.Is_Error (Got) or else To_String (Now.Meaning) /= Records.Get (Held, Field) then
+                     Append (Changed, (if Changed = Null_Unbounded_String then "" else ", ") & Id);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return To_String (Changed);
+   end Authority_Changed;
+
+   function Shown_Revisions (Host : Child_Host) return Name_Lists.Vector is
+      Call     : Records.Item;
+      Manifest : Records.Item;
+      Read     : E.Error_Info;
+      Mark     : constant String := "source_revision.";
+   begin
+      return Result : Name_Lists.Vector do
+         if Host.Calls.Is_Empty or else Host.Calls.Last_Element = "" then
+            return;
+         end if;
+         Stores.Read (Host.Item.all, Invocations_Area, Host.Calls.Last_Element, Call, Read);
+         if E.Is_Ok (Read) then
+            Stores.Read (Host.Item.all, Invocations_Area,
+                         "manifest." & Records.Get (Call, "context_manifest"), Manifest, Read);
+         end if;
+         if E.Is_Error (Read) then
+            return;
+         end if;
+         for Index in 1 .. Records.Field_Count (Manifest) loop
+            declare
+               Field : constant String := Records.Field_Name (Manifest, Index);
+            begin
+               if Field'Length > Mark'Length and then Field (Field'First .. Field'First + Mark'Length - 1) = Mark then
+                  Result.Append (Field (Field'First + Mark'Length .. Field'Last) & ASCII.HT
+                                 & Records.Get (Manifest, Field));
+               end if;
+            end;
+         end loop;
+      end return;
+   end Shown_Revisions;
+
    function Authority_Readable (Host : Child_Host) return Boolean is
       Defined : Records.Item;
       Read    : E.Error_Info;
@@ -1909,6 +1974,31 @@ package body Model_Runner.Framework.Work is
             end;
          end if;
       end;
+
+      --  Its model call recorded as started and never ended -- the work
+      --  stopped before the model ran: its workspace, its prompt, its
+      --  files not made -- is ended now, failed, with why: "started" is
+      --  said of a call that crossed into the model, and an opening would
+      --  have found it only later.
+      if Length (Result.Invocation_Id) > 0
+        and then Invocations.State_Of (Item, To_String (Result.Invocation_Id)) = "started"
+      then
+         declare
+            Change : Stores.Transaction;
+            Ended  : E.Error_Info;
+         begin
+            Invocations.Finish
+              (Item, Change, To_String (Result.Invocation_Id), Invocations.Failed, (others => 0), "",
+               "the work stopped before its model ran"
+               & (if E.Is_Error (Status) then ": " & Why_Of (Status)
+                  elsif Length (Result.Reason) > 0 then ": " & To_String (Result.Reason)
+                  else ""),
+               Ended);
+            if E.Is_Ok (Ended) then
+               Stores.Commit (Item, Change, Ended);
+            end if;
+         end;
+      end if;
 
       --  The run over, its baseline goes with it: left, it would stand for
       --  what the files were before a later run that kept none.

@@ -759,6 +759,19 @@ package body Model_Runner.CLI.Project_Commands is
       --  The tools work in the tree the work is done in, named, not in
       --  whatever directory the process is in.
       Runner.Set_Base (Tree);
+      --  The files its context showed it, as seen at the revisions shown: a
+      --  write over one changed since -- an editor, a build, another
+      --  session -- is refused until it is read again, not made from a
+      --  stale excerpt.
+      if Host /= null then
+         for Shown of Wk.Shown_Revisions (Host.all) loop
+            declare
+               Tab : constant Natural := Ada.Strings.Fixed.Index (Shown, [1 => ASCII.HT]);
+            begin
+               Runner.Note_Seen (Shown (Shown'First .. Tab - 1), Shown (Tab + 1 .. Shown'Last));
+            end;
+         end loop;
+      end if;
       Guard.Can := Work_Capabilities (Host);
       Guard.Watcher := Watcher'Unchecked_Access;
       Answer := Null_Unbounded_String;

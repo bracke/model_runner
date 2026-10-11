@@ -529,51 +529,10 @@ begin
       return;
    end if;
 
-   --  What it is told, and the call, recorded before it is made.
-   Context.Build
-     (Item, Task_Id, Model, Built, Held,
-      Instructions => Instructions_Here);
-   if E.Is_Error (Held) then
-      Conclude ("blocked", "its context cannot be built: "
-                & Why_Of (Held), "failed");
-      return;
-   end if;
-   Result.Manifest_Id := To_Unbounded_String (Context.Manifest_Id (Built));
-   Context.Keep (Item, Change, Built, Status);
-   if E.Is_Ok (Status) then
-      Invocations.Start
-        (Item, Change, To_String (Result.Agent_Id), Task_Id,
-         Generation_Of (Item, Task_Id),
-         To_String (Model.Id),
-         To_String (Result.Manifest_Id),
-         Tool_Policy
-           (Item, To_String (Result.Agent_Id),
-            Frozen.Max_Tool_Calls,
-            Task_Id, Isolated, Hosted => Runner in Parenting_Runner'Class),
-         Invocations.Work_Claim,
-         Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class),
-         Resolved => Resolved_Lines);
-      if E.Is_Ok (Status) then
-         Agents.Record_Holding
-           (Item, Change, To_String (Result.Agent_Id), "", To_String (Result.Invocation_Id),
-            Status);
-      end if;
-   end if;
-   if E."=" (Status.Code, E.Framework_Limit_Exceeded) then
-      --  Out of calls: blocked, deterministically, not run past its bound.
-      Change := Stores.No_Changes;
-      Conclude ("blocked", "no model call is left to it: " & Why_Of (Status),
-                "failed");
-      return;
-   end if;
-   if E.Is_Ok (Status) then
-      Stores.Commit (Item, Change, Status);
-   end if;
-   if E.Is_Error (Status) then
-      return;
-   end if;
-
-   --  Its own copy to write in, when the project isolates work.
+   --  Its own copy to write in, when the project isolates work -- made
+   --  before its context, which is built from it: what the agent is told
+   --  is the tree it edits, not the project as it was a moment before
+   --  another session took work in.
    if Isolated then
       declare
          Made  : Workspaces.Workspace;
@@ -615,6 +574,51 @@ begin
             return;
          end if;
       end;
+   end if;
+
+   --  What it is told, and the call, recorded before it is made.
+   Context.Build
+     (Item, Task_Id, Model, Built, Held,
+      Instructions => Instructions_Here,
+      Tree         => (if Isolated then To_String (Place) else ""));
+   if E.Is_Error (Held) then
+      Conclude ("blocked", "its context cannot be built: "
+                & Why_Of (Held), "failed");
+      return;
+   end if;
+   Result.Manifest_Id := To_Unbounded_String (Context.Manifest_Id (Built));
+   Context.Keep (Item, Change, Built, Status);
+   if E.Is_Ok (Status) then
+      Invocations.Start
+        (Item, Change, To_String (Result.Agent_Id), Task_Id,
+         Generation_Of (Item, Task_Id),
+         To_String (Model.Id),
+         To_String (Result.Manifest_Id),
+         Tool_Policy
+           (Item, To_String (Result.Agent_Id),
+            Frozen.Max_Tool_Calls,
+            Task_Id, Isolated, Hosted => Runner in Parenting_Runner'Class),
+         Invocations.Work_Claim,
+         Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class),
+         Resolved => Resolved_Lines);
+      if E.Is_Ok (Status) then
+         Agents.Record_Holding
+           (Item, Change, To_String (Result.Agent_Id), "", To_String (Result.Invocation_Id),
+            Status);
+      end if;
+   end if;
+   if E."=" (Status.Code, E.Framework_Limit_Exceeded) then
+      --  Out of calls: blocked, deterministically, not run past its bound.
+      Change := Stores.No_Changes;
+      Conclude ("blocked", "no model call is left to it: " & Why_Of (Status),
+                "failed");
+      return;
+   end if;
+   if E.Is_Ok (Status) then
+      Stores.Commit (Item, Change, Status);
+   end if;
+   if E.Is_Error (Status) then
+      return;
    end if;
 
    declare
@@ -1737,6 +1741,20 @@ begin
    if E.Is_Error (Status) then
       return;
    end if;
+
+   --  What it was told changed its meaning while it worked: its work is
+   --  for words it never saw, and is not credited on the new ones -- set
+   --  aside, kept, and said; accepted again, it runs on what they say now.
+   declare
+      Changed : constant String := Authority_Changed (Item, To_String (Result.Manifest_Id));
+   begin
+      if Changed /= "" then
+         Conclude ("blocked", Changed & " changed its meaning while this attempt ran, so its work answers"
+                   & " words it was not told of; /task accept " & Task_Id & " runs it again on what they"
+                   & " say now", "completed");
+         return;
+      end if;
+   end;
 
    --  Work written apart is taken in before it is verified: by the
    --  harness when the configuration says so, otherwise left waiting for

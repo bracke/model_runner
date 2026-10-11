@@ -2321,6 +2321,11 @@ package body Model_Runner.Tools.Builtin is
       Self.Base := U.To_Unbounded_String (Base);
    end Set_Base;
 
+   procedure Note_Seen (Self : in out Instance; Path : String; Revision : String) is
+   begin
+      Self.Seen.Put (Path, Revision);
+   end Note_Seen;
+
    ----------
    -- Base --
    ----------

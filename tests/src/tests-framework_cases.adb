@@ -32,6 +32,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Indexes;
@@ -5037,6 +5038,22 @@ package body Tests.Framework_Cases is
       Cx.Keep (Store, Change, One, Status);
       Assert (S.Change_Count (Change) = 0, "a manifest was kept twice");
 
+      --  Told one meaning, and the requirement revised since: named, for
+      --  the work that answered the old words to be set aside.
+      Assert (Model_Runner.Framework.Work.Authority_Changed (Store, Cx.Manifest_Id (One)) = "",
+              "a requirement as it was told was said to have changed");
+      declare
+         Impact : Nt.Impact;
+      begin
+         Nt.Revise (Store, Change, Nt.Requirement, To_String (Req), "Read", "It SHALL read twice.", "a test reads",
+                    Impact, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Model_Runner.Framework.Work.Authority_Changed (Store, Cx.Manifest_Id (One)) = To_String (Req),
+                 "a requirement revised after its context was told was not named: "
+                 & Model_Runner.Framework.Work.Authority_Changed (Store, Cx.Manifest_Id (One)) & " "
+                 & Code_Of (Status));
+      end;
+
       Cx.Build (Store, To_String (Id), Cx.Profile (Store, "tiny"), Two, Status);
       Assert (Status.Code = E.Framework_Context_Overflow,
               "a context whose mandatory part does not fit was built");
@@ -7243,6 +7260,11 @@ package body Tests.Framework_Cases is
                  and then To_String (Done.Reason) = "no workspace slot is free",
                  "a task ran with no workspace slot free: " & To_String (Done.Final_State)
                  & " " & To_String (Done.Reason));
+         --  Its model call, never made, is not left said to be started.
+         Assert (Length (Done.Invocation_Id) = 0
+                 or else Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "failed",
+                 "a model call never made was left started: "
+                 & Iv.State_Of (Store, To_String (Done.Invocation_Id)));
       end;
       S.Close (Store);
    end Schemas_Retention_Adapter_And_Slots;
@@ -11376,6 +11398,42 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Spoiled_Change_Is_Refused;
 
+   --  A file a context shows is held at the revision its tools read: the
+   --  manifest's revision of it is what a write finds, CRLF and UTF-8 alike.
+   procedure Shown_Files_Keep_Their_Revisions
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Built  : Cx.Built;
+      Held   : R.Item;
+      File   : Ada.Streams.Stream_IO.File_Type;
+   begin
+      Task_Project (Store, "shown-files", "");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Fresh_Root (Store) & "/src/tiny.adb");
+      String'Write (Ada.Streams.Stream_IO.Stream (File),
+                    "procedure Tiny is" & ASCII.CR & ASCII.LF & "   --  " & Character'Val (16#C3#)
+                    & Character'Val (16#A6#) & ASCII.LF & "begin null; end Tiny;" & ASCII.LF);
+      Ada.Streams.Stream_IO.Close (File);
+      Tk.Create (Store, Change, Fields ("Look at src/tiny.adb", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Built, Status);
+      Cx.Keep (Store, Change, Built, Status);
+      S.Commit (Store, Change, Status);
+      S.Read (Store, F.Invocations_Area, "manifest." & Cx.Manifest_Id (Built), Held, Status);
+      Assert (E.Is_Ok (Status)
+              and then R.Get (Held, "source_revision.src/tiny.adb")
+                       = Model_Runner.Tools.Editing.Revision_Of (Fresh_Root (Store) & "/src/tiny.adb"),
+              "a file's revision as its context showed it is not what its tools read: "
+              & R.Get (Held, "source_revision.src/tiny.adb") & " "
+              & Model_Runner.Tools.Editing.Revision_Of (Fresh_Root (Store) & "/src/tiny.adb"));
+      S.Close (Store);
+   end Shown_Files_Keep_Their_Revisions;
+
    --  A check's FILE:LINE is quoted from the project: the one file the
    --  name means, each line once; a name two files end in, or none, is not.
    procedure Check_Output_Quotes_Lines
@@ -11902,6 +11960,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Spoiled_Change_Is_Refused'Access,
          "a transaction something could not be staged into is refused whole");
+      Register_Routine
+        (T, Shown_Files_Keep_Their_Revisions'Access,
+         "a file a context shows is held at the revision its tools read");
       Register_Routine
         (T, Check_Output_Quotes_Lines'Access,
          "a check's FILE:LINE is quoted from the one project file it names");

@@ -93,13 +93,16 @@ package Model_Runner.Framework.Context is
    --    Framework_Context_Overflow when what is mandatory does not fit.
    --  @param Instructions What the agent is told to do and answer, after
    --    the context: counted in its cost, fingerprinted and rendered last.
+   --  @param Tree The tree to read its source from, where the agent works
+   --    apart -- its workspace's -- or "" for the project's.
    procedure Build
      (Item    : Stores.Store;
       Task_Id : String;
       Model   : Model_Profile;
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info;
-      Instructions : String := "");
+      Instructions : String := "";
+      Tree    : String := "");
 
    --  Build the context of a child agent: its rules, the task it helps with
    --  and what it is asked, all mandatory, fitted and fingerprinted as a
@@ -219,6 +222,20 @@ private
 
       --  The requirement and decision revisions that apply, as ID@N.
       Revisions  : Name_Lists.Vector;
+
+      --  And what each meant, as ID, a tab, the meaning: what the agent was
+      --  told, held against what it means when its work comes back.
+      Meanings   : Name_Lists.Vector;
+
+      --  The tree its source was read from -- a workspace's, where the
+      --  work is apart -- and that tree's fingerprint: what the agent was
+      --  shown and what it edits, the same.
+      Tree               : Ada.Strings.Unbounded.Unbounded_String;
+      Tree_Fingerprint   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Each file shown, by path, a tab, and its revision when it was
+      --  read: what the agent saw of it, for a write to be held to.
+      Sources            : Name_Lists.Vector;
 
       Config_Revision    : Natural := 0;
       Config_Fingerprint : Ada.Strings.Unbounded.Unbounded_String;

@@ -484,6 +484,24 @@ package Model_Runner.Framework.Work is
    --  @return True when it reads.
    function Authority_Readable (Host : Child_Host) return Boolean;
 
+   --  What changed its meaning since a context told an agent of it: each
+   --  requirement and decision its manifest names whose meaning now is not
+   --  the one it was told -- revised while the attempt ran.
+   --
+   --  @param Item The store.
+   --  @param Manifest_Id The context's manifest.
+   --  @return Their identifiers, comma-separated; "" where none.
+   function Authority_Changed (Item : Stores.Store; Manifest_Id : String) return String;
+
+   --  The files the agent now working was shown in its context, each at the
+   --  revision it was read at: path, a tab, the revision. Its tools hold
+   --  a write to them as read at those -- a file changed since its excerpt
+   --  was taken is read again before it is written over.
+   --
+   --  @param Host The host.
+   --  @return The lines.
+   function Shown_Revisions (Host : Child_Host) return Name_Lists.Vector;
+
    --  Count tokens the agent now working generated against its budget.
    --
    --  @param Host The host.

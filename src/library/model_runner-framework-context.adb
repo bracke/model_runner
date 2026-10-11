@@ -17,6 +17,7 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Tools.Editing;
 
 package body Model_Runner.Framework.Context is
 
@@ -264,11 +265,14 @@ package body Model_Runner.Framework.Context is
       Model   : Model_Profile;
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info;
-      Instructions : String := "")
+      Instructions : String := "";
+      Tree    : String := "")
    is
       View       : Records.Item;
       Config     : Records.Item;
       Candidates : Item_Vectors.Vector;
+      --  Each file offered, as its item and its revision, read whole.
+      File_Revisions : Name_Lists.Vector;
       Component  : Unbounded_String;
 
       procedure Offer (Id, Kind : String; Rank : Priority; Text : String) is
@@ -285,6 +289,11 @@ package body Model_Runner.Framework.Context is
                 Kind => To_Unbounded_String (Kind),
                 Rank => Rank,
                 Text => To_Unbounded_String (Text)));
+            --  A file's revision as it was read whole, before fitting may
+            --  trim what is shown of it.
+            if Id'Length > 5 and then Id (Id'First .. Id'First + 4) = "file:" then
+               File_Revisions.Append (Id & ASCII.HT & Model_Runner.Tools.Editing.Revision (Text));
+            end if;
          end if;
       end Offer;
 
@@ -533,6 +542,7 @@ package body Model_Runner.Framework.Context is
                   Intent.Read (Item, Intent.Requirement, Id, Held, Read);
                   if E.Is_Ok (Read) then
                      Result.Revisions.Append (Id & "@" & Image (Held.Revision));
+                     Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
                      Offer (Id & "@" & Image (Held.Revision), "requirement", Mandatory,
                             Id & ": " & To_String (Held.Text)
                             & (if Length (Held.Criteria) = 0 then ""
@@ -554,6 +564,7 @@ package body Model_Runner.Framework.Context is
                   Intent.Read (Item, Intent.Decision, Id, Held, Read);
                   if E.Is_Ok (Read) then
                      Result.Revisions.Append (Id & "@" & Image (Held.Revision));
+                     Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
                      --  Mandatory: a decision that applies is in the context,
                      --  or the context does not fit -- never quietly left out.
                      Offer (Id & "@" & Image (Held.Revision), "decision", Mandatory,
@@ -612,8 +623,9 @@ package body Model_Runner.Framework.Context is
       declare
          Graph   : Repository.Graph;
          Read    : E.Error_Info;
+         --  The tree it edits: the workspace's where it works apart.
          Project : constant String :=
-           Ada.Directories.Containing_Directory (Stores.Root (Item));
+           (if Tree /= "" then Tree else Ada.Directories.Containing_Directory (Stores.Root (Item)));
          Wanted  : constant String := Lower (To_String (Component));
 
          --  The files the task names, for what uses them to follow.
@@ -623,7 +635,12 @@ package body Model_Runner.Framework.Context is
          --  files and symbols as they were.
          Repository.Load (Item, Graph, Read);
          Result.Semantic := E.Is_Ok (Read);
-         Graph := Repository.Now (Item);
+         --  Of the workspace, scanned as it is: its files, not the
+         --  project's, are the ones offered.
+         Graph := (if Tree /= "" then Repository.Scan (Tree, Repository.Roots_Of (Item))
+                   else Repository.Now (Item));
+         Result.Tree := To_Unbounded_String (Project);
+         Result.Tree_Fingerprint := To_Unbounded_String (Repository.Graph_Fingerprint (Graph));
 
          --  A file the task names in its title, notes or question is what it is
          --  about: offered first, whatever component it is in.
@@ -980,6 +997,18 @@ package body Model_Runner.Framework.Context is
       end;
 
       Settle (Candidates, Task_Id, Result, Status);
+      --  The files it shows, at the revisions they were read at.
+      for Shown of Result.Included loop
+         for Held of File_Revisions loop
+            declare
+               Tab : constant Natural := Ada.Strings.Fixed.Index (Held, [1 => ASCII.HT]);
+            begin
+               if Held (Held'First .. Tab - 1) = To_String (Shown.Id) then
+                  Result.Sources.Append (Held (Held'First + 5 .. Held'Last));
+               end if;
+            end;
+         end loop;
+      end loop;
    end Build;
 
    -----------------
@@ -1197,6 +1226,18 @@ package body Model_Runner.Framework.Context is
          Records.Set (Value, "configuration_revision", Image (From.Config_Revision));
          Records.Set (Value, "configuration_fingerprint", To_String (From.Config_Fingerprint));
          Records.Set (Value, "retrieval", (if From.Semantic then "semantic" else "textual"));
+         --  The tree its source came from, and as it was: what was shown and
+         --  what is edited can be told the same.
+         for Shown of From.Sources loop
+            declare
+               Tab : constant Natural := Ada.Strings.Fixed.Index (Shown, [1 => ASCII.HT]);
+            begin
+               Records.Set (Value, "source_revision." & Shown (Shown'First .. Tab - 1),
+                            Shown (Tab + 1 .. Shown'Last));
+            end;
+         end loop;
+         Records.Set (Value, "source_tree", To_String (From.Tree));
+         Records.Set (Value, "source_fingerprint", To_String (From.Tree_Fingerprint));
          Records.Set (Value, "budget", Image (From.Budget));
          Records.Set (Value, "estimated_tokens", Image (From.Cost));
          Records.Set (Value, "fingerprint", To_String (From.Print));
@@ -1220,6 +1261,13 @@ package body Model_Runner.Framework.Context is
                Records.Set
                  (Value, "applies." & Revision (Revision'First .. At_Sign - 1),
                   Revision (At_Sign + 1 .. Revision'Last));
+            end;
+         end loop;
+         for Meant of From.Meanings loop
+            declare
+               Tab : constant Natural := Ada.Strings.Fixed.Index (Meant, [1 => ASCII.HT]);
+            begin
+               Records.Set (Value, "meaning." & Meant (Meant'First .. Tab - 1), Meant (Tab + 1 .. Meant'Last));
             end;
          end loop;
          Stores.Put (Change, Invocations_Area, Name, Value);
