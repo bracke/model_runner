@@ -27,12 +27,15 @@ package Agent_Trial is
    --  @param Repeats How many times each task is run, each in its project
    --    made afresh; past one, each run's session is kept beside the
    --    project and how many runs of each task ended complete is said.
+   --  @param Apart Whether the work is written in a workspace of its own
+   --    and taken in once its checks pass there (--isolation workspace).
    procedure Run
      (Model   : String;
       Program : String;
       Options : String;
       Only    : String;
       Clean   : out Boolean;
-      Repeats : Positive := 1);
+      Repeats : Positive := 1;
+      Apart   : Boolean := False);
 
 end Agent_Trial;

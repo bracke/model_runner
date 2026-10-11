@@ -144,15 +144,20 @@ package body Agent_Trial is
    --  the harness, it says.
    Time_Bound : constant String := " scalar.agents.max_seconds=1200";
 
-   function Check_Line (Tested : Boolean) return String is
+   --  Where the work is written: in a workspace of its own, taken in by
+   --  the harness once its checks pass there, where the trial asks it.
+   function Apart_Words (Apart : Boolean) return String
+   is (if Apart then " scalar.work.isolation=workspace scalar.work.integrate=automatic" else "");
+
+   function Check_Line (Tested : Boolean; Apart : Boolean := False) return String is
      (if Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main;"
            & " test: gnatmake -q -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
-           & Time_Bound & " confirm=yes"
+           & Time_Bound & Apart_Words (Apart) & " confirm=yes"
       else "/reconfigure add set.execution.allowed gnatmake "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"""
-           & Time_Bound & " confirm=yes");
+           & Time_Bound & Apart_Words (Apart) & " confirm=yes");
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is
@@ -188,7 +193,8 @@ package body Agent_Trial is
       Options : String;
       Only    : String;
       Clean   : out Boolean;
-      Repeats : Positive := 1)
+      Repeats : Positive := 1;
+      Apart   : Boolean := False)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -357,7 +363,7 @@ package body Agent_Trial is
                               Send ("");
                               if Wait_For ("initialized", 30.0)
                                 and then (Hostkit.Process.Locate ("gnatmake") = ""
-                                          or else (Send_Then (Check_Line (One.Tested))
+                                          or else (Send_Then (Check_Line (One.Tested, Apart))
                                                    and then Wait_For ("is now revision", 30.0)))
                               then
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
