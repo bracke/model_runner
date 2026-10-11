@@ -1,172 +1,17 @@
-with Ada.Containers.Indefinite_Vectors;
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+with Jsonlib.Serializers;
 
-with Model_Runner.Conversation;
-with Model_Runner.Text;
+with Model_Runner.Tools;
 
 package body Model_Runner.Agent.Recall is
-
-   package Member_Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
-   package Name_Sorting is new Member_Names.Generic_Sorting;
 
    ---------------
    -- Canonical --
    ---------------
 
    function Canonical (Arguments : String) return String is
-      use Ada.Strings.Unbounded;
-
-      At_Char : Natural := Arguments'First;
-      Bad     : exception;
-
-      procedure Skip is
-      begin
-         while At_Char <= Arguments'Last
-           and then Arguments (At_Char) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
-         loop
-            At_Char := At_Char + 1;
-         end loop;
-      end Skip;
-
-      function Peek return Character is
-      begin
-         Skip;
-         if At_Char > Arguments'Last then
-            raise Bad;
-         end if;
-         return Arguments (At_Char);
-      end Peek;
-
-      --  A string as it means, spelled one way: its escapes undone and
-      --  written again as JSON writes them, so src\/a and src/a, or \u0041
-      --  and A, are one call -- as the tools read them, the same.
-      function Text return String is
-         First : Positive;
-      begin
-         if Peek /= '"' then
-            raise Bad;
-         end if;
-         First := At_Char;
-         At_Char := At_Char + 1;
-         while At_Char <= Arguments'Last and then Arguments (At_Char) /= '"' loop
-            if Arguments (At_Char) = '\' then
-               At_Char := At_Char + 1;
-            end if;
-            At_Char := At_Char + 1;
-         end loop;
-         if At_Char > Arguments'Last then
-            raise Bad;
-         end if;
-         At_Char := At_Char + 1;
-         return Model_Runner.Text.JSON_Quoted
-           (Model_Runner.Conversation.Unescaped (Arguments (First + 1 .. At_Char - 2)));
-      end Text;
-
-      function Value return String;
-
-      --  An object's members in the order of their names; a name given
-      --  twice is the last given, as a reader takes it.
-      function Object return String is
-         package Members is new Ada.Containers.Indefinite_Hashed_Maps
-           (String, String, Ada.Strings.Hash, "=");
-         Held  : Members.Map;
-         Names : Member_Names.Vector;
-         Said  : Unbounded_String := To_Unbounded_String ("{");
-      begin
-         At_Char := At_Char + 1;
-         if Peek = '}' then
-            At_Char := At_Char + 1;
-            return "{}";
-         end if;
-         loop
-            declare
-               Name : constant String := Text;
-            begin
-               if Peek /= ':' then
-                  raise Bad;
-               end if;
-               At_Char := At_Char + 1;
-               declare
-                  Given : constant String := Value;
-               begin
-                  if Held.Contains (Name) then
-                     Held.Replace (Name, Given);
-                  else
-                     Held.Insert (Name, Given);
-                     Names.Append (Name);
-                  end if;
-               end;
-            end;
-            case Peek is
-               when ',' =>
-                  At_Char := At_Char + 1;
-               when '}' =>
-                  At_Char := At_Char + 1;
-                  exit;
-               when others =>
-                  raise Bad;
-            end case;
-         end loop;
-         Name_Sorting.Sort (Names);
-         for Index in Names.First_Index .. Names.Last_Index loop
-            Append (Said, (if Index = Names.First_Index then "" else ",")
-                          & Names (Index) & ":" & Held.Element (Names (Index)));
-         end loop;
-         return To_String (Said) & "}";
-      end Object;
-
-      function List return String is
-         Said  : Unbounded_String := To_Unbounded_String ("[");
-         First : Boolean := True;
-      begin
-         At_Char := At_Char + 1;
-         if Peek = ']' then
-            At_Char := At_Char + 1;
-            return "[]";
-         end if;
-         loop
-            Append (Said, (if First then "" else ",") & Value);
-            First := False;
-            case Peek is
-               when ',' =>
-                  At_Char := At_Char + 1;
-               when ']' =>
-                  At_Char := At_Char + 1;
-                  exit;
-               when others =>
-                  raise Bad;
-            end case;
-         end loop;
-         return To_String (Said) & "]";
-      end List;
-
-      --  A number or a literal, as written.
-      function Word return String is
-         First : Positive;
-      begin
-         Skip;
-         First := At_Char;
-         while At_Char <= Arguments'Last
-           and then Arguments (At_Char)
-                    not in ',' | '}' | ']' | ':' | ' ' | ASCII.HT | ASCII.LF | ASCII.CR
-         loop
-            At_Char := At_Char + 1;
-         end loop;
-         if At_Char = First then
-            raise Bad;
-         end if;
-         return Arguments (First .. At_Char - 1);
-      end Word;
-
-      function Value return String is
-      begin
-         case Peek is
-            when '{' => return Object;
-            when '[' => return List;
-            when '"' => return Text;
-            when others => return Word;
-         end case;
-      end Value;
-
       --  What is not JSON, without the space outside its strings.
       function Squeezed return String is
          Result : String (1 .. Arguments'Length);
@@ -196,19 +41,24 @@ package body Model_Runner.Agent.Recall is
          end loop;
          return Result (1 .. Last);
       end Squeezed;
+
+      Document : Jsonlib.Documents.Document;
+      Error    : Jsonlib.Errors.Error_Info;
    begin
-      declare
-         Whole : constant String := Value;
-      begin
-         Skip;
-         if At_Char <= Arguments'Last then
-            raise Bad;
-         end if;
-         return Whole;
-      end;
-   exception
-      when Bad | Constraint_Error =>
+      --  Read as JSON is read -- jsonlib -- once a model's raw controls in
+      --  its strings are escaped, a name given twice the last given; and
+      --  written back one way: members in the order of their names, no
+      --  space between tokens, each string escaped only where it must be.
+      --  The same call however its JSON was spelled is one call, as the
+      --  tool that runs it reads it.
+      Jsonlib.Parsers.Parse
+        (Model_Runner.Tools.Controls_Escaped (Arguments), Document, Error,
+         (Jsonlib.Parsers.Default_Options with delta Duplicates => Jsonlib.Parsers.Last_Wins));
+      if Jsonlib.Errors.Failed (Error) then
          return Squeezed;
+      end if;
+      return Jsonlib.Serializers.To_String
+        (Document, (Jsonlib.Serializers.Default_Options with delta Sort_Members => True));
    end Canonical;
 
    --------------
