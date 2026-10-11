@@ -152,8 +152,19 @@ package body Agent_Trial is
 
    --  Where the work is written: in a workspace of its own, taken in by
    --  the harness once its checks pass there, where the trial asks it.
-   function Apart_Words (Apart : Boolean) return String
-   is (if Apart then " scalar.work.isolation=workspace scalar.work.integrate=automatic" else "");
+   --  The harness takes work in for an agent that may ask for it: the
+   --  project's own permissions named whole -- naming one replaces what a
+   --  project that names none gives -- with request_integration among them.
+   function Apart_Words (Apart : Boolean) return String is
+     (if Apart
+      then " scalar.work.isolation=workspace scalar.work.integrate=automatic"
+           & " map.permission.project.read_source=inherit map.permission.project.write_source=inherit"
+           & " map.permission.project.read_specs=inherit map.permission.project.write_specs=inherit"
+           & " map.permission.project.run_build=inherit map.permission.project.run_tests=inherit"
+           & " map.permission.project.run_static_analysis=inherit"
+           & " map.permission.project.create_children=inherit map.permission.project.propose_tasks=inherit"
+           & " map.permission.project.request_integration=yes"
+      else "");
 
    function Check_Line (Tested : Boolean; Apart : Boolean := False) return String is
      (if Tested
