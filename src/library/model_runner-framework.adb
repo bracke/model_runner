@@ -1,6 +1,9 @@
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+
+with Hostkit.Process;
 
 package body Model_Runner.Framework is
 
@@ -74,6 +77,44 @@ package body Model_Runner.Framework is
    --------------
    -- Lines_Of --
    --------------
+
+   function Process_Line (Process_Id : Integer) return String is
+      Identity : constant String := Hostkit.Process.Identity_Of (Process_Id);
+      Image    : constant String := Ada.Strings.Fixed.Trim (Integer'Image (Process_Id), Ada.Strings.Both);
+   begin
+      return (if Identity = "" then Image else Image & " " & Identity);
+   end Process_Line;
+
+   function Standing_Of (Line : String) return Process_Standing is
+      use type Hostkit.Process.Presence;
+      Text  : constant String := Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both);
+      Space : constant Natural := Ada.Strings.Fixed.Index (Text & " ", " ");
+      Id    : constant String := Text (Text'First .. Space - 1);
+      Kept  : constant String :=
+        (if Space < Text'Last then Ada.Strings.Fixed.Trim (Text (Space + 1 .. Text'Last), Ada.Strings.Both)
+         else "");
+   begin
+      if Id'Length not in 1 .. 10 or else (for some C of Id => C not in '0' .. '9')
+        or else Long_Long_Integer'Value (Id) > Long_Long_Integer (Integer'Last)
+      then
+         return Not_Known;
+      end if;
+      declare
+         Pid      : constant Integer := Integer'Value (Id);
+         Presence : constant Hostkit.Process.Presence := Hostkit.Process.Presence_Of (Pid);
+      begin
+         if Presence = Hostkit.Process.Absent then
+            return Other_Process;
+         elsif Presence /= Hostkit.Process.Present or else Kept = "" then
+            return Not_Known;
+         end if;
+         declare
+            Now : constant String := Hostkit.Process.Identity_Of (Pid);
+         begin
+            return (if Now = "" then Not_Known elsif Now = Kept then Same_Process else Other_Process);
+         end;
+      end;
+   end Standing_Of;
 
    function Later (Name, Than : String) return Boolean is
       --  The first run of digits in a name, as a number.

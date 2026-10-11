@@ -161,7 +161,9 @@ begin
                   Held : E.Error_Info;
                begin
                   Results.Read (Host.Item.all, Parts (7), Log, Held);
-                  if E.Is_Ok (Held) then
+                  if E.Is_Ok (Held) and then Length (Log.Retired) > 0 then
+                     Append (Report, ASCII.LF & "(its log is retired under " & To_String (Log.Retired) & ")");
+                  elsif E.Is_Ok (Held) then
                      Append (Report, ASCII.LF & Tail (To_String (Log.Payload), 30)
                              & Quoted_Lines (Tail (To_String (Log.Payload), 30), To_String (Project_Dir), Known));
                   end if;

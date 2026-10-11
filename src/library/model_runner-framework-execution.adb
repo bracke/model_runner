@@ -260,9 +260,11 @@ package body Model_Runner.Framework.Execution is
       Wrote : E.Error_Info;
    begin
       if Current.Store /= null and then Length (Current.Lease) > 0 then
+         --  With what tells it apart from a later process given its id: an
+         --  opening after a kill stops it only where it is that one.
          Files.Write_Text
            (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)),
-            Trim (Integer'Image (Process_Id)), Wrote);
+            Process_Line (Process_Id), Wrote);
          Current.Group_Unrecorded := E.Is_Error (Wrote);
       end if;
    end Record_Group;
@@ -283,7 +285,6 @@ package body Model_Runner.Framework.Execution is
       for Name of Files.Files_In (Runtime) loop
          if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "group." then
             declare
-               use type Hostkit.Process.Presence;
                Path : constant String := Hostkit.Fs.Join (Runtime, Name);
                Text : Unbounded_String;
                Read : E.Error_Info;
@@ -291,13 +292,19 @@ package body Model_Runner.Framework.Execution is
             begin
                Files.Read_Text (Path, Text, Read);
                declare
-                  Said : constant String := Trim (To_String (Text));
+                  Said  : constant String := Trim (To_String (Text));
+                  Space : constant Natural := Ada.Strings.Fixed.Index (Said & " ", " ");
+                  Id    : constant String := Said (Said'First .. Space - 1);
                begin
-                  if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9') then
-                     Pid := Integer'Value (Said);
+                  if Id'Length in 1 .. 9 and then (for all C of Id => C in '0' .. '9') then
+                     Pid := Integer'Value (Id);
                   end if;
                end;
-               if Pid > 1 and then Hostkit.Process.Presence_Of (Pid) = Hostkit.Process.Present
+               --  Stopped only where it is the process recorded: an id is
+               --  reused once its process is gone, and a group signalled by
+               --  its id alone could be some other program's. One not known
+               --  to be the same is left alone, and its record goes.
+               if Pid > 1 and then Standing_Of (To_String (Text)) = Same_Process
                then
                   if Hostkit.Signals.Send_To_Group (Pid, Hostkit.Signals.Signal_Terminate) then
                      delay 0.2;
@@ -393,7 +400,7 @@ package body Model_Runner.Framework.Execution is
       if not Files.Make_Directory (Directory) then
          return "";
       end if;
-      Files.Write_Text (Draft, Mine, Written);
+      Files.Write_Text (Draft, Process_Line (Hostkit.Host.Own_Process_Id), Written);
       if E.Is_Error (Written) then
          return "";
       end if;
@@ -410,13 +417,11 @@ package body Model_Runner.Framework.Execution is
                   declare
                      Held  : Unbounded_String;
                      Read  : E.Error_Info;
-                     use type Hostkit.Process.Presence;
                   begin
                      Files.Read_Text (Path, Held, Read);
-                     if E.Is_Ok (Read) and then Length (Held) in 1 .. 9
-                       and then (for all C of To_String (Held) => C in '0' .. '9')
-                       and then Hostkit.Process.Presence_Of (Integer'Value (To_String (Held)))
-                                  = Hostkit.Process.Absent
+                     --  Gone, or another process given its id since: the
+                     --  slot is free.
+                     if E.Is_Ok (Read) and then Standing_Of (To_String (Held)) = Other_Process
                      then
                         Files.Discard (Path);
                         if Hostkit.Fs.Move_No_Replace (Draft, Path) then

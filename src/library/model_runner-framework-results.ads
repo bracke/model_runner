@@ -46,6 +46,11 @@ package Model_Runner.Framework.Results is
 
       --  Identifiers of other results this one refers to, one per line.
       References : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Why its payload is gone, where retention let it go -- the setting
+      --  that did, as retention.raw_log_days -- and when; "" for one whole.
+      --  A record that names it finds it retired, not missing.
+      Retired    : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  The largest payload a result's record holds itself.

@@ -62,6 +62,29 @@ package Model_Runner.Framework is
        elsif State = "verification" then "waiting in verification"
        else State);
 
+   --  How a process recorded by its id and identity stands: the same one
+   --  there still; another, or none -- gone; or not known. One answer for
+   --  every record that names a process -- a lease, a process slot, a
+   --  process group left to stop -- since an id is reused once its process
+   --  is gone, and "a process with that id is there" is not "it is".
+   type Process_Standing is (Same_Process, Other_Process, Not_Known);
+
+   --  A process as a record keeps it: its id, a space, its identity
+   --  (Hostkit.Process.Identity_Of), the identity left off where the host
+   --  cannot give one.
+   --
+   --  @param Process_Id The process.
+   --  @return The line.
+   function Process_Line (Process_Id : Integer) return String;
+
+   --  How a process a record kept stands now. An id with no identity --
+   --  kept by an older build, or on a host that gives none -- is never the
+   --  same process: present, it is not known; gone, it is gone.
+   --
+   --  @param Line As Process_Line made it, or an id alone.
+   --  @return The standing.
+   function Standing_Of (Line : String) return Process_Standing;
+
    --  Whether one record's name is later than another's by the number in
    --  it -- VER-1000000 after VER-999999, which sort the other way -- and,
    --  the numbers equal, by the name; any name is later than "".

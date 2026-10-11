@@ -46,8 +46,14 @@ package body Model_Runner.Framework.Indexes is
       return (if Plain'Length >= 6 then Plain else [1 .. 6 - Plain'Length => '0'] & Plain);
    end Six;
 
-   --  What the indexes are built from: the repository's fingerprint and
-   --  the last change the state recorded.
+   --  How the indexes are made from the graph: built by a builder that
+   --  makes them otherwise, they are built again. 1: the first counted.
+   Builder_Version : constant String := "1";
+
+   --  What the indexes are built from: the repository's fingerprint, the
+   --  last change the state recorded -- and how the source was read and
+   --  the indexes made from it: a reader that reads the same bytes into
+   --  other units and uses left indexes of the old reading current.
    function Source_Of (Item : Stores.Store; Found : Repository.Graph) return String is
       --  The newest alone: the log is not read whole for one name.
       Listed : constant Events.Event_List := Events.Latest (Item, 1);
@@ -55,7 +61,8 @@ package body Model_Runner.Framework.Indexes is
         (if Events.Length (Listed) = 0 then "0"
          else To_String (Events.Element (Listed, Events.Length (Listed)).Id));
    begin
-      return Repository.Graph_Fingerprint (Found) & " " & Last;
+      return Repository.Graph_Fingerprint (Found) & " " & Last
+        & " reader " & Repository.Reader_Version & " builder " & Builder_Version;
    end Source_Of;
 
    -----------

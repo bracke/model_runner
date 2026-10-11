@@ -5192,6 +5192,20 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = "none",
               "a field the contract does not name ran into the one before it: "
               & Iv.Claim (Said, "changed_files"));
+      --  Given as JSON, read as JSON means it: an escape decoded, a fence
+      --  around it allowed; an object with more after it is no JSON answer.
+      Iv.Hold (Iv.Work_Claim,
+               "```json" & LF & "{""status"": ""done"", ""summary"": ""caf\u00e9 \""ok\"""", "
+               & """changed_files"": ""src/a.adb""}" & LF & "```", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "summary") = "caf" & Character'Val (16#C3#)
+                                                                        & Character'Val (16#A9#) & " ""ok""",
+              "a JSON answer's string was not read as JSON means it: " & Iv.Claim (Said, "summary")
+              & " " & Code_Of (Status));
+      Iv.Hold (Iv.Work_Claim,
+               "{""status"": ""done"", ""summary"": ""finished""}" & LF & "and more besides",
+               Said, Status);
+      Assert (Iv.Claim (Said, "summary") /= "finished",
+              "an answer going on past its object was read as that object");
       Iv.Hold (Iv.Work_Claim, "status: finished" & LF & "summary: x", Said,
                Status);
       Assert (Status.Code = E.Framework_Contract_Violation,
@@ -7139,14 +7153,26 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Rs.Prune (Store, Change, Raw_Log_Days => 30, Context_Days => 0, Removed => Removed);
          S.Commit (Store, Change, Status);
-         Assert (Removed = 1
-                 and then not S.Exists (Store, Model_Runner.Framework.Results_Area,
-                                        To_String (Old_Log.Id))
-                 and then S.Exists (Store, Model_Runner.Framework.Results_Area,
-                                    To_String (New_Log.Id))
-                 and then S.Exists (Store, Model_Runner.Framework.Results_Area,
-                                    To_String (Kept.Id)),
-                 "retention let the wrong results go:" & Removed'Image);
+         --  The old raw log retired, not gone: its record stays, said to
+         --  be retired and by what, its payload let go -- the evidence that
+         --  names it names something retired, not something lost.
+         declare
+            Retired : Rs.Result;
+            Read    : E.Error_Info;
+         begin
+            Rs.Read (Store, To_String (Old_Log.Id), Retired, Read);
+            Assert (Removed = 1 and then E.Is_Ok (Read)
+                    and then Ada.Strings.Fixed.Index (To_String (Retired.Retired), "retention.raw_log_days") = 1
+                    and then Length (Retired.Payload) = 0
+                    and then S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                       To_String (New_Log.Id))
+                    and then S.Exists (Store, Model_Runner.Framework.Results_Area,
+                                       To_String (Kept.Id)),
+                    "retention let the wrong results go, or a raw log went without a trace:"
+                    & Removed'Image & " " & To_String (Retired.Retired) & Length (Retired.Payload)'Image
+                    & S.Exists (Store, Model_Runner.Framework.Results_Area, To_String (New_Log.Id))'Image
+                    & S.Exists (Store, Model_Runner.Framework.Results_Area, To_String (Kept.Id))'Image);
+         end;
 
          --  What is only a cache goes after its own days.
          declare
@@ -9571,9 +9597,19 @@ package body Tests.Framework_Cases is
                GNAT.OS_Lib.Free (A);
             end loop;
             delay 0.3;
+            --  Recorded with an identity that is not its: another process
+            --  given its id, as far as the record goes -- left alone.
             Put_File (S.Root (Store) & "/runtime/group." & To_String (Task_A),
                       Ada.Strings.Fixed.Trim
-                        (Integer'Image (GNAT.OS_Lib.Pid_To_Integer (Child)), Ada.Strings.Both));
+                        (Integer'Image (GNAT.OS_Lib.Pid_To_Integer (Child)), Ada.Strings.Both) & " 0:0");
+            Model_Runner.Framework.Execution.Stop_Left_Groups (Store, Stopped);
+            Assert (Stopped.Is_Empty
+                    and then Hostkit.Process."=" (Hostkit.Process.Presence_Of (GNAT.OS_Lib.Pid_To_Integer (Child)),
+                                                 Hostkit.Process.Present),
+                    "a process recorded with another's identity was signalled");
+            --  Recorded as it is: stopped.
+            Put_File (S.Root (Store) & "/runtime/group." & To_String (Task_A),
+                      Model_Runner.Framework.Process_Line (GNAT.OS_Lib.Pid_To_Integer (Child)));
             Model_Runner.Framework.Execution.Stop_Left_Groups (Store, Stopped);
             Assert (Natural (Stopped.Length) = 1
                     and then not Dirs.Exists (S.Root (Store) & "/runtime/group." & To_String (Task_A)),
@@ -11208,6 +11244,27 @@ package body Tests.Framework_Cases is
                 (Vf.Applicable (Store, To_String (Evidence)).Reasons.First_Element, "an earlier attempt's: ") = 1,
               "the kind did not lead the reason: "
               & Vf.Applicable (Store, To_String (Evidence)).Reasons.First_Element);
+
+      --  A process recorded by its id and identity is the one there only
+      --  where both match: the same id with another identity is another
+      --  process -- an id reused -- and an id alone is never known to be.
+      declare
+         use type Model_Runner.Framework.Process_Standing;
+         Own  : constant Integer := Hostkit.Host.Own_Process_Id;
+         Line : constant String := Model_Runner.Framework.Process_Line (Own);
+         Id   : constant String := Ada.Strings.Fixed.Trim (Own'Image, Ada.Strings.Both);
+      begin
+         if Hostkit.Process.Identity_Of (Own) /= "" then
+            Assert (Model_Runner.Framework.Standing_Of (Line) = Model_Runner.Framework.Same_Process
+                    and then Model_Runner.Framework.Standing_Of (Id & " 0:0")
+                             = Model_Runner.Framework.Other_Process
+                    and then Model_Runner.Framework.Standing_Of (Id) = Model_Runner.Framework.Not_Known,
+                    "a process was taken for the one recorded by its id alone: " & Line);
+         end if;
+         Assert (Model_Runner.Framework.Standing_Of ("999999999 x") = Model_Runner.Framework.Other_Process
+                 or else Model_Runner.Framework.Standing_Of ("999999999 x") = Model_Runner.Framework.Not_Known,
+                 "a process that is not there was taken to be");
+      end;
 
       --  Later by number, then by name; anything later than nothing.
       Assert (Model_Runner.Framework.Later ("VER-1000000", "VER-999999")

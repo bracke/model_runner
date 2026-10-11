@@ -1809,11 +1809,6 @@ package body Model_Runner.Framework.Repository is
       return Result;
    end Refresh;
 
-   --  How source is read into the graph: a graph kept by another is read
-   --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
-   --  formal part is not its unit.
-   Reader_Version : constant String := "6";
-
    ------------
    -- Memory --
    ------------

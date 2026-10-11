@@ -99,7 +99,9 @@ package body Model_Runner.Framework.Schemas is
           Rule ("payload", Text_Field, False),
           Rule ("payload_fingerprint", Text_Field, True),
           Rule ("provenance", Text_Field, False),
-          Rule ("references", Text_Field, False)]),
+          Rule ("references", Text_Field, False),
+          Rule ("retired", Text_Field, False),
+          Rule ("retired_at", Text_Field, False)]),
 
       --  What a template resolved to. Its declarations are fields named
       --  by their kind and key, which no schema can list ahead of time, so

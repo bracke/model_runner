@@ -386,6 +386,11 @@ package Model_Runner.Framework.Repository is
    --  @return Sixteen hexadecimal digits.
    function Graph_Fingerprint (From : Graph) return String;
 
+   --  How source is read into the graph: a graph kept by another is read
+   --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
+   --  formal part is not its unit.
+   Reader_Version : constant String := "6";
+
    --  The symbols a name matches: the full name, or the last part of it,
    --  in any case.
    --

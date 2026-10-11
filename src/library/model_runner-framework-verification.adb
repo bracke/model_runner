@@ -537,6 +537,9 @@ package body Model_Runner.Framework.Verification is
    begin
       Mix (Profile);
       Mix (Revision);
+      --  And the harness that ran them: a newer one reads checks' output
+      --  into diagnostics its own way, and does not inherit an older one's.
+      Mix (Model_Runner.Version);
       for Field of Name_Lists.Vector'(["checks_fingerprint", "configuration_fingerprint",
                                        "environment_fingerprint", "network"])
       loop
@@ -863,7 +866,7 @@ package body Model_Runner.Framework.Verification is
                        and then Records.Get (Prior, "scope_files") = ""
                        and then (for all Field of Name_Lists.Vector'
                                    (["checks_fingerprint", "configuration_fingerprint",
-                                     "environment_fingerprint", "network"]) =>
+                                     "environment_fingerprint", "network", "harness_version"]) =>
                                    Records.Get (Prior, Field) = Records.Get (Value, Field));
                      --  The same values given to its commands, none more.
                      if Same then
@@ -1366,6 +1369,13 @@ package body Model_Runner.Framework.Verification is
                        & "; its log is " & Parts (7));
                begin
                   Results.Read (Item, Parts (7), Log, Got);
+                  --  Gone by retention, said as that; gone otherwise, said
+                  --  as missing -- not taken for a log with nothing in it.
+                  if E.Is_Ok (Got) and then Length (Log.Retired) > 0 then
+                     Append (Text, " (retired under " & To_String (Log.Retired) & ")");
+                  elsif E.Is_Error (Got) then
+                     Append (Text, " (missing)");
+                  end if;
                   if E.Is_Ok (Got) and then Length (Log.Payload) > 0 then
                      declare
                         Whole : constant String := To_String (Log.Payload);

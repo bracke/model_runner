@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
+with Model_Runner.Conversation;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Records;
@@ -192,25 +193,28 @@ package body Model_Runner.Framework.Invocations is
          Position := Position + 1;
       end Expect;
 
+      --  A string as JSON means it -- \uXXXX, surrogate pairs and every
+      --  escape, decoded as a call's arguments are (Conversation.Unescaped);
+      --  a tab a space, as an answer's lines are read.
       function Text_Value return String is
-         Held : Unbounded_String;
+         First : Positive;
       begin
          Expect ('"');
+         First := Position;
          while Position <= Answer'Last and then Answer (Position) /= '"' loop
-            if Answer (Position) = '\' and then Position < Answer'Last then
-               Position := Position + 1;
-               case Answer (Position) is
-                  when 'n'    => Append (Held, ASCII.LF);
-                  when 't'    => Append (Held, ' ');
-                  when others => Append (Held, Answer (Position));
-               end case;
-            else
-               Append (Held, Answer (Position));
-            end if;
-            Position := Position + 1;
+            Position := Position + (if Answer (Position) = '\' and then Position < Answer'Last then 2 else 1);
          end loop;
-         Expect ('"');
-         return To_String (Held);
+         declare
+            Meant : String := Model_Runner.Conversation.Unescaped (Answer (First .. Position - 1));
+         begin
+            Expect ('"');
+            for C of Meant loop
+               if C = ASCII.HT then
+                  C := ' ';
+               end if;
+            end loop;
+            return Meant;
+         end;
       end Text_Value;
 
       --  A number, true, false or null, as written.
@@ -333,6 +337,18 @@ package body Model_Runner.Framework.Invocations is
          exit when Peek = '}';
          Expect (',');
       end loop;
+      Expect ('}');
+      --  One object, and nothing after it but a closing fence: an answer
+      --  that goes on past its object is not one, and is read as the text
+      --  it is.
+      Skip;
+      if Position + 2 <= Answer'Last and then Answer (Position .. Position + 2) = "```" then
+         Position := Position + 3;
+         Skip;
+      end if;
+      if Position <= Answer'Last then
+         return "";
+      end if;
       return To_String (Out_Text);
    exception
       when Failed | Constraint_Error =>

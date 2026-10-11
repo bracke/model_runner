@@ -94,12 +94,13 @@ package body Model_Runner.Framework.Leases is
       Process : constant String := Records.Get (Value, "process");
       Here    : constant Boolean :=
         Process /= "" and then Records.Get (Value, "host") = Hostkit.Host.Node_Name;
+      --  The process that took it, by its id and what tells it apart from
+      --  a later one given the id: a lease is held by the one there still,
+      --  not by whatever program has its id now.
+      Standing : constant Process_Standing :=
+        (if Here then Standing_Of (Process & " " & Records.Get (Value, "process_identity")) else Not_Known);
       Alive   : constant Boolean :=
-        Here and then Process'Length in 1 .. 9
-        and then (for all C of Process => C in '0' .. '9')
-        and then Process /= Own_Process
-        and then Hostkit.Process."=" (Hostkit.Process.Presence_Of (Integer'Value (Process)),
-                                     Hostkit.Process.Present);
+        Here and then Process /= Own_Process and then Standing = Same_Process;
    begin
       if Alive then
          return True;
@@ -114,10 +115,7 @@ package body Model_Runner.Framework.Leases is
       elsif not Here or else Process = Own_Process then
          return True;
       end if;
-      return Process'Length in 1 .. 9
-        and then (for all C of Process => C in '0' .. '9')
-        and then Hostkit.Process."/=" (Hostkit.Process.Presence_Of (Integer'Value (Process)),
-                                      Hostkit.Process.Absent);
+      return Standing /= Other_Process;
    end Running;
 
    procedure Refuse
@@ -182,6 +180,7 @@ package body Model_Runner.Framework.Leases is
              then Records.Get (Held, "acquired_at") else Timestamp));
          Records.Set (Next, "expires_at", Timestamp_After (Seconds));
          Records.Set (Next, "process", Own_Process);
+         Records.Set (Next, "process_identity", Hostkit.Process.Identity_Of (Hostkit.Host.Own_Process_Id));
          Records.Set (Next, "host", Hostkit.Host.Node_Name);
          Stores.Put (Change, Runtime_Area, Prefix & Resource, Next);
       end;

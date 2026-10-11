@@ -94,7 +94,10 @@ package body Model_Runner.Framework.Results is
          Summary    => To_Unbounded_String (Records.Get (Item, "summary")),
          Payload    => To_Unbounded_String (Records.Get (Item, "payload")),
          Provenance => To_Unbounded_String (Records.Get (Item, "provenance")),
-         References => To_Unbounded_String (Records.Get (Item, "references")));
+         References => To_Unbounded_String (Records.Get (Item, "references")),
+         Retired    => To_Unbounded_String
+           (if Records.Get (Item, "retired") = "" then ""
+            else Records.Get (Item, "retired") & " on " & Records.Get (Item, "retired_at")));
    end From_Record;
 
    ---------
@@ -249,9 +252,13 @@ package body Model_Runner.Framework.Results is
             return;
          end if;
       end if;
-      if Fingerprint (To_String (Value.Payload))
-           /= Records.Get (Stored, "payload_fingerprint")
-        or else Identifier_Of (Value) /= Id
+      --  Retired, its payload is gone by policy, and the fingerprint
+      --  stands for what was, not for anything to check.
+      --  Its name is made from its content, payload and all: retired, that
+      --  too stands for what was.
+      if Records.Get (Stored, "retired") = ""
+        and then (Fingerprint (To_String (Value.Payload)) /= Records.Get (Stored, "payload_fingerprint")
+                  or else Identifier_Of (Value) /= Id)
       then
          Status := E.Make (E.Framework_Integrity_Failed);
          E.Add_Text (Status, "path", Directory_Name (Results_Area) & "/" & Id,
@@ -316,12 +323,26 @@ package body Model_Runner.Framework.Results is
                declare
                   Kind    : constant String := Records.Get (Stored, "result_type");
                   Made_At : constant String := Records.Get (Stored, "created_at");
+                  Raw     : constant Boolean :=
+                    Raw_Cut /= "" and then Kind = Kind_Word (Verification)
+                    and then Records.Get (Stored, "producer") = "execution"
+                    and then Made_At < Raw_Cut;
                begin
-                  if (Raw_Cut /= "" and then Kind = Kind_Word (Verification)
-                      and then Records.Get (Stored, "producer") = "execution"
-                      and then Made_At < Raw_Cut)
-                    or else (Context_Cut /= "" and then Kind = Kind_Word (Context_Report)
-                             and then Made_At < Context_Cut)
+                  --  A raw log is named by the evidence that ran it, which
+                  --  stays: its payload goes and a record of it is left --
+                  --  retired, by what, when, its size and fingerprint -- so
+                  --  the evidence names something retired, not something
+                  --  lost. Already retired, it is left as it is.
+                  if Raw and then Records.Get (Stored, "retired") = "" then
+                     Records.Remove (Stored, "payload");
+                     Records.Remove (Stored, "payload_file");
+                     Records.Set (Stored, "retired", "retention.raw_log_days");
+                     Records.Set (Stored, "retired_at", Before (0));
+                     Records.Set_Revision (Stored, Records.Revision (Stored) + 1);
+                     Stores.Put (Change, Results_Area, Id, Stored);
+                     Removed := Removed + 1;
+                  elsif (Context_Cut /= "" and then Kind = Kind_Word (Context_Report)
+                         and then Made_At < Context_Cut)
                     or else (Cache_Cut /= "" and then Kind = Kind_Word (Impact_Report)
                              and then Made_At < Cache_Cut)
                   then
