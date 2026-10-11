@@ -238,10 +238,11 @@ package body Model_Runner.Framework.Permissions is
       Level   : String;
       Present : out Boolean) return Permission_Set
    is
-      --  The project's level names what differs from its default: one
-      --  capability named leaves the others as a project naming none has
-      --  them. A kind's or a role's names what it keeps of the level above.
-      Result : Permission_Set := (if Level = "project" then Project_Default else Nothing);
+      --  A level names what differs from what it would have unnamed: the
+      --  project's from its default, a kind's or a role's from the level
+      --  above -- one capability named leaves the others as they were, and
+      --  off takes one away.
+      Result : Permission_Set := (if Level = "project" then Project_Default else Unrestricted);
    begin
       Present := False;
       --  A level said to grant none: nothing, not the level above's grant.
@@ -270,7 +271,9 @@ package body Model_Runner.Framework.Permissions is
             end if;
          end;
       end loop;
-      return Result;
+      --  A kind or role that says nothing narrows nothing, and says so by
+      --  Present: what it gives is then not read.
+      return (if Present or else Level = "project" then Result else Nothing);
    end Level_Of;
 
    --  The capability a word names, if any.

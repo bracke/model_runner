@@ -9,6 +9,7 @@ with Ada.Text_IO;
 with Hostkit;
 with Hostkit.Descriptors;
 with Hostkit.Fs;
+with Hostkit.Host;
 with Hostkit.Metadata;
 with Hostkit.Process;
 with Hostkit.Pty;
@@ -198,6 +199,32 @@ package body Agent_Trial is
    -- Run --
    ---------
 
+   --  Whether a task is among those asked for: every one where none is
+   --  named, else each named, a comma apart -- edit,find -- so one trial,
+   --  with one copy of the program, runs a set.
+   function Chosen (Only, Name : String) return Boolean is
+   begin
+      if Only = "" then
+         return True;
+      end if;
+      declare
+         Start : Positive := Only'First;
+      begin
+         for At_Char in Only'Range loop
+            if Only (At_Char) = ',' or else At_Char = Only'Last then
+               if Ada.Strings.Fixed.Trim
+                    (Only (Start .. (if Only (At_Char) = ',' then At_Char - 1 else At_Char)), Ada.Strings.Both)
+                 = Name
+               then
+                  return True;
+               end if;
+               Start := At_Char + 1;
+            end if;
+         end loop;
+      end;
+      return False;
+   end Chosen;
+
    procedure Run
      (Model   : String;
       Program : String;
@@ -223,10 +250,13 @@ package body Agent_Trial is
          --  .exe runs this one.
          --  Beside the program, not elsewhere: it finds its messages and
          --  resources from where it is, and a copy in obj/ found none.
+         --  This trial's own: a second trial started meanwhile copied over
+         --  a shared one under the first one's runs.
          Aside : constant String :=
            Hostkit.Fs.Join
              (Ada.Directories.Containing_Directory (Program),
-              ".agent-trial-program"
+              ".agent-trial-program-"
+              & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Both)
               & (if Ada.Directories.Extension (Program) = "" then ""
                  else "." & Ada.Directories.Extension (Program)));
          Ignored : Boolean;
@@ -241,11 +271,30 @@ package body Agent_Trial is
 
       Own_Copy : constant String := Copied;
 
+      --  The copy gone with the trial it was made for.
+      procedure Discard_Copy is
+      begin
+         if Own_Copy /= Program and then Ada.Directories.Exists (Own_Copy) then
+            Ada.Directories.Delete_File (Own_Copy);
+         end if;
+      exception
+         when others =>
+            null;
+      end Discard_Copy;
+
       --  Whether a session could not start: the runs after it would end the
       --  same, and are not run.
       Halted   : Boolean := False;
    begin
       Clean := True;
+      --  A name no task has runs nothing: said, not an empty trial.
+      if not (for some One of Tasks => Chosen (Only, To_String (One.Name))) then
+         Ada.Text_IO.Put_Line
+           ("agent-trial: no task is called " & Only & "; they are edit, find and delegate, a comma apart");
+         Clean := False;
+         Discard_Copy;
+         return;
+      end if;
       for Round in 1 .. Repeats loop
          exit when Halted;
          for Which in Tasks'Range loop
@@ -253,7 +302,7 @@ package body Agent_Trial is
             declare
                One : Trial_Task renames Tasks (Which);
             begin
-               if Only = "" or else Only = To_String (One.Name) then
+               if Chosen (Only, To_String (One.Name)) then
                   declare
                      Name    : constant String := To_String (One.Name);
                      Root    : constant String := Ada.Directories.Full_Name ("obj/agent-trial-" & Name);
@@ -593,13 +642,14 @@ package body Agent_Trial is
          Ada.Text_IO.Put_Line
            ("agent-trial: stopped -- a session could not start, and the runs after it would not either");
       end if;
+      Discard_Copy;
 
       --  Of several runs, how many of each task's ended complete: one run
       --  of a small model is a sample, and a change is told from luck only
       --  by a count.
       if Repeats > 1 then
          for Which in Tasks'Range loop
-            if Only = "" or else Only = To_String (Tasks (Which).Name) then
+            if Chosen (Only, To_String (Tasks (Which).Name)) then
                Ada.Text_IO.Put_Line
                  ("agent-trial " & To_String (Tasks (Which).Name) & ": complete in"
                   & Natural'Image (Completed (Which)) & " of" & Integer'Image (Repeats) & " runs");

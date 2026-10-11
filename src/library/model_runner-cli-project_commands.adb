@@ -858,98 +858,81 @@ package body Model_Runner.CLI.Project_Commands is
             Recorded := Outcome.Work_Record;
          end if;
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
-         --  Written, then only repeating what is done: the work is there,
-         --  and what is missing is its report -- asked for once, not the
-         --  work failed for it.
-         --  Given up -- or said done -- on checks that failed, with time
-         --  left: sent back once to fix what they reported. A small model
-         --  that saw one compile error ended the task failed at once.
-         if Root and then Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
-           and then not Asked_To_Fix and then Host /= null and then Host.Checks_Failing
-           and then Host.Time_Left > 0.0
-         then
-            Asked_To_Fix := True;
-            Conv.Append
-              (Messages, Conv.User_Role,
-               "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
-               & " error is in its answer above -- run the checks again, and report status: done only"
-               & " when they pass.", Status);
-            exit when E.Is_Error (Status);
-         --  Said done with no check run at all, where it may run them: the
-         --  harness runs them, and a failure sends it back once with what
-         --  they said -- in a workspace qwen3-8b answered done three runs
-         --  out of three without a check, and its work waited there failed.
-         elsif Root and then Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
-           and then not Asked_To_Fix and then Host /= null and then Runner.Check_Runs = 0
-           and then Host.May_Check (Host.Task_Profile) and then Host.Time_Left > 0.0
-           and then Conv.Length (Messages) > 0
-           and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
-           and then Ada.Strings.Fixed.Index
-                      (Ada.Characters.Handling.To_Lower
-                         (Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages)))),
-                       "status: done") > 0
-         then
-            declare
-               Report : Unbounded_String;
-               Ran    : E.Error_Info;
-            begin
-               Runner.Check_Runs := Runner.Check_Runs + 1;
-               Host.Run_Checks (Host.Task_Profile, Report, Ran);
-               if E.Is_Ok (Ran) and then Host.Checks_Failing then
+         --  What comes of the round, decided from how it ended (Wk.Next_Step).
+         declare
+            Last_Own : constant Boolean :=
+              Conv.Length (Messages) > 0
+              and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role;
+            State : constant Wk.Round_State :=
+              (Root            => Root,
+               Answered        => Outcome.Reason = Model_Runner.Agent.Answered,
+               Repeating       => Outcome.Reason = Model_Runner.Agent.Repeating,
+               Round           => Round,
+               Asked_To_Fix    => Asked_To_Fix,
+               Asked_To_Mend   => Asked_To_Mend,
+               Asked_To_Report => Asked_To_Report,
+               Hosted          => Host /= null,
+               Checks_Failing  => Host /= null and then Host.Checks_Failing,
+               May_Check       => Host /= null and then Host.May_Check (Host.Task_Profile),
+               Time_Left       => Host /= null and then Host.Time_Left > 0.0,
+               Check_Runs      => Runner.Check_Runs,
+               Calls           => Calls,
+               Wrote           => Watcher.Wrote,
+               Answer          =>
+                 (if Last_Own
+                  then To_Unbounded_String
+                         (Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))))
+                  else Null_Unbounded_String));
+         begin
+            case Wk.Next_Step (State) is
+               when Wk.Ask_To_Fix =>
                   Asked_To_Fix := True;
                   Conv.Append
                     (Messages, Conv.User_Role,
-                     "You reported status: done without running the checks. They were run for you, and"
-                     & " they failed:" & ASCII.LF & To_String (Report) & ASCII.LF
-                     & "Fix what they report, run run_checks yourself, and report status: done only when"
-                     & " they pass.", Status);
-                  exit when E.Is_Error (Status);
-               else
+                     "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
+                     & " error is in its answer above -- run the checks again, and report status: done only"
+                     & " when they pass.", Status);
+               when Wk.Check_For_It =>
+                  declare
+                     Report : Unbounded_String;
+                     Ran    : E.Error_Info;
+                  begin
+                     Runner.Check_Runs := Runner.Check_Runs + 1;
+                     Host.Run_Checks (Host.Task_Profile, Report, Ran);
+                     exit when E.Is_Error (Ran) or else not Host.Checks_Failing;
+                     Asked_To_Fix := True;
+                     Conv.Append
+                       (Messages, Conv.User_Role,
+                        "You reported status: done without running the checks. They were run for you, and"
+                        & " they failed:" & ASCII.LF & To_String (Report) & ASCII.LF
+                        & "Fix what they report, run run_checks yourself, and report status: done only when"
+                        & " they pass.", Status);
+                  end;
+               when Wk.Ask_To_Mend =>
+                  Asked_To_Mend := True;
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "Your report could not be taken: " & Wk.Report_Refusal (Root, To_String (State.Answer))
+                     & ". Finish again with the report lines as you were told -- status:, summary: and"
+                     & " changed_files:, each on a line of its own.", Status);
+               when Wk.Ask_To_Report =>
+                  Asked_To_Report := True;
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "That call was made already and its file is written; repeating it changes nothing."
+                     & " If the task is done, finish now with the report lines: status: done, summary:,"
+                     & " changed_files:.", Status);
+               when Wk.Ask_To_Call =>
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "You have not called a tool, so no file has changed. If the task"
+                     & " needs a change, make it now by calling write_file, then report"
+                     & " again.", Status);
+               when Wk.Finish =>
                   exit;
-               end if;
-            end;
-         --  A report the harness cannot take -- a required line missing, a
-         --  status none of its words -- handed back once, saying what is
-         --  wrong, as an unreadable call is: a 8B wrote status: blocked and
-         --  parts: with no summary:, and the task was blocked for it.
-         elsif Outcome.Reason = Model_Runner.Agent.Answered and then Host /= null
-           and then Round < (if Root then 3 else 2) and then not Asked_To_Mend
-           and then Conv.Length (Messages) > 0
-           and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
-           and then Wk.Report_Refusal
-                      (Root, Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))))
-                    /= ""
-         then
-            Asked_To_Mend := True;
-            Conv.Append
-              (Messages, Conv.User_Role,
-               "Your report could not be taken: "
-               & Wk.Report_Refusal
-                   (Root, Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages))))
-               & ". Finish again with the report lines as you were told -- status:, summary: and"
-               & " changed_files:, each on a line of its own.", Status);
+            end case;
             exit when E.Is_Error (Status);
-         elsif Outcome.Reason = Model_Runner.Agent.Repeating and then Watcher.Wrote
-           and then Round < (if Root then 3 else 2)
-           and then not Asked_To_Report
-         then
-            Asked_To_Report := True;
-            Conv.Append
-              (Messages, Conv.User_Role,
-               "That call was made already and its file is written; repeating it changes nothing."
-               & " If the task is done, finish now with the report lines: status: done, summary:,"
-               & " changed_files:.", Status);
-            exit when E.Is_Error (Status);
-         else
-            exit when Calls > 0 or else Round = 3 or else not Root
-              or else Outcome.Reason /= Model_Runner.Agent.Answered;
-            Conv.Append
-              (Messages, Conv.User_Role,
-               "You have not called a tool, so no file has changed. If the task"
-               & " needs a change, make it now by calling write_file, then report"
-               & " again.", Status);
-            exit when E.Is_Error (Status);
-         end if;
+         end;
       end loop;
 
       if Conv.Length (Messages) > 0

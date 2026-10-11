@@ -653,19 +653,18 @@ begin
                   then
                      Field (Argument (1), "(no capability is called "
                             & Kind (Kind'First + Bare_Kind'Length + 1 .. Kind'Last) & ")");
-                  --  One capability of a kind that names others: withheld,
-                  --  for a kind grants only what it names.
+                  --  One capability of a kind that grants none: withheld, for
+                  --  the kind takes all of them away. One a kind names not,
+                  --  where it grants some, is the project's, said below.
                   elsif Family = "permission.kind" and then Bare_Kind /= ""
                     and then Kind'Length > Bare_Kind'Length
-                    and then (for some Index in 1 .. R.Field_Count (Config) =>
-                                Ada.Strings.Fixed.Index (R.Field_Name (Config, Index),
-                                                         "map.permission.kind." & Bare_Kind & ".") = 1
-                                or else R.Field_Name (Config, Index) = "map.permission.kind." & Bare_Kind)
+                    and then not R.Has (Config, "map.permission.kind." & Kind)
+                    and then R.Get (Config, "map.permission.kind." & Bare_Kind) = "none"
                   then
                      Field ("map.permission.kind." & Kind,
                             (if Ruled.Contains ("map.permission.kind." & Kind)
                              then "withheld (" & Ruled ("map.permission.kind." & Kind) & ")"
-                             else "withheld (kind." & Bare_Kind & " grants only what it names)"), Pres.Bad);
+                             else "withheld (kind." & Bare_Kind & " grants none)"), Pres.Bad);
                   else
                      --  Asked of one capability: said of it, not of the kind.
                      Field ((if Family = "permission.kind" then "map." else "scalar.") & Family

@@ -3569,12 +3569,13 @@ package body Model_Runner.Framework.Configurations is
       --  out for another change put back; and the lines that said so kept
       --  are not said.
       for Name of Taken_Away loop
-         --  The project's level falls back to its default for what it does
-         --  not name: taking away what the default grants is kept written.
-         if Starts (Name, "map.permission.project.")
-           and then (for some One in Permissions.Capability =>
-                       Permissions.Word (One) = Name (Name'First + 23 .. Name'Last)
-                       and then Permissions.Project_Default (One).Granted)
+         --  A level falls back for what it does not name -- the project's
+         --  to its default, a kind's or a role's to the level above: taking
+         --  away what that gives is kept written, as off.
+         if not Starts (Name, "map.permission.project.")
+           or else (for some One in Permissions.Capability =>
+                      Permissions.Word (One) = Name (Name'First + 23 .. Name'Last)
+                      and then Permissions.Project_Default (One).Granted)
          then
             Records.Set (Result.After, Name, "off");
          elsif Records.Has (Result.After, Name) then
@@ -3607,24 +3608,6 @@ package body Model_Runner.Framework.Configurations is
          end if;
       end loop;
 
-      --  A kind or role left with nothing named would take the level
-      --  above's whole grant: what was taken away is kept taken, as a
-      --  level that grants none.
-      for Name of Taken_Away loop
-         declare
-            Dot   : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
-            Level : constant String := Name (Name'First .. Dot - 1);
-         begin
-            if Level /= "map.permission.project"
-              and then not (for some Index in 1 .. Records.Field_Count (Result.After) =>
-                              Starts (Records.Field_Name (Result.After, Index), Level & "."))
-              and then not Records.Has (Result.After, Level)
-            then
-               Records.Set (Result.After, Level, "none");
-               Result.Changed.Append (Level & ": -> none, nothing granted (not the level above's grant)");
-            end if;
-         end;
-      end loop;
       --  A level set whole: none takes each capability it named away and
       --  keeps the mark; inherit takes them all away, mark too, so the level
       --  above holds.

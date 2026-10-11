@@ -813,16 +813,22 @@ package body Model_Runner.Framework.Verification is
          --  The same checks, run a moment ago on the same files with the
          --  same configuration, environment and values: their result is
          --  this run's -- kept as that, naming the run it is -- not taken
-         --  again. Several tasks completed at once run the suite once.
-         if Workspace = "" then
+         --  again. Several tasks completed at once run the suite once; and
+         --  the checks a work's agent ran in its workspace, on the tree as
+         --  it is, are not run again when that work is taken in.
+         declare
+            Key : constant String := Profile & (if Workspace = "" then "" else "@" & Workspace);
+         begin
             declare
-               Now   : constant String := Repository_Now (Item);
+               Now   : constant String :=
+                 (if Workspace = "" then Repository_Now (Item)
+                  else Repository.Graph_Fingerprint (Repository.Scan (Workspace, Repository.Roots_Of (Item))));
 
                --  The one the index names for what this run is, if any.
                function Indexed return Name_Lists.Vector is
                   Text : Unbounded_String;
                   Got  : E.Error_Info;
-                  Path : constant String := Reuse_Index (Item, Value, Profile, Now);
+                  Path : constant String := Reuse_Index (Item, Value, Key, Now);
                begin
                   return Result : Name_Lists.Vector do
                      if Ada.Directories.Exists (Path) then
@@ -858,11 +864,13 @@ package body Model_Runner.Framework.Verification is
                   begin
                      Stores.Read (Item, Verification_Area, Id, Prior, Read);
                      Same := E.Is_Ok (Read)
-                       and then Records.Get (Prior, "workspace") = ""
+                       and then Records.Get (Prior, "workspace") = Workspace
                        and then Records.Get (Prior, "state_changed") = ""
                        and then Records.Get (Prior, "passed") /= ""
                        and then Records.Get (Prior, "profile") = Profile
-                       and then Records.Get (Prior, "repository_revision") = Now
+                       and then Records.Get
+                                  (Prior, (if Workspace = "" then "repository_revision" else "workspace_revision"))
+                                = Now
                        and then Records.Get (Prior, "scope_files") = ""
                        and then (for all Field of Name_Lists.Vector'
                                    (["checks_fingerprint", "configuration_fingerprint",
@@ -918,8 +926,12 @@ package body Model_Runner.Framework.Verification is
                         end loop;
                         Passed := Records.Get (Prior, "passed") = "true";
                         Records.Set (Value, "reused_from", Id);
-                        Records.Set (Value, "repository_revision", Now);
+                        Records.Set (Value, "repository_revision",
+                                     (if Workspace = "" then Now else Repository_Now (Item)));
                         Records.Set (Value, "workspace_revision", Now);
+                        if Workspace /= "" then
+                           Records.Set (Value, "workspace", Workspace);
+                        end if;
                         Records.Set (Value, "passed", (if Passed then "true" else "false"));
                         Records.Set (Value, "ended_at", Timestamp);
                         Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
@@ -928,7 +940,7 @@ package body Model_Runner.Framework.Verification is
                   end;
                end loop;
             end;
-         end if;
+         end;
 
          Passed := True;
          Stores.Snapshot_State (Item, State);
@@ -1090,12 +1102,15 @@ package body Model_Runner.Framework.Verification is
          Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
          --  Named in the reuse index under what it is: a later run the same
          --  finds it there. An entry not written is only checks run again.
-         if Workspace = "" and then Records.Get (Value, "state_changed") = ""
+         if Records.Get (Value, "state_changed") = ""
            and then Records.Get (Value, "scope_files") = ""
          then
             declare
                Path    : constant String :=
-                 Reuse_Index (Item, Value, Profile, Records.Get (Value, "repository_revision"));
+                 (if Workspace = ""
+                  then Reuse_Index (Item, Value, Profile, Records.Get (Value, "repository_revision"))
+                  else Reuse_Index (Item, Value, Profile & "@" & Workspace,
+                                    Records.Get (Value, "workspace_revision")));
                Ignored : E.Error_Info;
             begin
                if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then

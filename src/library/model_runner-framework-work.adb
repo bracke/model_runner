@@ -938,6 +938,48 @@ package body Model_Runner.Framework.Work is
    -- Report_Refusal --
    --------------------
 
+   function Next_Step (State : Round_State) return Round_Step is
+      Rounds : constant Positive := (if State.Root then 3 else 2);
+      Said   : constant String := To_String (State.Answer);
+   begin
+      --  Given up -- or said done -- on checks that failed, with time
+      --  left: sent back once to fix what they reported. A small model
+      --  that saw one compile error ended the task failed at once.
+      if State.Root and then State.Answered and then State.Round < 3 and then not State.Asked_To_Fix
+        and then State.Hosted and then State.Checks_Failing and then State.Time_Left
+      then
+         return Ask_To_Fix;
+      --  Said done with no check run at all, where it may run them: the
+      --  harness runs them, and a failure sends it back once with what
+      --  they said -- in a workspace qwen3-8b answered done three runs out
+      --  of three without a check, and its work waited there failed.
+      elsif State.Root and then State.Answered and then State.Round < 3 and then not State.Asked_To_Fix
+        and then State.Hosted and then State.Check_Runs = 0 and then State.May_Check and then State.Time_Left
+        and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Said), "status: done") > 0
+      then
+         return Check_For_It;
+      --  A report the harness cannot take -- a required line missing, a
+      --  status none of its words -- handed back once, saying what is
+      --  wrong, as an unreadable call is: a 8B wrote status: blocked and
+      --  parts: with no summary:, and the task was blocked for it.
+      elsif State.Answered and then State.Hosted and then State.Round < Rounds and then not State.Asked_To_Mend
+        and then Said /= "" and then Report_Refusal (State.Root, Said) /= ""
+      then
+         return Ask_To_Mend;
+      --  Written, then only repeating what is done: the work is there, and
+      --  what is missing is its report -- asked for once, not the work
+      --  failed for it.
+      elsif State.Repeating and then State.Wrote and then State.Round < Rounds
+        and then not State.Asked_To_Report
+      then
+         return Ask_To_Report;
+      elsif State.Calls > 0 or else State.Round = 3 or else not State.Root or else not State.Answered then
+         return Finish;
+      else
+         return Ask_To_Call;
+      end if;
+   end Next_Step;
+
    function Report_Refusal (Root : Boolean; Answer : String) return String is
       Said : Invocations.Claims;
       Held : E.Error_Info;
@@ -1749,6 +1791,45 @@ package body Model_Runner.Framework.Work is
          end if;
          if Overflowed and then Has_Word ("or") and then Ada.Strings.Fixed.Index (Lower, "or else") = 0 then
             Say ("or works out both sides even where the first is True; a guard needs or else");
+         end if;
+         --  The guard's own sum overflowing: T'Last - X for a negative X,
+         --  T'First - X for a positive one. qwen3-8b guarded the sum with
+         --  A > Integer'Last - B, and seven rewrites kept that guard, each
+         --  told only that line 5 overflowed.
+         if Overflowed then
+            for Bound in 1 .. 2 loop
+               declare
+                  Mark  : constant String := (if Bound = 1 then "'last - " else "'first - ");
+                  At_It : constant Natural := Ada.Strings.Fixed.Index (Lower, Mark);
+                  Last  : Natural := At_It + Mark'Length - 1;
+               begin
+                  if At_It > 0 then
+                     while Last < Lower'Last and then Name_Char (Lower (Last + 1)) loop
+                        Last := Last + 1;
+                     end loop;
+                     declare
+                        Low     : constant String := Lower (At_It + Mark'Length .. Last);
+                        --  As the line spells it: Lower numbers from one.
+                        Operand : constant String :=
+                          Line (Line'First + (At_It + Mark'Length - Lower'First)
+                                .. Line'First + (Last - Lower'First));
+                        Sign    : constant String := (if Bound = 1 then " > 0" else " < 0");
+                     begin
+                        if Low /= ""
+                          and then Ada.Strings.Fixed.Index (Lower, Low & Sign) = 0
+                          and then Ada.Strings.Fixed.Index (Lower, Low & " >= 0") = 0
+                          and then Ada.Strings.Fixed.Index (Lower, Low & " <= 0") = 0
+                        then
+                           Say ((if Bound = 1 then "T'Last - " & Operand & " itself overflows where "
+                                   & Operand & " is negative"
+                                 else "T'First - " & Operand & " itself overflows where " & Operand
+                                   & " is positive")
+                                & "; test its sign first: " & Operand & Sign & " and then the comparison");
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
          end if;
          if Ada.Strings.Fixed.Index (Lower, "+=") > 0 or else Ada.Strings.Fixed.Index (Lower, "-=") > 0
            or else Ada.Strings.Fixed.Index (Lower, "++") > 0

@@ -5225,6 +5225,46 @@ package body Tests.Framework_Cases is
               and then Model_Runner.Framework.Work.Report_Refusal
                          (False, "status: done" & LF & "summary: found it" & LF & "findings: one") = "",
               "what a report lacks was not said, or a report that holds was refused");
+
+      --  What an agent's loop does after a round: each sending back once,
+      --  in its order, and only where it applies.
+      declare
+         package Wk renames Model_Runner.Framework.Work;
+         use type Wk.Round_Step;
+         Done   : constant Unbounded_String :=
+           To_Unbounded_String ("status: done" & LF & "summary: did it" & LF & "changed_files: src/a.adb");
+         Worked : constant Wk.Round_State :=
+           (Answered => True, Hosted => True, May_Check => True, Time_Left => True, Calls => 2,
+            Answer => Done, others => <>);
+      begin
+         Assert (Wk.Next_Step ((Worked with delta Checks_Failing => True)) = Wk.Ask_To_Fix,
+                 "a root that answered on failing checks was not sent back to fix them");
+         Assert (Wk.Next_Step ((Worked with delta Checks_Failing => True, Asked_To_Fix => True)) = Wk.Finish,
+                 "a root was sent back to fix its checks twice");
+         Assert (Wk.Next_Step ((Worked with delta Checks_Failing => True, Time_Left => False)) = Wk.Finish,
+                 "a root with no time left was sent back to fix its checks");
+         Assert (Wk.Next_Step (Worked) = Wk.Check_For_It,
+                 "a root that said done without a check did not have the checks run for it");
+         Assert (Wk.Next_Step ((Worked with delta Check_Runs => 1)) = Wk.Finish
+                 and then Wk.Next_Step ((Worked with delta May_Check => False)) = Wk.Finish
+                 and then Wk.Next_Step ((Worked with delta Root => False)) = Wk.Finish
+                 and then Wk.Next_Step ((Worked with delta Round => 3)) = Wk.Finish,
+                 "the checks were run for an agent that ran them, may not, is a helper, or had no round left");
+         Assert (Wk.Next_Step ((Worked with delta Answer => To_Unbounded_String
+                                  ("status: blocked" & LF & "summary: stuck" & LF & "changed_files: none")))
+                 = Wk.Finish,
+                 "the checks were run for a root that did not say done");
+         Assert (Wk.Next_Step ((Worked with delta Check_Runs => 1,
+                                Answer => To_Unbounded_String ("status: blocked" & LF & "parts: x")))
+                 = Wk.Ask_To_Mend,
+                 "a report that cannot be taken was not handed back");
+         Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True))
+                 = Wk.Ask_To_Report,
+                 "an agent repeating a write it made was not asked for its report");
+         Assert (Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False)) = Wk.Ask_To_Call
+                 and then Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False, Round => 3)) = Wk.Finish,
+                 "a root that answered without a call was not told so, or told on its last round");
+      end;
    end Invocations_Are_Recorded;
 
    ---------------------------------------------------------------------------
@@ -6565,6 +6605,31 @@ package body Tests.Framework_Cases is
       end;
       Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
               "the intersection with nothing granted something");
+
+      --  A kind's capability turned off by /reconfigure stays off, written
+      --  so, and the rest of what the kind may do is the project's still.
+      declare
+         One      : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Planned  : Model_Runner.Framework.Configurations.Change_Plan;
+         Revision : Natural;
+         Got      : E.Error_Info;
+         Config   : R.Item;
+         Analysis : Pm.Permission_Set;
+      begin
+         One.Include ("map.permission.kind.analysis.write_source", "off");
+         Model_Runner.Framework.Configurations.Plan_Change (Store, One, Planned, Got);
+         if E.Is_Ok (Got) then
+            Model_Runner.Framework.Configurations.Reconfigure (Store, Planned, Revision, Got);
+         end if;
+         Assert (E.Is_Ok (Got), "a kind's capability could not be turned off: " & Code_Of (Got));
+         Model_Runner.Framework.Configurations.Read (Store, Config, Got);
+         Analysis := Pm.Effective (Store, "analysis", "");
+         Assert (R.Get (Config, "map.permission.kind.analysis.write_source") = "off"
+                 and then not R.Has (Config, "map.permission.kind.analysis")
+                 and then not Pm.Allows (Analysis, Pm.Write_Source, "src/a.adb")
+                 and then Pm.Allows (Analysis, Pm.Read_Source, "src/a.adb"),
+                 "a kind's capability turned off was not kept off, or took the rest of the kind's with it");
+      end;
       --  A place a grant names that the project has not: said, a place
       --  there is not.
       Assert (Ada.Strings.Fixed.Index (Pm.Missing_Places (".", "roots=nosuchdir/"), "nosuchdir/") > 0
@@ -9556,10 +9621,16 @@ package body Tests.Framework_Cases is
          begin
             Model_Runner.Framework.Records.Set
               (Config, "map.permission.kind.test.write_source", "roots=tests/");
+            Model_Runner.Framework.Records.Set (Config, "map.permission.kind.test.use_network", "off");
             Given := Pm.Level_Of (Config, "kind.test", Present);
+            --  What it names, as it names it; off, withheld; the rest left
+            --  as the level above gives it.
             Assert (Present and then Given (Pm.Write_Source).Granted
-                    and then not Given (Pm.Read_Source).Granted,
-                    "a level read from a configuration not kept did not grant what it names");
+                    and then Given (Pm.Write_Source).Roots.Contains ("tests/")
+                    and then not Given (Pm.Use_Network).Granted
+                    and then Given (Pm.Read_Source).Granted,
+                    "a level read from a configuration not kept did not grant what it names, withhold what it"
+                    & " turns off, or leave the rest to the level above");
             Given := Pm.Level_Of (Config, "kind.analysis", Present);
             Assert (not Present and then not Given (Pm.Write_Source).Granted,
                     "a level a configuration says nothing of was said to be there");
@@ -11641,7 +11712,10 @@ package body Tests.Framework_Cases is
             & "calc.adb:4:12: again" & LF & "util.adb:1: two of them" & LF & "gone.adb:3: none",
             Root, ["src/calc.adb", "src/a/util.adb", "src/b/util.adb"]);
       begin
-         Assert (Said = LF & "src/calc.adb line 4 is: if A > Integer'Last - B then",
+         --  And the guard's own subtraction said to overflow, where nothing
+         --  tests B's sign first.
+         Assert (Said = LF & "src/calc.adb line 4 is: if A > Integer'Last - B then -- in Ada: T'Last - B itself"
+                 & " overflows where B is negative; test its sign first: B > 0 and then the comparison",
                  "a check's FILE:LINE was not quoted once, from the one file it names: " & Said);
       end;
       --  Another language's spelling in it said as Ada spells it.
@@ -11737,6 +11811,54 @@ package body Tests.Framework_Cases is
       Assert (Reused = "" and then R.Get (Held, "tool../probe.sh") = "probe 2.0",
               "evidence taken under another toolchain was reused, held strict: "
               & Reused & " / " & R.Get (Held, "tool../probe.sh"));
+
+      --  In a workspace: run again on the tree as it was, the evidence the
+      --  agent's own checks took there is this run's; on a tree changed
+      --  since, or in the project, it is not.
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Task_Id : Unbounded_String;
+         Made    : Ws.Workspace;
+         First   : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Probe", "analysis"), "user", "", Task_Id, Status);
+         S.Commit (Store, Change, Status);
+         Ws.Create (Store, Change, To_String (Task_Id), "AG-TEST", "1", False, Made, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "a workspace was not made: " & Code_Of (Status));
+         declare
+            Tree : constant String := To_String (Made.Path);
+         begin
+            Dirs.Create_Path (Tree & "/src");
+            Dirs.Copy_File (Project & "/probe.sh", Tree & "/probe.sh");
+            if not Hostkit.Metadata.Set_Permissions (Tree & "/probe.sh", 8#755#) then
+               Assert (False, "the probe could not be made runnable in the workspace");
+            end if;
+            Put_File (Tree & "/src/a.adb", "procedure A is begin null; end A;" & LF);
+            Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status, Workspace => Tree);
+            declare
+               Ran : constant String := Code_Of (Status);
+            begin
+               S.Commit (Store, Change, Status);
+               First := Evidence;
+               Assert (Ran = "NO_ERROR" and then E.Is_Ok (Status) and then Passed,
+                       "the first run in a workspace did not run: " & Ran & " " & Code_Of (Status));
+               Assert (Reused = "", "the first run in a workspace was reused from the project's: " & Reused);
+            end;
+            Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status, Workspace => Tree);
+            S.Commit (Store, Change, Status);
+            Assert (Reused = To_String (First) and then R.Get (Held, "workspace") = Tree,
+                    "the same workspace tree was checked again, not its evidence reused: " & Reused);
+            Put_File (Tree & "/src/a.adb", "procedure A is begin null; null; end A;" & LF);
+            Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status, Workspace => Tree);
+            S.Commit (Store, Change, Status);
+            Assert (Reused = "", "a workspace tree changed since was not checked again");
+            Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+            S.Commit (Store, Change, Status);
+            Assert (Reused = "" or else Reused /= To_String (First),
+                    "the project's run reused a workspace's evidence");
+         end;
+      end;
       S.Close (Store);
       Dirs.Delete_File (Outside);
    end Strict_Reuse_Follows_The_Toolchain;

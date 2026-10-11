@@ -34,7 +34,7 @@ hostkit 0
 zlib 0
 jpeglib 0
 jsonlib 0
-versionlib 19
+versionlib 0
 ssh_lib 0
 awklib 0
 regexp 0

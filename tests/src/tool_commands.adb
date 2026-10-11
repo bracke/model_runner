@@ -80,7 +80,7 @@ package body Tool_Commands is
    Takes_Fuzz      : aliased constant String := "[--seed N] [--cases N]";
    Takes_Conform   : aliased constant String := "[--arith MODE] [--part K/N [--short]]";
    Takes_Trial     : aliased constant String :=
-     "--model PATH [--program PATH] [--task edit|find|delegate] [--options ""OPTIONS""] [--repeats N]"
+     "--model PATH [--program PATH] [--task edit|find|delegate[,...]] [--options ""OPTIONS""] [--repeats N]"
      & " [--isolation workspace]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"

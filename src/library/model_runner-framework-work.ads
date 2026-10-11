@@ -461,6 +461,45 @@ package Model_Runner.Framework.Work is
    --  @return The field and what is wrong with it; "" when it holds.
    function Report_Refusal (Root : Boolean; Answer : String) return String;
 
+   --  What an agent's loop does once a round of its run has ended.
+   type Round_Step is
+     (Ask_To_Fix,     --  Its last checks failed: sent back once to fix them.
+      Check_For_It,   --  Said done with no check run: the harness runs them.
+      Ask_To_Mend,    --  Its report cannot be taken: handed back once.
+      Ask_To_Report,  --  Repeating a write already made: asked for its report.
+      Ask_To_Call,    --  A root that answered without a call: told nothing changed.
+      Finish);        --  Its answer stands.
+
+   --  How a round ended, as the loop decides on it.
+   type Round_State is record
+      Root            : Boolean := True;
+      --  How the run stopped: it answered, or kept repeating a call.
+      Answered        : Boolean := False;
+      Repeating       : Boolean := False;
+      Round           : Positive := 1;
+      Asked_To_Fix    : Boolean := False;
+      Asked_To_Mend   : Boolean := False;
+      Asked_To_Report : Boolean := False;
+      --  Whether a work's host stands behind it, and what it says.
+      Hosted          : Boolean := False;
+      Checks_Failing  : Boolean := False;
+      May_Check       : Boolean := False;
+      Time_Left       : Boolean := False;
+      --  The checks it ran itself, the calls it made, whether it wrote.
+      Check_Runs      : Natural := 0;
+      Calls           : Natural := 0;
+      Wrote           : Boolean := False;
+      --  Its last reply's answer, where the last turn is its own.
+      Answer          : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   --  The next step of an agent's loop: a root has three rounds, a helper
+   --  two, and each sending back is made once.
+   --
+   --  @param State How the round ended.
+   --  @return What the loop does next.
+   function Next_Step (State : Round_State) return Round_Step;
+
    --  Whether the last checks the work ran failed: what it reports done
    --  then is not, by its own checks.
    --
