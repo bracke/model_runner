@@ -16,7 +16,7 @@ is
      and then Allowed (Permissions.Create_Children).Max_Depth >= 1
      --  None allowed by the agents' own bound: no helpers either.
      and then Agents.Limits_Of (Item).Max_Children > 0;
-   May_Check   : constant Boolean := Helpers and then Offers_Checks (Item, Allowed, Task_Id, Apart);
+   May_Check   : constant Boolean := Helpers and then Offers_Checks (Item, Allowed, Task_Id);
    May_Propose : constant Boolean := Permissions.Allows (Allowed, Permissions.Propose_Tasks);
 
    function May_Split return Boolean is

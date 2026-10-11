@@ -3379,14 +3379,6 @@ package body Model_Runner.CLI.Tasks is
 
             --  Capabilities granted that the agent has no way to use here,
             --  said after what it may do; "" where there are none.
-            --  Its checks run when its work is taken in, not by it in its
-            --  workspace -- where there is work to take in: not an analysis's.
-            function Checks_Later return Boolean
-            is (R.Get (View, "workspace_policy") = "workspace"
-                and then R.Get (View, "definition.kind") /= "analysis"
-                and then (Ada.Strings.Fixed.Index (R.Get (View, "permissions"), "run_tests") > 0
-                          or else Ada.Strings.Fixed.Index (R.Get (View, "permissions"), "run_build") > 0));
-
             function Granted_Unused return String is
                package Pm renames Model_Runner.Framework.Permissions;
                Allowed : constant Pm.Permission_Set :=
@@ -3400,10 +3392,9 @@ package body Model_Runner.CLI.Tasks is
                                              | "request_integration"
                     --  A build its checks run is used.
                     and then not (Pm.Word (One) = "run_build"
-                                  and then (Checks_Later
-                                            or else Ada.Strings.Fixed.Index
-                                                      (Model_Runner.Framework.Work.May_Do (Store, Argument), "checks")
-                                                    > 0))
+                                  and then Ada.Strings.Fixed.Index
+                                             (Model_Runner.Framework.Work.May_Do (Store, Argument), "checks")
+                                           > 0)
                   then
                      Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Pm.Word (One));
                   end if;
@@ -3613,12 +3604,6 @@ package body Model_Runner.CLI.Tasks is
                      else Model_Runner.Framework.Permissions.In_Words (R.Get (View, Name)))
                     --  Granted, and nothing its agent does uses it: said, so a
                     --  grant is seen to have been made.
-                    --  Apart in a workspace its checks are not its to run:
-                    --  they run when its work is taken in.
-                    & (if Checks_Later
-                       then " -- its checks (run_build, run_tests) run when its work is taken in, not while it"
-                            & " works in its workspace"
-                       else "")
                     & Granted_Unused);
                   --  The capabilities by the names /task grant and withhold
                   --  take, beside the words above.

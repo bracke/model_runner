@@ -745,11 +745,12 @@ package body Model_Runner.Framework.Work is
    end Check_Capability;
 
    --  Whether an agent with these permissions is offered run_checks: one
-   --  working in the project, let run its task's own profile.
+   --  let run its task's own profile -- in the project, or in its own
+   --  workspace where it works apart.
    function Offers_Checks
-     (Item : Stores.Store; Allowed : Permissions.Permission_Set; Task_Id : String; Apart : Boolean)
+     (Item : Stores.Store; Allowed : Permissions.Permission_Set; Task_Id : String)
       return Boolean
-   is (not Apart and then Task_Id /= ""
+   is (Task_Id /= ""
        and then Verification.Profile_Of (Item, Task_Id) /= ""
        and then Permissions.Allows_Profile
                   (Allowed, Check_Capability (Item, Verification.Profile_Of (Item, Task_Id)),
@@ -760,7 +761,7 @@ package body Model_Runner.Framework.Work is
    --  where its permissions let it -- what those permissions are, and how
    --  many calls it may make.
    function Tools_Of
-     (Item : Stores.Store; Agent_Id : String; Task_Id : String; Apart : Boolean;
+     (Item : Stores.Store; Agent_Id : String; Task_Id : String;
       Hosted : Boolean := True) return Model_Runner.Tools.Registry.Capabilities
    is
       package Rg renames Model_Runner.Tools.Registry;
@@ -774,7 +775,7 @@ package body Model_Runner.Framework.Work is
       if E.Is_Error (Read) then
          return Can;
       end if;
-      Can (Rg.Project_Checks) := Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id, Apart);
+      Can (Rg.Project_Checks) := Hosted and then Offers_Checks (Item, Held.Allowed, Task_Id);
       Can (Rg.Write_Files) :=
         Permissions.Allows (Held.Allowed, Permissions.Write_Source)
         or else Permissions.Allows (Held.Allowed, Permissions.Write_Specs);
@@ -786,7 +787,7 @@ package body Model_Runner.Framework.Work is
    end Tools_Of;
 
    function Tool_Policy
-     (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural; Task_Id : String; Apart : Boolean;
+     (Item : Stores.Store; Agent_Id : String; Max_Calls : Natural; Task_Id : String;
       Hosted : Boolean := True)
       return String
    is
@@ -797,7 +798,7 @@ package body Model_Runner.Framework.Work is
       --  were no longer offered, and a helper was told of tools it had not.
       Said : Unbounded_String :=
         To_Unbounded_String
-          ("tools: " & Model_Runner.Tools.Registry.Offered_Names (Tools_Of (Item, Agent_Id, Task_Id, Apart, Hosted)));
+          ("tools: " & Model_Runner.Tools.Registry.Offered_Names (Tools_Of (Item, Agent_Id, Task_Id, Hosted)));
    begin
       Agents.Read (Item, Agent_Id, Held, Read);
       if E.Is_Error (Read) then
@@ -1331,7 +1332,7 @@ package body Model_Runner.Framework.Work is
       Status : E.Error_Info;
       Needed : constant Permissions.Capability := Check_Capability (Host.Item.all, Profile);
    begin
-      if Host.Apart or else Profile = "" then
+      if Profile = "" then
          return False;
       end if;
       Agents.Read (Host.Item.all, Current (Host), Held, Status);

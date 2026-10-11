@@ -91,7 +91,7 @@ begin
             return ASCII.LF & "## What you may do" & ASCII.LF
               & "Your tools -- these and no others: "
               & Model_Runner.Tools.Registry.Offered_Names
-                  (Tools_Of (Host.Item.all, To_String (Child_Id), To_String (Host.Task_Id), Host.Apart))
+                  (Tools_Of (Host.Item.all, To_String (Child_Id), To_String (Host.Task_Id)))
               & "." & ASCII.LF
               & "You may " & (if Said = Null_Unbounded_String then "only read what you are given"
                               else To_String (Said))
@@ -121,7 +121,7 @@ begin
             Generation_Of (Host.Item.all, To_String (Host.Task_Id)),
             To_String (Host.Model.Id), Framework.Context.Manifest_Id (Made),
             Tool_Policy (Host.Item.all, To_String (Child_Id), Host.Max_Calls,
-                         To_String (Host.Task_Id), Host.Apart),
+                         To_String (Host.Task_Id)),
             Child_Claim, Called, Read,
             Resource_Class => To_String (Host.Model.Resource_Class),
             --  The run that asked for it, and the call it asked by: the

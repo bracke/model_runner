@@ -781,8 +781,10 @@ private
    type Child_Host (Item : not null access Stores.Store) is tagged limited record
       Task_Id : Ada.Strings.Unbounded.Unbounded_String;
 
-      --  Whether the agents write in a workspace apart from the project.
+      --  Whether the agents write in a workspace apart from the project,
+      --  and the workspace's tree, where its checks run.
       Apart   : Boolean := False;
+      Tree    : Ada.Strings.Unbounded.Unbounded_String;
 
       --  Whether the last checks run for the work failed.
       Checks_Failed : Boolean := False;

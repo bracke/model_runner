@@ -597,7 +597,7 @@ begin
          Tool_Policy
            (Item, To_String (Result.Agent_Id),
             Frozen.Max_Tool_Calls,
-            Task_Id, Isolated, Hosted => Runner in Parenting_Runner'Class),
+            Task_Id, Hosted => Runner in Parenting_Runner'Class),
          Invocations.Work_Claim,
          Result.Invocation_Id, Status, Resource_Class => To_String (Model.Resource_Class),
          Resolved => Resolved_Lines);
@@ -696,6 +696,7 @@ begin
       begin
          Host.Task_Id := To_Unbounded_String (Task_Id);
          Host.Apart := Isolated;
+         Host.Tree := (if Isolated then Place else Null_Unbounded_String);
          Host.Model := Model;
          declare
             use type Ada.Calendar.Time;

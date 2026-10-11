@@ -62,8 +62,10 @@ begin
       return;
    end if;
    declare
+      --  Where the work is: the project, or the agent's own workspace.
       Project : constant String :=
-        Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
+        (if Host.Apart then To_String (Host.Tree)
+         else Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all)));
       Before  : constant Configurations.Value_Maps.Map := Snapshot (Project, Repository.Roots_Of (Host.Item.all));
    begin
       Project_Dir := To_Unbounded_String (Project);
@@ -75,14 +77,16 @@ begin
          E.Add_Text (Status, "name", "time");
          return;
       end if;
-      --  Run for its task: credited to it, where its agents work in the
-      --  project itself and the checks see what it holds.
+      --  Run for its task, in the tree its agents write: the project
+      --  itself, or its workspace -- evidence that says so, and never
+      --  counts as the project's.
       Verification.Run_Profile
-        (Host.Item.all, Change, Running, (if Host.Apart then "" else To_String (Host.Task_Id)),
+        (Host.Item.all, Change, Running, To_String (Host.Task_Id),
          Evidence, Passed, Status,
          Given      => (if Narrow then Chosen.Given else Name_Lists.Empty_Vector),
          Stands_For => (if Narrow then Profile else ""),
          Offline => not May (Host, Permissions.Use_Network, ""),
+         Workspace => (if Host.Apart then To_String (Host.Tree) else ""),
          Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0));
       if E.Is_Ok (Status) then
          Stores.Commit (Host.Item.all, Change, Status);

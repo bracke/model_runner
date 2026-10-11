@@ -24,6 +24,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **An agent working apart runs its checks in its workspace:** run_checks was withheld from an agent in a workspace -- its checks ran only when its work was taken in -- so it could not see its own work fail: qwen3-8b wrote code that did not build, said done, and the taking in failed with no attempt to fix it. It is offered now and runs the task's profile in the workspace's tree, the evidence saying so and never counting as the project's, as the taking in's does.
 - **Said done with no check run, checked anyway:** a working agent that reports status: done without ever calling run_checks, where it may, has the checks run for it; if they fail it is sent back once with what they said. In a workspace qwen3-8b reported done three runs of three on code that did not build.
 - **A project's permissions name what differs from its default:** naming one capability at project level -- map.permission.project.request_integration=on -- used to replace the whole default, withholding everything not named; the rest now stays as a project naming none has it. Taking away a capability the default grants is written as off, not removed, so it stays away.
 - **Conversation.Unescaped reads by jsonlib:** a part's escaped text is made a JSON string -- raw quotes and controls escaped, an escape JSON has not kept as its character, a lone surrogate half dropped -- and read by jsonlib; the last JSON reader of its own is gone.
