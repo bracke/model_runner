@@ -259,7 +259,9 @@ package body Model_Runner.Framework.Invocations is
             end case;
          end Value_Of;
       begin
-         Jsonlib.Parsers.Parse (Model_Runner.Tools.Controls_Escaped (Answer (Start .. Stop)), Document, Error);
+         Jsonlib.Parsers.Parse
+           (Model_Runner.Tools.Controls_Escaped (Answer (Start .. Stop)), Document, Error,
+            (Jsonlib.Parsers.Default_Options with delta Duplicates => Jsonlib.Parsers.Last_Wins));
          if Jsonlib.Errors.Failed (Error)
            or else Doc."/=" (Doc.Kind (Document, Doc.Root (Document)), Doc.Object_Value)
          then

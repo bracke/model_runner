@@ -10,7 +10,10 @@ with GNAT.OS_Lib;
 
 with Hostkit.Metadata;
 
-with Model_Runner.Conversation;
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+
 with Model_Runner.Processes;
 
 with Http_Client.Clients;
@@ -89,152 +92,61 @@ package body Model_Runner.Tools.Builtin is
            (May_Delegate => Self.Sub /= null, May_Ask => Self.Asker /= null)));
 
    ---------------------------------------------------------------------------
-   --  Reading arguments (a walk over the top level of one JSON object)
+   --  Reading arguments: the call's JSON object, read by jsonlib
    ---------------------------------------------------------------------------
 
-   function After_String (Text : String; Index : Positive) return Positive is
-      I : Natural := Index + 1;
-   begin
-      while I <= Text'Last loop
-         if Text (I) = '\' then
-            I := I + 2;
-         elsif Text (I) = '"' then
-            return I + 1;
-         else
-            I := I + 1;
-         end if;
-      end loop;
-      return Text'Last + 1;
-   end After_String;
+   package Doc renames Jsonlib.Documents;
 
-   --  The string that opens at Index, as it means: decoded as the call's
-   --  identity decodes it (Conversation.Unescaped), \uXXXX and surrogate
-   --  pairs included -- two readings of one call's JSON told the agent loop
-   --  two calls apart that the tool ran as one.
-   function String_Content (Text : String; Index : Positive) return String is
-      I : Natural := Index + 1;
-   begin
-      while I <= Text'Last and then Text (I) /= '"' loop
-         I := I + (if Text (I) = '\' and then I < Text'Last then 2 else 1);
-      end loop;
-      return Model_Runner.Conversation.Unescaped (Text (Index + 1 .. Natural'Min (I - 1, Text'Last)));
-   end String_Content;
-
-   procedure Locate
-     (Args  : String;
-      Key   : String;
-      First : out Natural;
-      Last  : out Natural;
-      Found : out Boolean)
+   --  The arguments as a document, and the member a key names in it: read
+   --  as JSON is read -- jsonlib, RFC 8259 exactly -- once the raw tabs and
+   --  line breaks a model puts inside its strings are escaped. One reading
+   --  for every argument, where a walk of our own told a string apart from
+   --  how the call's identity read it.
+   procedure Member
+     (Args     : String;
+      Key      : String;
+      Document : in out Doc.Document;
+      Found    : out Doc.Node;
+      Present  : out Boolean)
    is
-      I     : Natural := Args'First;
-      Depth : Natural := 0;
+      Error : Jsonlib.Errors.Error_Info;
+      First : constant Natural := Ada.Strings.Fixed.Index (Args, "{");
+      Last  : constant Natural := Ada.Strings.Fixed.Index (Args, "}", Ada.Strings.Backward);
    begin
-      First := 0;
-      Last  := 0;
-      Found := False;
-
-      while I <= Args'Last and then Args (I) /= '{' loop
-         I := I + 1;
-      end loop;
-      if I > Args'Last then
+      Present := False;
+      if First = 0 or else Last < First then
          return;
       end if;
-      I := I + 1;
-
-      loop
-         while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
-           | ASCII.LF | ASCII.CR
-         loop
-            I := I + 1;
-         end loop;
-         exit when I > Args'Last or else Args (I) = '}';
-
-         if Args (I) /= '"' then
-            return;
-         end if;
-
-         declare
-            Key_First : constant Positive := I;
-            Key_After : constant Positive := After_String (Args, I);
-            This_Key  : constant String :=
-              String_Content (Args, Key_First);
-         begin
-            I := Key_After;
-            while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
-              | ASCII.LF | ASCII.CR
-            loop
-               I := I + 1;
-            end loop;
-            exit when I > Args'Last or else Args (I) /= ':';
-            I := I + 1;
-            while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
-              | ASCII.LF | ASCII.CR
-            loop
-               I := I + 1;
-            end loop;
-            exit when I > Args'Last;
-
-            declare
-               Value_First : constant Positive := I;
-            begin
-               case Args (I) is
-                  when '"' =>
-                     I := After_String (Args, I);
-                  when '{' | '[' =>
-                     Depth := 1;
-                     I := I + 1;
-                     while I <= Args'Last and then Depth > 0 loop
-                        case Args (I) is
-                           when '"'       => I := After_String (Args, I);
-                           when '{' | '[' => Depth := Depth + 1; I := I + 1;
-                           when '}' | ']' => Depth := Depth - 1; I := I + 1;
-                           when others    => I := I + 1;
-                        end case;
-                     end loop;
-                  when others =>
-                     while I <= Args'Last
-                       and then Args (I) not in ',' | '}' | ']'
-                       | ' ' | ASCII.HT | ASCII.LF | ASCII.CR
-                     loop
-                        I := I + 1;
-                     end loop;
-               end case;
-
-               if This_Key = Key then
-                  First := Value_First;
-                  Last  := I - 1;
-                  Found := True;
-                  return;
-               end if;
-            end;
-
-            while I <= Args'Last and then Args (I) in ' ' | ASCII.HT
-              | ASCII.LF | ASCII.CR
-            loop
-               I := I + 1;
-            end loop;
-            exit when I > Args'Last or else Args (I) /= ',';
-            I := I + 1;
-         end;
-      end loop;
-   end Locate;
+      --  A name given twice is the last given, as a call's identity reads it.
+      Jsonlib.Parsers.Parse
+        (Model_Runner.Tools.Controls_Escaped (Args (First .. Last)), Document, Error,
+         (Jsonlib.Parsers.Default_Options with delta Duplicates => Jsonlib.Parsers.Last_Wins));
+      if Jsonlib.Errors.Failed (Error)
+        or else Doc."/=" (Doc.Kind (Document, Doc.Root (Document)), Doc.Object_Value)
+        or else not Doc.Has_Member (Document, Doc.Root (Document), Key)
+      then
+         return;
+      end if;
+      Found := Doc.Member (Document, Doc.Root (Document), Key);
+      Present := True;
+   end Member;
 
    --  A string argument's decoded content, unbounded so a tool need not size
    --  a buffer for it.
    function Text_Argument (Args : String; Key : String; Found : out Boolean)
      return String
    is
-      From, To : Natural;
+      Document : Doc.Document;
+      Item     : Doc.Node;
       Present  : Boolean;
    begin
       Found := False;
-      Locate (Args, Key, From, To, Present);
-      if not Present or else To < From or else Args (From) /= '"' then
+      Member (Args, Key, Document, Item, Present);
+      if not Present or else Doc."/=" (Doc.Kind (Document, Item), Doc.String_Value) then
          return "";
       end if;
       Found := True;
-      return String_Content (Args, From);
+      return Doc.As_String (Document, Item);
    end Text_Argument;
 
    procedure Text_List_Argument
@@ -244,50 +156,57 @@ package body Model_Runner.Tools.Builtin is
       Found       : out Boolean;
       Well_Formed : out Boolean)
    is
-      From, To : Natural;
+      Document : Doc.Document;
+      Item     : Doc.Node;
       Present  : Boolean;
-      I        : Natural;
-
-      procedure Blanks is
-      begin
-         while I <= To and then Args (I) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
-            I := I + 1;
-         end loop;
-      end Blanks;
    begin
       Items.Clear;
       Found := False;
       Well_Formed := True;
-      Locate (Args, Key, From, To, Present);
-      if not Present or else To < From then
+      Member (Args, Key, Document, Item, Present);
+      if not Present then
          return;
       end if;
       Found := True;
-      if Args (From) /= '[' then
+      --  A list of strings, and nothing else: a string where a list was
+      --  asked for is not taken for a list of one.
+      if Doc."/=" (Doc.Kind (Document, Item), Doc.Array_Value) then
          Well_Formed := False;
          return;
       end if;
-      I := From + 1;
-      loop
-         Blanks;
-         exit when I > To or else Args (I) = ']';
-         if Args (I) /= '"' then
-            Well_Formed := False;
-            Items.Clear;
-            return;
-         end if;
-         Items.Append (String_Content (Args, I));
-         I := After_String (Args, I);
-         Blanks;
-         if I <= To and then Args (I) = ',' then
-            I := I + 1;
-         end if;
+      for Index in 1 .. Doc.Length (Document, Item) loop
+         declare
+            One : constant Doc.Node := Doc.Element (Document, Item, Index);
+         begin
+            if Doc."/=" (Doc.Kind (Document, One), Doc.String_Value) then
+               Well_Formed := False;
+               Items.Clear;
+               return;
+            end if;
+            Items.Append (Doc.As_String (Document, One));
+         end;
       end loop;
-      if I > To then
-         Well_Formed := False;
-         Items.Clear;
-      end if;
    end Text_List_Argument;
+
+   --  Whether a key names a number, whole or not, in range or not: one past
+   --  what the host holds is refused by the reader, and said as that.
+   function Number_Given (Args : String; Key : String) return Boolean is
+      Document : Doc.Document;
+      Item     : Doc.Node;
+      Present  : Boolean;
+      Error    : Jsonlib.Errors.Error_Info;
+      First    : constant Natural := Ada.Strings.Fixed.Index (Args, "{");
+      Last     : constant Natural := Ada.Strings.Fixed.Index (Args, "}", Ada.Strings.Backward);
+   begin
+      Member (Args, Key, Document, Item, Present);
+      if Present then
+         return Doc.Kind (Document, Item) in Doc.Integer_Value | Doc.Float_Value;
+      elsif First = 0 or else Last < First then
+         return False;
+      end if;
+      Jsonlib.Parsers.Parse (Model_Runner.Tools.Controls_Escaped (Args (First .. Last)), Document, Error);
+      return Jsonlib.Errors."=" (Error.Code, Jsonlib.Errors.Number_Out_Of_Range);
+   end Number_Given;
 
    procedure Integer_Argument
      (Args  : String;
@@ -295,47 +214,23 @@ package body Model_Runner.Tools.Builtin is
       Value : out Long_Long_Integer;
       Found : out Boolean)
    is
-      From, To : Natural;
+      Document : Doc.Document;
+      Item     : Doc.Node;
       Present  : Boolean;
    begin
       Value := 0;
       Found := False;
-      Locate (Args, Key, From, To, Present);
-      if not Present or else To < From then
-         return;
+      Member (Args, Key, Document, Item, Present);
+      --  A whole number in range; one past it is no number, said by the
+      --  caller (Number_Given), not an overflow raised out of the read.
+      if Present and then Doc."=" (Doc.Kind (Document, Item), Doc.Integer_Value) then
+         Value := Doc.As_Integer (Document, Item);
+         Found := True;
       end if;
-
-      declare
-         Raw  : String renames Args (From .. To);
-         Sign : Long_Long_Integer := 1;
-         Acc  : Long_Long_Integer := 0;
-         I    : Natural := Raw'First;
-         Seen : Boolean := False;
-      begin
-         if I <= Raw'Last and then Raw (I) = '-' then
-            Sign := -1;
-            I := I + 1;
-         end if;
-         while I <= Raw'Last and then Raw (I) in '0' .. '9' loop
-            declare
-               Digit : constant Long_Long_Integer :=
-                 Long_Long_Integer (Character'Pos (Raw (I)) - Character'Pos ('0'));
-            begin
-               --  Past what a whole number here holds: no number, said by
-               --  the caller, not an overflow raised out of the parse.
-               if Acc > (Long_Long_Integer'Last - Digit) / 10 then
-                  return;
-               end if;
-               Acc := Acc * 10 + Digit;
-            end;
-            Seen := True;
-            I := I + 1;
-         end loop;
-         if Seen and then I > Raw'Last then
-            Value := Sign * Acc;
-            Found := True;
-         end if;
-      end;
+   exception
+      when others =>
+         Value := 0;
+         Found := False;
    end Integer_Argument;
 
    function Image (Value : Long_Long_Integer) return String is
@@ -436,13 +331,7 @@ package body Model_Runner.Tools.Builtin is
       Op : constant String := Text_Argument (Args, "op", Found_Op);
 
       --  Whether an argument is there, a number past the range or not.
-      function Given (Key : String) return Boolean is
-         First, Last : Natural;
-         Present     : Boolean;
-      begin
-         Locate (Args, Key, First, Last, Present);
-         return Present and then Last >= First and then Args (First) in '0' .. '9' | '-';
-      end Given;
+      function Given (Key : String) return Boolean is (Number_Given (Args, Key));
 
       --  Worked in twice the width and held to the range: every grammatical
       --  call has an answer, a result past the range among them.
