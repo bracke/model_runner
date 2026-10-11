@@ -204,9 +204,12 @@ package body Agent_Trial is
       function Copied return String is
          --  With the program's own extension: a host that runs only an
          --  .exe runs this one.
+         --  Beside the program, not elsewhere: it finds its messages and
+         --  resources from where it is, and a copy in obj/ found none.
          Aside : constant String :=
-           Ada.Directories.Full_Name
-             ("obj/agent-trial-program"
+           Hostkit.Fs.Join
+             (Ada.Directories.Containing_Directory (Program),
+              ".agent-trial-program"
               & (if Ada.Directories.Extension (Program) = "" then ""
                  else "." & Ada.Directories.Extension (Program)));
          Ignored : Boolean;
