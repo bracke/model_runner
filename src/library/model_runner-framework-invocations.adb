@@ -2,13 +2,17 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
-with Model_Runner.Conversation;
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Transitions;
+with Model_Runner.Tools;
 
 package body Model_Runner.Framework.Invocations is
 
@@ -163,96 +167,60 @@ package body Model_Runner.Framework.Invocations is
    --  title and then NAME=VALUE for each other member, a ; apart. The
    --  empty string where the answer holds no object that reads.
    function Lines_Of_JSON (Answer : String) return String is
-      Position : Natural := Answer'First;
-      Failed   : exception;
-      Out_Text : Unbounded_String;
+      package Doc renames Jsonlib.Documents;
 
-      procedure Skip is
-      begin
-         while Position <= Answer'Last
-           and then Answer (Position) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
-         loop
-            Position := Position + 1;
+      --  Where its object starts, and where it ends: what follows the
+      --  object may be a closing fence and white space, nothing more -- an
+      --  answer that goes on past its object is not one.
+      Start : constant Natural := Ada.Strings.Fixed.Index (Answer, "{");
+      Stop  : Natural := Answer'Last;
+   begin
+      if Start = 0 then
+         return "";
+      end if;
+      while Stop >= Start and then Answer (Stop) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+         Stop := Stop - 1;
+      end loop;
+      if Stop - 2 >= Start and then Answer (Stop - 2 .. Stop) = "```" then
+         Stop := Stop - 3;
+         while Stop >= Start and then Answer (Stop) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+            Stop := Stop - 1;
          end loop;
-      end Skip;
+      end if;
+      if Stop < Start or else Answer (Stop) /= '}' then
+         return "";
+      end if;
 
-      function Peek return Character is
-      begin
-         Skip;
-         if Position > Answer'Last then
-            raise Failed;
-         end if;
-         return Answer (Position);
-      end Peek;
+      --  Read as JSON is read -- jsonlib, RFC 8259 exactly -- once what a
+      --  model puts raw inside its strings is escaped.
+      declare
+         Document : Doc.Document;
+         Error    : Jsonlib.Errors.Error_Info;
+         Out_Text : Unbounded_String;
 
-      procedure Expect (C : Character) is
-      begin
-         if Peek /= C then
-            raise Failed;
-         end if;
-         Position := Position + 1;
-      end Expect;
-
-      --  A string as JSON means it -- \uXXXX, surrogate pairs and every
-      --  escape, decoded as a call's arguments are (Conversation.Unescaped);
-      --  a tab a space, as an answer's lines are read.
-      function Text_Value return String is
-         First : Positive;
-      begin
-         Expect ('"');
-         First := Position;
-         while Position <= Answer'Last and then Answer (Position) /= '"' loop
-            Position := Position + (if Answer (Position) = '\' and then Position < Answer'Last then 2 else 1);
-         end loop;
-         declare
-            Meant : String := Model_Runner.Conversation.Unescaped (Answer (First .. Position - 1));
+         --  A string as one line of text: a tab a space.
+         function Plain (Text : String) return String is
+            Result : String := Text;
          begin
-            Expect ('"');
-            for C of Meant loop
+            for C of Result loop
                if C = ASCII.HT then
                   C := ' ';
                end if;
             end loop;
-            return Meant;
-         end;
-      end Text_Value;
+            return Result;
+         end Plain;
 
-      --  A number, true, false or null, as written.
-      function Bare_Value return String is
-         Start : constant Positive := Position;
-      begin
-         while Position <= Answer'Last
-           and then Answer (Position) not in ',' | '}' | ']' | ' ' | ASCII.LF | ASCII.CR
-         loop
-            Position := Position + 1;
-         end loop;
-         if Position = Start then
-            raise Failed;
-         end if;
-         return (if Answer (Start .. Position - 1) = "null" then ""
-                 else Answer (Start .. Position - 1));
-      end Bare_Value;
+         function Value_Of (Item : Doc.Node) return String;
 
-      function Any_Value return String;
-
-      --  An object as one line: its title, then its other members.
-      function Object_Line return String is
-         Title : Unbounded_String;
-         Rest  : Unbounded_String;
-      begin
-         Expect ('{');
-         if Peek = '}' then
-            Position := Position + 1;
-            return "";
-         end if;
-         loop
-            declare
-               Name  : constant String := Text_Value;
-               Value : String := "";
-            begin
-               Expect (':');
+         --  An object as one line: its title, then its other members.
+         function Object_Line (Item : Doc.Node) return String is
+            Title : Unbounded_String;
+            Rest  : Unbounded_String;
+         begin
+            for Index in 1 .. Doc.Length (Document, Item) loop
                declare
-                  Given : constant String := Any_Value;
+                  Name  : constant String := Doc.Name (Document, Item, Index);
+                  Given : constant String := Value_Of (Doc.Element (Document, Item, Index));
                begin
                   if Lower (Name) in "title" | "name" and then Title = Null_Unbounded_String then
                      Title := To_Unbounded_String (Given);
@@ -260,99 +228,67 @@ package body Model_Runner.Framework.Invocations is
                      Append (Rest, "; " & Name & "=" & Given);
                   end if;
                end;
-               pragma Unreferenced (Value);
-            end;
-            exit when Peek = '}';
-            Expect (',');
-         end loop;
-         Expect ('}');
-         return To_String (Title) & To_String (Rest);
-      end Object_Line;
+            end loop;
+            return To_String (Title) & To_String (Rest);
+         end Object_Line;
 
-      --  A list as its items, a line each.
-      function List_Lines return String is
-         Held : Unbounded_String;
+         --  A list as its items, a line each.
+         function List_Lines (Item : Doc.Node) return String is
+            Held : Unbounded_String;
+         begin
+            for Index in 1 .. Doc.Length (Document, Item) loop
+               declare
+                  One : constant String := Value_Of (Doc.Element (Document, Item, Index));
+               begin
+                  if One /= "" then
+                     Append (Held, (if Held = Null_Unbounded_String then "" else [1 => ASCII.LF]) & One);
+                  end if;
+               end;
+            end loop;
+            return To_String (Held);
+         end List_Lines;
+
+         function Value_Of (Item : Doc.Node) return String is
+         begin
+            case Doc.Kind (Document, Item) is
+               when Doc.Null_Value   => return "";
+               when Doc.String_Value => return Plain (Doc.As_String (Document, Item));
+               when Doc.Object_Value => return Object_Line (Item);
+               when Doc.Array_Value  => return List_Lines (Item);
+               when others           => return Doc.Literal (Document, Item);
+            end case;
+         end Value_Of;
       begin
-         Expect ('[');
-         if Peek = ']' then
-            Position := Position + 1;
+         Jsonlib.Parsers.Parse (Model_Runner.Tools.Controls_Escaped (Answer (Start .. Stop)), Document, Error);
+         if Jsonlib.Errors.Failed (Error)
+           or else Doc."/=" (Doc.Kind (Document, Doc.Root (Document)), Doc.Object_Value)
+         then
             return "";
          end if;
-         loop
-            declare
-               Item : constant String := Any_Value;
-            begin
-               if Item /= "" then
-                  Append (Held, (if Held = Null_Unbounded_String then "" else [1 => ASCII.LF]) & Item);
-               end if;
-            end;
-            exit when Peek = ']';
-            Expect (',');
-         end loop;
-         Expect (']');
-         return To_String (Held);
-      end List_Lines;
-
-      function Any_Value return String is
-      begin
-         case Peek is
-            when '"'    => return Text_Value;
-            when '{'    => return Object_Line;
-            when '['    => return List_Lines;
-            when others => return Bare_Value;
-         end case;
-      end Any_Value;
-
-      Start : constant Natural := Ada.Strings.Fixed.Index (Answer, "{");
-   begin
-      if Start = 0 then
-         return "";
-      end if;
-      Position := Start;
-      Expect ('{');
-      if Peek = '}' then
-         return "";
-      end if;
-      loop
          declare
-            Name  : constant String := Text_Value;
+            Root : constant Doc.Node := Doc.Root (Document);
          begin
-            Expect (':');
-            declare
-               Given : constant String := Any_Value;
-               Items : constant Name_Lists.Vector := Lines_Of (Given);
-            begin
-               --  A value of one line after its name; of several, each on
-               --  a line of its own under it.
-               if Natural (Items.Length) <= 1 then
-                  Append (Out_Text, Name & ": " & Given & ASCII.LF);
-               else
-                  Append (Out_Text, Name & ":" & ASCII.LF);
-                  for Item of Items loop
-                     Append (Out_Text, "- " & Item & ASCII.LF);
-                  end loop;
-               end if;
-            end;
+            for Index in 1 .. Doc.Length (Document, Root) loop
+               declare
+                  Name  : constant String := Doc.Name (Document, Root, Index);
+                  Given : constant String := Value_Of (Doc.Element (Document, Root, Index));
+                  Items : constant Name_Lists.Vector := Lines_Of (Given);
+               begin
+                  --  A value of one line after its name; of several, each on
+                  --  a line of its own under it.
+                  if Natural (Items.Length) <= 1 then
+                     Append (Out_Text, Name & ": " & Given & ASCII.LF);
+                  else
+                     Append (Out_Text, Name & ":" & ASCII.LF);
+                     for Item of Items loop
+                        Append (Out_Text, "- " & Item & ASCII.LF);
+                     end loop;
+                  end if;
+               end;
+            end loop;
          end;
-         exit when Peek = '}';
-         Expect (',');
-      end loop;
-      Expect ('}');
-      --  One object, and nothing after it but a closing fence: an answer
-      --  that goes on past its object is not one, and is read as the text
-      --  it is.
-      Skip;
-      if Position + 2 <= Answer'Last and then Answer (Position .. Position + 2) = "```" then
-         Position := Position + 3;
-         Skip;
-      end if;
-      if Position <= Answer'Last then
-         return "";
-      end if;
-      return To_String (Out_Text);
-   exception
-      when Failed | Constraint_Error =>
-         return "";
+         return To_String (Out_Text);
+      end;
    end Lines_Of_JSON;
 
    procedure Hold

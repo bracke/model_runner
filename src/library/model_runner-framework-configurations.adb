@@ -1440,7 +1440,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 49) of access constant String :=
+   Known_Settings : constant array (1 .. 51) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.child_retries"),
@@ -1477,6 +1477,8 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.verification.escalation"),
       new String'("scalar.verification.requirements"),
       new String'("scalar.verification.toolchain"),
+      new String'("scalar.work.backend"),
+      new String'("scalar.work.integrate"),
       new String'("scalar.work.isolation"),
       new String'("scalar.work.lease"),
       new String'("scalar.work.max_workspaces"),
@@ -1521,6 +1523,10 @@ package body Model_Runner.Framework.Configurations is
          return "3600 seconds";
       elsif Name = "scalar.work.isolation" then
          return "project: agents work in the project itself";
+      elsif Name = "scalar.work.integrate" then
+         return "manual: work apart waits for a person to take it in";
+      elsif Name = "scalar.work.backend" then
+         return "worktree: a workspace is a git worktree, where the project is one";
       elsif Name = "scalar.execution.timeout" then
          return "600 seconds";
       elsif Name = "scalar.execution.output_limit" then
@@ -1969,6 +1975,10 @@ package body Model_Runner.Framework.Configurations is
          return "scalar.repository.state_policy is portable, local or all";
       elsif not Among ("scalar.work.isolation", "project, workspace") then
          return "scalar.work.isolation is project or workspace";
+      elsif not Among ("scalar.work.integrate", "manual, automatic") then
+         return "scalar.work.integrate is manual or automatic";
+      elsif not Among ("scalar.work.backend", "worktree, copy") then
+         return "scalar.work.backend is worktree or copy";
       end if;
 
       --  What the harness reads as one of some words is one of them: any
@@ -2328,6 +2338,11 @@ package body Model_Runner.Framework.Configurations is
          return "whether the tools a check ran are only recorded or must match: recorded or strict";
       elsif Name = "scalar.work.isolation" then
          return "where agents write: project, the project itself, or workspace, one apart per task";
+      elsif Name = "scalar.work.integrate" then
+         return "how work written apart is taken in: manual, by a person, or automatic, once its checks"
+           & " pass in its workspace";
+      elsif Name = "scalar.work.backend" then
+         return "what a workspace is: worktree, a git worktree, or copy, a copy of the files";
       elsif Name = "scalar.work.lease" then
          return "how long a task is held for a run: seconds, 1 or more";
       elsif Name = "scalar.work.max_workspaces" then

@@ -207,6 +207,15 @@ package Model_Runner.Tools is
    --    first block taken off; the whole reply when it called nothing.
    function Spoken_Length (Reply : String) return Natural;
 
+   --  A model's JSON with the raw tabs and line breaks inside its strings
+   --  written as the escapes they stand for: JSON allows none raw, and a
+   --  model writing text into a string puts one there easily. What a model
+   --  wrote is put right so, and then read as JSON is -- by jsonlib.
+   --
+   --  @param Text The JSON as written.
+   --  @return It with its strings' raw controls escaped.
+   function Controls_Escaped (Text : String) return String;
+
    --  The span of Reply that is what the model said, taking the call syntax
    --  into account. For the tag and JSON syntaxes the spoken part is the
    --  prose before the first block, so this is Spoken_Length as a span from
