@@ -62,6 +62,15 @@ package Model_Runner.Framework is
        elsif State = "verification" then "waiting in verification"
        else State);
 
+   --  Whether one record's name is later than another's by the number in
+   --  it -- VER-1000000 after VER-999999, which sort the other way -- and,
+   --  the numbers equal, by the name; any name is later than "".
+   --
+   --  @param Name The candidate.
+   --  @param Than The latest so far, or "".
+   --  @return True when Name is later.
+   function Later (Name, Than : String) return Boolean;
+
    --  The lines of a text, empty ones left out: how a field holding a
    --  list keeps it.
    --

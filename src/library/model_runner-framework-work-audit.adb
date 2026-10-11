@@ -65,6 +65,7 @@ function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector 
                Stores.Read (Item, Invocations_Area, Name, Value, Read);
                if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
                  and then Records.Get (Value, "result_contract") = "work_claim"
+                 and then Later (Name, To_String (Found))
                then
                   Found := To_Unbounded_String (Name);
                end if;

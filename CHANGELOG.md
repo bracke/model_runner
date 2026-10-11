@@ -24,6 +24,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **How evidence stands is said with its kind first:** "an earlier attempt's: …", "stale (the files): …", "unusable: …" lead the reason /why, /state and the gates give (Verification.Kind_Said).
+- **Every "latest" is by number:** the last invocation of a task, its last work call and the project's last test run were taken by where their names sorted -- one compared names as text; each is now by the number in it (Framework.Later), as the latest evidence is.
+- **A permission taken away mid-run is tested:** the children case revokes writing while its agent runs, and holds the agent to it at once.
 - **A task's evidence is its attempt's:** evidence recorded the generation of the attempt that took it, and nothing held it to it -- a task run again was let complete on its earlier attempt's checks; it now applies only to that attempt, and a run again on unchanged files is answered from the reuse index without running anything.
 - **A project not wholly read widens the checks, and holds evidence back:** a file that could not be read took its units, uses and tests out of the graph, and a change then seemed to reach less -- narrower checks for less known; it now runs the whole suite and says which file. What could not be read is part of the repository's fingerprint and of the files evidence keeps, and whole-project evidence is not current while any is unread.
 - **A permission taken away reaches the agent running:** a run held what it was given at its start, and a revocation from another terminal reached only the next; each check now also asks what the project allows its work as it stands -- a grant still waits for the next run.

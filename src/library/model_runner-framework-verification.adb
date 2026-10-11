@@ -1361,6 +1361,24 @@ package body Model_Runner.Framework.Verification is
       return Result;
    end Why_Failed;
 
+   ---------------
+   -- Kind_Said --
+   ---------------
+
+   function Kind_Said (Kind : Applicability) return String
+   is (case Kind is
+         when Current               => "current",
+         when Missing               => "missing",
+         when Corrupt               => "unusable",
+         when Stale_Generation      => "an earlier attempt's",
+         when Incomplete_Repository => "over a project not wholly read",
+         when Workspace_Only        => "a workspace's",
+         when Stale_Repository      => "stale (the files)",
+         when Stale_Configuration   => "stale (the configuration)",
+         when Stale_Environment     => "stale (the environment)",
+         when Stale_Toolchain       => "stale (the tools)",
+         when Stale_Authority       => "stale (what it was held to)");
+
    ----------------
    -- Applicable --
    ----------------
@@ -1581,6 +1599,12 @@ package body Model_Runner.Framework.Verification is
             end if;
          end;
       end loop;
+      --  The kind leads the first reason, where /why, /state and the gates
+      --  say it: what sort of not-applying it is before the detail.
+      if not Result.Reasons.Is_Empty then
+         Result.Reasons.Replace_Element
+           (Result.Reasons.First_Index, Kind_Said (Result.Kind) & ": " & Result.Reasons.First_Element);
+      end if;
       return Result;
    end Applicable;
 

@@ -278,6 +278,13 @@ package Model_Runner.Framework.Verification is
       Reasons : Name_Lists.Vector;
    end record;
 
+   --  A kind in words, as it leads the first reason: "stale (the files)",
+   --  "an earlier attempt's", "unusable".
+   --
+   --  @param Kind The kind.
+   --  @return The words.
+   function Kind_Said (Kind : Applicability) return String;
+
    --  How evidence stands: one definition of whether it applies, which
    --  Is_Current, the gates and /why all read.
    --

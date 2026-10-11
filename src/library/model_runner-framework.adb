@@ -75,6 +75,29 @@ package body Model_Runner.Framework is
    -- Lines_Of --
    --------------
 
+   function Later (Name, Than : String) return Boolean is
+      --  The first run of digits in a name, as a number.
+      function Number_In (Text : String) return Natural is
+         Value : Natural := 0;
+         Seen  : Boolean := False;
+      begin
+         for C of Text loop
+            if C in '0' .. '9' then
+               Seen := True;
+               exit when Value > Natural'Last / 10 - 9;
+               Value := Value * 10 + (Character'Pos (C) - Character'Pos ('0'));
+            elsif Seen then
+               exit;
+            end if;
+         end loop;
+         return Value;
+      end Number_In;
+   begin
+      return Than = ""
+        or else Number_In (Name) > Number_In (Than)
+        or else (Number_In (Name) = Number_In (Than) and then Name > Than);
+   end Later;
+
    function Lines_Of (Text : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
       Start  : Natural := Text'First;

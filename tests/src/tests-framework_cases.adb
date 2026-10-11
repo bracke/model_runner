@@ -9878,7 +9878,10 @@ package body Tests.Framework_Cases is
    --  An agent that asks for children through the host, as a plan says.
    type Parent_Plan is
      (Helped, Fails_Twice, Fails_Then_Good, Optional_Fails, Left_Open, Denied,
-      Checks_First, Interrupted, Out_Of_Time, Grandchild_Fails, Child_Unstarted);
+      Checks_First, Interrupted, Out_Of_Time, Grandchild_Fails, Child_Unstarted, Revoked);
+
+   --  The project a Revoked plan takes a permission away in, mid-run.
+   Revoking_In : access S.Store := null;
 
    type Scripted_Parent is new Wk.Parenting_Runner with record
       Plan : Parent_Plan := Helped;
@@ -10202,6 +10205,24 @@ package body Tests.Framework_Cases is
             Status := E.Make (E.Framework_Limit_Exceeded);
             E.Add_Text (Status, "name", "time");
             return;
+         when Revoked =>
+            --  A permission taken away while the work runs -- /reconfigure
+            --  from another terminal -- is gone at once, not at the next run.
+            Assert (Children.May (Pm.Write_Source, "src/hello.adb"),
+                    "a running agent could not write where its task is");
+            declare
+               Changes  : Model_Runner.Framework.Configurations.Value_Maps.Map;
+               Planned  : Model_Runner.Framework.Configurations.Change_Plan;
+               Revision : Natural;
+               Changed  : E.Error_Info;
+            begin
+               Changes.Include ("map.permission.kind.analysis", "none");
+               Model_Runner.Framework.Configurations.Plan_Change (Revoking_In.all, Changes, Planned, Changed);
+               Model_Runner.Framework.Configurations.Reconfigure (Revoking_In.all, Planned, Revision, Changed);
+               Assert (E.Is_Ok (Changed), "the permission was not taken away: " & Code_Of (Changed));
+            end;
+            Assert (not Children.May (Pm.Write_Source, "src/hello.adb"),
+                    "a permission taken away while the agent ran was still its");
          when Child_Unstarted =>
             --  A helper that cannot be started is not left the one working:
             --  its parent goes on as itself, and nothing is held up by it.
@@ -11065,6 +11086,10 @@ package body Tests.Framework_Cases is
               and then Contains (To_String (Done.Reason), "budget"),
               "a root past its token budget went on: " & To_String (Done.Final_State) & " "
               & To_String (Done.Reason));
+      --  Last: what it takes away stays taken.
+      Revoking_In := Store'Unchecked_Access;
+      Work (Revoked);
+      Revoking_In := null;
       S.Close (Store);
    end Children_Work_Within_Their_Parent;
 
@@ -11116,7 +11141,18 @@ package body Tests.Framework_Cases is
               "the task was not run again: " & Code_Of (Status));
       Assert (Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Stale_Generation,
               "an earlier attempt's evidence applied to a later one");
+      --  Said with its kind first, where /why and the gates show it.
+      Assert (Ada.Strings.Fixed.Index
+                (Vf.Applicable (Store, To_String (Evidence)).Reasons.First_Element, "an earlier attempt's: ") = 1,
+              "the kind did not lead the reason: "
+              & Vf.Applicable (Store, To_String (Evidence)).Reasons.First_Element);
 
+      --  Later by number, then by name; anything later than nothing.
+      Assert (Model_Runner.Framework.Later ("VER-1000000", "VER-999999")
+              and then not Model_Runner.Framework.Later ("VER-999999", "VER-1000000")
+              and then Model_Runner.Framework.Later ("INV-000002", "INV-000001")
+              and then Model_Runner.Framework.Later ("INV-000001", ""),
+              "a record's name was taken as later by where it sorts, not its number");
       --  The latest by number: a record numbered past six digits is later.
       declare
          Held : R.Item;

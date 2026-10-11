@@ -827,9 +827,10 @@ package body Model_Runner.Framework.Invocations is
                Read  : E.Error_Info;
             begin
                Stores.Read (Item, Invocations_Area, Name, Value, Read);
-               --  Identifiers are numbered in order, a fixed width.
+               --  Identifiers are numbered in order: the latest by its number,
+               --  which a fixed width outgrows.
                if E.Is_Ok (Read) and then Records.Get (Value, "task") = Task_Id
-                 and then Name > Ada.Strings.Unbounded.To_String (Found)
+                 and then Later (Name, Ada.Strings.Unbounded.To_String (Found))
                then
                   Found := Ada.Strings.Unbounded.To_Unbounded_String (Name);
                end if;

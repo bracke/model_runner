@@ -321,6 +321,7 @@ begin
               and then R.Get (Config, "scalar.profile_capability." & R.Get (Held, "profile"))
                        = "run_tests"
               and then R.Get (Held, "workspace") = ""
+              and then Model_Runner.Framework.Later (Name, To_String (Latest))
             then
                Latest := To_Unbounded_String (Name);
                Result := To_Unbounded_String
