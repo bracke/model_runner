@@ -14,8 +14,8 @@ with Hostkit.Metadata;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
-with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
@@ -119,58 +119,6 @@ package body Model_Runner.Framework.Workspaces is
       Files.Read_Text (Path, Text, Status);
       return (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else "?");
    end Print_Of;
-
-   --  Run git in a directory, and what it wrote.
-   function Git
-     (Directory : String;
-      Words     : Name_Lists.Vector;
-      Output    : String;
-      Worked    : out Boolean) return String
-   is
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Status    : E.Error_Info;
-   begin
-      --  The project a workspace's git is run for keeps the log: the one
-      --  whose state the directory is in, or the directory itself.
-      Execution.Run_Harness
-        ((if Ada.Strings.Fixed.Index (Directory, "/" & State_Directory & "/") > 0
-          then Directory (Directory'First
-                          .. Ada.Strings.Fixed.Index (Directory, "/" & State_Directory & "/") - 1)
-          else Directory),
-         "git", Words, Directory, Output, 120, Happened);
-      Worked := Happened.Started and then not Happened.Timed_Out
-        and then Happened.Exit_Status = 0;
-      if Dirs.Exists (Output) then
-         Files.Read_Text (Output, Text, Status);
-         Files.Discard (Output);
-      end if;
-      --  Its first line, which is all a command asked of here says.
-      declare
-         Lines : constant Name_Lists.Vector := Lines_Of (To_String (Text));
-      begin
-         return (if Lines.Is_Empty then "" else Trim (Lines.First_Element));
-      end;
-   end Git;
-
-   --  A command's words, the empty ones left out.
-   function Words (A, B, C, D, F : String := "") return Name_Lists.Vector is
-      Result : Name_Lists.Vector;
-
-      procedure Add (Word : String) is
-      begin
-         if Word /= "" then
-            Result.Append (Word);
-         end if;
-      end Add;
-   begin
-      Add (A);
-      Add (B);
-      Add (C);
-      Add (D);
-      Add (F);
-      return Result;
-   end Words;
 
    procedure Failed (Detail : String; Status : out E.Error_Info) is
    begin
@@ -295,7 +243,6 @@ package body Model_Runner.Framework.Workspaces is
          Home  : constant String :=
            Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"), Id);
          Tree  : constant String := Hostkit.Fs.Join (Home, "tree");
-         Scratch : constant String := Hostkit.Fs.Join (Home, "git-output");
       begin
          Result.Id := To_Unbounded_String (Id);
          Result.Path := To_Unbounded_String (Tree);
@@ -311,73 +258,60 @@ package body Model_Runner.Framework.Workspaces is
 
          if Prefer_Git and then Dirs.Exists (Hostkit.Fs.Join (Project, ".git")) then
             declare
-               Head : constant String :=
-                 Git (Project, Words ("rev-parse", "HEAD"), Scratch, Worked);
+               Head : Unbounded_String;
             begin
+               Git.Add_Worktree (Project, Dirs.Full_Name (Tree), Head, Worked);
                if Worked then
-                  declare
-                     Ignored : constant String :=
-                       Git (Project, Words ("worktree", "add", "--detach", Dirs.Full_Name (Tree), Head),
-                            Scratch, Worked);
-                     pragma Unreferenced (Ignored);
-                  begin
-                     if Worked then
-                        Result.Kind := Git_Worktree;
-                        Result.Base := To_Unbounded_String (Head);
+                  Result.Kind := Git_Worktree;
+                  Result.Base := Head;
 
-                        --  The project as it is, not as it was committed:
-                        --  what is modified or new is copied over, and what
-                        --  is gone is gone there too, so the work starts
-                        --  from -- and is compared with -- what is here.
-                        declare
-                           Here, There  : Maps.Map;
-                           Unread_Here  : Name_Lists.Vector;
-                           Unread_There : Name_Lists.Vector;
-                           Not_Read     : exception;
-                        begin
-                           Snapshot (Project, Repository.Roots_Of (Item), Here, Unread_Here);
-                           Snapshot (Tree, Repository.Roots_Of (Item), There, Unread_There);
-                           --  Not brought up to date from what cannot be
-                           --  read: copied whole instead, which refuses it.
-                           if not Unread_Here.Is_Empty or else not Unread_There.Is_Empty then
-                              raise Not_Read;
-                           end if;
-                           for Position in Here.Iterate loop
-                              if not There.Contains (Maps.Key (Position))
-                                or else There (Maps.Key (Position)) /= Maps.Element (Position)
-                              then
-                                 declare
-                                    Target : constant String :=
-                                      Hostkit.Fs.Join (Tree, Maps.Key (Position));
-                                 begin
-                                    if Files.Make_Directory (Dirs.Containing_Directory (Target)) then
-                                       Dirs.Copy_File
-                                         (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
-                                    end if;
-                                 end;
-                              end if;
-                           end loop;
-                           for Position in There.Iterate loop
-                              if not Here.Contains (Maps.Key (Position)) then
-                                 Files.Discard (Hostkit.Fs.Join (Tree, Maps.Key (Position)));
-                              end if;
-                           end loop;
-                        exception
-                           when others =>
-                              --  Copied instead, whole, as without Git.
-                              declare
-                                 Gone : constant String :=
-                                   Git (Project, Words ("worktree", "remove", "--force", Dirs.Full_Name (Tree)),
-                                        Scratch, Worked);
-                                 pragma Unreferenced (Gone);
-                              begin
-                                 if Dirs.Exists (Tree) then
-                                    Files.Discard_Tree (Tree);
-                                 end if;
-                                 Worked := False;
-                              end;
-                        end;
+                  --  The project as it is, not as it was committed:
+                  --  what is modified or new is copied over, and what
+                  --  is gone is gone there too, so the work starts
+                  --  from -- and is compared with -- what is here.
+                  declare
+                     Here, There  : Maps.Map;
+                     Unread_Here  : Name_Lists.Vector;
+                     Unread_There : Name_Lists.Vector;
+                     Not_Read     : exception;
+                  begin
+                     Snapshot (Project, Repository.Roots_Of (Item), Here, Unread_Here);
+                     Snapshot (Tree, Repository.Roots_Of (Item), There, Unread_There);
+                     --  Not brought up to date from what cannot be
+                     --  read: copied whole instead, which refuses it.
+                     if not Unread_Here.Is_Empty or else not Unread_There.Is_Empty then
+                        raise Not_Read;
                      end if;
+                     for Position in Here.Iterate loop
+                        if not There.Contains (Maps.Key (Position))
+                          or else There (Maps.Key (Position)) /= Maps.Element (Position)
+                        then
+                           declare
+                              Target : constant String :=
+                                Hostkit.Fs.Join (Tree, Maps.Key (Position));
+                           begin
+                              if Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+                                 Dirs.Copy_File
+                                   (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+                     for Position in There.Iterate loop
+                        if not Here.Contains (Maps.Key (Position)) then
+                           Files.Discard (Hostkit.Fs.Join (Tree, Maps.Key (Position)));
+                        end if;
+                     end loop;
+                  exception
+                     when others =>
+                        --  Copied instead, whole, as without Git.
+                        begin
+                           Git.Remove_Worktree (Project, Dirs.Full_Name (Tree), Worked);
+                           if Dirs.Exists (Tree) then
+                              Files.Discard_Tree (Tree);
+                           end if;
+                           Worked := False;
+                        end;
                   end;
                end if;
             end;
@@ -1005,15 +939,7 @@ package body Model_Runner.Framework.Workspaces is
       if Held.Kind = Git_Worktree
         and then Dirs.Exists (Hostkit.Fs.Join (To_String (Held.Path), ".git"))
       then
-         declare
-            Ignored : constant String :=
-              Git (Project_Of (Item),
-                   Words ("worktree", "remove", "--force", Dirs.Full_Name (To_String (Held.Path))),
-                   Hostkit.Fs.Join (Home, "git-output"), Worked);
-            pragma Unreferenced (Ignored);
-         begin
-            null;
-         end;
+         Git.Remove_Worktree (Project_Of (Item), Dirs.Full_Name (To_String (Held.Path)), Worked);
       end if;
       if Dirs.Exists (Home) then
          Files.Remove_Tree (Home, Status);
@@ -1022,15 +948,7 @@ package body Model_Runner.Framework.Workspaces is
       --  A worktree whose tree went some other way is still registered:
       --  git is told it is gone, so git worktree list does not keep it.
       if Held.Kind = Git_Worktree then
-         declare
-            Said    : constant String :=
-              Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "git-prune-output");
-            Ignored : constant String :=
-              Git (Project_Of (Item), Words ("worktree", "prune"), Said, Worked);
-            pragma Unreferenced (Ignored);
-         begin
-            Files.Discard (Said);
-         end;
+         Git.Prune_Worktrees (Project_Of (Item));
       end if;
    exception
       when Failure : others =>
@@ -1401,29 +1319,12 @@ package body Model_Runner.Framework.Workspaces is
                      Base    : constant String := Hostkit.Fs.Join (Base_Tree (Held), Path);
                      Theirs  : constant String := Hostkit.Fs.Join (Project_Of (Item), Path);
                      Ours    : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
-                     Args    : Name_Lists.Vector;
                      Worked  : Boolean;
                   begin
                      if Dirs.Exists (Base) and then Dirs.Exists (Theirs) and then Dirs.Exists (Ours) then
                         Dirs.Create_Path (Dirs.Containing_Directory (Merged));
                         Dirs.Copy_File (Ours, Merged);
-                        Args.Append ("merge-file");
-                        Args.Append ("-L");
-                        Args.Append ("workspace");
-                        Args.Append ("-L");
-                        Args.Append ("base");
-                        Args.Append ("-L");
-                        Args.Append ("project");
-                        Args.Append (Merged);
-                        Args.Append (Base);
-                        Args.Append (Theirs);
-                        declare
-                           Ignored_Said : constant String :=
-                             Git (Project_Of (Item), Args, Hostkit.Fs.Join (Home, "merge-output"), Worked);
-                           pragma Unreferenced (Ignored_Said);
-                        begin
-                           null;
-                        end;
+                        Git.Merge_File (Merged, Base, Theirs, "workspace", "base", "project", Worked);
                      end if;
                   exception
                      when others =>

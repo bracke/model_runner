@@ -4,6 +4,7 @@ with Ada.Interrupts.Names;
 with Ada.Real_Time.Timing_Events;
 
 with Hostkit.Descriptors;
+with Hostkit.Signals;
 with Hostkit.Terminal_Control;
 
 with Model_Runner.Text;
@@ -178,6 +179,45 @@ package body Model_Runner.Platform.Signals is
 
    end Handler;
 
+   --  SIGINT left reserved to the runtime: a stand-alone library linked in
+   --  -- sshlib, through versionlib -- initialises the tasking runtime from
+   --  its own constructor before this program's pragma
+   --  Unreserve_All_Interrupts is set, and the runtime then refuses to let
+   --  any handler be attached. Reserved, SIGINT is kept unmasked in every
+   --  thread, so the host's own handler -- Hostkit.Signals records the
+   --  arrival -- is sure to see it, and this task hands each arrival to the
+   --  same Handler.Interrupt.
+   Recording : Boolean := False
+     with Atomic;
+
+   task Interrupt_Watch is
+      entry Start;
+   end Interrupt_Watch;
+
+   task body Interrupt_Watch is
+   begin
+      loop
+         select
+            accept Start;
+         or
+            terminate;
+         end select;
+         while Recording loop
+            if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Interrupt) then
+               Hostkit.Signals.Clear (Hostkit.Signals.Signal_Interrupt);
+               Handler.Interrupt;
+            end if;
+            --  Started again while it still watches -- removed and installed
+            --  within one look -- it watches on.
+            select
+               accept Start;
+            or
+               delay 0.05;
+            end select;
+         end loop;
+      end loop;
+   end Interrupt_Watch;
+
    Attached : Boolean := False;
    Last_Failure : Model_Runner.Text.Bounded;
 
@@ -202,8 +242,18 @@ package body Model_Runner.Platform.Signals is
       --  what it started is stopped, and nothing is left holding the
       --  project.
       if not Attached then
-         Ada.Interrupts.Attach_Handler
-           (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
+         if not Ada.Interrupts.Is_Reserved (Ada.Interrupts.Names.SIGINT) then
+            Ada.Interrupts.Attach_Handler
+              (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
+         elsif Hostkit.Signals.Set_Disposition
+                 (Hostkit.Signals.Signal_Interrupt, Hostkit.Signals.Disposition_Record)
+         then
+            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Interrupt);
+            Recording := True;
+            Interrupt_Watch.Start;
+         else
+            raise Program_Error with "interrupt 2 is reserved, and the host would not record it";
+         end if;
          Ada.Interrupts.Attach_Handler
            (Handler.Ending'Access, Ada.Interrupts.Names.SIGTERM);
          Ada.Interrupts.Attach_Handler
@@ -220,7 +270,9 @@ package body Model_Runner.Platform.Signals is
          Installed := False;
          Last_Failure :=
            Model_Runner.Text.To_Bounded
-             (Ada.Exceptions.Exception_Name (Occurrence));
+             (Ada.Exceptions.Exception_Name (Occurrence)
+              & (if Ada.Exceptions.Exception_Message (Occurrence) = "" then ""
+                 else ": " & Ada.Exceptions.Exception_Message (Occurrence)));
    end Install;
 
    ------------
@@ -228,11 +280,18 @@ package body Model_Runner.Platform.Signals is
    ------------
 
    procedure Remove is
+      Ignored : Boolean;
    begin
       Handler.Bind (null);
 
       if Attached then
-         Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGINT);
+         if Recording then
+            Recording := False;
+            Ignored := Hostkit.Signals.Set_Disposition
+              (Hostkit.Signals.Signal_Interrupt, Hostkit.Signals.Disposition_Default);
+         else
+            Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGINT);
+         end if;
          Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGTERM);
          Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGHUP);
          Attached := False;

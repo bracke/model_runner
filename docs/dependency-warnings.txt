@@ -33,6 +33,9 @@ truststores 0
 hostkit 0
 zlib 0
 jpeglib 0
+jsonlib 0
+versionlib 19
+ssh_lib 0
 awklib 0
 regexp 0
 project_tools 0

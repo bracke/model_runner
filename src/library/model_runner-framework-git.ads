@@ -13,8 +13,9 @@ with Model_Runner.Framework.Stores;
 --  it. The policy is kept as the state root's own .gitignore, written by
 --  the harness and never by hand.
 --
---  Git's own view of the project is asked of Git directly and read, never
---  guessed: the branch, and each path as Git sees it.
+--  Git's own view of the project is read from the repository, never
+--  guessed: the branch, and each path as Git sees it -- by versionlib, in
+--  the process, so no git program is needed.
 package Model_Runner.Framework.Git is
 
    --  Make the state root's .gitignore say what the policy says.
@@ -44,20 +45,19 @@ package Model_Runner.Framework.Git is
    --  Ask Git how the project stands.
    --
    --  @param Project_Directory The project.
-   --  @return What it said; Found is False where there is no repository or
-   --    no git.
+   --  @return What it said; Found is False where there is no repository, or
+   --    none versionlib can read.
    function Status_Of (Project_Directory : String) return Status_Report;
 
    --  The root of the repository a directory is in, as Git finds it.
    --
    --  @param Directory The directory asked about.
-   --  @return The repository's top directory; "" where Git finds none, or
-   --    there is no git.
+   --  @return The repository's top directory; "" where there is none.
    function Top_Level (Directory : String) return String;
 
    --  Where the repository's history says a file went: the path a commit
    --  renamed it to, followed through later renames, as the project names
-   --  paths; "" where no commit renamed it, or there is no git.
+   --  paths; "" where no commit renamed it, or there is no repository.
    --
    --  @param Project_Directory The project.
    --  @param Path The file's path, as the project names it.
@@ -69,16 +69,57 @@ package Model_Runner.Framework.Git is
    --  @param Project_Directory The project.
    --  @param Path The file, as the project names it.
    --  @return The commit's time; "" where no commit holds it, or there is no
-   --    git.
+   --    repository.
    function Last_Commit_At (Project_Directory, Path : String) return String;
 
    --  What some files hold beyond the last commit, as git diff shows it.
    --
    --  @param Project_Directory The project.
    --  @param Paths The files, as the project names them.
-   --  @param Found False where there is no repository or no git.
+   --  @param Found False where there is no repository, or no commit.
    --  @return The diff; "" where they are as committed.
    function Uncommitted_Diff
      (Project_Directory : String; Paths : Name_Lists.Vector; Found : out Boolean) return String;
+
+   --  Make a directory a worktree of the project's repository, detached at
+   --  its last commit, as git worktree add --detach makes one.
+   --
+   --  @param Project_Directory The project, at its repository's top.
+   --  @param Tree Where the worktree goes: a full path, not there yet.
+   --  @param Head The commit it was made at.
+   --  @param Worked False where there is no repository, no commit, or it
+   --    could not be made.
+   procedure Add_Worktree
+     (Project_Directory, Tree : String;
+      Head                    : out Ada.Strings.Unbounded.Unbounded_String;
+      Worked                  : out Boolean);
+
+   --  Take a worktree away, its changes with it, and its registration.
+   --
+   --  @param Project_Directory The project.
+   --  @param Tree The worktree, a full path.
+   --  @param Worked False where it could not be taken away.
+   procedure Remove_Worktree (Project_Directory, Tree : String; Worked : out Boolean);
+
+   --  Forget the worktrees whose directory went some other way, as git
+   --  worktree prune does.
+   --
+   --  @param Project_Directory The project.
+   procedure Prune_Worktrees (Project_Directory : String);
+
+   --  Merge in place three versions of a file -- Merged holds one side
+   --  and is rewritten -- the conflicts marked, as git merge-file does.
+   --
+   --  @param Merged The first side, and where the merge is written.
+   --  @param Base What both sides came from.
+   --  @param Theirs The other side.
+   --  @param Ours_Label The label of Merged's side at a conflict.
+   --  @param Base_Label The label of the base.
+   --  @param Theirs_Label The label of the other side.
+   --  @param Worked False where a file could not be read or written.
+   procedure Merge_File
+     (Merged, Base, Theirs                  : String;
+      Ours_Label, Base_Label, Theirs_Label  : String;
+      Worked                                : out Boolean);
 
 end Model_Runner.Framework.Git;

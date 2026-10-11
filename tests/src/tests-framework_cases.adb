@@ -10508,6 +10508,124 @@ package body Tests.Framework_Cases is
                        and then Said.Changes.Contains ("?? new.txt"),
                        "Git's own view of the project was not read");
             end;
+
+            --  What versionlib reads of a history git wrote: a rename
+            --  committed and one only staged, followed to the file's name
+            --  now; the last commit to a file; what differs from it; the
+            --  top seen from a project further down.
+            declare
+               package Gt renames Model_Runner.Framework.Git;
+
+               procedure Run_Git (A, B, C, D : String := "") is
+                  Words : Hostkit.String_Vectors.Vector;
+                  Code  : Integer;
+
+                  procedure Add (Word : String) is
+                  begin
+                     if Word /= "" then
+                        Words.Append (To_Unbounded_String (Word));
+                     end if;
+                  end Add;
+               begin
+                  Add ("-C");
+                  Add (Root);
+                  Add ("-c");
+                  Add ("user.name=T");
+                  Add ("-c");
+                  Add ("user.email=t@e");
+                  Add (A);
+                  Add (B);
+                  Add (C);
+                  Add (D);
+                  if not Hostkit.Process.Run (Hostkit.Process.Locate ("git"), Words, Code) then
+                     Code := -1;
+                  end if;
+                  Assert (Code = 0, "git " & A & " " & B & " failed");
+               end Run_Git;
+
+               Found : Boolean;
+            begin
+               Dirs.Create_Path (Root & "/sub");
+               Put_File (Root & "/sub/old.adb", "one" & LF & "two" & LF);
+               Run_Git ("add", "sub/old.adb");
+               Run_Git ("commit", "-q", "-m", "first");
+               Run_Git ("mv", "sub/old.adb", "sub/mid.adb");
+               Run_Git ("commit", "-q", "-m", "renamed");
+               Assert (Gt.Renamed_In_History (Root, "sub/old.adb") = "sub/mid.adb",
+                       "a committed rename was not followed: " & Gt.Renamed_In_History (Root, "sub/old.adb"));
+               Assert (Gt.Renamed_In_History (Root & "/sub", "old.adb") = "mid.adb",
+                       "a rename was not said from the project further down: "
+                       & Gt.Renamed_In_History (Root & "/sub", "old.adb"));
+               Assert (Gt.Last_Commit_At (Root, "sub/mid.adb")'Length = 20
+                       and then Gt.Last_Commit_At (Root & "/sub", "mid.adb") = Gt.Last_Commit_At (Root, "sub/mid.adb")
+                       and then Gt.Last_Commit_At (Root, "sub/none.adb") = "",
+                       "a file's last commit was not read: " & Gt.Last_Commit_At (Root, "sub/mid.adb"));
+               Put_File (Root & "/sub/mid.adb", "one" & LF & "three" & LF);
+               declare
+                  Paths : Model_Runner.Framework.Name_Lists.Vector;
+                  Diff  : Unbounded_String;
+               begin
+                  Paths.Append ("mid.adb");
+                  Diff := To_Unbounded_String (Gt.Uncommitted_Diff (Root & "/sub", Paths, Found));
+                  Assert (Found and then Ada.Strings.Unbounded.Index (Diff, "-two") > 0
+                          and then Ada.Strings.Unbounded.Index (Diff, "+three") > 0
+                          and then Ada.Strings.Unbounded.Index (Diff, "a/mid.adb") > 0,
+                          "what differs from the last commit was not read: " & To_String (Diff));
+               end;
+               Run_Git ("add", "sub/mid.adb");
+               Run_Git ("mv", "sub/mid.adb", "sub/new.adb");
+               Assert (Gt.Renamed_In_History (Root, "sub/old.adb") = "sub/new.adb",
+                       "a staged rename was not followed: " & Gt.Renamed_In_History (Root, "sub/old.adb"));
+               Assert (Gt.Top_Level (Root & "/sub") = Root,
+                       "the repository's top was not found from below: " & Gt.Top_Level (Root & "/sub"));
+               Assert (Gt.Top_Level (Dirs.Containing_Directory (Root)) = ""
+                       or else Gt.Top_Level (Dirs.Containing_Directory (Root)) /= Root,
+                       "a directory above the repository was found in it");
+
+               --  A worktree made and taken away as git would, git reading
+               --  it in between; one gone some other way pruned.
+               Run_Git ("commit", "-q", "-m", "moved on");
+               declare
+                  Tree   : constant String := Root & "-tree";
+                  Other  : constant String := Root & "-other";
+                  Head   : Unbounded_String;
+                  Worked : Boolean;
+               begin
+                  Gt.Add_Worktree (Root, Tree, Head, Worked);
+                  Assert (Worked and then Length (Head) = 40
+                          and then Dirs.Exists (Tree & "/sub/new.adb")
+                          and then Gt.Status_Of (Tree).Found
+                          and then Gt.Status_Of (Tree).Changes.Is_Empty,
+                          "a worktree was not made at the last commit");
+                  Gt.Remove_Worktree (Root, Tree, Worked);
+                  Assert (Worked and then not Dirs.Exists (Tree), "a worktree was not taken away");
+                  Gt.Add_Worktree (Root, Other, Head, Worked);
+                  Dirs.Delete_Tree (Other);
+                  Gt.Prune_Worktrees (Root);
+                  Gt.Add_Worktree (Root, Other, Head, Worked);
+                  Assert (Worked, "a worktree gone some other way was not pruned: its place stayed taken");
+                  Gt.Remove_Worktree (Root, Other, Worked);
+               end;
+
+               --  Three versions of a file merged as git merge-file merges
+               --  them: the conflict marked with the names given.
+               Put_File (Root & "-base", "a" & LF & "b" & LF & "c" & LF);
+               Put_File (Root & "-ours", "a" & LF & "ours" & LF & "c" & LF);
+               Put_File (Root & "-theirs", "a" & LF & "theirs" & LF & "c" & LF);
+               declare
+                  Worked : Boolean;
+                  Merged : Unbounded_String;
+               begin
+                  Gt.Merge_File (Root & "-ours", Root & "-base", Root & "-theirs",
+                                 "workspace", "base", "project", Worked);
+                  Merged := To_Unbounded_String (Read_Whole (Root & "-ours"));
+                  Assert (Worked
+                          and then To_String (Merged)
+                            = "a" & LF & "<<<<<<< workspace" & LF & "ours" & LF & "=======" & LF
+                              & "theirs" & LF & ">>>>>>> project" & LF & "c" & LF,
+                          "three versions were not merged as git merges them: " & To_String (Merged));
+               end;
+            end;
          end if;
       end;
       S.Close (Store);

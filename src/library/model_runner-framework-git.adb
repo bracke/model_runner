@@ -2,11 +2,22 @@ with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 
-with Hostkit;
 with Hostkit.Fs;
 
+with Version.Diff;
+with Version.Files;
+with Version.History;
+with Version.Log;
+with Version.Merge;
+with Version.Objects;
+with Version.Pack;
+with Version.Pathspec;
+with Version.Refs;
+with Version.Repository;
+with Version.Status;
+with Version.Worktrees;
+
 with Model_Runner.Framework.Configurations;
-with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 
@@ -71,68 +82,109 @@ package body Model_Runner.Framework.Git is
       end if;
    end Keep_Policy;
 
+   --  versionlib, one call at a time -- its caches are the process's --
+   --  each as if the process stood in the directory asked about, which it
+   --  never moves: other tasks keep theirs.
+   protected Gate is
+      entry Seize;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Gate;
+
+   protected body Gate is
+      entry Seize when not Held is
+      begin
+         Held := True;
+      end Seize;
+
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Gate;
+
+   --  Action run from Directory; Worked is False where it raised -- no
+   --  repository there, or one versionlib could not read.
+   procedure Within
+     (Directory : String;
+      Action    : not null access procedure;
+      Worked    : out Boolean) is
+   begin
+      Gate.Seize;
+      begin
+         Standard.Version.Files.In_Directory (Directory, Action);
+         Worked := True;
+      exception
+         when others =>
+            Worked := False;
+      end;
+      --  The pack files read, let go: the session runs on for hours.
+      Standard.Version.Pack.Release_Cached_Files;
+      Gate.Release;
+   end Within;
+
+   --  Each pathspec of Paths, read from where the project stands in the
+   --  repository.
+   function Specs_Of (Paths : Name_Lists.Vector; Prefix : String)
+     return Standard.Version.Pathspec.Pathspec_Vectors.Vector
+   is
+      Result : Standard.Version.Pathspec.Pathspec_Vectors.Vector;
+   begin
+      for Path of Paths loop
+         Standard.Version.Pathspec.Append_Parse (Result, Path, Prefix);
+      end loop;
+      return Result;
+   end Specs_Of;
+
+   --  A path the repository names, as the project names it.
+   function Within_Project (Path, Prefix : String) return String
+   is (if Prefix /= "" and then Path'Length > Prefix'Length
+         and then Path (Path'First .. Path'First + Prefix'Length - 1) = Prefix
+       then Path (Path'First + Prefix'Length .. Path'Last) else Path);
+
    ---------------
    -- Status_Of --
    ---------------
 
    function Status_Of (Project_Directory : String) return Status_Report is
-      Result    : Status_Report;
-      Arguments : Name_Lists.Vector;
-      --  Outside the project, or Git would see the file it writes to.
-      Output    : constant String :=
-        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
-                         "model_runner-git-status-" & Fingerprint (Project_Directory) & ".txt");
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Read      : E.Error_Info;
-   begin
-      Arguments.Append ("status");
-      Arguments.Append ("--porcelain=v1");
-      Arguments.Append ("--branch");
-      --  Each new file, not the new directory it is in: a task's file
-      --  there is known as its.
-      Arguments.Append ("--untracked-files=all");
-      --  What is in the project only, where it is part of a larger
-      --  repository: the rest is no task's work.
-      Arguments.Append ("--");
-      Arguments.Append (".");
-      Execution.Run_Harness
-        (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
-      if Ada.Directories.Exists (Output) then
-         Files.Read_Text (Output, Text, Read);
-         Files.Discard (Output);
-      end if;
-      Result.Found := Happened.Started and then not Happened.Timed_Out
-        and then Happened.Exit_Status = 0;
-      if not Result.Found then
-         return Result;
-      end if;
-      declare
-         --  Git names a path from the repository's top: within a project
-         --  further down, from the project's, as everything else does.
-         Top    : constant String := Top_Level (Project_Directory);
-         Here   : constant String := Ada.Directories.Full_Name (Project_Directory);
-         Prefix : constant String :=
-           (if Top /= "" and then Here'Length > Top'Length + 1
-              and then Here (Here'First .. Here'First + Top'Length - 1) = Top
-            then Here (Here'First + Top'Length + 1 .. Here'Last) & "/" else "");
+      Result : Status_Report;
+
+      procedure Ask is
+         Repo   : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
+         Prefix : constant String := Standard.Version.Repository.Prefix (Repo);
+         Only   : Name_Lists.Vector;
       begin
-         for Line of Lines_Of (To_String (Text)) loop
-            if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
-               Result.Branch := To_Unbounded_String (Line (Line'First + 3 .. Line'Last));
-            elsif Line'Length > 3 then
-               declare
-                  Path : constant String := Line (Line'First + 3 .. Line'Last);
-               begin
+         --  What is in the project only, where it is part of a larger
+         --  repository: the rest is no task's work. Each new file, not the
+         --  new directory it is in: a task's file there is known as its.
+         Only.Append (".");
+         declare
+            Seen : constant Standard.Version.Status.Status_Result :=
+              Standard.Version.Status.Current_Status (Specs_Of (Only, Prefix), All_Untracked => True);
+         begin
+            for Line of Lines_Of (Standard.Version.Status.Branch_Status_Text (Seen)) loop
+               if Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "## " then
+                  Result.Branch := To_Unbounded_String (Line (Line'First + 3 .. Line'Last));
+                  exit;
+               end if;
+            end loop;
+            --  Git names a path from the repository's top: within a project
+            --  further down, from the project's, as everything else does.
+            for Line of Lines_Of (Standard.Version.Status.Porcelain_Status_Text (Seen)) loop
+               if Line'Length > 3 then
                   Result.Changes.Append
-                    (if Prefix /= "" and then Path'Length > Prefix'Length
-                       and then Path (Path'First .. Path'First + Prefix'Length - 1) = Prefix
-                     then Line (Line'First .. Line'First + 2) & Path (Path'First + Prefix'Length .. Path'Last)
-                     else Line);
-               end;
-            end if;
-         end loop;
-      end;
+                    (Line (Line'First .. Line'First + 2)
+                     & Within_Project (Line (Line'First + 3 .. Line'Last), Prefix));
+               end if;
+            end loop;
+         end;
+      end Ask;
+   begin
+      Within (Project_Directory, Ask'Access, Result.Found);
+      if not Result.Found then
+         Result := (others => <>);
+      end if;
       return Result;
    end Status_Of;
 
@@ -141,30 +193,16 @@ package body Model_Runner.Framework.Git is
    ---------------
 
    function Top_Level (Directory : String) return String is
-      Arguments : Name_Lists.Vector;
-      Output    : constant String :=
-        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
-                         "model_runner-git-top-" & Fingerprint (Directory) & ".txt");
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Read      : E.Error_Info;
+      Top    : Unbounded_String;
+      Worked : Boolean;
+
+      procedure Ask is
+      begin
+         Top := To_Unbounded_String (Standard.Version.Repository.Root_Path (Standard.Version.Repository.Open));
+      end Ask;
    begin
-      Arguments.Append ("rev-parse");
-      Arguments.Append ("--show-toplevel");
-      Execution.Run_Harness (Directory, "git", Arguments, Directory, Output, 60, Happened);
-      if Ada.Directories.Exists (Output) then
-         Files.Read_Text (Output, Text, Read);
-         Files.Discard (Output);
-      end if;
-      if not (Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0) then
-         return "";
-      end if;
-      for Line of Lines_Of (To_String (Text)) loop
-         if Line /= "" then
-            return Line;
-         end if;
-      end loop;
-      return "";
+      Within (Directory, Ask'Access, Worked);
+      return (if Worked then To_String (Top) else "");
    end Top_Level;
 
    ------------------------
@@ -172,102 +210,72 @@ package body Model_Runner.Framework.Git is
    ------------------------
 
    function Renamed_In_History (Project_Directory, Path : String) return String is
-      Arguments : Name_Lists.Vector;
-      Output    : constant String :=
-        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
-                         "model_runner-git-renames-" & Fingerprint (Project_Directory) & ".txt");
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Read      : E.Error_Info;
-      Top       : constant String := Top_Level (Project_Directory);
-      Here      : constant String := Ada.Directories.Full_Name (Project_Directory);
-      Prefix    : constant String :=
-        (if Top /= "" and then Here'Length > Top'Length + 1
-           and then Here (Here'First .. Here'First + Top'Length - 1) = Top
-         then Here (Here'First + Top'Length + 1 .. Here'Last) & "/" else "");
-      Now       : Unbounded_String := To_Unbounded_String (Prefix & Path);
-   begin
-      --  The renames of the last commits, newest first: old and new path.
-      Arguments.Append ("log");
-      Arguments.Append ("-M");
-      Arguments.Append ("--diff-filter=R");
-      Arguments.Append ("--name-status");
-      Arguments.Append ("--format=");
-      Arguments.Append ("-n");
-      Arguments.Append ("200");
-      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
-      if Ada.Directories.Exists (Output) then
-         Files.Read_Text (Output, Text, Read);
-         Files.Discard (Output);
-      end if;
-      if not (Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0) then
-         return "";
-      end if;
-      declare
-         Lines   : constant Name_Lists.Vector := Lines_Of (To_String (Text));
-         Changed : Boolean := True;
-         Rounds  : Natural := 0;
+      Went   : Unbounded_String;
+      Worked : Boolean;
+
+      procedure Ask is
+         Repo   : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
+         Prefix : constant String := Standard.Version.Repository.Prefix (Repo);
+         Head   : constant String := Standard.Version.Refs.Current_Commit_Id (Repo);
+         Now    : Unbounded_String := To_Unbounded_String (Prefix & Path);
+         Lines  : Name_Lists.Vector;
       begin
-         --  Oldest rename first, then each one after it.
-         while Changed and then Rounds < 10 loop
-            Changed := False;
-            Rounds := Rounds + 1;
-            for Line of reverse Lines loop
-               declare
-                  First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
-                  Second_Tab : constant Natural :=
-                    (if First_Tab = 0 then 0
-                     else Ada.Strings.Fixed.Index (Line (First_Tab + 1 .. Line'Last), [1 => ASCII.HT]));
-               begin
-                  if Line'Length > 1 and then Line (Line'First) = 'R' and then Second_Tab > 0
-                    and then Line (First_Tab + 1 .. Second_Tab - 1) = To_String (Now)
-                  then
-                     Now := To_Unbounded_String (Line (Second_Tab + 1 .. Line'Last));
-                     Changed := True;
-                  end if;
-               end;
+         --  The renames of the last commits, newest first: old and new path.
+         if Head /= "" then
+            declare
+               Start : Standard.Version.History.Commit_Id_Vectors.Vector;
+            begin
+               Start.Append (Standard.Version.Objects.To_Object_Id (Head));
+               Lines := Lines_Of
+                 (Standard.Version.Log.Log_List_Text
+                    (Repo,
+                     Standard.Version.History.Rev_List (Repo, Start, Options => (Max_Count => 200, others => <>)),
+                     Name_Status  => True,
+                     Rename_Score => 50));
+            end;
+         end if;
+         declare
+            Changed : Boolean := True;
+            Rounds  : Natural := 0;
+         begin
+            --  Oldest rename first, then each one after it.
+            while Changed and then Rounds < 10 loop
+               Changed := False;
+               Rounds := Rounds + 1;
+               for Line of reverse Lines loop
+                  declare
+                     First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                     Second_Tab : constant Natural :=
+                       (if First_Tab = 0 then 0
+                        else Ada.Strings.Fixed.Index (Line (First_Tab + 1 .. Line'Last), [1 => ASCII.HT]));
+                  begin
+                     if Line'Length > 1 and then Line (Line'First) = 'R' and then Second_Tab > 0
+                       and then (for all C of Line (Line'First + 1 .. First_Tab - 1) => C in '0' .. '9')
+                       and then Line (First_Tab + 1 .. Second_Tab - 1) = To_String (Now)
+                     then
+                        Now := To_Unbounded_String (Line (Second_Tab + 1 .. Line'Last));
+                        Changed := True;
+                     end if;
+                  end;
+               end loop;
             end loop;
+         end;
+         --  And a rename not yet committed -- git mv, edited since or not:
+         --  as the index has it.
+         for Staged of Standard.Version.Status.Current_Status.Staged loop
+            if Standard.Version.Status."=" (Staged.Kind, Standard.Version.Status.Renamed_File)
+              and then Staged.Old_Path = Now
+            then
+               Now := Staged.Path;
+            end if;
          end loop;
-      end;
-      --  And a rename not yet committed -- git mv, edited since or not:
-      --  as the index has it, R  old -> new.
-      declare
-         Staged : Name_Lists.Vector;
-         Seen   : Unbounded_String;
-         Got    : E.Error_Info;
-      begin
-         Staged.Append ("status");
-         Staged.Append ("--porcelain=v1");
-         Staged.Append ("-M");
-         Execution.Run_Harness (Project_Directory, "git", Staged, Project_Directory, Output, 60, Happened);
-         if Ada.Directories.Exists (Output) then
-            Files.Read_Text (Output, Seen, Got);
-            Files.Discard (Output);
+         if To_String (Now) /= Prefix & Path then
+            Went := To_Unbounded_String (Within_Project (To_String (Now), Prefix));
          end if;
-         if Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0 then
-            for Line of Lines_Of (To_String (Seen)) loop
-               declare
-                  Arrow : constant Natural := Ada.Strings.Fixed.Index (Line, " -> ");
-               begin
-                  if Line'Length > 3 and then Line (Line'First) = 'R' and then Arrow > Line'First + 3
-                    and then Line (Line'First + 3 .. Arrow - 1) = To_String (Now)
-                  then
-                     Now := To_Unbounded_String (Line (Arrow + 4 .. Line'Last));
-                  end if;
-               end;
-            end loop;
-         end if;
-      end;
-      if To_String (Now) = Prefix & Path then
-         return "";
-      end if;
-      declare
-         Went : constant String := To_String (Now);
-      begin
-         return (if Prefix /= "" and then Went'Length > Prefix'Length
-                   and then Went (Went'First .. Went'First + Prefix'Length - 1) = Prefix
-                 then Went (Went'First + Prefix'Length .. Went'Last) else Went);
-      end;
+      end Ask;
+   begin
+      Within (Project_Directory, Ask'Access, Worked);
+      return (if Worked then To_String (Went) else "");
    end Renamed_In_History;
 
    --------------------
@@ -276,42 +284,42 @@ package body Model_Runner.Framework.Git is
 
    function Last_Commit_At (Project_Directory, Path : String) return String is
       use type Ada.Calendar.Time;
-      Arguments : Name_Lists.Vector;
-      Output    : constant String :=
-        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
-                         "model_runner-git-when-" & Fingerprint (Project_Directory) & ".txt");
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Read      : E.Error_Info;
+      Seconds : Long_Long_Integer := -1;
+      Worked  : Boolean;
+
+      procedure Ask is
+         Repo   : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
+         Head   : constant String := Standard.Version.Refs.Current_Commit_Id (Repo);
+         Start  : Standard.Version.History.Commit_Id_Vectors.Vector;
+         Limits : Standard.Version.History.Rev_List_Options := (Max_Count => 1, others => <>);
+      begin
+         if Head = "" then
+            return;
+         end if;
+         Start.Append (Standard.Version.Objects.To_Object_Id (Head));
+         Limits.Paths.Append (Standard.Version.Repository.Prefix (Repo) & Path);
+         declare
+            Last : constant Standard.Version.History.Commit_Id_Vectors.Vector :=
+              Standard.Version.History.Rev_List (Repo, Start, Options => Limits);
+         begin
+            if not Last.Is_Empty then
+               Seconds := Standard.Version.Objects.Commit_Committer_Time
+                 (Standard.Version.Objects.Read_Object (Repo, Last.First_Element));
+            end if;
+         end;
+      end Ask;
    begin
-      Arguments.Append ("log");
-      Arguments.Append ("-1");
-      Arguments.Append ("--format=%ct");
-      Arguments.Append ("--");
-      Arguments.Append (Path);
-      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
-      if Ada.Directories.Exists (Output) then
-         Files.Read_Text (Output, Text, Read);
-         Files.Discard (Output);
+      Within (Project_Directory, Ask'Access, Worked);
+      if not Worked or else Seconds < 0 then
+         return "";
       end if;
       declare
-         Seconds : constant String := Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both);
-         Digits_Only : constant Boolean :=
-           Seconds /= ""
-           and then (for all C of Seconds => C in '0' .. '9' | ASCII.LF | ASCII.CR);
+         Image : String :=
+           Ada.Calendar.Formatting.Image
+             (Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0) + Duration (Seconds));
       begin
-         if not (Happened.Started and then Happened.Exit_Status = 0 and then Digits_Only) then
-            return "";
-         end if;
-         declare
-            Image : String :=
-              Ada.Calendar.Formatting.Image
-                (Ada.Calendar.Formatting.Time_Of (1970, 1, 1, 0.0)
-                 + Duration (Long_Long_Integer'Value (Lines_Of (Seconds).First_Element)));
-         begin
-            Image (Image'First + 10) := 'T';
-            return Image & "Z";
-         end;
+         Image (Image'First + 10) := 'T';
+         return Image & "Z";
       end;
    end Last_Commit_At;
 
@@ -322,27 +330,122 @@ package body Model_Runner.Framework.Git is
    function Uncommitted_Diff
      (Project_Directory : String; Paths : Name_Lists.Vector; Found : out Boolean) return String
    is
-      Arguments : Name_Lists.Vector;
-      Output    : constant String :=
-        Hostkit.Fs.Join (Hostkit.Fs.Temp_Directory,
-                         "model_runner-git-diff-" & Fingerprint (Project_Directory) & ".txt");
-      Happened  : Execution.Outcome;
-      Text      : Unbounded_String;
-      Read      : E.Error_Info;
+      Text : Unbounded_String;
+
+      procedure Ask is
+         Repo   : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
+         Prefix : constant String := Standard.Version.Repository.Prefix (Repo);
+         Head   : constant String := Standard.Version.Refs.Current_Commit_Id (Repo);
+      begin
+         --  No commit, no HEAD to differ from: as git diff HEAD, nothing found.
+         if Head = "" then
+            raise Program_Error;
+         end if;
+         --  Each path named from the project, as the project names it.
+         Text := To_Unbounded_String
+           (Standard.Version.Diff.Diff_Tree_Vs_Working
+              (Repo,
+               Standard.Version.Objects.Commit_Tree_Id
+                 (Standard.Version.Objects.Read_Object (Repo, Standard.Version.Objects.To_Object_Id (Head))),
+               Specs_Of (Paths, Prefix),
+               (Relative_Set => True, Relative => To_Unbounded_String (Prefix), others => <>)));
+      end Ask;
    begin
-      Arguments.Append ("diff");
-      Arguments.Append ("--no-color");
-      Arguments.Append ("--relative");
-      Arguments.Append ("HEAD");
-      Arguments.Append ("--");
-      Arguments.Append_Vector (Paths);
-      Execution.Run_Harness (Project_Directory, "git", Arguments, Project_Directory, Output, 60, Happened);
-      if Ada.Directories.Exists (Output) then
-         Files.Read_Text (Output, Text, Read);
-         Files.Discard (Output);
-      end if;
-      Found := Happened.Started and then not Happened.Timed_Out and then Happened.Exit_Status = 0;
+      Within (Project_Directory, Ask'Access, Found);
       return (if Found then To_String (Text) else "");
    end Uncommitted_Diff;
+
+   ------------------
+   -- Add_Worktree --
+   ------------------
+
+   procedure Add_Worktree
+     (Project_Directory, Tree : String;
+      Head                    : out Ada.Strings.Unbounded.Unbounded_String;
+      Worked                  : out Boolean)
+   is
+      procedure Make is
+         Repo : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
+         Id   : constant String := Standard.Version.Refs.Current_Commit_Id (Repo);
+      begin
+         --  No commit to check out: no worktree.
+         if Id = "" then
+            raise Program_Error;
+         end if;
+         Standard.Version.Worktrees.Add_Detached (Path => Tree, Rev => Id);
+         Head := To_Unbounded_String (Id);
+      end Make;
+   begin
+      Head := Null_Unbounded_String;
+      Within (Project_Directory, Make'Access, Worked);
+   end Add_Worktree;
+
+   ---------------------
+   -- Remove_Worktree --
+   ---------------------
+
+   procedure Remove_Worktree (Project_Directory, Tree : String; Worked : out Boolean) is
+      procedure Take_Away is
+      begin
+         --  Its changes and all: what is to be kept was taken in already.
+         Standard.Version.Worktrees.Remove (Path => Tree, Force => 1);
+      end Take_Away;
+   begin
+      Within (Project_Directory, Take_Away'Access, Worked);
+   end Remove_Worktree;
+
+   ---------------------
+   -- Prune_Worktrees --
+   ---------------------
+
+   procedure Prune_Worktrees (Project_Directory : String) is
+      Worked : Boolean;
+
+      procedure Prune is
+      begin
+         Standard.Version.Worktrees.Prune;
+      end Prune;
+   begin
+      Within (Project_Directory, Prune'Access, Worked);
+   end Prune_Worktrees;
+
+   ----------------
+   -- Merge_File --
+   ----------------
+
+   procedure Merge_File
+     (Merged, Base, Theirs                  : String;
+      Ours_Label, Base_Label, Theirs_Label  : String;
+      Worked                                : out Boolean)
+   is
+      Ours_Text, Base_Text, Theirs_Text, Result : Unbounded_String;
+      Conflicts : Natural;
+      Read      : E.Error_Info;
+   begin
+      Worked := False;
+      Files.Read_Text (Merged, Ours_Text, Read);
+      if E.Is_Ok (Read) then
+         Files.Read_Text (Base, Base_Text, Read);
+      end if;
+      if E.Is_Ok (Read) then
+         Files.Read_Text (Theirs, Theirs_Text, Read);
+      end if;
+      if E.Is_Error (Read) then
+         return;
+      end if;
+      --  As git merge-file writes it: a pure merge of texts, no repository.
+      Standard.Version.Merge.Merge_File
+        (To_String (Ours_Text), To_String (Base_Text), To_String (Theirs_Text),
+         (Ours_Label   => To_Unbounded_String (Ours_Label),
+          Base_Label   => To_Unbounded_String (Base_Label),
+          Theirs_Label => To_Unbounded_String (Theirs_Label),
+          others       => <>),
+         Result, Conflicts);
+      Files.Write_Text (Merged, To_String (Result), Read);
+      Worked := E.Is_Ok (Read);
+   exception
+      when others =>
+         Worked := False;
+   end Merge_File;
 
 end Model_Runner.Framework.Git;
