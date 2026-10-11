@@ -1,3 +1,4 @@
+with Hostkit.Parent_Watch;
 with Model_Runner.CLI.Execute;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -1415,6 +1416,11 @@ begin
             declare
                Given : constant String := Option ("--part", "");
                Slash : constant Natural := Ada.Strings.Fixed.Index (Given, "/");
+               --  A part ends with the sweep that started it. Stopped once
+               --  its summary was read, the check left its parts adopted by
+               --  the system, and they ran an hour of every core on.
+               Watched : constant Boolean := Hostkit.Parent_Watch.End_With_Parent;
+               pragma Unreferenced (Watched);
             begin
                Conformance.Run
                  (Result,

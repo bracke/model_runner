@@ -2,6 +2,7 @@ with Ada.Unchecked_Conversion;
 
 with System;
 with System.Machine_Code;
+with System.Storage_Elements;
 
 with Model_Runner.Quantization.Grid_Integers;
 with Model_Runner.Quantization.Interleave;
@@ -18781,7 +18782,657 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Words : GI.Word_Block;
       Lanes : GI.Lane_Block;
       Carry : Vector_Lanes;
+
+      --  The grid formats decoded in the registers, where the byte product
+      --  has them: a sub-block's grid entries into one register, its signs
+      --  as +1/-1 bytes put on the activation (IQ1's 8g + 1 or 8g - 1 made
+      --  from its signed grid), and nothing written out and read back. The
+      --  factors are worked out once a super-block, two a sub-block.
+               IQ2_XXS_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "1:" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm0" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm0, %%xmm0" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm1" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm1, %%xmm1" & LF &
+                  "vinserti128 $1, %%xmm1, %%ymm0, %%ymm0" & LF &
+                  "movl 4(%%rsi), %%edx" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vmovq (%%r8,%%rax,8), %%xmm2" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $7, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vpinsrq $1, (%%r8,%%rax,8), %%xmm2, %%xmm2" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $14, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vmovq (%%r8,%%rax,8), %%xmm3" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $21, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vpinsrq $1, (%%r8,%%rax,8), %%xmm3, %%xmm3" & LF &
+                  "vinserti128 $1, %%xmm3, %%ymm2, %%ymm2" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $8, %%rsi" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ2_XS_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "1:" & LF &
+                  "movzwl 0(%%rsi), %%eax" & LF &
+                  "movl %%eax, %%edx" & LF &
+                  "andl $511, %%eax" & LF &
+                  "shrl $9, %%edx" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm0" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm2" & LF &
+                  "movzwl 2(%%rsi), %%eax" & LF &
+                  "movl %%eax, %%edx" & LF &
+                  "andl $511, %%eax" & LF &
+                  "shrl $9, %%edx" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm0, %%xmm0" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm2, %%xmm2" & LF &
+                  "movzwl 4(%%rsi), %%eax" & LF &
+                  "movl %%eax, %%edx" & LF &
+                  "andl $511, %%eax" & LF &
+                  "shrl $9, %%edx" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm1" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm3" & LF &
+                  "movzwl 6(%%rsi), %%eax" & LF &
+                  "movl %%eax, %%edx" & LF &
+                  "andl $511, %%eax" & LF &
+                  "shrl $9, %%edx" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm1, %%xmm1" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm3, %%xmm3" & LF &
+                  "vinserti128 $1, %%xmm1, %%ymm0, %%ymm0" & LF &
+                  "vinserti128 $1, %%xmm3, %%ymm2, %%ymm2" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $8, %%rsi" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ2_S_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "leaq 66(%%rax), %%r11" & LF &
+                  "1:" & LF &
+                  "movzbl (%%r11), %%ecx" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "andl $768, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "movzbl 32(%%rsi), %%edx" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm0" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm2" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $6, %%edx" & LF &
+                  "andl $768, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "movzbl 33(%%rsi), %%edx" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm0, %%xmm0" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm2, %%xmm2" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $4, %%edx" & LF &
+                  "andl $768, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "movzbl 34(%%rsi), %%edx" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm1" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm3" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $2, %%edx" & LF &
+                  "andl $768, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "movzbl 35(%%rsi), %%edx" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm1, %%xmm1" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm3, %%xmm3" & LF &
+                  "vinserti128 $1, %%xmm1, %%ymm0, %%ymm0" & LF &
+                  "vinserti128 $1, %%xmm3, %%ymm2, %%ymm2" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $4, %%rsi" & LF &
+                  "addq $1, %%r11" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ3_XXS_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "leaq 66(%%rax), %%r11" & LF &
+                  "1:" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "vmovd (%%r15,%%rax,4), %%xmm0" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "vpinsrd $1, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "vpinsrd $2, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "vpinsrd $3, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 4(%%rsi), %%eax" & LF &
+                  "vmovd (%%r15,%%rax,4), %%xmm1" & LF &
+                  "movzbl 5(%%rsi), %%eax" & LF &
+                  "vpinsrd $1, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "movzbl 6(%%rsi), %%eax" & LF &
+                  "vpinsrd $2, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "movzbl 7(%%rsi), %%eax" & LF &
+                  "vpinsrd $3, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "vinserti128 $1, %%xmm1, %%ymm0, %%ymm0" & LF &
+                  "movl (%%r11), %%edx" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vmovq (%%r8,%%rax,8), %%xmm2" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $7, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vpinsrq $1, (%%r8,%%rax,8), %%xmm2, %%xmm2" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $14, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vmovq (%%r8,%%rax,8), %%xmm3" & LF &
+                  "movl %%edx, %%eax" & LF &
+                  "shrl $21, %%eax" & LF &
+                  "andl $127, %%eax" & LF &
+                  "vpinsrq $1, (%%r8,%%rax,8), %%xmm3, %%xmm3" & LF &
+                  "vinserti128 $1, %%xmm3, %%ymm2, %%ymm2" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $8, %%rsi" & LF &
+                  "addq $4, %%r11" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ3_S_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "leaq 66(%%rax), %%r11" & LF &
+                  "leaq 74(%%rax), %%r13" & LF &
+                  "1:" & LF &
+                  "movzbl (%%r11), %%ecx" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovd (%%r15,%%rax,4), %%xmm0" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $1, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $1, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $2, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $2, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $3, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $3, (%%r15,%%rax,4), %%xmm0, %%xmm0" & LF &
+                  "movzbl 4(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $4, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovd (%%r15,%%rax,4), %%xmm1" & LF &
+                  "movzbl 5(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $5, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $1, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "movzbl 6(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $6, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $2, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "movzbl 7(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $7, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrd $3, (%%r15,%%rax,4), %%xmm1, %%xmm1" & LF &
+                  "vinserti128 $1, %%xmm1, %%ymm0, %%ymm0" & LF &
+                  "movzbl 0(%%r13), %%edx" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm2" & LF &
+                  "movzbl 1(%%r13), %%edx" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm2, %%xmm2" & LF &
+                  "movzbl 2(%%r13), %%edx" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm3" & LF &
+                  "movzbl 3(%%r13), %%edx" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm3, %%xmm3" & LF &
+                  "vinserti128 $1, %%xmm3, %%ymm2, %%ymm2" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $8, %%rsi" & LF &
+                  "addq $1, %%r11" & LF &
+                  "addq $4, %%r13" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ1_S_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "leaq 2(%%rax), %%rsi" & LF &
+                  "leaq 34(%%rax), %%r11" & LF &
+                  "movl $134744072, %%eax" & LF &
+                  "vmovd %%eax, %%xmm13" & LF &
+                  "vpbroadcastd %%xmm13, %%ymm13" & LF &
+                  "1:" & LF &
+                  "movzwl (%%r11), %%ecx" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "andl $7, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm9" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $3, %%edx" & LF &
+                  "andl $7, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm9, %%xmm9" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $6, %%edx" & LF &
+                  "andl $7, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm10" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $9, %%edx" & LF &
+                  "andl $7, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm10, %%xmm10" & LF &
+                  "vinserti128 $1, %%xmm10, %%ymm9, %%ymm9" & LF &
+                  "vpsignb %%ymm9, %%ymm13, %%ymm2" & LF &
+                  "movl $1, %%eax" & LF &
+                  "movl $-1, %%edx" & LF &
+                  "testl $32768, %%ecx" & LF &
+                  "cmovnzl %%edx, %%eax" & LF &
+                  "vmovd %%eax, %%xmm3" & LF &
+                  "vpbroadcastb %%xmm3, %%ymm3" & LF &
+                  "vpaddb %%ymm3, %%ymm2, %%ymm2" & LF &
+                  "vpsignb %%ymm2, %%ymm2, %%ymm0" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $4, %%rsi" & LF &
+                  "addq $2, %%r11" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+         IQ1_M_Code : constant String :=
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps (%%rdx), %%ymm6" & LF &
+                  "movq 8(%0), %%rax" & LF &
+                  "movq 16(%0), %%r15" & LF &
+                  "movq 24(%0), %%r8" & LF &
+                  "movq 32(%0), %%rdi" & LF &
+                  "movq 40(%0), %%r9" & LF &
+                  "movq 48(%0), %%r12" & LF &
+                  "movq 56(%0), %%rdx" & LF &
+                  "vpbroadcastw (%%rdx), %%xmm7" & LF &
+                  "vcvtph2ps %%xmm7, %%ymm7" & LF &
+                  "movq $8, %%r10" & LF &
+                  "movq %%rax, %%rsi" & LF &
+                  "leaq 32(%%rax), %%r11" & LF &
+                  "movl $134744072, %%eax" & LF &
+                  "vmovd %%eax, %%xmm13" & LF &
+                  "vpbroadcastd %%xmm13, %%ymm13" & LF &
+                  "1:" & LF &
+                  "movzbl (%%r11), %%ecx" & LF &
+                  "movzbl 1(%%r11), %%r14d" & LF &
+                  "movzbl 0(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "andl $1792, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm9" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $3, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm3" & LF &
+                  "movzbl 1(%%rsi), %%eax" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shll $4, %%edx" & LF &
+                  "andl $1792, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm9, %%xmm9" & LF &
+                  "movl %%ecx, %%edx" & LF &
+                  "shrl $7, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm3, %%xmm3" & LF &
+                  "movzbl 2(%%rsi), %%eax" & LF &
+                  "movl %%r14d, %%edx" & LF &
+                  "shll $8, %%edx" & LF &
+                  "andl $1792, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vmovq (%%r15,%%rax,8), %%xmm10" & LF &
+                  "movl %%r14d, %%edx" & LF &
+                  "shrl $3, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "vmovq (%%r8,%%rdx,8), %%xmm11" & LF &
+                  "movzbl 3(%%rsi), %%eax" & LF &
+                  "movl %%r14d, %%edx" & LF &
+                  "shll $4, %%edx" & LF &
+                  "andl $1792, %%edx" & LF &
+                  "orl %%edx, %%eax" & LF &
+                  "vpinsrq $1, (%%r15,%%rax,8), %%xmm10, %%xmm10" & LF &
+                  "movl %%r14d, %%edx" & LF &
+                  "shrl $7, %%edx" & LF &
+                  "andl $1, %%edx" & LF &
+                  "vpinsrq $1, (%%r8,%%rdx,8), %%xmm11, %%xmm11" & LF &
+                  "vinserti128 $1, %%xmm10, %%ymm9, %%ymm9" & LF &
+                  "vpsignb %%ymm9, %%ymm13, %%ymm2" & LF &
+                  "vinserti128 $1, %%xmm11, %%ymm3, %%ymm3" & LF &
+                  "vpaddb %%ymm3, %%ymm2, %%ymm2" & LF &
+                  "vpsignb %%ymm2, %%ymm2, %%ymm0" & LF &
+                  "vmovdqu (%%rdi), %%ymm4" & LF &
+                  "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
+                  "vpxor %%ymm1, %%ymm1, %%ymm1" & LF &
+                  "vpdpbusd %%ymm4, %%ymm0, %%ymm1" & LF &
+                  "vcvtdq2ps %%ymm1, %%ymm1" & LF &
+                  "vbroadcastss (%%r12), %%xmm5" & LF &
+                  "vbroadcastss 4(%%r12), %%xmm8" & LF &
+                  "vinsertf128 $1, %%xmm8, %%ymm5, %%ymm5" & LF &
+                  "vmulps %%ymm7, %%ymm5, %%ymm5" & LF &
+                  "vbroadcastss (%%r9), %%ymm8" & LF &
+                  "vmulps %%ymm8, %%ymm5, %%ymm5" & LF &
+                  "vfmadd231ps %%ymm5, %%ymm1, %%ymm6" & LF &
+                  "addq $32, %%rdi" & LF &
+                  "addq $4, %%r9" & LF &
+                  "addq $8, %%r12" & LF &
+                  "addq $4, %%rsi" & LF &
+                  "addq $2, %%r11" & LF &
+                  "decq %%r10" & LF &
+                  "jnz 1b" & LF &
+                  "movq (%0), %%rdx" & LF &
+                  "vmovaps %%ymm6, (%%rdx)";
+
+      Clobbers : constant String :=
+        "rax,rcx,rdx,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15,"
+        & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm13,memory";
+
+      procedure Fused is
+         Grid    : constant System.Address := GI.Grid_Address (Format);
+         Signs   : constant System.Address :=
+           (case Format is
+              when G.Type_IQ2_S | G.Type_IQ3_S => GI.Byte_Sign_Ones_Address,
+              when G.Type_IQ1_S | G.Type_IQ1_M => GI.Offset_Words_Address,
+              when others => GI.Sign_Ones_Address);
+         Factors : aliased GI.Factor_Block;
+         Half    : aliased Interfaces.Unsigned_16;
+      begin
+         for Row in 0 .. Rows - 1 loop
+            Carry := [others => [others => 0.0]];
+            for Block in 0 .. Blocks - 1 loop
+               declare
+                  Within   : constant B.Byte_Count :=
+                    Offset + Row_Bytes * B.Byte_Count (Row) + Width * B.Byte_Count (Block);
+                  At_Block : constant B.Byte_Index := Data'First + Within;
+               begin
+                  GI.Factors_Of (Format, Data, Within, Factors, Half);
+                  for Vector in 0 .. Count - 1 loop
+                     declare
+                        At_Value : constant Element_Count := First + Vector * Stride + Block * 256;
+                        type Address_Row is array (0 .. 7) of System.Address;
+                        Pointers : aliased constant Address_Row :=
+                          [Carry (Vector)'Address, Data (At_Block)'Address, Grid, Signs,
+                           Values (Values'First + At_Value)'Address,
+                           Scales (Scales'First + At_Value / Activation_Block)'Address,
+                           Factors'Address, Half'Address];
+                     begin
+                        case Format is
+                           when G.Type_IQ2_XXS =>
+                              System.Machine_Code.Asm
+                                (IQ2_XXS_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ2_XS =>
+                              System.Machine_Code.Asm
+                                (IQ2_XS_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ2_S =>
+                              System.Machine_Code.Asm
+                                (IQ2_S_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ3_XXS =>
+                              System.Machine_Code.Asm
+                                (IQ3_XXS_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ3_S =>
+                              System.Machine_Code.Asm
+                                (IQ3_S_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ1_S =>
+                              System.Machine_Code.Asm
+                                (IQ1_S_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when G.Type_IQ1_M =>
+                              System.Machine_Code.Asm
+                                (IQ1_M_Code,
+                                 Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                                 Clobber  => Clobbers,
+                                 Volatile => True);
+                           when others =>
+                              null;
+                        end case;
+                     end;
+                  end loop;
+               end;
+            end loop;
+            for Vector in 0 .. Count - 1 loop
+               declare
+                  Total : N.Wide_Real := 0.0;
+               begin
+                  for Lane in Lanes_8'Range loop
+                     Total := Total + N.Wide_Real (Carry (Vector) (Lane));
+                  end loop;
+                  Sums (Sums'First + Row * Count + Vector) :=
+                    Sums (Sums'First + Row * Count + Vector) + Total;
+               end;
+            end loop;
+         end loop;
+      end Fused;
    begin
+      --  For a vector or two: a batch is decoded once below and every
+      --  vector read against it, where this would decode it again for each.
+      if Deep and then Count <= 2 then
+         Fused;
+         return;
+      end if;
       for Row in 0 .. Rows - 1 loop
          Carry := [others => [others => 0.0]];
          for Block in 0 .. Blocks - 1 loop
@@ -18790,7 +19441,108 @@ package body Model_Runner.Quantization.Integers.Kernels is
                Offset + Row_Bytes * B.Byte_Count (Row) + Width * B.Byte_Count (Block),
                Words, Lanes);
 
-            for Vector in 0 .. Count - 1 loop
+            --  Four vectors a pass: the block's bytes, their magnitudes and
+            --  its factors loaded once for the four, each vector's sign, dot
+            --  product and scale its own. What a prompt's batch spends its
+            --  time on; a vector at a time loaded the three again for each.
+            if Deep then
+               for Quad in 0 .. Count / 4 - 1 loop
+                  declare
+                     At_Value : constant Element_Count := First + 4 * Quad * Stride + Block * 256;
+                     type Address_Row is array (0 .. 9) of System.Address;
+                     Pointers : aliased constant Address_Row :=
+                       [Words'Address, Lanes'Address,
+                        Values (Values'First + At_Value)'Address,
+                        Scales (Scales'First + At_Value / Activation_Block)'Address,
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.Integer_Address (Stride)),
+                        System.Storage_Elements.To_Address
+                          (System.Storage_Elements.Integer_Address (Stride / Activation_Block * 4)),
+                        Carry (4 * Quad)'Address, Carry (4 * Quad + 1)'Address,
+                        Carry (4 * Quad + 2)'Address, Carry (4 * Quad + 3)'Address];
+                  begin
+                     System.Machine_Code.Asm
+                       ("movq 48(%0), %%rax"                       & LF &
+                        "vmovaps (%%rax), %%ymm6"                  & LF &
+                        "movq 56(%0), %%rax"                       & LF &
+                        "vmovaps (%%rax), %%ymm10"                 & LF &
+                        "movq 64(%0), %%rax"                       & LF &
+                        "vmovaps (%%rax), %%ymm11"                 & LF &
+                        "movq 72(%0), %%rax"                       & LF &
+                        "vmovaps (%%rax), %%ymm12"                 & LF &
+                        "movq (%0), %%rsi"                         & LF &
+                        "movq 8(%0), %%r8"                         & LF &
+                        "movq 16(%0), %%rdi"                       & LF &
+                        "movq 24(%0), %%r9"                        & LF &
+                        "movq 32(%0), %%rcx"                       & LF &
+                        "movq 40(%0), %%rdx"                       & LF &
+                        "movq $8, %%r10"                           & LF &
+                        "1:"                                       & LF &
+                        "vmovdqu (%%rsi), %%ymm0"                  & LF &
+                        "vpsignb %%ymm0, %%ymm0, %%ymm3"           & LF &
+                        "vmovaps (%%r8), %%ymm9"                   & LF &
+                        "vmovdqu (%%rdi), %%ymm4"                  & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
+                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
+                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
+                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
+                        "vbroadcastss (%%r9), %%ymm2"              & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"       & LF &
+                        "leaq (%%rdi,%%rcx), %%rax"                & LF &
+                        "leaq (%%r9,%%rdx), %%r11"                 & LF &
+                        "vmovdqu (%%rax), %%ymm4"                  & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
+                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
+                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
+                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
+                        "vbroadcastss (%%r11), %%ymm2"             & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm10"      & LF &
+                        "addq %%rcx, %%rax"                        & LF &
+                        "addq %%rdx, %%r11"                        & LF &
+                        "vmovdqu (%%rax), %%ymm4"                  & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
+                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
+                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
+                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
+                        "vbroadcastss (%%r11), %%ymm2"             & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm11"      & LF &
+                        "addq %%rcx, %%rax"                        & LF &
+                        "addq %%rdx, %%r11"                        & LF &
+                        "vmovdqu (%%rax), %%ymm4"                  & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
+                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
+                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
+                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
+                        "vbroadcastss (%%r11), %%ymm2"             & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm12"      & LF &
+                        "addq $32, %%rsi"                          & LF &
+                        "addq $32, %%r8"                           & LF &
+                        "addq $32, %%rdi"                          & LF &
+                        "addq $4, %%r9"                            & LF &
+                        "decq %%r10"                               & LF &
+                        "jnz 1b"                                   & LF &
+                        "movq 48(%0), %%rax"                       & LF &
+                        "vmovaps %%ymm6, (%%rax)"                  & LF &
+                        "movq 56(%0), %%rax"                       & LF &
+                        "vmovaps %%ymm10, (%%rax)"                 & LF &
+                        "movq 64(%0), %%rax"                       & LF &
+                        "vmovaps %%ymm11, (%%rax)"                 & LF &
+                        "movq 72(%0), %%rax"                       & LF &
+                        "vmovaps %%ymm12, (%%rax)",
+                        Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
+                        Clobber  =>
+                          "rax,rcx,rdx,rsi,rdi,r8,r9,r10,r11,"
+                          & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,ymm9,ymm10,ymm11,ymm12,memory",
+                        Volatile => True);
+                  end;
+               end loop;
+            end if;
+
+            for Vector in (if Deep then 4 * (Count / 4) else 0) .. Count - 1 loop
                declare
                   At_Value : constant Element_Count := First + Vector * Stride + Block * 256;
                begin

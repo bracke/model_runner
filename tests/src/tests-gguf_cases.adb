@@ -1922,7 +1922,7 @@ package body Tests.GGUF_Cases is
             Blocks  : constant N.Element_Count := 4;
             Columns : constant N.Element_Count := 256 * Blocks;
             Rows    : constant N.Element_Count := 4;
-            Count   : constant N.Element_Count := 3;
+            Count   : constant N.Element_Count := 6;
             Data    : B.Byte_Array (0 .. Width * B.Byte_Count (Blocks * Rows) - 1);
             Vectors : N.Real_Array (0 .. Columns * Count - 1);
             Values  : QI.Signed_Array (0 .. Columns * Count - 1);
@@ -1932,7 +1932,21 @@ package body Tests.GGUF_Cases is
             Row     : N.Real_Array (0 .. Columns - 1);
             Ok      : Boolean;
 
+            procedure Check_Count
+              (Wide_Rows, Deep_Rows : Boolean; Name : String; Count : N.Element_Count);
+
             procedure Check (Wide_Rows, Deep_Rows : Boolean; Name : String) is
+            begin
+               --  One vector and two take the kernel that decodes in its
+               --  registers; more, the one that decodes a block once, four
+               --  vectors a pass and the rest singly.
+               for Taken in 1 .. Count loop
+                  Check_Count (Wide_Rows, Deep_Rows, Name & Taken'Image & " vectors", Taken);
+               end loop;
+            end Check;
+
+            procedure Check_Count
+              (Wide_Rows, Deep_Rows : Boolean; Name : String; Count : N.Element_Count) is
                Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) := [others => 0.0];
             begin
                QI.Use_Wide_Rows (Wide_Rows);
@@ -1961,7 +1975,7 @@ package body Tests.GGUF_Cases is
                      end;
                   end loop;
                end loop;
-            end Check;
+            end Check_Count;
          begin
             for Index in Data'Range loop
                Data (Index) := B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);

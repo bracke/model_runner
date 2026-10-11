@@ -34,6 +34,11 @@ package body Untested_Surface is
    --  scripted case overrides On_Call and On_Result, and has no use for
    --  these two.
    --
+   --  The grid formats' factors. Factors_Of is a private unit's, read by
+   --  the kernel that decodes a grid format in its registers, and the
+   --  grid formats' product test holds that kernel's every answer to the
+   --  decoded rows -- a wrong factor fails it -- but cannot name it.
+   --
    --  A split mixture's token path. Rouse and Take_Front_Route are what a
    --  token of a model whose experts stay on the processor goes through
    --  every layer -- the device's front half routes and the pool is kept
@@ -72,6 +77,7 @@ package body Untested_Surface is
          | "Divides_Into_Blocks"
          | "Enter"
          | "Executable_Directory"
+         | "Factors_Of"
          | "Finalize_Session_Plan"
          | "Flush_Sink"
          | "Generation_Progress"

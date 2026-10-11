@@ -1,4 +1,5 @@
 with Interfaces;
+with System;
 
 with Model_Runner.Bytes;
 with Model_Runner.GGUF;
@@ -50,5 +51,43 @@ private package Model_Runner.Quantization.Grid_Integers is
       Offset : Model_Runner.Bytes.Byte_Count;
       Words  : out Word_Block;
       Lanes  : out Lane_Block);
+
+   --  For a kernel that decodes in its registers: where the tables are.
+   --  The grids as the format keeps them; the two-bit grids' seven-bit sign
+   --  indices, and a sign byte itself, as eight bytes of +1 or -1, what a
+   --  byte sign instruction reads; and IQ1's offset, +1 or -1 in eight
+   --  bytes, by its bit.
+   --
+   --  @param Format A grid format.
+   --  @return Where its grid is.
+   function Grid_Address (Format : Model_Runner.GGUF.Tensor_Type) return System.Address;
+
+   --  @return Where the seven-bit sign indices' +1/-1 words are.
+   function Sign_Ones_Address return System.Address;
+
+   --  @return Where a sign byte's +1/-1 words are.
+   function Byte_Sign_Ones_Address return System.Address;
+
+   --  @return Where IQ1's two offset words are, +1 then -1.
+   function Offset_Words_Address return System.Address;
+
+   --  A super-block's factors, two a sub-block of thirty-two: the first
+   --  sixteen elements' and the last sixteen's, each the sub-block's scale
+   --  as the format states it (for IQ1, over eight) -- the block's half not
+   --  in them: its bits are given apart, for an instruction to widen.
+   type Factor_Block is array (0 .. 15) of Model_Runner.Numerics.Real
+     with Alignment => 32;
+
+   --  @param Format A grid format.
+   --  @param Data Buffer holding the block.
+   --  @param Offset Byte position of the block, from Data'First.
+   --  @param Factors Receives them.
+   --  @param Half_Bits Receives the block's half, as its bits.
+   procedure Factors_Of
+     (Format    : Model_Runner.GGUF.Tensor_Type;
+      Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Factors   : out Factor_Block;
+      Half_Bits : out Interfaces.Unsigned_16);
 
 end Model_Runner.Quantization.Grid_Integers;
