@@ -1187,6 +1187,21 @@ package body Tests.GGUF_Cases is
                --  and the quants rather than before them.
                Tame_Half (Block, 80);
                Tame_Half (Block, 82);
+            when Model_Runner.GGUF.Type_IQ1_S | Model_Runner.GGUF.Type_IQ2_XXS
+               | Model_Runner.GGUF.Type_IQ2_XS | Model_Runner.GGUF.Type_IQ2_S
+               | Model_Runner.GGUF.Type_IQ3_XXS | Model_Runner.GGUF.Type_IQ3_S =>
+               --  The grid formats' one half leads the block.
+               Tame_Half (Block, 0);
+            when Model_Runner.GGUF.Type_IQ1_M =>
+               --  Its half is spread a nibble at a time over the tops of
+               --  the four scale words; the last word's top nibble is the
+               --  half's sign and exponent.
+               declare
+                  At_Byte : constant B.Byte_Index :=
+                    Data'First + B.Byte_Count (Block) * Width + 55;
+               begin
+                  Data (At_Byte) := (Data (At_Byte) and 16#0F#) or 16#30#;
+               end;
             when others =>
                null;
          end case;
@@ -1873,6 +1888,102 @@ package body Tests.GGUF_Cases is
 
       Assert (Checked_Rows = 15, "not every format was checked");
    end Fused_Dot_Matches_Decoder;
+
+   --  The grid formats' integer product against their decoded rows: each
+   --  of the seven, every compilation of the product, random blocks, held
+   --  to the bound the quantized path is held to everywhere else.
+   procedure Grid_Products_Match_Their_Rows
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package QI renames Model_Runner.Quantization.Integers;
+      package G renames Model_Runner.GGUF;
+
+      Formats : constant array (1 .. 7) of G.Tensor_Type :=
+        [G.Type_IQ1_S, G.Type_IQ1_M, G.Type_IQ2_XXS, G.Type_IQ2_XS,
+         G.Type_IQ2_S, G.Type_IQ3_XXS, G.Type_IQ3_S];
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Deep : constant Boolean := Model_Runner.Platform.Byte_Products;
+      Seed : Interfaces.Unsigned_32 := 16#6A1D_0001#;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+   begin
+      for Format of Formats loop
+         Assert (QI.Has_Integer_Kernel (Format),
+                 G.Tensor_Type'Image (Format) & " has no integer product");
+         declare
+            Width   : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+            Blocks  : constant N.Element_Count := 4;
+            Columns : constant N.Element_Count := 256 * Blocks;
+            Rows    : constant N.Element_Count := 4;
+            Count   : constant N.Element_Count := 3;
+            Data    : B.Byte_Array (0 .. Width * B.Byte_Count (Blocks * Rows) - 1);
+            Vectors : N.Real_Array (0 .. Columns * Count - 1);
+            Values  : QI.Signed_Array (0 .. Columns * Count - 1);
+            Scales  : N.Real_Array (0 .. Columns * Count / QI.Activation_Block - 1);
+            Totals  : QI.Sum_Array (0 .. Columns * Count / QI.Activation_Block - 1);
+            Halves  : QI.Sum_Array (0 .. Columns * Count / QI.Activation_Half - 1);
+            Row     : N.Real_Array (0 .. Columns - 1);
+            Ok      : Boolean;
+
+            procedure Check (Wide_Rows, Deep_Rows : Boolean; Name : String) is
+               Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) := [others => 0.0];
+            begin
+               QI.Use_Wide_Rows (Wide_Rows);
+               QI.Use_Deep_Rows (Deep_Rows);
+               QI.Accumulate_Rows
+                 (Format, Data, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
+                  Values, Scales, Totals, Halves, 0, Columns, Count, Sums, Ok);
+               Assert (Ok, Name & " refused " & G.Tensor_Type'Image (Format));
+               for R in 0 .. Rows - 1 loop
+                  Model_Runner.Quantization.Decode_Blocks
+                    (Format, Data, Width * B.Byte_Count (Blocks * R), Blocks, Row, Ok);
+                  Assert (Ok, "could not decode " & G.Tensor_Type'Image (Format));
+                  for V in 0 .. Count - 1 loop
+                     declare
+                        Want  : N.Wide_Real := 0.0;
+                        Size  : N.Wide_Real := 0.0;
+                        Got   : constant N.Wide_Real := Sums (R * Count + V);
+                     begin
+                        for E in Row'Range loop
+                           Want := Want + N.Wide_Real (Row (E)) * N.Wide_Real (Vectors (V * Columns + E));
+                           Size := Size + abs (N.Wide_Real (Row (E)) * N.Wide_Real (Vectors (V * Columns + E)));
+                        end loop;
+                        Assert (abs (Got - Want) <= 5.0E-2 * N.Wide_Real'Max (Size, 1.0E-6),
+                                Name & " " & G.Tensor_Type'Image (Format) & " row" & R'Image
+                                & " vector" & V'Image & ":" & Got'Image & " against" & Want'Image);
+                     end;
+                  end loop;
+               end loop;
+            end Check;
+         begin
+            for Index in Data'Range loop
+               Data (Index) := B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+            end loop;
+            Make_Finite (Data, Format, Blocks * Rows);
+            for Index in Vectors'Range loop
+               Vectors (Index) := N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
+            end loop;
+            QI.Quantize_Vectors (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok);
+            Assert (Ok, "the activations could not be quantized");
+            Check (False, False, "the baseline product");
+            if Wide then
+               Check (True, False, "the wider product");
+            end if;
+            if Deep then
+               Check (Wide, True, "the byte product");
+            end if;
+         end;
+      end loop;
+      QI.Use_Wide_Rows (Wide);
+      QI.Use_Deep_Rows (Deep);
+   end Grid_Products_Match_Their_Rows;
 
    --  The two sixteen-bit compilations of the integer product answer the
    --  same bits, and the byte one answers within the bound.
@@ -7916,6 +8027,9 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Grid_Products_Match_Their_Rows'Access,
+         "integer products : the grid formats' rows, every compilation, as decoded");
       Register_Routine
         (T, Both_Row_Kernels_Answer_The_Same_Bits'Access,
          "the sixteen-bit compilations of the integer product answer the "

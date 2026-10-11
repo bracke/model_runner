@@ -3063,9 +3063,13 @@ begin
             Set : constant String := Option ("--prompt-set", "");
          begin
             if Set = "" then
+               --  Unnamed, the 110-token prompt the llama.cpp comparisons
+               --  are taken against: the six-token one said nothing of a
+               --  prompt's rate. The published figures that were taken from
+               --  it name it.
                Measure
                  (Option ("--prompt-file",
-                          "../tests/fixtures/speed-prompt-short.txt"),
+                          "../tests/fixtures/speed-prompt-110.txt"),
                   Result);
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
@@ -3081,7 +3085,7 @@ begin
                   begin
                      Measure
                        (Option ("--prompt-file",
-                                "../tests/fixtures/speed-prompt-short.txt"),
+                                "../tests/fixtures/speed-prompt-110.txt"),
                         Plain, Timeline => False);
                      if Plain.Ran
                        and then abs (Result.Wall - Plain.Wall)

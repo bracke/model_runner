@@ -3,6 +3,7 @@ with Ada.Unchecked_Conversion;
 with System;
 with System.Machine_Code;
 
+with Model_Runner.Quantization.Grid_Integers;
 with Model_Runner.Quantization.Interleave;
 
 package body Model_Runner.Quantization.Integers.Kernels is
@@ -18744,6 +18745,137 @@ package body Model_Runner.Quantization.Integers.Kernels is
    -- Rows --
    ----------
 
+   --  The grid formats (Grid_Integers): each super-block of a row decoded
+   --  once to bytes and a factor for every four, then each vector's byte
+   --  dot products against it, thirty-two elements an instruction, the
+   --  weight's sign moved onto the activation as Rows_Singly moves it. The
+   --  lanes' factors and the activation block's scale meet in binary32,
+   --  summed in eight lanes and reduced once a row.
+   procedure Rows_Grid
+     (Format    : Model_Runner.GGUF.Tensor_Type;
+      Data      : Model_Runner.Bytes.Byte_Array;
+      Offset    : Model_Runner.Bytes.Byte_Count;
+      Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows      : Element_Count;
+      Blocks    : Element_Count;
+      Values    : Signed_Array;
+      Scales    : Model_Runner.Numerics.Real_Array;
+      First     : Element_Count;
+      Stride    : Element_Count;
+      Count     : Element_Count;
+      Sums      : in out Model_Runner.Numerics.Wide_Real_Array)
+   is
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+
+      package GI renames Model_Runner.Quantization.Grid_Integers;
+      LF    : constant Character := ASCII.LF;
+      Width : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+
+      --  One super-block at a time, decoded into the first-level cache
+      --  beside the grids it was decoded from, and each vector's eight
+      --  lanes carried across the row. A whole row decoded first was up to
+      --  thirty-five kilobytes, and it and the grids pushed each other out.
+      type Vector_Lanes is array (0 .. Count - 1) of Lanes_8;
+      Words : GI.Word_Block;
+      Lanes : GI.Lane_Block;
+      Carry : Vector_Lanes;
+   begin
+      for Row in 0 .. Rows - 1 loop
+         Carry := [others => [others => 0.0]];
+         for Block in 0 .. Blocks - 1 loop
+            GI.Decode
+              (Format, Data,
+               Offset + Row_Bytes * B.Byte_Count (Row) + Width * B.Byte_Count (Block),
+               Words, Lanes);
+
+            for Vector in 0 .. Count - 1 loop
+               declare
+                  At_Value : constant Element_Count := First + Vector * Stride + Block * 256;
+               begin
+                  if Deep then
+                     System.Machine_Code.Asm
+                       ("vmovaps (%0), %%ymm6"                & LF &
+                        "movq $8, %%rax"                      & LF &
+                        "movq %1, %%rsi"                      & LF &
+                        "movq %2, %%rdi"                      & LF &
+                        "movq %3, %%r8"                       & LF &
+                        "movq %4, %%r9"                       & LF &
+                        "1:"                                  & LF &
+                        "vmovdqu (%%rsi), %%ymm0"             & LF &
+                        "vpsignb %%ymm0, %%ymm0, %%ymm3"      & LF &
+                        "vmovdqu (%%rdi), %%ymm4"             & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"      & LF &
+                        "vpxor %%ymm1, %%ymm1, %%ymm1"        & LF &
+                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"     & LF &
+                        "vcvtdq2ps %%ymm1, %%ymm1"            & LF &
+                        "vbroadcastss (%%r9), %%ymm2"         & LF &
+                        "vmulps (%%r8), %%ymm2, %%ymm2"       & LF &
+                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"  & LF &
+                        "addq $32, %%rsi"                     & LF &
+                        "addq $32, %%rdi"                     & LF &
+                        "addq $32, %%r8"                      & LF &
+                        "addq $4, %%r9"                       & LF &
+                        "decq %%rax"                          & LF &
+                        "jnz 1b"                              & LF &
+                        "vmovaps %%ymm6, (%0)",
+                        Inputs =>
+                          [System.Address'Asm_Input ("r", Carry (Vector)'Address),
+                           System.Address'Asm_Input ("r", Words'Address),
+                           System.Address'Asm_Input ("r", Values (Values'First + At_Value)'Address),
+                           System.Address'Asm_Input ("r", Lanes'Address),
+                           System.Address'Asm_Input
+                             ("r", Scales (Scales'First + At_Value / Activation_Block)'Address)],
+                        Clobber  => "rax,rsi,rdi,r8,r9,ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,memory",
+                        Volatile => True);
+                  else
+                     declare
+                        Bytes : array (0 .. 255) of Interfaces.Integer_8
+                          with Import, Address => Words'Address;
+                     begin
+                        for Group in 0 .. 7 loop
+                           declare
+                              At_Group : constant Element_Count := At_Value + Element_Count (Group) * 32;
+                              Scale    : constant N.Real :=
+                                Scales (Scales'First + At_Group / Activation_Block);
+                           begin
+                              for Lane in 0 .. 7 loop
+                                 declare
+                                    Dot : Integer := 0;
+                                 begin
+                                    for K in 0 .. 3 loop
+                                       Dot := Dot
+                                         + Integer (Bytes (32 * Group + 4 * Lane + K))
+                                           * Integer (Values (Values'First + At_Group
+                                                              + Element_Count (4 * Lane + K)));
+                                    end loop;
+                                    Carry (Vector) (Lane) := Carry (Vector) (Lane)
+                                      + N.Real (Dot) * Lanes (8 * Group + Lane) * Scale;
+                                 end;
+                              end loop;
+                           end;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end loop;
+
+         for Vector in 0 .. Count - 1 loop
+            declare
+               Total : N.Wide_Real := 0.0;
+            begin
+               for Lane in Lanes_8'Range loop
+                  Total := Total + N.Wide_Real (Carry (Vector) (Lane));
+               end loop;
+               Sums (Sums'First + Row * Count + Vector) :=
+                 Sums (Sums'First + Row * Count + Vector) + Total;
+            end;
+         end loop;
+      end loop;
+   end Rows_Grid;
+
    procedure Rows
      (Format    : Model_Runner.GGUF.Tensor_Type;
       Data      : Model_Runner.Bytes.Byte_Array;
@@ -18811,6 +18943,17 @@ package body Model_Runner.Quantization.Integers.Kernels is
                       Row_Bytes * B.Byte_Count (Rows - 1)
                       + Width * B.Byte_Count (Blocks))
       then
+         return;
+      end if;
+
+      if Model_Runner.Quantization.Grid_Integers.Is_Grid (Format) then
+         if Interleaved then
+            return;
+         end if;
+         Rows_Grid
+           (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+            First, Stride, Count, Sums);
+         Ok := True;
          return;
       end if;
 

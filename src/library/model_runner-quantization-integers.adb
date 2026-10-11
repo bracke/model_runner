@@ -1,3 +1,4 @@
+with Model_Runner.Quantization.Grid_Integers;
 with System;
 with System.Machine_Code;
 
@@ -59,6 +60,8 @@ package body Model_Runner.Quantization.Integers is
        --  two refuse a panel and the product falls to the floating-point
        --  path, so True there would pack activations nothing reads.
        else Format = G.Type_Q8_0
+       or else (not Interleaved
+                and then Model_Runner.Quantization.Grid_Integers.Is_Grid (Format))
        or else Format = G.Type_Q4_0
        or else Format = G.Type_Q4_K
        or else Format = G.Type_Q5_K

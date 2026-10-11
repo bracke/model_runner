@@ -1895,7 +1895,7 @@ against something over forty seconds before, and the resident set peaks at
 4.6 GB against an arena of 11.25 GB -- a mixture routes to eight experts of a
 hundred and twenty-eight, so most of that file is never read at all.
 
-and `tests speed --model MODEL` takes the same measurement three times and
+and `tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-short.txt` takes the same measurement three times and
 reports the median, so the figure above is a command rather than a memory.
 It reports the processor time as well now, taken around the same region as
 the wall time so that the two answer about the same work. That used to be the
@@ -2216,8 +2216,8 @@ question a caller asks before running it is what that costs. Both sides of
 the answer are one command now:
 
 ```
-tests speed --model MODEL --backend cpu       --max-tokens 4
-tests speed --model MODEL --backend reference --max-tokens 4
+tests speed --model MODEL --backend cpu       --max-tokens 4 --prompt-file tests/fixtures/speed-prompt-short.txt
+tests speed --model MODEL --backend reference --max-tokens 4 --prompt-file tests/fixtures/speed-prompt-short.txt
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
@@ -2333,8 +2333,8 @@ everything above, median of three runs, with the same command that produces
 every other figure here:
 
 ```
-tests speed --model MODEL --backend cpu
-tests speed --model MODEL --backend device
+tests speed --model MODEL --backend cpu    --prompt-file tests/fixtures/speed-prompt-short.txt
+tests speed --model MODEL --backend device --prompt-file tests/fixtures/speed-prompt-short.txt
 ```
 
 | Run | `cpu`, 7 workers | `device` |
