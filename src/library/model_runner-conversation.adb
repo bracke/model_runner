@@ -1,6 +1,8 @@
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
 with Ada.Strings.Unbounded;
 with Model_Runner.Text;
-with Model_Runner.UTF8;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Conversation is
@@ -168,85 +170,98 @@ package body Model_Runner.Conversation is
    ---------------
 
    function Unescaped (Escaped : String) return String is
-      R : Ada.Strings.Unbounded.Unbounded_String;
-      I : Natural := Escaped'First;
+      Hex : constant String := "0123456789abcdef";
 
-      --  The four hex digits at I, or -1 where they are not.
+      --  The four hex digits at an index, or -1 where they are not.
       function Hex_At (At_Index : Natural) return Integer is
          Value : Integer := 0;
       begin
          if At_Index + 3 > Escaped'Last then
             return -1;
          end if;
-         for K in At_Index .. At_Index + 3 loop
-            declare
-               C : constant Character := Escaped (K);
-            begin
-               Value := Value * 16
-                 + (if C in '0' .. '9' then Character'Pos (C) - Character'Pos ('0')
-                    elsif C in 'a' .. 'f'
-                    then Character'Pos (C) - Character'Pos ('a') + 10
-                    elsif C in 'A' .. 'F'
-                    then Character'Pos (C) - Character'Pos ('A') + 10
-                    else 0);
-               if C not in '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' then
-                  return -1;
-               end if;
-            end;
+         for C of Escaped (At_Index .. At_Index + 3) loop
+            case C is
+               when '0' .. '9' => Value := Value * 16 + Character'Pos (C) - Character'Pos ('0');
+               when 'a' .. 'f' => Value := Value * 16 + Character'Pos (C) - Character'Pos ('a') + 10;
+               when 'A' .. 'F' => Value := Value * 16 + Character'Pos (C) - Character'Pos ('A') + 10;
+               when others => return -1;
+            end case;
          end loop;
          return Value;
       end Hex_At;
-   begin
-      while I <= Escaped'Last loop
-         if Escaped (I) = '\' and then I < Escaped'Last then
-            I := I + 1;
-            case Escaped (I) is
-               when 'n' => Ada.Strings.Unbounded.Append (R, ASCII.LF);
-               when 't' => Ada.Strings.Unbounded.Append (R, ASCII.HT);
-               when 'r' => Ada.Strings.Unbounded.Append (R, ASCII.CR);
-               when 'b' => Ada.Strings.Unbounded.Append (R, ASCII.BS);
-               when 'f' => Ada.Strings.Unbounded.Append (R, ASCII.FF);
-               when 'u' =>
+
+      --  What a model wrote, made a JSON string's inside: raw controls and
+      --  quotes escaped, an escape JSON has not -- \x, \u short of four
+      --  digits -- its character alone, a surrogate half with no other
+      --  half dropped.
+      function Repaired return String is
+         R : Ada.Strings.Unbounded.Unbounded_String;
+         I : Natural := Escaped'First;
+      begin
+         while I <= Escaped'Last loop
+            declare
+               C : constant Character := Escaped (I);
+            begin
+               if C = '\' and then I = Escaped'Last then
+                  Ada.Strings.Unbounded.Append (R, "\\");
+               elsif C = '\' and then Escaped (I + 1) in '"' | '\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' then
+                  Ada.Strings.Unbounded.Append (R, Escaped (I .. I + 1));
+                  I := I + 1;
+               elsif C = '\' and then Escaped (I + 1) = 'u' and then Hex_At (I + 2) >= 0 then
                   declare
-                     Code : Integer := Hex_At (I + 1);
+                     Code : constant Integer := Hex_At (I + 2);
+                     Low  : constant Integer :=
+                       (if I + 7 <= Escaped'Last and then Escaped (I + 6 .. I + 7) = "\u"
+                        then Hex_At (I + 8) else -1);
                   begin
-                     if Code < 0 then
-                        Ada.Strings.Unbounded.Append (R, 'u');
+                     if Code in 16#D800# .. 16#DBFF# and then Low in 16#DC00# .. 16#DFFF# then
+                        Ada.Strings.Unbounded.Append (R, Escaped (I .. I + 11));
+                        I := I + 11;
+                     elsif Code in 16#D800# .. 16#DFFF# then
+                        I := I + 5;
                      else
-                        I := I + 4;
-                        --  A high surrogate followed by \u and a low one is
-                        --  one character past the basic plane.
-                        if Code in 16#D800# .. 16#DBFF#
-                          and then I + 2 <= Escaped'Last
-                          and then Escaped (I + 1) = '\'
-                          and then Escaped (I + 2) = 'u'
-                        then
-                           declare
-                              Low : constant Integer := Hex_At (I + 3);
-                           begin
-                              if Low in 16#DC00# .. 16#DFFF# then
-                                 Code := 16#10000#
-                                   + (Code - 16#D800#) * 16#400#
-                                   + (Low - 16#DC00#);
-                                 I := I + 6;
-                              end if;
-                           end;
-                        end if;
-                        if Code not in 16#D800# .. 16#DFFF# then
-                           Ada.Strings.Unbounded.Append
-                             (R, Model_Runner.UTF8.Encode (Code));
-                        end if;
+                        Ada.Strings.Unbounded.Append (R, Escaped (I .. I + 5));
+                        I := I + 5;
                      end if;
                   end;
-               when others =>
+               elsif C = '\' then
+                  I := I + 1;
+                  if Escaped (I) = '"' or else Character'Pos (Escaped (I)) < 32 then
+                     goto Escape_One;
+                  end if;
                   Ada.Strings.Unbounded.Append (R, Escaped (I));
-            end case;
-         else
-            Ada.Strings.Unbounded.Append (R, Escaped (I));
-         end if;
-         I := I + 1;
-      end loop;
-      return Ada.Strings.Unbounded.To_String (R);
+               elsif C = '"' or else Character'Pos (C) < 32 then
+                  goto Escape_One;
+               else
+                  Ada.Strings.Unbounded.Append (R, C);
+               end if;
+               goto Next;
+               <<Escape_One>>
+               Ada.Strings.Unbounded.Append
+                 (R, (if Escaped (I) = '"' then "\"""
+                      else "\u00" & Hex (Character'Pos (Escaped (I)) / 16 + 1)
+                                   & Hex (Character'Pos (Escaped (I)) mod 16 + 1)));
+            end;
+            <<Next>>
+            I := I + 1;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (R);
+      end Repaired;
+
+      Document : Jsonlib.Documents.Document;
+      Error    : Jsonlib.Errors.Error_Info;
+   begin
+      --  Read as JSON is read -- jsonlib -- once it is a JSON string; what
+      --  still is none, bytes no UTF-8 has among them, is kept as written.
+      Jsonlib.Parsers.Parse ('"' & Repaired & '"', Document, Error);
+      if Jsonlib.Errors.Failed (Error)
+        or else Jsonlib.Documents."/="
+                  (Jsonlib.Documents.Kind (Document, Jsonlib.Documents.Root (Document)),
+                   Jsonlib.Documents.String_Value)
+      then
+         return Escaped;
+      end if;
+      return Jsonlib.Documents.As_String (Document, Jsonlib.Documents.Root (Document));
    end Unescaped;
 
    -------------------

@@ -6831,7 +6831,8 @@ package body Tests.Framework_Cases is
 
       --  A project that grants no children refuses them.
       Task_Project (Store, "recursion-none",
-                    "map permission.project.read_source =" & LF);
+                    "map permission.project.read_source =" & LF
+                    & "map permission.project.create_children = off" & LF);
       Change := S.No_Changes;
       Ag.Start_Root (Store, Change, "TASK-001", "worker", "", Root, Status);
       S.Commit (Store, Change, Status);
@@ -6856,6 +6857,7 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "bounds",
          "map permission.project.write_source = roots=lib/" & LF
+         & "map permission.project.write_specs = off" & LF
          & "map permission.project.run_tests =" & LF);
       Tk.Create (Store, Change, Fields ("Hello", "analysis"), "user", "", Id, Status);
       S.Commit (Store, Change, Status);
@@ -7060,7 +7062,8 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "no-proposals",
          Checks & "map permission.project.write_source =" & LF
-         & "map permission.project.run_tests =" & LF);
+         & "map permission.project.run_tests =" & LF
+         & "map permission.project.propose_tasks = off" & LF);
       Work (Proposing);
       Assert (To_String (Done.Final_State) = "complete" and then Done.Proposed.Is_Empty
               and then Natural (Tk.List (Store, "candidate").Length) = 0,
@@ -11112,7 +11115,8 @@ package body Tests.Framework_Cases is
         (Store, "no-children",
          Checks & "map permission.project.read_source =" & LF
          & "map permission.project.write_source =" & LF
-         & "map permission.project.run_tests =" & LF);
+         & "map permission.project.run_tests =" & LF
+         & "map permission.project.create_children = off" & LF);
       Work (Denied);
       Assert (Parent_Status.Code = E.Framework_Permission_Denied
               and then To_String (Done.Final_State) = "complete"
@@ -11127,6 +11131,7 @@ package body Tests.Framework_Cases is
          & "map permission.project.read_source =" & LF
          & "map permission.project.write_source =" & LF
          & "map permission.project.run_tests =" & LF
+         & "map permission.project.run_build = off" & LF
          & "map permission.project.create_children = max_depth=2, max_children=8" & LF
          & "scalar agents.max_depth = 2" & LF
          & "scalar agents.max_children = 8" & LF

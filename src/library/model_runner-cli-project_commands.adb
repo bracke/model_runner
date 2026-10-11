@@ -875,6 +875,39 @@ package body Model_Runner.CLI.Project_Commands is
                & " error is in its answer above -- run the checks again, and report status: done only"
                & " when they pass.", Status);
             exit when E.Is_Error (Status);
+         --  Said done with no check run at all, where it may run them: the
+         --  harness runs them, and a failure sends it back once with what
+         --  they said -- in a workspace qwen3-8b answered done three runs
+         --  out of three without a check, and its work waited there failed.
+         elsif Root and then Outcome.Reason = Model_Runner.Agent.Answered and then Round < 3
+           and then not Asked_To_Fix and then Host /= null and then Runner.Check_Runs = 0
+           and then Host.May_Check (Host.Task_Profile) and then Host.Time_Left > 0.0
+           and then Conv.Length (Messages) > 0
+           and then Conv.Sender_At (Messages, Conv.Length (Messages)) = Conv.Assistant_Role
+           and then Ada.Strings.Fixed.Index
+                      (Ada.Characters.Handling.To_Lower
+                         (Model_Runner.Agent.Answer_Of (Conv.Content_At (Messages, Conv.Length (Messages)))),
+                       "status: done") > 0
+         then
+            declare
+               Report : Unbounded_String;
+               Ran    : E.Error_Info;
+            begin
+               Runner.Check_Runs := Runner.Check_Runs + 1;
+               Host.Run_Checks (Host.Task_Profile, Report, Ran);
+               if E.Is_Ok (Ran) and then Host.Checks_Failing then
+                  Asked_To_Fix := True;
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "You reported status: done without running the checks. They were run for you, and"
+                     & " they failed:" & ASCII.LF & To_String (Report) & ASCII.LF
+                     & "Fix what they report, run run_checks yourself, and report status: done only when"
+                     & " they pass.", Status);
+                  exit when E.Is_Error (Status);
+               else
+                  exit;
+               end if;
+            end;
          --  A report the harness cannot take -- a required line missing, a
          --  status none of its words -- handed back once, saying what is
          --  wrong, as an unreadable call is: a 8B wrote status: blocked and

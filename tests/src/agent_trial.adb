@@ -152,18 +152,12 @@ package body Agent_Trial is
 
    --  Where the work is written: in a workspace of its own, taken in by
    --  the harness once its checks pass there, where the trial asks it.
-   --  The harness takes work in for an agent that may ask for it: the
-   --  project's own permissions named whole -- naming one replaces what a
-   --  project that names none gives -- with request_integration among them.
+   --  The harness takes work in for an agent that may ask for it:
+   --  request_integration, which a project's default leaves out.
    function Apart_Words (Apart : Boolean) return String is
      (if Apart
       then " scalar.work.isolation=workspace scalar.work.integrate=automatic"
-           & " map.permission.project.read_source=inherit map.permission.project.write_source=inherit"
-           & " map.permission.project.read_specs=inherit map.permission.project.write_specs=inherit"
-           & " map.permission.project.run_build=inherit map.permission.project.run_tests=inherit"
-           & " map.permission.project.run_static_analysis=inherit"
-           & " map.permission.project.create_children=inherit map.permission.project.propose_tasks=inherit"
-           & " map.permission.project.request_integration=yes"
+           & " map.permission.project.request_integration=on"
       else "");
 
    function Check_Line (Tested : Boolean; Apart : Boolean := False) return String is
@@ -465,7 +459,24 @@ package body Agent_Trial is
                            --  messages -- their names shown in their place -- or
                            --  no model loaded. Two trials ran an hour on nothing
                            --  so, each run "did not end".
+                        --  A setup the program refused is the same: no run
+                        --  of it can work, so none more is tried.
                         if To_String (Outcome) = "did not end"
+                          and then Ada.Strings.Fixed.Index (Text, "model_runner: error: ") > 0
+                          and then Ada.Strings.Fixed.Index (Text, "model_runner: error: ")
+                                     < Ada.Strings.Fixed.Index (Text & "/work", "/work")
+                        then
+                           declare
+                              At_Error : constant Positive := Ada.Strings.Fixed.Index (Text, "model_runner: error: ");
+                              Line_End : constant Natural :=
+                                Ada.Strings.Fixed.Index (Text (At_Error .. Text'Last), [ASCII.LF]);
+                           begin
+                              Outcome := To_Unbounded_String
+                                ("the session could not start: its setup was refused -- "
+                                 & Text (At_Error + 21 .. (if Line_End = 0 then Text'Last else Line_End - 1)));
+                           end;
+                           Halted := True;
+                        elsif To_String (Outcome) = "did not end"
                           and then (Ada.Strings.Fixed.Index (Text, "message catalog could not be read") > 0
                                     or else Ada.Strings.Fixed.Index (Text, "<cli.") > 0
                                     or else Ada.Strings.Fixed.Index (Text, "<progress.") > 0)

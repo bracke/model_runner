@@ -238,7 +238,10 @@ package body Model_Runner.Framework.Permissions is
       Level   : String;
       Present : out Boolean) return Permission_Set
    is
-      Result : Permission_Set := Nothing;
+      --  The project's level names what differs from its default: one
+      --  capability named leaves the others as a project naming none has
+      --  them. A kind's or a role's names what it keeps of the level above.
+      Result : Permission_Set := (if Level = "project" then Project_Default else Nothing);
    begin
       Present := False;
       --  A level said to grant none: nothing, not the level above's grant.
@@ -255,7 +258,9 @@ package body Model_Runner.Framework.Permissions is
                --  inherit: what the level above gives, read when it is
                --  asked -- the project's default for the project, and for
                --  a kind or role no narrowing of the level above at all.
-               if Records.Get (Config, Field) = "inherit" then
+               if Records.Get (Config, Field) = "off" then
+                  Result (Item_Kind) := (Granted => False, others => <>);
+               elsif Records.Get (Config, Field) = "inherit" then
                   Result (Item_Kind) :=
                     (if Level = "project" then Project_Default (Item_Kind)
                      else (Granted => True, others => <>));

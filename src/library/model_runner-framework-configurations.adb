@@ -3569,7 +3569,15 @@ package body Model_Runner.Framework.Configurations is
       --  out for another change put back; and the lines that said so kept
       --  are not said.
       for Name of Taken_Away loop
-         if Records.Has (Result.After, Name) then
+         --  The project's level falls back to its default for what it does
+         --  not name: taking away what the default grants is kept written.
+         if Starts (Name, "map.permission.project.")
+           and then (for some One in Permissions.Capability =>
+                       Permissions.Word (One) = Name (Name'First + 23 .. Name'Last)
+                       and then Permissions.Project_Default (One).Granted)
+         then
+            Records.Set (Result.After, Name, "off");
+         elsif Records.Has (Result.After, Name) then
             Records.Remove (Result.After, Name);
          end if;
          declare

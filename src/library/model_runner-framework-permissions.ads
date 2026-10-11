@@ -81,7 +81,9 @@ package Model_Runner.Framework.Permissions is
    --  @return Its constraints, a space apart; empty for none.
    function Grant_Text (Given : Grant) return String;
 
-   --  A level as the configuration writes it.
+   --  A level as the configuration writes it. The project's level is
+   --  its default with what it names put over it, off withholding; a
+   --  kind's or a role's is only what it names.
    --
    --  @param Item The store.
    --  @param Level project, kind.KIND or role.ROLE.

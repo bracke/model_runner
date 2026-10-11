@@ -1995,6 +1995,11 @@ package body Tests.Template_Cases is
          Assert (Conv.Unescaped ("\ud83d x\u12") = " xu12",
                  "a lone surrogate or a short escape was not dropped: "
                  & Conv.Unescaped ("\ud83d x\u12"));
+         --  What a model writes that no JSON string holds is kept: a raw
+         --  quote or line end, an escape JSON has not, a closing backslash.
+         Assert (Conv.Unescaped ("q""" & ASCII.LF & "\x\") = "q""" & ASCII.LF & "x\",
+                 "a raw quote, line end or loose backslash was not kept: "
+                 & Conv.Unescaped ("q""" & ASCII.LF & "\x\"));
          Assert (Conv.Text_Of_Parts
                    ("[{""type"": ""text"", ""text"": ""say \""hi\"" \u2014""}]")
                    = "say ""hi"" " & Character'Val (16#E2#)
