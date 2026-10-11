@@ -1,3 +1,6 @@
+with Model_Runner.Platform;
+with Model_Runner.Drafts;
+with Model_Runner.Draft_Policy;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -19,6 +22,8 @@ with Model_Runner.Text;
 with Project_Tools.Files;
 
 package body Speed_Run is
+
+   package Draft_Policy renames Model_Runner.Draft_Policy;
 
    package CPU renames Model_Runner.Backend.CPU;
    package IO renames Ada.Text_IO;
@@ -137,7 +142,8 @@ package body Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Penalty     : Model_Runner.Numerics.Real := 1.1;
       Draft       : String := "";
-      Draft_Tokens : Positive := 4;
+      Draft_Tokens : Natural := 4;
+      Draft_Tokens_Set : Boolean := False;
       Draft_Lookup : Boolean := False;
       Draft_Next   : Boolean := False;
       Repeats     : Positive;
@@ -177,6 +183,18 @@ package body Speed_Run is
       Draft_Container : Containers.Container;
       Draft_Engine    : aliased L.Model;
       Drafting        : Boolean := False;
+
+      --  What was asked of drafting, read as the command reads it.
+      Asked : constant Draft_Policy.Asked :=
+        (Tokens      => Draft_Tokens,
+         Tokens_Set  => Draft_Tokens_Set or else Draft_Next,
+         Lookup      => Draft_Lookup,
+         Model_Named => Draft /= "");
+      Found_Draft : Ada.Strings.Unbounded.Unbounded_String;
+      Lightened   : Boolean := False;
+
+      function Draft_Path return String
+      is (if Draft /= "" then Draft else Ada.Strings.Unbounded.To_String (Found_Draft));
 
       Walls     : Duration_Array (1 .. Repeats) := [others => 0.0];
       Spents    : Duration_Array (1 .. Repeats) := [others => 0.0];
@@ -292,22 +310,51 @@ package body Speed_Run is
          Result.Load :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
 
-         --  The next block's proposals read a slice of the head at four
-         --  bits, as the command takes it: they read the file's precision
-         --  here, 1.6 ms a proposal on qwen3.6 where run reads less.
-         if Draft_Next and then Draft = "" and then not Draft_Lookup then
+         --  A draft the run would take unasked: one the model names beside
+         --  itself, else one found in the store or beside the model, as
+         --  Draft_Policy has run look -- found, it is loaded as a named one
+         --  is.
+         if Draft = "" and then Draft_Policy.Seeks_Paired_Draft (Engine, Asked) then
+            Found_Draft := Ada.Strings.Unbounded.To_Unbounded_String
+              (Model_Runner.Drafts.Paired (Path, Model_Runner.Platform.Models_Directory));
+         end if;
+         if Draft = "" and then Ada.Strings.Unbounded.Length (Found_Draft) = 0 then
             declare
-               Lighter : E.Error_Info;
+               Probe : L.Session;
+               Local : E.Error_Info;
             begin
-               L.Lighten_Draft_Head (Engine, Threads, Lighter);
+               L.Open (Probe, Engine, Context => Context, Status => Local, Paged => Paged);
+               if E.Is_Ok (Local)
+                 and then Draft_Policy.Seeks_Store_Draft (Engine, Probe, Asked)
+               then
+                  declare
+                     Beside   : constant String :=
+                       Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Path));
+                     In_Store : constant String :=
+                       Model_Runner.Drafts.Find
+                         (Model_Runner.Platform.Models_Directory, Path, Container,
+                          L.Vocabulary (Engine).all);
+                     Near     : constant String :=
+                       Model_Runner.Drafts.Find
+                         (Beside, Path, Container, L.Vocabulary (Engine).all);
+                     function Bytes (Name : String) return Long_Long_Integer
+                     is (if Name = "" then 0 else Long_Long_Integer (Ada.Directories.Size (Name)));
+                  begin
+                     Found_Draft := Ada.Strings.Unbounded.To_Unbounded_String
+                       (if Bytes (Near) > Bytes (In_Store) then Near else In_Store);
+                  end;
+               end if;
+               if E.Is_Ok (Local) then
+                  L.Close (Probe);
+               end if;
             end;
          end if;
 
          --  And a draft, when one was named. The figures it produces are a
          --  comparison, so both halves belong to one command: this is the
          --  same run with --draft-model and without it.
-         if Draft /= "" then
-            if not Ada.Directories.Exists (Draft) then
+         if Draft_Path /= "" then
+            if not Ada.Directories.Exists (Draft_Path) then
                Say ("no draft model at that path; nothing measured");
                L.Close (Engine, Status);
                Containers.Close (Container);
@@ -315,7 +362,7 @@ package body Speed_Run is
                return;
             end if;
 
-            Shards.Open (Draft_Source, Draft, Status => Status);
+            Shards.Open (Draft_Source, Draft_Path, Status => Status);
             if E.Is_Error (Status) then
                Say ("the draft would not open: "
                     & E.Error_Code'Image (Status.Code));
@@ -435,7 +482,6 @@ package body Speed_Run is
                   Request.Max_Tokens := Tokens;
                   Request.Ignore_End := Ignore_End;
                   Request.Draft_Floor := Draft_Floor;
-                  Request.Draft_Adapts := Draft_Adapts;
 
                   --  As the command sets it: a backend that does not batch
                   --  gets one, whatever was asked for. Passing the asked-for
@@ -463,14 +509,29 @@ package body Speed_Run is
                   Request.Seed := 1;
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
-                  Request.Draft_Tokens :=
-                    (if Drafting or else Draft_Lookup or else Draft_Next
-                     then Draft_Tokens else 0);
-                  Request.Draft_From_Context :=
-                    Draft_Lookup and then not Drafting;
-                  Request.Draft_From_Next :=
-                    Draft_Next and then not Drafting
-                    and then not Draft_Lookup;
+                  --  Drafting as the command drafts, asked or not.
+                  declare
+                     Plan : constant Draft_Policy.Plan :=
+                       Draft_Policy.Decide
+                         (Engine, Session, Asked,
+                          Draft_Ready  => Drafting,
+                          Auto_Drafted => Drafting and then Draft = "");
+                  begin
+                     Request.Draft_Tokens := Plan.Tokens;
+                     Request.Draft_From_Context := Plan.From_Context;
+                     Request.Draft_From_Next := Plan.From_Next;
+                     Request.Draft_Adapts := Draft_Adapts or else Plan.Adapts;
+                     --  The block's proposals read a slice of the head at
+                     --  four bits, as the command takes it.
+                     if Plan.From_Next and then not Lightened then
+                        declare
+                           Lighter : E.Error_Info;
+                        begin
+                           L.Lighten_Draft_Head (Engine, Threads, Lighter);
+                        end;
+                        Lightened := True;
+                     end if;
+                  end;
 
                   --  Before the clock is read, because turning it on is
                   --  the only thing here that could cost the region it is

@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Execute;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Model_Runner.CLI.Options;
@@ -2891,6 +2892,42 @@ begin
             when others =>
                return 0;
          end Bytes;
+
+         --  The backend: the one named, or the one run takes unnamed -- the
+         --  device where the model fits it. This took the processor unnamed
+         --  while run took the device, so its figures were for a run nobody
+         --  starts.
+         function Chosen return String is
+         begin
+            if Given ("--backend") then
+               return Option ("--backend", "cpu");
+            end if;
+            declare
+               Catalog : aliased Model_Runner.Localization.Catalog;
+               Screen  : Model_Runner.Presentation.Console;
+               Program : constant String :=
+                 Ada.Directories.Full_Name (Model_Runner.Platform.Executable_Directory);
+               Beside  : constant String :=
+                 Ada.Directories.Containing_Directory (Ada.Directories.Containing_Directory (Program))
+                 & "/resources/messages/catalog.txt";
+            begin
+               Model_Runner.Localization.Open
+                 (Catalog, (if Ada.Directories.Exists (Beside) then Beside
+                            else Model_Runner.Platform.Catalog_Path), "en");
+               Model_Runner.Presentation.Open
+                 (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Auto,
+                  (Input_Is_Terminal  => False,
+                   Output_Is_Terminal => False,
+                   Error_Is_Terminal  => Model_Runner.Platform.Is_Terminal (2),
+                   Colour_Suppressed  => True),
+                  Model_Runner.CLI.Options.Normal);
+               return Model_Runner.Backend.Backend_Name
+                 (Model_Runner.CLI.Execute.Unasked_Backend
+                    (Option ("--model", ""), Bytes ("--device-memory"), Screen));
+            end;
+         end Chosen;
+
+         Chosen_Backend : constant String := Chosen;
       begin
          --  Refused on a busy machine, exactly as `tests benchmark` and
          --  `tests outside` are and on the same bound, because all three
@@ -2957,7 +2994,7 @@ begin
                     (if Given ("--repack")
                      then Mode_Of (Option ("--repack", "none"))
                      elsif Model_Runner.Backend."="
-                             (Backend_Of (Option ("--backend", "cpu")),
+                             (Backend_Of (Chosen_Backend),
                               Model_Runner.Backend.Backend_CPU)
                        and then Ada.Directories.Exists (Option ("--model", ""))
                        and then Model_Runner.Llama.Panels_Unasked
@@ -2990,14 +3027,15 @@ begin
                                         (Model_Runner.Llama.Exact)
                         then Model_Runner.Llama.Exact
                         else Model_Runner.Llama.Halved)),
-                  Backend     => Backend_Of (Option ("--backend", "cpu")),
+                  Backend     => Backend_Of (Chosen_Backend),
                   Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
                   Draft       => Option ("--draft-model", ""),
                   --  Three a round from the next block unless named, as run
-                  --  drafts from it.
+                  --  drafts from it; 0 turns drafting off, as run's does.
                   Draft_Tokens =>
-                    Number ("--draft-tokens",
-                            (if Given ("--draft-next") then 3 else 4)),
+                    Count ("--draft-tokens",
+                           (if Given ("--draft-next") then 3 else 4)),
+                  Draft_Tokens_Set => Given ("--draft-tokens"),
                   Draft_Lookup => Given ("--draft-lookup"),
                   Draft_Next  => Given ("--draft-next"),
                   Repeats     => Number ("--repeats", 3),
@@ -3015,7 +3053,7 @@ begin
                   Paged       =>
                     not Given ("--no-paged")
                     and then (Given ("--paged")
-                              or else Option ("--backend", "cpu") = "device"),
+                              or else Chosen_Backend = "device"),
                   Ignore_End  => Given ("--ignore-eos"),
                   Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
                   Draft_Adapts => Given ("--draft-adapts"),

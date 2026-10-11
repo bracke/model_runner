@@ -1,4 +1,5 @@
 with Ada.Streams.Stream_IO;
+with Model_Runner.Text;
 with Model_Runner.CLI.Execute.Support;
 with Model_Runner.CLI.Execute.Help_Command;
 with Model_Runner.CLI.Execute.Inspect_Command;
@@ -121,5 +122,23 @@ package body Model_Runner.CLI.Execute is
          Pres.Report (Screen, E.Unexpected (Failure, "command " & Opt.Command_Kind'Image (Item.Kind)));
          Status := E.Exit_Internal;
    end Dispatch;
+
+   function Unasked_Backend
+     (Model_Path    : String;
+      Device_Memory : Interfaces.Unsigned_64;
+      Screen        : in out Model_Runner.Presentation.Console)
+      return Model_Runner.Backend.Backend_Kind
+   is
+      use type Interfaces.Unsigned_64;
+      Item : Opt.Command;
+   begin
+      Item.Kind := Opt.Command_Run;
+      Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
+      if Device_Memory > 0 then
+         Item.Device_Memory := Device_Memory;
+         Item.Device_Memory_Set := True;
+      end if;
+      return Resolved_Backend (Item, Screen).Backend;
+   end Unasked_Backend;
 
 end Model_Runner.CLI.Execute;

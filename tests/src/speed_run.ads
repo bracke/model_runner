@@ -145,6 +145,8 @@ package Speed_Run is
    --    with and without -- so this exists to make both halves of it one
    --    command rather than two hand-taken numbers.
    --  @param Draft_Tokens How many that model may propose at a time.
+   --  @param Draft_Tokens_Set Whether Draft_Tokens was named, which run
+   --    takes as asked rather than deciding the length itself.
    --  @param Draft_Lookup Propose those tokens out of the context instead,
    --    with no draft model: what followed the last two the last time they
    --    occurred.
@@ -192,7 +194,8 @@ package Speed_Run is
         Model_Runner.Backend.Backend_CPU;
       Penalty     : Model_Runner.Numerics.Real := 1.1;
       Draft       : String := "";
-      Draft_Tokens : Positive := 4;
+      Draft_Tokens : Natural := 4;
+      Draft_Tokens_Set : Boolean := False;
       Draft_Lookup : Boolean := False;
       Draft_Next   : Boolean := False;
       Repeats     : Positive;

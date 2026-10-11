@@ -17,6 +17,10 @@ package body Library_Surface is
       --  crash a commit at each and reopen the store, and nothing else.
       new String'("Crash_At"),
 
+      --  The backend run takes unasked, for tests speed: the tool measures
+      --  the run run makes, so it asks run's own decision.
+      new String'("Unasked_Backend"),
+
       --  One symbol by its full name, the first declared. The sym command
       --  and a work agent's find_symbol list every declaration of a name;
       --  a caller that wants the one asks.

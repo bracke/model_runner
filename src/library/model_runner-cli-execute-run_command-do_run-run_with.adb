@@ -201,10 +201,7 @@ begin
    --  nobody asked for it.
    --  A draft the model names beside itself comes first, whatever
    --  the rest says: someone chose it. See Drafts.Paired.
-   if T.Is_Empty (Item.Draft_Path)
-     and then not Item.Draft_Lookup
-     and then Item.Draft_Tokens > 0
-     and then L.Vocabulary (Prepared) /= null
+   if Model_Runner.Draft_Policy.Seeks_Paired_Draft (Prepared, Asked_Drafting (Item))
    then
       Auto_Draft :=
         T.To_Bounded
@@ -214,15 +211,9 @@ begin
               Model_Runner.Platform.Models_Directory));
    end if;
 
-   if T.Is_Empty (Item.Draft_Path)
-     and then T.Is_Empty (Auto_Draft)
-     and then not Item.Draft_Lookup
-     and then not Item.Draft_Tokens_Set
-     and then Item.Draft_Tokens > 0
-     and then L.Config (Prepared).Experts = 0
-     and then not L.Drafts_Next (Session)
-     and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
-     and then L.Vocabulary (Prepared) /= null
+   if T.Is_Empty (Auto_Draft)
+     and then Model_Runner.Draft_Policy.Seeks_Store_Draft
+                (Prepared, Session, Asked_Drafting (Item))
    then
       --  In the store, and beside the model: a folder of models kept
       --  by hand is where the small one of a family usually is.
@@ -1523,38 +1514,26 @@ begin
             Request.Context_Shift := Item.Context_Shift;
             Request.Context_Keep := Item.Context_Keep;
             --  Without a draft model or a lookup, a model that carries
-            --  a next-token block drafts from that, asked or not: the
-            --  block exists for nothing else, the text is the same
-            --  with it as without, and the round is a gain on every
-            --  file it has been measured on. --draft-tokens 0 is how
-            --  a caller turns it off; generation itself leaves it
-            --  unused where it cannot apply, which is any sampling
-            --  but greedy and any run under a grammar.
-            --
-            --  Unless a draft costs too much of a token to pay: the
-            --  block and the head over the stack and the head, which
-            --  is 0.19 on Qwen3.5-4B, where three proposals a round
-            --  read 13.3 -> 17.4 tokens a second sampling, and 0.38
-            --  on the 0.8B, whose head is a third of the file and
-            --  where one proposal a round already reads 57 -> 52 --
-            --  and a model whose token reads less than Next_Draft_
-            --  Bytes, whose token is its fixed costs: with its draft
-            --  reading a slice of the head the 0.8B's share is a
-            --  ninth, and it still reads 49 -> 39 at one proposal. A
-            --  --draft-tokens named is taken as asked. Three a round
-            --  unless named: four read 15.5 on the 4B and six 14.0,
-            --  the proposals past the third kept too rarely to pay
-            --  for the block's pass.
-            Request.Draft_From_Next :=
-              Item.Draft_Tokens > 0
-              and then not Draft_Ready
-              and then not Item.Draft_Lookup
-              and then L.Drafts_Next (Session)
-              and then (Item.Draft_Tokens_Set
-                        or else (L.Draft_Share (Prepared)
-                                   <= Next_Draft_Share
-                                 and then L.Token_Bytes (Prepared)
-                                          >= Next_Draft_Bytes));
+            --  a next-token block drafts from that, asked or not, where
+            --  a draft is cheap enough of a token to pay; else, where
+            --  nothing drafts, a large model drafts out of its context.
+            --  --draft-tokens 0 turns drafting off; generation leaves
+            --  it unused under any sampling but greedy and under a
+            --  grammar. The figures behind each rule are in
+            --  Model_Runner.Draft_Policy.
+            --  How it drafts, decided as Draft_Policy decides it for
+            --  anything measuring this run.
+            declare
+               Plan : constant Model_Runner.Draft_Policy.Plan :=
+                 Model_Runner.Draft_Policy.Decide
+                   (Prepared, Session, Asked_Drafting (Item),
+                    Draft_Ready => Draft_Ready, Auto_Drafted => Auto_Drafted);
+            begin
+               Request.Draft_From_Next := Plan.From_Next;
+               Request.Draft_Tokens := Plan.Tokens;
+               Request.Draft_From_Context := Plan.From_Context;
+               Request.Draft_Adapts := Plan.Adapts;
+            end;
             --  The block's proposals read a slice of the head, at
             --  four bits for that alone.
             if Request.Draft_From_Next then
@@ -1565,74 +1544,6 @@ begin
                     (Prepared, Model_Runner.Platform.Core_Count,
                      Lighter);
                end;
-            end if;
-
-            Request.Draft_Tokens :=
-              (if Request.Draft_From_Next
-                 and then not Item.Draft_Tokens_Set
-                 and then L.Batch_Limit (Prepared)
-                          = L.Dense_Streamed_Batch
-               --  A split dense model's round streams its feed-forward
-               --  once for every proposal it checks, so a longer round
-               --  pays where on a model the device holds it did not:
-               --  ThinkingCap 7.80 -> 7.93 tokens a second at four over
-               --  three, and 6.39 -> 6.82 four thousand positions in.
-               then Split_Next_Draft_Tokens
-               elsif Request.Draft_From_Next
-                 and then not Item.Draft_Tokens_Set
-               then Next_Draft_Tokens
-               elsif Auto_Drafted then Store_Draft_Tokens
-               --  A named draft model starts where a found one does
-               --  unless a length was named: three, then adapting.
-               --  Started at four it was slower on every pair
-               --  measured.
-               elsif Draft_Ready and then not Item.Draft_Tokens_Set
-               then Store_Draft_Tokens
-               elsif Draft_Ready or else Item.Draft_Lookup
-                 or else Request.Draft_From_Next
-               then Item.Draft_Tokens else 0);
-            Request.Draft_From_Context :=
-              Item.Draft_Lookup and then not Draft_Ready;
-
-            --  A draft model's rounds follow what the rounds before
-            --  kept, unless a length was named.
-            Request.Draft_Adapts :=
-              Draft_Ready and then not Item.Draft_Tokens_Set;
-
-            --  And where nothing drafts, a dense model large enough
-            --  that a round pays drafts out of its own context: what
-            --  followed this phrase the last time it was said. A
-            --  phrase not said before proposes nothing and costs
-            --  nothing, and a reply that repeats its context -- an
-            --  edit to code, a summary, a quotation -- is where it
-            --  pays: gemma-3-4b editing a function 20.8 -> 31.8
-            --  tokens a second, qwen3-8b 12.7 -> 13.9, and prose
-            --  within a few per cent either way. A mixture too, now
-            --  that a lookup keeping little rests: its check of several
-            --  positions reads several tokens' experts, so a round that
-            --  keeps nothing costs it most of a token, and Qwen3-Coder-
-            --  30B lost 9 and 15 per cent before -- resting, it reads
-            --  prose 37.0 -> 36.3 and an edit 33.2 -> 37.6, though its
-            --  token reads only the experts it routes to, 1.1 GB, under
-            --  the size a dense model must have. Not on the processor, where checking several positions
-            --  costs several positions' arithmetic and a phrase seen
-            --  before is too seldom what follows to pay for it: phi3
-            --  kept 4 to 8 per cent of what the text proposed and lost
-            --  5 per cent writing code and 2 writing prose. A draft
-            --  named, or a --draft-tokens, decides instead.
-            if not Request.Draft_From_Context
-              and then not Request.Draft_From_Next
-              and then not Draft_Ready
-              and then not Item.Draft_Tokens_Set
-              and then Item.Draft_Tokens > 0
-              and then (L.Config (Prepared).Experts > 0
-                        or else L.Token_Bytes (Prepared) >= Next_Draft_Bytes)
-              and then not Model_Runner.Backend."="
-                             (L.Capability (Prepared).Kind,
-                              Model_Runner.Backend.Backend_CPU)
-            then
-               Request.Draft_From_Context := True;
-               Request.Draft_Tokens := Item.Draft_Tokens;
             end if;
 
             Request.Sampling := Item.Sampling;

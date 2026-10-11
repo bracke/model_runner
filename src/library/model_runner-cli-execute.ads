@@ -1,3 +1,5 @@
+with Interfaces;
+with Model_Runner.Backend;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
@@ -42,5 +44,19 @@ package Model_Runner.CLI.Execute is
      (Path   : String;
       Data   : Model_Runner.Bytes.Byte_Array;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  The backend run takes where none is named: the device where it opens
+   --  and the model fits its budget, the processor otherwise -- the one
+   --  decision, for a tool that measures what run does.
+   --
+   --  @param Model_Path The model, as run would be given it.
+   --  @param Device_Memory The device budget named, 0 for the default.
+   --  @param Screen Where run's notes about the choice go.
+   --  @return The backend.
+   function Unasked_Backend
+     (Model_Path    : String;
+      Device_Memory : Interfaces.Unsigned_64;
+      Screen        : in out Model_Runner.Presentation.Console)
+      return Model_Runner.Backend.Backend_Kind;
 
 end Model_Runner.CLI.Execute;

@@ -2372,8 +2372,10 @@ package body Tests.Tools_Cases is
               "one string spelled two ways was taken for two calls, or an escaped quote ended a string");
       declare
          Have : Boolean;
+         Read : constant String :=
+           Builtin.Text_Argument ("{""path"": ""\u0041\/b.adb""}", "path", Have);
       begin
-         Assert (Builtin.Text_Argument ("{""path"": ""\u0041\/b.adb""}", "path", Have) = "A/b.adb" and then Have,
+         Assert (Read = "A/b.adb" and then Have,
                  "a \u escape in an argument was not read as its character");
       end;
       Assert (Rc.Canonical ("{""b"": [ {""d"":1, ""c"":2} ], ""a"": null}") = "{""a"":null,""b"":[{""c"":2,""d"":1}]}"

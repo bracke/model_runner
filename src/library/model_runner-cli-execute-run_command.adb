@@ -1,3 +1,4 @@
+with Model_Runner.Draft_Policy;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Environment_Variables;
@@ -909,18 +910,12 @@ package body Model_Runner.CLI.Execute.Run_Command is
    --  run
    ---------------------------------------------------------------------------
 
-   --  The most of a token a draft from the block past the stack may cost
-   --  and still be taken without being asked for, and how many proposals a
-   --  round it makes then. See where a run's request is made.
-   Next_Draft_Share  : constant Float := 0.25;
-   Next_Draft_Bytes  : constant Float := 2.0 * 1024.0 ** 3;
-   Next_Draft_Tokens : constant := 3;
-   Split_Next_Draft_Tokens : constant := 4;
-
-   --  Proposals a round for a draft the run found in the model store:
-   --  three read best for Steelman-14B with Qwen2.5-Coder-0.5B, 12.75
-   --  tokens a second against 12.0, 11.8 and 11.3 for four, five and six.
-   Store_Draft_Tokens : constant := 3;
+   --  What the command asks of drafting, as Draft_Policy reads it.
+   function Asked_Drafting (Item : Opt.Command) return Model_Runner.Draft_Policy.Asked
+   is (Tokens      => Item.Draft_Tokens,
+       Tokens_Set  => Item.Draft_Tokens_Set,
+       Lookup      => Item.Draft_Lookup,
+       Model_Named => not T.Is_Empty (Item.Draft_Path));
 
    procedure Do_Run
      (Item    : Opt.Command;
