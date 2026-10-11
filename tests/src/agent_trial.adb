@@ -1,4 +1,5 @@
 with Ada.Calendar;
+with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Streams;
@@ -270,6 +271,83 @@ package body Agent_Trial is
       end Copied;
 
       Own_Copy : constant String := Copied;
+
+      --  The build the trial runs, as the repository names it: its commit,
+      --  + where the tree differs from it. Each run is kept under it in
+      --  obj/agent-trial-history.tsv, so one build's runs are set beside
+      --  another's without reading a file a trial.
+      function Build_Named return String is
+         Words  : Hostkit.String_Vectors.Vector;
+         Said   : constant String := Ada.Directories.Full_Name ("obj/agent-trial-commit.txt");
+         Dirty  : constant String := Ada.Directories.Full_Name ("obj/agent-trial-dirty.txt");
+         Ran    : Hostkit.Process.Process_Outcome;
+         File   : Ada.Text_IO.File_Type;
+         Commit : Unbounded_String := To_Unbounded_String ("unknown");
+         Mark   : Unbounded_String;
+      begin
+         Words.Append (To_Unbounded_String ("rev-parse"));
+         Words.Append (To_Unbounded_String ("--short"));
+         Words.Append (To_Unbounded_String ("HEAD"));
+         Ran := Hostkit.Process.Run_Captured ("git", Words, Stdout_Path => Said);
+         if Ran.Started and then Ada.Directories.Exists (Said) then
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Said);
+            if not Ada.Text_IO.End_Of_File (File) then
+               Commit := To_Unbounded_String (Ada.Strings.Fixed.Trim (Ada.Text_IO.Get_Line (File), Ada.Strings.Both));
+            end if;
+            Ada.Text_IO.Close (File);
+            Ada.Directories.Delete_File (Said);
+         end if;
+         Words.Clear;
+         Words.Append (To_Unbounded_String ("status"));
+         Words.Append (To_Unbounded_String ("--porcelain"));
+         Words.Append (To_Unbounded_String ("--untracked-files=no"));
+         Ran := Hostkit.Process.Run_Captured ("git", Words, Stdout_Path => Dirty);
+         if Ran.Started and then Ada.Directories.Exists (Dirty) then
+            if Ada.Directories."/=" (Ada.Directories.Size (Dirty), 0) then
+               Mark := To_Unbounded_String ("+");
+            end if;
+            Ada.Directories.Delete_File (Dirty);
+         end if;
+         return To_String (Commit & Mark);
+      exception
+         when others =>
+            return "unknown";
+      end Build_Named;
+
+      Build : constant String := Build_Named;
+
+      --  One run, a line of the history: when, the build, the model, the
+      --  task, where it worked, how it ended, its seconds, calls and the
+      --  thoughts closed at their budget; a tab apart.
+      procedure Keep_In_History (Task_Name, Ending : String; Seconds, Calls : Natural; Closed : String) is
+         Path  : constant String := Ada.Directories.Full_Name ("obj/agent-trial-history.tsv");
+         File  : Ada.Text_IO.File_Type;
+         Fresh : constant Boolean := not Ada.Directories.Exists (Path);
+         HT    : constant Character := ASCII.HT;
+         Now   : String := Ada.Calendar.Formatting.Image (Ada.Calendar.Clock);
+      begin
+         Now (Now'First + 10) := 'T';
+         if Fresh then
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+            Ada.Text_IO.Put_Line
+              (File, "when" & HT & "build" & HT & "model" & HT & "task" & HT & "isolation" & HT & "outcome"
+               & HT & "seconds" & HT & "calls" & HT & "thoughts_closed");
+         else
+            Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Path);
+         end if;
+         Ada.Text_IO.Put_Line
+           (File, Now & HT & Build & HT & Ada.Directories.Simple_Name (Model) & HT & Task_Name & HT
+            & (if Apart then "workspace" else "project") & HT & Ending & HT
+            & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
+            & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed);
+         Ada.Text_IO.Close (File);
+      exception
+         --  A history not kept is no trial lost.
+         when others =>
+            if Ada.Text_IO.Is_Open (File) then
+               Ada.Text_IO.Close (File);
+            end if;
+      end Keep_In_History;
 
       --  The copy gone with the trial it was made for.
       procedure Discard_Copy is
@@ -601,6 +679,7 @@ package body Agent_Trial is
                                       & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
                                       & Integer'Image (Integer (Took)) & " s," & Natural'Image (Calls) & " calls, "
                                       & Closed & " thoughts closed" & LF);
+                              Keep_In_History (Name, Ending, Natural (Took), Calls, Closed);
                            end;
                            Ada.Text_IO.Put_Line
                              ("agent-trial " & Name

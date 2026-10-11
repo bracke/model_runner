@@ -7,6 +7,7 @@ with Hostkit.Fs;
 with Version.Diff;
 with Version.Files;
 with Version.History;
+with Version.Hooks;
 with Version.Log;
 with Version.Merge;
 with Version.Objects;
@@ -18,6 +19,7 @@ with Version.Status;
 with Version.Worktrees;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 
@@ -205,6 +207,16 @@ package body Model_Runner.Framework.Git is
       return (if Worked then To_String (Top) else "");
    end Top_Level;
 
+   --  The renames of the last commits as of one commit of one repository:
+   --  the same for every path asked about until HEAD moves, and a check
+   --  of the project asks of each file it misses.
+   Renames_Key   : Unbounded_String;
+   Renames_Lines : Name_Lists.Vector;
+
+   --  Each file's last commit as of one commit of one repository.
+   Commits_Key   : Unbounded_String;
+   Commits_Seen  : Name_Lists.Vector;
+
    ------------------------
    -- Renamed_In_History --
    ------------------------
@@ -221,7 +233,10 @@ package body Model_Runner.Framework.Git is
          Lines  : Name_Lists.Vector;
       begin
          --  The renames of the last commits, newest first: old and new path.
-         if Head /= "" then
+         if Head /= "" and then To_String (Renames_Key) = Standard.Version.Repository.Root_Path (Repo) & "@" & Head
+         then
+            Lines := Renames_Lines;
+         elsif Head /= "" then
             declare
                Start : Standard.Version.History.Commit_Id_Vectors.Vector;
             begin
@@ -232,6 +247,8 @@ package body Model_Runner.Framework.Git is
                      Standard.Version.History.Rev_List (Repo, Start, Options => (Max_Count => 200, others => <>)),
                      Name_Status  => True,
                      Rename_Score => 50));
+               Renames_Key := To_Unbounded_String (Standard.Version.Repository.Root_Path (Repo) & "@" & Head);
+               Renames_Lines := Lines;
             end;
          end if;
          declare
@@ -296,6 +313,22 @@ package body Model_Runner.Framework.Git is
          if Head = "" then
             return;
          end if;
+         --  Asked already as of this commit: TAB-separated path and seconds.
+         declare
+            Key : constant String := Standard.Version.Repository.Root_Path (Repo) & "@" & Head;
+            Own : constant String := Standard.Version.Repository.Prefix (Repo) & Path & ASCII.HT;
+         begin
+            if To_String (Commits_Key) /= Key then
+               Commits_Key := To_Unbounded_String (Key);
+               Commits_Seen.Clear;
+            end if;
+            for Seen of Commits_Seen loop
+               if Seen'Length > Own'Length and then Seen (Seen'First .. Seen'First + Own'Length - 1) = Own then
+                  Seconds := Long_Long_Integer'Value (Seen (Seen'First + Own'Length .. Seen'Last));
+                  return;
+               end if;
+            end loop;
+         end;
          Start.Append (Standard.Version.Objects.To_Object_Id (Head));
          Limits.Paths.Append (Standard.Version.Repository.Prefix (Repo) & Path);
          declare
@@ -305,6 +338,11 @@ package body Model_Runner.Framework.Git is
             if not Last.Is_Empty then
                Seconds := Standard.Version.Objects.Commit_Committer_Time
                  (Standard.Version.Objects.Read_Object (Repo, Last.First_Element));
+            end if;
+            if Natural (Commits_Seen.Length) < 4096 then
+               Commits_Seen.Append
+                 (Standard.Version.Repository.Prefix (Repo) & Path & ASCII.HT
+                  & Long_Long_Integer'Image (Seconds));
             end if;
          end;
       end Ask;
@@ -364,6 +402,8 @@ package body Model_Runner.Framework.Git is
       Head                    : out Ada.Strings.Unbounded.Unbounded_String;
       Worked                  : out Boolean)
    is
+      Hook : Unbounded_String;
+
       procedure Make is
          Repo : constant Standard.Version.Repository.Repository_Handle := Standard.Version.Repository.Open;
          Id   : constant String := Standard.Version.Refs.Current_Commit_Id (Repo);
@@ -374,10 +414,31 @@ package body Model_Runner.Framework.Git is
          end if;
          Standard.Version.Worktrees.Add_Detached (Path => Tree, Rev => Id);
          Head := To_Unbounded_String (Id);
+         Hook := To_Unbounded_String (Standard.Version.Hooks.Runnable_Hook (Repo, "post-checkout"));
       end Make;
    begin
       Head := Null_Unbounded_String;
       Within (Project_Directory, Make'Access, Worked);
+      --  The project's post-checkout hook, as git worktree add runs it: in
+      --  the new worktree, told it came from nothing to its commit, a
+      --  branch checkout. A child of its own, in that directory: run in
+      --  the process, it would move every task's. What it says is the
+      --  harness log's; how it ends changes nothing, as with git.
+      if Worked and then Length (Hook) > 0 then
+         declare
+            Arguments : Name_Lists.Vector;
+            Happened  : Execution.Outcome;
+         begin
+            Arguments.Append (String'(1 .. 40 => '0'));
+            Arguments.Append (To_String (Head));
+            Arguments.Append ("1");
+            --  Its output beside the worktree, not in it.
+            Execution.Run_Harness
+              (Project_Directory, To_String (Hook), Arguments, Tree,
+               Tree & ".post-checkout", 600, Happened);
+            Files.Discard (Tree & ".post-checkout");
+         end;
+      end if;
    end Add_Worktree;
 
    ---------------------

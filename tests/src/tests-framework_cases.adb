@@ -10661,8 +10661,21 @@ package body Tests.Framework_Cases is
                   Other  : constant String := Root & "-other";
                   Head   : Unbounded_String;
                   Worked : Boolean;
+                  Hook   : constant String := Root & "/.git/hooks/post-checkout";
                begin
+                  --  The project's post-checkout hook runs in the new
+                  --  worktree, told what git tells it.
+                  Put_File (Hook, "#!/bin/sh" & LF & "echo ""$1 $2 $3"" > hook-ran" & LF);
+                  if not Hostkit.Metadata.Set_Permissions (Hook, 8#755#) then
+                     Assert (False, "the hook could not be made runnable");
+                  end if;
                   Gt.Add_Worktree (Root, Tree, Head, Worked);
+                  Assert (Dirs.Exists (Tree & "/hook-ran")
+                          and then Read_Whole (Tree & "/hook-ran")
+                            = String'(1 .. 40 => '0') & " " & To_String (Head) & " 1" & LF,
+                          "the post-checkout hook did not run in the worktree, told what git tells it");
+                  Dirs.Delete_File (Hook);
+                  Dirs.Delete_File (Tree & "/hook-ran");
                   Assert (Worked and then Length (Head) = 40
                           and then Dirs.Exists (Tree & "/sub/new.adb")
                           and then Gt.Status_Of (Tree).Found
