@@ -24,6 +24,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A file rewritten the same size within a second is seen:** the repository told a changed file by its size and modification time in whole seconds, and a rewrite of the same size in the second it was last read in kept its old content -- its fingerprint, symbols and uses -- under everything built on the graph. The file system's own change record, to the nanosecond, is now part of the stamp where the host keeps one, as the agent's tools already had it.
+- **What the project allows now, not to be read, allows nothing:** the live check fell back to the agent's first grant when the task could not be read -- open exactly when its authority was unknown; it now refuses, and a file call says the permissions cannot be established, not that it is denied.
+- **No evidence without what it is held to:** a task's attempt, the requirements it serves, their specifications and the decisions that govern it were recorded only where they read; evidence missing one could never be found stale by it. Run_Profile now stops on any that will not read.
+- **A tool that will not say its version is known by its file:** "unknown" for every such tool was one answer for any two, and evidence held strict to its toolchain stood when the tool was replaced; such a tool is now known by where it is found and a hash of what it holds.
+- **Results made at once are ordered by the project's count:** a per-process counter gave two sessions the same order; the store's allocator, which every session shares, numbers them now.
 - **How evidence stands is said with its kind first:** "an earlier attempt's: …", "stale (the files): …", "unusable: …" lead the reason /why, /state and the gates give (Verification.Kind_Said).
 - **Every "latest" is by number:** the last invocation of a task, its last work call and the project's last test run were taken by where their names sorted -- one compared names as text; each is now by the number in it (Framework.Later), as the latest evidence is.
 - **A permission taken away mid-run is tested:** the children case revokes writing while its agent runs, and holds the agent to it at once.

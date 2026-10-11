@@ -1188,14 +1188,16 @@ package body Model_Runner.Framework.Work is
    --  What the project allows the task's work as its configuration and
    --  the task's own permissions stand now: the most any agent of it holds.
    --  By the agent's own role: a helper's role may be granted what a
-   --  worker's is not. No task to read it by, nothing more is held to.
+   --  worker's is not. Where the task it is held by cannot be read, what
+   --  the project allows now cannot be known, and nothing is allowed: a
+   --  live limit that lapses when its authority is unreadable is none.
    function Allowed_Now (Host : Child_Host; Role : String) return Permissions.Permission_Set is
       Defined : Records.Item;
       Read    : E.Error_Info;
    begin
       Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
       if E.Is_Error (Read) then
-         return Permissions.Unrestricted;
+         return Permissions.Nothing;
       end if;
       return Permissions.Effective (Host.Item.all, Records.Get (Defined, "kind"),
                                     (if Role = "" then "worker" else Role),
@@ -1434,6 +1436,14 @@ package body Model_Runner.Framework.Work is
    end Keep_Unkept;
 
    function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info is (Host.Unkept);
+
+   function Authority_Readable (Host : Child_Host) return Boolean is
+      Defined : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
+      return E.Is_Ok (Read);
+   end Authority_Readable;
 
    procedure Spend
      (Host          : in out Child_Host;

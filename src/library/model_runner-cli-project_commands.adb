@@ -1494,6 +1494,11 @@ package body Model_Runner.CLI.Project_Commands is
               when Pm.Path_Harness_Owned => Tr.Harness_Owned,
               when others                => Tr.Not_Permitted);
          Put ("error: " & Pm.Path_Refusal (Root, Path, Writing => Writes (Named)));
+      elsif File_Tool (Named) and then Self.Host /= null and then not Wk.Authority_Readable (Self.Host.all) then
+         --  Not denied: not known. Said as that, nothing done.
+         Refuse (Tr.Not_Permitted);
+         Put ("error: what this project allows its work cannot be established now -- its task's record will"
+              & " not read -- so nothing was done; finish with status: blocked and say so");
       elsif File_Tool (Named) and then not Writes (Named) and then not May (Reading => True) then
          Refuse (if Within_Project (Path) then Tr.Not_Permitted else Tr.Outside_Project);
          Put ("error: you may not read " & Path

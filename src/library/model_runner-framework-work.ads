@@ -476,6 +476,14 @@ package Model_Runner.Framework.Work is
    --  @return The failure.
    function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info;
 
+   --  Whether what the project allows the work now can be established:
+   --  the task it is held by reads. Where it does not, every permission
+   --  is refused, and the refusal is said as this, not as policy.
+   --
+   --  @param Host The host.
+   --  @return True when it reads.
+   function Authority_Readable (Host : Child_Host) return Boolean;
+
    --  Count tokens the agent now working generated against its budget.
    --
    --  @param Host The host.

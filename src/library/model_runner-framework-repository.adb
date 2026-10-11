@@ -10,6 +10,7 @@ with Ada.Strings.Hash;
 with Ada.Strings.Maps;
 
 with Hostkit.Fs;
+with Hostkit.Metadata;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
@@ -55,24 +56,39 @@ package body Model_Runner.Framework.Repository is
       Seconds : constant Duration :=
         Dirs.Modification_Time (Full) - Ada.Calendar.Time_Of (1970, 1, 1);
    begin
-      return Ada.Strings.Fixed.Trim (Dirs.File_Size'Image (Dirs.Size (Full)), Ada.Strings.Both)
-        & ":" & Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Long_Long_Integer (Seconds)),
-                                        Ada.Strings.Both);
+      --  And the file system's own change record, to the nanosecond, where
+      --  the host keeps one (statx): size and whole seconds alone kept the
+      --  old content of a file rewritten the same size within the second
+      --  it was last read in -- the agent's own tools already stamp so.
+      declare
+         Fine    : Boolean;
+         Changed : constant String := Hostkit.Metadata.Change_Stamp (Full, Fine);
+      begin
+         return Ada.Strings.Fixed.Trim (Dirs.File_Size'Image (Dirs.Size (Full)), Ada.Strings.Both)
+           & ":" & Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Long_Long_Integer (Seconds)),
+                                           Ada.Strings.Both)
+           & (if Fine then ":" & Changed else "");
+      end;
    exception
       when others =>
          return "";
    end Stamp_Of;
 
    --  Whether a stamp says a file changed so lately that one of the same
-   --  second could still follow unseen.
+   --  moment could still follow unseen: within two seconds, read again
+   --  whatever the stamp -- a fine change record is a kernel tick coarse,
+   --  and two writes of one size in one tick share it.
    function Recent (Stamp : String) return Boolean is
       use type Ada.Calendar.Time;
       Colon : constant Natural := Ada.Strings.Fixed.Index (Stamp, ":");
+      Fine  : constant Natural :=
+        (if Colon = 0 then 0 else Ada.Strings.Fixed.Index (Stamp (Colon + 1 .. Stamp'Last), ":"));
       Now   : constant Long_Long_Integer :=
         Long_Long_Integer (Ada.Calendar.Clock - Ada.Calendar.Time_Of (1970, 1, 1));
    begin
       return Colon = 0
-        or else Now - Long_Long_Integer'Value (Stamp (Colon + 1 .. Stamp'Last)) < 2;
+        or else Now - Long_Long_Integer'Value
+                        (Stamp (Colon + 1 .. (if Fine = 0 then Stamp'Last else Fine - 1))) < 2;
    exception
       when others =>
          return True;

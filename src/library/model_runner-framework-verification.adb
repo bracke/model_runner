@@ -1,8 +1,10 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
 with Hostkit.Fs;
+with Hostkit.Process;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
@@ -441,6 +443,47 @@ package body Model_Runner.Framework.Verification is
 
    --  What a program says its version is: the first line of its --version,
    --  run as any check is; "unknown" where it will not say.
+   --  A program that will not say its version, known by what it is: where
+   --  it is found and what its file holds. "unknown" for every such tool
+   --  was the same answer for any two of them, and evidence held strict to
+   --  its toolchain stood when the tool was replaced by another.
+   function Identity_Of (Item : Stores.Store; Program : String) return String is
+      Where : constant String :=
+        (if Ada.Strings.Fixed.Index (Program, "/") > 0
+         then Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Program)
+         else Hostkit.Process.Locate (Program));
+      type Hash is mod 2 ** 64;
+      Sum   : Hash := 16#CBF29CE484222325#;
+      Hex   : constant String := "0123456789abcdef";
+      Said  : String (1 .. 16);
+      File  : Ada.Streams.Stream_IO.File_Type;
+      Block : Ada.Streams.Stream_Element_Array (1 .. 65_536);
+      Last  : Ada.Streams.Stream_Element_Offset;
+   begin
+      if Where = "" or else not Ada.Directories.Exists (Where) then
+         return "not found: " & Program;
+      end if;
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Where);
+      while not Ada.Streams.Stream_IO.End_Of_File (File) loop
+         Ada.Streams.Stream_IO.Read (File, Block, Last);
+         for Index in Block'First .. Last loop
+            Sum := (Sum xor Hash (Block (Index))) * 16#100000001B3#;
+         end loop;
+      end loop;
+      Ada.Streams.Stream_IO.Close (File);
+      for Index in reverse Said'Range loop
+         Said (Index) := Hex (Hex'First + Natural (Sum mod 16));
+         Sum := Sum / 16;
+      end loop;
+      return Where & " " & Said;
+   exception
+      when others =>
+         if Ada.Streams.Stream_IO.Is_Open (File) then
+            Ada.Streams.Stream_IO.Close (File);
+         end if;
+         return "unreadable: " & Where;
+   end Identity_Of;
+
    function Version_Of
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
@@ -455,7 +498,7 @@ package body Model_Runner.Framework.Verification is
       Asked.Keep_Whole := False;
       Execution.Run (Item, Change, Asked, Program & " --version", "", Ran, Status);
       if E.Is_Error (Status) or else not Ran.Started or else Ran.Exit_Status /= 0 then
-         return "unknown";
+         return Identity_Of (Item, Program);
       end if;
       declare
          Text : constant String := To_String (Ran.Output);
@@ -463,7 +506,7 @@ package body Model_Runner.Framework.Verification is
          Line : constant String :=
            Trim (if Stop = 0 then Text else Text (Text'First .. Stop - 1));
       begin
-         return (if Line = "" then "unknown" else Line);
+         return (if Line = "" then Identity_Of (Item, Program) else Line);
       end;
    end Version_Of;
 
@@ -655,10 +698,14 @@ package body Model_Runner.Framework.Verification is
                Read : E.Error_Info;
             begin
                Intent.Read (Item, Intent.Requirement, Task_Id, Held, Read);
-               if E.Is_Ok (Read) then
-                  Records.Set (Value, "requirement." & Task_Id, Image (Held.Revision));
-                  Records.Set (Value, "meaning." & Task_Id, To_String (Held.Meaning));
+               --  What it is held to, recorded, or no evidence: evidence
+               --  missing a binding can never be found stale by it.
+               if E.Is_Error (Read) then
+                  Status := Read;
+                  return;
                end if;
+               Records.Set (Value, "requirement." & Task_Id, Image (Held.Revision));
+               Records.Set (Value, "meaning." & Task_Id, To_String (Held.Meaning));
             end;
          elsif Task_Id /= "" then
             declare
@@ -666,18 +713,25 @@ package body Model_Runner.Framework.Verification is
                Read : E.Error_Info;
             begin
                Tasks.Effective (Item, Task_Id, View, Read);
+               --  The task's attempt and what it serves, or no evidence.
+               if E.Is_Error (Read) then
+                  Status := Read;
+                  return;
+               end if;
                Records.Set (Value, "generation", Records.Get (View, "runtime.generation"));
                for Requirement of Lines_Of (Records.Get (View, "definition.requirements")) loop
                   declare
                      Held : Intent.Entity;
                   begin
                      Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
-                     if E.Is_Ok (Read) then
-                        Records.Set (Value, "requirement." & Requirement,
-                                     Image (Held.Revision));
-                        Records.Set (Value, "meaning." & Requirement,
-                                     To_String (Held.Meaning));
+                     if E.Is_Error (Read) then
+                        Status := Read;
+                        return;
                      end if;
+                     Records.Set (Value, "requirement." & Requirement,
+                                  Image (Held.Revision));
+                     Records.Set (Value, "meaning." & Requirement,
+                                  To_String (Held.Meaning));
 
                      --  The specifications it is linked to, by what they mean.
                      for Relation in Intent.Link_Kind loop
@@ -685,10 +739,12 @@ package body Model_Runner.Framework.Verification is
                         loop
                            if Starts (Target, "SPEC-") then
                               Intent.Read (Item, Intent.Specification, Target, Held, Read);
-                              if E.Is_Ok (Read) then
-                                 Records.Set (Value, "specification_meaning." & Target,
-                                              To_String (Held.Meaning));
+                              if E.Is_Error (Read) then
+                                 Status := Read;
+                                 return;
                               end if;
+                              Records.Set (Value, "specification_meaning." & Target,
+                                           To_String (Held.Meaning));
                            end if;
                         end loop;
                      end loop;
@@ -704,10 +760,12 @@ package body Model_Runner.Framework.Verification is
                      if Starts (Field, "decision.") then
                         Intent.Read (Item, Intent.Decision, Field (Field'First + 9 .. Field'Last),
                                      Held, Read);
-                        if E.Is_Ok (Read) then
-                           Records.Set (Value, "decision_meaning." & Field (Field'First + 9 .. Field'Last),
-                                        To_String (Held.Meaning));
+                        if E.Is_Error (Read) then
+                           Status := Read;
+                           return;
                         end if;
+                        Records.Set (Value, "decision_meaning." & Field (Field'First + 9 .. Field'Last),
+                                     To_String (Held.Meaning));
                      end if;
                   end;
                end loop;

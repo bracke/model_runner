@@ -3238,6 +3238,31 @@ package body Tests.Framework_Cases is
                  and then Rp.References_To (Refreshed, "Parser.Next")
                           = Rp.References_To (Again, "Parser.Next"),
                  "a changed spec was not brought in as a scan would");
+         --  Rewritten the same size, its modification time put back as it
+         --  was, and long ago: what the file system records of the change
+         --  still tells it, and it is read again -- size and whole seconds
+         --  alone kept the old content.
+         declare
+            Fine    : Boolean;
+            Same    : constant String := Project & "/src/same.ads";
+            Long_Ago : constant Long_Long_Integer := 1_700_000_000;
+            Ignored : Boolean;
+            Before  : Rp.Graph;
+         begin
+            Put_File (Same, "package Same is X : constant := 1; end Same;" & LF);
+            Ignored := Hostkit.Metadata.Set_File_Times (Same, Long_Ago, Long_Ago);
+            if Hostkit.Metadata.Change_Stamp (Same, Fine)'Length >= 0 and then Fine then
+               Before := Rp.Scan (Project);
+               delay 0.05;
+               Put_File (Same, "package Same is X : constant := 2; end Same;" & LF);
+               Ignored := Hostkit.Metadata.Set_File_Times (Same, Long_Ago, Long_Ago);
+               Refreshed := Rp.Refresh (Project, Before, Read);
+               Assert (Rp.Graph_Fingerprint (Refreshed) = Rp.Graph_Fingerprint (Rp.Scan (Project))
+                       and then Rp.Graph_Fingerprint (Refreshed) /= Rp.Graph_Fingerprint (Before),
+                       "a file rewritten the same size at the same time was taken as it was");
+            end if;
+            Dirs.Delete_File (Same);
+         end;
          Assert (Read >= 1 and then Read < Rp.File_Count (Again),
                  "the refresh read more than changed:" & Natural'Image (Read));
       end;
@@ -6684,6 +6709,21 @@ package body Tests.Framework_Cases is
       Change := S.No_Changes;
       Rs.Add (Store, Change, Transcript, Status);
       S.Commit (Store, Change, Status);
+      --  Made in one moment, results are in the order made by the project's
+      --  count, which every session shares: the second is later.
+      declare
+         One, Two : Rs.Result :=
+           (Kind => Rs.Diagnostic, Producer => First, Summary => To_Unbounded_String ("one"),
+            Payload => To_Unbounded_String ("first of two"), Provenance => First, others => <>);
+      begin
+         Two.Payload := To_Unbounded_String ("second of two");
+         Rs.Add (Store, Change, One, Status);
+         Rs.Add (Store, Change, Two, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then To_String (Two.Created_At) > To_String (One.Created_At),
+                 "two results made at once were not in the order made: "
+                 & To_String (One.Created_At) & " " & To_String (Two.Created_At));
+      end;
       Assert (Ada.Strings.Fixed.Index (Ag.Child_Results (Store, To_String (Root)),
                                        To_String (First)) > 0
               and then Ada.Strings.Fixed.Index
@@ -11168,6 +11208,37 @@ package body Tests.Framework_Cases is
                  & Vf.Latest (Store, To_String (Id), "probing") & " " & Code_Of (Status));
       end;
 
+      --  A task serving a requirement that will not read gets no evidence:
+      --  evidence missing that binding could never be found stale by it.
+      declare
+         Req     : Unbounded_String;
+         Serving : Unbounded_String;
+         Given   : Tk.Field_Map;
+         Project : constant String := Fresh_Root (Store);
+         Report  : S.Recovery_Report;
+         Taken   : Unbounded_String;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Read", "It SHALL read.", "",
+                     "user", "", "io", Req, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+         Given := Fields ("Serve", "analysis");
+         Given.Include ("requirements", To_String (Req));
+         Tk.Create (Store, Change, Given, "user", "", Serving, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Kept  : constant String := S.Root (Store) & "/requirements/" & To_String (Req) & ".rec";
+         begin
+            S.Close (Store);
+            Dirs.Rename (Kept, Kept & ".aside");
+            S.Open (Store, Project, Report, Status);
+            Vf.Run_Profile (Store, Change, "probing", To_String (Serving), Taken, Passed, Status);
+            Change := S.No_Changes;
+            Dirs.Rename (Kept & ".aside", Kept);
+            Assert (E.Is_Error (Status), "evidence was taken without a requirement its task serves");
+         end;
+      end;
+
       --  A record that will not read is unusable, not failed.
       declare
          Path : constant String := S.Root (Store) & "/verification/" & To_String (Evidence) & ".rec";
@@ -11219,6 +11290,60 @@ package body Tests.Framework_Cases is
       end if;
       S.Close (Store);
    end Evidence_Applies_By_One_Rule;
+
+   --  A tool that will not say its version is known by where it is and
+   --  what its file holds: held strict, replaced, its evidence is stale.
+   procedure Quiet_Tool_Held_By_Its_File
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vf renames Model_Runner.Framework.Verification;
+      use type Vf.Applicability;
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+
+      procedure Script (Body_Line : String) is
+         File    : Ada.Text_IO.File_Type;
+         Path    : constant String := Fresh_Root (Store) & "/quiet.sh";
+         Ignored : Boolean;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put_Line (File, "#!/bin/sh");
+         Ada.Text_IO.Put_Line (File, "[ ""$1"" = --version ] && exit 1");
+         Ada.Text_IO.Put_Line (File, Body_Line);
+         Ada.Text_IO.Close (File);
+         Ignored := Hostkit.Metadata.Set_Permissions (Path, 8#755#);
+      end Script;
+   begin
+      if not Dirs.Exists ("/bin/sh") then
+         return;
+      end if;
+      Task_Project (Store, "quiet-tool",
+                    "set execution.allowed = ./quiet.sh" & LF
+                    & "profile quiet = run: ./quiet.sh" & LF
+                    & "scalar verification.toolchain = strict" & LF);
+      Script ("exit 0");
+      Vf.Run_Profile (Store, Change, "quiet", "", Evidence, Passed, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Vf.Applicable (Store, To_String (Evidence)).Kind = Vf.Current,
+              "evidence of a quiet tool did not apply as taken: " & Code_Of (Status));
+      Script ("true; exit 0");
+      declare
+         Stands : constant Vf.Applicability_Report := Vf.Applicable (Store, To_String (Evidence));
+         Said   : Unbounded_String;
+      begin
+         for Reason of Stands.Reasons loop
+            Append (Said, Reason & " | ");
+         end loop;
+         Assert ((for some Reason of Stands.Reasons => Ada.Strings.Fixed.Index (Reason, "./quiet.sh has changed") > 0),
+                 "a quiet tool replaced left its evidence standing, held strict: "
+                 & Stands.Kind'Image & " " & To_String (Said));
+      end;
+      S.Close (Store);
+   end Quiet_Tool_Held_By_Its_File;
 
    --  Evidence is reused only where it would be current: held strict to
    --  its toolchain, a tool that answers otherwise now is a run of the
@@ -11783,6 +11908,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Evidence_Applies_By_One_Rule'Access,
          "evidence applies by one rule, and says how it does not");
+      Register_Routine
+        (T, Quiet_Tool_Held_By_Its_File'Access,
+         "a tool that will not say its version is held to by its file");
       Register_Routine
         (T, Strict_Reuse_Follows_The_Toolchain'Access,
          "held strict to its toolchain, evidence is not reused once a tool answers otherwise");
