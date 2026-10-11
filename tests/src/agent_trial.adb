@@ -223,10 +223,16 @@ package body Agent_Trial is
       end Copied;
 
       Own_Copy : constant String := Copied;
+
+      --  Whether a session could not start: the runs after it would end the
+      --  same, and are not run.
+      Halted   : Boolean := False;
    begin
       Clean := True;
       for Round in 1 .. Repeats loop
+         exit when Halted;
          for Which in Tasks'Range loop
+            exit when Halted;
             declare
                One : Trial_Task renames Tasks (Which);
             begin
@@ -431,6 +437,21 @@ package body Agent_Trial is
                               Start := Index + 1;
                            end if;
                         end loop;
+                        --  A session that never started is said as that, not as
+                           --  work that did not end: the program without its
+                           --  messages -- their names shown in their place -- or
+                           --  no model loaded. Two trials ran an hour on nothing
+                           --  so, each run "did not end".
+                        if To_String (Outcome) = "did not end"
+                          and then (Ada.Strings.Fixed.Index (Text, "message catalog could not be read") > 0
+                                    or else Ada.Strings.Fixed.Index (Text, "<cli.") > 0
+                                    or else Ada.Strings.Fixed.Index (Text, "<progress.") > 0)
+                        then
+                           Outcome := To_Unbounded_String
+                             ("the session could not start: the program found no message catalog -- "
+                              & "its messages came out as their names");
+                           Halted := True;
+                        end if;
                         if not Worked or else Ada.Strings.Fixed.Index (To_String (Outcome), "complete") = 0 then
                            Clean := False;
                         else
@@ -533,6 +554,11 @@ package body Agent_Trial is
             end;
          end loop;
       end loop;
+
+      if Halted then
+         Ada.Text_IO.Put_Line
+           ("agent-trial: stopped -- a session could not start, and the runs after it would not either");
+      end if;
 
       --  Of several runs, how many of each task's ended complete: one run
       --  of a small model is a sample, and a change is told from luck only

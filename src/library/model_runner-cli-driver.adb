@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Text_IO;
 
 with Model_Runner.CLI.Execute;
 with Model_Runner.Config;
@@ -268,9 +269,18 @@ package body Model_Runner.CLI.Driver is
         (Screen, Catalog'Unchecked_Access, Item.Color, Capabilities, Item.Level);
 
       if not Loc.Is_Ready (Catalog) then
-         --  The emergency path: say so once, in the invariant form, and carry
-         --  on with message identifiers instead of text.
-         Pres.Warn (Screen, "warning.locale_fallback");
+         --  The emergency path: said once, in plain words -- the catalog is
+         --  what a message would be read from, so a message key said it to
+         --  nobody -- with where it was looked for; and on, with message
+         --  identifiers instead of text. A copy of the program run from
+         --  elsewhere found none, and said nothing a reader could follow.
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            Model_Runner.Program_Name & ": warning: the message catalog could not be read -- looked for "
+            & Model_Runner.Platform.Catalog_Path & ", beside the program in "
+            & Model_Runner.Platform.Executable_Directory
+            & " -- so messages are shown by their names; run the program from where it was built"
+            & " or installed");
       elsif Loc.Used_Fallback (Catalog)
         and then (Model_Runner.Text.To_String (Item.Locale) /= ""
                   or else Item.Level = Opt.Verbose)

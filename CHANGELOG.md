@@ -24,6 +24,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A program without its message catalog says so in words:** it warned in "the invariant form" -- a message name, which is what a missing catalog shows anyway -- and a copy run from elsewhere said nothing a reader could follow; it now says on its error output that the catalog could not be read, where it looked, and that messages are shown by their names.
+- **tests agent-trial tells a session that never started:** one whose messages came out as their names is said as unable to start, not as work that "did not end", and the runs after it are not made -- two trials spent an hour on nothing so.
 - **A file rewritten the same size within a second is seen:** the repository told a changed file by its size and modification time in whole seconds, and a rewrite of the same size in the second it was last read in kept its old content -- its fingerprint, symbols and uses -- under everything built on the graph. The file system's own change record, to the nanosecond, is now part of the stamp where the host keeps one, as the agent's tools already had it.
 - **What the project allows now, not to be read, allows nothing:** the live check fell back to the agent's first grant when the task could not be read -- open exactly when its authority was unknown; it now refuses, and a file call says the permissions cannot be established, not that it is denied.
 - **No evidence without what it is held to:** a task's attempt, the requirements it serves, their specifications and the decisions that govern it were recorded only where they read; evidence missing one could never be found stale by it. Run_Profile now stops on any that will not read.
