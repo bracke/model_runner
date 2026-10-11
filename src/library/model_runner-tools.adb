@@ -3,6 +3,10 @@ with Ada.Strings.Unbounded;
 with Ada.Strings.Maps;
 with Ada.Unchecked_Deallocation;
 
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+
 with Model_Runner.Tools.Python_Calls;
 
 package body Model_Runner.Tools is
@@ -34,11 +38,6 @@ package body Model_Runner.Tools is
    --  Reading and writing JSON
    ---------------------------------------------------------------------------
 
-   --  Whether a character may stand inside a number, which is the only
-   --  value written back exactly as the file spells it.
-   function Is_Number_Character (Letter : Character) return Boolean
-   is (Letter in '0' .. '9' | '-' | '+' | '.' | 'e' | 'E');
-
    --  Skip whitespace, as JSON means it: the four characters and nothing
    --  else, so a file with a stray byte in it is refused rather than read
    --  past.
@@ -56,86 +55,26 @@ package body Model_Runner.Tools is
       return Index;
    end Blanks_Skipped;
 
-   --  Fail at a position, keeping the first failure. The reader wants to
-   --  know where the text stopped being JSON, not where a second reader
-   --  gave up afterwards.
-   procedure Fail
-     (Status : in out E.Error_Info;
-      Code   : E.Error_Code;
-      Text   : String;
-      Where  : Natural) is
-   begin
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      Status := E.Make (Code);
-      E.Add_Integer
-        (Status, "offset", Long_Long_Integer (Where - Text'First),
-         E.Param_Offset);
-   end Fail;
+   -------------
+   -- Rewrite --
+   -------------
 
-   --  One code point, as UTF-8. Written here rather than taken from the
-   --  text package because what arrives is a number a \u escape spelled and
-   --  not a character anybody has.
-   function As_UTF8 (Code : Natural) return String is
-   begin
-      if Code < 16#80# then
-         return [1 => Character'Val (Code)];
-      elsif Code < 16#800# then
-         return [Character'Val (16#C0# + Code / 16#40#),
-                 Character'Val (16#80# + Code mod 16#40#)];
-      elsif Code < 16#1_0000# then
-         return [Character'Val (16#E0# + Code / 16#1000#),
-                 Character'Val (16#80# + (Code / 16#40#) mod 16#40#),
-                 Character'Val (16#80# + Code mod 16#40#)];
-      else
-         return [Character'Val (16#F0# + Code / 16#4_0000#),
-                 Character'Val (16#80# + (Code / 16#1000#) mod 16#40#),
-                 Character'Val (16#80# + (Code / 16#40#) mod 16#40#),
-                 Character'Val (16#80# + Code mod 16#40#)];
-      end if;
-   end As_UTF8;
-
-   --  The value of four hexadecimal digits, or -1 when they are not four
-   --  hexadecimal digits.
-   function Hex_Value (Text : String; From : Natural) return Integer is
-      Result : Integer := 0;
-   begin
-      if From + 3 > Text'Last then
-         return -1;
-      end if;
-
-      for Index in From .. From + 3 loop
-         case Text (Index) is
-            when '0' .. '9' =>
-               Result := Result * 16
-                 + (Character'Pos (Text (Index)) - Character'Pos ('0'));
-            when 'a' .. 'f' =>
-               Result := Result * 16
-                 + (Character'Pos (Text (Index)) - Character'Pos ('a')) + 10;
-            when 'A' .. 'F' =>
-               Result := Result * 16
-                 + (Character'Pos (Text (Index)) - Character'Pos ('A')) + 10;
-            when others =>
-               return -1;
-         end case;
-      end loop;
-      return Result;
-   end Hex_Value;
-
-   --  Write one value back in the spelling this engine uses, advancing From
-   --  past it.
-   --
-   --  Recursive, and bounded by Depth: a value nests as deeply as its author
-   --  wrote it, and this is where a file that nests without end stops.
-   procedure Write_Value
-     (Text   : String;
-      From   : in out Natural;
-      Target : in out String;
-      Last   : in out Natural;
-      Depth  : Natural;
-      Status : in out E.Error_Info)
+   --  A value of a document written into Target after Last, in the
+   --  spelling this engine uses: ", " between items, ": " after a name,
+   --  members in the order written, a number as written, a string with its
+   --  characters as they are and only the escapes JSON requires -- a quote,
+   --  a backslash, a control as its short escape or as \u00XX. That is what
+   --  the implementation these templates were made for writes, and a prompt
+   --  differing from it in an escape is one the model was not trained on.
+   procedure Write_Node
+     (Document : Jsonlib.Documents.Document;
+      Item     : Jsonlib.Documents.Node;
+      Target   : in out String;
+      Last     : in out Natural;
+      Status   : in out E.Error_Info)
    is
+      package Doc renames Jsonlib.Documents;
+
       --  Append to the target, reporting the one bound this has.
       procedure Emit (Value : String) is
       begin
@@ -143,264 +82,87 @@ package body Model_Runner.Tools is
             return;
          elsif Last + Value'Length > Target'Length then
             Status := E.Make (E.Tools_Too_Large);
-            E.Add_Integer
-              (Status, "limit", Long_Long_Integer (Target'Length),
-               E.Param_Bytes);
+            E.Add_Integer (Status, "limit", Long_Long_Integer (Target'Length), E.Param_Bytes);
             return;
          end if;
-         Target (Target'First + Last .. Target'First + Last + Value'Length - 1)
-           := Value;
+         Target (Target'First + Last .. Target'First + Last + Value'Length - 1) := Value;
          Last := Last + Value'Length;
       end Emit;
 
-      --  A quoted string, written back with its escapes decoded to the
-      --  characters they stand for and only the ones JSON requires written
-      --  again. That is what the implementation these templates were
-      --  written for produces, and a prompt differing from it in an escape
-      --  is a prompt the model was not trained on.
-      procedure Write_String is
-         Index : Natural := From + 1;
+      procedure Emit_String (Value : String) is
+         Digits_16 : constant String := "0123456789abcdef";
       begin
          Emit ("""");
-         while Index <= Text'Last and then Text (Index) /= '"' loop
-            if Text (Index) = '\' then
-               if Index = Text'Last then
-                  Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-                  return;
-               end if;
-
-               case Text (Index + 1) is
-                  when '"'  => Emit ("\""");
-                  when '\'  => Emit ("\\");
-                  when '/'  => Emit ("/");
-                  when 'b'  => Emit ("\b");
-                  when 'f'  => Emit ("\f");
-                  when 'n'  => Emit ("\n");
-                  when 'r'  => Emit ("\r");
-                  when 't'  => Emit ("\t");
-                  when 'u'  =>
-                     declare
-                        Code : Integer := Hex_Value (Text, Index + 2);
-                        Pair : Integer;
-                     begin
-                        if Code < 0 then
-                           Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-                           return;
-                        end if;
-
-                        Index := Index + 4;
-
-                        --  A character outside the first plane is written
-                        --  as two escapes, and the two are one character.
-                        --  Either half on its own is no character at all,
-                        --  which is a file this refuses rather than writes
-                        --  bytes nobody can decode.
-                        if Code in 16#D800# .. 16#DBFF# then
-                           if Index + 7 <= Text'Last
-                             and then Text (Index + 1 .. Index + 2) = "\u"
-                           then
-                              Pair := Hex_Value (Text, Index + 3);
-                           else
-                              Pair := -1;
-                           end if;
-
-                           if Pair not in 16#DC00# .. 16#DFFF# then
-                              Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-                              return;
-                           end if;
-
-                           Code := 16#1_0000#
-                             + (Code - 16#D800#) * 16#400#
-                             + (Pair - 16#DC00#);
-                           Index := Index + 6;
-                        elsif Code in 16#DC00# .. 16#DFFF# then
-                           Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-                           return;
-                        end if;
-
-                        --  A control character has to stay an escape
-                        --  whatever it was written as, because JSON has no
-                        --  way to write one plainly.
-                        if Code < 16#20# then
-                           declare
-                              Digits_16 : constant String :=
-                                "0123456789abcdef";
-                           begin
-                              Emit ("\u00"
-                                    & Digits_16 (Digits_16'First + Code / 16)
-                                    & Digits_16
-                                        (Digits_16'First + Code mod 16));
-                           end;
-                        elsif Code = Character'Pos ('"') then
-                           Emit ("\""");
-                        elsif Code = Character'Pos ('\') then
-                           Emit ("\\");
-                        else
-                           Emit (As_UTF8 (Code));
-                        end if;
-                     end;
-
-                  when others =>
-                     Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-                     return;
-               end case;
-
-               Index := Index + 2;
-            elsif Text (Index) < ' ' then
-               --  A raw control character is not a string JSON allows, and
-               --  reading one anyway would accept a file this cannot write
-               --  back unchanged.
-               Fail (Status, E.Tools_Invalid_JSON, Text, Index);
-               return;
-            else
-               Emit (Text (Index .. Index));
-               Index := Index + 1;
-            end if;
-
-            if E.Is_Error (Status) then
-               return;
-            end if;
+         for C of Value loop
+            case C is
+               when '"'      => Emit ("\""");
+               when '\'      => Emit ("\\");
+               when ASCII.BS => Emit ("\b");
+               when ASCII.FF => Emit ("\f");
+               when ASCII.LF => Emit ("\n");
+               when ASCII.CR => Emit ("\r");
+               when ASCII.HT => Emit ("\t");
+               when Character'Val (0) .. Character'Val (7) | Character'Val (11)
+                  | Character'Val (14) .. Character'Val (31) =>
+                  Emit ("\u00" & Digits_16 (Digits_16'First + Character'Pos (C) / 16)
+                        & Digits_16 (Digits_16'First + Character'Pos (C) mod 16));
+               when others   => Emit ([1 => C]);
+            end case;
          end loop;
-
-         if Index > Text'Last then
-            Fail (Status, E.Tools_Invalid_JSON, Text, Text'Last);
-            return;
-         end if;
-
          Emit ("""");
-         From := Index + 1;
-      end Write_String;
+      end Emit_String;
 
-      Index : Natural;
-   begin
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      if Depth > Max_Depth then
-         Fail (Status, E.Tools_Nesting_Too_Deep, Text, From);
-         return;
-      end if;
-
-      From := Blanks_Skipped (Text, From);
-      if From > Text'Last then
-         Fail (Status, E.Tools_Invalid_JSON, Text, Text'Last + 1);
-         return;
-      end if;
-
-      case Text (From) is
-         when '"' =>
-            Write_String;
-
-         when '{' | '[' =>
-            declare
-               Object : constant Boolean := Text (From) = '{';
-               Shut   : constant Character := (if Object then '}' else ']');
-            begin
-               Emit (Text (From .. From));
-               From := Blanks_Skipped (Text, From + 1);
-
-               if From <= Text'Last and then Text (From) = Shut then
-                  Emit (Text (From .. From));
-                  From := From + 1;
-                  return;
-               end if;
-
-               loop
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
-
-                  if Object then
-                     From := Blanks_Skipped (Text, From);
-                     if From > Text'Last or else Text (From) /= '"' then
-                        Fail (Status, E.Tools_Invalid_JSON, Text,
-                              Natural'Min (From, Text'Last));
-                        return;
-                     end if;
-
-                     Write_String;
-                     if E.Is_Error (Status) then
-                        return;
-                     end if;
-
-                     From := Blanks_Skipped (Text, From);
-                     if From > Text'Last or else Text (From) /= ':' then
-                        Fail (Status, E.Tools_Invalid_JSON, Text,
-                              Natural'Min (From, Text'Last));
-                        return;
-                     end if;
-
-                     Emit (": ");
-                     From := From + 1;
-                  end if;
-
-                  Write_Value (Text, From, Target, Last, Depth + 1, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
-
-                  From := Blanks_Skipped (Text, From);
-                  if From > Text'Last then
-                     Fail (Status, E.Tools_Invalid_JSON, Text, Text'Last + 1);
-                     return;
-                  elsif Text (From) = ',' then
-                     Emit (", ");
-                     From := From + 1;
-                  elsif Text (From) = Shut then
-                     Emit (Text (From .. From));
-                     From := From + 1;
-                     return;
-                  else
-                     Fail (Status, E.Tools_Invalid_JSON, Text, From);
-                     return;
-                  end if;
+      procedure Emit_Value (One : Doc.Node) is
+      begin
+         case Doc.Kind (Document, One) is
+            when Doc.Null_Value    => Emit ("null");
+            when Doc.Boolean_Value => Emit (if Doc.As_Boolean (Document, One) then "true" else "false");
+            when Doc.Integer_Value | Doc.Float_Value => Emit (Doc.Literal (Document, One));
+            when Doc.String_Value  => Emit_String (Doc.As_String (Document, One));
+            when Doc.Array_Value =>
+               Emit ("[");
+               for Index in 1 .. Doc.Length (Document, One) loop
+                  Emit ((if Index = 1 then "" else ", "));
+                  Emit_Value (Doc.Element (Document, One, Index));
                end loop;
-            end;
+               Emit ("]");
+            when Doc.Object_Value =>
+               Emit ("{");
+               for Index in 1 .. Doc.Length (Document, One) loop
+                  Emit ((if Index = 1 then "" else ", "));
+                  Emit_String (Doc.Name (Document, One, Index));
+                  Emit (": ");
+                  Emit_Value (Doc.Element (Document, One, Index));
+               end loop;
+               Emit ("}");
+         end case;
+      end Emit_Value;
+   begin
+      Emit_Value (Item);
+   end Write_Node;
 
-         when 't' | 'f' | 'n' =>
-            --  The three words, matched whole. A file that says "tru" says
-            --  nothing, and reading the first letter alone would let it.
-            declare
-               function Says (Word : String) return Boolean
-               is (From + Word'Length - 1 <= Text'Last
-                   and then Text (From .. From + Word'Length - 1) = Word);
-            begin
-               if Says ("true") then
-                  Emit ("true");
-                  From := From + 4;
-               elsif Says ("false") then
-                  Emit ("false");
-                  From := From + 5;
-               elsif Says ("null") then
-                  Emit ("null");
-                  From := From + 4;
-               else
-                  Fail (Status, E.Tools_Invalid_JSON, Text, From);
-               end if;
-            end;
-
-         when '-' | '0' .. '9' =>
-            --  Written back as the file spells it. Rewriting a number means
-            --  choosing a spelling for every number a file could hold, and
-            --  the bound in a tool's schema is read as text either way.
-            Index := From;
-            while Index <= Text'Last
-              and then Is_Number_Character (Text (Index))
-            loop
-               Index := Index + 1;
-            end loop;
-            Emit (Text (From .. Index - 1));
-            From := Index;
-
-         when others =>
-            Fail (Status, E.Tools_Invalid_JSON, Text, From);
-      end case;
-   end Write_Value;
-
-   -------------
-   -- Rewrite --
-   -------------
+   --  Text read as JSON is read -- jsonlib, RFC 8259 exactly, every member
+   --  as written -- or the refusal, saying where, in this engine's codes.
+   procedure Parsed
+     (Text     : String;
+      Document : in out Jsonlib.Documents.Document;
+      Status   : out E.Error_Info)
+   is
+      Error : Jsonlib.Errors.Error_Info;
+   begin
+      Status := E.Success;
+      Jsonlib.Parsers.Parse
+        (Text, Document, Error,
+         (Jsonlib.Parsers.Default_Options with delta
+            Max_Depth  => Max_Depth + 1,
+            Duplicates => Jsonlib.Parsers.Keep_Duplicates));
+      if Jsonlib.Errors.Failed (Error) then
+         Status := E.Make
+           ((if Jsonlib.Errors."=" (Error.Code, Jsonlib.Errors.Depth_Exceeded)
+             then E.Tools_Nesting_Too_Deep else E.Tools_Invalid_JSON));
+         E.Add_Integer (Status, "offset", Long_Long_Integer (Error.At_Position.Offset), E.Param_Offset);
+      end if;
+   end Parsed;
 
    procedure Rewrite
      (Text   : String;
@@ -408,23 +170,15 @@ package body Model_Runner.Tools is
       Last   : out Natural;
       Status : out E.Error_Info)
    is
-      From : Natural := Text'First;
+      Document : Jsonlib.Documents.Document;
    begin
       Target := [others => ' '];
       Last := 0;
-      Status := E.Success;
-
-      Write_Value (Text, From, Target, Last, 0, Status);
-      if E.Is_Error (Status) then
-         Last := 0;
-         return;
+      Parsed (Text, Document, Status);
+      if E.Is_Ok (Status) then
+         Write_Node (Document, Jsonlib.Documents.Root (Document), Target, Last, Status);
       end if;
-
-      --  Text after the value is text this did not read, and a caller whose
-      --  file holds two values wrote a file this cannot answer about.
-      From := Blanks_Skipped (Text, From);
-      if From <= Text'Last then
-         Fail (Status, E.Tools_Invalid_JSON, Text, From);
+      if E.Is_Error (Status) then
          Last := 0;
       end if;
    end Rewrite;
@@ -795,12 +549,13 @@ package body Model_Runner.Tools is
       Text   : String;
       Status : out E.Error_Info)
    is
-      From : Natural;
+      package Doc renames Jsonlib.Documents;
+
+      Document : Doc.Document;
 
       --  Write one definition into the pool and record where it went.
-      procedure Take_One is
+      procedure Take_One (One : Doc.Node) is
          Before : constant Natural := Item.Filled;
-         First  : constant Natural := Blanks_Skipped (Text, From);
       begin
          if Item.Used = Max_Definitions then
             Status := E.Make (E.Tools_Too_Many);
@@ -809,14 +564,13 @@ package body Model_Runner.Tools is
             return;
          end if;
 
-         if First > Text'Last or else Text (First) /= '{' then
-            Fail (Status, E.Tools_Not_An_Object, Text,
-                  Natural'Min (First, Text'Last));
+         if Doc."/=" (Doc.Kind (Document, One), Doc.Object_Value) then
+            Status := E.Make (E.Tools_Not_An_Object);
+            E.Add_Integer (Status, "offset", 0, E.Param_Offset);
             return;
          end if;
 
-         From := First;
-         Write_Value (Text, From, Item.Pool.all, Item.Filled, 0, Status);
+         Write_Node (Document, One, Item.Pool.all, Item.Filled, Status);
          if E.Is_Error (Status) then
             return;
          end if;
@@ -860,67 +614,27 @@ package body Model_Runner.Tools is
       Item.Pool := new String (1 .. Max_Definition_Bytes);
       Item.Pool.all := [others => ' '];
 
-      From := Blanks_Skipped (Text, Text'First);
-      if From > Text'Last then
-         Status := E.Make (E.Tools_Invalid_JSON);
-         E.Add_Integer (Status, "offset", 0, E.Param_Offset);
-         return;
-      end if;
-
-      if Text (From) /= '[' then
-         --  One object rather than a list of them, which is what a caller
-         --  with one tool writes and what refusing would make them wrap.
-         Take_One;
-         if E.Is_Ok (Status) then
-            From := Blanks_Skipped (Text, From);
-            if From <= Text'Last then
-               Fail (Status, E.Tools_Invalid_JSON, Text, From);
+      --  Read as JSON is read, by jsonlib; then one object -- what a caller
+      --  with one tool writes, and refusing would make them wrap -- or a
+      --  list of them, an empty one offering nothing.
+      Parsed (Text, Document, Status);
+      if E.Is_Ok (Status) then
+         declare
+            Root : constant Doc.Node := Doc.Root (Document);
+         begin
+            if Doc."=" (Doc.Kind (Document, Root), Doc.Array_Value) then
+               for Index in 1 .. Doc.Length (Document, Root) loop
+                  Take_One (Doc.Element (Document, Root, Index));
+                  exit when E.Is_Error (Status);
+               end loop;
+            else
+               Take_One (Root);
             end if;
-         end if;
-
-         if E.Is_Error (Status) then
-            Close (Item);
-         end if;
-         return;
+         end;
       end if;
-
-      From := Blanks_Skipped (Text, From + 1);
-      if From <= Text'Last and then Text (From) = ']' then
-         --  A list with nothing in it offers nothing, which is a thing a
-         --  caller may say and not a file to refuse.
-         return;
-      end if;
-
-      loop
-         Take_One;
-         exit when E.Is_Error (Status);
-
-         From := Blanks_Skipped (Text, From);
-         if From > Text'Last then
-            Fail (Status, E.Tools_Invalid_JSON, Text, Text'Last + 1);
-            exit;
-         elsif Text (From) = ',' then
-            From := From + 1;
-         elsif Text (From) = ']' then
-            From := Blanks_Skipped (Text, From + 1);
-            if From <= Text'Last then
-               Fail (Status, E.Tools_Invalid_JSON, Text, From);
-            end if;
-            exit;
-         else
-            Fail (Status, E.Tools_Invalid_JSON, Text, From);
-            exit;
-         end if;
-      end loop;
-
       if E.Is_Error (Status) then
          Close (Item);
       end if;
-   exception
-      when others =>
-         Close (Item);
-         Status := E.Make (E.Internal_Invariant_Violated);
-         E.Add_Frame (Status, "tools.read");
    end Read;
 
    -----------
