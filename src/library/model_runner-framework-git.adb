@@ -121,8 +121,10 @@ package body Model_Runner.Framework.Git is
          when others =>
             Worked := False;
       end;
-      --  The pack files read, let go: the session runs on for hours.
-      Standard.Version.Pack.Release_Cached_Files;
+      --  The pack files read, kept for the next call where they are a
+      --  repository's of ordinary size -- read again, they were most of a
+      --  status -- and let go past that: the session runs on for hours.
+      Standard.Version.Pack.Release_Cached_Files (Above => 256 * 1024 * 1024);
       Gate.Release;
    end Within;
 

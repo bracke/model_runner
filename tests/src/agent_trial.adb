@@ -330,7 +330,7 @@ package body Agent_Trial is
          if Fresh then
             Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
             Ada.Text_IO.Put_Line
-              (File, "when" & HT & "build" & HT & "model" & HT & "task" & HT & "isolation" & HT & "outcome"
+              (File, "when_utc" & HT & "build" & HT & "model" & HT & "task" & HT & "isolation" & HT & "outcome"
                & HT & "seconds" & HT & "calls" & HT & "thoughts_closed");
          else
             Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Path);
