@@ -1,5 +1,9 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
+with Ada.Task_Attributes;
+
+with CryptoLib.Hashes;
 
 with Http_Client.Clients;
 with Http_Client.Errors;
@@ -709,6 +713,303 @@ package body Model_Runner.Hub is
    -- Fetch --
    -----------
 
+   -------------------
+   -- Fetch_Ranges --
+   -------------------
+
+   --  A large file fetched as ranges at once: one connection to the hub's
+   --  servers gave 3.7 MB/s of a link that carries more. Chunks of 64 MB
+   --  past what the file already holds, four connections taking them in
+   --  turn, each chunk a file of its own beside the model -- one whole is
+   --  kept, so a stopped fetch resumes a chunk at a time -- then appended
+   --  in order, each removed as it goes, and the whole checked against the
+   --  digest the hub records. Ranges the server will not serve as asked --
+   --  no 206, another length -- leave Served false, and the caller fetches
+   --  in one stream instead.
+   Chunk_Bytes   : constant := 64 * 1024 * 1024;
+   Range_Workers : constant := 4;
+   Ranges_From   : constant := 512 * 1024 * 1024;
+
+   --  The chunk the calling worker task is fetching, for the client's
+   --  progress callback, which carries no state of its own.
+   package Worker_Chunk is new Ada.Task_Attributes (Natural, 0);
+
+   type Chunk_Bytes_Array is array (Positive range <>) of Interfaces.Unsigned_64;
+
+   procedure Fetch_Ranges
+     (Repo      : String;
+      File      : Download_File;
+      Dest_Path : String;
+      Served    : out Boolean;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded;
+      Report    : Progress_Reporter)
+   is
+      Have   : constant Interfaces.Unsigned_64 :=
+        (if Ada.Directories.Exists (Dest_Path)
+         then Interfaces.Unsigned_64 (Ada.Directories.Size (Dest_Path)) else 0);
+      Left   : constant Interfaces.Unsigned_64 := File.Size - Have;
+      Chunks : constant Natural := Natural ((Left + Chunk_Bytes - 1) / Chunk_Bytes);
+      URL    : constant String := Host & "/" & Repo & "/resolve/main/" & T.To_String (File.Name);
+
+      function Start_Of (K : Positive) return Interfaces.Unsigned_64 is
+        (Have + Interfaces.Unsigned_64 (K - 1) * Chunk_Bytes);
+      function Length_Of (K : Positive) return Interfaces.Unsigned_64 is
+        (Interfaces.Unsigned_64'Min (Chunk_Bytes, File.Size - Start_Of (K)));
+      function Chunk_Path (K : Positive) return String is
+        (Dest_Path & ".range-" & Model_Runner.Text.Trim (Interfaces.Unsigned_64'Image (Start_Of (K))));
+
+      --  Which chunk is next, how much of each is written, and whether any
+      --  went wrong -- and how: a range not served, or another failure.
+      protected Board is
+         procedure Take (K : out Natural);
+         procedure Wrote (K : Positive; Bytes : Interfaces.Unsigned_64);
+         procedure Fail (Not_Served : Boolean; Why : String);
+         procedure Finish;
+         function Written return Interfaces.Unsigned_64;
+         function Failed return Boolean;
+         function Refused return Boolean;
+         function Why return String;
+         function Finished return Natural;
+      private
+         Next      : Positive := 1;
+         Bytes     : Chunk_Bytes_Array (1 .. Natural'Max (Chunks, 1)) := [others => 0];
+         Bad       : Boolean := False;
+         Unserved  : Boolean := False;
+         Said      : Model_Runner.Text.Bounded;
+         Done      : Natural := 0;
+      end Board;
+
+      protected body Board is
+         procedure Take (K : out Natural) is
+         begin
+            if Bad or else Next > Chunks then
+               K := 0;
+            else
+               K := Next;
+               Next := Next + 1;
+            end if;
+         end Take;
+
+         procedure Wrote (K : Positive; Bytes : Interfaces.Unsigned_64) is
+         begin
+            Board.Bytes (K) := Bytes;
+         end Wrote;
+
+         procedure Fail (Not_Served : Boolean; Why : String) is
+         begin
+            if not Bad then
+               Said := T.To_Bounded (Why);
+            end if;
+            Bad := True;
+            Unserved := Unserved or else Not_Served;
+         end Fail;
+
+         procedure Finish is
+         begin
+            Done := Done + 1;
+         end Finish;
+
+         function Written return Interfaces.Unsigned_64 is
+            Sum : Interfaces.Unsigned_64 := 0;
+         begin
+            for B of Bytes loop
+               Sum := Sum + B;
+            end loop;
+            return Sum;
+         end Written;
+
+         function Failed return Boolean is (Bad);
+         function Refused return Boolean is (Unserved);
+         function Why return String is (T.To_String (Said));
+         function Finished return Natural is (Done);
+      end Board;
+
+      function Chunk_Progress
+        (Bytes_Written : Interfaces.Unsigned_64;
+         Total_Bytes   : Interfaces.Unsigned_64) return HE.Result_Status
+      is
+         pragma Unreferenced (Total_Bytes);
+      begin
+         if Worker_Chunk.Value > 0 then
+            Board.Wrote (Worker_Chunk.Value, Bytes_Written);
+         end if;
+         return (if Board.Failed then HE.Internal_Error else HE.Ok);
+      end Chunk_Progress;
+
+      task type Worker;
+
+      task body Worker is
+         K : Natural;
+      begin
+         loop
+            Board.Take (K);
+            exit when K = 0;
+            declare
+               Path    : constant String := Chunk_Path (K);
+               Length  : constant Interfaces.Unsigned_64 := Length_Of (K);
+               Config  : HC.Client_Configuration := Client_For;
+               Options : HC.Download_Options := HC.Default_Download_Options;
+               Outcome : HC.Download_Result;
+               Status  : HE.Result_Status;
+            begin
+               --  A chunk a stopped fetch left whole is not fetched again.
+               if Ada.Directories.Exists (Path)
+                 and then Interfaces.Unsigned_64 (Ada.Directories.Size (Path)) = Length
+               then
+                  Board.Wrote (K, Length);
+               else
+                  Http_Client.Headers.Append
+                    (Config.Default_Headers, "Range",
+                     "bytes=" & Model_Runner.Text.Trim (Interfaces.Unsigned_64'Image (Start_Of (K))) & "-"
+                     & Model_Runner.Text.Trim (Interfaces.Unsigned_64'Image (Start_Of (K) + Length - 1)));
+                  Options.Max_Download_Size := 0;
+                  Options.Require_Success_Status := True;
+                  Options.File_Mode := HC.Overwrite;
+                  Options.Expected_Size := Length;
+                  Options.Progress_Callback := Chunk_Progress'Unrestricted_Access;
+                  Options.Progress_Interval_Bytes := 1024 * 1024;
+                  Worker_Chunk.Set_Value (K);
+                  Status := HC.Download_To_File
+                    (URL => URL, Path => Path, Result => Outcome, Options => Options, Configuration => Config);
+                  Worker_Chunk.Set_Value (0);
+                  if HE.Is_Success (Status) and then Outcome.HTTP_Status_Code = 206
+                    and then Outcome.Bytes_Written = Length
+                  then
+                     Board.Wrote (K, Length);
+                  else
+                     Board.Fail
+                       (Not_Served => HE.Is_Success (Status) and then Outcome.HTTP_Status_Code /= 206,
+                        Why        => "a range of the file came back with status"
+                                      & Natural'Image (Outcome.HTTP_Status_Code));
+                  end if;
+               end if;
+            exception
+               when others =>
+                  Board.Fail (Not_Served => False, Why => "a range of the file could not be fetched");
+            end;
+         end loop;
+         Board.Finish;
+      exception
+         when others =>
+            Board.Finish;
+      end Worker;
+   begin
+      Served := True;
+      Ok := False;
+      Reason := T.Empty;
+      declare
+         Crew : array (1 .. Range_Workers) of Worker;
+         pragma Unreferenced (Crew);
+      begin
+         --  The progress painted from here, the one task that may: the
+         --  workers only count.
+         while Board.Finished < Range_Workers loop
+            delay 0.5;
+            if Report /= null then
+               begin
+                  Report (Have + Board.Written, File.Size);
+               exception
+                  when others =>
+                     null;
+               end;
+            end if;
+         end loop;
+      end;
+
+      if Board.Failed then
+         Served := not Board.Refused;
+         Reason := T.To_Bounded (Board.Why);
+         --  Chunks fetched whole stay for the next run; a part is gone.
+         for K in 1 .. Chunks loop
+            if Ada.Directories.Exists (Chunk_Path (K))
+              and then Interfaces.Unsigned_64 (Ada.Directories.Size (Chunk_Path (K))) /= Length_Of (K)
+            then
+               Ada.Directories.Delete_File (Chunk_Path (K));
+            end if;
+         end loop;
+         if not Served then
+            --  Ranges are not this server's way: none is kept.
+            for K in 1 .. Chunks loop
+               if Ada.Directories.Exists (Chunk_Path (K)) then
+                  Ada.Directories.Delete_File (Chunk_Path (K));
+               end if;
+            end loop;
+         end if;
+         return;
+      end if;
+
+      --  In order onto what the file held, each chunk gone as it is added.
+      declare
+         use Ada.Streams;
+         Out_File : Stream_IO.File_Type;
+         Buffer   : Stream_Element_Array (1 .. 1024 * 1024);
+         Last     : Stream_Element_Offset;
+      begin
+         if Ada.Directories.Exists (Dest_Path) then
+            Stream_IO.Open (Out_File, Stream_IO.Append_File, Dest_Path);
+         else
+            Stream_IO.Create (Out_File, Stream_IO.Out_File, Dest_Path);
+         end if;
+         for K in 1 .. Chunks loop
+            declare
+               In_File : Stream_IO.File_Type;
+            begin
+               Stream_IO.Open (In_File, Stream_IO.In_File, Chunk_Path (K));
+               while not Stream_IO.End_Of_File (In_File) loop
+                  Stream_IO.Read (In_File, Buffer, Last);
+                  Stream_IO.Write (Out_File, Buffer (1 .. Last));
+               end loop;
+               Stream_IO.Close (In_File);
+               Ada.Directories.Delete_File (Chunk_Path (K));
+            end;
+         end loop;
+         Stream_IO.Close (Out_File);
+      end;
+
+      --  The whole against the hub's digest: a file of the right length
+      --  made of the wrong bytes is removed, not opened.
+      if File.Has_Hash then
+         declare
+            use Ada.Streams;
+            Context : CryptoLib.Hashes.SHA256_Context;
+            In_File : Stream_IO.File_Type;
+            Buffer  : Stream_Element_Array (1 .. 4 * 1024 * 1024);
+            Last    : Stream_Element_Offset;
+            Digest  : CryptoLib.Hashes.SHA256_Digest;
+            Hex     : constant String := "0123456789abcdef";
+            Seen    : String (1 .. 64);
+         begin
+            CryptoLib.Hashes.Initialize_SHA256 (Context);
+            Stream_IO.Open (In_File, Stream_IO.In_File, Dest_Path);
+            while not Stream_IO.End_Of_File (In_File) loop
+               Stream_IO.Read (In_File, Buffer, Last);
+               CryptoLib.Hashes.Update (Context, Buffer (1 .. Last));
+            end loop;
+            Stream_IO.Close (In_File);
+            Digest := CryptoLib.Hashes.Finalize (Context);
+            for I in Digest'Range loop
+               Seen (2 * I - 1) := Hex (Natural (Digest (I)) / 16 + 1);
+               Seen (2 * I) := Hex (Natural (Digest (I)) mod 16 + 1);
+            end loop;
+            if Ada.Characters.Handling.To_Lower (File.SHA256) /= Seen then
+               Ada.Directories.Delete_File (Dest_Path);
+               Reason := T.To_Bounded ("the file's digest is not the one the hub records; it was removed");
+               return;
+            end if;
+         end;
+      end if;
+      if Report /= null then
+         Report (File.Size, File.Size);
+      end if;
+      Ok := True;
+   exception
+      when others =>
+         Served := True;
+         Ok := False;
+         Reason := T.To_Bounded ("the file's ranges could not be put together");
+   end Fetch_Ranges;
+
    procedure Fetch
      (Repo      : String;
       File      : Download_File;
@@ -723,6 +1024,20 @@ package body Model_Runner.Hub is
    begin
       Ok := False;
       Reason := T.Empty;
+
+      --  A large file whose digest the hub gives: in ranges at once, where
+      --  the server serves them; in one stream where it does not.
+      if File.Size >= Ranges_From and then File.Has_Hash then
+         declare
+            Served : Boolean;
+         begin
+            Fetch_Ranges (Repo, File, Dest_Path, Served, Ok, Reason, Report);
+            if Ok or else Served then
+               return;
+            end if;
+            Reason := T.Empty;
+         end;
+      end if;
 
       --  Written to the file itself, and a part left where it stops: a
       --  later fetch of the same file asks for the bytes past what is there

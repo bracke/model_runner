@@ -53,6 +53,10 @@ jsonlib = "*"
 [[depends-on]]
 versionlib = "*"
 
+# A downloaded model's digest is checked here when it came in ranges.
+[[depends-on]]
+cryptolib = "~0.1.0-dev"
+
 [[pins]]
 terminal_styles = { path = "../terminal_styles" }
 
