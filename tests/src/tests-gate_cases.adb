@@ -1,3 +1,5 @@
+with Project_Tools.Tree_Checks;
+with Ada.Strings.Unbounded;
 with AUnit.Test_Cases;
 with AUnit.Assertions; use AUnit.Assertions;
 
@@ -333,6 +335,76 @@ package body Tests.Gate_Cases is
               "the project does not meet its specification: " & Spec_Conformance.Problem (".."));
    end The_Specification_Is_A_Gate;
 
+   --  Two of the repository checks the suite runs too, being cheap and the
+   --  two that let mistakes through on 2026-10-12: the build left no
+   --  warnings in its logs, and no file of the tree -- builds, pinned
+   --  crates' copies and history aside -- is past the two mebibytes the
+   --  repository allows. A generated shader package passed it, and two
+   --  style warnings stood in the library, and the suite said nothing.
+   procedure The_Tree_Holds_Its_Two_Cheap_Bounds
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Dirs.File_Size;
+
+      Root  : constant String := Dirs.Full_Name ("..");
+      Limit : constant Dirs.File_Size := 2_097_152;
+      Large : Natural := 0;
+      First_Large : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Weigh (Directory : String) is
+         Search : Dirs.Search_Type;
+         Item   : Dirs.Directory_Entry_Type;
+      begin
+         Dirs.Start_Search (Search, Directory, "");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Item);
+            declare
+               Simple : constant String := Dirs.Simple_Name (Item);
+               Full   : constant String := Dirs.Full_Name (Item);
+            begin
+               if Simple = "." or else Simple = ".." then
+                  null;
+               elsif Dirs."=" (Dirs.Kind (Item), Dirs.Directory) then
+                  if Simple /= ".git" and then Simple /= "obj"
+                    and then Simple /= "bin" and then Simple /= "alire"
+                  then
+                     Weigh (Full);
+                  end if;
+               elsif Dirs."=" (Dirs.Kind (Item), Dirs.Ordinary_File)
+                 and then Dirs.Size (Item) > Limit
+               then
+                  Large := Large + 1;
+                  if Large = 1 then
+                     First_Large := Ada.Strings.Unbounded.To_Unbounded_String (Full);
+                  end if;
+               end if;
+            end;
+         end loop;
+         Dirs.End_Search (Search);
+      end Weigh;
+
+      Quiet_Logs : Boolean := True;
+   begin
+      Weigh (Root);
+      Assert (Large = 0,
+              Natural'Image (Large) & " files are past two mebibytes, the first "
+              & Ada.Strings.Unbounded.To_String (First_Large));
+
+      begin
+         Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+           (Root & "/obj", Quiet => True);
+         Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr
+           (Root & "/tests/obj", Quiet => True);
+      exception
+         when others =>
+            Quiet_Logs := False;
+      end;
+      Assert (Quiet_Logs,
+              "the build left warnings behind; see the .stderr logs under obj "
+              & "(a build older than its sources leaves old ones: build first)");
+   end The_Tree_Holds_Its_Two_Cheap_Bounds;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -340,6 +412,10 @@ package body Tests.Gate_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Tree_Holds_Its_Two_Cheap_Bounds'Access,
+         "the build left no warnings and no file of the tree is past two "
+         & "mebibytes");
       Register_Routine
         (T, The_Specification_Is_A_Gate'Access,
          "the specification is a gate: every requirement met, by a test there is");
