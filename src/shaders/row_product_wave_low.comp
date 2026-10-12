@@ -3066,10 +3066,18 @@ void main_many() {
     uint groups = (shape.columns + 255u) / 256u;
     uint span = (shape.columns / BLOCK_ELEMS) * BLOCK_BYTES;
 
-    for (uint c = 0u; c < MULTI; c += 4u) {
-        uint from_k[4];
-        bool real_k[4];
-        for (uint k = 0u; k < 4u; ++k) {
+#ifdef DOTS
+    //  As bytes a walk's registers are few enough for every vector at
+    //  once: in chunks of four a check of five read the weights twice and
+    //  cost 1.7 times a check of four.
+    const uint CHUNK = MULTI;
+#else
+    const uint CHUNK = 4u;
+#endif
+    for (uint c = 0u; c < MULTI; c += CHUNK) {
+        uint from_k[CHUNK];
+        bool real_k[CHUNK];
+        for (uint k = 0u; k < CHUNK; ++k) {
             uint kk = min(c + k, run_count - 1u);
             real_k[k] = c + k < run_count && c + k < MULTI;
             from_k[k] = listed
@@ -3079,9 +3087,9 @@ void main_many() {
                   : (shape.first + kk) * shape.columns + member * shape.apart;
         }
 
-        float temp[MANY_R][4];
+        float temp[MANY_R][CHUNK];
         for (uint r = 0u; r < MANY_R; ++r) {
-            for (uint k = 0u; k < 4u; ++k) {
+            for (uint k = 0u; k < CHUNK; ++k) {
                 temp[r][k] = 0.0;
             }
         }
@@ -3096,9 +3104,9 @@ void main_many() {
                 //  bytes too, so a row's register footprint is a quarter of
                 //  the binary32 walk's, which held four vectors' thirty-two
                 //  values each and ran a wave to a unit.
-                int qa[4][8];
-                float da[4];
-                for (uint k = 0u; k < 4u; ++k) {
+                int qa[CHUNK][8];
+                float da[CHUNK];
+                for (uint k = 0u; k < CHUNK; ++k) {
                     if (c + k < MULTI) {
                         uint xb = (from_k[k] + col) >> 2u;
                         for (uint e = 0u; e < 8u; ++e) {
@@ -3114,7 +3122,7 @@ void main_many() {
                     int wq[8];
                     float s0, s1;
                     lane_bytes32(at, itid, wq, s0, s1);
-                    for (uint k = 0u; k < 4u; ++k) {
+                    for (uint k = 0u; k < CHUNK; ++k) {
                         if (c + k < MULTI) {
                             int lo = dotPacked4x8EXT(qa[k][0], wq[0])
                                    + dotPacked4x8EXT(qa[k][1], wq[1])
@@ -3135,7 +3143,7 @@ void main_many() {
                               + block * BLOCK_BYTES;
                     vec4 wv[8];
                     lane_weights32(at, itid, wv);
-                    for (uint k = 0u; k < 4u; ++k) {
+                    for (uint k = 0u; k < CHUNK; ++k) {
                         if (c + k < MULTI) {
                             uint xb = (from_k[k] + col) >> 2u;
                             float sum = 0.0;
@@ -3152,7 +3160,7 @@ void main_many() {
 
         for (uint r = 0u; r < MANY_R; ++r) {
             uint row = first_row + r;
-            for (uint k = 0u; k < 4u; ++k) {
+            for (uint k = 0u; k < CHUNK; ++k) {
                 float whole = subgroupAdd(temp[r][k]);
 
                 if (tid == 0u && row < shape.rows && real_k[k]) {

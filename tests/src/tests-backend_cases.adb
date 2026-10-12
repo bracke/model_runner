@@ -6836,9 +6836,10 @@ package body Tests.Backend_Cases is
 
    --  The codebook formats' walks as integers -- each lane's thirty-two
    --  weights made signed bytes from the grid and its signs, IQ1's in
-   --  eighths -- answer what their binary32 walks answer, to the rounding of
-   --  the activations, at three positions and four; and are not those walks
-   --  under another name. Skipped where the device has no integer dot.
+   --  eighths, every position in one pass -- answer what their binary32
+   --  walks answer, to the rounding of the activations, at three to six
+   --  positions; and are not those walks under another name. Q4_K's
+   --  beside them. Skipped where the device has no integer dot.
    procedure Codebook_Walks_As_Integers_Stay_Close
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6891,7 +6892,7 @@ package body Tests.Backend_Cases is
             return;
          end if;
 
-         for Count in Positive range 3 .. 4 loop
+         for Count in Positive range 3 .. 6 loop
             declare
                Width : constant N.Element_Count := N.Element_Count (Count);
                Input : constant N.Real_Array :=
@@ -6967,6 +6968,7 @@ package body Tests.Backend_Cases is
       Check (Products.Packed_IQ3_S, Fixtures.Encode_IQ3_S'Access, "IQ3_S");
       Check (Products.Packed_IQ1_S, Fixtures.Encode_IQ1_S'Access, "IQ1_S");
       Check (Products.Packed_IQ1_M, Fixtures.Encode_IQ1_M'Access, "IQ1_M");
+      Check (Products.Packed_Q4_K, Fixtures.Encode_Q4_K'Access, "Q4_K");
    end Codebook_Walks_As_Integers_Stay_Close;
 
    --  A product streamed for its run -- a split dense model's
