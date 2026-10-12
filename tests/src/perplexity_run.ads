@@ -1,4 +1,5 @@
 with Model_Runner.Backend;
+with Model_Runner.Llama;
 with Model_Runner.Numerics;
 
 --  What a quantization costs the model's predictions.
@@ -133,6 +134,8 @@ package Perplexity_Run is
    --    is refused.
    --  @param Factor What to stretch it by, where two is twice the context.
    --    Zero is unasked.
+   --  @param Repack The weights' layout, as Llama.Prepare takes it: the
+   --    command passes run's unasked one, the panels on the processor.
    procedure Run
      (Path    : String;
       Against : String;
@@ -146,7 +149,9 @@ package Perplexity_Run is
       Waiting : Natural := 0;
       Result  : out Report;
       Stretch : String := "";
-      Factor  : Model_Runner.Numerics.Wide_Real := 0.0);
+      Factor  : Model_Runner.Numerics.Wide_Real := 0.0;
+      Repack  : Model_Runner.Llama.Repack_Mode :=
+        Model_Runner.Llama.No_Repack);
 
    --  One line saying what it found.
    --

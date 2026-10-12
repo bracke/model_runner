@@ -138,6 +138,22 @@ procedure Tests_Main is
       return Model_Runner.Backend.CPU.Every_Role;
    end Roles_Named;
 
+   --  The layout `run` takes when none is named: the panels on the
+   --  processor where they fit, the file's rows otherwise. What a tool
+   --  measuring run's products asks for unasked.
+   function Unasked_Layout
+     (Model : String; Backend : Model_Runner.Backend.Backend_Kind)
+      return Model_Runner.Llama.Repack_Mode
+   is (if Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_CPU)
+         and then Ada.Directories.Exists (Model)
+         and then Model_Runner.Llama.Panels_Unasked
+                    (Interfaces.Unsigned_64 (Ada.Directories.Size (Model)),
+                     Model_Runner.Limits.Default_Model_Limits
+                       .Max_Allocation_Bytes,
+                     Model_Runner.Platform.Available_Memory)
+       then Model_Runner.Llama.To_Rows
+       else Model_Runner.Llama.No_Repack);
+
    --  Selected command, defaulting to the mandatory suite.
    function Command return String is
    begin
@@ -2095,6 +2111,13 @@ begin
             return;
          end if;
 
+         --  The arithmetic, as --arith names it: binary32 unasked, which is
+         --  what the format table in the README was measured with -- the
+         --  weights' price alone -- and int8 as `run` multiplies and as
+         --  llama-perplexity does, twenty times quicker on the processor.
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (Roles_Named (Option ("--arith", "f32")));
+
          Perplexity_Run.Run
            (Path    => Option ("--model", ""),
             Against => Option ("--against", ""),
@@ -2108,6 +2131,9 @@ begin
             Anyway  => Given ("--anyway"),
             Waiting => Number ("--wait", 0),
             Result  => Result,
+            Repack  => Unasked_Layout
+                         (Option ("--model", ""),
+                          Backend_Of (Option ("--backend", "cpu"))),
             Stretch => Option ("--rope-scaling", ""),
             Factor  =>
               Model_Runner.Numerics.Wide_Real (Number ("--rope-scale", 0)));
@@ -2999,19 +3025,9 @@ begin
                   Repack      =>
                     (if Given ("--repack")
                      then Mode_Of (Option ("--repack", "none"))
-                     elsif Model_Runner.Backend."="
-                             (Backend_Of (Chosen_Backend),
-                              Model_Runner.Backend.Backend_CPU)
-                       and then Ada.Directories.Exists (Option ("--model", ""))
-                       and then Model_Runner.Llama.Panels_Unasked
-                                  (Interfaces.Unsigned_64
-                                     (Ada.Directories.Size
-                                        (Option ("--model", ""))),
-                                   Model_Runner.Limits.Default_Model_Limits
-                                     .Max_Allocation_Bytes,
-                                   Model_Runner.Platform.Available_Memory)
-                     then Model_Runner.Llama.To_Rows
-                     else Model_Runner.Llama.No_Repack),
+                     else Unasked_Layout
+                            (Option ("--model", ""),
+                             Backend_Of (Chosen_Backend))),
 
                   --  The storage the session keeps its context in, named the way
                   --  the command names it: f32, f16, q8 or q4, and by default

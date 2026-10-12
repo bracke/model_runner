@@ -73,7 +73,7 @@ package body Tool_Commands is
      " --model --format --out --against --imatrix ";
    Opts_Perplex   : aliased constant String :=
      " --model --against --text --chunk --chunks --threads --backend"
-     & " --anyway --wait --rope-scaling --rope-scale ";
+     & " --anyway --wait --rope-scaling --rope-scale --arith ";
 
    Takes_Check     : aliased constant String :=
      "[ROOT] [--repository] [--record-warnings] [--short]";
@@ -200,7 +200,7 @@ package body Tool_Commands is
    Takes_Perplexity : aliased constant String :=
      "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"
      & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
-     & " [--rope-scaling NAME] [--rope-scale N]";
+     & " [--rope-scaling NAME] [--rope-scale N] [--arith MODE]";
 
    Says_Agent_Eval : aliased constant String :=
      "score the agent loop on tool-use tasks against a real model";

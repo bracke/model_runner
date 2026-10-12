@@ -18406,7 +18406,11 @@ Every format in this repository has a measured cost to run and an asserted
 cost to be right. `tests perplexity` measures the second one. It is
 llama.cpp's `llama-perplexity`: score a corpus a chunk at a time, and against
 a `--against` model of the same weights in another format, report how far the
-distributions have moved.
+distributions have moved. Its products keep the activations in binary32
+unless `--arith int8` is named, so that what is measured is the weights'
+price alone; `--arith int8` multiplies as `run` and `llama-perplexity` do, on
+the panels `run` reads, and on the processor scores TinyLlama about eighteen
+times as fast.
 
 **Read the divergence column.** Perplexity is the exponential of the mean
 surprise -- how many equally likely tokens the model was effectively choosing

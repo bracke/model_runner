@@ -8,7 +8,6 @@ with Model_Runner.Backend.Device;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
-with Model_Runner.Llama;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
@@ -188,7 +187,9 @@ package body Perplexity_Run is
       Waiting : Natural := 0;
       Result  : out Report;
       Stretch : String := "";
-      Factor  : Model_Runner.Numerics.Wide_Real := 0.0)
+      Factor  : Model_Runner.Numerics.Wide_Real := 0.0;
+      Repack  : Model_Runner.Llama.Repack_Mode :=
+        Model_Runner.Llama.No_Repack)
    is
       procedure Note (Item : String);
 
@@ -250,6 +251,7 @@ package body Perplexity_Run is
          L.Prepare
            (Item.Engine, Item.Container, Item.Source,
             Backend => Backend, Threads => Threads, Status => Status,
+            Repack => Repack,
             Stretch =>
               (Kind =>
                  (if Stretch = "none" then L.As_Trained
