@@ -2753,15 +2753,18 @@ would rather say so than name the wrong one twice. What is ruled out is
 above; what is untried is the shader's own efficiency, which the seven point
 eight gigabytes a second under `### Batched prefill` says is not bandwidth.
 
-Each matrix is uploaded once and stays on the device, up to three quarters of
+Each matrix is uploaded once and stays on the device, up to seven eighths of
 the largest heap the device reports -- and, where the device has a second heap,
-three quarters of that as well, as far as leaves six gigabytes of the host's
+seven eighths of that as well, as far as leaves six gigabytes of the host's
 memory available when the device opens (on a part that shares the host's
 memory, what the device holds is the host's). The second heap is what lets a
 mixture whose experts do not fit the first run its layers whole on the device:
 Qwen3-Coder-30B-A3B at Q2_K, 11.26 GB, went piecemeal with its context on the
 host at 86 tokens a second for a prompt and 18.7 generating, and with the second
-heap reads 365 and 35.6 -- llama.cpp 294 and 32.5. Past that the matrix wanted longest ago
+heap reads 365 and 35.6 -- llama.cpp 294 and 32.5. It was three quarters of each,
+and Qwen3.6-35B-A3B at UD-IQ3_XXS, 14 GB, missed by a gigabyte and a half: its
+experts on the processor, 17.2 tokens a second; at seven eighths, whole on the
+device, 33.3 -- the Q4_K_S file, which cannot fit, reads 24.9 split. Past that the matrix wanted longest ago
 goes back to make room for the one wanted now, which is correct and slower:
 what does not fit is uploaded again every time a token needs it. A run says
 which device it used, how many matrices are on it and how many have been

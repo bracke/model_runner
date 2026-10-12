@@ -3145,13 +3145,16 @@ private
    --  keep out of a layer.
    type Set_Array is array (1 .. Sequence_Limit) of System.Address;
 
-   --  What fraction of the device's largest heap the resident matrices may
-   --  take, as a numerator over a denominator. Three quarters: the rest is
-   --  for whatever else the device is doing, for the vector and result
-   --  buffers, and for the driver's own allocations, none of which this
-   --  measures.
-   Budget_Share : constant := 3;
-   Budget_Whole : constant := 4;
+   --  What fraction of each heap the resident matrices may take, as a
+   --  numerator over a denominator. Seven eighths: the rest is for the
+   --  cache, the vector and result buffers, the rings and the driver's own
+   --  allocations, none of which this measures -- two gigabytes on the
+   --  780M's two heaps of 5.3 and 10.5 GiB. It was three quarters, which
+   --  left four, and a 14 GB mixture (qwen3.6-35B-A3B at IQ3_XXS) went
+   --  piecemeal for want of the difference: 17.2 tokens a second with its
+   --  experts on the processor, 33.3 whole on the device.
+   Budget_Share : constant := 7;
+   Budget_Whole : constant := 8;
 
    --  The heaps the weights may be held in: the one the upload kind draws
    --  from, and a second the device may offer, as Context.Second_Kind
