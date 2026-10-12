@@ -2231,6 +2231,58 @@ package body Model_Runner.Llama is
         Four_Bit_View (Item.Draft_Head_Bytes, Rows, Head.Columns, Head.Role);
    end Lighten_Draft_Head;
 
+   ------------------------
+   -- Lighten_Next_Block --
+   ------------------------
+
+   procedure Lighten_Next_Block
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      Used : Natural := 0;
+
+      procedure Lighten (View : in out T.View);
+
+      procedure Lighten (View : in out T.View) is
+         Local : E.Error_Info;
+      begin
+         if View.Format /= Model_Runner.GGUF.Type_Q8_0
+           or else Used = Item.Next_Light'Last
+         then
+            return;
+         end if;
+
+         Encode_Four_Bits
+           (Item.Accounting, View, View.Rows, Threads,
+            Item.Next_Light (Used + 1), Local);
+         if Item.Next_Light (Used + 1) /= null then
+            Used := Used + 1;
+            View := Four_Bit_View
+              (Item.Next_Light (Used), View.Rows, View.Columns, View.Role);
+         elsif E.Is_Error (Local) then
+            Status := Local;
+         end if;
+      end Lighten;
+   begin
+      Status := E.Success;
+      if Item.Next = null or else Item.Next_Light (1) /= null then
+         return;
+      end if;
+
+      for Layer of Item.Next.all loop
+         Lighten (Layer.Query);
+         Lighten (Layer.Key);
+         Lighten (Layer.Value);
+         Lighten (Layer.Attention_Out);
+         Lighten (Layer.Gate);
+         Lighten (Layer.Up);
+         Lighten (Layer.Down);
+         Lighten (Layer.Next_Proj);
+      end loop;
+   end Lighten_Next_Block;
+
    -----------------
    -- Head_Format --
    -----------------
@@ -6773,6 +6825,14 @@ package body Model_Runner.Llama is
             Interfaces.Unsigned_64 (Item.Draft_Head_Bytes.all'Length));
          B.Free (Item.Draft_Head_Bytes);
       end if;
+      for Bytes of Item.Next_Light loop
+         if Bytes /= null then
+            Mem.Record_Release
+              (Item.Accounting, Mem.Converted_Weights,
+               Interfaces.Unsigned_64 (Bytes.all'Length));
+            B.Free (Bytes);
+         end if;
+      end loop;
       Item.Draft_Head := T.Empty_View;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;

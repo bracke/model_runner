@@ -1,3 +1,4 @@
+with Model_Runner.Errors;
 with Model_Runner.Backend;
 
 package body Model_Runner.Draft_Policy is
@@ -92,5 +93,25 @@ package body Model_Runner.Draft_Policy is
       end if;
       return Result;
    end Decide;
+
+   -------------
+   -- Prepare --
+   -------------
+
+   procedure Prepare
+     (Prepared  : in out Model_Runner.Llama.Model;
+      Decided   : Plan;
+      On_Device : Boolean;
+      Threads   : Positive)
+   is
+      Lighter : Model_Runner.Errors.Error_Info;
+   begin
+      if Decided.From_Next then
+         L.Lighten_Draft_Head (Prepared, Threads, Lighter);
+         if On_Device then
+            L.Lighten_Next_Block (Prepared, Threads, Lighter);
+         end if;
+      end if;
+   end Prepare;
 
 end Model_Runner.Draft_Policy;

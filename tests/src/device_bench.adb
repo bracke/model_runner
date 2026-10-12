@@ -1008,7 +1008,7 @@ package body Device_Bench is
          --  The vectors a product carries: a generated token's one, and a
          --  drafted round's check of four or eight, which a format without
          --  a kernel for a few vectors at once pays for several times over.
-         Widths : constant array (1 .. 3) of Positive := [1, 4, 8];
+         Widths : constant array (1 .. 3) of Positive := [4, 5, 8];
 
          type Shape is record
             Packing  : Products.Weight_Packing;

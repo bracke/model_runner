@@ -1533,19 +1533,13 @@ begin
                Request.Draft_Tokens := Plan.Tokens;
                Request.Draft_From_Context := Plan.From_Context;
                Request.Draft_Adapts := Plan.Adapts;
+               Model_Runner.Draft_Policy.Prepare
+                 (Prepared, Plan,
+                  On_Device => Model_Runner.Backend."="
+                                 (Item.Backend,
+                                  Model_Runner.Backend.Backend_Device),
+                  Threads   => Model_Runner.Platform.Core_Count);
             end;
-            --  The block's proposals read a slice of the head, at
-            --  four bits for that alone.
-            if Request.Draft_From_Next then
-               declare
-                  Lighter : E.Error_Info;
-               begin
-                  L.Lighten_Draft_Head
-                    (Prepared, Model_Runner.Platform.Core_Count,
-                     Lighter);
-               end;
-            end if;
-
             Request.Sampling := Item.Sampling;
             Request.Seed := Item.Seed;
             Request.Has_Seed := Item.Has_Seed;

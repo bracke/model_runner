@@ -521,14 +521,13 @@ package body Speed_Run is
                      Request.Draft_From_Context := Plan.From_Context;
                      Request.Draft_From_Next := Plan.From_Next;
                      Request.Draft_Adapts := Draft_Adapts or else Plan.Adapts;
-                     --  The block's proposals read a slice of the head at
-                     --  four bits, as the command takes it.
-                     if Plan.From_Next and then not Lightened then
-                        declare
-                           Lighter : E.Error_Info;
-                        begin
-                           L.Lighten_Draft_Head (Engine, Threads, Lighter);
-                        end;
+                     --  Readied for it as the command readies it.
+                     if not Lightened then
+                        Draft_Policy.Prepare
+                          (Engine, Plan,
+                           On_Device => Backend
+                                        = Model_Runner.Backend.Backend_Device,
+                           Threads   => Threads);
                         Lightened := True;
                      end if;
                   end;

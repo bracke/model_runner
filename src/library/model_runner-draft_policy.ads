@@ -81,4 +81,20 @@ package Model_Runner.Draft_Policy is
       Draft_Ready  : Boolean;
       Auto_Drafted : Boolean) return Plan;
 
+   --  Get a model ready for the drafting a plan decided: a draft from the
+   --  block past the stack reads a four-bit slice of the head, and on the
+   --  device the block's own eight-bit matrices at four bits too
+   --  (Llama.Lighten_Next_Block). Proposals only: nothing the run writes
+   --  changes. The run command and a tool measuring it both call this.
+   --
+   --  @param Prepared The model.
+   --  @param Decided The plan Decide returned.
+   --  @param On_Device The run evaluates on the device.
+   --  @param Threads Workers to encode with.
+   procedure Prepare
+     (Prepared  : in out Model_Runner.Llama.Model;
+      Decided   : Plan;
+      On_Device : Boolean;
+      Threads   : Positive);
+
 end Model_Runner.Draft_Policy;

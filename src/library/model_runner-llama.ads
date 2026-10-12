@@ -1010,6 +1010,25 @@ package Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Write the block past the stack's eight-bit matrices again at four
+   --  bits, for the drafts it makes.
+   --
+   --  Its proposals are checked token by token, so coarser weights change
+   --  how many are kept and never what the run writes. For the device:
+   --  Underdog-Saluki-27B drafting three a round on it 11.8 -> 12.7 tokens
+   --  a second, the same proposals kept; on the processor, whose products
+   --  round the activations as well, it kept 41 in a hundred against 59
+   --  and lost. Nothing is written for a matrix at another format.
+   --
+   --  @param Item Prepared model that drafts from its own block.
+   --  @param Threads Workers to encode with.
+   --  @param Status Success, or why a copy could not be made; that matrix
+   --    is then read as the file has it.
+   procedure Lighten_Next_Block
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  The format the output head is read in, which Lighten_Head changes.
    --
    --  @param Item Prepared model.
@@ -2652,6 +2671,9 @@ private
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
+
+   --  Room for the block past the stack's re-encoded matrices.
+   type Light_Bytes is array (1 .. 32) of Model_Runner.Bytes.Byte_Array_Access;
    type Layer_Array_Access is access Layer_Array;
 
    --  A matrix's name against where its bytes begin, for a watcher to ask
@@ -2732,6 +2754,10 @@ private
       --  at four bits, where the run asked for them; empty otherwise.
       Draft_Head       : aliased Model_Runner.Tensors.View;
       Draft_Head_Bytes : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  The block past the stack's matrices at four bits, where the run
+      --  asked for them; see Lighten_Next_Block.
+      Next_Light : Light_Bytes := [others => null];
 
       --  What every resolved matrix is called, against where it lives.
       --
