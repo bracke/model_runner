@@ -2486,6 +2486,92 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back_Buffer (Item, Buffer, Memory);
    end Release_Weight;
 
+   --  Write_Bytes's eight copiers, made the first time a matrix is copied
+   --  and kept: eight tasks made and ended for every matrix were most of a
+   --  thousand threads for a small model's first prompt.
+   task type Byte_Copier is
+      entry Go
+        (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count);
+   end Byte_Copier;
+   type Byte_Copier_Access is access Byte_Copier;
+   Copiers : array (1 .. 8) of Byte_Copier_Access;
+
+   --  One copy at a time through them, and its parts counted home.
+   protected Copying is
+      entry Seize;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Copying;
+
+   protected Copy_Count is
+      procedure Expect (Parts : Natural);
+      procedure One_Done;
+      entry Finished;
+   private
+      Left : Natural := 0;
+   end Copy_Count;
+
+   protected body Copying is
+      entry Seize when not Held is
+      begin
+         Held := True;
+      end Seize;
+
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Copying;
+
+   protected body Copy_Count is
+      procedure Expect (Parts : Natural) is
+      begin
+         Left := Parts;
+      end Expect;
+
+      procedure One_Done is
+      begin
+         Left := Left - 1;
+      end One_Done;
+
+      entry Finished when Left = 0 is
+      begin
+         null;
+      end Finished;
+   end Copy_Count;
+
+   task body Byte_Copier is
+      To, Source : System.Address;
+      Size       : Model_Runner.Bytes.Byte_Count;
+   begin
+      loop
+         select
+            accept Go
+              (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count)
+            do
+               To := Into;
+               Source := From;
+               Size := Length;
+            end Go;
+         or
+            terminate;
+         end select;
+
+         if Size > 0 then
+            declare
+               Target : Model_Runner.Bytes.Byte_Array (1 .. Size)
+                 with Import, Address => To;
+               Origin : constant Model_Runner.Bytes.Byte_Array (1 .. Size)
+                 with Import, Address => Source;
+            begin
+               Target := Origin;
+            end;
+         end if;
+         Copy_Count.One_Done;
+      end loop;
+   end Byte_Copier;
+
    procedure Write_Bytes
      (Where  : Address;
       Values : Model_Runner.Bytes.Byte_Array;
@@ -2514,32 +2600,34 @@ package body Model_Runner.Platform.Device.Products is
             Room := Values;
          else
             declare
-               task type Part is
-                  entry Go (Lo, Hi : Model_Runner.Bytes.Byte_Count);
-               end Part;
-               task body Part is
-                  L, H : Model_Runner.Bytes.Byte_Count;
-               begin
-                  accept Go (Lo, Hi : Model_Runner.Bytes.Byte_Count) do
-                     L := Lo;
-                     H := Hi;
-                  end Go;
-                  Room (L .. H) := Values (L .. H);
-               end Part;
-               Parts : array (1 .. Ways) of Part;
-               Step  : constant Model_Runner.Bytes.Byte_Count :=
+               Step : constant Model_Runner.Bytes.Byte_Count :=
                  (Values'Length + Ways - 1) / Ways;
             begin
-               for K in Parts'Range loop
+               Copying.Seize;
+               if Copiers (1) = null then
+                  for K in Copiers'Range loop
+                     Copiers (K) := new Byte_Copier;
+                  end loop;
+               end if;
+               Copy_Count.Expect (Ways);
+               for K in Copiers'Range loop
                   declare
                      Lo : constant Model_Runner.Bytes.Byte_Count :=
                        Values'First + Model_Runner.Bytes.Byte_Count (K - 1) * Step;
+                     Hi : constant Model_Runner.Bytes.Byte_Count :=
+                       Model_Runner.Bytes.Byte_Count'Min (Values'Last, Lo + Step - 1);
                   begin
-                     Parts (K).Go
-                       (Lo, Model_Runner.Bytes.Byte_Count'Min
-                              (Values'Last, Lo + Step - 1));
+                     Copiers (K).Go
+                       (Room (Lo)'Address, Values (Lo)'Address,
+                        (if Hi >= Lo then Hi - Lo + 1 else 0));
                   end;
                end loop;
+               Copy_Count.Finished;
+               Copying.Release;
+            exception
+               when others =>
+                  Copying.Release;
+                  raise;
             end;
          end if;
       end;
