@@ -18,6 +18,17 @@ is
 begin
    Result := (Task_Id => To_Unbounded_String (Task_Id), others => <>);
 
+   --  A task with more than one workspace is a broken state, and which
+   --  of them to take in is not this to decide.
+   declare
+      Unique : Unbounded_String;
+   begin
+      Workspaces.Active_Workspace (Item, Task_Id, Unique, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+   end;
+
    --  Work is taken in for a task that waits for it -- in verification,
    --  its agent done -- and not for one set aside or still being worked.
    if Tasks.State_Of (Item, Task_Id) /= "verification" then
@@ -310,7 +321,14 @@ begin
       end;
    end if;
    if E.Is_Ok (Status) then
-      Workspaces.Release (Item, Id);
+      declare
+         Left : E.Error_Info;
+      begin
+         Workspaces.Release (Item, Id, Left);
+         if E.Is_Error (Left) then
+            Result.Tree_Left := To_Unbounded_String (Why_Of (Left));
+         end if;
+      end;
    end if;
    if E.Is_Error (Status) then
       return;

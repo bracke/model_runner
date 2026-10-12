@@ -949,13 +949,16 @@ package body Model_Runner.Framework.Tasks is
             end loop;
          end;
       end if;
-      if Next in "failed" | "cancelled" | "rejected"
-        and then Workspaces.Active_For (Item, Id) /= ""
-      then
-         Workspaces.Abandon (Item, Change, Workspaces.Active_For (Item, Id), Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
+      --  Every workspace it has, where a broken state left it more than
+      --  one: given up is what each would be, and none is chosen over the
+      --  others.
+      if Next in "failed" | "cancelled" | "rejected" then
+         for Space of Workspaces.Every_Active (Item, Id) loop
+            Workspaces.Abandon (Item, Change, Space, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end loop;
       end if;
 
       --  Accepted with children still open -- split while a candidate --

@@ -165,8 +165,34 @@ package Model_Runner.Framework.Agents is
    --
    --  @param Item The store.
    --  @param Task_Id The task.
-   --  @return Its identifier, or "" for none.
+   --  @return Its identifier, or "" for none -- and for more than one, a
+   --    broken state no caller may settle by picking: Every_Working_On
+   --    tells the two apart.
    function Working_On (Item : Stores.Store; Task_Id : String) return String;
+
+   --  Every root agent made and not ended for a task: one at most, unless
+   --  the state is broken.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return Their identifiers.
+   function Every_Working_On
+     (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
+
+   --  Every root agent made and not ended, as its task and its identifier
+   --  with a space between: Task_Of and Agent_Of take them apart.
+   --
+   --  @param Item The store.
+   --  @return One a root agent going.
+   function Going_Roots (Item : Stores.Store) return Name_Lists.Vector;
+
+   --  @param Root One of Going_Roots.
+   --  @return Its task.
+   function Task_Of (Root : String) return String;
+
+   --  @param Root One of Going_Roots.
+   --  @return Its agent.
+   function Agent_Of (Root : String) return String;
 
    --  The children of an agent.
    --

@@ -197,6 +197,25 @@ begin
             end if;
          end;
       end loop;
+      --  A workspace made whose record was never kept, and which could
+      --  not be removed then: removed now, as it was marked to be. And a
+      --  tree taken in whose removal failed: tried again.
+      declare
+         Removed : Name_Lists.Vector;
+         Left    : Name_Lists.Vector;
+      begin
+         Workspaces.Discard_Aborted (Item, Removed);
+         for Id of Removed loop
+            Said.Append ("workspaces/" & Id & ": made and never recorded; removed");
+         end loop;
+         Workspaces.Release_Leftovers (Item, Removed, Left);
+         for Id of Removed loop
+            Said.Append (Id & ": taken in, its tree left behind; removed");
+         end loop;
+         for Id of Left loop
+            Said.Append (Id & ": taken in, and its tree still cannot be removed");
+         end loop;
+      end;
       if Ada.Directories.Exists (Home) then
          declare
             use Ada.Directories;

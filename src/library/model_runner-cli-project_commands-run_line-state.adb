@@ -261,13 +261,18 @@ begin
    --  Each running, with the agent that runs it.
    for Id of Tk.List (Store, "running") loop
       declare
-         Runs_It : constant String := Model_Runner.Framework.Agents.Working_On (Store, Id);
+         Going : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Model_Runner.Framework.Agents.Every_Working_On (Store, Id);
       begin
          Pres.Put_Indented
            (Screen, "cli.project.which",
             [Loc.Named ("name", Id),
-             Loc.Named ("value", (if Runs_It = "" then "running"
-                                  else "its agent " & Runs_It & " is working on it"))], Indent => 4);
+             Loc.Named ("value", (if Going.Is_Empty then "running"
+                                  elsif Natural (Going.Length) = 1
+                                  then "its agent " & Going.First_Element & " is working on it"
+                                  else Ada.Strings.Fixed.Trim (Natural'Image (Natural (Going.Length)), Ada.Strings.Both)
+                                       & " agents say they work on it, which cannot be;"
+                                       & " /check consistency"))], Indent => 4);
       end;
    end loop;
    Line_Of ("cli.project.complete", Count ("complete"));

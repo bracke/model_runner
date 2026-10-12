@@ -3,6 +3,7 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
@@ -1276,6 +1277,28 @@ package body Model_Runner.Framework.Consistency is
                             & Tasks.State_Of (Item, To_String (Held.Task_Id))
                             & " and still has a workspace");
                   end if;
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  One root agent going a task.
+      declare
+         Seen : Name_Lists.Vector;
+         Who  : Name_Lists.Vector;
+      begin
+         for Root of Agents.Going_Roots (Item) loop
+            declare
+               Task_Id : constant String := Agents.Task_Of (Root);
+               At_Seen : constant Natural := Seen.Find_Index (Task_Id);
+            begin
+               if At_Seen /= Name_Lists.No_Index then
+                  Found (Agent_Assignment, Agents.Agent_Of (Root),
+                         Task_Id & " has more than one agent working on it, "
+                         & Who (At_Seen) & " and " & Agents.Agent_Of (Root));
+               else
+                  Seen.Append (Task_Id);
+                  Who.Append (Agents.Agent_Of (Root));
                end if;
             end;
          end loop;

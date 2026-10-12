@@ -446,8 +446,8 @@ package body Model_Runner.Framework.Workspaces is
    -- Active_For --
    ----------------
 
-   function Active_For (Item : Stores.Store; Task_Id : String) return String is
-      Found : Unbounded_String;
+   function Every_Active (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector is
+      Found : Name_Lists.Vector;
    begin
       for Name of Stores.Names (Item, Workspaces_Area) loop
          declare
@@ -458,12 +458,42 @@ package body Model_Runner.Framework.Workspaces is
             if E.Is_Ok (Status) and then To_String (Held.Task_Id) = Task_Id
               and then To_String (Held.Status) = "active"
             then
-               Found := Held.Id;
+               Found.Append (To_String (Held.Id));
             end if;
          end;
       end loop;
-      return To_String (Found);
+      return Found;
+   end Every_Active;
+
+   function Active_For (Item : Stores.Store; Task_Id : String) return String is
+      Found : constant Name_Lists.Vector := Every_Active (Item, Task_Id);
+   begin
+      return (if Found.Is_Empty then "" else Found.First_Element);
    end Active_For;
+
+   ----------------------
+   -- Active_Workspace --
+   ----------------------
+
+   procedure Active_Workspace
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Id      : out Unbounded_String;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Found : constant Name_Lists.Vector := Every_Active (Item, Task_Id);
+   begin
+      Id := Null_Unbounded_String;
+      Status := E.Success;
+      if Natural (Found.Length) > 1 then
+         Status := E.Make (E.Framework_Integrity_Failed);
+         E.Add_Text (Status, "name", Task_Id);
+         E.Add_Text (Status, "value",
+                     Trim (Natural'Image (Natural (Found.Length))) & " active workspaces");
+      elsif not Found.Is_Empty then
+         Id := To_Unbounded_String (Found.First_Element);
+      end if;
+   end Active_Workspace;
 
    -------------
    -- Changes --
@@ -1502,17 +1532,133 @@ package body Model_Runner.Framework.Workspaces is
    -- Release --
    -------------
 
-   procedure Release (Item : Stores.Store; Id : String) is
-      Held   : Workspace;
-      Status : E.Error_Info;
+   procedure Release
+     (Item   : Stores.Store;
+      Id     : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Held : Workspace;
    begin
       Read (Item, Id, Held, Status);
       --  What was taken in is the project's now: a tree that stays is room
-      --  taken, not work lost, and released all the same.
+      --  taken, not work lost, and released all the same -- said, and
+      --  tried again at the next opening.
       if E.Is_Ok (Status) and then To_String (Held.Status) = "integrated" then
          Remove_Tree (Item, Held, Status);
       end if;
    end Release;
+
+   -----------------------
+   -- Release_Leftovers --
+   -----------------------
+
+   procedure Release_Leftovers
+     (Item     : Stores.Store;
+      Released : out Name_Lists.Vector;
+      Left     : out Name_Lists.Vector) is
+   begin
+      Released.Clear;
+      Left.Clear;
+      for Name of Stores.Names (Item, Workspaces_Area) loop
+         declare
+            Held   : Workspace;
+            Status : E.Error_Info;
+         begin
+            Read (Item, Name, Held, Status);
+            if E.Is_Ok (Status) and then To_String (Held.Status) = "integrated"
+              and then Length (Held.Path) > 0
+              and then Dirs.Exists (Dirs.Containing_Directory (To_String (Held.Path)))
+            then
+               Remove_Tree (Item, Held, Status);
+               if E.Is_Ok (Status) then
+                  Released.Append (To_String (Held.Id));
+               else
+                  Left.Append (To_String (Held.Id));
+               end if;
+            end if;
+         end;
+      end loop;
+   end Release_Leftovers;
+
+   --  Where Discard_Unrecorded marks a workspace it could not remove: its
+   --  tree's place and how it was kept, a line each.
+   function Aborted_Mark (Item : Stores.Store; Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"),
+                        "aborted-" & Id & ".txt"));
+
+   ------------------------
+   -- Discard_Unrecorded --
+   ------------------------
+
+   procedure Discard_Unrecorded
+     (Item   : Stores.Store;
+      Made   : Workspace;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Marked : E.Error_Info;
+   begin
+      Remove_Tree (Item, Made, Status);
+      if E.Is_Error (Status) then
+         Files.Write_Text
+           (Aborted_Mark (Item, To_String (Made.Id)),
+            To_String (Made.Path) & ASCII.LF
+            & Ada.Characters.Handling.To_Lower (Backend'Image (Made.Kind)) & ASCII.LF,
+            Marked);
+      end if;
+   end Discard_Unrecorded;
+
+   function Aborted (Item : Stores.Store; Id : String) return Boolean
+   is (Dirs.Exists (Aborted_Mark (Item, Id)));
+
+   ---------------------
+   -- Discard_Aborted --
+   ---------------------
+
+   procedure Discard_Aborted
+     (Item    : Stores.Store;
+      Removed : out Name_Lists.Vector)
+   is
+      Home : constant String := Hostkit.Fs.Join (Stores.Root (Item), "runtime");
+   begin
+      Removed.Clear;
+      if not Dirs.Exists (Home) then
+         return;
+      end if;
+      for Name of Files.Files_In (Home) loop
+         if Name'Length > 12
+           and then Name (Name'First .. Name'First + 7) = "aborted-"
+           and then Name (Name'Last - 3 .. Name'Last) = ".txt"
+         then
+            declare
+               Id     : constant String := Name (Name'First + 8 .. Name'Last - 4);
+               Text   : Unbounded_String;
+               Status : E.Error_Info;
+            begin
+               Files.Read_Text (Hostkit.Fs.Join (Home, Name), Text, Status);
+               --  Never one the store has a record of: that one is the
+               --  store's to settle, whatever a mark says.
+               if E.Is_Ok (Status) and then not Stores.Exists (Item, Workspaces_Area, Id) then
+                  declare
+                     Lines : constant Name_Lists.Vector := Lines_Of (To_String (Text));
+                     Made  : Workspace;
+                  begin
+                     if Natural (Lines.Length) >= 2 then
+                        Made.Id := To_Unbounded_String (Id);
+                        Made.Path := To_Unbounded_String (Lines (1));
+                        Made.Kind := (if Lines (2) = "git_worktree" then Git_Worktree
+                                      else File_Copy);
+                        Remove_Tree (Item, Made, Status);
+                        if E.Is_Ok (Status) then
+                           Files.Discard (Hostkit.Fs.Join (Home, Name));
+                           Removed.Append (Id);
+                        end if;
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+      end loop;
+   end Discard_Aborted;
 
    -------------
    -- Abandon --

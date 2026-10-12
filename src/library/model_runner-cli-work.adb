@@ -1506,6 +1506,12 @@ package body Model_Runner.CLI.Work is
               (Screen, "cli.work.kept_back",
                [Loc.Named ("detail", Line), Loc.Named ("name", To_String (Done.Issue_Id))]);
          end loop;
+         if Done.Tree_Left /= Null_Unbounded_String then
+            Pres.Put_Message
+              (Screen, "cli.work.tree_left",
+               [Loc.Named ("name", To_String (Done.Workspace_Id)),
+                Loc.Named ("detail", To_String (Done.Tree_Left))]);
+         end if;
          --  Issues it reported, with nothing kept back: where they are.
          if Done.Kept_Back.Is_Empty and then Done.Issue_Id /= Null_Unbounded_String then
             Pres.Put_Message

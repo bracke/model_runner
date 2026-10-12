@@ -5452,6 +5452,12 @@ package body Model_Runner.CLI.Tasks is
                [Loc.Named ("name", To_String (Done.Workspace_Id)),
                 Loc.Named ("detail", (if Said.Is_Empty then "nothing" else Joined (Said)))]);
          end;
+         if Length (Done.Tree_Left) > 0 then
+            Pres.Put_Message
+              (Screen, "cli.work.tree_left",
+               [Loc.Named ("name", To_String (Done.Workspace_Id)),
+                Loc.Named ("detail", To_String (Done.Tree_Left))]);
+         end if;
          --  The project as it is after, checked: said with its evidence.
          --  Passed or not by its own record: a task held back by a gate
          --  of its own -- parts still open -- was checked all the same.

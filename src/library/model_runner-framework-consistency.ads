@@ -34,6 +34,7 @@ package Model_Runner.Framework.Consistency is
       Stale_Verification,
       Completed_Without_Gate,
       Workspace_Assignment,
+      Agent_Assignment,
       Permission_Widening,
       Permission_Withheld,
       Missing_Component,

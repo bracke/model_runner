@@ -5246,6 +5246,11 @@ package body Tests.Framework_Cases is
                  "a root with no time left was sent back to fix its checks");
          Assert (Wk.Next_Step (Worked) = Wk.Check_For_It,
                  "a root that said done without a check did not have the checks run for it");
+         Assert (Wk.Next_Step ((Worked with delta Answer => To_Unbounded_String
+                                  ("{""status"": ""done"", ""summary"": ""did it"","
+                                   & " ""changed_files"": ""src/a.adb""}")))
+                 = Wk.Check_For_It,
+                 "a root that said done in JSON without a check was not taken as done");
          Assert (Wk.Next_Step ((Worked with delta Check_Runs => 1)) = Wk.Finish
                  and then Wk.Next_Step ((Worked with delta May_Check => False)) = Wk.Finish
                  and then Wk.Next_Step ((Worked with delta Root => False)) = Wk.Finish
@@ -6158,6 +6163,28 @@ package body Tests.Framework_Cases is
          end loop;
          Assert (Misplaced, "a workspace for a task nobody works on was not found");
       end;
+
+      --  Two workspaces for one task: said by the consistency check, and
+      --  refused by what acts on the task's workspace rather than one of
+      --  them picked.
+      declare
+         Second : Ws.Workspace;
+         Only   : Unbounded_String;
+      begin
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Second, Status);
+         S.Commit (Store, Change, Status);
+         Ws.Active_Workspace (Store, To_String (Other), Only, Status);
+         Assert (Status.Code = E.Framework_Integrity_Failed
+                 and then Length (Only) = 0
+                 and then Natural (Ws.Every_Active (Store, To_String (Other)).Length) = 2,
+                 "a task with two workspaces was given one of them: " & Code_Of (Status)
+                 & " " & To_String (Only));
+         Ws.Abandon (Store, Change, To_String (Second.Id), Status);
+         S.Commit (Store, Change, Status);
+         Ws.Active_Workspace (Store, To_String (Other), Only, Status);
+         Assert (E.Is_Ok (Status) and then Only = Made.Id,
+                 "a task's one workspace was not its workspace: " & Code_Of (Status));
+      end;
       Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
       Assert (Status.Code = E.Framework_Integration_Conflict,
               "a conflicting workspace was taken in");
@@ -6720,6 +6747,38 @@ package body Tests.Framework_Cases is
               and then Ag.Working_On (Store, "TASK-404") = "",
               "the agent working on a task was not found as its root");
 
+      --  Two roots going on one task is a broken state: neither is the
+      --  one working on it, and the consistency check says so.
+      declare
+         Extra : Unbounded_String;
+         Gone  : Model_Runner.Framework.Name_Lists.Vector;
+         Said  : Boolean := False;
+         use type Model_Runner.Framework.Consistency.Finding_Kind;
+      begin
+         Ag.Start_Root (Store, Change, "TASK-001", "planner", "", Extra, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Findings : constant Model_Runner.Framework.Consistency.Finding_List :=
+              Model_Runner.Framework.Consistency.Check (Store);
+         begin
+            for Index in 1 .. Model_Runner.Framework.Consistency.Length (Findings) loop
+               Said := Said
+                 or else Model_Runner.Framework.Consistency.Element (Findings, Index).Kind
+                           = Model_Runner.Framework.Consistency.Agent_Assignment;
+            end loop;
+         end;
+         Assert (Ag.Working_On (Store, "TASK-001") = ""
+                 and then Natural (Ag.Every_Working_On (Store, "TASK-001").Length) = 2
+                 and then Said,
+                 "two root agents on one task were taken for one, or not found: "
+                 & Code_Of (Status) & " [" & Ag.Working_On (Store, "TASK-001") & "]"
+                 & Ag.Every_Working_On (Store, "TASK-001").Length'Image & " " & Said'Image);
+         Ag.Cancel (Store, Change, To_String (Extra), Gone, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Ag.Working_On (Store, "TASK-001") = To_String (Root),
+                 "with the second root ended, the first is not the one working");
+      end;
+
       Ag.Spawn_Child (Store, Change, To_String (Root), "coder", Ag.Required,
                       Pm.Unrestricted, 300, First, Status);
       S.Commit (Store, Change, Status);
@@ -7241,6 +7300,47 @@ package body Tests.Framework_Cases is
                     & Removed'Image & " " & To_String (Retired.Retired) & Length (Retired.Payload)'Image
                     & S.Exists (Store, Model_Runner.Framework.Results_Area, To_String (New_Log.Id))'Image
                     & S.Exists (Store, Model_Runner.Framework.Results_Area, To_String (Kept.Id))'Image);
+         end;
+
+         --  Retired, it still proves what it is: its summary changed is
+         --  found, though the payload that made its name is gone.
+         declare
+            Retired : Rs.Result;
+            Read    : E.Error_Info;
+         begin
+            S.Read (Store, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored, Status);
+            R.Set (Stored, "summary", "forged");
+            R.Set_Revision (Stored, R.Revision (Stored) + 1);
+            S.Put (Change, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored);
+            S.Commit (Store, Change, Status);
+            Rs.Read (Store, To_String (Old_Log.Id), Retired, Read);
+            Assert (Read.Code = E.Framework_Integrity_Failed,
+                    "a retired result whose summary changed read back as sound: " & Code_Of (Read));
+            R.Set (Stored, "summary", "old");
+            R.Set_Revision (Stored, R.Revision (Stored) + 1);
+            S.Put (Change, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored);
+            S.Commit (Store, Change, Status);
+         end;
+
+         --  The same log again, after its first was retired: the same
+         --  name, taken, and its payload back.
+         declare
+            Again   : Rs.Result :=
+              (Kind => Rs.Verification, Producer => To_Unbounded_String ("execution"),
+               Summary => To_Unbounded_String ("old"), Payload => To_Unbounded_String ("x"),
+               others => <>);
+            Back    : Rs.Result;
+            Read    : E.Error_Info;
+         begin
+            Rs.Add (Store, Change, Again, Status);
+            Assert (E.Is_Ok (Status) and then Again.Id = Old_Log.Id,
+                    "the same content as a retired result was refused: " & Code_Of (Status));
+            S.Commit (Store, Change, Status);
+            Rs.Read (Store, To_String (Old_Log.Id), Back, Read);
+            Assert (E.Is_Ok (Read) and then To_String (Back.Payload) = "x"
+                    and then Length (Back.Retired) = 0,
+                    "a retired result given its content again is not whole: "
+                    & Code_Of (Read) & " " & To_String (Back.Retired));
          end;
 
          --  What is only a cache goes after its own days.
@@ -8532,11 +8632,52 @@ package body Tests.Framework_Cases is
                     "only the workspace's own change was not taken in, or its tree went"
                     & " before the integration was kept: " & Code_Of (Status));
             S.Commit (Store, Change, Status);
-            Ws.Release (Store, To_String (Made.Id));
-            Assert (Read_Whole (Root & "/src/a.adb") = "three"
+            Ws.Release (Store, To_String (Made.Id), Status);
+            Assert (E.Is_Ok (Status)
+                    and then Read_Whole (Root & "/src/a.adb") = "three"
                     and then not Dirs.Exists (To_String (Made.Path)),
                     "a kept integration left its tree, or did not take the change in");
+            --  Its tree gone, the opening's second try finds nothing left.
+            declare
+               Released, Left : Model_Runner.Framework.Name_Lists.Vector;
+            begin
+               Ws.Release_Leftovers (Store, Released, Left);
+               Assert (Released.Is_Empty and then Left.Is_Empty,
+                       "a tree already removed was found left behind");
+            end;
          end if;
+      end;
+
+      --  A workspace made and its record never kept is nobody's: removed
+      --  then, or -- where it will not go -- marked, and removed when the
+      --  project is next opened rather than left for someone to guess at.
+      declare
+         Lost    : Ws.Workspace;
+         Removed : Model_Runner.Framework.Name_Lists.Vector;
+         Home    : Unbounded_String;
+      begin
+         Ws.Create (Store, Change, To_String (Id), "AG-TEST", "9", False, Lost, Status);
+         Change := S.No_Changes;
+         Assert (E.Is_Ok (Status) and then Dirs.Exists (To_String (Lost.Path)),
+                 "a workspace to lose was not made: " & Code_Of (Status));
+         Ws.Discard_Unrecorded (Store, Lost, Status);
+         Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Lost.Path))
+                 and then not Ws.Aborted (Store, To_String (Lost.Id)),
+                 "a workspace never recorded was left behind: " & Code_Of (Status));
+
+         Ws.Create (Store, Change, To_String (Id), "AG-TEST", "9", False, Lost, Status);
+         Change := S.No_Changes;
+         Home := To_Unbounded_String (Dirs.Containing_Directory (To_String (Lost.Path)));
+         GNAT.OS_Lib.Set_Non_Writable (To_String (Home));
+         Ws.Discard_Unrecorded (Store, Lost, Status);
+         GNAT.OS_Lib.Set_Writable (To_String (Home));
+         Assert (E.Is_Error (Status) and then Ws.Aborted (Store, To_String (Lost.Id)),
+                 "a workspace that would not go was not marked to go: " & Code_Of (Status));
+         Ws.Discard_Aborted (Store, Removed);
+         Assert (Removed.Contains (To_String (Lost.Id))
+                 and then not Dirs.Exists (To_String (Home))
+                 and then not Ws.Aborted (Store, To_String (Lost.Id)),
+                 "a workspace marked to go was not removed when asked again");
       end;
       S.Close (Store);
    end Workspaces_Start_And_End_Whole;

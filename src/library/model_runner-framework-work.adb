@@ -938,6 +938,17 @@ package body Model_Runner.Framework.Work is
    -- Report_Refusal --
    --------------------
 
+   --  Whether a root's answer reports its work done, read as the harness
+   --  reads every report -- lines or JSON alike -- not by its text: a
+   --  done said in JSON is done as surely as one said in a line.
+   function Says_Done (Answer : String) return Boolean is
+      Said : Invocations.Claims;
+      Held : E.Error_Info;
+   begin
+      Invocations.Hold (Invocations.Work_Claim, Answer, Said, Held);
+      return Ada.Characters.Handling.To_Lower (Invocations.Claim (Said, "status")) = "done";
+   end Says_Done;
+
    function Next_Step (State : Round_State) return Round_Step is
       Rounds : constant Positive := (if State.Root then 3 else 2);
       Said   : constant String := To_String (State.Answer);
@@ -955,7 +966,7 @@ package body Model_Runner.Framework.Work is
       --  of three without a check, and its work waited there failed.
       elsif State.Root and then State.Answered and then State.Round < 3 and then not State.Asked_To_Fix
         and then State.Hosted and then State.Check_Runs = 0 and then State.May_Check and then State.Time_Left
-        and then Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Said), "status: done") > 0
+        and then Says_Done (Said)
       then
          return Check_For_It;
       --  A report the harness cannot take -- a required line missing, a

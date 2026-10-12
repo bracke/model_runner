@@ -9,7 +9,11 @@ begin
    Recovered.Clear;
    Status := E.Success;
    for Id of Tasks.List (Item, "running") loop
-      if Leases.Holder (Item, Lease_Of (Id)) = "" then
+      --  One with more than one workspace is left as it is: which to give
+      --  up is not this to decide, and /check consistency names it.
+      if Leases.Holder (Item, Lease_Of (Id)) = ""
+        and then Natural (Workspaces.Every_Active (Item, Id).Length) <= 1
+      then
          declare
             Agent : constant String := Holder_Record (Item, Id);
             Space : constant String := Workspaces.Active_For (Item, Id);

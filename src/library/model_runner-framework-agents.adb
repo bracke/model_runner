@@ -115,7 +115,21 @@ package body Model_Runner.Framework.Agents is
       end if;
    end Read;
 
-   function Working_On (Item : Stores.Store; Task_Id : String) return String is
+   function Every_Working_On
+     (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector
+   is
+      Found : Name_Lists.Vector;
+   begin
+      for Root of Going_Roots (Item) loop
+         if Task_Of (Root) = Task_Id then
+            Found.Append (Agent_Of (Root));
+         end if;
+      end loop;
+      return Found;
+   end Every_Working_On;
+
+   function Going_Roots (Item : Stores.Store) return Name_Lists.Vector is
+      Found : Name_Lists.Vector;
    begin
       for Name of Stores.Names (Item, Runtime_Area) loop
          if Name'Length > Prefix'Length
@@ -126,16 +140,28 @@ package body Model_Runner.Framework.Agents is
                Status : E.Error_Info;
             begin
                Read (Item, Name (Name'First + Prefix'Length .. Name'Last), Held, Status);
-               if E.Is_Ok (Status) and then To_String (Held.Task_Id) = Task_Id
+               if E.Is_Ok (Status)
                  and then Length (Held.Parent) = 0
                  and then To_String (Held.Status) in "created" | "running" | "waiting"
                then
-                  return To_String (Held.Id);
+                  Found.Append (To_String (Held.Task_Id) & " " & To_String (Held.Id));
                end if;
             end;
          end if;
       end loop;
-      return "";
+      return Found;
+   end Going_Roots;
+
+   function Task_Of (Root : String) return String
+   is (Root (Root'First .. Ada.Strings.Fixed.Index (Root, " ", Ada.Strings.Backward) - 1));
+
+   function Agent_Of (Root : String) return String
+   is (Root (Ada.Strings.Fixed.Index (Root, " ", Ada.Strings.Backward) + 1 .. Root'Last));
+
+   function Working_On (Item : Stores.Store; Task_Id : String) return String is
+      Found : constant Name_Lists.Vector := Every_Working_On (Item, Task_Id);
+   begin
+      return (if Natural (Found.Length) = 1 then Found.First_Element else "");
    end Working_On;
 
    --  How many agents are going: made and not ended.

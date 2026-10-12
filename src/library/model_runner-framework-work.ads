@@ -593,6 +593,11 @@ package Model_Runner.Framework.Work is
       --  an issue for a person instead.
       Kept_Back     : Name_Lists.Vector;
 
+      --  Why the tree of a workspace taken in could not be removed: the
+      --  work is the project's all the same, and the next opening tries
+      --  again (Workspaces.Release_Leftovers). Empty where it went.
+      Tree_Left     : Ada.Strings.Unbounded.Unbounded_String;
+
       --  The result the answer's issues -- and what was kept back -- are
       --  kept as, where there were any.
       Issue_Id      : Ada.Strings.Unbounded.Unbounded_String;

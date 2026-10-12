@@ -72,12 +72,38 @@ package Model_Runner.Framework.Workspaces is
       Result : out Workspace;
       Status : out Model_Runner.Errors.Error_Info);
 
-   --  The workspace a task's work is in, if one is active.
+   --  The workspace a task's work is in, if one is active: for saying so
+   --  and for asking whether there is one. Where the state is broken and
+   --  a task has more than one, this names one of them, which is enough
+   --  to say a workspace is there and never enough to act on: what acts
+   --  on a task's workspace asks Active_Workspace, which refuses.
    --
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @return Its identifier, or the empty string.
    function Active_For (Item : Stores.Store; Task_Id : String) return String;
+
+   --  Every active workspace of a task: one, or none, unless the state is
+   --  broken.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return Their identifiers, in the store's order.
+   function Every_Active (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
+
+   --  The one workspace a task's work is in, for what acts on it.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Id Its identifier, or the empty string where there is none.
+   --  @param Status Framework_Integrity_Failed where the task has more than
+   --    one active workspace -- a state /check consistency names, which no
+   --    operation may settle by picking one -- and Id the empty string.
+   procedure Active_Workspace
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Id      : out Ada.Strings.Unbounded.Unbounded_String;
+      Status  : out Model_Runner.Errors.Error_Info);
 
    --  The files an agent changed in its workspace, against the baseline.
    --
@@ -167,7 +193,53 @@ package Model_Runner.Framework.Workspaces is
    --
    --  @param Item The store.
    --  @param Id The workspace.
-   procedure Release (Item : Stores.Store; Id : String);
+   --  @param Status A tree that could not be removed. The work is the
+   --    project's all the same; what is left is room, which the next
+   --    opening tries again to give back (Release_Leftovers).
+   procedure Release
+     (Item   : Stores.Store;
+      Id     : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Give back every integrated workspace's tree still there: a release
+   --  that failed, tried again where the project is opened.
+   --
+   --  @param Item The store.
+   --  @param Released The workspaces whose trees went now.
+   --  @param Left The workspaces whose trees still would not go.
+   procedure Release_Leftovers
+     (Item     : Stores.Store;
+      Released : out Name_Lists.Vector;
+      Left     : out Name_Lists.Vector);
+
+   --  Undo a workspace made whose record was never kept: its tree, and
+   --  git's worktree with it, removed now. Where that fails a mark says
+   --  it was such a workspace, and the next opening removes it
+   --  (Discard_Aborted) rather than leaving an unrecorded directory for
+   --  someone to guess about.
+   --
+   --  @param Item The store.
+   --  @param Made The workspace Create made.
+   --  @param Status A tree that could not be removed; it is marked.
+   procedure Discard_Unrecorded
+     (Item   : Stores.Store;
+      Made   : Workspace;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Remove what Discard_Unrecorded marked and could not remove then.
+   --
+   --  @param Item The store.
+   --  @param Removed The workspaces removed now.
+   procedure Discard_Aborted
+     (Item    : Stores.Store;
+      Removed : out Name_Lists.Vector);
+
+   --  Whether a workspace's directory was marked by Discard_Unrecorded.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @return True where it was made, never recorded, and is to go.
+   function Aborted (Item : Stores.Store; Id : String) return Boolean;
 
    --  Take a workspace's changes into the project.
    --

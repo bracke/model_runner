@@ -304,11 +304,15 @@ is
       --  a retry starts afresh -- and said.
       function Given_Up return String is
          Held : E.Error_Info;
+         Only : Unbounded_String;
       begin
          if not Isolated or else Next not in "failed" | "blocked"
            or else Result.Workspace_Id = Null_Unbounded_String
-           or else Workspaces.Active_For (Item, Task_Id) /= To_String (Result.Workspace_Id)
          then
+            return "";
+         end if;
+         Workspaces.Active_Workspace (Item, Task_Id, Only, Held);
+         if E.Is_Error (Held) or else Only /= Result.Workspace_Id then
             return "";
          end if;
          Workspaces.Abandon (Item, Change, To_String (Result.Workspace_Id), Held);
@@ -536,19 +540,30 @@ begin
    if Isolated then
       declare
          Made  : Workspaces.Workspace;
-         Stale : constant String := Workspaces.Active_For (Item, Task_Id);
+         Only  : Unbounded_String;
       begin
-         --  A workspace an earlier attempt left -- set aside, not taken in
-         --  -- is that attempt's: this generation starts from the project
-         --  as it is, and the task has one workspace, not two.
-         if Stale /= "" then
-            Workspaces.Abandon (Item, Change, Stale, Held);
-            if E.Is_Error (Held) then
-               Change := Stores.No_Changes;
-               Conclude ("blocked", "its earlier workspace cannot be set aside", "failed");
-               return;
-            end if;
+         Workspaces.Active_Workspace (Item, Task_Id, Only, Held);
+         if E.Is_Error (Held) then
+            Change := Stores.No_Changes;
+            Conclude ("blocked", "it has more than one workspace; /check consistency", "failed");
+            return;
          end if;
+         declare
+            Stale : constant String := To_String (Only);
+         begin
+            --  A workspace an earlier attempt left -- set aside, not taken in
+            --  -- is that attempt's: this generation starts from the project
+            --  as it is, and the task has one workspace, not two.
+            if Stale /= "" then
+               Workspaces.Abandon (Item, Change, Stale, Held);
+               if E.Is_Error (Held) then
+                  Change := Stores.No_Changes;
+                  Conclude ("blocked", "its earlier workspace cannot be set aside", "failed");
+                  return;
+               end if;
+            end if;
+         end;
+
          Workspaces.Create
            (Item, Change, Task_Id, To_String (Result.Agent_Id),
             Generation_Of (Item, Task_Id), Work_Setting (Item, "backend") /= "copy",
@@ -556,6 +571,14 @@ begin
          if E.Is_Ok (Held) then
             Agents.Record_Holding
               (Item, Change, To_String (Result.Agent_Id), To_String (Made.Id), "", Held);
+            --  Made, its record not to be kept: it goes with it.
+            if E.Is_Error (Held) then
+               declare
+                  Gone : E.Error_Info;
+               begin
+                  Workspaces.Discard_Unrecorded (Item, Made, Gone);
+               end;
+            end if;
          end if;
          if E.Is_Error (Held) then
             Change := Stores.No_Changes;
@@ -571,6 +594,13 @@ begin
          Annotate (Item, Change, Task_Id, "current_workspace", To_String (Made.Id));
          Stores.Commit (Item, Change, Status);
          if E.Is_Error (Status) then
+            --  Its record never kept, the tree made for it is nobody's:
+            --  removed now, or marked for the next opening to remove.
+            declare
+               Gone : E.Error_Info;
+            begin
+               Workspaces.Discard_Unrecorded (Item, Made, Gone);
+            end;
             return;
          end if;
       end;
@@ -1891,7 +1921,14 @@ begin
          if E.Is_Error (Status) then
             return;
          end if;
-         Workspaces.Release (Item, To_String (Result.Workspace_Id));
+         declare
+            Left : E.Error_Info;
+         begin
+            Workspaces.Release (Item, To_String (Result.Workspace_Id), Left);
+            if E.Is_Error (Left) then
+               Result.Tree_Left := To_Unbounded_String (Why_Of (Left));
+            end if;
+         end;
       end;
    end if;
 

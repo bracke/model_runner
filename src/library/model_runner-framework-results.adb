@@ -53,20 +53,34 @@ package body Model_Runner.Framework.Results is
       Found := False;
    end Kind_Of;
 
-   --  A result's content as one text, each part preceded by its length so
-   --  that no two different results run together into the same one.
-   function Content (Value : Result) return String is
-      function Part (Text : String) return String is
-         Image : constant String := Natural'Image (Text'Length);
-      begin
-         return Image (Image'First + 1 .. Image'Last) & ":" & Text;
-      end Part;
+   --  A text preceded by its length, so that no two different runs of
+   --  parts run together into the same one.
+   function Part (Text : String) return String is
+      Image : constant String := Natural'Image (Text'Length);
    begin
-      return Part (Kind_Word (Value.Kind)) & Part (To_String (Value.Producer))
-        & Part (To_String (Value.Summary)) & Part (To_String (Value.Payload))
-        & Part (To_String (Value.Provenance))
-        & Part (To_String (Value.References));
-   end Content;
+      return Image (Image'First + 1 .. Image'Last) & ":" & Text;
+   end Part;
+
+   --  A result's content as one text, with Payload standing where its
+   --  payload stands.
+   function Content_With (Value : Result; Payload : String) return String
+   is (Part (Kind_Word (Value.Kind)) & Part (To_String (Value.Producer))
+       & Part (To_String (Value.Summary)) & Part (Payload)
+       & Part (To_String (Value.Provenance))
+       & Part (To_String (Value.References)));
+
+   --  A result's content as one text.
+   function Content (Value : Result) return String
+   is (Content_With (Value, To_String (Value.Payload)));
+
+   --  What a retired result still proves it is: its name and its content
+   --  with the payload's fingerprint for the payload. Written when the
+   --  payload goes, from a result whose payload was read and checked, and
+   --  checked whenever the record is read: the payload is gone by policy,
+   --  the rest of what made the name is not.
+   function Retired_Print
+     (Id : String; Value : Result; Payload_Print : String) return String
+   is (Fingerprint (Part (Id) & Content_With (Value, Payload_Print)));
 
    -------------------
    -- Identifier_Of --
@@ -99,6 +113,50 @@ package body Model_Runner.Framework.Results is
            (if Records.Get (Item, "retired") = "" then ""
             else Records.Get (Item, "retired") & " on " & Records.Get (Item, "retired_at")));
    end From_Record;
+
+   --  A result's payload into its record: inline, or kept apart past
+   --  Inline_Limit.
+   procedure Place_Payload
+     (Item    : Stores.Store;
+      Stored  : in out Records.Item;
+      Payload : Unbounded_String;
+      Status  : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Success;
+      if Length (Payload) > Inline_Limit then
+         --  Kept apart, named by what it is: the same payload twice is
+         --  one file, and a result that is never committed leaves only
+         --  a file its fingerprint names.
+         declare
+            Print : constant String := Fingerprint (To_String (Payload));
+            Path  : constant String := Payload_Path (Item, Print);
+            Held  : Unbounded_String;
+            Read  : E.Error_Info;
+         begin
+            --  Written whole or not at all, and written again where what
+            --  is there is not what its name says -- a write a crash cut
+            --  short.
+            if Ada.Directories.Exists (Path) then
+               Files.Read_Text (Path, Held, Read);
+            end if;
+            if not Ada.Directories.Exists (Path) or else E.Is_Error (Read)
+              or else Fingerprint (To_String (Held)) /= Print
+            then
+               if not Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
+                  Files.Write_Failed (Path, Status);
+                  return;
+               end if;
+               Files.Write_Whole (Path, To_String (Payload), Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+            Records.Set (Stored, "payload_file", Print);
+         end;
+      else
+         Records.Set (Stored, "payload", To_String (Payload));
+      end if;
+   end Place_Payload;
 
    ---------
    -- Add --
@@ -143,6 +201,34 @@ package body Model_Runner.Framework.Results is
             end if;
             if E.Is_Error (Status) then
                return;
+            elsif Length (Held.Retired) > 0 then
+               --  Retired, its payload is gone: the same content is the
+               --  same name and the same everything else, and it is
+               --  given its payload back.
+               declare
+                  Stored : Records.Item;
+                  Print  : constant String := Fingerprint (To_String (Value.Payload));
+               begin
+                  Stores.Read (Item, Results_Area, Id, Stored, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  elsif Records.Get (Stored, "payload_fingerprint") /= Print
+                    or else Content_With (Held, Print) /= Content_With (Value, Print)
+                  then
+                     Status := E.Make (E.Framework_Result_Conflict);
+                     E.Add_Text (Status, "name", Id);
+                     return;
+                  end if;
+                  Place_Payload (Item, Stored, Value.Payload, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Records.Remove (Stored, "retired");
+                  Records.Remove (Stored, "retired_at");
+                  Records.Remove (Stored, "retired_print");
+                  Records.Set_Revision (Stored, Records.Revision (Stored) + 1);
+                  Stores.Put (Change, Results_Area, Id, Stored);
+               end;
             elsif Content (Held) /= Content (Value) then
                Status := E.Make (E.Framework_Result_Conflict);
                E.Add_Text (Status, "name", Id);
@@ -176,38 +262,9 @@ package body Model_Runner.Framework.Results is
               (Stored, "payload_fingerprint",
                Fingerprint (To_String (Value.Payload)));
             Records.Set (Stored, "payload_size", Trim (Natural'Image (Length (Value.Payload))));
-            if Length (Value.Payload) > Inline_Limit then
-               --  Kept apart, named by what it is: the same payload twice is
-               --  one file, and a result that is never committed leaves only
-               --  a file its fingerprint names.
-               declare
-                  Print : constant String := Fingerprint (To_String (Value.Payload));
-                  Path  : constant String := Payload_Path (Item, Print);
-                  Held  : Unbounded_String;
-                  Read  : E.Error_Info;
-               begin
-                  --  Written whole or not at all, and written again where what
-                  --  is there is not what its name says -- a write a crash cut
-                  --  short.
-                  if Ada.Directories.Exists (Path) then
-                     Files.Read_Text (Path, Held, Read);
-                  end if;
-                  if not Ada.Directories.Exists (Path) or else E.Is_Error (Read)
-                    or else Fingerprint (To_String (Held)) /= Print
-                  then
-                     if not Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
-                        Files.Write_Failed (Path, Status);
-                        return;
-                     end if;
-                     Files.Write_Whole (Path, To_String (Value.Payload), Status);
-                     if E.Is_Error (Status) then
-                        return;
-                     end if;
-                  end if;
-                  Records.Set (Stored, "payload_file", Print);
-               end;
-            else
-               Records.Set (Stored, "payload", To_String (Value.Payload));
+            Place_Payload (Item, Stored, Value.Payload, Status);
+            if E.Is_Error (Status) then
+               return;
             end if;
             Records.Set (Stored, "provenance", To_String (Value.Provenance));
             Records.Set (Stored, "references", To_String (Value.References));
@@ -252,13 +309,18 @@ package body Model_Runner.Framework.Results is
             return;
          end if;
       end if;
-      --  Retired, its payload is gone by policy, and the fingerprint
-      --  stands for what was, not for anything to check.
-      --  Its name is made from its content, payload and all: retired, that
-      --  too stands for what was.
-      if Records.Get (Stored, "retired") = ""
-        and then (Fingerprint (To_String (Value.Payload)) /= Records.Get (Stored, "payload_fingerprint")
-                  or else Identifier_Of (Value) /= Id)
+      --  Its name is made from its content, payload and all. Retired, the
+      --  payload is gone by policy, and what is checked is the print the
+      --  retiring left of the rest. A record retired before the print was
+      --  kept has nothing to check.
+      if (if Records.Get (Stored, "retired") = ""
+          then Fingerprint (To_String (Value.Payload))
+                 /= Records.Get (Stored, "payload_fingerprint")
+               or else Identifier_Of (Value) /= Id
+          else Records.Get (Stored, "retired_print") /= ""
+               and then Retired_Print
+                          (Id, Value, Records.Get (Stored, "payload_fingerprint"))
+                        /= Records.Get (Stored, "retired_print"))
       then
          Status := E.Make (E.Framework_Integrity_Failed);
          E.Add_Text (Status, "path", Directory_Name (Results_Area) & "/" & Id,
@@ -311,6 +373,15 @@ package body Model_Runner.Framework.Results is
       Raw_Cut     : constant String := (if Raw_Log_Days = 0 then "" else Before (Raw_Log_Days));
       Context_Cut : constant String := (if Context_Days = 0 then "" else Before (Context_Days));
       Cache_Cut   : constant String := (if Cache_Days = 0 then "" else Before (Cache_Days));
+
+      --  Whether a result reads back whole, its content its name.
+      function Checked (Id : String) return Boolean is
+         Value  : Result;
+         Status : E.Error_Info;
+      begin
+         Read (Item, Id, Value, Status);
+         return E.Is_Ok (Status);
+      end Checked;
    begin
       Removed := 0;
       for Id of Stores.Names (Item, Results_Area) loop
@@ -333,7 +404,16 @@ package body Model_Runner.Framework.Results is
                   --  retired, by what, when, its size and fingerprint -- so
                   --  the evidence names something retired, not something
                   --  lost. Already retired, it is left as it is.
-                  if Raw and then Records.Get (Stored, "retired") = "" then
+                  --  One whose content no longer makes its name is left to
+                  --  be found so, not retired into something that would pass.
+                  if Raw and then Records.Get (Stored, "retired") = ""
+                    and then Checked (Id)
+                  then
+                     Records.Set
+                       (Stored, "retired_print",
+                        Retired_Print
+                          (Id, From_Record (Stored),
+                           Records.Get (Stored, "payload_fingerprint")));
                      Records.Remove (Stored, "payload");
                      Records.Remove (Stored, "payload_file");
                      Records.Set (Stored, "retired", "retention.raw_log_days");
