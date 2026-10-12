@@ -8261,7 +8261,7 @@ package body Tests.Backend_Cases is
       Width   : constant := 256;
       Feed    : constant := 256;
       Count   : constant := 4;
-      Padded  : constant := Used + (15 * Experts + Count - 1) / Count;
+      Padded  : constant Natural := Products.Run_Slots (Experts, Used, Count);
 
       Held   : Devices.Inventory;
       Opened : Devices.Context;
@@ -8426,11 +8426,11 @@ package body Tests.Backend_Cases is
       --  What the batch's sequence leaves: the router's scores, the
       --  routing, the inversion's room, the three listed answers with
       --  their padding, the combination, and the mix, a position each.
-      Padded : constant := Used + (15 * Experts + Count - 1) / Count;
+      Padded : constant Natural := Products.Run_Slots (Experts, Used, Count);
       Batch_Room : constant N.Element_Count :=
         N.Element_Count (Count)
-        * (Experts + 2 * Used + 32 * Experts + 3 * Used
-           + 3 * Padded * Feed + Padded * Width + Width);
+        * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+                           + 3 * Padded * Feed + Padded * Width + Width);
 
       Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
       One   : N.Real_Array
@@ -8476,8 +8476,8 @@ package body Tests.Backend_Cases is
 
          At_Mix : constant N.Element_Count :=
            N.Element_Count (Count)
-           * (Experts + 2 * Used + 32 * Experts + 3 * Used
-              + 3 * Padded * Feed + Padded * Width);
+           * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+                              + 3 * Padded * Feed + Padded * Width);
          One_Mix : constant N.Element_Count :=
            N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
                             + Used * Width);

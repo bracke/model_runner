@@ -1008,6 +1008,18 @@ package Model_Runner.Platform.Device.Products is
       Added      : out Boolean;
       Kept       : Boolean := False);
 
+   --  Slots a position takes in a batch's expert runs, the padding the
+   --  matrix kernel needs included where the batch reaches it.
+   --
+   --  @param Experts The mixture's experts.
+   --  @param Used How many a position chooses.
+   --  @param Count Positions in the batch.
+   --  @return The slots a position.
+   function Run_Slots
+     (Experts : Natural;
+      Used    : Natural;
+      Count   : Natural) return Natural;
+
    --  Name one product of every expert of a stack over the positions that
    --  chose it, for a sequence to perform.
    --

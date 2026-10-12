@@ -4209,10 +4209,7 @@ package body Model_Runner.Backend.Device is
                --  it.
                declare
                   Padded : constant Natural :=
-                    Used
-                    + (15 * Natural'Min (Experts, Natural (Slots) * Used)
-                       + Natural (Slots) - 1)
-                      / Natural (Slots);
+                    Products.Run_Slots (Experts, Used, Natural (Slots));
                begin
                   Products.Add_Invert
                     (Steps, Experts, Used, Step_Route, Added, Kept => False);

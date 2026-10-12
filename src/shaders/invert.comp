@@ -35,6 +35,9 @@ layout(push_constant) uniform Shape {
     uint experts;
     uint used;
     uint count;
+    //  Whether the runs are tight: a batch too short for the matrix kernel
+    //  is walked, a run's real positions alone, and needs no padding.
+    uint tight;
 } shape;
 
 //  More experts than any mixture this program has been shown has.
@@ -69,7 +72,7 @@ void main() {
         uint at = 0u;
         for (uint e = 0u; e < experts; e++) {
             begins[e] = at;
-            at += (counted[e] + 15u) / 16u * 16u;
+            at += shape.tight != 0u ? counted[e] : (counted[e] + 15u) / 16u * 16u;
         }
     }
     barrier ();
@@ -81,8 +84,8 @@ void main() {
 
     //  The padding first, so that a real position's entry lands over it.
     for (uint e = lane; e < experts; e += 256u) {
-        for (uint pad = counted[e]; pad < (counted[e] + 15u) / 16u * 16u;
-             pad++) {
+        uint padded = shape.tight != 0u ? counted[e] : (counted[e] + 15u) / 16u * 16u;
+        for (uint pad = counted[e]; pad < padded; pad++) {
             l[list_at + begins[e] + pad] = 0u;
             l[share_at + begins[e] + pad] = 0u;
         }

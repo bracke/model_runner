@@ -11910,6 +11910,21 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Invert;
 
+   --  Slots a position, with the padding: fifteen slots at most for each
+   --  expert that has a run, spread over the positions -- where the batch
+   --  is long enough for the tile, which stores sixteen at a time. A
+   --  shorter batch's runs are tight (invert.comp), and its slots are the
+   --  positions' own: a check of five padded to a hundred and twenty-eight
+   --  slots a position, and the combining after it went over all of them,
+   --  sixteen times what there was.
+   function Run_Slots
+     (Experts : Natural;
+      Used    : Natural;
+      Count   : Natural) return Natural
+   is (if Count < Tile_Least then Used
+       else Used + (15 * Natural'Min (Experts, Count * Used) + Count - 1)
+                   / Count);
+
    procedure Add_Listed_Product
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -11934,11 +11949,7 @@ package body Model_Runner.Platform.Device.Products is
         (if not Chained then 0
          elsif From_Step = 0 then Steps.Held else From_Step);
 
-      --  Slots a position, with the padding: fifteen slots at most for
-      --  each expert that has a run, spread over the positions.
-      Slots : constant Natural :=
-        Used + (15 * Natural'Min (Experts, Count * Used) + Count - 1)
-               / Count;
+      Slots : constant Natural := Run_Slots (Experts, Used, Count);
 
       --  What the source holds a position: the vectors themselves, or
       --  the slots' worth where they are read by slot.
@@ -16065,10 +16076,14 @@ package body Model_Runner.Platform.Device.Products is
                     (Item.Buffer, Bind_Point_Compute, Item.Invert_Line);
 
                   declare
+                     --  Runs padded to the tile's sixteen only where a batch
+                     --  is long enough for the tile; the walks read a run's
+                     --  real positions alone (see Add_Listed_Product).
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Columns),
                         Columns => C.unsigned (This.Used),
                         Count   => C.unsigned (Count),
+                        First   => (if Count < Tile_Least then 1 else 0),
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
