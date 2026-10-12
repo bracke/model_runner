@@ -2,7 +2,7 @@
 --
 --  Model_Runner loads a local GGUF model file, validates its container
 --  strictly, prepares a bounded Llama-compatible decoder-only execution plan,
---  tokenizes prompts, evaluates the model on the CPU, maintains an explicit KV
+--  tokenizes prompts, evaluates the model on the GPU or the CPU, maintains an explicit KV
 --  cache, samples output tokens and streams decoded text.
 --
 --  Inference is local only. No package in this hierarchy opens a network

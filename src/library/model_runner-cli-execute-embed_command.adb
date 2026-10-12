@@ -1,3 +1,4 @@
+with Model_Runner.Clocks;
 with Ada.Unchecked_Deallocation;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -66,6 +67,23 @@ package body Model_Runner.CLI.Execute.Embed_Command is
       end Fail;
 
       procedure Embed_With (Team : Workers_CPU.Pool_Reference) is
+         --  For --show-stats: the tokens read, and since when.
+         Watch    : Model_Runner.Clocks.System_Clock;
+         Started  : Model_Runner.Clocks.Nanoseconds := 0;
+         Read     : Natural := 0;
+
+         --  What reading cost, as a run says its statistics, where asked.
+         procedure Say_Statistics is
+         begin
+            if Item.Show_Stats then
+               Pres.Put_Embedding_Statistics
+                 (Screen, Read,
+                  Model_Runner.Clocks.Elapsed (Started, Watch.Now),
+                  Item.Backend,
+                  (if Workers_CPU."=" (Team, null) then 1
+                   else Positive (Workers_CPU.Worker_Total (Team.all)) + 1));
+            end if;
+         end Say_Statistics;
       begin
          Status := E.Exit_Success;
 
@@ -75,6 +93,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             Fail (Condition);
             return;
          end if;
+         Started := Watch.Now;
 
          --  The arithmetic, told to the backend before the session opens
          --  and therefore before anything is dispatched. The backend states
@@ -270,6 +289,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                                  Fail (Condition);
                                  return;
                               end if;
+                              Read := Read + Count;
 
                               --  The CLS position stands for the pair; its
                               --  state through the head is the score.
@@ -290,6 +310,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                         First := Stop + 1;
                      end;
                   end loop;
+                  Say_Statistics;
                   return;
                end;
             end if;
@@ -419,6 +440,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                         Fail (Condition);
                         return;
                      end if;
+                     Read := Read + Natural (Taken);
 
                      case Pooling is
                         when Opt.Pool_Mean =>
@@ -517,6 +539,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             end if;
          end;
 
+         Say_Statistics;
          Cleanup;
       end Embed_With;
    begin

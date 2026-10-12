@@ -1,3 +1,5 @@
+with Model_Runner.Clocks;
+with Model_Runner.Backend;
 with Ada.Text_IO;
 
 with Model_Runner.CLI.Options;
@@ -643,6 +645,23 @@ package Model_Runner.Presentation is
       Handed_Why     : String := "";
       Blocks_Moved   : Natural := 0;
       Rings_Moved    : Natural := 0);
+
+   --  What an embedding cost, to standard error as a run's statistics go:
+   --  the tokens read, how long and how fast, and where. Only the fields
+   --  that mean something for a text reduced to a vector -- nothing was
+   --  generated -- under the same headings and words a run's take.
+   --
+   --  @param Item Console to write to.
+   --  @param Tokens How many tokens were read.
+   --  @param Elapsed How long reading them took.
+   --  @param Backend Where they were read.
+   --  @param Workers How many workers the processor gave, one on the device.
+   procedure Put_Embedding_Statistics
+     (Item    : in out Console;
+      Tokens  : Natural;
+      Elapsed : Model_Runner.Clocks.Nanoseconds;
+      Backend : Model_Runner.Backend.Backend_Kind;
+      Workers : Positive);
 
    --  Somewhere for per-token explanations to go: standard error, one line
    --  a token, in a shape a program can read.

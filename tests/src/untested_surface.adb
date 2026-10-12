@@ -101,6 +101,7 @@ package body Untested_Surface is
          | "Prefetch_Stacks"
          | "Product_Batch"
          | "Put_Data_Field"
+         | "Put_Embedding_Statistics"
          | "Put_Statistics"
          | "Put_Table"
          | "Put_Words"

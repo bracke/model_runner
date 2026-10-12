@@ -6,8 +6,6 @@ with Ada.Text_IO.Text_Streams;
 
 with Terminal_Styles;
 
-with Model_Runner.Backend;
-with Model_Runner.Clocks;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Presentation is
@@ -1343,6 +1341,50 @@ package body Model_Runner.Presentation is
    ----------------------
    -- Put_Statistics --
    ----------------------
+
+   ------------------------------
+   -- Put_Embedding_Statistics --
+   ------------------------------
+
+   procedure Put_Embedding_Statistics
+     (Item    : in out Console;
+      Tokens  : Natural;
+      Elapsed : Model_Runner.Clocks.Nanoseconds;
+      Backend : Model_Runner.Backend.Backend_Kind;
+      Workers : Positive)
+   is
+      Seconds : constant Long_Float :=
+        Long_Float (Elapsed)
+        / Long_Float (Model_Runner.Clocks.Nanoseconds_Per_Second);
+   begin
+      Put_Heading (Item, "statistics.heading", Diagnostic, Gap => True);
+      Put_Heading (Item, "statistics.heading.tokens", Diagnostic);
+      Put_Field
+        (Item, "statistics.prompt_tokens",
+         T.Image (Long_Long_Integer (Tokens)), Diagnostic);
+      Put_Heading (Item, "statistics.heading.speed", Diagnostic, Gap => True);
+      Put_Field
+        (Item, "statistics.prefill_duration",
+         Message (Item, "statistics.seconds",
+                  [Loc.Named ("value", T.Image (Seconds, 3))]),
+         Diagnostic);
+      Put_Field
+        (Item, "statistics.prefill_rate",
+         Message (Item, "statistics.per_second",
+                  [Loc.Named
+                     ("value",
+                      T.Image ((if Seconds > 0.0
+                                then Long_Float (Tokens) / Seconds
+                                else 0.0), 2))]),
+         Diagnostic);
+      Put_Heading (Item, "statistics.heading.where", Diagnostic, Gap => True);
+      Put_Field
+        (Item, "statistics.backend",
+         Model_Runner.Backend.Backend_Name (Backend), Diagnostic);
+      Put_Field
+        (Item, "statistics.workers",
+         T.Image (Long_Long_Integer (Workers)), Diagnostic);
+   end Put_Embedding_Statistics;
 
    procedure Put_Statistics
      (Item           : in out Console;
