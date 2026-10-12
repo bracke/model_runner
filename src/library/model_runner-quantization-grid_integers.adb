@@ -111,9 +111,27 @@ package body Model_Runner.Quantization.Grid_Integers is
 
    function Sign_Shuffle_Address return System.Address is (Sign_Shuffle (0)'Address);
 
-   --  2k + 1 for a field k.
-   type Odd_Table is array (U8 range 0 .. 15) of N.Real;
-   Odd_1 : constant Odd_Table := [for K in U8 range 0 .. 15 => N.Real (2 * Integer (K) + 1)];
+   function Make_Scale_Shuffle return Word_Table is
+      Result : Word_Table (0 .. 31);
+   begin
+      for Sub in 0 .. 7 loop
+         declare
+            Pair : constant U64 := U64 (2 * Sub) or Interfaces.Shift_Left (U64 (2 * Sub + 1), 8);
+            Word : constant U64 := Pair * 16#0001_0001_0001_0001#;
+         begin
+            Result (4 * Sub .. 4 * Sub + 3) := [others => Word];
+         end;
+      end loop;
+      return Result;
+   end Make_Scale_Shuffle;
+
+   Scale_Shuffle : aliased constant Word_Table := Make_Scale_Shuffle;
+
+   function Scale_Shuffle_Address return System.Address is (Scale_Shuffle (0)'Address);
+
+   --  2k + 1 in both halves of a word.
+   type Odd_Table is array (U8 range 0 .. 15) of U32;
+   Odd_1 : constant Odd_Table := [for K in U8 range 0 .. 15 => U32 (2 * Integer (K) + 1) * 16#1_0001#];
 
    procedure Factors_Of
      (Format    : G.Tensor_Type;
@@ -193,7 +211,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                end loop;
             end;
          when others =>
-            Factors := [others => 0.0];
+            Factors := [others => 0];
             Half_Bits := 0;
       end case;
    end Factors_Of;
