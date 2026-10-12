@@ -6487,7 +6487,14 @@ package body Tests.CLI_Cases is
             L.Close (Session);
             return Room;
          end Logits_From;
+         --  The processor's exact arithmetic, whatever a test before this
+         --  one left it at: a float weight of a role computed inexactly
+         --  takes the binary32 vector kernel, which is not this question.
+         Was : constant Model_Runner.Backend.CPU.Role_Set :=
+           Model_Runner.Backend.CPU.Integer_Activation_Roles;
       begin
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (Model_Runner.Backend.CPU.No_Role);
          Start (Under, Back.Backend_CPU);
 
          declare
@@ -6513,6 +6520,7 @@ package body Tests.CLI_Cases is
          end;
 
          L.Close (Under.Ready, Dropped);
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Was);
          Containers.Close (Under.Parsed);
       end;
    end Backends_Agree;

@@ -844,6 +844,14 @@ package body Model_Runner.Backend.CPU is
 
       Count_Share (Weight.Format, Handled);
 
+      --  A float weight of a role computed inexactly, as Take_Share runs
+      --  it: the serial answer is the pool's, bit for bit.
+      if not Handled and then Roles (Weight.Role) then
+         T.Mat_Mul_Range_Float
+           (Weight, Vector.all, Count, Target.all, 0, Weight.Rows - 1,
+            Handled);
+      end if;
+
       if not Handled then
          T.Mat_Mul_Range
            (Weight, Vector.all, Count, Target.all, 0, Weight.Rows - 1);
@@ -1050,7 +1058,7 @@ package body Model_Runner.Backend.CPU is
       if not Handled
         and then Work.Roles (Work.Weight.Role)
       then
-         T.Mat_Mul_Range_F16
+         T.Mat_Mul_Range_Float
            (Work.Weight, Work.Vector.all, Work.Count, Work.Target.all,
             First, Last, Handled);
       end if;

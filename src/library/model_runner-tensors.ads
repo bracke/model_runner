@@ -350,14 +350,15 @@ package Model_Runner.Tensors is
       First   : Element_Count;
       Last    : Element_Count);
 
-   --  Mat_Mul_Range for a matrix of sixteen-bit floats, in binary32 by the
-   --  vector instructions -- eight halves widened at a time and multiplied
-   --  into up to four vectors at once -- where Mat_Mul_Range widens a row
-   --  into memory and sums it in binary64 an element at a time, five times
-   --  slower on an embedding model than llama.cpp. For the roles a run lets
-   --  compute inexactly, as the integer kernels are for the other formats.
+   --  Mat_Mul_Range for a matrix of floats -- binary16, bfloat16 or
+   --  binary32 -- in binary32 by the vector instructions: eight elements
+   --  widened at a time and multiplied into four vectors at once, two rows
+   --  together, where Mat_Mul_Range widens a row into memory and sums it in
+   --  binary64 an element at a time, four to five times slower on an
+   --  embedding model. For the roles a run lets compute inexactly, as the
+   --  integer kernels are for the quantized formats.
    --
-   --  @param Item A sixteen-bit matrix in rows.
+   --  @param Item A matrix of one of the three float formats, in rows.
    --  @param Vectors Count vectors of Item.Columns each, one after another.
    --  @param Count How many vectors.
    --  @param Target Count runs of Item.Rows answers, as Mat_Mul_Range
@@ -366,7 +367,7 @@ package Model_Runner.Tensors is
    --  @param Last The last row to compute.
    --  @param Handled False where it is not one, or the processor has not
    --    the instructions (Use_Wide_Halves), and nothing was written.
-   procedure Mat_Mul_Range_F16
+   procedure Mat_Mul_Range_Float
      (Item    : View;
       Vectors : Real_Array;
       Count   : Element_Count;
@@ -378,8 +379,8 @@ package Model_Runner.Tensors is
    --  Whether the processor widens halves and fuses multiply-adds (the
    --  x86-64-v3 set), said once by the backend that knows.
    --
-   --  @param Allowed True where it does; False leaves every sixteen-bit
-   --    matrix to Mat_Mul_Range.
+   --  @param Allowed True where it does; False leaves every float matrix
+   --    to Mat_Mul_Range.
    procedure Use_Wide_Halves (Allowed : Boolean);
 
    --  How many rows were read out of their panels to be computed the

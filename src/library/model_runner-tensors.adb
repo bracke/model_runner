@@ -1,3 +1,4 @@
+with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 
 with Interfaces;
@@ -590,7 +591,7 @@ package body Model_Runner.Tensors is
       Wide_Halves := Allowed;
    end Use_Wide_Halves;
 
-   procedure Mat_Mul_Range_F16
+   procedure Mat_Mul_Range_Float
      (Item    : View;
       Vectors : Real_Array;
       Count   : Element_Count;
@@ -600,7 +601,7 @@ package body Model_Runner.Tensors is
       Handled : out Boolean)
    is
       use type Model_Runner.GGUF.Tensor_Type;
-      use type Interfaces.Unsigned_16;
+      use type Interfaces.Unsigned_32;
       use type Real;
       LF : constant Character := ASCII.LF;
       Columns : constant Element_Count := Item.Columns;
@@ -609,10 +610,20 @@ package body Model_Runner.Tensors is
       type Lane_Sums is array (0 .. 63) of Real with Alignment => 32;
       Sums : aliased Lane_Sums;
       Row  : Element_Count;
+
+      type Float_Kind is (Halves, Brains, Singles);
+      Kind : constant Float_Kind :=
+        (case Item.Format is
+           when Model_Runner.GGUF.Type_F16  => Halves,
+           when Model_Runner.GGUF.Type_BF16 => Brains,
+           when others                      => Singles);
+      Width_Bytes : constant B.Byte_Count := (if Kind = Singles then 4 else 2);
    begin
       Handled := False;
       if not Wide_Halves
-        or else Item.Format /= Model_Runner.GGUF.Type_F16
+        or else Item.Format not in Model_Runner.GGUF.Type_F16
+                                 | Model_Runner.GGUF.Type_BF16
+                                 | Model_Runner.GGUF.Type_F32
         or else Item.Interleaved
         or else not Is_Present (Item)
         or else First > Last
@@ -629,7 +640,7 @@ package body Model_Runner.Tensors is
            with Import, Address => Item.Base;
          Row_Span : constant B.Byte_Count := Row_Bytes (Item);
 
-         --  The halves past the last whole eight, one at a time.
+         --  The elements past the last whole eight, one at a time.
          function Tail
            (At_Row : B.Byte_Count; Vector : Element_Count) return Real
          is
@@ -638,15 +649,25 @@ package body Model_Runner.Tensors is
             for Column in Eights * 8 .. Columns - 1 loop
                declare
                   At_Byte : constant B.Byte_Count :=
-                    Held'First + At_Row + B.Byte_Count (Column) * 2;
-                  Bits : constant Interfaces.Unsigned_16 :=
-                    Interfaces.Unsigned_16 (Held (At_Byte))
-                    or Interfaces.Shift_Left
-                         (Interfaces.Unsigned_16 (Held (At_Byte + 1)), 8);
+                    Held'First + At_Row + B.Byte_Count (Column) * Width_Bytes;
+                  function Word (From : B.Byte_Count) return Interfaces.Unsigned_32
+                  is (Interfaces.Unsigned_32 (Held (From))
+                      or Interfaces.Shift_Left (Interfaces.Unsigned_32 (Held (From + 1)), 8));
+                  function As_Real is new Ada.Unchecked_Conversion
+                    (Interfaces.Unsigned_32, Real);
+                  Value : constant Real :=
+                    (case Kind is
+                       when Halves =>
+                         Model_Runner.Numerics.To_Real
+                           (Model_Runner.Numerics.Half (Interfaces.Unsigned_16 (Word (At_Byte)))),
+                       when Brains =>
+                         As_Real (Interfaces.Shift_Left (Word (At_Byte), 16)),
+                       when Singles =>
+                         As_Real (Word (At_Byte)
+                                  or Interfaces.Shift_Left (Word (At_Byte + 2), 16)));
                begin
                   Total := Total
-                    + Model_Runner.Numerics.To_Real (Model_Runner.Numerics.Half (Bits))
-                      * Vectors (Vectors'First + Vector * Columns + Column);
+                    + Value * Vectors (Vectors'First + Vector * Columns + Column);
                end;
             end loop;
             return Total;
@@ -663,63 +684,184 @@ package body Model_Runner.Tensors is
                --  there: every activation read is multiplied twice.
                if Row < Last and then Count >= 4 and then Eights > 0 then
                   while Count - Vector >= 4 loop
-                     System.Machine_Code.Asm
-                       ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
-                        "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
-                        "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
-                        "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
-                        "vxorps %%ymm8, %%ymm8, %%ymm8" & LF &
-                        "vxorps %%ymm9, %%ymm9, %%ymm9" & LF &
-                        "vxorps %%ymm10, %%ymm10, %%ymm10" & LF &
-                        "vxorps %%ymm11, %%ymm11, %%ymm11" & LF &
-                        "movq %0, %%rsi" & LF &
-                        "movq %1, %%rdi" & LF &
-                        "movq %2, %%rdx" & LF &
-                        "movq %3, %%rcx" & LF &
-                        "movq %5, %%r8" & LF &
-                        "1:" & LF &
-                        "vcvtph2ps (%%rsi), %%ymm0" & LF &
-                        "vcvtph2ps (%%rsi,%%r8), %%ymm1" & LF &
-                        "vmovups (%%rdi), %%ymm2" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm0, %%ymm4" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm8" & LF &
-                        "vmovups (%%rdi,%%rdx), %%ymm2" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm0, %%ymm5" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm9" & LF &
-                        "leaq (%%rdi,%%rdx,2), %%rax" & LF &
-                        "vmovups (%%rax), %%ymm2" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm0, %%ymm6" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm10" & LF &
-                        "vmovups (%%rax,%%rdx), %%ymm2" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm0, %%ymm7" & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm11" & LF &
-                        "addq $16, %%rsi" & LF &
-                        "addq $32, %%rdi" & LF &
-                        "decq %%rcx" & LF &
-                        "jnz 1b" & LF &
-                        "movq %4, %%rax" & LF &
-                        "vmovups %%ymm4, (%%rax)" & LF &
-                        "vmovups %%ymm5, 32(%%rax)" & LF &
-                        "vmovups %%ymm6, 64(%%rax)" & LF &
-                        "vmovups %%ymm7, 96(%%rax)" & LF &
-                        "vmovups %%ymm8, 128(%%rax)" & LF &
-                        "vmovups %%ymm9, 160(%%rax)" & LF &
-                        "vmovups %%ymm10, 192(%%rax)" & LF &
-                        "vmovups %%ymm11, 224(%%rax)" & LF &
-                        "vzeroupper",
-                        Inputs =>
-                          [System.Address'Asm_Input
-                             ("r", Held (Held'First + At_Row)'Address),
-                           System.Address'Asm_Input
-                             ("r", Vectors (Vectors'First + Vector * Columns)'Address),
-                           Element_Count'Asm_Input ("r", Stride),
-                           Element_Count'Asm_Input ("r", Eights),
-                           System.Address'Asm_Input ("r", Sums'Address),
-                           B.Byte_Count'Asm_Input ("r", Row_Span)],
-                        Clobber =>
-                          "rax,rcx,rdx,rsi,rdi,r8,ymm0,ymm1,ymm2,ymm4,ymm5,ymm6,"
-                          & "ymm7,ymm8,ymm9,ymm10,ymm11,memory",
-                        Volatile => True);
+                     case Kind is
+                        when Halves =>
+                           System.Machine_Code.Asm
+                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                              "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                              "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                              "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                              "vxorps %%ymm8, %%ymm8, %%ymm8" & LF &
+                              "vxorps %%ymm9, %%ymm9, %%ymm9" & LF &
+                              "vxorps %%ymm10, %%ymm10, %%ymm10" & LF &
+                              "vxorps %%ymm11, %%ymm11, %%ymm11" & LF &
+                              "movq %0, %%rsi" & LF &
+                              "movq %1, %%rdi" & LF &
+                              "movq %2, %%rdx" & LF &
+                              "movq %3, %%rcx" & LF &
+                              "movq %5, %%r8" & LF &
+                              "1:" & LF &
+                              "vcvtph2ps (%%rsi), %%ymm0" & LF &
+                              "vcvtph2ps (%%rsi,%%r8), %%ymm1" & LF &
+                              "vmovups (%%rdi), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm4" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm8" & LF &
+                              "vmovups (%%rdi,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm5" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm9" & LF &
+                              "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                              "vmovups (%%rax), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm6" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm10" & LF &
+                              "vmovups (%%rax,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm7" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm11" & LF &
+                              "addq $16, %%rsi" & LF &
+                              "addq $32, %%rdi" & LF &
+                              "decq %%rcx" & LF &
+                              "jnz 1b" & LF &
+                              "movq %4, %%rax" & LF &
+                              "vmovups %%ymm4, (%%rax)" & LF &
+                              "vmovups %%ymm5, 32(%%rax)" & LF &
+                              "vmovups %%ymm6, 64(%%rax)" & LF &
+                              "vmovups %%ymm7, 96(%%rax)" & LF &
+                              "vmovups %%ymm8, 128(%%rax)" & LF &
+                              "vmovups %%ymm9, 160(%%rax)" & LF &
+                              "vmovups %%ymm10, 192(%%rax)" & LF &
+                              "vmovups %%ymm11, 224(%%rax)" & LF &
+                              "vzeroupper",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Held (Held'First + At_Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                 Element_Count'Asm_Input ("r", Stride),
+                                 Element_Count'Asm_Input ("r", Eights),
+                                 System.Address'Asm_Input ("r", Sums'Address),
+                                 B.Byte_Count'Asm_Input ("r", Row_Span)],
+                              Clobber =>
+                                "rax,rcx,rdx,rsi,rdi,r8,ymm0,ymm1,ymm2,ymm4,ymm5,ymm6,"
+                                & "ymm7,ymm8,ymm9,ymm10,ymm11,memory",
+                              Volatile => True);
+                        when Brains =>
+                           System.Machine_Code.Asm
+                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                              "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                              "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                              "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                              "vxorps %%ymm8, %%ymm8, %%ymm8" & LF &
+                              "vxorps %%ymm9, %%ymm9, %%ymm9" & LF &
+                              "vxorps %%ymm10, %%ymm10, %%ymm10" & LF &
+                              "vxorps %%ymm11, %%ymm11, %%ymm11" & LF &
+                              "movq %0, %%rsi" & LF &
+                              "movq %1, %%rdi" & LF &
+                              "movq %2, %%rdx" & LF &
+                              "movq %3, %%rcx" & LF &
+                              "movq %5, %%r8" & LF &
+                              "1:" & LF &
+                              "vpmovzxwd (%%rsi), %%ymm0" & LF &
+                                                   "vpslld $16, %%ymm0, %%ymm0" & LF &
+                              "vpmovzxwd (%%rsi,%%r8), %%ymm1" & LF &
+                                                   "vpslld $16, %%ymm1, %%ymm1" & LF &
+                              "vmovups (%%rdi), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm4" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm8" & LF &
+                              "vmovups (%%rdi,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm5" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm9" & LF &
+                              "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                              "vmovups (%%rax), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm6" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm10" & LF &
+                              "vmovups (%%rax,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm7" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm11" & LF &
+                              "addq $16, %%rsi" & LF &
+                              "addq $32, %%rdi" & LF &
+                              "decq %%rcx" & LF &
+                              "jnz 1b" & LF &
+                              "movq %4, %%rax" & LF &
+                              "vmovups %%ymm4, (%%rax)" & LF &
+                              "vmovups %%ymm5, 32(%%rax)" & LF &
+                              "vmovups %%ymm6, 64(%%rax)" & LF &
+                              "vmovups %%ymm7, 96(%%rax)" & LF &
+                              "vmovups %%ymm8, 128(%%rax)" & LF &
+                              "vmovups %%ymm9, 160(%%rax)" & LF &
+                              "vmovups %%ymm10, 192(%%rax)" & LF &
+                              "vmovups %%ymm11, 224(%%rax)" & LF &
+                              "vzeroupper",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Held (Held'First + At_Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                 Element_Count'Asm_Input ("r", Stride),
+                                 Element_Count'Asm_Input ("r", Eights),
+                                 System.Address'Asm_Input ("r", Sums'Address),
+                                 B.Byte_Count'Asm_Input ("r", Row_Span)],
+                              Clobber =>
+                                "rax,rcx,rdx,rsi,rdi,r8,ymm0,ymm1,ymm2,ymm4,ymm5,ymm6,"
+                                & "ymm7,ymm8,ymm9,ymm10,ymm11,memory",
+                              Volatile => True);
+                        when Singles =>
+                           System.Machine_Code.Asm
+                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                              "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                              "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                              "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                              "vxorps %%ymm8, %%ymm8, %%ymm8" & LF &
+                              "vxorps %%ymm9, %%ymm9, %%ymm9" & LF &
+                              "vxorps %%ymm10, %%ymm10, %%ymm10" & LF &
+                              "vxorps %%ymm11, %%ymm11, %%ymm11" & LF &
+                              "movq %0, %%rsi" & LF &
+                              "movq %1, %%rdi" & LF &
+                              "movq %2, %%rdx" & LF &
+                              "movq %3, %%rcx" & LF &
+                              "movq %5, %%r8" & LF &
+                              "1:" & LF &
+                              "vmovups (%%rsi), %%ymm0" & LF &
+                              "vmovups (%%rsi,%%r8), %%ymm1" & LF &
+                              "vmovups (%%rdi), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm4" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm8" & LF &
+                              "vmovups (%%rdi,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm5" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm9" & LF &
+                              "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                              "vmovups (%%rax), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm6" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm10" & LF &
+                              "vmovups (%%rax,%%rdx), %%ymm2" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm0, %%ymm7" & LF &
+                              "vfmadd231ps %%ymm2, %%ymm1, %%ymm11" & LF &
+                              "addq $32, %%rsi" & LF &
+                              "addq $32, %%rdi" & LF &
+                              "decq %%rcx" & LF &
+                              "jnz 1b" & LF &
+                              "movq %4, %%rax" & LF &
+                              "vmovups %%ymm4, (%%rax)" & LF &
+                              "vmovups %%ymm5, 32(%%rax)" & LF &
+                              "vmovups %%ymm6, 64(%%rax)" & LF &
+                              "vmovups %%ymm7, 96(%%rax)" & LF &
+                              "vmovups %%ymm8, 128(%%rax)" & LF &
+                              "vmovups %%ymm9, 160(%%rax)" & LF &
+                              "vmovups %%ymm10, 192(%%rax)" & LF &
+                              "vmovups %%ymm11, 224(%%rax)" & LF &
+                              "vzeroupper",
+                              Inputs =>
+                                [System.Address'Asm_Input
+                                   ("r", Held (Held'First + At_Row)'Address),
+                                 System.Address'Asm_Input
+                                   ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                 Element_Count'Asm_Input ("r", Stride),
+                                 Element_Count'Asm_Input ("r", Eights),
+                                 System.Address'Asm_Input ("r", Sums'Address),
+                                 B.Byte_Count'Asm_Input ("r", Row_Span)],
+                              Clobber =>
+                                "rax,rcx,rdx,rsi,rdi,r8,ymm0,ymm1,ymm2,ymm4,ymm5,ymm6,"
+                                & "ymm7,ymm8,ymm9,ymm10,ymm11,memory",
+                              Volatile => True);
+                     end case;
 
                      for Pair in Element_Count range 0 .. 1 loop
                         for K in 0 .. 3 loop
@@ -748,30 +890,84 @@ package body Model_Runner.Tensors is
                            Base  : constant B.Byte_Count :=
                              At_Row + B.Byte_Count (Pair) * Row_Span;
                         begin
-                           System.Machine_Code.Asm
-                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
-                              "movq %0, %%rsi" & LF &
-                              "movq %1, %%rdi" & LF &
-                              "movq %2, %%rcx" & LF &
-                              "1:" & LF &
-                              "vcvtph2ps (%%rsi), %%ymm0" & LF &
-                              "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
-                              "addq $16, %%rsi" & LF &
-                              "addq $32, %%rdi" & LF &
-                              "decq %%rcx" & LF &
-                              "jnz 1b" & LF &
-                              "movq %3, %%rax" & LF &
-                              "vmovups %%ymm4, (%%rax)" & LF &
-                              "vzeroupper",
-                              Inputs =>
-                                [System.Address'Asm_Input
-                                   ("r", Held (Held'First + Base)'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Vectors (Vectors'First + Left * Columns)'Address),
-                                 Element_Count'Asm_Input ("r", Eights),
-                                 System.Address'Asm_Input ("r", Sums'Address)],
-                              Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
-                              Volatile => True);
+                           case Kind is
+                              when Halves =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vcvtph2ps (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + Base)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Left * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                              when Brains =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vpmovzxwd (%%rsi), %%ymm0" & LF &
+                                                         "vpslld $16, %%ymm0, %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + Base)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Left * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                              when Singles =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vmovups (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $32, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + Base)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Left * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                           end case;
                            for Lane in 0 .. 7 loop
                               Total := Total + Sums (Lane);
                            end loop;
@@ -791,68 +987,202 @@ package body Model_Runner.Tensors is
                   begin
                      if Eights > 0 then
                         if Group = 4 then
-                           System.Machine_Code.Asm
-                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
-                              "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
-                              "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
-                              "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
-                              "movq %0, %%rsi" & LF &
-                              "movq %1, %%rdi" & LF &
-                              "movq %2, %%rdx" & LF &
-                              "movq %3, %%rcx" & LF &
-                              "1:" & LF &
-                              "vcvtph2ps (%%rsi), %%ymm0" & LF &
-                              "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
-                              "vfmadd231ps (%%rdi,%%rdx), %%ymm0, %%ymm5" & LF &
-                              "leaq (%%rdi,%%rdx,2), %%rax" & LF &
-                              "vfmadd231ps (%%rax), %%ymm0, %%ymm6" & LF &
-                              "vfmadd231ps (%%rax,%%rdx), %%ymm0, %%ymm7" & LF &
-                              "addq $16, %%rsi" & LF &
-                              "addq $32, %%rdi" & LF &
-                              "decq %%rcx" & LF &
-                              "jnz 1b" & LF &
-                              "movq %4, %%rax" & LF &
-                              "vmovups %%ymm4, (%%rax)" & LF &
-                              "vmovups %%ymm5, 32(%%rax)" & LF &
-                              "vmovups %%ymm6, 64(%%rax)" & LF &
-                              "vmovups %%ymm7, 96(%%rax)" & LF &
-                              "vzeroupper",
-                              Inputs =>
-                                [System.Address'Asm_Input
-                                   ("r", Held (Held'First + At_Row)'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Vectors (Vectors'First + Vector * Columns)'Address),
-                                 Element_Count'Asm_Input ("r", Stride),
-                                 Element_Count'Asm_Input ("r", Eights),
-                                 System.Address'Asm_Input ("r", Sums'Address)],
-                              Clobber =>
-                                "rax,rcx,rdx,rsi,rdi,ymm0,ymm4,ymm5,ymm6,ymm7,memory",
-                              Volatile => True);
+                           case Kind is
+                              when Halves =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                                    "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                                    "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rdx" & LF &
+                                    "movq %3, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vcvtph2ps (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "vfmadd231ps (%%rdi,%%rdx), %%ymm0, %%ymm5" & LF &
+                                    "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                                    "vfmadd231ps (%%rax), %%ymm0, %%ymm6" & LF &
+                                    "vfmadd231ps (%%rax,%%rdx), %%ymm0, %%ymm7" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %4, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vmovups %%ymm5, 32(%%rax)" & LF &
+                                    "vmovups %%ymm6, 64(%%rax)" & LF &
+                                    "vmovups %%ymm7, 96(%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Stride),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber =>
+                                      "rax,rcx,rdx,rsi,rdi,ymm0,ymm4,ymm5,ymm6,ymm7,memory",
+                                    Volatile => True);
+                              when Brains =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                                    "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                                    "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rdx" & LF &
+                                    "movq %3, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vpmovzxwd (%%rsi), %%ymm0" & LF &
+                                                         "vpslld $16, %%ymm0, %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "vfmadd231ps (%%rdi,%%rdx), %%ymm0, %%ymm5" & LF &
+                                    "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                                    "vfmadd231ps (%%rax), %%ymm0, %%ymm6" & LF &
+                                    "vfmadd231ps (%%rax,%%rdx), %%ymm0, %%ymm7" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %4, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vmovups %%ymm5, 32(%%rax)" & LF &
+                                    "vmovups %%ymm6, 64(%%rax)" & LF &
+                                    "vmovups %%ymm7, 96(%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Stride),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber =>
+                                      "rax,rcx,rdx,rsi,rdi,ymm0,ymm4,ymm5,ymm6,ymm7,memory",
+                                    Volatile => True);
+                              when Singles =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "vxorps %%ymm5, %%ymm5, %%ymm5" & LF &
+                                    "vxorps %%ymm6, %%ymm6, %%ymm6" & LF &
+                                    "vxorps %%ymm7, %%ymm7, %%ymm7" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rdx" & LF &
+                                    "movq %3, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vmovups (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "vfmadd231ps (%%rdi,%%rdx), %%ymm0, %%ymm5" & LF &
+                                    "leaq (%%rdi,%%rdx,2), %%rax" & LF &
+                                    "vfmadd231ps (%%rax), %%ymm0, %%ymm6" & LF &
+                                    "vfmadd231ps (%%rax,%%rdx), %%ymm0, %%ymm7" & LF &
+                                    "addq $32, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %4, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vmovups %%ymm5, 32(%%rax)" & LF &
+                                    "vmovups %%ymm6, 64(%%rax)" & LF &
+                                    "vmovups %%ymm7, 96(%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Stride),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber =>
+                                      "rax,rcx,rdx,rsi,rdi,ymm0,ymm4,ymm5,ymm6,ymm7,memory",
+                                    Volatile => True);
+                           end case;
                         else
-                           System.Machine_Code.Asm
-                             ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
-                              "movq %0, %%rsi" & LF &
-                              "movq %1, %%rdi" & LF &
-                              "movq %2, %%rcx" & LF &
-                              "1:" & LF &
-                              "vcvtph2ps (%%rsi), %%ymm0" & LF &
-                              "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
-                              "addq $16, %%rsi" & LF &
-                              "addq $32, %%rdi" & LF &
-                              "decq %%rcx" & LF &
-                              "jnz 1b" & LF &
-                              "movq %3, %%rax" & LF &
-                              "vmovups %%ymm4, (%%rax)" & LF &
-                              "vzeroupper",
-                              Inputs =>
-                                [System.Address'Asm_Input
-                                   ("r", Held (Held'First + At_Row)'Address),
-                                 System.Address'Asm_Input
-                                   ("r", Vectors (Vectors'First + Vector * Columns)'Address),
-                                 Element_Count'Asm_Input ("r", Eights),
-                                 System.Address'Asm_Input ("r", Sums'Address)],
-                              Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
-                              Volatile => True);
+                           case Kind is
+                              when Halves =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vcvtph2ps (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                              when Brains =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vpmovzxwd (%%rsi), %%ymm0" & LF &
+                                                         "vpslld $16, %%ymm0, %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $16, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                              when Singles =>
+                                 System.Machine_Code.Asm
+                                   ("vxorps %%ymm4, %%ymm4, %%ymm4" & LF &
+                                    "movq %0, %%rsi" & LF &
+                                    "movq %1, %%rdi" & LF &
+                                    "movq %2, %%rcx" & LF &
+                                    "1:" & LF &
+                                    "vmovups (%%rsi), %%ymm0" & LF &
+                                    "vfmadd231ps (%%rdi), %%ymm0, %%ymm4" & LF &
+                                    "addq $32, %%rsi" & LF &
+                                    "addq $32, %%rdi" & LF &
+                                    "decq %%rcx" & LF &
+                                    "jnz 1b" & LF &
+                                    "movq %3, %%rax" & LF &
+                                    "vmovups %%ymm4, (%%rax)" & LF &
+                                    "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input
+                                         ("r", Held (Held'First + At_Row)'Address),
+                                       System.Address'Asm_Input
+                                         ("r", Vectors (Vectors'First + Vector * Columns)'Address),
+                                       Element_Count'Asm_Input ("r", Eights),
+                                       System.Address'Asm_Input ("r", Sums'Address)],
+                                    Clobber => "rax,rcx,rsi,rdi,ymm0,ymm4,memory",
+                                    Volatile => True);
+                           end case;
                         end if;
                      else
                         Sums := [others => 0.0];
@@ -878,7 +1208,7 @@ package body Model_Runner.Tensors is
       end;
 
       Handled := True;
-   end Mat_Mul_Range_F16;
+   end Mat_Mul_Range_Float;
 
    procedure Mat_Mul_Range
      (Item    : View;
