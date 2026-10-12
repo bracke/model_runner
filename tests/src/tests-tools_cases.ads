@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the built-in tools and the tool-call grammar.
 --
@@ -10,7 +11,7 @@ with AUnit.Test_Cases;
 --  check without weights.
 package Tests.Tools_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

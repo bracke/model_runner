@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Calendar;
 with Model_Runner.Platform.Signals;
 with Ada.Text_IO;

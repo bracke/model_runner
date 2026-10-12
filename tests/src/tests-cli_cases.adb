@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Real_Time;
 with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;

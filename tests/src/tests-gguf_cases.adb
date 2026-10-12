@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Calendar;
 with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;

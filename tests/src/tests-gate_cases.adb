@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with AUnit.Assertions; use AUnit.Assertions;
 
 with Ada.Directories;

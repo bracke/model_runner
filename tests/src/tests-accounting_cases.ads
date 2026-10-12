@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for memory accounting and the monotonic clock.
 --
@@ -9,7 +10,7 @@ with AUnit.Test_Cases;
 --  host's timer misbehaves.
 package Tests.Accounting_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

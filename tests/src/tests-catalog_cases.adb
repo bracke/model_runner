@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Streams;

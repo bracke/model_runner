@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Structural tests for the GGUF container parser.
 --
@@ -7,7 +8,7 @@ with AUnit.Test_Cases;
 --  broken".
 package Tests.GGUF_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

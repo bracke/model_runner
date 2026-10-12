@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Directories;
 with Ada.Numerics;
 with Ada.Numerics.Generic_Elementary_Functions;

@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
 with Ada.Strings.Unbounded;

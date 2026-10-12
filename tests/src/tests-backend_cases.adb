@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Environment_Variables;
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;

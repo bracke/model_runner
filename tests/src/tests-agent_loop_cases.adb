@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
 with Ada.Strings.Fixed;

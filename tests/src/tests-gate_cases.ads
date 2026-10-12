@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the gate's own reasoning.
 --
@@ -11,7 +12,7 @@ with AUnit.Test_Cases;
 --  fixtures made for the question, with no device and no network.
 package Tests.Gate_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

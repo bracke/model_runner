@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the CPU backend and its worker pool.
 --
@@ -8,7 +9,7 @@ with AUnit.Test_Cases;
 --  rows for every count.
 package Tests.Backend_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

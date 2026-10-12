@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the agent loop itself, held to a script of replies.
 --
@@ -10,7 +11,7 @@ with AUnit.Test_Cases;
 --  asserted without weights that could write the reply.
 package Tests.Agent_Loop_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the sampling pipeline, stop conditions and chat templates.
 --
@@ -7,7 +8,7 @@ with AUnit.Test_Cases;
 --  model that produced surprising numbers.
 package Tests.Sampling_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

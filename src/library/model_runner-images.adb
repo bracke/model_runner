@@ -760,6 +760,12 @@ package body Model_Runner.Images is
             Room : constant Natural := 32 * 1024 * 1024;
             Raised : Boolean := False;
 
+            --  What the codec raised was running out of room -- a stack or
+            --  a heap too small for the picture -- which is said as that,
+            --  not as a fault in the file or the codec: a 4K picture that
+            --  overflowed the stack was reported as an invariant failing.
+            Out_Of_Room : Boolean := False;
+
             task Decoding is
                pragma Storage_Size (Room);
             end Decoding;
@@ -768,6 +774,8 @@ package body Model_Runner.Images is
             begin
                Outcome := Jpeglib.Decoding.Decode_Image (Decoder, View);
             exception
+               when Storage_Error =>
+                  Out_Of_Room := True;
                when others =>
                   Raised := True;
             end Decoding;
@@ -784,6 +792,11 @@ package body Model_Runner.Images is
             Jpeglib.Decoding.Finalize (Decoder);
             Started := False;
             Free (Input);
+            if Out_Of_Room then
+               Free (Output);
+               Refuse_Memory (Status, Name);
+               return;
+            end if;
             if not Jpeglib.Results.Succeeded (Outcome) then
                Free (Output);
                Refuse (Status, Name,
@@ -804,8 +817,8 @@ package body Model_Runner.Images is
             end loop;
             Free (Output);
          exception
-            --  The decoding task's stack is sized for the picture, and a
-            --  stack the host will not give is a task that does not start.
+            --  A stack the host will not give is a task that does not
+            --  start.
             when Storage_Error | Tasking_Error =>
                Free (Output);
                raise;

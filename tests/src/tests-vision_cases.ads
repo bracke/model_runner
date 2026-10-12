@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Pictures and the vision encoder: the three file formats decoded and
 --  refused, the resampling, a projector written small and run against a
@@ -6,7 +7,7 @@ with AUnit.Test_Cases;
 --  markers in a prompt.
 package Tests.Vision_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    overriding function Name (T : Case_Type) return AUnit.Message_String;
 

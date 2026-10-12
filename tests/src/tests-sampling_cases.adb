@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Unchecked_Deallocation;
 with Fixtures;

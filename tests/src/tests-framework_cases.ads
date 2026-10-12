@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the project state a development session keeps.
 --
@@ -9,7 +10,7 @@ with AUnit.Test_Cases;
 --  derived can be thrown away and built again to the same thing.
 package Tests.Framework_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

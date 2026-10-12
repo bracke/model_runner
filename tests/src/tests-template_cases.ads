@@ -1,4 +1,5 @@
-with AUnit.Test_Cases;
+with AUnit;
+with Tests.Fresh_Cases;
 
 --  Tests for the chat template engine.
 --
@@ -13,7 +14,7 @@ with AUnit.Test_Cases;
 --  each bound is reached deliberately and the refusal is checked by code.
 package Tests.Template_Cases is
 
-   type Case_Type is new AUnit.Test_Cases.Test_Case with null record;
+   type Case_Type is new Tests.Fresh_Cases.Fresh_Case with null record;
 
    --  Name shown by the reporter.
    --

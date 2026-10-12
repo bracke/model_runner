@@ -1,3 +1,4 @@
+with AUnit.Test_Cases;
 with System.Storage_Elements;
 with Model_Runner.Zeroed_Storage;
 with Model_Runner.Platform.Pages;
