@@ -111,7 +111,10 @@ package body Model_Runner.CLI.Execute is
             end if;
 
          when Opt.Command_Embed =>
-            Do_Embed (Item, Screen, Status);
+            --  Unasked, the device where the model fits it, as run takes
+            --  it: a sixteen-bit embedding model read a 400-token text in
+            --  1.9 s on the processor and 0.25 s on the device.
+            Do_Embed (Resolved_Backend (Item, Screen), Screen, Status);
 
          when Opt.Command_None =>
             Pres.Report (Screen, E.Make (E.CLI_Missing_Command));
