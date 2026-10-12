@@ -25,6 +25,7 @@ with Tiny_Model;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Low_Dots;
 with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
 with Shader_Generation;
@@ -6860,9 +6861,9 @@ package body Checks is
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked
       --  against it, and Q8_0's three over several vectors, and its five
       --  gate-and-up compilations, and MXFP4's -- and Q8_0's six walks
-      --  again as integers, and the two IQ4 formats', MXFP4's, Q2_K's and
-      --  Q3_K's.
-      for Which in 1 .. 42 loop
+      --  again as integers, and the two IQ4 formats', MXFP4's, Q2_K's,
+      --  Q3_K's and the seven codebooks'.
+      for Which in 1 .. 49 loop
          declare
             Found : Boolean;
 
@@ -6902,17 +6903,24 @@ package body Checks is
                   when 29 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Glu_Digest,
                   when 30 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Glu_Digest,
                   when 31 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Digest,
-                  when 32 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Digest,
-                  when 33 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Digest,
-                  when 34 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Digest,
-                  when 35 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Glu_Digest,
-                  when 36 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Glu_Digest,
-                  when 37 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Glu_Digest,
-                  when 38 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl_Dots_Digest,
-                  when 39 => Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_Dots_Digest,
-                  when 40 => Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots_Digest,
-                  when 41 => Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K_Dots_Digest,
-                  when 42 => Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K_Dots_Digest,
+                  when 32 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots_Digest,
+                  when 33 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots_Digest,
+                  when 34 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots_Digest,
+                  when 35 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots_Glu_Digest,
+                  when 36 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots_Glu_Digest,
+                  when 37 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots_Glu_Digest,
+                  when 38 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq4_Nl_Dots_Digest,
+                  when 39 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq4_Xs_Dots_Digest,
+                  when 40 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Mxfp4_Dots_Digest,
+                  when 41 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q2_K_Dots_Digest,
+                  when 42 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q3_K_Dots_Digest,
+                  when 43 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq3_S_Dots_Digest,
+                  when 44 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_Xxs_Dots_Digest,
+                  when 45 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_Xs_Dots_Digest,
+                  when 46 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_S_Dots_Digest,
+                  when 47 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq3_Xxs_Dots_Digest,
+                  when 48 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_S_Dots_Digest,
+                  when 49 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_M_Dots_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

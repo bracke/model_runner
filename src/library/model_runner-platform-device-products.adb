@@ -11,6 +11,7 @@ with System.Storage_Elements;
 with Model_Runner.Kernels;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
+with Model_Runner.Shaders.Low_Dots;
 with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
 
@@ -3195,14 +3196,14 @@ package body Model_Runner.Platform.Device.Products is
                      declare
                         Dots : aliased constant Model_Runner.Shaders.Word_Array :=
                           (case Count is
-                             when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots,
-                             when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots,
-                             when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots);
+                             when 2 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots,
+                             when 3 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots,
+                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots);
                         Glus : aliased constant Model_Runner.Shaders.Word_Array :=
                           (case Count is
-                             when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2_Dots_Glu,
-                             when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3_Dots_Glu,
-                             when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4_Dots_Glu);
+                             when 2 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots_Glu,
+                             when 3 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots_Glu,
+                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots_Glu);
                      begin
                         Request.Size := Interfaces.C.size_t (Dots'Length * 4);
                         Request.Code := Dots'Address;
@@ -3256,29 +3257,29 @@ package body Model_Runner.Platform.Device.Products is
                     Item.XS_Wave_Shader);
             --  And their walks as integers, where the device has the dot.
             if Has_Integer_Dot (On) then
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Nl_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq4_Nl_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ4_NL));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq4_Xs_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ4_XS));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Mxfp4_Dots,
                        Item.Dots_Wave_Shaders (Packed_MXFP4));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_S_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq3_S_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ3_S));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xxs_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_Xxs_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ2_XXS));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xs_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_Xs_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ2_XS));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_S_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq2_S_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ2_S));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_Xxs_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq3_Xxs_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ3_XXS));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_S_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_S_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ1_S));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_M_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_M_Dots,
                        Item.Dots_Wave_Shaders (Packed_IQ1_M));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q2_K_Dots,
                        Item.Dots_Wave_Shaders (Packed_Q2_K));
-               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K_Dots,
+               Module (Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q3_K_Dots,
                        Item.Dots_Wave_Shaders (Packed_Q3_K));
             end if;
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K,

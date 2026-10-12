@@ -741,6 +741,37 @@ package body Model_Runner.Generation is
 
       --  Release everything this call owns. Called exactly once, from the
       --  single exit path.
+      --  Whether the draft's own probability of what it just proposed --
+      --  one over the sum of e to each logit less the chosen one's, the
+      --  chosen one being the largest -- is under the floor, so the round
+      --  is checked now rather than drafted further. The logits are spent.
+      function Below_Floor (Chosen_Token : Vocab.Token_Id) return Boolean;
+
+      function Below_Floor (Chosen_Token : Vocab.Token_Id) return Boolean is
+         use type N.Real;
+      begin
+         if not (Item.Draft_Floor > 0.0)
+           or else Sampled_Draft
+           or else N.Element_Count (Chosen_Token) >= Draft_Words
+         then
+            return False;
+         end if;
+
+         declare
+            Run : N.Real_Array renames
+              Aside.all (Aside.all'First .. Aside.all'First + Draft_Words - 1);
+            Chosen : constant N.Real :=
+              Run (Run'First + N.Element_Count (Chosen_Token));
+            Total : N.Real := 0.0;
+         begin
+            Model_Runner.Kernels.Exponentiate (Run, Chosen);
+            for Value of Run loop
+               Total := Total + Value;
+            end loop;
+            return Total > 0.0 and then 1.0 / Total < Item.Draft_Floor;
+         end;
+      end Below_Floor;
+
       procedure Cleanup is
       begin
          T.Free (Logits);
@@ -1928,6 +1959,7 @@ package body Model_Runner.Generation is
                   Count := Count + 1;
                   Proposed.all (Count) := Guess;
                   Next_In.all := Next_Out.all;
+                  exit when Below_Floor (Guess);
                end loop;
             elsif By_Context then
                --  What followed this phrase the last time it was said. One
@@ -2032,28 +2064,7 @@ package body Model_Runner.Generation is
                   --  over the sum of e to each logit less the chosen one's,
                   --  the chosen one being the largest. Below the floor, the
                   --  round is checked now rather than drafted further.
-                  if N.">" (Item.Draft_Floor, 0.0)
-                    and then not Sampled_Draft
-                    and then N.Element_Count (Guess) < Draft_Words
-                  then
-                     declare
-                        use type N.Real;
-
-                        Run : N.Real_Array renames
-                          Aside.all (Aside.all'First
-                                     .. Aside.all'First + Draft_Words - 1);
-                        Chosen : constant N.Real :=
-                          Run (Run'First + N.Element_Count (Guess));
-                        Total : N.Real := 0.0;
-                     begin
-                        Model_Runner.Kernels.Exponentiate (Run, Chosen);
-                        for Value of Run loop
-                           Total := Total + Value;
-                        end loop;
-                        exit when Total > 0.0
-                          and then 1.0 / Total < Item.Draft_Floor;
-                     end;
-                  end if;
+                  exit when Below_Floor (Guess);
                end loop;
             end if;
 
