@@ -78,6 +78,18 @@ private package Model_Runner.Quantization.Grid_Integers is
    --    instruction, as llama.cpp picks IQ2_S's.
    function Scale_Shuffle_Address return System.Address;
 
+   --  @return Where IQ1_M's scale constants are: four quadword shifts (0, 6,
+   --    3, 9) that bring a block's sixteen three-bit scales to the bottom of
+   --    the sixteen-bit words, then eight shuffles picking sub-block S's two
+   --    -- its first half's from the low half of a register, its second's
+   --    from the high, as llama.cpp arranges them.
+   function IQ1M_Scales_Address return System.Address;
+
+   --  @return Where sixteen vectors of thirty-two bytes are, +1 or -1 by
+   --    the four bits of their index, eight bytes a bit: IQ1_M's offsets'
+   --    signs for a sub-block, one load where they were built.
+   function Offset_Signs_Address return System.Address;
+
    --  @return Where a byte's eight bits are, a byte each, 0 or 1: IQ3_S's
    --    ninth index bits, widened beside its eight index bytes.
    function Bit_Bytes_Address return System.Address;
@@ -87,27 +99,5 @@ private package Model_Runner.Quantization.Grid_Integers is
    --    its bits -- a sub-block's signs made a mask in the registers, as
    --    llama.cpp makes IQ3_S's.
    function Sign_Shuffle_Address return System.Address;
-
-   --  A super-block's factors, two a sub-block of thirty-two: the first
-   --  sixteen elements' and the last sixteen's, each the sub-block's odd
-   --  scale as the format states it (2s + 1), whole, in both halves of its
-   --  word, as a sixteen-bit multiply-add reads it -- the block's half and
-   --  the format's power of two not in them: the half's bits are given
-   --  apart, for an instruction to widen. IQ1_M's alone are read; the
-   --  others are worked out where they are used.
-   type Factor_Block is array (0 .. 15) of Interfaces.Unsigned_32
-     with Alignment => 32;
-
-   --  @param Format A grid format.
-   --  @param Data Buffer holding the block.
-   --  @param Offset Byte position of the block, from Data'First.
-   --  @param Factors Receives them.
-   --  @param Half_Bits Receives the block's half, as its bits.
-   procedure Factors_Of
-     (Format    : Model_Runner.GGUF.Tensor_Type;
-      Data      : Model_Runner.Bytes.Byte_Array;
-      Offset    : Model_Runner.Bytes.Byte_Count;
-      Factors   : out Factor_Block;
-      Half_Bits : out Interfaces.Unsigned_16);
 
 end Model_Runner.Quantization.Grid_Integers;

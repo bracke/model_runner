@@ -129,92 +129,40 @@ package body Model_Runner.Quantization.Grid_Integers is
 
    function Scale_Shuffle_Address return System.Address is (Scale_Shuffle (0)'Address);
 
-   --  2k + 1 in both halves of a word.
-   type Odd_Table is array (U8 range 0 .. 15) of U32;
-   Odd_1 : constant Odd_Table := [for K in U8 range 0 .. 15 => U32 (2 * Integer (K) + 1) * 16#1_0001#];
-
-   procedure Factors_Of
-     (Format    : G.Tensor_Type;
-      Data      : B.Byte_Array;
-      Offset    : B.Byte_Count;
-      Factors   : out Factor_Block;
-      Half_Bits : out U16)
-   is
-      pragma Suppress (Index_Check);
-      pragma Suppress (Range_Check);
-      pragma Suppress (Overflow_Check);
-
-      function Raw (At_Byte : B.Byte_Count) return U8
-      is (Data (Data'First + Offset + At_Byte))
-        with Inline_Always;
-      function Read_16 (At_Byte : B.Byte_Count) return U16
-      is (U16 (Raw (At_Byte)) or Interfaces.Shift_Left (U16 (Raw (At_Byte + 1)), 8))
-        with Inline_Always;
+   function Make_Offset_Signs return Word_Table is
+      Result : Word_Table (0 .. 63);
    begin
-      case Format is
-         when G.Type_IQ2_XXS =>
-            Half_Bits := Read_16 (0);
-            for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_1 (Interfaces.Shift_Right (Raw (2 + B.Byte_Count (Sub) * 8 + 7), 4));
-               Factors (2 * Sub + 1) := Factors (2 * Sub);
-            end loop;
-         when G.Type_IQ2_XS | G.Type_IQ2_S =>
-            Half_Bits := Read_16 (0);
-            for Sub in 0 .. 7 loop
-               declare
-                  SB : constant U8 := Raw ((if Format = G.Type_IQ2_XS then 66 else 74) + B.Byte_Count (Sub));
-               begin
-                  Factors (2 * Sub) := Odd_1 (SB and 16#0F#);
-                  Factors (2 * Sub + 1) := Odd_1 (Interfaces.Shift_Right (SB, 4));
-               end;
-            end loop;
-         when G.Type_IQ3_XXS =>
-            Half_Bits := Read_16 (0);
-            for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_1 (Interfaces.Shift_Right (Raw (66 + B.Byte_Count (4 * Sub) + 3), 4));
-               Factors (2 * Sub + 1) := Factors (2 * Sub);
-            end loop;
-         when G.Type_IQ3_S =>
-            Half_Bits := Read_16 (0);
-            for Pair in 0 .. 3 loop
-               declare
-                  Byte : constant U8 := Raw (106 + B.Byte_Count (Pair));
-               begin
-                  Factors (4 * Pair) := Odd_1 (Byte and 16#0F#);
-                  Factors (4 * Pair + 1) := Factors (4 * Pair);
-                  Factors (4 * Pair + 2) := Odd_1 (Interfaces.Shift_Right (Byte, 4));
-                  Factors (4 * Pair + 3) := Factors (4 * Pair + 2);
-               end;
-            end loop;
-         when G.Type_IQ1_S =>
-            Half_Bits := Read_16 (0);
-            for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_1 (U8 (Interfaces.Shift_Right (Raw (35 + B.Byte_Count (2 * Sub)), 4) and 7));
-               Factors (2 * Sub + 1) := Factors (2 * Sub);
-            end loop;
-         when G.Type_IQ1_M =>
-            declare
-               SC : constant array (0 .. 3) of U16 := [Read_16 (48), Read_16 (50), Read_16 (52), Read_16 (54)];
-            begin
-               Half_Bits := Interfaces.Shift_Right (SC (0), 12)
-                 or (Interfaces.Shift_Right (SC (1), 8) and 16#00F0#)
-                 or (Interfaces.Shift_Right (SC (2), 4) and 16#0F00#)
-                 or (SC (3) and 16#F000#);
-               for Sub in 0 .. 7 loop
-                  declare
-                     SW : constant U16 := SC (Sub / 2);
-                     Sh : constant Natural := 6 * (Sub mod 2);
-                  begin
-                     Factors (2 * Sub) := Odd_1 (U8 (Interfaces.Shift_Right (SW, Sh) and 7));
-                     Factors (2 * Sub + 1) := Odd_1 (U8 (Interfaces.Shift_Right (SW, Sh + 3) and 7));
-                  end;
-               end loop;
-            end;
-         when others =>
-            Factors := [others => 0];
-            Half_Bits := 0;
-      end case;
-   end Factors_Of;
+      for Bits in 0 .. 15 loop
+         for K in 0 .. 3 loop
+            Result (4 * Bits + K) :=
+              (if (Bits / 2 ** K) mod 2 = 1 then 16#FFFF_FFFF_FFFF_FFFF# else Ones);
+         end loop;
+      end loop;
+      return Result;
+   end Make_Offset_Signs;
+
+   Offset_Signs : aliased constant Word_Table (0 .. 63) := Make_Offset_Signs;
+
+   function Offset_Signs_Address return System.Address is (Offset_Signs (0)'Address);
+
+   function Make_IQ1M_Scales return Word_Table is
+      Result : Word_Table (0 .. 35);
+   begin
+      Result (0 .. 3) := [0, 6, 3, 9];
+      for Sub in 0 .. 7 loop
+         declare
+            Word : constant U64 := U64 (if Sub mod 2 = 0 then Sub / 2 else 4 + Sub / 2);
+            Pair : constant U64 := (2 * Word) or Interfaces.Shift_Left (2 * Word + 1, 8);
+         begin
+            Result (4 + 4 * Sub .. 4 + 4 * Sub + 3) := [others => Pair * 16#0001_0001_0001_0001#];
+         end;
+      end loop;
+      return Result;
+   end Make_IQ1M_Scales;
+
+   IQ1M_Scales : aliased constant Word_Table (0 .. 35) := Make_IQ1M_Scales;
+
+   function IQ1M_Scales_Address return System.Address is (IQ1M_Scales (0)'Address);
 
    --  IQ1's grid entry at eight times, its offset added or taken: each
    --  byte is -1, 0 or 1 and becomes 8g + 1 or 8g - 1, worked out in the
