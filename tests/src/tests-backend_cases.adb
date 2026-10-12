@@ -10955,6 +10955,75 @@ package body Tests.Backend_Cases is
    --  the warning that the handlers have become reachable and now need
    --  reaching in a test.
 
+   --  A sixteen-bit matrix multiplied by the vector kernel answers what
+   --  the exact path answers, to binary32's rounding: at every count of
+   --  vectors from one to nine -- the four-wide passes, two rows at once,
+   --  and what is left over -- and at a width whose last halves are not a
+   --  whole eight. Skipped where the processor has not the instructions.
+   procedure Half_Products_Match_The_Exact_Path
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Width  : constant := 45;
+      Height : constant := 7;
+
+      Values : constant N.Real_Array :=
+        Fixtures.Sequence (Height * Width, 9901, 1.0);
+      Bytes  : constant B.Byte_Array := Fixtures.Encode_F16 (Values);
+      Data   : B.Byte_Array_Access;
+      Item   : T.View;
+      Status : E.Error_Info;
+   begin
+      B.Allocate (Bytes'Length, Data);
+      Data.all := Bytes;
+      T.Make (G.Type_F16, Height, Width, Data, 0, Item, Status);
+      Assert (E.Is_Ok (Status), "the sixteen-bit view could not be built");
+
+      for Count in N.Element_Count range 1 .. 9 loop
+         declare
+            Vectors : constant N.Real_Array :=
+              Fixtures.Sequence (Count * Width, Interfaces.Unsigned_64 (77 + Count), 1.0);
+            Exact, Fast : N.Real_Array (0 .. Count * Height - 1) := [others => 0.0];
+            Handled : Boolean;
+            Worst, Largest : N.Real := 0.0;
+         begin
+            T.Mat_Mul_Range (Item, Vectors, Count, Exact, 0, Height - 1);
+            T.Mat_Mul_Range_F16 (Item, Vectors, Count, Fast, 0, Height - 1, Handled);
+            if not Handled then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no vector kernel for sixteen-bit rows here");
+               exit;
+            end if;
+            for Index in Exact'Range loop
+               Largest := N.Real'Max (Largest, abs Exact (Index));
+               Worst := N.Real'Max (Worst, abs (Exact (Index) - Fast (Index)));
+            end loop;
+            Assert (Largest > 0.0 and then Worst <= 1.0E-5 * Largest,
+                    "the vector kernel strayed" & N.Real'Image (Worst)
+                    & " from the exact path's largest" & N.Real'Image (Largest)
+                    & " at" & N.Element_Count'Image (Count) & " vectors");
+         end;
+      end loop;
+
+      --  Told the processor has not the instructions, it leaves the
+      --  matrix to the exact path and writes nothing.
+      declare
+         Vectors : constant N.Real_Array := Fixtures.Sequence (Width, 5, 1.0);
+         Fast    : N.Real_Array (0 .. Height - 1) := [others => 0.0];
+         Handled : Boolean;
+      begin
+         T.Use_Wide_Halves (False);
+         T.Mat_Mul_Range_F16 (Item, Vectors, 1, Fast, 0, Height - 1, Handled);
+         T.Use_Wide_Halves (Model_Runner.Platform.Wide_Vectors);
+         Assert (not Handled and then (for all V of Fast => V = 0.0),
+                 "the vector kernel ran where it was told it could not");
+      end;
+
+      B.Free (Data);
+   end Half_Products_Match_The_Exact_Path;
+
    procedure Shares_Cannot_Raise
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11366,6 +11435,10 @@ package body Tests.Backend_Cases is
         (T, Cores_Are_Not_Above_Processors'Access,
          "the core count is at least one and never above the processor "
          & "count, whatever the host reports");
+      Register_Routine
+        (T, Half_Products_Match_The_Exact_Path'Access,
+         "a sixteen-bit matrix by the vector kernel answers what the exact "
+         & "path answers");
       Register_Routine
         (T, Shares_Cannot_Raise'Access,
          "a malformed request is refused by the range procedures rather "

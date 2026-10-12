@@ -1047,6 +1047,14 @@ package body Model_Runner.Backend.CPU is
 
       Count_Share (Work.Weight.Format, Handled);
 
+      if not Handled
+        and then Work.Roles (Work.Weight.Role)
+      then
+         T.Mat_Mul_Range_F16
+           (Work.Weight, Work.Vector.all, Work.Count, Work.Target.all,
+            First, Last, Handled);
+      end if;
+
       if not Handled then
          T.Mat_Mul_Range
            (Work.Weight, Work.Vector.all, Work.Count,
@@ -1394,6 +1402,7 @@ package body Model_Runner.Backend.CPU is
          Scales => null,
          Totals => null,
          Work   => null,
+         Roles  => Roles,
          others => <>);
 
       if Prepare_Packed (Item, Weight, Vector, 1, Roles) then
@@ -1517,6 +1526,7 @@ package body Model_Runner.Backend.CPU is
          Scales => null,
          Totals => null,
          Work   => null,
+         Roles  => Roles,
          others => <>);
 
       if Weights'Length >= 2 then
@@ -1722,6 +1732,7 @@ package body Model_Runner.Backend.CPU is
          Scales => null,
          Totals => null,
          Work   => null,
+         Roles  => Roles,
          others => <>);
 
       if Prepare_Packed (Item, Weight, Vectors, Count, Roles) then
@@ -2031,6 +2042,8 @@ begin
    Model_Runner.Quantization.Integers.Use_Deep_Rows
      (Model_Runner.Platform.Byte_Products);
    Model_Runner.Kernels.Use_Wide_Lanes
+     (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Tensors.Use_Wide_Halves
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Delta_Rule.Use_Wide
      (Model_Runner.Platform.Wide_Vectors);

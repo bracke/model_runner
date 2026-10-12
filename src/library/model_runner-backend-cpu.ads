@@ -525,6 +525,12 @@ private
       --  leaves the product's own path exactly as it was.
       Work   : Task_Item_Access := null;
 
+      --  Which roles the run lets compute inexactly: a sixteen-bit weight
+      --  of one of them is multiplied in binary32 by the vector kernel, its
+      --  halves widened as they are read, where otherwise it takes the
+      --  exact binary64 path every format without a kernel takes.
+      Roles  : Role_Set := [others => False];
+
       --  Two further matrices the same input is multiplied by, each with
       --  its own answer.
       --

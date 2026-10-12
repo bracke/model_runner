@@ -23689,7 +23689,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         "movq 80(%0), %%rax"                       & LF &
                         "vmovaps (%%rax), %%ymm6"                  & LF &
                         "vfmadd231ps %%ymm2, %%ymm19, %%ymm6"      & LF &
-                        "vmovaps %%ymm6, (%%rax)"                 ,
+                        "vmovaps %%ymm6, (%%rax)",
                         Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
                         Clobber  =>
                           "rax,rcx,rdx,rsi,rdi,r8,r9,r10,"
@@ -23728,7 +23728,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                         "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
                         "vmovaps (%0), %%ymm6"                     & LF &
                         "vfmadd231ps %%ymm2, %%ymm16, %%ymm6"      & LF &
-                        "vmovaps %%ymm6, (%0)"                    ,
+                        "vmovaps %%ymm6, (%0)",
                         Inputs =>
                           [System.Address'Asm_Input ("r", Carry (Vector)'Address),
                            System.Address'Asm_Input ("r", Words'Address),
