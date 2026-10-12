@@ -1366,12 +1366,14 @@ package Model_Runner.Llama is
 
    --  And the fewest a split dense model's batch holds for the feed-forward
    --  its processor keeps to be streamed to the device instead, never more
-   --  than Stream_Least. Every position of a batch reads every row of a
-   --  dense layer, so streaming pays far sooner than a mixture's stacks
-   --  do: ThinkingCap's prompt of 110 read in 1.71 s on the processor's
-   --  half and 1.49 streamed, of 231 in 3.16 and 2.54, of 57 in 1.46 and
-   --  1.41; of 28 in 1.21 and 1.37, where the upload is most of a batch.
-   Feed_Stream_Least : constant := 48;
+   --  than Stream_Least. Measured first on prompts read alone (ThinkingCap's
+   --  110 in 1.71 s on the processor's half and 1.49 streamed), it was 48;
+   --  in a conversation, where the file's rows the upload reads compete
+   --  with everything else for memory, warm turns of 65 to 135 new tokens
+   --  took 3.3 to 5.1 s on the processor and 4.0 to 9.7 s streamed, with
+   --  one of 40.6 s that read the rows from the disk again. So a dense
+   --  model streams from the same length a mixture does.
+   Feed_Stream_Least : constant := 256;
 
    --  Change it, for the run: a test streams a fixture's short batch.
    --
