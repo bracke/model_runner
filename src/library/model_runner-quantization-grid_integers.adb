@@ -103,6 +103,14 @@ package body Model_Runner.Quantization.Grid_Integers is
 
    function Bit_Bytes_Address return System.Address is (Bit_Bytes (0)'Address);
 
+   --  Byte 8K + J reads sign byte K and its bit J: the byte selectors, then
+   --  the bits, four quadwords each.
+   Sign_Shuffle : aliased constant Word_Table (0 .. 7) :=
+     [16#0000_0000_0000_0000#, 16#0101_0101_0101_0101#, 16#0202_0202_0202_0202#, 16#0303_0303_0303_0303#,
+      16#8040_2010_0804_0201#, 16#8040_2010_0804_0201#, 16#8040_2010_0804_0201#, 16#8040_2010_0804_0201#];
+
+   function Sign_Shuffle_Address return System.Address is (Sign_Shuffle (0)'Address);
+
    --  2k + 1 for a field k.
    type Odd_Table is array (U8 range 0 .. 15) of N.Real;
    Odd_1 : constant Odd_Table := [for K in U8 range 0 .. 15 => N.Real (2 * Integer (K) + 1)];

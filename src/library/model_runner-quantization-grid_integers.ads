@@ -75,6 +75,12 @@ private package Model_Runner.Quantization.Grid_Integers is
    --    ninth index bits, widened beside its eight index bytes.
    function Bit_Bytes_Address return System.Address;
 
+   --  @return Where two shuffle constants are, thirty-two bytes each: which
+   --    of four sign bytes each of thirty-two elements reads, and which of
+   --    its bits -- a sub-block's signs made a mask in the registers, as
+   --    llama.cpp makes IQ3_S's.
+   function Sign_Shuffle_Address return System.Address;
+
    --  A super-block's factors, two a sub-block of thirty-two: the first
    --  sixteen elements' and the last sixteen's, each the sub-block's odd
    --  scale as the format states it (2s + 1), whole -- the block's half and

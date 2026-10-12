@@ -31,6 +31,12 @@ package body Model_Runner.Quantization.Integers is
    -- Use_Deep_Rows --
    --------------------
 
+   function Decodes_Dearly (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
+   is (Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q4_K)
+       or else Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q5_K)
+       or else Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q6_K)
+       or else Model_Runner.Quantization.Grid_Integers.Is_Grid (Format));
+
    function Takes_Few_Together
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
    is (Deeper

@@ -364,7 +364,10 @@ package body Model_Runner.Backend.CPU is
    --  where five shares of the eight-bit kernel are at it. Measured on
    --  Qwen3.6-35B-A3B's Q6_K head, 11.0 -> 9.6 ms a read, and on
    --  Qwen3-8B Q4_K_M whole: 2.83 -> 2.62 s over twenty-four tokens,
-   --  alternated twice each way.
+   --  alternated twice each way. And the grid formats, whose decoding is
+   --  dearer still: at five an IQ2 mix of a 27B model stopped at 2.10
+   --  tokens a second from four workers on, where llama.cpp went on to 2.92
+   --  at seven.
    Quant_Team : constant Share_Count := 9;
 
    --  Rows a worker takes from the counter at a time.
@@ -1364,7 +1367,6 @@ package body Model_Runner.Backend.CPU is
       Status : out E.Error_Info;
       Roles   : Role_Set := Integer_Activation_Roles)
    is
-      use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1414,9 +1416,7 @@ package body Model_Runner.Backend.CPU is
          Work.Team :=
            Share_Count'Min
              (Item.Workers + 1,
-              (if Weight.Format = Model_Runner.GGUF.Type_Q4_K
-                 or else Weight.Format = Model_Runner.GGUF.Type_Q5_K
-                 or else Weight.Format = Model_Runner.GGUF.Type_Q6_K
+              (if Model_Runner.Quantization.Integers.Decodes_Dearly (Weight.Format)
                then Quant_Team else Vector_Team));
       end if;
 
@@ -1492,7 +1492,6 @@ package body Model_Runner.Backend.CPU is
       Status  : out E.Error_Info;
       Roles   : Role_Set)
    is
-      use type Model_Runner.GGUF.Tensor_Type;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1545,9 +1544,7 @@ package body Model_Runner.Backend.CPU is
          Work.Team :=
            Share_Count'Min
              (Item.Workers + 1,
-              (if Work.Weight.Format = Model_Runner.GGUF.Type_Q4_K
-                 or else Work.Weight.Format = Model_Runner.GGUF.Type_Q5_K
-                 or else Work.Weight.Format = Model_Runner.GGUF.Type_Q6_K
+              (if Model_Runner.Quantization.Integers.Decodes_Dearly (Work.Weight.Format)
                then Quant_Team else Vector_Team));
       end if;
 

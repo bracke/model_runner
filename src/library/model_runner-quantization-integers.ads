@@ -209,6 +209,15 @@ package Model_Runner.Quantization.Integers is
    --  @param Allowed True only where the host answered plainly.
    procedure Use_Deep_Rows (Allowed : Boolean);
 
+   --  Whether one vector's product in this format costs its kernel more
+   --  than the memory takes to bring the bytes -- the k-quants' unpacking,
+   --  the grid formats' lookups -- so that every share there is pays,
+   --  where a format the memory answers saturates it with a few.
+   --
+   --  @param Format The weights' format.
+   --  @return True for Q4_K, Q5_K, Q6_K and the grid formats.
+   function Decodes_Dearly (Format : Model_Runner.GGUF.Tensor_Type) return Boolean;
+
    --  Whether a product of two to four vectors in this format has a kernel
    --  of its own here, which reads each weight once for them all: Q4_K and
    --  the grid formats, where the deepest compilation runs. Elsewhere a caller does better
