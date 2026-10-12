@@ -9,10 +9,12 @@
 //  them never read: a check whose drafts are all taken reads only the last.
 //  So where the host asks, the check writes the last state whole and, for
 //  the others, the record that makes one state from the one before it --
-//  the head's key, the decay, and a correction a column -- in the first
-//  three rows of the slot the state would have taken. A rewind into the
-//  check makes the state it wants here: the state the check began from,
-//  carried through the records, as the check carried it.
+//  the head's key, the decay, and a correction a column -- in the slot's
+//  records, three rows a head past every state. The run after a rewind
+//  makes the state it begins from itself (rule_held.comp); what reads the
+//  ring otherwise -- the host, a checkpoint -- has it made here: the
+//  state the check began from, carried through the records, as the check
+//  carried it.
 //
 //  A workgroup a head, of every linear layer in the slot alike, a column
 //  to a lane and half the rows to each of two groups.
@@ -27,6 +29,7 @@ layout(std430, binding = 4) buffer State { float s[]; };
 
 layout(push_constant) uniform Shape {
     uint base;
+    uint records;
     uint every;
     uint slots;
     uint from;
@@ -49,6 +52,7 @@ void main() {
     }
 
     uint head_at = shape.base + h * HEAD * HEAD;
+    uint record_of = shape.records + h * 3u * HEAD;
     uint read_at = head_at + (shape.from % shape.slots) * shape.every;
     float st[HELD];
 
@@ -57,19 +61,20 @@ void main() {
     }
 
     for (uint p = 0u; p < shape.count; p++) {
-        uint at = head_at + ((shape.from + p + 1u) % shape.slots) * shape.every;
+        uint slot = (shape.from + p + 1u) % shape.slots;
+        uint at = head_at + slot * shape.every;
+        uint note = record_of + slot * shape.every;
 
         if (part == 0u) {
-            key[cl] = s[at + HEAD + cl];
+            key[cl] = s[note + HEAD + cl];
 
             if (cl == 0u) {
-                decay = s[at + 2u * HEAD];
+                decay = s[note + 2u * HEAD];
             }
         }
 
-        float fix = s[at + cl];
+        float fix = s[note + cl];
 
-        //  The record read whole before the state is written over it.
         barrier();
 
         for (uint e = 0u; e < HELD; e++) {

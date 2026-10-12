@@ -63,7 +63,9 @@ layout(push_constant) uniform Shape {
     uint beta_at;
     uint scale;
     uint epsilon;
-    uint unused[8];
+    //  Where the layer's records begin within a slot, past every state.
+    uint record_at;
+    uint unused[7];
 } shape;
 
 //  A chunk's keys and queries, padded a vector a row so that the triangles'
@@ -76,7 +78,7 @@ shared float between[CHUNK * CHUNK];
 shared float gram[CHUNK * CHUNK];
 shared float cross[CHUNK * CHUNK];
 shared uint written[CHUNK];
-shared bool recorded[CHUNK];
+shared uint recorded[CHUNK];
 shared float root[CHUNK];
 shared vec4 keys[CHUNK * STRIDE];
 shared vec4 queries[CHUNK * STRIDE];
@@ -110,6 +112,7 @@ uint query_of;
 uint value_of;
 uint answer;
 uint head_at;
+uint record_of;
 uint kept_from;
 bool lazy;
 float a_log;
@@ -142,12 +145,12 @@ void chunk(const uint n, uint done) {
             bool last = done + t + 1u == run_count;
             bool keep = done + t >= kept_from || last;
             written[t] = keep ? head_at + slot * shape.every : NOWHERE;
-            recorded[t] = lazy && !last;
+            recorded[t] = keep && lazy && !last ? record_of + slot * shape.every : NOWHERE;
         } else {
             decay[t] = 1.0;
             rate[t] = 0.0;
             written[t] = NOWHERE;
-            recorded[t] = false;
+            recorded[t] = NOWHERE;
         }
     }
 
@@ -290,16 +293,17 @@ void chunk(const uint n, uint done) {
         }
 
         uint to = written[t];
+        uint note = recorded[t];
 
-        if (to != NOWHERE && recorded[t]) {
-            //  The record: this column's correction, the head's key, and
-            //  the decay, in the first three rows of the slot's state.
+        if (note != NOWHERE) {
+            //  The record, in the slot's records past its states: this
+            //  column's correction, the head's key, and the decay.
             if (part == 0u) {
-                s[to + cl] = fix[t];
-                s[to + HEAD + cl] = keys[t * STRIDE + cl / 4u][cl % 4u];
+                s[note + cl] = fix[t];
+                s[note + HEAD + cl] = keys[t * STRIDE + cl / 4u][cl % 4u];
 
                 if (cl == 0u) {
-                    s[to + 2u * HEAD] = decay[t];
+                    s[note + 2u * HEAD] = decay[t];
                 }
             }
         } else if (to != NOWHERE) {
@@ -366,13 +370,38 @@ void main() {
     dt_bias = w[shape.base + shape.value_heads + h];
 
     head_at = base + shape.state_at + h * HEAD * HEAD;
+    record_of = base + shape.record_at + h * 3u * HEAD;
     kept_from = run_count > slots ? run_count - slots : 0u;
 
-    //  The state the run begins from, once.
-    uint read_at = head_at + (first % slots) * shape.every;
+    //  The state the run begins from, once -- or, where a rewind left the
+    //  slot it reads a record, the state the records were made from,
+    //  carried through them as the check carried it, and written where
+    //  the run reads, so that what comes later begins from a state.
+    uint replay_from = tab[shape.table_at + 128u + run * 2u];
+    uint replays = tab[shape.table_at + 128u + run * 2u + 1u];
+    uint read_at = head_at + ((replays > 0u ? replay_from : first) % slots) * shape.every;
 
     [[unroll]] for (uint e = 0u; e < HELD; e++) {
         st[e] = s[read_at + (part * HELD + e) * HEAD + cl];
+    }
+
+    if (replays > 0u) {
+        for (uint p = 0u; p < replays; p++) {
+            uint note = record_of + ((replay_from + p + 1u) % slots) * shape.every;
+            float lost = s[note + 2u * HEAD];
+            float mended = s[note + cl];
+
+            [[unroll]] for (uint e = 0u; e < HELD; e++) {
+                precise float pushed = s[note + HEAD + part * HELD + e] * mended;
+                st[e] = fma(st[e], lost, pushed);
+            }
+        }
+
+        uint made_at = head_at + (first % slots) * shape.every;
+
+        [[unroll]] for (uint e = 0u; e < HELD; e++) {
+            s[made_at + (part * HELD + e) * HEAD + cl] = st[e];
+        }
     }
 
     uint done = 0u;

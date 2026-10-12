@@ -264,6 +264,15 @@ package body Model_Runner.Llama is
        * Element_Count (Settings.Conv_Kernel - 1)
        * Conv_Width (Settings));
 
+   --  How many numbers the records a check leaves take on the device, in a
+   --  slot past every state: three rows a head -- a correction a column,
+   --  the key, the decay -- where the heads are the width the device's
+   --  rule holds in registers, the one that leaves records; none else.
+   function Record_Room (Settings : Configuration) return Element_Count
+   is (if Settings.State_Size = 128
+       then State_Room (Settings) / Element_Count (Settings.State_Size) * 3
+       else 0);
+
    --  Which slot of the ring holds the state a position reads: the one
    --  the position before it wrote. Kept_States + 1 slots, the one slot
    --  where nothing is kept.
@@ -3271,7 +3280,8 @@ package body Model_Runner.Llama is
    --  How many elements one slot of the ring takes on the device: the
    --  memories of every linear layer, then the states.
    function Device_Slot_Span (Item : Session) return Element_Count
-   is (Conv_Room (Item.Owner.Settings) + State_Room (Item.Owner.Settings));
+   is (Conv_Room (Item.Owner.Settings) + State_Room (Item.Owner.Settings)
+       + Record_Room (Item.Owner.Settings));
 
    --  How many elements a session's whole ring takes.
    function Device_Ring_Span (Item : Session) return Element_Count
@@ -3286,10 +3296,14 @@ package body Model_Runner.Llama is
 
    --  What the slot a position reads holds, as Record_Of says: nought for
    --  a state, past the ring's first Ring_Most slots too.
+   --  A slot the run after a rewind made a state of in its rule (Made_At)
+   --  is one once that run is committed.
    function Record_At (Item : Session; Position : Natural) return Natural
-   is (if State_Slot (Item, Position) < Ring_Most
-       then Item.Record_Of (Natural (State_Slot (Item, Position)))
-       else 0);
+   is (if State_Slot (Item, Position) >= Ring_Most then 0
+       elsif Position = Item.Made_At and then Item.Committed > Position
+         and then Item.Record_Of (Natural (State_Slot (Item, Position))) = Position
+       then 0
+       else Item.Record_Of (Natural (State_Slot (Item, Position))));
 
    --  Whether the ring still reaches a position: nothing written since
    --  has come round to its slot.
@@ -3339,6 +3353,7 @@ package body Model_Runner.Llama is
 
       Model_Runner.Backend.Device.Replay_States
         (Base      => Item.State_Base + Conv_Room (Settings),
+         Records   => Item.State_Base + Conv_Room (Settings) + State_Room (Settings),
          Every     => Device_Slot_Span (Item),
          Slots     => Item.Kept_States + 1,
          From      => From,
@@ -3833,13 +3848,24 @@ package body Model_Runner.Llama is
    --
    --  The slot count's top bit asks the rule for records where a run is
    --  a check the ring holds whole, its base included: every position
-   --  but the last leaves the record that makes its state, and a rewind
-   --  makes the one it wants (Make_Real). A check whose drafts are all
-   --  taken reads none of the others, and writing each was a sixth of
-   --  the rule's time.
+   --  but the last leaves the record that makes its state. A check whose
+   --  drafts are all taken reads none of the others, and writing each was
+   --  a sixth of the rule's time.
+   --
+   --  And past the five words a run, from word Replay_Words on, two a run:
+   --  where a rewind left the slot a run reads a record, the position its
+   --  records begin from and how many there are, and the rule makes the
+   --  state it begins from itself. Made apart, it was six milliseconds a
+   --  rewind on Saluki-27B, a submission waited for and the states read
+   --  and written whole, two in a hundred of what generating cost.
+   Replay_Words : constant Element_Count := 128;
+
    procedure Write_Runs (Runs : State_Runs; Ok : out Boolean) is
-      Words : Real_Array (0 .. Element_Count (Runs'Length) * 5 - 1);
+      Words : Real_Array
+        (0 .. Replay_Words + Element_Count (Runs'Length) * 2 - 1) :=
+        [others => 0.0];
       Place : Element_Count := 0;
+      Which : Element_Count := 0;
 
       function Records (Run : State_Run) return Boolean
       is (Run.Count >= 2
@@ -3860,6 +3886,21 @@ package body Model_Runner.Llama is
                 (Interfaces.Unsigned_32 (Run.Whose.Kept_States + 1),
                  (if Records (Run) then 16#8000_0000# else 0)));
          Place := Place + 5;
+
+         declare
+            Base : constant Integer := Replay_Base (Run.Whose.all, Run.First);
+         begin
+            if Record_At (Run.Whose.all, Run.First) = Run.First
+              and then Base >= 0 and then Base < Run.First
+            then
+               Words (Replay_Words + Which * 2) :=
+                 N.From_Bits (Interfaces.Unsigned_32 (Base));
+               Words (Replay_Words + Which * 2 + 1) :=
+                 N.From_Bits (Interfaces.Unsigned_32 (Run.First - Natural (Base)));
+               Run.Whose.Made_At := Run.First;
+            end if;
+         end;
+         Which := Which + 1;
       end loop;
 
       Model_Runner.Backend.Device.Put_State (0, Words, Ok);
@@ -3893,6 +3934,12 @@ package body Model_Runner.Llama is
       end if;
    end Write_Runs;
 
+   --  And where its records lie: past every state, three rows a head.
+   function Linear_Record_At (Item : Session; Index : Natural) return Natural
+   is (Natural (Conv_Room (Item.Owner.Settings) + State_Room (Item.Owner.Settings)
+                + State_At (Item.Owner.Settings, Index)
+                  / Element_Count (Natural'Max (1, Item.Owner.Settings.State_Size)) * 3));
+
    --  A linear layer's geometry and its place in the ring, as the
    --  device's steps take them; the row steps are filled in there.
    function Linear_Shape_Of
@@ -3911,6 +3958,7 @@ package body Model_Runner.Llama is
          Key_Width   => Key_Width (Settings),
          Region_At   => Natural (Conv_At (Settings, Index)),
          Every       => Natural (Device_Slot_Span (Item)),
+         Record_At   => Linear_Record_At (Item, Index),
          Table_At    => 0,
          Runs        => Runs,
          Z_Step      => 0,
@@ -3926,6 +3974,7 @@ package body Model_Runner.Llama is
    function Linear_State_At (Item : Session; Index : Natural) return Natural
    is (Natural (Conv_Room (Item.Owner.Settings)
                 + State_At (Item.Owner.Settings, Index)));
+
 
    --  A Mamba2 mixer as the device takes it, the session's seat in the
    --  state room included -- with the layer's normalization on the way in
@@ -8227,21 +8276,9 @@ package body Model_Runner.Llama is
             --  what was written there, and what decides whether a later
             --  rewind's slot is intact is the highest position ever
             --  written, not the committed count. A slot a check left a
-            --  record in is made a state here.
-            declare
-               Made : Boolean;
-            begin
-               Make_Real (Item, Position, Made);
-               if not Made then
-                  Status := E.Make (E.Tensor_Shape_Mismatch);
-                  E.Add_Integer (Status, "input", Long_Long_Integer (Position));
-                  E.Add_Integer
-                    (Status, "expected",
-                     Long_Long_Integer
-                       (Natural'Max (0, Item.Kept_Newest - Item.Kept_States)));
-                  return;
-               end if;
-            end;
+            --  record in is made a state by the next run's rule, which
+            --  reads it (Write_Runs), or by whatever reads the ring first.
+            null;
          elsif Item.Check_At > 0 and then Position = Item.Check_At
            and then Item.Check_On_Device and then Item.State_Seated
          then

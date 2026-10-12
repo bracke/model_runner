@@ -878,6 +878,8 @@ begin
                           Linear_Shape_Of (Item, Natural (Index), 1),
                         Linear_State_At =>
                           Linear_State_At (Item, Natural (Index)),
+                        Linear_Record_At =>
+                          Linear_Record_At (Item, Natural (Index)),
                         No_Feed   => Half);
                      Start_Shared (Current, Half and then Fused);
                      Half_Done := Half and then Fused;

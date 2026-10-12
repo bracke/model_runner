@@ -35,6 +35,7 @@ package Model_Runner.Framework.Consistency is
       Completed_Without_Gate,
       Workspace_Assignment,
       Agent_Assignment,
+      Unprovable_Result,
       Permission_Widening,
       Permission_Withheld,
       Missing_Component,

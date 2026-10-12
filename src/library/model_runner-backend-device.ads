@@ -402,6 +402,7 @@ package Model_Runner.Backend.Device is
    --  place, as Products.Replay_States says.
    --
    --  @param Base Where slot nought's states begin, in elements.
+   --  @param Records Where slot nought's records begin, in elements.
    --  @param Every How far apart the ring's slots are, in elements.
    --  @param Slots How many slots the ring has.
    --  @param From The position whose slot holds the state to begin from.
@@ -412,6 +413,7 @@ package Model_Runner.Backend.Device is
    --  @param Ok True when it ran.
    procedure Replay_States
      (Base      : Model_Runner.Numerics.Element_Count;
+      Records   : Model_Runner.Numerics.Element_Count;
       Every     : Model_Runner.Numerics.Element_Count;
       Slots     : Natural;
       From      : Natural;
@@ -1688,6 +1690,8 @@ package Model_Runner.Backend.Device is
    --    Add_Rule take it, with Region_At the memory's place within a
    --    slot; the three row steps are filled in here.
    --  @param Linear_State_At The state's place within a slot.
+   --  @param Linear_Record_At The records' place within a slot, where a
+   --    check leaves records rather than states (rule_held.comp).
    --
    --  The two normalization weights are named by reference, as every
    --  weight the device keeps is: the device remembers a weight by its
@@ -1832,6 +1836,7 @@ package Model_Runner.Backend.Device is
       Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
         (others => <>);
       Linear_State_At : Natural := 0;
+      Linear_Record_At : Natural := 0;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
       First_Position : Natural := 0;

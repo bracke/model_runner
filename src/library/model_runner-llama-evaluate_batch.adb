@@ -1359,6 +1359,8 @@ begin
                                         Linear_Runs),
                      Linear_State_At =>
                        Linear_State_At (Item, Natural (Index)),
+                     Linear_Record_At =>
+                       Linear_Record_At (Item, Natural (Index)),
                      No_Feed   => Half);
                   Half_Done := Half and then Whole_Layer_Done;
                   if Half_Done then

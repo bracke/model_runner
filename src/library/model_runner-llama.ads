@@ -3298,6 +3298,11 @@ private
       --  Ring_Most slots only; a longer ring never holds records.
       Record_Of : Slot_Records := [others => 0];
 
+      --  The position whose slot a run's rule makes a state of from the
+      --  records before it, the run after a rewind into a check: a state
+      --  once that run is committed (Record_At). Nought for none.
+      Made_At : Natural := 0;
+
       --  Whether the device's copy of the ring is the newer: a linear
       --  layer taken whole on the device wrote its slots there, and the
       --  host's copy above is brought home before anything here reads

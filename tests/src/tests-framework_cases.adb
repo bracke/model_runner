@@ -7322,6 +7322,37 @@ package body Tests.Framework_Cases is
             S.Commit (Store, Change, Status);
          end;
 
+         --  Retired before retiring kept its print, it proves nothing,
+         --  and the consistency check says so rather than passing it.
+         declare
+            Kept_Print : Unbounded_String;
+            Said       : Boolean := False;
+            use type Model_Runner.Framework.Consistency.Finding_Kind;
+         begin
+            S.Read (Store, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored, Status);
+            Kept_Print := To_Unbounded_String (R.Get (Stored, "retired_print"));
+            R.Remove (Stored, "retired_print");
+            R.Set_Revision (Stored, R.Revision (Stored) + 1);
+            S.Put (Change, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored);
+            S.Commit (Store, Change, Status);
+            declare
+               Findings : constant Model_Runner.Framework.Consistency.Finding_List :=
+                 Model_Runner.Framework.Consistency.Check (Store);
+            begin
+               for Index in 1 .. Model_Runner.Framework.Consistency.Length (Findings) loop
+                  Said := Said
+                    or else Model_Runner.Framework.Consistency.Element (Findings, Index).Kind
+                              = Model_Runner.Framework.Consistency.Unprovable_Result;
+               end loop;
+            end;
+            Assert (Length (Kept_Print) > 0 and then Said,
+                    "a retired result with no print was not said to prove nothing");
+            R.Set (Stored, "retired_print", To_String (Kept_Print));
+            R.Set_Revision (Stored, R.Revision (Stored) + 1);
+            S.Put (Change, Model_Runner.Framework.Results_Area, To_String (Old_Log.Id), Stored);
+            S.Commit (Store, Change, Status);
+         end;
+
          --  The same log again, after its first was retired: the same
          --  name, taken, and its payload back.
          declare

@@ -1282,6 +1282,25 @@ package body Model_Runner.Framework.Consistency is
          end loop;
       end;
 
+      --  A result retired before retiring kept a print of what it was:
+      --  its payload gone, nothing it still says can be checked against
+      --  its name. Said, rather than passed as sound.
+      for Name of Stores.Names (Item, Results_Area) loop
+         declare
+            Held : Records.Item;
+            Read : E.Error_Info;
+         begin
+            Stores.Read (Item, Results_Area, Name, Held, Read);
+            if E.Is_Ok (Read) and then Records.Get (Held, "retired") /= ""
+              and then Records.Get (Held, "retired_print") = ""
+            then
+               Found (Unprovable_Result, Name,
+                      "it was retired before a retired result kept what it was; "
+                      & "what it still says cannot be checked");
+            end if;
+         end;
+      end loop;
+
       --  One root agent going a task.
       declare
          Seen : Name_Lists.Vector;

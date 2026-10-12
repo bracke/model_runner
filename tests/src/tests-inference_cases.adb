@@ -5593,7 +5593,7 @@ package body Tests.Inference_Cases is
             Ran : Boolean;
          begin
             Model_Runner.Backend.Device.Replay_States
-              (Base => 0, Every => 1, Slots => 1, From => 0, Count => 0,
+              (Base => 0, Records => 0, Every => 1, Slots => 1, From => 0, Count => 0,
                Heads => 1, All_Slots => False, Ok => Ran);
             Assert (not Ran, "a replay of no records was said to run");
          end;

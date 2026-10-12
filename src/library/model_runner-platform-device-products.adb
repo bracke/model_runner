@@ -10650,6 +10650,7 @@ package body Model_Runner.Platform.Device.Products is
    procedure Replay_States
      (Item  : in out Engine;
       Base  : Model_Runner.Numerics.Element_Count;
+      Records : Model_Runner.Numerics.Element_Count;
       Every : Model_Runner.Numerics.Element_Count;
       Slots : Natural;
       From  : Natural;
@@ -10661,7 +10662,7 @@ package body Model_Runner.Platform.Device.Products is
       Ignored : constant Boolean := Set_Asking (Item);
 
       type Replay_Constants is record
-         Base, Every, Slots, From, Count, Heads, All_Slots : C.unsigned;
+         Base, Records, Every, Slots, From, Count, Heads, All_Slots : C.unsigned;
       end record
         with Convention => C;
 
@@ -10686,6 +10687,7 @@ package body Model_Runner.Platform.Device.Products is
       Began : aliased Command_Begin_Info;
       Shape : aliased Replay_Constants :=
         (Base      => C.unsigned (Base),
+         Records   => C.unsigned (Records),
          Every     => C.unsigned (Every),
          Slots     => C.unsigned (Slots),
          From      => C.unsigned (From),
@@ -16445,6 +16447,7 @@ package body Model_Runner.Platform.Device.Products is
                                   (Places (This.Linear.Beta_Step).At_Byte / 4),
                            6 => Bits (This.Linear.Scale),
                            7 => Bits (This.Linear.Epsilon),
+                           8 => C.unsigned (This.Linear.Record_At),
                            others => 0],
                         others  => <>);
                   begin

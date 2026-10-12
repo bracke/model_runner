@@ -806,6 +806,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Replay_States
      (Base      : Model_Runner.Numerics.Element_Count;
+      Records   : Model_Runner.Numerics.Element_Count;
       Every     : Model_Runner.Numerics.Element_Count;
       Slots     : Natural;
       From      : Natural;
@@ -820,7 +821,7 @@ package body Model_Runner.Backend.Device is
       end if;
 
       Products.Replay_States
-        (Engine, Base, Every, Slots, From, Count, Heads, All_Slots, Ok);
+        (Engine, Base, Records, Every, Slots, From, Count, Heads, All_Slots, Ok);
    end Replay_States;
 
    function Replays_States (Head : Natural) return Boolean
@@ -2688,6 +2689,7 @@ package body Model_Runner.Backend.Device is
       Linear         : Model_Runner.Platform.Device.Products.Linear_Shape :=
         (others => <>);
       Linear_State_At : Natural := 0;
+      Linear_Record_At : Natural := 0;
       Pages_At       : Natural := 0;
       Page_Shift     : Natural := 0;
       First_Position : Natural := 0;
@@ -3274,6 +3276,7 @@ package body Model_Runner.Backend.Device is
 
                --  The state lies elsewhere in a slot than the memory.
                Shape.Region_At := Linear_State_At;
+               Shape.Record_At := Linear_Record_At;
                Products.Add_Rule
                  (Steps, Numbers.all (Numbers.all'First)'Address,
                   Model_Runner.Bytes.Byte_Count (Numbers.all'Length) * 4, 0,

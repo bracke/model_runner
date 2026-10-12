@@ -7308,19 +7308,21 @@ package body Tests.Backend_Cases is
             Ring (Index) := N.Real ((Index * 3) mod 19) / 19.0 - 0.5;
          end loop;
 
-         Products.Reserve_State (Engine, Ring'Length + 5, Ok);
+         Products.Reserve_State (Engine, Ring'Length + 130, Ok);
          Assert (Ok, "no room for the ring");
          Products.Put_State (Engine, 0, Ring, Ok);
          Assert (Ok, "the ring would not be written");
 
          --  The one run the batch is, in the table past the ring: the
          --  ring's base, the position it begins at, the rows, the first
-         --  row, and the slots, each as the bits of a float.
+         --  row, and the slots, each as the bits of a float -- and, from
+         --  word 128 on, no records to replay first.
          declare
-            Table : constant N.Real_Array (0 .. 4) :=
-              [N.From_Bits (0), N.From_Bits (First),
-               N.From_Bits (Interfaces.Unsigned_32 (Count)),
-               N.From_Bits (0), N.From_Bits (Slots)];
+            Table : constant N.Real_Array (0 .. 129) :=
+              [0 => N.From_Bits (0), 1 => N.From_Bits (First),
+               2 => N.From_Bits (Interfaces.Unsigned_32 (Count)),
+               3 => N.From_Bits (0), 4 => N.From_Bits (Slots),
+               others => N.From_Bits (0)];
          begin
             Products.Put_State (Engine, Ring'Length, Table, Ok);
             Assert (Ok, "the runs' table would not be written");
@@ -7361,6 +7363,7 @@ package body Tests.Backend_Cases is
                Key_Heads => Key_Heads, Value_Heads => Val_Heads,
                Key_Width => Natural (Key_Width),
                Region_At => Memory_At, Every => Natural (Every),
+               Record_At => 0,
                Table_At => Ring'Length, Runs => 1,
                Z_Step => 2, Alpha_Step => 3, Beta_Step => 4,
                Scale => 0.5, Epsilon => Epsilon);

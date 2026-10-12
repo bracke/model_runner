@@ -1484,6 +1484,11 @@ package Model_Runner.Platform.Device.Products is
       Region_At  : Natural := 0;
       Every      : Natural := 0;
 
+      --  Where the layer's records lie within a slot: three rows a head,
+      --  past every state, that a check leaves for the positions it does
+      --  not write a state for (rule_held.comp).
+      Record_At  : Natural := 0;
+
       --  The runs of the batch, each one session's: where the table
       --  begins in the state buffer, in elements, and how many runs it
       --  names. Five words a run, as the bits of floats: where the
@@ -2765,6 +2770,7 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Item Engine with a room reserved.
    --  @param Base Where slot nought's states begin, in elements.
+   --  @param Records Where slot nought's records begin, in elements.
    --  @param Every How far apart the ring's slots are, in elements.
    --  @param Slots How many slots the ring has.
    --  @param From The position whose slot holds the state to begin from.
@@ -2776,6 +2782,7 @@ package Model_Runner.Platform.Device.Products is
    procedure Replay_States
      (Item  : in out Engine;
       Base  : Model_Runner.Numerics.Element_Count;
+      Records : Model_Runner.Numerics.Element_Count;
       Every : Model_Runner.Numerics.Element_Count;
       Slots : Natural;
       From  : Natural;
