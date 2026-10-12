@@ -94,6 +94,13 @@ compile row_product_wave_iq2_s       row_product_wave_low.comp vulkan1.1 NUM_ROW
 compile row_product_wave_iq3_xxs     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ3_XXS
 compile row_product_wave_iq1_s       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ1_S
 compile row_product_wave_iq1_m       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ1_M
+compile_dots row_product_wave_iq3_s_dots     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ3_S DOTS
+compile_dots row_product_wave_iq2_xxs_dots   row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XXS DOTS
+compile_dots row_product_wave_iq2_xs_dots    row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_XS DOTS
+compile_dots row_product_wave_iq2_s_dots     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ2_S DOTS
+compile_dots row_product_wave_iq3_xxs_dots   row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ3_XXS DOTS
+compile_dots row_product_wave_iq1_s_dots     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ1_S DOTS
+compile_dots row_product_wave_iq1_m_dots     row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u IQ1_M DOTS
 compile row_product_wave_tq1_0       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u TQ1_0
 compile row_product_wave_tq2_0       row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u TQ2_0
 compile row_product_wave_q1_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=8u Q1_0

@@ -3262,6 +3262,20 @@ package body Model_Runner.Platform.Device.Products is
                        Item.Dots_Wave_Shaders (Packed_IQ4_XS));
                Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Dots,
                        Item.Dots_Wave_Shaders (Packed_MXFP4));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_S_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ3_S));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xxs_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ2_XXS));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_Xs_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ2_XS));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq2_S_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ2_S));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq3_Xxs_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ3_XXS));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_S_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ1_S));
+               Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq1_M_Dots,
+                       Item.Dots_Wave_Shaders (Packed_IQ1_M));
                Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q2_K_Dots,
                        Item.Dots_Wave_Shaders (Packed_Q2_K));
                Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q3_K_Dots,

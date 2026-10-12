@@ -6834,6 +6834,141 @@ package body Tests.Backend_Cases is
       Check (True);
    end Rounded_Walks_In_A_Sequence_Stay_Close;
 
+   --  The codebook formats' walks as integers -- each lane's thirty-two
+   --  weights made signed bytes from the grid and its signs, IQ1's in
+   --  eighths -- answer what their binary32 walks answer, to the rounding of
+   --  the activations, at three positions and four; and are not those walks
+   --  under another name. Skipped where the device has no integer dot.
+   procedure Codebook_Walks_As_Integers_Stay_Close
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Products.Walk_Rounding;
+
+      Rows    : constant := 64;
+      Columns : constant := 512;
+
+      type Coded is access function (Values : N.Real_Array) return B.Byte_Array;
+
+      procedure Check
+        (Packing : Products.Weight_Packing; Encode : Coded; Name : String)
+      is
+         Stored : aliased B.Byte_Array :=
+           Encode (Fixtures.Sequence (Rows * Columns, 2711, 1.0));
+         Gain   : constant N.Real_Array (0 .. Columns - 1) := [others => 1.0];
+
+         Held    : Devices.Inventory;
+         Opened  : Devices.Context;
+         Engine  : Products.Engine;
+         Found   : Boolean;
+         Ready   : Boolean;
+      begin
+         Devices.Open (Held, Found);
+         if not Found or else Devices.Count (Held) = 0 then
+            Devices.Close (Held);
+            return;
+         end if;
+         Devices.Open (Opened, Held, 1, Ready);
+         if Ready then
+            Products.Open (Engine, Opened, Ready);
+            if not Ready then
+               Devices.Close (Opened);
+            end if;
+         end if;
+         if not Ready then
+            Devices.Close (Held);
+            return;
+         end if;
+
+         Products.Round_Walks (Engine, Products.Rounds_Every);
+         if Products.Rounds_Walks (Engine) /= Products.Rounds_Every then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device walks as integers here");
+            Products.Close (Engine);
+            Devices.Close (Opened);
+            Devices.Close (Held);
+            return;
+         end if;
+
+         for Count in Positive range 3 .. 4 loop
+            declare
+               Width : constant N.Element_Count := N.Element_Count (Count);
+               Input : constant N.Real_Array :=
+                 Fixtures.Sequence
+                   (N.Element_Count (Columns * Count),
+                    Interfaces.Unsigned_64 (4099 + Count), 1.0);
+
+               --  The normalization's room, which is not read back, then
+               --  the product's answer.
+               subtype Answers is
+                 N.Real_Array (0 .. (Columns + Rows) * Width - 1);
+               Plain, Every : Answers;
+               Product_At : constant N.Element_Count := Columns * Width;
+
+               procedure Run_With
+                 (Rounding : Products.Walk_Rounding; Into : out Answers)
+               is
+                  Steps  : Products.Sequence;
+                  Added  : Boolean;
+                  Ok     : Boolean;
+                  Halted : Boolean;
+               begin
+                  Products.Round_Walks (Engine, Rounding);
+                  Products.Open_Sequence (Steps);
+                  Products.Add_Norm
+                    (Steps, Gain (Gain'First)'Address,
+                     B.Byte_Count (Gain'Length) * 4, 0, Columns, 1.0E-6,
+                     Added, Key => Gain (Gain'First)'Address, Kept => False);
+                  Assert (Added, "the normalization was refused");
+                  Products.Add_Chained_Product
+                    (Steps, Stored'Address, Stored'Length, 0, Packing, Rows,
+                     Columns, Added, Key => Stored (Stored'First)'Address,
+                     From_Step => 1);
+                  Assert (Added, Name & "'s product was refused");
+                  Products.Run (Engine, Steps, Input, Count, Into, Ok, Halted);
+                  Assert (Ok, "the sequence would not run");
+               end Run_With;
+
+               Largest : N.Real := 0.0;
+               Worst   : N.Real := 0.0;
+            begin
+               Run_With (Products.Rounds_Every, Every);
+               Run_With (Products.Rounds_None, Plain);
+
+               for Index in Product_At .. Product_At + Rows * Width - 1 loop
+                  Largest := N.Real'Max (Largest, abs Plain (Index));
+                  Worst :=
+                    N.Real'Max (Worst, abs (Plain (Index) - Every (Index)));
+               end loop;
+               Assert (Largest > 0.0 and then Worst <= 0.01 * Largest,
+                       Name & "'s walk as integers strayed"
+                       & N.Real'Image (Worst)
+                       & " from the binary32 answer's largest"
+                       & N.Real'Image (Largest) & " at" & Count'Image
+                       & " positions");
+               Assert (not N."=" (Every (Product_At .. Every'Last),
+                                  Plain (Product_At .. Plain'Last)),
+                       Name & "'s walk said to be integers answered the "
+                       & "binary32 walk's bits at" & Count'Image
+                       & " positions, so it was not");
+            end;
+         end loop;
+
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+      end Check;
+   begin
+      Check (Products.Packed_IQ2_XXS, Fixtures.Encode_IQ2_XXS'Access, "IQ2_XXS");
+      Check (Products.Packed_IQ2_XS, Fixtures.Encode_IQ2_XS'Access, "IQ2_XS");
+      Check (Products.Packed_IQ2_S, Fixtures.Encode_IQ2_S'Access, "IQ2_S");
+      Check (Products.Packed_IQ3_XXS, Fixtures.Encode_IQ3_XXS'Access, "IQ3_XXS");
+      Check (Products.Packed_IQ3_S, Fixtures.Encode_IQ3_S'Access, "IQ3_S");
+      Check (Products.Packed_IQ1_S, Fixtures.Encode_IQ1_S'Access, "IQ1_S");
+      Check (Products.Packed_IQ1_M, Fixtures.Encode_IQ1_M'Access, "IQ1_M");
+   end Codebook_Walks_As_Integers_Stay_Close;
+
    --  A product streamed for its run -- a split dense model's
    --  feed-forward over a long batch -- is computed and not kept: named,
    --  it would have been resident after, and streamed it is not; its buffer
@@ -11180,6 +11315,10 @@ package body Tests.Backend_Cases is
          "a sequence's walks as integers stay within their rounding of the "
          & "binary32 walks, and the feed-forward's alone leaves a plain "
          & "product as it was");
+      Register_Routine
+        (T, Codebook_Walks_As_Integers_Stay_Close'Access,
+         "the codebook formats' walks as integers stay within their rounding "
+         & "of the binary32 walks");
       Register_Routine
         (T, Holding_The_Clock_Spins_The_Keeper'Access,
          "holding the clock does nothing on a closed backend and spins the "
