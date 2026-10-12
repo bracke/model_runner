@@ -6838,8 +6838,8 @@ package body Tests.Backend_Cases is
    --  weights made signed bytes from the grid and its signs, IQ1's in
    --  eighths, every position in one pass -- answer what their binary32
    --  walks answer, to the rounding of the activations, at three to six
-   --  positions; and are not those walks under another name. Q4_K's
-   --  beside them. Skipped where the device has no integer dot.
+   --  positions; and are not those walks under another name. Q4_K's and
+   --  Q8_0's beside them, Q8_0's past four on walks of their own. Skipped where the device has no integer dot.
    procedure Codebook_Walks_As_Integers_Stay_Close
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6969,6 +6969,7 @@ package body Tests.Backend_Cases is
       Check (Products.Packed_IQ1_S, Fixtures.Encode_IQ1_S'Access, "IQ1_S");
       Check (Products.Packed_IQ1_M, Fixtures.Encode_IQ1_M'Access, "IQ1_M");
       Check (Products.Packed_Q4_K, Fixtures.Encode_Q4_K'Access, "Q4_K");
+      Check (Products.Packed_Q8_0, Fixtures.Encode_Q8_0'Access, "Q8_0");
    end Codebook_Walks_As_Integers_Stay_Close;
 
    --  A product streamed for its run -- a split dense model's

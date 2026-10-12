@@ -81,6 +81,10 @@ package Model_Runner.Platform.Device.Products is
    type Many_Array is array (Many_Count) of System.Address;
    type Multi_Array is array (Multi_Count) of System.Address;
 
+   --  And Q8_0's plain walks, which go to eight.
+   subtype Q8_Count is Positive range 2 .. 8;
+   type Q8_Array is array (Q8_Count) of System.Address;
+
    --  Query positions one workgroup of the tiled attention kernel answers.
    --  attention.comp declares the same number as QUERIES under QUERY_TILE
    --  and the two have to agree: this decides how many workgroups the
@@ -3574,8 +3578,8 @@ private
 
       --  And the same walk over two, three or four vectors at once, for a
       --  drafted round's check.
-      Q8_Multi_Shaders : Multi_Array := [others => System.Null_Address];
-      Q8_Multi_Lines   : Multi_Array := [others => System.Null_Address];
+      Q8_Multi_Shaders : Q8_Array := [others => System.Null_Address];
+      Q8_Multi_Lines   : Q8_Array := [others => System.Null_Address];
 
       --  Q8_0's gate and up at once, for one position -- long rows and
       --  short -- and for a few; see Add_Gated_Pair.
@@ -3587,8 +3591,8 @@ private
       Q8_Glu_Multi_Lines   : Multi_Array := [others => System.Null_Address];
 
       --  And both again over activations rounded to bytes; see Round_Walks.
-      Q8_Dots_Shaders     : Multi_Array := [others => System.Null_Address];
-      Q8_Dots_Lines       : Multi_Array := [others => System.Null_Address];
+      Q8_Dots_Shaders     : Q8_Array := [others => System.Null_Address];
+      Q8_Dots_Lines       : Q8_Array := [others => System.Null_Address];
       Q8_Glu_Dots_Shaders : Multi_Array := [others => System.Null_Address];
       Q8_Glu_Dots_Lines   : Multi_Array := [others => System.Null_Address];
 

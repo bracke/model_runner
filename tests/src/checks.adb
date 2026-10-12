@@ -6862,8 +6862,9 @@ package body Checks is
       --  against it, and Q8_0's three over several vectors, and its five
       --  gate-and-up compilations, and MXFP4's -- and Q8_0's six walks
       --  again as integers, and the two IQ4 formats', MXFP4's, Q2_K's,
-      --  Q3_K's and the seven codebooks'.
-      for Which in 1 .. 49 loop
+      --  Q3_K's and the seven codebooks'; and Q8_0's walks of five to
+      --  eight, both ways.
+      for Which in 1 .. 57 loop
          declare
             Found : Boolean;
 
@@ -6921,6 +6922,14 @@ package body Checks is
                   when 47 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq3_Xxs_Dots_Digest,
                   when 48 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_S_Dots_Digest,
                   when 49 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Iq1_M_Dots_Digest,
+                  when 50 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V5_Digest,
+                  when 51 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V6_Digest,
+                  when 52 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V7_Digest,
+                  when 53 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V8_Digest,
+                  when 54 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V5_Dots_Digest,
+                  when 55 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V6_Dots_Digest,
+                  when 56 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V7_Dots_Digest,
+                  when 57 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V8_Dots_Digest,
                   when others => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_Digest);
          begin
             Result.Performed := Result.Performed + 1;

@@ -1091,7 +1091,7 @@ package body Model_Runner.Platform.Device.Products is
    function Waved
      (Item : Engine; Packing : Weight_Packing; Count : Natural) return Boolean
    is ((Packing = Packed_Q8_0
-        and then Count in Multi_Count
+        and then Count in Q8_Count
         and then Item.Q8_Multi_Lines (Count) /= Null_Handle)
        or else
        (Count in Many_Count
@@ -1189,7 +1189,7 @@ package body Model_Runner.Platform.Device.Products is
      (Packing : Weight_Packing;
       Count   : Natural := 1;
       Short   : Boolean := False) return Positive
-   is (if Packing = Packed_Q8_0 and then Count in Multi_Count
+   is (if Packing = Packed_Q8_0 and then Count in Q8_Count
        then Q8_Multi_Rows
        --  And the few-vector walks compiled to land as many (MANY_ROWS in
        --  compile-shaders.sh): Q2_K's and Q3_K's check of four 18 per cent
@@ -1246,7 +1246,7 @@ package body Model_Runner.Platform.Device.Products is
        elsif Packing in Low_Packing and then Waved (Item, Packing, Count)
        then Item.Low_Wave_Lines (Packing)
        elsif Packing = Packed_Q8_0 and then Waved (Item, Packing, Count)
-       then (if Count in Multi_Count then Item.Q8_Multi_Lines (Count)
+       then (if Count in Q8_Count then Item.Q8_Multi_Lines (Count)
              elsif Q8_Short (Item, Packing, Count, Columns)
              then Item.Q8_Short_Line
              else Item.Q8_Wave_Line)
@@ -3170,13 +3170,17 @@ package body Model_Runner.Platform.Device.Products is
                   end;
                end loop;
 
-               for Count in Multi_Count loop
+               for Count in Q8_Count loop
                   declare
                      More : aliased constant Model_Runner.Shaders.Word_Array :=
                        (case Count is
                           when 2 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V2,
                           when 3 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V3,
-                          when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4);
+                          when 4 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V4,
+                          when 5 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V5,
+                          when 6 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V6,
+                          when 7 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V7,
+                          when 8 => Model_Runner.Shaders.Low.Row_Product_Wave_Q8_0_V8);
                   begin
                      Request.Size := Interfaces.C.size_t (More'Length * 4);
                      Request.Code := More'Address;
@@ -3192,18 +3196,17 @@ package body Model_Runner.Platform.Device.Products is
                --  And both again as integers, where the device has the
                --  integer dot; see Round_Walks.
                if Has_Integer_Dot (On) then
-                  for Count in Multi_Count loop
+                  for Count in Q8_Count loop
                      declare
                         Dots : aliased constant Model_Runner.Shaders.Word_Array :=
                           (case Count is
                              when 2 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots,
                              when 3 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots,
-                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots);
-                        Glus : aliased constant Model_Runner.Shaders.Word_Array :=
-                          (case Count is
-                             when 2 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots_Glu,
-                             when 3 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots_Glu,
-                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots_Glu);
+                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots,
+                             when 5 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V5_Dots,
+                             when 6 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V6_Dots,
+                             when 7 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V7_Dots,
+                             when 8 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V8_Dots);
                      begin
                         Request.Size := Interfaces.C.size_t (Dots'Length * 4);
                         Request.Code := Dots'Address;
@@ -3212,7 +3215,17 @@ package body Model_Runner.Platform.Device.Products is
                         then
                            Item.Q8_Dots_Shaders (Count) := Made;
                         end if;
+                     end;
+                  end loop;
 
+                  for Count in Multi_Count loop
+                     declare
+                        Glus : aliased constant Model_Runner.Shaders.Word_Array :=
+                          (case Count is
+                             when 2 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V2_Dots_Glu,
+                             when 3 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V3_Dots_Glu,
+                             when 4 => Model_Runner.Shaders.Low_Dots.Row_Product_Wave_Q8_0_V4_Dots_Glu);
+                     begin
                         Request.Size := Interfaces.C.size_t (Glus'Length * 4);
                         Request.Code := Glus'Address;
                         if Create (Item.Logical, Request'Address, Null_Handle,
@@ -4379,18 +4392,21 @@ package body Model_Runner.Platform.Device.Products is
                   Line (Low_Wave_Lanes, 1, Item.Q8_Short_Line);
                end if;
 
-               for Count in Multi_Count loop
+               for Count in Q8_Count loop
                   if Item.Q8_Multi_Shaders (Count) /= Null_Handle then
                      Request.Stage.Module := Item.Q8_Multi_Shaders (Count);
                      Line (Low_Wave_Lanes, 1, Item.Q8_Multi_Lines (Count));
                   end if;
-                  if Item.Q8_Glu_Multi_Shaders (Count) /= Null_Handle then
-                     Request.Stage.Module := Item.Q8_Glu_Multi_Shaders (Count);
-                     Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Multi_Lines (Count));
-                  end if;
                   if Item.Q8_Dots_Shaders (Count) /= Null_Handle then
                      Request.Stage.Module := Item.Q8_Dots_Shaders (Count);
                      Line (Low_Wave_Lanes, 1, Item.Q8_Dots_Lines (Count));
+                  end if;
+               end loop;
+
+               for Count in Multi_Count loop
+                  if Item.Q8_Glu_Multi_Shaders (Count) /= Null_Handle then
+                     Request.Stage.Module := Item.Q8_Glu_Multi_Shaders (Count);
+                     Line (Low_Wave_Lanes, 1, Item.Q8_Glu_Multi_Lines (Count));
                   end if;
                   if Item.Q8_Glu_Dots_Shaders (Count) /= Null_Handle then
                      Request.Stage.Module := Item.Q8_Glu_Dots_Shaders (Count);
@@ -5804,10 +5820,12 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Q8_Short_Line, "vkDestroyPipeline");
       Give_Back (Item.Q8_Glu_Line, "vkDestroyPipeline");
       Give_Back (Item.Q8_Glu_Short_Line, "vkDestroyPipeline");
-      for Count in Multi_Count loop
+      for Count in Q8_Count loop
          Give_Back (Item.Q8_Multi_Lines (Count), "vkDestroyPipeline");
-         Give_Back (Item.Q8_Glu_Multi_Lines (Count), "vkDestroyPipeline");
          Give_Back (Item.Q8_Dots_Lines (Count), "vkDestroyPipeline");
+      end loop;
+      for Count in Multi_Count loop
+         Give_Back (Item.Q8_Glu_Multi_Lines (Count), "vkDestroyPipeline");
          Give_Back (Item.Q8_Glu_Dots_Lines (Count), "vkDestroyPipeline");
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
@@ -5967,9 +5985,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Q8_Short_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q8_Glu_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Q8_Glu_Short_Shader, "vkDestroyShaderModule");
-      for Count in Multi_Count loop
+      for Count in Q8_Count loop
          Give_Back (Item.Q8_Multi_Shaders (Count), "vkDestroyShaderModule");
          Give_Back (Item.Q8_Dots_Shaders (Count), "vkDestroyShaderModule");
+      end loop;
+      for Count in Multi_Count loop
          Give_Back (Item.Q8_Glu_Dots_Shaders (Count), "vkDestroyShaderModule");
          Give_Back (Item.Q8_Glu_Multi_Shaders (Count),
                     "vkDestroyShaderModule");
@@ -6045,7 +6065,7 @@ package body Model_Runner.Platform.Device.Products is
              then Item.Dots_Multi_Lines (Packing) (Count)
              else Null_Handle)
        elsif Packing = Packed_Q8_0
-       then (if Count in Multi_Count
+       then (if Count in Q8_Count
                and then Row_Line (Item, Count, Packing, Columns)
                         = Item.Q8_Multi_Lines (Count)
              then Item.Q8_Dots_Lines (Count)
