@@ -3366,8 +3366,32 @@ package body Model_Runner.Llama is
          Ok        => Ok);
    end Replay;
 
+   --  Whether the host's ring keeps records past its states: a ring with
+   --  states kept, short enough to tell its slots apart, at the head
+   --  width the device's records are laid out for too, so that a ring
+   --  carried either way carries its records.
+   function Recording (Item : Session) return Boolean
+   is (Record_Room (Item.Owner.Settings) > 0
+       and then Item.Kept_States in 1 .. Ring_Most - 1
+       and then Item.Delta_State /= null
+       and then Item.Delta_State.all'Length
+                  >= (Element_Count (Item.Kept_States) + 1)
+                     * (State_Room (Item.Owner.Settings)
+                        + Record_Room (Item.Owner.Settings)));
+
+   --  Where the host keeps the record a position's slot holds, for a
+   --  linear layer's head nought: past every slot's states, a slot's
+   --  records together, a head's three rows apart.
+   function Host_Record_At
+     (Item : Session; Position : Natural; Layer : Natural) return Element_Count
+   is (Element_Count (Item.Kept_States + 1) * State_Room (Item.Owner.Settings)
+       + State_Slot (Item, Position) * Record_Room (Item.Owner.Settings)
+       + State_At (Item.Owner.Settings, Layer)
+         / Element_Count (Item.Owner.Settings.State_Size) * 3);
+
    --  Make the state a position reads a state, where its slot holds a
-   --  record; Ok is False where it cannot be made.
+   --  record; Ok is False where it cannot be made. On the device by the
+   --  replay; on the host, where the ring is the host's, by Carry.
    procedure Make_Real
      (Item     : in out Session;
       Position : Natural;
@@ -3380,7 +3404,44 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Replay (Item, Natural (Base), Position - Natural (Base), False, Ok);
+      if Item.State_On_Device then
+         Replay (Item, Natural (Base), Position - Natural (Base), False, Ok);
+      elsif Recording (Item) then
+         declare
+            Settings : Configuration renames Item.Owner.Settings;
+            Head     : constant Element_Count := Element_Count (Settings.State_Size);
+            Square   : constant Element_Count := Head * Head;
+            Every    : constant Element_Count := State_Room (Settings);
+            Count    : constant Element_Count := Element_Count (Position - Natural (Base));
+         begin
+            for Layer in 0 .. Settings.Layers - 1 loop
+               if Linear (Settings, Layer) then
+                  for H in 0 .. Element_Count (Settings.Value_Heads) - 1 loop
+                     declare
+                        Notes : Model_Runner.Delta_Rule.Slot_Origins :=
+                          [others => Model_Runner.Delta_Rule.Nowhere];
+                     begin
+                        for K in 0 .. Count - 1 loop
+                           Notes (K) :=
+                             Host_Record_At (Item, Natural (Base) + Natural (K) + 1, Layer)
+                             + H * 3 * Head;
+                        end loop;
+                        Model_Runner.Delta_Rule.Carry
+                          (State => Item.Delta_State.all,
+                           From  => State_Slot (Item, Natural (Base)) * Every
+                                    + State_At (Settings, Layer) + H * Square,
+                           Into  => State_Slot (Item, Position) * Every
+                                    + State_At (Settings, Layer) + H * Square,
+                           Notes => Notes,
+                           Count => Count,
+                           Head  => Head);
+                     end;
+                  end loop;
+               end if;
+            end loop;
+            Ok := True;
+         end;
+      end if;
       if Ok then
          Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
       end if;
@@ -3499,15 +3560,18 @@ package body Model_Runner.Llama is
          end if;
       end loop;
 
+      --  Records the seat held go with it: what they made is not here.
+      --  Records the host holds, where its ring is the newer, stay.
+      if Item.State_On_Device then
+         for Held of Item.Record_Of loop
+            if Held /= 0 then
+               Held := Lost_Record;
+            end if;
+         end loop;
+      end if;
+
       Item.State_Seated := False;
       Item.State_On_Device := False;
-
-      --  Records the seat held go with it: what they made is not here.
-      for Held of Item.Record_Of loop
-         if Held /= 0 then
-            Held := Lost_Record;
-         end if;
-      end loop;
 
       --  A checkpoint the seat held goes with it.
       if Item.Check_On_Device then
@@ -3545,6 +3609,7 @@ package body Model_Runner.Llama is
       Every       : constant Element_Count := Device_Slot_Span (Item.all);
       Every_Conv  : constant Element_Count := Conv_Room (Settings);
       Every_State : constant Element_Count := State_Room (Settings);
+      Every_Records : constant Element_Count := Record_Room (Settings);
       Slots       : constant Element_Count :=
         Element_Count (Item.Kept_States) + 1;
       Written     : Boolean;
@@ -3569,6 +3634,23 @@ package body Model_Runner.Llama is
          if not Written then
             Ok := False;
             return;
+         end if;
+
+         --  And the records a check on the host left, where the device's
+         --  rule may be the one to make a state from them.
+         if Every_Records > 0
+           and then Item.Delta_State.all'Length >= Slots * (Every_State + Every_Records)
+         then
+            Model_Runner.Backend.Device.Put_State
+              (Item.State_Base + Slot * Every + Every_Conv + Every_State,
+               Item.Delta_State.all
+                 (Slots * Every_State + Slot * Every_Records
+                  .. Slots * Every_State + (Slot + 1) * Every_Records - 1),
+               Written);
+            if not Written then
+               Ok := False;
+               return;
+            end if;
          end if;
       end loop;
    end Write_Ring;
@@ -3890,7 +3972,8 @@ package body Model_Runner.Llama is
          declare
             Base : constant Integer := Replay_Base (Run.Whose.all, Run.First);
          begin
-            if Record_At (Run.Whose.all, Run.First) = Run.First
+            if Run.First > 0
+              and then Record_At (Run.Whose.all, Run.First) = Run.First
               and then Base >= 0 and then Base < Run.First
             then
                Words (Replay_Words + Which * 2) :=
@@ -8379,8 +8462,14 @@ package body Model_Runner.Llama is
       end if;
 
       --  The ring on the device, home, and its seat given back: the
-      --  ring made anew is another size.
+      --  ring made anew is another size. The slot carried over is a
+      --  state, made so where a rewind left a record there.
       Fetch_States (Item'Unchecked_Access);
+      declare
+         Made : Boolean;
+      begin
+         Make_Real (Item, Item.Committed, Made);
+      end;
       Release_State_Room (Item'Unchecked_Access);
 
       --  The ring made anew with Count + 1 slots, the state as it is
@@ -8397,7 +8486,7 @@ package body Model_Runner.Llama is
          Into   : constant Element_Count :=
            Element_Count (Item.Committed) mod Slots;
       begin
-         T.Allocate (Slots * Every_State, States);
+         T.Allocate (Slots * (Every_State + Record_Room (Settings)), States);
          T.Allocate (Slots * Every_Conv, Convs);
 
          if States = null or else Convs = null then
@@ -8578,6 +8667,19 @@ package body Model_Runner.Llama is
       States     : Element_Count := 0;
       Written    : Model_Runner.Delta_Rule.Slot_Origins :=
         [others => Model_Runner.Delta_Rule.Nowhere];
+
+      --  Where a position leaves its record rather than its state, head
+      --  nought's, a head's three rows apart (Delta_Rule.Chunk's Noted).
+      Noted      : Model_Runner.Delta_Rule.Slot_Origins :=
+        [others => Model_Runner.Delta_Rule.Nowhere];
+
+      --  Where a rewind left the slot the chunk reads a record: the state
+      --  to carry from, head nought's, and the records to carry it
+      --  through, Carried of them; nought for none.
+      Carry_From : Element_Count := 0;
+      Carry_Notes : Model_Runner.Delta_Rule.Slot_Origins :=
+        [others => Model_Runner.Delta_Rule.Nowhere];
+      Carried    : Element_Count := 0;
       Head       : Element_Count := 0;
       Keys_Wide  : Element_Count := 0;
       Key_Heads  : Element_Count := 0;
@@ -8645,9 +8747,20 @@ package body Model_Runner.Llama is
       end if;
 
       for T in 0 .. Count - 1 loop
-         if Share.Written (T) /= Model_Runner.Delta_Rule.Nowhere
-           and then Share.Written (T) + (To + 1) * Square - 1
-                    > Share.State.all'Last
+         if (Share.Written (T) /= Model_Runner.Delta_Rule.Nowhere
+             and then Share.Written (T) + (To + 1) * Square - 1
+                      > Share.State.all'Last)
+           or else (Share.Noted (T) /= Model_Runner.Delta_Rule.Nowhere
+                    and then Share.Noted (T) + (To + 1) * 3 * Head - 1
+                             > Share.State.all'Last)
+         then
+            Share.Ok := False;
+            return;
+         end if;
+      end loop;
+      for T in 0 .. Share.Carried - 1 loop
+         if Share.Carry_Notes (T) + (To + 1) * 3 * Head - 1 > Share.State.all'Last
+           or else Share.Carry_From + (To + 1) * Square - 1 > Share.State.all'Last
          then
             Share.Ok := False;
             return;
@@ -8658,7 +8771,27 @@ package body Model_Runner.Llama is
          declare
             KH : constant Element_Count := H mod Share.Key_Heads;
             Written : Model_Runner.Delta_Rule.Slot_Origins := Share.Written;
+            Noted   : Model_Runner.Delta_Rule.Slot_Origins := Share.Noted;
          begin
+            --  The state the chunk reads made first from the records, as
+            --  the device's rule makes it.
+            if Share.Carried > 0 then
+               declare
+                  Notes : Model_Runner.Delta_Rule.Slot_Origins := Share.Carry_Notes;
+               begin
+                  for T in 0 .. Share.Carried - 1 loop
+                     Notes (T) := Notes (T) + H * 3 * Head;
+                  end loop;
+                  Model_Runner.Delta_Rule.Carry
+                    (State => Share.State.all,
+                     From  => Share.Carry_From + H * Square,
+                     Into  => Share.States + H * Square,
+                     Notes => Notes,
+                     Count => Share.Carried,
+                     Head  => Head);
+               end;
+            end if;
+
             --  The decays and rates: the file keeps minus the exponential
             --  of the decay's shape, not the shape, so what is stored is
             --  what multiplies.
@@ -8678,6 +8811,9 @@ package body Model_Runner.Llama is
             for T in 0 .. Count - 1 loop
                if Written (T) /= Model_Runner.Delta_Rule.Nowhere then
                   Written (T) := Written (T) + H * Square;
+               end if;
+               if Noted (T) /= Model_Runner.Delta_Rule.Nowhere then
+                  Noted (T) := Noted (T) + H * 3 * Head;
                end if;
             end loop;
 
@@ -8702,7 +8838,8 @@ package body Model_Runner.Llama is
                Blend_Stride => Share.Rows.Blend_Stride,
                State_Norm   => Share.State_Norm.all,
                Epsilon      => Share.Epsilon,
-               Scale        => Share.Scale);
+               Scale        => Share.Scale,
+               Noted        => Noted);
          end;
       end loop;
    end Run;
@@ -8915,6 +9052,24 @@ package body Model_Runner.Llama is
       Fetch_States (Item'Unchecked_Access);
       Item.Ring_Written := True;
 
+      --  Where a rewind left the slot the run reads a record, the state it
+      --  reads is made from the state before the records, through them --
+      --  decided at the batch's first linear layer, from the ring as the
+      --  batch found it: each layer writes the ring's account as it goes,
+      --  and the layers after the first would read the batch's own.
+      if Linear_Ordinal (Settings, Layer_Index) = 0 then
+         Item.Carry_At := Position;
+         Item.Carry_Base := Position;
+         if Position > 0 and then Record_At (Item, Position) = Position then
+            if Replay_Base (Item, Position) not in 0 .. Position - 1 then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               E.Add_Text (Status, "tensor", "ssm_state", E.Param_Identifier);
+               return;
+            end if;
+            Item.Carry_Base := Natural (Replay_Base (Item, Position));
+         end if;
+      end if;
+
       while Taken < Rows.Count loop
          declare
             Here  : constant Element_Count :=
@@ -8943,9 +9098,49 @@ package body Model_Runner.Llama is
               [others => Model_Runner.Delta_Rule.Nowhere];
             Written_Conv  : Model_Runner.Delta_Rule.Slot_Origins :=
               [others => Model_Runner.Delta_Rule.Nowhere];
+            Noted_State   : Model_Runner.Delta_Rule.Slot_Origins :=
+              [others => Model_Runner.Delta_Rule.Nowhere];
+            Carry_Notes   : Model_Runner.Delta_Rule.Slot_Origins :=
+              [others => Model_Runner.Delta_Rule.Nowhere];
+            Carry_From    : Element_Count := 0;
+            Carried       : Element_Count := 0;
+
+            --  A check the ring holds whole leaves records for every
+            --  position but its last, as the device's does: a check whose
+            --  drafts are all taken reads none of the others, and writing
+            --  each was half the rule's time on the processor.
+            Lazy : constant Boolean :=
+              Recording (Item) and then Rows.Count = Here
+              and then Here >= 2
+              and then Here <= Element_Count (Item.Kept_States);
          begin
+            if Taken = 0 and then Item.Carry_At = Position
+              and then Item.Carry_Base < Position
+            then
+               declare
+                  Base : constant Natural := Item.Carry_Base;
+               begin
+                  Carry_From := State_Slot (Item, Base) * Every + States;
+                  Carried := Element_Count (Position - Base);
+                  for K in 0 .. Carried - 1 loop
+                     Carry_Notes (K) :=
+                       Host_Record_At (Item, Base + Natural (K) + 1, Layer_Index);
+                  end loop;
+                  Item.Made_At := Position;
+               end;
+            end if;
+
             for T in 0 .. Here - 1 loop
-               if T = Here - 1
+               if Lazy and then T < Here - 1 then
+                  Noted_State (T) :=
+                    Host_Record_At (Item, First + Natural (T) + 1, Layer_Index);
+                  Item.Record_Of
+                    (Natural (State_Slot (Item, First + Natural (T) + 1))) :=
+                    First + Natural (T) + 1;
+                  Written_Conv (T) :=
+                    State_Slot (Item, First + Natural (T) + 1) * Every_Conv
+                    + Memory;
+               elsif T = Here - 1
                  or else (Item.Kept_States > 0
                           and then T + Element_Count (Item.Kept_States) + 1
                                    >= Here)
@@ -8998,6 +9193,10 @@ package body Model_Runner.Llama is
                  (State      => Item.Delta_State,
                   States     => State_Slot (Item, First) * Every + States,
                   Written    => Written_State,
+                  Noted      => Noted_State,
+                  Carry_From => Carry_From,
+                  Carry_Notes => Carry_Notes,
+                  Carried    => Carried,
                   Head       => Head,
                   Keys_Wide  => Element_Count (Key_Width (Settings)),
                   Key_Heads  => Element_Count (Settings.Key_Heads),

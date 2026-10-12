@@ -3303,6 +3303,12 @@ private
       --  once that run is committed (Record_At). Nought for none.
       Made_At : Natural := 0;
 
+      --  The host's plan for a batch whose first slot holds a record: the
+      --  position it starts at and the one its state is made from, the
+      --  same where there is nothing to make (Linear_Chunk).
+      Carry_At   : Natural := 0;
+      Carry_Base : Natural := 0;
+
       --  Whether the device's copy of the ring is the newer: a linear
       --  layer taken whole on the device wrote its slots there, and the
       --  host's copy above is brought home before anything here reads

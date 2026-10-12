@@ -35,7 +35,8 @@ package body Model_Runner.Delta_Rule.Kernel is
       Blend_Stride : Element_Count;
       State_Norm   : Real_Array;
       Epsilon      : Real;
-      Scale        : Real)
+      Scale        : Real;
+      Noted        : Slot_Origins := [others => Nowhere])
    is
       --  The chunk's numbers: the products of decays from one position to
       --  another, what the state says of each key and of each query, the
@@ -237,7 +238,9 @@ package body Model_Runner.Delta_Rule.Kernel is
       --  began with: each position's is the one before decayed and
       --  corrected, and the ones nobody asks for are not written. The
       --  row is read before any position's is written, so a slot written
-      --  may be the slot read.
+      --  may be the slot read. Where a position is Noted, what makes its
+      --  state is kept there instead -- the correction a column, the key
+      --  a row, the decay -- for Carry to make it again if asked.
       for I in 0 .. Head - 1 loop
          declare
             Base : constant Element_Count := From + I * Head;
@@ -258,10 +261,54 @@ package body Model_Runner.Delta_Rule.Kernel is
                   if Slot /= Nowhere then
                      State (Slot + I * Head .. Slot + I * Head + Head - 1) := Row;
                   end if;
+
+                  if Noted (T) /= Nowhere then
+                     State (Noted (T) + Head + I) := Key;
+                     if I = 0 then
+                        State (Noted (T) .. Noted (T) + Head - 1) :=
+                          Fix (F_Row .. F_Row + Head - 1);
+                        State (Noted (T) + 2 * Head) := A;
+                     end if;
+                  end if;
                end;
             end loop;
          end;
       end loop;
    end Chunk;
+
+   procedure Carry
+     (State : in out Real_Array;
+      From  : Element_Count;
+      Into  : Element_Count;
+      Notes : Slot_Origins;
+      Count : Element_Count;
+      Head  : Element_Count)
+   is
+      Row : Real_Array (0 .. Head - 1);
+
+      pragma Suppress (Index_Check);
+      pragma Suppress (Range_Check);
+      pragma Suppress (Overflow_Check);
+   begin
+      --  As Chunk carries a row through its positions, to the bit: the
+      --  same decay and the same correction, in the same order.
+      for I in 0 .. Head - 1 loop
+         Row := State (From + I * Head .. From + I * Head + Head - 1);
+
+         for T in 0 .. Count - 1 loop
+            declare
+               Note : constant Element_Count := Notes (T);
+               Key  : constant Real := State (Note + Head + I);
+               A    : constant Real := State (Note + 2 * Head);
+            begin
+               for J in 0 .. Head - 1 loop
+                  Row (J) := Row (J) * A + Key * State (Note + J);
+               end loop;
+            end;
+         end loop;
+
+         State (Into + I * Head .. Into + I * Head + Head - 1) := Row;
+      end loop;
+   end Carry;
 
 end Model_Runner.Delta_Rule.Kernel;

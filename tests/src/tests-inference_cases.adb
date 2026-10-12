@@ -5653,6 +5653,111 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Check_Leaves_Records_A_Rewind_Makes_States_Of;
 
+   -----------------------------------------------------
+   -- A_Check_On_The_Host_Leaves_Records_Too --
+   -----------------------------------------------------
+
+   --  The same on the processor: a check of four leaves records for its
+   --  first three positions (Delta_Rule.Chunk's Noted), the run after a
+   --  rewind into it makes the state it reads from them (Carry), and so
+   --  does whatever reads the ring before that run -- here Keep_States,
+   --  which carries the committed slot into a ring of another size.
+   procedure A_Check_On_The_Host_Leaves_Records_Too
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 64;
+      Front  : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+      Check  : constant Vocab.Token_Array (1 .. 4) := [7, 8, 9, 10];
+      Next   : constant Vocab.Token_Id := 11;
+      Near   : constant N.Real := 2.0E-3;
+
+      Image : B.Byte_Array_Access;
+
+      function Worst (Left, Right : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in Left'Range loop
+            Most := N.Real'Max (Most, abs (Left (Index) - Right (Index)));
+         end loop;
+         return Most;
+      end Worst;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room, Wide_State => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Answer : Logit_Vector;
+         Want   : Logit_Vector;
+         Got    : Logit_Vector;
+
+         procedure Begin_With (Live : in out L.Session) is
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "a hybrid session did not open");
+            L.Keep_States (Live, 4, Status);
+            Assert (E.Is_Ok (Status), "the session would not keep states");
+            for Token of Front loop
+               L.Evaluate (Live, Under.Ready, Token, Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the front did not evaluate");
+            end loop;
+         end Begin_With;
+      begin
+         Start (Under);
+
+         declare
+            Live : L.Session;
+         begin
+            Begin_With (Live);
+            for Index in 1 .. 2 loop
+               L.Evaluate
+                 (Live, Under.Ready, Check (Index), Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the straight run did not evaluate");
+            end loop;
+            L.Evaluate (Live, Under.Ready, Next, Want, Status => Status);
+            Assert (E.Is_Ok (Status), "the straight run's next did not evaluate");
+            L.Close (Live);
+         end;
+
+         for Resized in Boolean loop
+            declare
+               Live : L.Session;
+            begin
+               Begin_With (Live);
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Check, Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the check did not evaluate");
+               L.Rewind (Live, Front'Length + 2, Status);
+               Assert (E.Is_Ok (Status),
+                       "a rewind into the check was refused: "
+                       & E.Error_Code'Image (Status.Code));
+
+               --  A ring of another size, the slot the session reads
+               --  carried into it: a state, not the record left there.
+               if Resized then
+                  L.Keep_States (Live, 5, Status);
+                  Assert (E.Is_Ok (Status), "the ring was not made anew");
+               end if;
+
+               L.Evaluate (Live, Under.Ready, Next, Got, Status => Status);
+               Assert (E.Is_Ok (Status), "the next after the rewind failed");
+               Assert (Worst (Want, Got) <= Near,
+                       "the state the processor made from a check's records "
+                       & (if Resized then "into a ring made anew " else "")
+                       & "says" & N.Real'Image (Worst (Want, Got))
+                       & " away from the straight run");
+               L.Close (Live);
+            end;
+         end loop;
+      end;
+
+      B.Free (Image);
+   end A_Check_On_The_Host_Leaves_Records_Too;
+
    ----------------------------------------------------------
    -- A_Paged_Session_Says_What_A_Block_Session_Says --
    ----------------------------------------------------------
@@ -16096,6 +16201,10 @@ package body Tests.Inference_Cases is
         (T, The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing'Access,
          "the device's room of rings moves its seats to the front rather "
          & "than growing past a gap a larger ring cannot use");
+      Register_Routine
+        (T, A_Check_On_The_Host_Leaves_Records_Too'Access,
+         "a check on the processor leaves records too, and a rewind into it "
+         & "makes the state it wants from them, a ring made anew included");
       Register_Routine
         (T, A_Check_Leaves_Records_A_Rewind_Makes_States_Of'Access,
          "a check on the device leaves records where its states would be, "

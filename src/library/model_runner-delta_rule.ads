@@ -90,6 +90,9 @@ package Model_Runner.Delta_Rule is
    --  @param State_Norm The gain a dimension of the answer, Head of them.
    --  @param Epsilon The normalization's stabilizer.
    --  @param Scale What the answer is scaled by before the normalization.
+   --  @param Noted Origin of the record each position leaves in place of
+   --    its state -- the correction a column, the key a row, the decay --
+   --    or Nowhere; Carry makes the state from it.
    procedure Chunk
      (State        : in out Real_Array;
       From         : Element_Count;
@@ -111,6 +114,24 @@ package Model_Runner.Delta_Rule is
       Blend_Stride : Element_Count;
       State_Norm   : Real_Array;
       Epsilon      : Real;
-      Scale        : Real);
+      Scale        : Real;
+      Noted        : Slot_Origins := [others => Nowhere]);
+
+   --  A head's state carried from From through Count records Chunk left
+   --  (Noted), as Chunk carried it, and written at Into.
+   --
+   --  @param State Every state of the session, its records included.
+   --  @param From Origin of the head's state to begin from.
+   --  @param Into Origin to write the state made at.
+   --  @param Notes Origin of each record, in order.
+   --  @param Count How many records.
+   --  @param Head State size.
+   procedure Carry
+     (State : in out Real_Array;
+      From  : Element_Count;
+      Into  : Element_Count;
+      Notes : Slot_Origins;
+      Count : Element_Count;
+      Head  : Element_Count);
 
 end Model_Runner.Delta_Rule;

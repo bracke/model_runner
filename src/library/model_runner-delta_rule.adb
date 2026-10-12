@@ -31,7 +31,8 @@ package body Model_Runner.Delta_Rule is
       Blend_Stride : Element_Count;
       State_Norm   : Real_Array;
       Epsilon      : Real;
-      Scale        : Real) is
+      Scale        : Real;
+      Noted        : Slot_Origins := [others => Nowhere]) is
    begin
       --  One source, two compilations, and the host decides which: each
       --  is entered only where the host says it has the instructions,
@@ -40,13 +41,28 @@ package body Model_Runner.Delta_Rule is
          Wide.Chunk
            (State, From, Written, Head, Count, Mixed, Stride, Key_At,
             Query_At, Value_At, Decay, Rate, Z_Gate, Z_At, Z_Stride, Blend,
-            Blend_At, Blend_Stride, State_Norm, Epsilon, Scale);
+            Blend_At, Blend_Stride, State_Norm, Epsilon, Scale, Noted);
       else
          Plain.Chunk
            (State, From, Written, Head, Count, Mixed, Stride, Key_At,
             Query_At, Value_At, Decay, Rate, Z_Gate, Z_At, Z_Stride, Blend,
-            Blend_At, Blend_Stride, State_Norm, Epsilon, Scale);
+            Blend_At, Blend_Stride, State_Norm, Epsilon, Scale, Noted);
       end if;
    end Chunk;
+
+   procedure Carry
+     (State : in out Real_Array;
+      From  : Element_Count;
+      Into  : Element_Count;
+      Notes : Slot_Origins;
+      Count : Element_Count;
+      Head  : Element_Count) is
+   begin
+      if Wider then
+         Wide.Carry (State, From, Into, Notes, Count, Head);
+      else
+         Plain.Carry (State, From, Into, Notes, Count, Head);
+      end if;
+   end Carry;
 
 end Model_Runner.Delta_Rule;

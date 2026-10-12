@@ -373,6 +373,12 @@ begin
 
    --  The linear layers' memories and states as they are now: the
    --  slot the committed count reads, whole.
+   --  A state, made so where a rewind left a record in that slot.
+   declare
+      Made : Boolean;
+   begin
+      Make_Real (Item, Item.Committed, Made);
+   end;
    if Item.Conv_State /= null then
       declare
          Slot : constant Element_Count := State_Slot (Item, Item.Committed);
