@@ -484,7 +484,7 @@ void main() {
     first = tab[at + 1u];
     run_count = tab[at + 2u];
     row0 = tab[at + 3u];
-    slots = tab[at + 4u];
+    slots = tab[at + 4u] & 0x7FFFFFFFu;
 
     head = shape.head;
     uint kh = h % shape.key_heads;

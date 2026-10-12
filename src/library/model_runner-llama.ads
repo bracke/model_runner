@@ -2935,6 +2935,11 @@ private
    type Choice_List is array (Natural range <>) of Natural;
    type Choice_Access is access Choice_List;
 
+   --  How many slots of a ring are told apart in what they hold.
+   Ring_Most : constant := 64;
+   Lost_Record : constant Natural := Natural'Last;
+   type Slot_Records is array (0 .. Ring_Most - 1) of Natural;
+
    type Session is limited new Ada.Finalization.Limited_Controlled with record
       --  See Skipped.
       Skipped_Count : Natural := 0;
@@ -3285,6 +3290,13 @@ private
       --  still hold what was written there and a later rewind's slot is
       --  intact only if nothing has come round to it.
       Kept_Newest : Natural := 0;
+
+      --  What each slot of the ring holds on the device, where a check
+      --  left records there rather than states (Replay_States): nought
+      --  for a state, the position whose state the record makes, or
+      --  Lost_Record where the state it began from is gone. The first
+      --  Ring_Most slots only; a longer ring never holds records.
+      Record_Of : Slot_Records := [others => 0];
 
       --  Whether the device's copy of the ring is the newer: a linear
       --  layer taken whole on the device wrote its slots there, and the

@@ -398,6 +398,33 @@ package Model_Runner.Backend.Device is
       Elements : Model_Runner.Numerics.Element_Count;
       Ok       : out Boolean);
 
+   --  Make linear states again from the records a check left in their
+   --  place, as Products.Replay_States says.
+   --
+   --  @param Base Where slot nought's states begin, in elements.
+   --  @param Every How far apart the ring's slots are, in elements.
+   --  @param Slots How many slots the ring has.
+   --  @param From The position whose slot holds the state to begin from.
+   --  @param Count How many records to carry it through.
+   --  @param Heads How many heads of a hundred and twenty-eight a slot's
+   --    states are.
+   --  @param All_Slots Whether every state made is written, or the last.
+   --  @param Ok True when it ran.
+   procedure Replay_States
+     (Base      : Model_Runner.Numerics.Element_Count;
+      Every     : Model_Runner.Numerics.Element_Count;
+      Slots     : Natural;
+      From      : Natural;
+      Count     : Natural;
+      Heads     : Natural;
+      All_Slots : Boolean;
+      Ok        : out Boolean);
+
+   --  @param Head The linear layers' head width.
+   --  @return Whether a check on the device may leave records in place of
+   --    the states it passes: the device can make them again.
+   function Replays_States (Head : Natural) return Boolean;
+
    --  Note that a block of the cache, or a seat in the room of rings, was
    --  moved to close a gap below it.
    --

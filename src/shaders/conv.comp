@@ -120,7 +120,7 @@ void main() {
             first = tab[at + 1u];
             run_count = r_count;
             row0 = r_row0;
-            slots = tab[at + 4u];
+            slots = tab[at + 4u] & 0x7FFFFFFFu;
         }
     }
     uint p = t - row0;

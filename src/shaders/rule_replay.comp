@@ -1,0 +1,89 @@
+#version 450
+
+//  The delta rule's states made again from the records rule_held.comp
+//  left in their place.
+//
+//  A drafted round's check runs the rule over every position it checks,
+//  and a rewind needs the state as it stood after any of them. Writing
+//  each of those states is sixty-four kilobytes a head a position, most of
+//  them never read: a check whose drafts are all taken reads only the last.
+//  So where the host asks, the check writes the last state whole and, for
+//  the others, the record that makes one state from the one before it --
+//  the head's key, the decay, and a correction a column -- in the first
+//  three rows of the slot the state would have taken. A rewind into the
+//  check makes the state it wants here: the state the check began from,
+//  carried through the records, as the check carried it.
+//
+//  A workgroup a head, of every linear layer in the slot alike, a column
+//  to a lane and half the rows to each of two groups.
+
+const uint HEAD = 128u;
+const uint PARTS = 2u;
+const uint HELD = HEAD / PARTS;
+
+layout(local_size_x = HEAD * PARTS) in;
+
+layout(std430, binding = 4) buffer State { float s[]; };
+
+layout(push_constant) uniform Shape {
+    uint base;
+    uint every;
+    uint slots;
+    uint from;
+    uint count;
+    uint heads;
+    uint all;
+} shape;
+
+shared float key[HEAD];
+shared float decay;
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+    uint part = lane / HEAD;
+    uint cl = lane % HEAD;
+
+    if (h >= shape.heads) {
+        return;
+    }
+
+    uint head_at = shape.base + h * HEAD * HEAD;
+    uint read_at = head_at + (shape.from % shape.slots) * shape.every;
+    float st[HELD];
+
+    for (uint e = 0u; e < HELD; e++) {
+        st[e] = s[read_at + (part * HELD + e) * HEAD + cl];
+    }
+
+    for (uint p = 0u; p < shape.count; p++) {
+        uint at = head_at + ((shape.from + p + 1u) % shape.slots) * shape.every;
+
+        if (part == 0u) {
+            key[cl] = s[at + HEAD + cl];
+
+            if (cl == 0u) {
+                decay = s[at + 2u * HEAD];
+            }
+        }
+
+        float fix = s[at + cl];
+
+        //  The record read whole before the state is written over it.
+        barrier();
+
+        for (uint e = 0u; e < HELD; e++) {
+            precise float pushed = key[part * HELD + e] * fix;
+            st[e] = fma(st[e], decay, pushed);
+        }
+
+        if (shape.all != 0u || p + 1u == shape.count) {
+            for (uint e = 0u; e < HELD; e++) {
+                s[at + (part * HELD + e) * HEAD + cl] = st[e];
+            }
+        }
+
+        //  And the shared numbers read out before the next record's.
+        barrier();
+    }
+}

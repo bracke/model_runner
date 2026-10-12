@@ -3388,6 +3388,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Rule_Held;
             Single : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Rule_Held_Single;
+            Replay : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Rule_Replay;
          begin
             Request.Size := Interfaces.C.size_t (Routed'Length * 4);
             Request.Code := Routed'Address;
@@ -3537,6 +3539,15 @@ package body Model_Runner.Platform.Device.Products is
                        Made'Access) = 0
             then
                Item.Single_Ruler := Made;
+            end if;
+
+            Request.Size := Interfaces.C.size_t (Replay'Length * 4);
+            Request.Code := Replay'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Replayer := Made;
             end if;
          end;
 
@@ -4749,6 +4760,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Replayer /= Null_Handle then
+            Request.Stage.Module := Item.Replayer;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Replay_Line := Made;
+            end if;
+         end if;
+
          if Item.Turner /= Null_Handle then
             Request.Stage.Module := Item.Turner;
 
@@ -5951,6 +5972,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Conv_Line, "vkDestroyPipeline");
       Give_Back (Item.Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Held_Rule_Line, "vkDestroyPipeline");
+      Give_Back (Item.Replay_Line, "vkDestroyPipeline");
       Give_Back (Item.Single_Rule_Line, "vkDestroyPipeline");
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
@@ -5971,6 +5993,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Held_Ruler, "vkDestroyShaderModule");
       Give_Back (Item.Single_Ruler, "vkDestroyShaderModule");
+      Give_Back (Item.Replayer, "vkDestroyShaderModule");
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
@@ -10623,6 +10646,111 @@ package body Model_Runner.Platform.Device.Products is
       Submit_And_Wait (Item, Good, Cancelled, null);
       Ok := Good;
    end Copy_State;
+
+   procedure Replay_States
+     (Item  : in out Engine;
+      Base  : Model_Runner.Numerics.Element_Count;
+      Every : Model_Runner.Numerics.Element_Count;
+      Slots : Natural;
+      From  : Natural;
+      Count : Natural;
+      Heads : Natural;
+      All_Slots : Boolean;
+      Ok    : out Boolean)
+   is
+      Ignored : constant Boolean := Set_Asking (Item);
+
+      type Replay_Constants is record
+         Base, Every, Slots, From, Count, Heads, All_Slots : C.unsigned;
+      end record
+        with Convention => C;
+
+      Update : constant Update_Sets_Call :=
+        To_Update_Sets (Point ("vkUpdateDescriptorSets"));
+      Reset_Buffer : constant Reset_Buffer_Call :=
+        To_Reset_Buffer (Point ("vkResetCommandBuffer"));
+      Start : constant Begin_Call :=
+        To_Begin (Point ("vkBeginCommandBuffer"));
+      Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
+      Bind_Pipeline : constant Bind_Pipeline_Call :=
+        To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
+      Bind_Sets : constant Bind_Sets_Call :=
+        To_Bind_Sets (Point ("vkCmdBindDescriptorSets"));
+      Push : constant Push_Call := To_Push (Point ("vkCmdPushConstants"));
+      Dispatch : constant Dispatch_Call :=
+        To_Dispatch (Point ("vkCmdDispatch"));
+
+      Told  : aliased Buffer_Info_Array;
+      Notes : aliased Write_Array;
+      Sets  : aliased Address := Item.Descriptor;
+      Began : aliased Command_Begin_Info;
+      Shape : aliased Replay_Constants :=
+        (Base      => C.unsigned (Base),
+         Every     => C.unsigned (Every),
+         Slots     => C.unsigned (Slots),
+         From      => C.unsigned (From),
+         Count     => C.unsigned (Count),
+         Heads     => C.unsigned (Heads),
+         All_Slots => (if All_Slots then 1 else 0));
+
+      Good, Cancelled : Boolean;
+   begin
+      Ok := False;
+
+      if not Is_Ready (Item)
+        or else Item.State_Buffer = Null_Handle
+        or else Item.Replay_Line = Null_Handle
+        or else Count = 0 or else Slots = 0 or else Heads = 0
+        or else Update = null or else Reset_Buffer = null
+        or else Start = null or else Stop = null
+        or else Bind_Pipeline = null or else Bind_Sets = null
+        or else Push = null or else Dispatch = null
+      then
+         return;
+      end if;
+
+      Settle (Item, Good);
+      if not Good then
+         return;
+      end if;
+
+      --  The kernel reads the room alone; a set is written whole, so the
+      --  room stands for every binding.
+      for Binding in Told'Range loop
+         Told (Binding) :=
+           (Buffer => Item.State_Buffer, Offset => 0,
+            Extent => Item.State_Bytes);
+         Notes (Binding).Target := Item.Descriptor;
+         Notes (Binding).Binding := C.unsigned (Binding - 1);
+         Notes (Binding).Buffers := Told (Binding)'Address;
+      end loop;
+      Update (Item.Logical, 6, Notes'Address, 0, Null_Handle);
+
+      if Reset_Buffer (Item.Buffer, 0) /= 0
+        or else Opened (Item.Buffer, Start, Began'Address) /= 0
+      then
+         return;
+      end if;
+
+      Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Replay_Line);
+      Bind_Sets (Item.Buffer, Bind_Point_Compute, Item.Layout, 0, 1,
+                 Sets'Address, 0, Null_Handle);
+      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+            C.unsigned (Shape'Size / 8), Shape'Address);
+      Dispatch (Item.Buffer, C.unsigned (Heads), 1, 1);
+
+      if Stop (Item.Buffer) /= 0 then
+         return;
+      end if;
+
+      Submit_And_Wait (Item, Good, Cancelled, null);
+      Ok := Good;
+   end Replay_States;
+
+   function Replays_States (Item : Engine) return Boolean
+   is (Item.Replay_Line /= Null_Handle
+       and then Item.Held_Rule_Line /= Null_Handle
+       and then Item.Single_Rule_Line /= Null_Handle);
 
    procedure Clear_State
      (Item     : in out Engine;

@@ -414,6 +414,7 @@ begin
       end;
    end if;
    Item.Kept_Newest := Natural (Held);
+   Item.Record_Of := [others => 0];
 
    --  What was adopted is the host's, whatever the device held.
    Item.State_On_Device := False;

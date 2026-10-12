@@ -5508,6 +5508,152 @@ package body Tests.Inference_Cases is
    end The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing;
 
    ----------------------------------------------------------
+   -- A_Check_Leaves_Records_A_Rewind_Makes_States_Of --
+   ----------------------------------------------------------
+
+   --  A drafted round's check on the device, at the head width the rule
+   --  holds its state in registers for, writes its last state whole and
+   --  for every other position the record that makes it (rule_held.comp);
+   --  a rewind into the check makes the state from the records
+   --  (rule_replay.comp). Wrong, the state is a record's three rows read
+   --  as one, and the answers move by whole numbers.
+   --
+   --  Four tokens one at a time, a check of four, and back to the second
+   --  of it: what comes next is what a session that read the two one at a
+   --  time says. And again with the ring brought home between the check
+   --  and the rewind, which makes every record a state on the way.
+   procedure A_Check_Leaves_Records_A_Rewind_Makes_States_Of
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 64;
+      Front  : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+      Check  : constant Vocab.Token_Array (1 .. 4) := [7, 8, 9, 10];
+      Next   : constant Vocab.Token_Id := 11;
+      Near   : constant N.Real := 2.0E-3;
+
+      Image : B.Byte_Array_Access;
+
+      function Worst (Left, Right : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in Left'Range loop
+            Most := N.Real'Max (Most, abs (Left (Index) - Right (Index)));
+         end loop;
+         return Most;
+      end Worst;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room, Wide_State => True);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+         Answer : Logit_Vector;
+         Want   : Logit_Vector;
+         Got    : Logit_Vector;
+
+         --  A session keeping four states, the front read one at a time.
+         procedure Begin_With (Live : in out L.Session) is
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "a hybrid session did not open");
+            L.Keep_States (Live, 4, Status);
+            Assert (E.Is_Ok (Status), "the session would not keep states");
+            for Token of Front loop
+               L.Evaluate (Live, Under.Ready, Token, Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the front did not evaluate");
+            end loop;
+         end Begin_With;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+
+         if not Awake then
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+
+         if not Ready or else not Model_Runner.Backend.Device.Replays_States (128)
+         then
+            Model_Runner.Backend.Device.Close;
+            B.Free (Image);
+            return;
+         end if;
+
+         --  Nothing to carry a state through is refused, not run.
+         declare
+            Ran : Boolean;
+         begin
+            Model_Runner.Backend.Device.Replay_States
+              (Base => 0, Every => 1, Slots => 1, From => 0, Count => 0,
+               Heads => 1, All_Slots => False, Ok => Ran);
+            Assert (not Ran, "a replay of no records was said to run");
+         end;
+
+         --  The straight answer: two of the check one at a time, then the
+         --  next.
+         declare
+            Live : L.Session;
+         begin
+            Begin_With (Live);
+            for Index in 1 .. 2 loop
+               L.Evaluate
+                 (Live, Under.Ready, Check (Index), Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the straight run did not evaluate");
+            end loop;
+            L.Evaluate (Live, Under.Ready, Next, Want, Status => Status);
+            Assert (E.Is_Ok (Status), "the straight run's next did not evaluate");
+            L.Close (Live);
+         end;
+
+         for Home in Boolean loop
+            declare
+               Live : L.Session;
+            begin
+               Begin_With (Live);
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Check, Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the check did not evaluate");
+
+               --  The ring home: every record made a state there first.
+               if Home then
+                  L.Hold_Checkpoints (Live);
+               end if;
+
+               Assert (L.Rewind_Point (Live, Front'Length + 2)
+                         = Front'Length + 2,
+                       "a point inside the check is out of reach");
+               L.Rewind (Live, Front'Length + 2, Status);
+               Assert (E.Is_Ok (Status),
+                       "a rewind into the check was refused: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Evaluate (Live, Under.Ready, Next, Got, Status => Status);
+               Assert (E.Is_Ok (Status), "the next after the rewind failed");
+
+               Assert (Worst (Want, Got) <= Near,
+                       "the state a rewind made from a check's records "
+                       & (if Home then "brought home " else "")
+                       & "says" & N.Real'Image (Worst (Want, Got))
+                       & " away from the straight run");
+               L.Close (Live);
+            end;
+         end loop;
+
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Check_Leaves_Records_A_Rewind_Makes_States_Of;
+
+   ----------------------------------------------------------
    -- A_Paged_Session_Says_What_A_Block_Session_Says --
    ----------------------------------------------------------
 
@@ -15950,6 +16096,10 @@ package body Tests.Inference_Cases is
         (T, The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing'Access,
          "the device's room of rings moves its seats to the front rather "
          & "than growing past a gap a larger ring cannot use");
+      Register_Routine
+        (T, A_Check_Leaves_Records_A_Rewind_Makes_States_Of'Access,
+         "a check on the device leaves records where its states would be, "
+         & "and a rewind into it makes the state it wants from them");
       Register_Routine
         (T, A_Run_Says_Which_Layers_The_Device_Took'Access,
          "a run on the device says how many layers went over whole and "

@@ -378,6 +378,9 @@ package Tiny_Model is
    --    embedding and of the output: what Qwen's larger models do, whose
    --    vocabularies are padded past the tokens their small ones number.
    --    Written on the SentencePiece road only.
+   --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
+   --    twenty-eight wide, as the real models' are, rather than four: the
+   --    one width the device keeps a state in registers for.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -399,6 +402,7 @@ package Tiny_Model is
       Depth          : Natural := 0;
       Code_Norms     : Boolean := True;
       Ranking        : Boolean := False;
-      Padding        : Natural := 0);
+      Padding        : Natural := 0;
+      Wide_State     : Boolean := False);
 
 end Tiny_Model;

@@ -6634,16 +6634,18 @@ package body Checks is
          end if;
       end;
 
-      --  And the four of a hybrid's linear layer: the convolution over
-      --  the memory the ring keeps, and the rule over the state it keeps,
-      --  in its three compilations -- the chunk's, the one that holds the
-      --  state, and that one again for single positions.
-      for Which in 1 .. 4 loop
+      --  And the five of a hybrid's linear layer: the convolution over
+      --  the memory the ring keeps, the rule over the state it keeps, in
+      --  its three compilations -- the chunk's, the one that holds the
+      --  state, and that one again for single positions -- and the
+      --  replay that makes a state from a check's records.
+      for Which in 1 .. 5 loop
          declare
             Name : constant String :=
               (case Which is
                   when 1 => "conv",
                   when 2 => "rule",
+                  when 5 => "rule_replay",
                   when others => "rule_held");
             Found : Boolean;
 
@@ -6655,6 +6657,7 @@ package body Checks is
                   when 1 => Model_Runner.Shaders.Conv_Digest,
                   when 2 => Model_Runner.Shaders.Rule_Digest,
                   when 3 => Model_Runner.Shaders.Rule_Held_Digest,
+                  when 5 => Model_Runner.Shaders.Rule_Replay_Digest,
                   when others =>
                      Model_Runner.Shaders.Rule_Held_Single_Digest);
          begin

@@ -800,6 +800,33 @@ package body Model_Runner.Backend.Device is
       Products.Copy_State (Engine, From, Into, Elements, Ok);
    end Copy_State;
 
+   -------------------
+   -- Replay_States --
+   -------------------
+
+   procedure Replay_States
+     (Base      : Model_Runner.Numerics.Element_Count;
+      Every     : Model_Runner.Numerics.Element_Count;
+      Slots     : Natural;
+      From      : Natural;
+      Count     : Natural;
+      Heads     : Natural;
+      All_Slots : Boolean;
+      Ok        : out Boolean) is
+   begin
+      if not Ready_Now then
+         Ok := False;
+         return;
+      end if;
+
+      Products.Replay_States
+        (Engine, Base, Every, Slots, From, Count, Heads, All_Slots, Ok);
+   end Replay_States;
+
+   function Replays_States (Head : Natural) return Boolean
+   is (Ready_Now and then Head = Products.Held_Rule_Head
+       and then Products.Replays_States (Engine));
+
    ----------------
    -- Note_Moved --
    ----------------

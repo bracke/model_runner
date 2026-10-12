@@ -2753,6 +2753,44 @@ package Model_Runner.Platform.Device.Products is
    --  @return True where a hybrid's linear layer may go whole.
    function Runs_Linear (Item : Engine) return Boolean;
 
+   --  Make linear states again from the records a check left in their
+   --  place: see rule_replay.comp.
+   --
+   --  A check run whose ring slots are marked for records writes its
+   --  last state whole and, for every other position the ring reaches,
+   --  what carries one state to the next in the first rows of the slot.
+   --  This carries the state in the slot of From through Count of those
+   --  records, writing the last -- or each, where All_Slots -- over the
+   --  record in its slot. Waits for what is in flight, and for itself.
+   --
+   --  @param Item Engine with a room reserved.
+   --  @param Base Where slot nought's states begin, in elements.
+   --  @param Every How far apart the ring's slots are, in elements.
+   --  @param Slots How many slots the ring has.
+   --  @param From The position whose slot holds the state to begin from.
+   --  @param Count How many records to carry it through.
+   --  @param Heads How many heads of a hundred and twenty-eight a slot's
+   --  states are, every linear layer's together.
+   --  @param All_Slots Whether every state made is written, or the last.
+   --  @param Ok True when it ran.
+   procedure Replay_States
+     (Item  : in out Engine;
+      Base  : Model_Runner.Numerics.Element_Count;
+      Every : Model_Runner.Numerics.Element_Count;
+      Slots : Natural;
+      From  : Natural;
+      Count : Natural;
+      Heads : Natural;
+      All_Slots : Boolean;
+      Ok    : out Boolean);
+
+   --  Whether a check may leave records rather than states: the engine
+   --  made the register-held rule both ways and the replay.
+   --
+   --  @param Item Ready engine.
+   --  @return True where Replay_States can make the states again.
+   function Replays_States (Item : Engine) return Boolean;
+
    --  How many submissions the engine has recorded: a caller that leaves
    --  an answer on the device to fetch later asks whether anything went
    --  over since, which would have written where the answer lies.
@@ -3416,6 +3454,7 @@ private
       Ruler      : System.Address := System.Null_Address;
       Held_Ruler : System.Address := System.Null_Address;
       Single_Ruler : System.Address := System.Null_Address;
+      Replayer     : System.Address := System.Null_Address;
 
       --  The heads of a layer's queries or keys made ready in one step --
       --  normalized where the architecture says, turned, and the keys and
@@ -3667,6 +3706,7 @@ private
       Scan1_Line  : System.Address := System.Null_Address;
       Held_Rule_Line : System.Address := System.Null_Address;
       Single_Rule_Line : System.Address := System.Null_Address;
+      Replay_Line : System.Address := System.Null_Address;
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;

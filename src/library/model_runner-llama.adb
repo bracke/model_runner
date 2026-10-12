@@ -3284,6 +3284,142 @@ package body Model_Runner.Llama is
    is (Item.State_Base
        + (Element_Count (Item.Kept_States) + 1) * Device_Slot_Span (Item));
 
+   --  What the slot a position reads holds, as Record_Of says: nought for
+   --  a state, past the ring's first Ring_Most slots too.
+   function Record_At (Item : Session; Position : Natural) return Natural
+   is (if State_Slot (Item, Position) < Ring_Most
+       then Item.Record_Of (Natural (State_Slot (Item, Position)))
+       else 0);
+
+   --  Whether the ring still reaches a position: nothing written since
+   --  has come round to its slot.
+   function In_Reach (Item : Session; Position : Natural) return Boolean
+   is (Position <= Item.Kept_Newest
+       and then Item.Kept_Newest - Position <= Item.Kept_States);
+
+   --  The position whose state the one a position reads is made from: the
+   --  position itself where its slot holds a state, the nearest state
+   --  below a run of records, or -1 where that is gone.
+   function Replay_Base (Item : Session; Position : Natural) return Integer
+   is
+      Base : Natural := Position;
+   begin
+      if Record_At (Item, Position) = 0 then
+         return Position;
+      elsif Record_At (Item, Position) /= Position then
+         return -1;
+      end if;
+
+      while Base > 0 and then Record_At (Item, Base) = Base loop
+         Base := Base - 1;
+      end loop;
+
+      if Record_At (Item, Base) = 0 and then In_Reach (Item, Base) then
+         return Base;
+      end if;
+      return -1;
+   end Replay_Base;
+
+   --  Make the states From's slot holds again through Count records on
+   --  the device, the last or each written over its record.
+   procedure Replay
+     (Item      : in out Session;
+      From      : Natural;
+      Count     : Natural;
+      All_Slots : Boolean;
+      Ok        : out Boolean)
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+   begin
+      Ok := False;
+
+      if not Item.State_On_Device or else not Item.State_Seated then
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Replay_States
+        (Base      => Item.State_Base + Conv_Room (Settings),
+         Every     => Device_Slot_Span (Item),
+         Slots     => Item.Kept_States + 1,
+         From      => From,
+         Count     => Count,
+         Heads     =>
+           Natural (State_Room (Settings)
+                    / (Element_Count (Settings.State_Size)
+                       * Element_Count (Settings.State_Size))),
+         All_Slots => All_Slots,
+         Ok        => Ok);
+   end Replay;
+
+   --  Make the state a position reads a state, where its slot holds a
+   --  record; Ok is False where it cannot be made.
+   procedure Make_Real
+     (Item     : in out Session;
+      Position : Natural;
+      Ok       : out Boolean)
+   is
+      Base : constant Integer := Replay_Base (Item, Position);
+   begin
+      Ok := Base = Position;
+      if Base < 0 or else Ok then
+         return;
+      end if;
+
+      Replay (Item, Natural (Base), Position - Natural (Base), False, Ok);
+      if Ok then
+         Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
+      end if;
+   end Make_Real;
+
+   --  Every record the ring reaches made a state again, before the host
+   --  reads the ring or the device's copy stops being the one to read;
+   --  a record whose state is gone is marked so.
+   procedure Settle_Records (Item : in out Session) is
+      Position : Natural;
+      Last     : Natural;
+      Base     : Integer;
+      Made     : Boolean;
+   begin
+      if (for all Held of Item.Record_Of => Held in 0 | Lost_Record) then
+         return;
+      end if;
+
+      Position := Natural'Max (1, Item.Kept_Newest - Natural'Min
+                                     (Item.Kept_Newest, Item.Kept_States));
+      while Position <= Item.Kept_Newest loop
+         if Record_At (Item, Position) = Position then
+            Last := Position;
+            while Last < Item.Kept_Newest
+              and then Record_At (Item, Last + 1) = Last + 1
+            loop
+               Last := Last + 1;
+            end loop;
+
+            Base := Replay_Base (Item, Position);
+            Made := False;
+            if Base >= 0 then
+               Replay (Item, Natural (Base), Last - Natural (Base), True,
+                       Made);
+            end if;
+
+            for Each in Position .. Last loop
+               Item.Record_Of (Natural (State_Slot (Item, Each))) :=
+                 (if Made then 0 else Lost_Record);
+            end loop;
+            Position := Last + 1;
+         else
+            Position := Position + 1;
+         end if;
+      end loop;
+
+      --  Whatever is left the ring no longer reaches.
+      for Held of Item.Record_Of loop
+         if Held /= 0 then
+            Held := Lost_Record;
+         end if;
+      end loop;
+   end Settle_Records;
+
    --  Bring a session's ring home from the device, where the device's
    --  copy is the newer. A no-op otherwise, so it is asked wherever the
    --  host is about to read the ring.
@@ -3296,6 +3432,8 @@ package body Model_Runner.Llama is
       then
          return;
       end if;
+
+      Settle_Records (Item.all);
 
       declare
          Settings   : Configuration renames Item.Owner.Settings;
@@ -3348,6 +3486,13 @@ package body Model_Runner.Llama is
 
       Item.State_Seated := False;
       Item.State_On_Device := False;
+
+      --  Records the seat held go with it: what they made is not here.
+      for Held of Item.Record_Of loop
+         if Held /= 0 then
+            Held := Lost_Record;
+         end if;
+      end loop;
 
       --  A checkpoint the seat held goes with it.
       if Item.Check_On_Device then
@@ -3685,9 +3830,23 @@ package body Model_Runner.Llama is
 
    --  Write the runs' table at the front of the room, as the kernels
    --  read it: five words a run, each a number as the bits of a float.
+   --
+   --  The slot count's top bit asks the rule for records where a run is
+   --  a check the ring holds whole, its base included: every position
+   --  but the last leaves the record that makes its state, and a rewind
+   --  makes the one it wants (Make_Real). A check whose drafts are all
+   --  taken reads none of the others, and writing each was a sixth of
+   --  the rule's time.
    procedure Write_Runs (Runs : State_Runs; Ok : out Boolean) is
       Words : Real_Array (0 .. Element_Count (Runs'Length) * 5 - 1);
       Place : Element_Count := 0;
+
+      function Records (Run : State_Run) return Boolean
+      is (Run.Count >= 2
+          and then Run.Count <= Run.Whose.Kept_States
+          and then Run.Whose.Kept_States < Ring_Most
+          and then Model_Runner.Backend.Device.Replays_States
+                     (Run.Whose.Owner.Settings.State_Size));
    begin
       for Run of Runs loop
          Words (Place) :=
@@ -3696,11 +3855,42 @@ package body Model_Runner.Llama is
          Words (Place + 2) := N.From_Bits (Interfaces.Unsigned_32 (Run.Count));
          Words (Place + 3) := N.From_Bits (Interfaces.Unsigned_32 (Run.Row));
          Words (Place + 4) :=
-           N.From_Bits (Interfaces.Unsigned_32 (Run.Whose.Kept_States + 1));
+           N.From_Bits
+             (Interfaces."or"
+                (Interfaces.Unsigned_32 (Run.Whose.Kept_States + 1),
+                 (if Records (Run) then 16#8000_0000# else 0)));
          Place := Place + 5;
       end loop;
 
       Model_Runner.Backend.Device.Put_State (0, Words, Ok);
+
+      --  What each slot the runs write will hold, as the rule decides
+      --  which it writes.
+      if Ok then
+         for Run of Runs loop
+            declare
+               Slots : constant Natural := Run.Whose.Kept_States + 1;
+               Lazy  : constant Boolean := Records (Run);
+            begin
+               for Step in 0 .. Run.Count - 1 loop
+                  declare
+                     Position : constant Natural := Run.First + Step + 1;
+                     Slot     : constant Natural := Position mod Slots;
+                  begin
+                     if (Step = Run.Count - 1
+                         or else Run.Count <= Slots
+                         or else Step >= Run.Count - Slots)
+                       and then Slot < Ring_Most
+                     then
+                        Run.Whose.Record_Of (Slot) :=
+                          (if Lazy and then Step < Run.Count - 1
+                           then Position else 0);
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end if;
    end Write_Runs;
 
    --  A linear layer's geometry and its place in the ring, as the
@@ -8029,14 +8219,29 @@ package body Model_Runner.Llama is
             --  what the device holds in the others is not read again.
             Item.State_On_Device := False;
             Item.Kept_Newest := 0;
-         elsif Position <= Item.Kept_Newest
-           and then Item.Kept_Newest - Position <= Item.Kept_States
+            Item.Record_Of := [others => 0];
+         elsif In_Reach (Item, Position)
+           and then Replay_Base (Item, Position) >= 0
          then
             --  Kept_Newest stays: the slots past the position still hold
             --  what was written there, and what decides whether a later
             --  rewind's slot is intact is the highest position ever
-            --  written, not the committed count.
-            null;
+            --  written, not the committed count. A slot a check left a
+            --  record in is made a state here.
+            declare
+               Made : Boolean;
+            begin
+               Make_Real (Item, Position, Made);
+               if not Made then
+                  Status := E.Make (E.Tensor_Shape_Mismatch);
+                  E.Add_Integer (Status, "input", Long_Long_Integer (Position));
+                  E.Add_Integer
+                    (Status, "expected",
+                     Long_Long_Integer
+                       (Natural'Max (0, Item.Kept_Newest - Item.Kept_States)));
+                  return;
+               end if;
+            end;
          elsif Item.Check_At > 0 and then Position = Item.Check_At
            and then Item.Check_On_Device and then Item.State_Seated
          then
@@ -8067,6 +8272,9 @@ package body Model_Runner.Llama is
             Item.State_On_Device := True;
             Item.Ring_Written := False;
             Item.Kept_Newest := Position;
+            if State_Slot (Item, Position) < Ring_Most then
+               Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
+            end if;
          elsif Item.Check_At > 0 and then Position = Item.Check_At
            and then not Item.Check_On_Device
            and then Item.Check_State /= null and then Item.Check_Conv /= null
@@ -8090,6 +8298,9 @@ package body Model_Runner.Llama is
             Item.State_On_Device := False;
             Item.Ring_Written := True;
             Item.Kept_Newest := Position;
+            if State_Slot (Item, Position) < Ring_Most then
+               Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
+            end if;
          else
             Status := E.Make (E.Tensor_Shape_Mismatch);
             E.Add_Integer (Status, "input", Long_Long_Integer (Position));
@@ -8171,6 +8382,7 @@ package body Model_Runner.Llama is
          Item.Delta_State := States;
          Item.Conv_State := Convs;
          Item.Kept_States := Count;
+         Item.Record_Of := [others => 0];
          Item.Kept_Newest := Item.Committed;
       end;
    end Keep_States;
@@ -8218,6 +8430,7 @@ package body Model_Runner.Llama is
       Item.State_On_Device := False;
       Item.Ring_Written := False;
       Item.Kept_Newest := 0;
+      Item.Record_Of := [others => 0];
       Item.Check_At := 0;
       Item.Check_On_Device := False;
 
@@ -8702,6 +8915,12 @@ package body Model_Runner.Llama is
                then
                   Written_State (T) :=
                     State_Slot (Item, First + Natural (T) + 1) * Every + States;
+                  if State_Slot (Item, First + Natural (T) + 1) < Ring_Most
+                  then
+                     Item.Record_Of
+                       (Natural (State_Slot (Item, First + Natural (T) + 1))) :=
+                       0;
+                  end if;
                   Written_Conv (T) :=
                     State_Slot (Item, First + Natural (T) + 1) * Every_Conv
                     + Memory;
@@ -10003,6 +10222,15 @@ package body Model_Runner.Llama is
            State_Slot (Item, Item.Committed);
          Read        : Boolean := True;
       begin
+         --  A record where the state should be is made the state first.
+         if Record_At (Item, Item.Committed) /= 0 then
+            Make_Real (Item, Item.Committed, Read);
+            if not Read then
+               Item.Check_At := 0;
+               return;
+            end if;
+         end if;
+
          --  On the device, into the slot past the ring, where the session
          --  has one and the device holds the newer copy.
          if Item.Check_Slot and then Item.State_On_Device
@@ -10100,8 +10328,7 @@ package body Model_Runner.Llama is
       if Item.Delta_State /= null and then Wanted < Item.Committed
         and then Wanted > 0
       then
-         if Wanted <= Item.Kept_Newest
-           and then Item.Kept_Newest - Wanted <= Item.Kept_States
+         if In_Reach (Item, Wanted) and then Replay_Base (Item, Wanted) >= 0
          then
             null;
          elsif Item.Check_At > 0 and then Item.Check_At <= Wanted then

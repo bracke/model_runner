@@ -76,6 +76,7 @@ shared float between[CHUNK * CHUNK];
 shared float gram[CHUNK * CHUNK];
 shared float cross[CHUNK * CHUNK];
 shared uint written[CHUNK];
+shared bool recorded[CHUNK];
 shared float root[CHUNK];
 shared vec4 keys[CHUNK * STRIDE];
 shared vec4 queries[CHUNK * STRIDE];
@@ -110,6 +111,7 @@ uint value_of;
 uint answer;
 uint head_at;
 uint kept_from;
+bool lazy;
 float a_log;
 float dt_bias;
 
@@ -133,13 +135,19 @@ void chunk(const uint n, uint done) {
 
             //  The positions the host keeps, and the run's last, which
             //  the next batch begins from.
+            //  Where the host asked for records, every kept position but
+            //  the last leaves what made its state rather than the state:
+            //  rule_replay.comp makes it again from them if a rewind asks.
             uint slot = (first + done + t + 1u) % slots;
-            bool keep = done + t >= kept_from || done + t + 1u == run_count;
+            bool last = done + t + 1u == run_count;
+            bool keep = done + t >= kept_from || last;
             written[t] = keep ? head_at + slot * shape.every : NOWHERE;
+            recorded[t] = lazy && !last;
         } else {
             decay[t] = 1.0;
             rate[t] = 0.0;
             written[t] = NOWHERE;
+            recorded[t] = false;
         }
     }
 
@@ -273,14 +281,28 @@ void chunk(const uint n, uint done) {
         [[unroll]] for (uint v = 0u; v < HELD / 4u; v++) {
             vec4 key = keys[t * STRIDE + part * (HELD / 4u) + v];
 
+            //  Written as rule_replay.comp writes it, so that a state made
+            //  again from its record is this one to the bit.
             [[unroll]] for (uint k = 0u; k < 4u; k++) {
-                st[v * 4u + k] = st[v * 4u + k] * decay[t] + key[k] * fix[t];
+                precise float pushed = key[k] * fix[t];
+                st[v * 4u + k] = fma(st[v * 4u + k], decay[t], pushed);
             }
         }
 
         uint to = written[t];
 
-        if (to != NOWHERE) {
+        if (to != NOWHERE && recorded[t]) {
+            //  The record: this column's correction, the head's key, and
+            //  the decay, in the first three rows of the slot's state.
+            if (part == 0u) {
+                s[to + cl] = fix[t];
+                s[to + HEAD + cl] = keys[t * STRIDE + cl / 4u][cl % 4u];
+
+                if (cl == 0u) {
+                    s[to + 2u * HEAD] = decay[t];
+                }
+            }
+        } else if (to != NOWHERE) {
             [[unroll]] for (uint e = 0u; e < HELD; e++) {
                 s[to + (part * HELD + e) * HEAD + cl] = st[e];
             }
@@ -332,7 +354,8 @@ void main() {
     first = tab[at + 1u];
     run_count = tab[at + 2u];
     row0 = tab[at + 3u];
-    slots = tab[at + 4u];
+    slots = tab[at + 4u] & 0x7FFFFFFFu;
+    lazy = (tab[at + 4u] & 0x80000000u) != 0u;
 
     uint kh = h % shape.key_heads;
     query_of = kh * HEAD;

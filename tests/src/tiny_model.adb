@@ -73,10 +73,15 @@ package body Tiny_Model is
       Depth        : Natural := 0;
       Code_Norms   : Boolean := True;
       Ranking      : Boolean := False;
-      Padding      : Natural := 0)
+      Padding      : Natural := 0;
+      Wide_State   : Boolean := False)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
+
+      --  A Qwen3.5's linear head width.
+      State_Width : constant Natural :=
+        (if Wide_State then 128 else Linear_State);
 
       Quantized : constant Boolean :=
         Format in Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0
@@ -627,20 +632,22 @@ package body Tiny_Model is
       end if;
 
       --  The hybrid's linear layers: every second block attends in full;
-      --  the rest keep a state of Linear_State by Linear_State a value
+      --  the rest keep a state of State_Width by State_Width a value
       --  head over Linear_Heads key heads and as many value heads, after
       --  a convolution Linear_Taps long. The inner size is the value
       --  heads times the state, which the reader checks.
       if Kind = Qwen35 then
          Fixtures.Add_U32 (Builder, Prefix & ".full_attention_interval", 2);
-         Fixtures.Add_U32 (Builder, Prefix & ".ssm.state_size", Linear_State);
+         Fixtures.Add_U32
+           (Builder, Prefix & ".ssm.state_size",
+            Interfaces.Unsigned_32 (State_Width));
          Fixtures.Add_U32 (Builder, Prefix & ".ssm.group_count", Linear_Heads);
          Fixtures.Add_U32
            (Builder, Prefix & ".ssm.time_step_rank", Linear_Heads);
          Fixtures.Add_U32 (Builder, Prefix & ".ssm.conv_kernel", Linear_Taps);
          Fixtures.Add_U32
            (Builder, Prefix & ".ssm.inner_size",
-            Interfaces.Unsigned_32 (Linear_Heads * Linear_State));
+            Interfaces.Unsigned_32 (Linear_Heads * State_Width));
          Fixtures.Add_U32 (Builder, Prefix & ".nextn_predict_layers", 1);
       end if;
 
@@ -1403,8 +1410,8 @@ package body Tiny_Model is
             --  blend's gain and the way back.
             declare
                Mix : constant Natural :=
-                 (2 * Linear_Heads + Linear_Heads) * Linear_State;
-               Val : constant Natural := Linear_Heads * Linear_State;
+                 (2 * Linear_Heads + Linear_Heads) * State_Width;
+               Val : constant Natural := Linear_Heads * State_Width;
                Shape_Of_Decay : N.Real_Array (0 .. Linear_Heads - 1);
             begin
                Weight (Layer_Name (Index, "attn_qkv.weight"),
@@ -1430,7 +1437,7 @@ package body Tiny_Model is
                   [G.U64 (Linear_Taps), G.U64 (Mix)], G.Type_F32,
                   Fixtures.Encode_F32
                     (Next_Score (N.Element_Count (Linear_Taps * Mix))));
-               Gain_Of (Layer_Name (Index, "ssm_norm.weight"), Linear_State);
+               Gain_Of (Layer_Name (Index, "ssm_norm.weight"), State_Width);
                Weight (Layer_Name (Index, "ssm_out.weight"),
                        [G.U64 (Val), G.U64 (Embedding)]);
             end;
