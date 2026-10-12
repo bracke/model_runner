@@ -138,6 +138,27 @@ procedure Tests_Main is
       return Model_Runner.Backend.CPU.Every_Role;
    end Roles_Named;
 
+   --  How many turn files a --turns directory holds, at least one so that
+   --  an empty one is a run that says what is wrong with it.
+   function Turn_Count (Directory : String) return Positive is
+      Search : Ada.Directories.Search_Type;
+      Item   : Ada.Directories.Directory_Entry_Type;
+      Count  : Natural := 0;
+   begin
+      if not Ada.Directories.Exists (Directory) then
+         return 1;
+      end if;
+      Ada.Directories.Start_Search
+        (Search, Directory, "",
+         [Ada.Directories.Ordinary_File => True, others => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+         Count := Count + 1;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      return Positive'Max (1, Natural'Min (Count, 256));
+   end Turn_Count;
+
    --  The layout `run` takes when none is named: the panels on the
    --  processor where they fit, the file's rows otherwise. What a tool
    --  measuring run's products asks for unasked.
@@ -3060,7 +3081,10 @@ begin
                   Draft_Tokens_Set => Given ("--draft-tokens"),
                   Draft_Lookup => Given ("--draft-lookup"),
                   Draft_Next  => Given ("--draft-next"),
-                  Repeats     => Number ("--repeats", 3),
+                  Repeats     =>
+                    (if Option ("--turns", "") /= ""
+                     then Turn_Count (Option ("--turns", ""))
+                     else Number ("--repeats", 3)),
                   Budget      => Given ("--budget"),
                   Timeline    => Timeline,
                   Context     => Whole ("--context-size"),
@@ -3079,7 +3103,8 @@ begin
                   Ignore_End  => Given ("--ignore-eos"),
                   Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
                   Draft_Adapts => Given ("--draft-adapts"),
-                  Result      => Into);
+                  Result      => Into,
+                  Turns       => Option ("--turns", ""));
             end Measure;
 
             Set : constant String := Option ("--prompt-set", "");

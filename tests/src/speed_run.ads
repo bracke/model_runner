@@ -181,6 +181,10 @@ package Speed_Run is
    --  @param Draft_Adapts Whether a round's length follows what the rounds
    --    before kept, as run's own drafting from the store does.
    --  @param Result What it measured.
+   --  @param Turns A directory of turn files: each pass one turn, the
+   --    prompt every file so far in their names' order, in one session
+   --    that keeps what it read, a line said for each; Repeats is then the
+   --    number of turns. Empty, every pass a fresh session.
    procedure Run
      (Path        : String;
       Prompt_Path : String;
@@ -207,7 +211,8 @@ package Speed_Run is
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Draft_Adapts : Boolean := False;
-      Result      : out Report);
+      Result      : out Report;
+      Turns       : String := "");
 
    --  The digest this tool prints, over any text.
    --

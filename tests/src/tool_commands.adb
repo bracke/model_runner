@@ -47,7 +47,7 @@ package body Tool_Commands is
      " --model --prompt-file --prompt-set --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next --draft-floor --draft-adapts"
-     & " --kv-cache --repeats"
+     & " --kv-cache --repeats --turns"
      & " --paged --no-paged"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory --ignore-eos ";
@@ -87,7 +87,7 @@ package body Tool_Commands is
      & " [--threads N] [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
      & " [--repeat-penalty X] [--draft-model PATH] [--draft-tokens N]"
      & " [--draft-lookup] [--draft-next] [--draft-floor P] [--draft-adapts]"
-     & " [--kv-cache MODE] [--repeats N] [--paged] [--no-paged]"
+     & " [--kv-cache MODE] [--repeats N] [--turns DIR] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"
      & " [--device-memory BYTES]";

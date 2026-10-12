@@ -155,7 +155,8 @@ package body Speed_Run is
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Draft_Adapts : Boolean := False;
-      Result      : out Report)
+      Result      : out Report;
+      Turns       : String := "")
    is
       use type Model_Runner.Backend.Backend_Kind;
 
@@ -257,6 +258,58 @@ package body Speed_Run is
          end As_Commanded;
 
          Prompt : constant String := As_Commanded;
+
+         --  In turns, each pass one turn of a conversation held in one
+         --  session: the prompt every turn file so far, in their names'
+         --  order, so the session holds the turns before and reads only
+         --  the new one -- what a conversation's warm turn costs, which a
+         --  pass in a fresh session cannot say.
+         Turning : constant Boolean := Turns /= "";
+
+         function Turn_File (Index : Positive) return String is
+            Names  : Ada.Strings.Unbounded.Unbounded_String;
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+            type Name_List is array (1 .. 256) of Ada.Strings.Unbounded.Unbounded_String;
+            List  : Name_List;
+            Count : Natural := 0;
+         begin
+            Ada.Directories.Start_Search
+              (Search, Turns, "", [Ada.Directories.Ordinary_File => True, others => False]);
+            while Ada.Directories.More_Entries (Search) and then Count < List'Last loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               Count := Count + 1;
+               List (Count) := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Ada.Directories.Full_Name (Item));
+            end loop;
+            Ada.Directories.End_Search (Search);
+            for I in 2 .. Count loop
+               for J in reverse 2 .. I loop
+                  exit when Ada.Strings.Unbounded."<=" (List (J - 1), List (J));
+                  Names := List (J);
+                  List (J) := List (J - 1);
+                  List (J - 1) := Names;
+               end loop;
+            end loop;
+            return (if Index <= Count
+                    then Project_Tools.Files.Read_Raw_File
+                           (Ada.Strings.Unbounded.To_String (List (Index)))
+                    else "");
+         end Turn_File;
+
+         function Turn_Prompt (Pass : Positive) return String is
+         begin
+            if not Turning then
+               return Prompt;
+            elsif Pass = 1 then
+               return Turn_File (1);
+            else
+               return Turn_Prompt (Pass - 1) & ASCII.LF & Turn_File (Pass);
+            end if;
+         end Turn_Prompt;
+
+         Shared_Session : aliased L.Session;
+         Shared_Draft   : aliased L.Session;
 
          Started : Ada.Real_Time.Time;
          Spent_At : Long_Float := 0.0;
@@ -443,17 +496,32 @@ package body Speed_Run is
 
             for Pass in 1 .. Repeats loop
                declare
-                  Session : L.Session;
-                  Draft_Session : aliased L.Session;
+                  Own_Session : aliased L.Session;
+                  Own_Draft   : aliased L.Session;
+                  Session_At  : constant access L.Session :=
+                    (if Turning then Shared_Session'Access
+                     else Own_Session'Access);
+                  Draft_At    : constant access L.Session :=
+                    (if Turning then Shared_Draft'Access
+                     else Own_Draft'Access);
+                  Session : L.Session renames Session_At.all;
+                  Draft_Session : L.Session renames Draft_At.all;
+                  --  A turn after the first goes on in the session the
+                  --  first opened, and only the last turn closes it.
+                  Opening : constant Boolean := not Turning or else Pass = 1;
+                  Closing : constant Boolean :=
+                    not Turning or else Pass = Repeats;
                   Stop    : Model_Runner.Stops.Set;
                   Sink    : aliased Discard;
                   Request : Gen.Request;
                   Outcome : Gen.Result;
                   Local   : E.Error_Info;
                begin
-                  L.Open (Session, Engine, Context => Context,
-                          Workers => Where, Cache => Cache, Status => Local,
-                          Paged => Paged);
+                  if Opening then
+                     L.Open (Session, Engine, Context => Context,
+                             Workers => Where, Cache => Cache, Status => Local,
+                             Paged => Paged);
+                  end if;
                   if E.Is_Error (Local) then
                      Say ("the session would not open: "
                           & E.Error_Code'Image (Local.Code));
@@ -464,7 +532,7 @@ package body Speed_Run is
                   --  and not the buffers being made ready for it.
                   L.Account (Session, Budget);
 
-                  if Drafting then
+                  if Drafting and then Opening then
                      --  As the command opens it: the same context, cache and
                      --  paging as the session it drafts for. Opened with the
                      --  model's own context, unpaged and in binary32, a
@@ -482,6 +550,7 @@ package body Speed_Run is
                   Request.Max_Tokens := Tokens;
                   Request.Ignore_End := Ignore_End;
                   Request.Draft_Floor := Draft_Floor;
+                  Request.Reuse_Committed_Prefix := Turning;
 
                   --  As the command sets it: a backend that does not batch
                   --  gets one, whatever was asked for. Passing the asked-for
@@ -557,7 +626,7 @@ package body Speed_Run is
                   Started := Ada.Real_Time.Clock;
                   Spent_At := Host_Load.Processor_Seconds;
                   Gen.Generate
-                    (Engine, Session, Prompt, Request, Stop, null,
+                    (Engine, Session, Turn_Prompt (Pass), Request, Stop, null,
                      Sink'Unchecked_Access, null, Timer'Unchecked_Access,
                      null, null,
                      Draft =>
@@ -616,7 +685,23 @@ package body Speed_Run is
                      exit;
                   end if;
 
-                  Result.Prompt := Outcome.Prompt_Tokens;
+                  if Turning then
+                     IO.Put_Line
+                       (IO.Standard_Error,
+                        "  turn" & Natural'Image (Pass) & ":"
+                        & Natural'Image (Outcome.Prompt_Tokens - Outcome.Reused_Tokens)
+                        & " new prompt tokens of" & Natural'Image (Outcome.Prompt_Tokens)
+                        & ", " & T.Image (Long_Float (Evaluates (Pass)), 3) & " s reading them, "
+                        & Natural'Image (Outcome.Generated_Tokens) & " generated in "
+                        & T.Image (Long_Float (Generates (Pass)), 3) & " s");
+                  end if;
+
+                  --  In turns, the tokens a turn read: what the median
+                  --  rate is of.
+                  Result.Prompt :=
+                    (if Turning
+                     then Outcome.Prompt_Tokens - Outcome.Reused_Tokens
+                     else Outcome.Prompt_Tokens);
                   Result.Produced := Outcome.Generated_Tokens;
                   Result.Drafted := Outcome.Drafted;
                   Result.Accepted := Outcome.Accepted;
@@ -665,10 +750,12 @@ package body Speed_Run is
                   end if;
 
                   Model_Runner.Stops.Close (Stop);
-                  if Drafting then
-                     L.Close (Draft_Session);
+                  if Closing then
+                     if Drafting then
+                        L.Close (Draft_Session);
+                     end if;
+                     L.Close (Session);
                   end if;
-                  L.Close (Session);
                   Gen.Release (Outcome);
                end;
             end loop;
