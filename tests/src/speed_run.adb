@@ -799,6 +799,13 @@ package body Speed_Run is
    function Summary (Item : Report) return String is
       function Seconds (Value : Duration) return String
       is (T.Image (Long_Float (Value), 3) & " s");
+
+      --  Tokens a second, as llama-bench says them, so a comparison is read
+      --  rather than worked out: " (N t/s)", or nothing where no time was
+      --  spent.
+      function Rate (Tokens : Natural; Spent : Duration) return String
+      is (if Tokens = 0 or else Spent <= 0.0 then ""
+          else " (" & T.Image (Long_Float (Tokens) / Long_Float (Spent), 2) & " t/s)");
    begin
       if Item.Missing or else not Item.Ran then
          return Item.Detail (1 .. Item.Detail_Up);
@@ -808,8 +815,10 @@ package body Speed_Run is
         & Natural'Image (Item.Prompt) & " prompt tokens,"
         & Natural'Image (Item.Produced) & " generated; "
         & Seconds (Item.Wall) & " wall -- "
-        & Seconds (Item.Evaluate) & " evaluating the prompt and "
-        & Seconds (Item.Generate) & " generating; loading took "
+        & Seconds (Item.Evaluate) & " evaluating the prompt"
+        & Rate (Item.Prompt, Item.Evaluate) & " and "
+        & Seconds (Item.Generate) & " generating"
+        & Rate (Item.Produced, Item.Generate) & "; loading took "
         & Seconds (Item.Load) & "; output " & Item.Digest
         & (if Item.Drafted = 0 then ""
            else ", proposed" & Natural'Image (Item.Drafted)

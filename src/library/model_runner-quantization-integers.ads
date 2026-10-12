@@ -210,8 +210,8 @@ package Model_Runner.Quantization.Integers is
    procedure Use_Deep_Rows (Allowed : Boolean);
 
    --  Whether a product of two to four vectors in this format has a kernel
-   --  of its own here, which reads each weight once for them all: Q4_K,
-   --  where the deepest compilation runs. Elsewhere a caller does better
+   --  of its own here, which reads each weight once for them all: Q4_K and
+   --  the grid formats, where the deepest compilation runs. Elsewhere a caller does better
    --  taking a few vectors one at a time than on the tile meant for many.
    --
    --  @param Format The weights' format.

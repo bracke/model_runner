@@ -71,6 +71,10 @@ private package Model_Runner.Quantization.Grid_Integers is
    --  @return Where IQ1's two offset words are, +1 then -1.
    function Offset_Words_Address return System.Address;
 
+   --  @return Where a byte's eight bits are, a byte each, 0 or 1: IQ3_S's
+   --    ninth index bits, widened beside its eight index bytes.
+   function Bit_Bytes_Address return System.Address;
+
    --  A super-block's factors, two a sub-block of thirty-two: the first
    --  sixteen elements' and the last sixteen's, each the sub-block's scale
    --  as the format states it (for IQ1, over eight) -- the block's half not

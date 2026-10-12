@@ -1,9 +1,11 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
+with Hostkit.Parent_Watch;
 with Model_Runner.CLI.Execute;
 with Model_Runner.Config;
 with Model_Runner.Errors;
@@ -354,6 +356,20 @@ package body Model_Runner.CLI.Driver is
    procedure Run_Process (Status : out Natural) is
       Source : Opt.Process_Arguments;
    begin
+      --  Started by a harness that asks it to end with the harness:
+      --  agent-trial's copies, which hold a loaded model for minutes and
+      --  ran on, adopted, when the trial was stopped. Asked, never assumed:
+      --  a person's run outlives the program it was started from.
+      if Ada.Environment_Variables.Exists ("MODEL_RUNNER_END_WITH_PARENT")
+        and then Ada.Environment_Variables.Value ("MODEL_RUNNER_END_WITH_PARENT") = "1"
+      then
+         declare
+            Arranged : constant Boolean := Hostkit.Parent_Watch.End_With_Parent;
+            pragma Unreferenced (Arranged);
+         begin
+            null;
+         end;
+      end if;
       Run (Source, Status);
    end Run_Process;
 

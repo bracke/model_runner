@@ -460,6 +460,9 @@ package body Agent_Trial is
                      end if;
                      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
                      Spawned.Environment.Append (To_Unbounded_String ("TERM=xterm"));
+                     --  The copy ends with the trial: stopped, it ran on with
+                     --  its model loaded.
+                     Spawned.Environment.Append (To_Unbounded_String ("MODEL_RUNNER_END_WITH_PARENT=1"));
                      Spawned.Replace_Environment := True;
                      Spawned.Working_Directory := To_Unbounded_String (Root);
                      if not (Hostkit.Pty.Set_Size (Pair, (Rows => 50, Columns => 200))

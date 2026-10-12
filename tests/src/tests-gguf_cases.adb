@@ -1922,7 +1922,7 @@ package body Tests.GGUF_Cases is
             Blocks  : constant N.Element_Count := 4;
             Columns : constant N.Element_Count := 256 * Blocks;
             Rows    : constant N.Element_Count := 4;
-            Count   : constant N.Element_Count := 6;
+            Count   : constant N.Element_Count := 10;
             Data    : B.Byte_Array (0 .. Width * B.Byte_Count (Blocks * Rows) - 1);
             Vectors : N.Real_Array (0 .. Columns * Count - 1);
             Values  : QI.Signed_Array (0 .. Columns * Count - 1);
@@ -1937,9 +1937,9 @@ package body Tests.GGUF_Cases is
 
             procedure Check (Wide_Rows, Deep_Rows : Boolean; Name : String) is
             begin
-               --  One vector and two take the kernel that decodes in its
-               --  registers; more, the one that decodes a block once, four
-               --  vectors a pass and the rest singly.
+               --  Up to eight take the kernel that decodes in its registers,
+               --  four vectors a decoding and the rest singly; more, the one
+               --  that decodes a block once, four vectors a pass.
                for Taken in 1 .. Count loop
                   Check_Count (Wide_Rows, Deep_Rows, Name & Taken'Image & " vectors", Taken);
                end loop;

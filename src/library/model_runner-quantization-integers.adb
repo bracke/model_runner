@@ -34,7 +34,11 @@ package body Model_Runner.Quantization.Integers is
    function Takes_Few_Together
      (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
    is (Deeper
-       and then Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q4_K));
+       and then (Model_Runner.GGUF."=" (Format, Model_Runner.GGUF.Type_Q4_K)
+                 --  The grid formats decode a block once for four vectors in
+                 --  their registers; a vector at a time decoded it for each,
+                 --  and a drafted check of four cost three tokens.
+                 or else Model_Runner.Quantization.Grid_Integers.Is_Grid (Format)));
 
    procedure Use_Deep_Rows (Allowed : Boolean) is
    begin
