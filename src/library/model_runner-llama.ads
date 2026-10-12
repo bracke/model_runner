@@ -1029,6 +1029,21 @@ package Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Bring into memory, a page at a time, what the processor will read of
+   --  a model a device runs the rest of: a split dense model's feed-forward
+   --  the host holds, in its panels and as the file has it for streaming,
+   --  and a mixture's experts where they are not stacks on the device.
+   --  A token reads only some of these, and a cold file is read from the
+   --  disk at the first prompt that asks; read here in the background
+   --  while a conversation's first line is typed, they are read before.
+   --  Nothing is written; Stop is asked between matrices.
+   --
+   --  @param Item Prepared model.
+   --  @param Stop Asked to stop, or null.
+   procedure Warm_Host_Pages
+     (Item : Model;
+      Stop : Model_Runner.Cancellation.Token_Reference := null);
+
    --  The format the output head is read in, which Lighten_Head changes.
    --
    --  @param Item Prepared model.

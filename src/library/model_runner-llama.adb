@@ -2283,6 +2283,64 @@ package body Model_Runner.Llama is
       end loop;
    end Lighten_Next_Block;
 
+   ---------------------
+   -- Warm_Host_Pages --
+   ---------------------
+
+   procedure Warm_Host_Pages
+     (Item : Model;
+      Stop : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Seen : B.Byte := 0 with Volatile;
+
+      procedure Touch (View : T.View);
+
+      procedure Touch (View : T.View) is
+         Page : constant B.Byte_Count := 4096;
+      begin
+         if View.Span = 0
+           or else System."=" (View.Base, System.Null_Address)
+           or else Model_Runner.Cancellation.Is_Cancelled (Stop)
+         then
+            return;
+         end if;
+
+         declare
+            Held : B.Byte_Array (1 .. View.Span)
+              with Import, Address => View.Base, Volatile;
+            At_Byte : B.Byte_Count := 1;
+         begin
+            while At_Byte <= View.Span loop
+               Seen := Seen xor Held (At_Byte);
+               At_Byte := At_Byte + Page;
+            end loop;
+         end;
+      end Touch;
+   begin
+      if Item.Layers = null or else not Item.Split_Feed then
+         return;
+      end if;
+
+      for Layer of Item.Layers.all loop
+         if Layer.Host_Feed then
+            Touch (Layer.Gate);
+            Touch (Layer.Up);
+            Touch (Layer.Down);
+            Touch (Layer.File_Gate);
+            Touch (Layer.File_Up);
+            Touch (Layer.File_Down);
+         end if;
+
+         if Layer.Experts /= null and then not Item.Stacked then
+            for One of Layer.Experts.all loop
+               Touch (One.Gate);
+               Touch (One.Up);
+               Touch (One.Down);
+            end loop;
+         end if;
+      end loop;
+   end Warm_Host_Pages;
+
    -----------------
    -- Head_Format --
    -----------------

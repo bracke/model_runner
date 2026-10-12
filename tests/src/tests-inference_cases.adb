@@ -2035,6 +2035,61 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Lightened_Draft_Head_Leaves_The_Model_Alone;
 
+   --  Reading the host's pages ahead changes nothing a token answers:
+   --  the model's logits are the same bits before and after, asked to
+   --  stop at once or let run.
+   procedure Warming_Host_Pages_Changes_Nothing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room : constant := 64;
+
+      Image  : B.Byte_Array_Access;
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room,
+         Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : aliased Harness (Held'Access);
+         Status : E.Error_Info;
+         Stop   : aliased Model_Runner.Cancellation.Token;
+
+         procedure Read (Logits : out Logit_Vector) is
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Logits, Status => Status);
+               Assert (E.Is_Ok (Status), "evaluation failed");
+            end loop;
+            L.Close (Live);
+         end Read;
+
+         Before, After, Stopped : Logit_Vector;
+      begin
+         Start (Under);
+         Read (Before);
+         L.Warm_Host_Pages (Under.Ready);
+         Read (After);
+         Stop.Request;
+         L.Warm_Host_Pages (Under.Ready, Stop'Unchecked_Access);
+         Read (Stopped);
+
+         for Index in Before'Range loop
+            Assert (After (Index) = Before (Index)
+                    and then Stopped (Index) = Before (Index),
+                    "a logit moved at" & N.Element_Count'Image (Index));
+         end loop;
+      end;
+
+      B.Free (Image);
+   end Warming_Host_Pages_Changes_Nothing;
+
    --  The block past the stack's own eight-bit matrices written again at
    --  four bits: the model's logits do not move by a bit, and the block's
    --  drafted ones move, by less than three tenths of their largest.
@@ -15699,6 +15754,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Lightened_Draft_Head_Leaves_The_Model_Alone'Access,
          "the block's rows at four bits move its drafts and not the model");
+      Register_Routine
+        (T, Warming_Host_Pages_Changes_Nothing'Access,
+         "reading the host's pages ahead changes no logit");
       Register_Routine
         (T, A_Lightened_Next_Block_Leaves_The_Model_Alone'Access,
          "the block's own matrices at four bits move its drafts and not the "

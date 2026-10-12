@@ -26,6 +26,8 @@ with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
+with Model_Runner.Tensors;
+with Model_Runner.Numerics;
 with Model_Runner.UTF8;
 with Model_Runner.CLI.Pictures;
 with Model_Runner.Vision;
@@ -302,6 +304,51 @@ package body Model_Runner.CLI.Interactive is
    ---------
    -- Run --
    ---------
+
+   --  The pages the processor will read of a split model, brought in
+   --  behind the conversation (Llama.Warm_Host_Pages). Not a task of Run's:
+   --  the first turn does not wait for it, as it does for the token below,
+   --  and it may outlast a line typed quickly. Told to stop and waited for
+   --  when Run is left, before the model it reads is closed.
+   Touch_Stop : aliased Model_Runner.Cancellation.Token;
+
+   type Model_Reference is access constant L.Model;
+
+   task type Page_Toucher is
+      entry Start (Source : Model_Reference);
+   end Page_Toucher;
+
+   task body Page_Toucher is
+      Held : Model_Reference;
+   begin
+      accept Start (Source : Model_Reference) do
+         Held := Source;
+      end Start;
+      L.Warm_Host_Pages (Held.all, Touch_Stop'Access);
+   exception
+      when others =>
+         null;
+   end Page_Toucher;
+
+   type Toucher_Access is access Page_Toucher;
+
+   --  Stops the toucher and waits for it as Run is left, however it is.
+   type Toucher_Guard is new Ada.Finalization.Limited_Controlled with record
+      Running : Toucher_Access := null;
+   end record;
+
+   overriding procedure Finalize (Guard : in out Toucher_Guard);
+
+   overriding procedure Finalize (Guard : in out Toucher_Guard) is
+   begin
+      if Guard.Running /= null then
+         Touch_Stop.Request;
+         while not Guard.Running'Terminated loop
+            delay 0.01;
+         end loop;
+         Touch_Stop.Reset;
+      end if;
+   end Finalize;
 
    procedure Run
      (Item     : Opt.Command;
@@ -1192,6 +1239,66 @@ package body Model_Runner.CLI.Interactive is
          end;
       end Submit;
 
+      --  The weights read once while the first line is typed: a token run
+      --  through a session that holds nothing, which uploads what the
+      --  device keeps and brings into memory what the processor reads,
+      --  and the session given back empty. ThinkingCap's first prompt
+      --  carried eleven gigabytes of uploads otherwise. The first line
+      --  waits for it, and every line after finds it done.
+      protected Warming is
+         procedure Finish;
+         entry Settled;
+      private
+         Done : Boolean := False;
+      end Warming;
+
+      protected body Warming is
+         procedure Finish is
+         begin
+            Done := True;
+         end Finish;
+
+         entry Settled when Done is
+         begin
+            null;
+         end Settled;
+      end Warming;
+
+      Toucher : Toucher_Guard;
+
+      task Warmer;
+
+      task body Warmer is
+      begin
+         if L.Position (Session) = 0 then
+            declare
+               use type Model_Runner.Tensors.Real_Array_Access;
+               Logits : Model_Runner.Tensors.Real_Array_Access := null;
+               Local  : E.Error_Info;
+            begin
+               Model_Runner.Tensors.Allocate
+                 (Model_Runner.Numerics.Element_Count
+                    (L.Config (Prepared).Vocabulary),
+                  Logits);
+               if Logits /= null then
+                  L.Evaluate
+                    (Session, Prepared, Words.Beginning_Token, Logits,
+                     Status => Local);
+                  L.Reset (Session);
+                  Model_Runner.Tensors.Free (Logits);
+               end if;
+            end;
+         end if;
+         Warming.Finish;
+
+         --  And the processor's pages behind it, read on alone.
+         Toucher.Running := new Page_Toucher;
+         Toucher.Running.Start (Prepared'Unchecked_Access);
+      exception
+         when others =>
+            Warming.Finish;
+      end Warmer;
+
    begin
       Status := E.Exit_Success;
 
@@ -1408,6 +1515,10 @@ package body Model_Runner.CLI.Interactive is
                   Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
                   exit Read_Loop;
             end;
+
+            --  The weights' first reading, done by now unless this is the
+            --  first line and it came quickly.
+            Warming.Settled;
 
             --  A line longer than the buffer arrives in pieces. Joining them
             --  would be the same turn; treating each as a line would put line
