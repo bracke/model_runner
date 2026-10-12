@@ -103,11 +103,9 @@ package body Model_Runner.Quantization.Grid_Integers is
 
    function Bit_Bytes_Address return System.Address is (Bit_Bytes (0)'Address);
 
-   --  2k + 1 for a field k, and the same over four and over eight.
+   --  2k + 1 for a field k.
    type Odd_Table is array (U8 range 0 .. 15) of N.Real;
    Odd_1 : constant Odd_Table := [for K in U8 range 0 .. 15 => N.Real (2 * Integer (K) + 1)];
-   Odd_4 : constant Odd_Table := [for K in U8 range 0 .. 15 => N.Real (2 * Integer (K) + 1) * 0.25];
-   Odd_8 : constant Odd_Table := [for K in U8 range 0 .. 15 => N.Real (2 * Integer (K) + 1) * 0.125];
 
    procedure Factors_Of
      (Format    : G.Tensor_Type;
@@ -131,7 +129,7 @@ package body Model_Runner.Quantization.Grid_Integers is
          when G.Type_IQ2_XXS =>
             Half_Bits := Read_16 (0);
             for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_8 (Interfaces.Shift_Right (Raw (2 + B.Byte_Count (Sub) * 8 + 7), 4));
+               Factors (2 * Sub) := Odd_1 (Interfaces.Shift_Right (Raw (2 + B.Byte_Count (Sub) * 8 + 7), 4));
                Factors (2 * Sub + 1) := Factors (2 * Sub);
             end loop;
          when G.Type_IQ2_XS | G.Type_IQ2_S =>
@@ -140,14 +138,14 @@ package body Model_Runner.Quantization.Grid_Integers is
                declare
                   SB : constant U8 := Raw ((if Format = G.Type_IQ2_XS then 66 else 74) + B.Byte_Count (Sub));
                begin
-                  Factors (2 * Sub) := Odd_8 (SB and 16#0F#);
-                  Factors (2 * Sub + 1) := Odd_8 (Interfaces.Shift_Right (SB, 4));
+                  Factors (2 * Sub) := Odd_1 (SB and 16#0F#);
+                  Factors (2 * Sub + 1) := Odd_1 (Interfaces.Shift_Right (SB, 4));
                end;
             end loop;
          when G.Type_IQ3_XXS =>
             Half_Bits := Read_16 (0);
             for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_4 (Interfaces.Shift_Right (Raw (66 + B.Byte_Count (4 * Sub) + 3), 4));
+               Factors (2 * Sub) := Odd_1 (Interfaces.Shift_Right (Raw (66 + B.Byte_Count (4 * Sub) + 3), 4));
                Factors (2 * Sub + 1) := Factors (2 * Sub);
             end loop;
          when G.Type_IQ3_S =>
@@ -165,7 +163,7 @@ package body Model_Runner.Quantization.Grid_Integers is
          when G.Type_IQ1_S =>
             Half_Bits := Read_16 (0);
             for Sub in 0 .. 7 loop
-               Factors (2 * Sub) := Odd_8 (U8 (Interfaces.Shift_Right (Raw (35 + B.Byte_Count (2 * Sub)), 4) and 7));
+               Factors (2 * Sub) := Odd_1 (U8 (Interfaces.Shift_Right (Raw (35 + B.Byte_Count (2 * Sub)), 4) and 7));
                Factors (2 * Sub + 1) := Factors (2 * Sub);
             end loop;
          when G.Type_IQ1_M =>
@@ -181,8 +179,8 @@ package body Model_Runner.Quantization.Grid_Integers is
                      SW : constant U16 := SC (Sub / 2);
                      Sh : constant Natural := 6 * (Sub mod 2);
                   begin
-                     Factors (2 * Sub) := Odd_8 (U8 (Interfaces.Shift_Right (SW, Sh) and 7));
-                     Factors (2 * Sub + 1) := Odd_8 (U8 (Interfaces.Shift_Right (SW, Sh + 3) and 7));
+                     Factors (2 * Sub) := Odd_1 (U8 (Interfaces.Shift_Right (SW, Sh) and 7));
+                     Factors (2 * Sub + 1) := Odd_1 (U8 (Interfaces.Shift_Right (SW, Sh + 3) and 7));
                   end;
                end loop;
             end;

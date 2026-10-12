@@ -1984,7 +1984,9 @@ package body Tests.GGUF_Cases is
             for Index in Vectors'Range loop
                Vectors (Index) := N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
             end loop;
-            QI.Quantize_Vectors (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok);
+            QI.Quantize_Vectors
+              (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok,
+               Super => QI.Supers_Vectors (Format));
             Assert (Ok, "the activations could not be quantized");
             Check (False, False, "the baseline product");
             if Wide then

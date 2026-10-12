@@ -76,9 +76,11 @@ private package Model_Runner.Quantization.Grid_Integers is
    function Bit_Bytes_Address return System.Address;
 
    --  A super-block's factors, two a sub-block of thirty-two: the first
-   --  sixteen elements' and the last sixteen's, each the sub-block's scale
-   --  as the format states it (for IQ1, over eight) -- the block's half not
-   --  in them: its bits are given apart, for an instruction to widen.
+   --  sixteen elements' and the last sixteen's, each the sub-block's odd
+   --  scale as the format states it (2s + 1), whole -- the block's half and
+   --  the format's power of two not in them: the half's bits are given
+   --  apart, for an instruction to widen. IQ1_M's alone are read; the
+   --  others are worked out where they are used.
    type Factor_Block is array (0 .. 15) of Model_Runner.Numerics.Real
      with Alignment => 32;
 

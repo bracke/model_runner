@@ -101,7 +101,11 @@ package body Model_Runner.Quantization.Integers is
        or else Format = G.Type_Q6_K
        or else Format = G.Type_Q2_K
        or else Format = G.Type_Q3_K
-       or else Format = G.Type_IQ4_XS);
+       or else Format = G.Type_IQ4_XS
+       --  The grid formats as llama.cpp quantizes them for, one scale for
+       --  256: the kernel that decodes in its registers then sums a block's
+       --  sub-blocks as integers, each times its odd scale, and widens once.
+       or else Model_Runner.Quantization.Grid_Integers.Is_Grid (Format));
 
    ----------------------
    -- Quantize_Vectors --
