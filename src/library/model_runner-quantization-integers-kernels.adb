@@ -18780,7 +18780,8 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  thirty-five kilobytes, and it and the grids pushed each other out.
       type Vector_Lanes is array (0 .. Count - 1) of Lanes_8;
       Words : GI.Word_Block;
-      Lanes : GI.Lane_Block;
+      Odds  : GI.Odd_Block;
+      Unit  : aliased N.Real;
       Carry : Vector_Lanes;
 
       --  The grid formats decoded in the registers, where the byte product
@@ -18845,8 +18846,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -18883,8 +18883,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -18964,27 +18963,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19021,27 +19016,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19148,8 +19139,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19184,8 +19174,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19277,27 +19266,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19332,27 +19317,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19467,8 +19448,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -19504,8 +19484,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -19605,27 +19584,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -19661,27 +19636,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -19788,8 +19759,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19835,8 +19805,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19926,27 +19895,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -19992,27 +19957,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -20115,8 +20076,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -20141,8 +20101,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -20231,27 +20190,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -20276,27 +20231,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $8, %%rsi" & LF &
@@ -20411,8 +20362,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20449,8 +20399,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20548,27 +20497,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20605,27 +20550,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20746,8 +20687,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20787,8 +20727,7 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20893,27 +20832,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -20953,27 +20888,23 @@ package body Model_Runner.Quantization.Integers.Kernels is
                   "vmovdqu (%%rdi), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm16, %%ymm16" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm16" & LF &
                   "movq 64(%0), %%rax" & LF &
                   "addq %%rdi, %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm17, %%ymm17" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm17" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm18, %%ymm18" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm18" & LF &
                   "addq 64(%0), %%rax" & LF &
                   "vmovdqu (%%rax), %%ymm4" & LF &
                   "vpsignb %%ymm2, %%ymm4, %%ymm4" & LF &
                   "vpmaddubsw %%ymm4, %%ymm0, %%ymm1" & LF &
-                  "vpmaddwd %%ymm5, %%ymm1, %%ymm1" & LF &
-                  "vpaddd %%ymm1, %%ymm19, %%ymm19" & LF &
+                  "vpdpwssd %%ymm5, %%ymm1, %%ymm19" & LF &
                   "addq $32, %%rdi" & LF &
                   "addq $4, %%r9" & LF &
                   "addq $4, %%rsi" & LF &
@@ -21189,104 +21120,108 @@ package body Model_Runner.Quantization.Integers.Kernels is
             GI.Decode
               (Format, Data,
                Offset + Row_Bytes * B.Byte_Count (Row) + Width * B.Byte_Count (Block),
-               Words, Lanes);
+               Words, Odds, Unit);
 
-            --  Four vectors a pass: the block's bytes, their magnitudes and
-            --  its factors loaded once for the four, each vector's sign, dot
-            --  product and scale its own. What a prompt's batch spends its
-            --  time on; a vector at a time loaded the three again for each.
+            --  Four vectors a pass: the block's magnitudes and odd scales
+            --  loaded once for the four, each vector's sign and byte product
+            --  its own. The products sum as whole numbers across the block,
+            --  sixteen bits by the odd scale and thirty-two from there, and
+            --  turn into a real once, by the activation's one scale for the
+            --  block and the block's unit -- what the fused kernel does.
             if Deep then
                for Quad in 0 .. Count / 4 - 1 loop
                   declare
                      At_Value : constant Element_Count := First + 4 * Quad * Stride + Block * 256;
-                     type Address_Row is array (0 .. 9) of System.Address;
+                     type Address_Row is array (0 .. 10) of System.Address;
                      Pointers : aliased constant Address_Row :=
-                       [Words'Address, Lanes'Address,
+                       [Words'Address, Odds'Address,
                         Values (Values'First + At_Value)'Address,
                         Scales (Scales'First + At_Value / Activation_Block)'Address,
                         System.Storage_Elements.To_Address
                           (System.Storage_Elements.Integer_Address (Stride)),
                         System.Storage_Elements.To_Address
                           (System.Storage_Elements.Integer_Address (Stride / Activation_Block * 4)),
+                        Unit'Address,
                         Carry (4 * Quad)'Address, Carry (4 * Quad + 1)'Address,
                         Carry (4 * Quad + 2)'Address, Carry (4 * Quad + 3)'Address];
                   begin
                      System.Machine_Code.Asm
                        ("movq 48(%0), %%rax"                       & LF &
-                        "vmovaps (%%rax), %%ymm6"                  & LF &
-                        "movq 56(%0), %%rax"                       & LF &
-                        "vmovaps (%%rax), %%ymm10"                 & LF &
-                        "movq 64(%0), %%rax"                       & LF &
-                        "vmovaps (%%rax), %%ymm11"                 & LF &
-                        "movq 72(%0), %%rax"                       & LF &
-                        "vmovaps (%%rax), %%ymm12"                 & LF &
+                        "vbroadcastss (%%rax), %%ymm9"             & LF &
                         "movq (%0), %%rsi"                         & LF &
                         "movq 8(%0), %%r8"                         & LF &
                         "movq 16(%0), %%rdi"                       & LF &
-                        "movq 24(%0), %%r9"                        & LF &
                         "movq 32(%0), %%rcx"                       & LF &
-                        "movq 40(%0), %%rdx"                       & LF &
+                        "vpxord %%ymm16, %%ymm16, %%ymm16"         & LF &
+                        "vpxord %%ymm17, %%ymm17, %%ymm17"         & LF &
+                        "vpxord %%ymm18, %%ymm18, %%ymm18"         & LF &
+                        "vpxord %%ymm19, %%ymm19, %%ymm19"         & LF &
                         "movq $8, %%r10"                           & LF &
                         "1:"                                       & LF &
                         "vmovdqu (%%rsi), %%ymm0"                  & LF &
-                        "vpsignb %%ymm0, %%ymm0, %%ymm3"           & LF &
-                        "vmovaps (%%r8), %%ymm9"                   & LF &
+                        "vpabsb %%ymm0, %%ymm3"                    & LF &
+                        "vmovdqa (%%r8), %%ymm5"                   & LF &
                         "vmovdqu (%%rdi), %%ymm4"                  & LF &
                         "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
-                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
-                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
-                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
-                        "vbroadcastss (%%r9), %%ymm2"              & LF &
-                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"       & LF &
+                        "vpmaddubsw %%ymm4, %%ymm3, %%ymm1"        & LF &
+                        "vpdpwssd %%ymm5, %%ymm1, %%ymm16"          & LF &
                         "leaq (%%rdi,%%rcx), %%rax"                & LF &
-                        "leaq (%%r9,%%rdx), %%r11"                 & LF &
                         "vmovdqu (%%rax), %%ymm4"                  & LF &
                         "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
-                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
-                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
-                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
-                        "vbroadcastss (%%r11), %%ymm2"             & LF &
-                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm10"      & LF &
+                        "vpmaddubsw %%ymm4, %%ymm3, %%ymm1"        & LF &
+                        "vpdpwssd %%ymm5, %%ymm1, %%ymm17"          & LF &
                         "addq %%rcx, %%rax"                        & LF &
-                        "addq %%rdx, %%r11"                        & LF &
                         "vmovdqu (%%rax), %%ymm4"                  & LF &
                         "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
-                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
-                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
-                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
-                        "vbroadcastss (%%r11), %%ymm2"             & LF &
-                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm11"      & LF &
+                        "vpmaddubsw %%ymm4, %%ymm3, %%ymm1"        & LF &
+                        "vpdpwssd %%ymm5, %%ymm1, %%ymm18"          & LF &
                         "addq %%rcx, %%rax"                        & LF &
-                        "addq %%rdx, %%r11"                        & LF &
                         "vmovdqu (%%rax), %%ymm4"                  & LF &
                         "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
-                        "vpxor %%ymm1, %%ymm1, %%ymm1"             & LF &
-                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"          & LF &
-                        "vcvtdq2ps %%ymm1, %%ymm1"                 & LF &
-                        "vbroadcastss (%%r11), %%ymm2"             & LF &
-                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm12"      & LF &
+                        "vpmaddubsw %%ymm4, %%ymm3, %%ymm1"        & LF &
+                        "vpdpwssd %%ymm5, %%ymm1, %%ymm19"          & LF &
                         "addq $32, %%rsi"                          & LF &
                         "addq $32, %%r8"                           & LF &
                         "addq $32, %%rdi"                          & LF &
-                        "addq $4, %%r9"                            & LF &
                         "decq %%r10"                               & LF &
                         "jnz 1b"                                   & LF &
-                        "movq 48(%0), %%rax"                       & LF &
-                        "vmovaps %%ymm6, (%%rax)"                  & LF &
+                        "movq 24(%0), %%r9"                        & LF &
+                        "movq 40(%0), %%rdx"                       & LF &
+                        "vcvtdq2ps %%ymm16, %%ymm16"               & LF &
+                        "vbroadcastss (%%r9), %%ymm2"              & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
                         "movq 56(%0), %%rax"                       & LF &
-                        "vmovaps %%ymm10, (%%rax)"                 & LF &
+                        "vmovaps (%%rax), %%ymm6"                  & LF &
+                        "vfmadd231ps %%ymm2, %%ymm16, %%ymm6"      & LF &
+                        "vmovaps %%ymm6, (%%rax)"                  & LF &
+                        "addq %%rdx, %%r9"                         & LF &
+                        "vcvtdq2ps %%ymm17, %%ymm17"               & LF &
+                        "vbroadcastss (%%r9), %%ymm2"              & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
                         "movq 64(%0), %%rax"                       & LF &
-                        "vmovaps %%ymm11, (%%rax)"                 & LF &
+                        "vmovaps (%%rax), %%ymm6"                  & LF &
+                        "vfmadd231ps %%ymm2, %%ymm17, %%ymm6"      & LF &
+                        "vmovaps %%ymm6, (%%rax)"                  & LF &
+                        "addq %%rdx, %%r9"                         & LF &
+                        "vcvtdq2ps %%ymm18, %%ymm18"               & LF &
+                        "vbroadcastss (%%r9), %%ymm2"              & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
                         "movq 72(%0), %%rax"                       & LF &
-                        "vmovaps %%ymm12, (%%rax)",
+                        "vmovaps (%%rax), %%ymm6"                  & LF &
+                        "vfmadd231ps %%ymm2, %%ymm18, %%ymm6"      & LF &
+                        "vmovaps %%ymm6, (%%rax)"                  & LF &
+                        "addq %%rdx, %%r9"                         & LF &
+                        "vcvtdq2ps %%ymm19, %%ymm19"               & LF &
+                        "vbroadcastss (%%r9), %%ymm2"              & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "movq 80(%0), %%rax"                       & LF &
+                        "vmovaps (%%rax), %%ymm6"                  & LF &
+                        "vfmadd231ps %%ymm2, %%ymm19, %%ymm6"      & LF &
+                        "vmovaps %%ymm6, (%%rax)"                 ,
                         Inputs   => System.Address'Asm_Input ("r", Pointers'Address),
                         Clobber  =>
-                          "rax,rcx,rdx,rsi,rdi,r8,r9,r10,r11,"
-                          & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,ymm9,ymm10,ymm11,ymm12,memory",
+                          "rax,rcx,rdx,rsi,rdi,r8,r9,r10,"
+                          & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm9,xmm16,xmm17,xmm18,xmm19,memory",
                         Volatile => True);
                   end;
                end loop;
@@ -21298,66 +21233,57 @@ package body Model_Runner.Quantization.Integers.Kernels is
                begin
                   if Deep then
                      System.Machine_Code.Asm
-                       ("vmovaps (%0), %%ymm6"                & LF &
-                        "movq $8, %%rax"                      & LF &
-                        "movq %1, %%rsi"                      & LF &
-                        "movq %2, %%rdi"                      & LF &
-                        "movq %3, %%r8"                       & LF &
-                        "movq %4, %%r9"                       & LF &
-                        "1:"                                  & LF &
-                        "vmovdqu (%%rsi), %%ymm0"             & LF &
-                        "vpsignb %%ymm0, %%ymm0, %%ymm3"      & LF &
-                        "vmovdqu (%%rdi), %%ymm4"             & LF &
-                        "vpsignb %%ymm0, %%ymm4, %%ymm4"      & LF &
-                        "vpxor %%ymm1, %%ymm1, %%ymm1"        & LF &
-                        "vpdpbusd %%ymm4, %%ymm3, %%ymm1"     & LF &
-                        "vcvtdq2ps %%ymm1, %%ymm1"            & LF &
-                        "vbroadcastss (%%r9), %%ymm2"         & LF &
-                        "vmulps (%%r8), %%ymm2, %%ymm2"       & LF &
-                        "vfmadd231ps %%ymm2, %%ymm1, %%ymm6"  & LF &
-                        "addq $32, %%rsi"                     & LF &
-                        "addq $32, %%rdi"                     & LF &
-                        "addq $32, %%r8"                      & LF &
-                        "addq $4, %%r9"                       & LF &
-                        "decq %%rax"                          & LF &
-                        "jnz 1b"                              & LF &
-                        "vmovaps %%ymm6, (%0)",
+                       ("vbroadcastss (%4), %%ymm9"                & LF &
+                        "movq %1, %%rsi"                           & LF &
+                        "movq %2, %%r8"                            & LF &
+                        "movq %3, %%rdi"                           & LF &
+                        "vpxord %%ymm16, %%ymm16, %%ymm16"         & LF &
+                        "movq $8, %%r10"                           & LF &
+                        "1:"                                       & LF &
+                        "vmovdqu (%%rsi), %%ymm0"                  & LF &
+                        "vpabsb %%ymm0, %%ymm3"                    & LF &
+                        "vmovdqu (%%rdi), %%ymm4"                  & LF &
+                        "vpsignb %%ymm0, %%ymm4, %%ymm4"           & LF &
+                        "vpmaddubsw %%ymm4, %%ymm3, %%ymm1"        & LF &
+                        "vpdpwssd (%%r8), %%ymm1, %%ymm16"          & LF &
+                        "addq $32, %%rsi"                          & LF &
+                        "addq $32, %%r8"                           & LF &
+                        "addq $32, %%rdi"                          & LF &
+                        "decq %%r10"                               & LF &
+                        "jnz 1b"                                   & LF &
+                        "vcvtdq2ps %%ymm16, %%ymm16"               & LF &
+                        "vbroadcastss (%5), %%ymm2"                & LF &
+                        "vmulps %%ymm9, %%ymm2, %%ymm2"            & LF &
+                        "vmovaps (%0), %%ymm6"                     & LF &
+                        "vfmadd231ps %%ymm2, %%ymm16, %%ymm6"      & LF &
+                        "vmovaps %%ymm6, (%0)"                    ,
                         Inputs =>
                           [System.Address'Asm_Input ("r", Carry (Vector)'Address),
                            System.Address'Asm_Input ("r", Words'Address),
+                           System.Address'Asm_Input ("r", Odds'Address),
                            System.Address'Asm_Input ("r", Values (Values'First + At_Value)'Address),
-                           System.Address'Asm_Input ("r", Lanes'Address),
+                           System.Address'Asm_Input ("r", Unit'Address),
                            System.Address'Asm_Input
                              ("r", Scales (Scales'First + At_Value / Activation_Block)'Address)],
-                        Clobber  => "rax,rsi,rdi,r8,r9,ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,memory",
+                        Clobber  => "rsi,rdi,r8,r10,ymm0,ymm1,ymm2,ymm3,ymm4,ymm6,ymm9,xmm16,memory",
                         Volatile => True);
                   else
                      declare
                         Bytes : array (0 .. 255) of Interfaces.Integer_8
                           with Import, Address => Words'Address;
+                        Dot   : Integer := 0;
                      begin
-                        for Group in 0 .. 7 loop
-                           declare
-                              At_Group : constant Element_Count := At_Value + Element_Count (Group) * 32;
-                              Scale    : constant N.Real :=
-                                Scales (Scales'First + At_Group / Activation_Block);
-                           begin
-                              for Lane in 0 .. 7 loop
-                                 declare
-                                    Dot : Integer := 0;
-                                 begin
-                                    for K in 0 .. 3 loop
-                                       Dot := Dot
-                                         + Integer (Bytes (32 * Group + 4 * Lane + K))
-                                           * Integer (Values (Values'First + At_Group
-                                                              + Element_Count (4 * Lane + K)));
-                                    end loop;
-                                    Carry (Vector) (Lane) := Carry (Vector) (Lane)
-                                      + N.Real (Dot) * Lanes (8 * Group + Lane) * Scale;
-                                 end;
-                              end loop;
-                           end;
+                        for Pair in 0 .. 127 loop
+                           Dot := Dot
+                             + Integer (Odds (Pair))
+                               * (Integer (Bytes (2 * Pair)) * Integer (Values (Values'First + At_Value
+                                                                               + Element_Count (2 * Pair)))
+                                  + Integer (Bytes (2 * Pair + 1))
+                                    * Integer (Values (Values'First + At_Value
+                                                       + Element_Count (2 * Pair + 1))));
                         end loop;
+                        Carry (Vector) (0) := Carry (Vector) (0)
+                          + N.Real (Dot) * Unit * Scales (Scales'First + At_Value / Activation_Block);
                      end;
                   end if;
                end;

@@ -195,7 +195,8 @@ package body Model_Runner.Quantization.Grid_Integers is
       Data   : B.Byte_Array;
       Offset : B.Byte_Count;
       Words  : out Word_Block;
-      Lanes  : out Lane_Block)
+      Odds   : out Odd_Block;
+      Unit   : out N.Real)
    is
       pragma Suppress (Index_Check);
       pragma Suppress (Range_Check);
@@ -223,22 +224,23 @@ package body Model_Runner.Quantization.Grid_Integers is
       is ((Magnitudes xor Mask) + (Mask and Ones))
         with Inline_Always;
 
-      --  The factor of the four lanes from First on.
-      procedure Set_Lanes (First : Natural; Count : Natural; Factor : N.Real)
+      --  The odd scale 2 Scale + 1 of the pairs from First on.
+      procedure Set_Odds (First : Natural; Count : Natural; Scale : Integer)
         with Inline_Always;
 
-      procedure Set_Lanes (First : Natural; Count : Natural; Factor : N.Real) is
+      procedure Set_Odds (First : Natural; Count : Natural; Scale : Integer) is
       begin
          for K in First .. First + Count - 1 loop
-            Lanes (K) := Factor;
+            Odds (K) := Interfaces.Integer_16 (2 * Scale + 1);
          end loop;
-      end Set_Lanes;
+      end Set_Odds;
    begin
       case Format is
          when G.Type_IQ2_XXS =>
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D * 0.125;
                for Sub in 0 .. 7 loop
                   declare
                      Base : constant B.Byte_Count := 2 + B.Byte_Count (Sub) * 8;
@@ -249,7 +251,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                           Signed (IQ2XXS_Grid (Natural (Raw (Base + B.Byte_Count (L)))),
                                   Sign_Masks (Natural (Interfaces.Shift_Right (Aux, 7 * L) and 127)));
                      end loop;
-                     Set_Lanes (8 * Sub, 8, D * N.Real (2 * Integer (Interfaces.Shift_Right (Aux, 28)) + 1) * 0.125);
+                     Set_Odds (16 * Sub, 16, Integer (Interfaces.Shift_Right (Aux, 28)));
                   end;
                end loop;
             end;
@@ -258,6 +260,7 @@ package body Model_Runner.Quantization.Grid_Integers is
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D * 0.125;
                for Sub in 0 .. 7 loop
                   declare
                      SB : constant U8 := Raw (66 + B.Byte_Count (Sub));
@@ -271,8 +274,8 @@ package body Model_Runner.Quantization.Grid_Integers is
                                      Sign_Masks (Natural (Interfaces.Shift_Right (Word, 9))));
                         end;
                      end loop;
-                     Set_Lanes (8 * Sub, 4, D * N.Real (2 * Integer (SB and 16#0F#) + 1) * 0.125);
-                     Set_Lanes (8 * Sub + 4, 4, D * N.Real (2 * Integer (Interfaces.Shift_Right (SB, 4)) + 1) * 0.125);
+                     Set_Odds (16 * Sub, 8, Integer (SB and 16#0F#));
+                     Set_Odds (16 * Sub + 8, 8, Integer (Interfaces.Shift_Right (SB, 4)));
                   end;
                end loop;
             end;
@@ -281,6 +284,7 @@ package body Model_Runner.Quantization.Grid_Integers is
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D * 0.125;
                for Sub in 0 .. 7 loop
                   declare
                      SB  : constant U8 := Raw (74 + B.Byte_Count (Sub));
@@ -296,8 +300,8 @@ package body Model_Runner.Quantization.Grid_Integers is
                                      Masks (Natural (Raw (2 + B.Byte_Count (32 + 4 * Sub + L)))));
                         end;
                      end loop;
-                     Set_Lanes (8 * Sub, 4, D * N.Real (2 * Integer (SB and 16#0F#) + 1) * 0.125);
-                     Set_Lanes (8 * Sub + 4, 4, D * N.Real (2 * Integer (Interfaces.Shift_Right (SB, 4)) + 1) * 0.125);
+                     Set_Odds (16 * Sub, 8, Integer (SB and 16#0F#));
+                     Set_Odds (16 * Sub + 8, 8, Integer (Interfaces.Shift_Right (SB, 4)));
                   end;
                end loop;
             end;
@@ -306,6 +310,7 @@ package body Model_Runner.Quantization.Grid_Integers is
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D * 0.25;
                for Sub in 0 .. 7 loop
                   declare
                      Aux : constant U32 := Read_32 (66 + B.Byte_Count (4 * Sub));
@@ -320,7 +325,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                                      Sign_Masks (Natural (Interfaces.Shift_Right (Aux, 7 * L) and 127)));
                         end;
                      end loop;
-                     Set_Lanes (8 * Sub, 8, D * N.Real (2 * Integer (Interfaces.Shift_Right (Aux, 28)) + 1) * 0.25);
+                     Set_Odds (16 * Sub, 16, Integer (Interfaces.Shift_Right (Aux, 28)));
                   end;
                end loop;
             end;
@@ -329,6 +334,7 @@ package body Model_Runner.Quantization.Grid_Integers is
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D;
                for Sub in 0 .. 7 loop
                   declare
                      Scale_Byte : constant U8 := Raw (106 + B.Byte_Count (Sub / 2));
@@ -350,7 +356,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                                      Masks (Natural (Raw (74 + B.Byte_Count (4 * Sub + L)))));
                         end;
                      end loop;
-                     Set_Lanes (8 * Sub, 8, D * N.Real (2 * Integer (Nibble) + 1));
+                     Set_Odds (16 * Sub, 16, Integer (Nibble));
                   end;
                end loop;
             end;
@@ -359,6 +365,7 @@ package body Model_Runner.Quantization.Grid_Integers is
             declare
                D : constant N.Real := Half_At (0);
             begin
+               Unit := D * 0.125;
                for Sub in 0 .. 7 loop
                   declare
                      QHw  : constant U16 := Read_16 (34 + B.Byte_Count (2 * Sub));
@@ -373,9 +380,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                            Words (4 * Sub + L) := (if Down then Ones_Down (Index) else Ones_Up (Index));
                         end;
                      end loop;
-                     Set_Lanes
-                       (8 * Sub, 8,
-                        D * N.Real (2 * Integer (Interfaces.Shift_Right (QHw, 12) and 7) + 1) * 0.125);
+                     Set_Odds (16 * Sub, 16, Integer (Interfaces.Shift_Right (QHw, 12) and 7));
                   end;
                end loop;
             end;
@@ -390,6 +395,7 @@ package body Model_Runner.Quantization.Grid_Integers is
                  or (SC (3) and 16#F000#);
                D : constant N.Real := N.To_Real (N.Half (Bits));
             begin
+               Unit := D * 0.125;
                for Sub in 0 .. 7 loop
                   declare
                      SW  : constant U16 := SC (Sub / 2);
@@ -410,19 +416,16 @@ package body Model_Runner.Quantization.Grid_Integers is
                            Words (4 * Sub + L) := (if Down then Ones_Down (Index) else Ones_Up (Index));
                         end;
                      end loop;
-                     Set_Lanes
-                       (8 * Sub, 4,
-                        D * N.Real (2 * Integer (Interfaces.Shift_Right (SW, Sh) and 7) + 1) * 0.125);
-                     Set_Lanes
-                       (8 * Sub + 4, 4,
-                        D * N.Real (2 * Integer (Interfaces.Shift_Right (SW, Sh + 3) and 7) + 1) * 0.125);
+                     Set_Odds (16 * Sub, 8, Integer (Interfaces.Shift_Right (SW, Sh) and 7));
+                     Set_Odds (16 * Sub + 8, 8, Integer (Interfaces.Shift_Right (SW, Sh + 3) and 7));
                   end;
                end loop;
             end;
 
          when others =>
             Words := [others => 0];
-            Lanes := [others => 0.0];
+            Odds := [others => 0];
+            Unit := 0.0;
       end case;
    end Decode;
 

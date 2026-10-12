@@ -33,8 +33,10 @@ private package Model_Runner.Quantization.Grid_Integers is
    type Word_Block is array (0 .. 31) of Interfaces.Unsigned_64
      with Alignment => 32;
 
-   --  And its factors: element E's weight is its byte times Lanes (E / 4).
-   type Lane_Block is array (0 .. 63) of Model_Runner.Numerics.Real
+   --  And its odd scales: element E's weight is its byte times Odds (E / 2)
+   --  times the block's unit, the pair of elements a sixteen-bit multiply
+   --  of a byte product covers.
+   type Odd_Block is array (0 .. 127) of Interfaces.Integer_16
      with Alignment => 32;
 
    --  Decode one super-block.
@@ -44,13 +46,16 @@ private package Model_Runner.Quantization.Grid_Integers is
    --  @param Offset Byte position of the block, from Data'First; the whole
    --    block lies inside Data.
    --  @param Words Receives the weights as bytes.
-   --  @param Lanes Receives the factor of each four.
+   --  @param Odds Receives the odd scale of each two.
+   --  @param Unit Receives the block's unit, its scale and the format's
+   --    constant together.
    procedure Decode
      (Format : Model_Runner.GGUF.Tensor_Type;
       Data   : Model_Runner.Bytes.Byte_Array;
       Offset : Model_Runner.Bytes.Byte_Count;
       Words  : out Word_Block;
-      Lanes  : out Lane_Block);
+      Odds   : out Odd_Block;
+      Unit   : out Model_Runner.Numerics.Real);
 
    --  For a kernel that decodes in its registers: where the tables are.
    --  The grids as the format keeps them; the two-bit grids' seven-bit sign
