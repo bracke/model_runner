@@ -95,10 +95,6 @@ private package Model_Runner.Quantization.Grid_Integers is
    --    signs for a sub-block, one load where they were built.
    function Offset_Signs_Address return System.Address;
 
-   --  @return Where a byte's eight bits are, a byte each, 0 or 1: IQ3_S's
-   --    ninth index bits, widened beside its eight index bytes.
-   function Bit_Bytes_Address return System.Address;
-
    --  @return Where two shuffle constants are, thirty-two bytes each: which
    --    of four sign bytes each of thirty-two elements reads, and which of
    --    its bits -- a sub-block's signs made a mask in the registers, as

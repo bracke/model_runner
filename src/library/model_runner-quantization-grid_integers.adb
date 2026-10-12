@@ -90,19 +90,6 @@ package body Model_Runner.Quantization.Grid_Integers is
    function Byte_Sign_Ones_Address return System.Address is (Byte_Sign_Ones (0)'Address);
    function Offset_Words_Address return System.Address is (Offset_Words (0)'Address);
 
-   function Make_Bit_Bytes return Word_Table is
-      Result : Word_Table (0 .. 255);
-   begin
-      for Index in Result'Range loop
-         Result (Index) := Masks (Index) and Ones;
-      end loop;
-      return Result;
-   end Make_Bit_Bytes;
-
-   Bit_Bytes : aliased constant Word_Table := Make_Bit_Bytes;
-
-   function Bit_Bytes_Address return System.Address is (Bit_Bytes (0)'Address);
-
    --  Byte 8K + J reads sign byte K and its bit J: the byte selectors, then
    --  the bits, four quadwords each.
    Sign_Shuffle : aliased constant Word_Table (0 .. 7) :=
