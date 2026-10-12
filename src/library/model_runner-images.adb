@@ -751,15 +751,13 @@ package body Model_Runner.Images is
                   Accessible_Bytes => Jpeglib.Byte_Count (Output'Length)),
                Storage => Output);
 
-            --  The codec keeps every coefficient of the picture on its
-            --  stack -- two hundred and fifty-six bytes a block, a block
-            --  for every sixty-four samples -- which is seventy megabytes
-            --  for a twelve-megapixel photograph and more than a task's
-            --  stack holds. So it runs on a task of its own, with a stack
-            --  sized for the picture: eight bytes a pixel and sixteen
-            --  megabytes besides, reserved rather than touched.
-            Room : constant Natural :=
-              16 * 1024 * 1024 + 8 * Width * Height;
+            --  The codec kept every coefficient of the picture on its
+            --  stack, and a task of its own was sized for the picture --
+            --  which a 3840 by 2160 wallpaper outgrew, failing as an
+            --  invariant. It keeps them on the heap now (jpeglib a3e521e);
+            --  the task stays, with a stack of a fixed size for the
+            --  codec's own frames.
+            Room : constant Natural := 32 * 1024 * 1024;
             Raised : Boolean := False;
 
             task Decoding is
