@@ -1137,6 +1137,13 @@ begin
       if E.Is_Ok (Read) then
          S.Commit (Store, Change, Read);
       end if;
+      --  The configuration is changed; what is ready by it is not worked
+      --  out: said, and none named as ready.
+      if E.Is_Error (Read) then
+         Change := S.No_Changes;
+         Became.Clear;
+         Pres.Report (Screen, Read);
+      end if;
       for Requirement of Moved loop
          Pres.Put_Message
            (Screen, "cli.work.requirement",

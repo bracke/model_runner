@@ -453,6 +453,19 @@ package Model_Runner.Framework.Work is
    --  @return True when the work may not change it.
    function Judged_By (Host : Child_Host; Path : String) return Boolean;
 
+   --  The files a task's work is judged by, as they are now: what
+   --  Judged_By refuses, listed for an agent run as a process of its own
+   --  to be held to, and for its changes to be judged by after.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @param Profile_Text Its profile's checks.
+   --  @return Each, relative to the project.
+   function Judged_Files
+     (Item         : Stores.Store;
+      Task_Id      : String;
+      Profile_Text : String) return Name_Lists.Vector;
+
    --  What an answer's report lacks to be taken, as the harness reads it:
    --  the root's against the work's contract, a helper's against a
    --  helper's. "" where it holds.

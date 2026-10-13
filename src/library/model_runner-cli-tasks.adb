@@ -450,6 +450,9 @@ package body Model_Runner.CLI.Tasks is
                                                   (Store, Model_Runner.Framework.Intent.Requirement, Id))]);
                      end if;
                   end loop;
+               else
+                  --  Not judged again: said, and none named as moved.
+                  Pres.Report (Screen, Judged);
                end if;
             end;
          end if;
@@ -5110,12 +5113,11 @@ package body Model_Runner.CLI.Tasks is
                then
                   return;
                end if;
+               --  Given up and taken up again as one change: not left failed
+               --  with its work gone should the second not be kept.
                Tk.Move (Store, Change, First_Word, "failed",
                         "its work in " & Space & " was given up by hand, to be done afresh",
                         Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
-               if E.Is_Ok (Outcome) then
-                  Commit;
-               end if;
                if E.Is_Ok (Outcome) then
                   Tk.Move (Store, Change, First_Word, "accepted", "to be done afresh",
                            Status => Outcome, Actor => Model_Runner.Framework.Transitions.User);
@@ -5244,9 +5246,25 @@ package body Model_Runner.CLI.Tasks is
                   else Model_Runner.Framework.Workspaces.Conflict_Files
                          (Store, Space, Unsettled_Only => True));
                Project   : constant String := Ada.Directories.Containing_Directory (S.Root (Store));
-               Kept_In   : constant String :=
+               Kept_Stem : constant String :=
                  Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"),
                                   "replaced-" & First_Word & (if Space = "" then "" else "-" & Space));
+               --  A name of its own: an earlier copy kept here is not
+               --  written over.
+               function Free_Name return String is
+                  function Numbered (Number : Positive) return String
+                  is (Kept_Stem & "-" & Ada.Strings.Fixed.Trim (Positive'Image (Number), Ada.Strings.Both));
+                  Number : Positive := 2;
+               begin
+                  if not Ada.Directories.Exists (Kept_Stem) then
+                     return Kept_Stem;
+                  end if;
+                  while Ada.Directories.Exists (Numbered (Number)) loop
+                     Number := Number + 1;
+                  end loop;
+                  return Numbered (Number);
+               end Free_Name;
+               Kept_In   : constant String := Free_Name;
             begin
                if not Unsettled.Is_Empty then
                   if Interactive then
@@ -5268,8 +5286,19 @@ package body Model_Runner.CLI.Tasks is
                            Ada.Directories.Copy_File (From, To);
                         end if;
                      exception
+                        --  Not kept, it is not written over: the person's
+                        --  edit would be lost with no copy.
                         when others =>
-                           null;
+                           declare
+                              Failed : E.Error_Info;
+                           begin
+                              Failed := E.Make (E.Framework_Transaction_Failed);
+                              E.Add_Text (Failed, "path", To, E.Param_Path);
+                              E.Add_Text (Failed, "detail", "the project's own " & File & " could not be kept"
+                                          & " aside, so nothing was taken in over it");
+                              Pres.Report (Screen, Failed);
+                              return;
+                           end;
                      end;
                   end loop;
                   Pres.Put_Note (Screen, "cli.task.anyway_saved",
@@ -6617,23 +6646,34 @@ package body Model_Runner.CLI.Tasks is
                      if E.Is_Error (Outcome) then
                         Fail (Outcome);
                      else
-                        Pres.Put_Message (Screen, "cli.task.kept_restored",
-                                          [Loc.Named ("name", Name),
-                                           Loc.Named ("detail", Joined (Ws.Kept_Files (Store, Name)))]);
-                        if Natural (Changed.Length) > 0 then
-                           Pres.Put_Note (Screen, "cli.task.kept_replaced",
-                                          [Loc.Named ("name", Aside),
-                                           Loc.Named ("detail", Joined (Changed))]);
-                        end if;
                         --  What the task it came from is now, and the way on.
                         declare
                            At_Task : constant Natural := Ada.Strings.Fixed.Index (Name, "TASK-");
                            Stop    : Natural := At_Task + 5;
+
+                           --  Said once it is settled, and not before: put
+                           --  back after all, it was never restored.
+                           procedure Say_Restored is
+                           begin
+                              Pres.Put_Message (Screen, "cli.task.kept_restored",
+                                                [Loc.Named ("name", Name),
+                                                 Loc.Named ("detail", Joined (Ws.Kept_Files (Store, Name)))]);
+                              if Natural (Changed.Length) > 0 then
+                                 Pres.Put_Note (Screen, "cli.task.kept_replaced",
+                                                [Loc.Named ("name", Aside),
+                                                 Loc.Named ("detail", Joined (Changed))]);
+                              end if;
+                           end Say_Restored;
                         begin
                            --  No task's: nothing to record of whose work, and
                            --  the files kept as they are.
                            if At_Task = 0 then
                               Ws.Settle_Restore (Store, Name, Kept => True, Status => Outcome);
+                              if E.Is_Error (Outcome) then
+                                 Fail (Outcome);
+                                 return;
+                              end if;
+                              Say_Restored;
                            end if;
                            if At_Task > 0 then
                               while Stop <= Name'Last and then Name (Stop) in '0' .. '9' loop
@@ -6742,6 +6782,7 @@ package body Model_Runner.CLI.Tasks is
                                     Fail (Noted);
                                     return;
                                  end if;
+                                 Say_Restored;
                                  if State /= "" then
                                     Pres.Put_Note
                                       (Screen, "cli.task.after_restore",
@@ -7088,6 +7129,10 @@ package body Model_Runner.CLI.Tasks is
       then
          Change := S.No_Changes;
          Commit;
+         --  Not kept, it is said, not ended on as though it were.
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+         end if;
       end if;
       Say_Became_Ready;
       S.Close (Store);

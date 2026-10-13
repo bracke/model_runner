@@ -54,6 +54,12 @@ begin
                                   Passed, Got);
                   if E.Is_Ok (Got) then
                      S.Commit (Store, Change, Got);
+                  end if;
+                  --  Not run, or not kept: said, as a failure of its own.
+                  if E.Is_Error (Got) then
+                     Change := S.No_Changes;
+                     Pres.Report (Screen, Got);
+                  else
                      Field (Id, To_String (Evidence) & (if Passed then " passed" else " failed"));
                      if not Passed then
                         Failing.Append (To_String (Evidence));
@@ -65,6 +71,10 @@ begin
          Vf.Verify_Requirement (Store, Change, Requirement, Evidence, Passed, Got);
          if E.Is_Ok (Got) then
             S.Commit (Store, Change, Got);
+         end if;
+         if E.Is_Error (Got) then
+            Pres.Report (Screen, Got);
+         else
             Field (Requirement, To_String (Evidence) & (if Passed then " passed" else " failed"));
             if not Passed then
                Failing.Append (To_String (Evidence));
@@ -72,7 +82,15 @@ begin
          end if;
          Change := S.No_Changes;
          Vf.Reevaluate_Requirements (Store, Change, Changed, Got);
-         S.Commit (Store, Change, Got);
+         if E.Is_Ok (Got) then
+            S.Commit (Store, Change, Got);
+         end if;
+         --  Not judged again: where it stands is not new, and that is said.
+         if E.Is_Error (Got) then
+            Change := S.No_Changes;
+            Changed.Clear;
+            Pres.Report (Screen, Got);
+         end if;
          Model_Runner.Framework.Intent.Read
            (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
          Field ("state", To_String (Held.State));
@@ -221,12 +239,18 @@ begin
             if E.Is_Ok (Outcome) then
                S.Commit (Store, Change, Outcome);
             end if;
-            for Requirement of Changed loop
-               Pres.Put_Message
-                 (Screen, "cli.work.requirement",
-                  [Loc.Named ("name", Requirement),
-                   Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
-            end loop;
+            if E.Is_Error (Outcome) then
+               --  Not judged again: said, and nothing named as moved.
+               Change := S.No_Changes;
+               Pres.Report (Screen, Outcome);
+            else
+               for Requirement of Changed loop
+                  Pres.Put_Message
+                    (Screen, "cli.work.requirement",
+                     [Loc.Named ("name", Requirement),
+                      Loc.Named ("value", Nt.State_Of (Store, Nt.Requirement, Requirement))]);
+               end loop;
+            end if;
             Outcome := E.Success;
          end;
 

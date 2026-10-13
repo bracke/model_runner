@@ -843,8 +843,12 @@ package body Model_Runner.Framework.Tasks is
          --  work is stopped by cancelling it, which lets go of what it holds.
          --  A task waiting in verification -- its work not taken in, or its
          --  checks gone wrong -- a person may also fail or block.
+         --  From complete to another state that counts as complete -- one
+         --  the project adds, as released -- is a person's to make: what
+         --  completes it was passed already.
          if Transitions.By_Person (Actor)
-           and then (Next_As in "running" | "verification" | "complete"
+           and then ((Next_As in "running" | "verification" | "complete"
+                      and then not (Next_As = "complete" and then Now_As = "complete"))
                      or else (Now_As = "running"
                               and then Next_As /= Tasks.Cancelled)
                      or else (Now_As = "verification"
@@ -877,7 +881,7 @@ package body Model_Runner.Framework.Tasks is
                   return;
                end if;
             end;
-         elsif Next_As = Tasks.Complete and then not Gates_Passed then
+         elsif Next_As = Tasks.Complete and then Now_As /= Tasks.Complete and then not Gates_Passed then
             Not_Ready ("its completion gates have not passed");
             return;
          end if;
@@ -886,7 +890,7 @@ package body Model_Runner.Framework.Tasks is
          --  done, read before anything moves: a task cannot truthfully be
          --  complete for a requirement whose words cannot be read, so the move
          --  is refused, not made with that requirement's meaning left out.
-         if Next_As = Tasks.Complete then
+         if Next_As = Tasks.Complete and then Now_As /= Tasks.Complete then
             declare
                Defined : Records.Item;
                Read    : E.Error_Info;
@@ -953,7 +957,7 @@ package body Model_Runner.Framework.Tasks is
             Records.Set (Value, "blocking_reasons", Reason);
          elsif Next = Tasks.Failed then
             Records.Set (Value, "current_failure", Reason);
-         elsif Next_As = Tasks.Complete then
+         elsif Next_As = Tasks.Complete and then Now_As /= Tasks.Complete then
             --  What each requirement it served meant when it was done, as
             --  read above: work done for other words implements nothing of the
             --  new ones.
@@ -983,7 +987,9 @@ package body Model_Runner.Framework.Tasks is
       --      is abandoned (blocked keeps it to be looked at; the next
       --      attempt sets it aside);
       --    to complete -> what it served is noted (above).
-      if Leaving in "running" | "verification" and then Next not in "running" | "verification" then
+      if Counts_As (Item, Leaving) in "running" | "verification"
+        and then Counts_As (Item, Next) not in "running" | "verification"
+      then
          declare
             Holder : constant String := Leases.Holder (Item, "task." & Id);
             Defined : Records.Item;

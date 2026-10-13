@@ -2404,6 +2404,36 @@ package body Tests.Framework_Cases is
                     "an instruction whose record will not read was passed over as none");
             Put_File (File, Was);
          end;
+
+         --  The decision it overrides given another number: overridden
+         --  under that one, and nothing renumbered while a record that may
+         --  name it will not read.
+         declare
+            Over    : Unbounded_String;
+            Held    : R.Item;
+            Got     : E.Error_Info;
+            Dash    : constant Natural := Ada.Strings.Fixed.Index (To_String (Id), "-");
+            New_Id  : constant String := To_String (Id) (1 .. Dash) & "900";
+            Blocker : constant String := S.Root (Store) & "/project/instruction." & To_String (Given) & ".rec";
+            Was     : constant String := Read_Whole (Blocker);
+         begin
+            Au.Instruct (Store, Change, "scalar.build.command", "alr build -j4", To_String (Id), "user tester",
+                         Over, Status);
+            S.Commit (Store, Change, Status);
+            Put_File (Blocker, "not a record" & LF);
+            Nt.Renumber (Store, Change, Nt.Decision, To_String (Id), New_Id, Status);
+            Assert (Status.Code = E.Framework_Integrity_Failed,
+                    "a decision was renumbered while a record that may name it would not read: "
+                    & Code_Of (Status));
+            Change := S.No_Changes;
+            Put_File (Blocker, Was);
+            Nt.Renumber (Store, Change, Nt.Decision, To_String (Id), New_Id, Status);
+            S.Commit (Store, Change, Status);
+            S.Read (Store, F.Project_Area, "instruction." & To_String (Over), Held, Got);
+            Assert (E.Is_Ok (Status) and then E.Is_Ok (Got) and then R.Get (Held, "overrides") = New_Id,
+                    "an instruction overriding a renumbered decision still names its old number: "
+                    & Code_Of (Status) & " " & R.Get (Held, "overrides"));
+         end;
       end;
       S.Close (Store);
    end Authority_Conflicts_Are_Found;
@@ -3620,6 +3650,41 @@ package body Tests.Framework_Cases is
             Dirs.Delete_Directory (Away);
          end if;
          pragma Unreferenced (Gone);
+      end;
+
+      --  A file too large to read whole is printed all the same: changed,
+      --  its print changes.
+      declare
+         --  A tree of its own, so that its first scan reads it whole.
+         Place : constant String := Fresh ("large-file");
+         Big   : constant String := Place & "/src/table.adb";
+         Block : constant String (1 .. 1024) := [others => 'x'];
+         Text  : Unbounded_String;
+         function Print_Of_Big return String is
+            Seen : constant Rp.Graph := Rp.Scan (Place);
+         begin
+            for Index in 1 .. Rp.File_Count (Seen) loop
+               if To_String (Rp.File_At (Seen, Index).Path) = "src/table.adb" then
+                  return To_String (Rp.File_At (Seen, Index).Fingerprint);
+               end if;
+            end loop;
+            return "";
+         end Print_Of_Big;
+      begin
+         for Count in 1 .. 5 * 1024 loop
+            Append (Text, Block);
+         end loop;
+         Dirs.Create_Path (Place & "/src");
+         Put_File (Big, To_String (Text) & "a");
+         declare
+            Before : constant String := Print_Of_Big;
+         begin
+            Put_File (Big, To_String (Text) & "b");
+            Assert (Before /= "" and then Print_Of_Big /= Before
+                    and then Before /= Model_Runner.Framework.Fingerprint (""),
+                    "a file too large to read whole kept one print however it changed");
+         end;
+         Dirs.Delete_File (Big);
       end;
    end Repository_Is_Scanned;
 
@@ -5039,7 +5104,9 @@ package body Tests.Framework_Cases is
       Change := S.No_Changes;
       Task_Project (Store, "task-lifecycle-done",
                     "map task.state.done = complete, and signed off" & LF
-                    & "set task.transitions = accepted -> done" & LF);
+                    & "set task.transitions = accepted -> done" & LF
+                    & "map task.state.released = complete, and shipped" & LF
+                    & "set task.transitions = complete -> released" & LF);
       Tk.Create (Store, Change, Fields ("Build", "analysis"), "user", "", Id, Status);
       S.Commit (Store, Change, Status);
       Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
@@ -5052,6 +5119,19 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Error (Status),
               "a task went to a state counting as complete past its gates");
       Change := S.No_Changes;
+      --  Complete already, it is a person's to take on to another state
+      --  that counts as complete.
+      for Next of Model_Runner.Framework.Name_Lists.Vector'(["running", "verification"]) loop
+         Tk.Move (Store, Change, To_String (Id), Next, "", Status => Status);
+         S.Commit (Store, Change, Status);
+      end loop;
+      Tk.Move (Store, Change, To_String (Id), "complete", "", Gates_Passed => True, Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "released", "", Status => Status, Actor => Tr.User);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "released",
+              "a person could not take a complete task on to a state counting as complete: "
+              & Code_Of (Status) & " " & Tk.State_Of (Store, To_String (Id)));
       S.Close (Store);
    end Task_Lifecycle_Is_The_Projects;
 
@@ -9563,6 +9643,25 @@ package body Tests.Framework_Cases is
       Assert (Status.Code = E.Framework_Integrity_Failed,
               "a generation that is not a count was counted on: " & Code_Of (Status));
       Change := S.No_Changes;
+
+      --  What the work is judged by: a script its checks run, as they
+      --  spell it or not, and the tests; not a source a check only looks at.
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Judged  : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Dirs.Create_Path (Project & "/src");
+         Dirs.Create_Path (Project & "/scripts");
+         Dirs.Create_Path (Project & "/tests");
+         Put_File (Project & "/src/x.adb", "procedure X is begin null; end X;" & LF);
+         Put_File (Project & "/scripts/check.py", "print (1)" & LF);
+         Put_File (Project & "/tests/x_test.adb", "procedure X_Test is begin null; end X_Test;" & LF);
+         Judged := Wk2.Judged_Files
+           (Store, To_String (Id), "look: test -f src/x.adb" & LF & "run: python3 ./scripts//check.py");
+         Assert (Judged.Contains ("scripts/check.py") and then Judged.Contains ("tests/x_test.adb")
+                 and then not Judged.Contains ("src/x.adb"),
+                 "the files work is judged by were not told from those it writes");
+      end;
       S.Close (Store);
    end Undetermined_Is_Not_Ordinary;
 

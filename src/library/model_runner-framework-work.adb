@@ -1525,12 +1525,49 @@ package body Model_Runner.Framework.Work is
    -- Judged_By --
    ---------------
 
+   --  Whether a path is one a check's command names as what it judges by:
+   --  a word of it, as its parts say it -- a script or a list it reads --
+   --  and, where it is a source, what the check runs: its first word, or
+   --  what an interpreter is given. A source a check only looks at -- test
+   --  -f src/x.adb -- is the work's to write.
+   --  A program's name without where it is: /usr/bin/python3 is python3.
+   function Last_Part (Word : String) return String is
+      Slash : constant Natural := Ada.Strings.Fixed.Index (Word, "/", Ada.Strings.Backward);
+   begin
+      return (if Slash = 0 then Word else Word (Slash + 1 .. Word'Last));
+   end Last_Part;
+
+   function Named_By_Checks (Item : Stores.Store; Profile_Text, Bare : String) return Boolean is
+      Checks : constant Verification.Check_List := Verification.Parse_Profile (Profile_Text);
+      Source : constant Boolean :=
+        Repository."=" (Repository.Role_Of (Bare, Repository.Roots_Of (Item)), Repository.Source);
+   begin
+      for At_Check in 1 .. Verification.Length (Checks) loop
+         declare
+            Words : constant Name_Lists.Vector :=
+              Execution.Words_Of (To_String (Verification.Element (Checks, At_Check).Command));
+         begin
+            for Index in 1 .. Natural (Words.Length) loop
+               if Permissions.Normal (Words (Index)) = Bare
+                 and then (not Source
+                           or else Index = 1
+                           or else Last_Part (Words (Index - 1))
+                                     in "sh" | "bash" | "python" | "python3" | "perl" | "ruby" | "node"
+                                      | "tclsh" | "lua" | "php" | "Rscript")
+               then
+                  return True;
+               end if;
+            end loop;
+         end;
+      end loop;
+      return False;
+   end Named_By_Checks;
+
    function Judged_By (Host : Child_Host; Path : String) return Boolean is
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
-      Bare    : constant String :=
-        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
-         then Path (Path'First + 2 .. Path'Last) else Path);
-      Existing : constant Boolean := Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare));
+      --  As its parts say it: ././x and src//x are x and src/x.
+      Bare    : constant String := Permissions.Normal (Path);
+      Existing : constant Boolean := Bare /= "" and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare));
    begin
       if Kind_Of_Task (Host.Item.all, To_String (Host.Task_Id)) = "test" or else not Existing then
          --  A new file judges nothing yet: tests may be added.
@@ -1538,23 +1575,61 @@ package body Model_Runner.Framework.Work is
       elsif Repository.Under_Roots (Repository.Roots_Of (Host.Item.all).Tests, Bare) then
          return True;
       end if;
-      --  A word of a check's command that is this file.
-      declare
-         Checks : constant Verification.Check_List :=
-           Verification.Parse_Profile
-             (if Host.Profile_Frozen then To_String (Host.Profile_Text)
-              else Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host)));
-      begin
-         for At_Check in 1 .. Verification.Length (Checks) loop
-            for Word of Execution.Words_Of (To_String (Verification.Element (Checks, At_Check).Command)) loop
-               if Word = Bare or else Word = "./" & Bare then
-                  return True;
-               end if;
-            end loop;
-         end loop;
-      end;
-      return False;
+      --  A word of a check's command that is this file -- a script it
+      --  runs, a list it reads -- and not a source the work is to write,
+      --  which a check names to look at.
+      return Named_By_Checks
+        (Host.Item.all,
+         (if Host.Profile_Frozen then To_String (Host.Profile_Text)
+          else Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host))),
+         Bare);
    end Judged_By;
+
+   ------------------
+   -- Judged_Files --
+   ------------------
+
+   function Judged_Files
+     (Item         : Stores.Store;
+      Task_Id      : String;
+      Profile_Text : String) return Name_Lists.Vector
+   is
+      Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      Result  : Name_Lists.Vector;
+      Tests   : constant Name_Lists.Vector := Repository.Roots_Of (Item).Tests;
+      Files   : constant Repository.Graph := Repository.Now (Item);
+      Checks  : constant Verification.Check_List := Verification.Parse_Profile (Profile_Text);
+   begin
+      if Kind_Of_Task (Item, Task_Id) = "test" then
+         return Result;
+      end if;
+      for Index in 1 .. Repository.File_Count (Files) loop
+         declare
+            Path : constant String := To_String (Repository.File_At (Files, Index).Path);
+         begin
+            if Repository.Under_Roots (Tests, Path) then
+               Result.Append (Path);
+            end if;
+         end;
+      end loop;
+      for At_Check in 1 .. Verification.Length (Checks) loop
+         for Word of Execution.Words_Of (To_String (Verification.Element (Checks, At_Check).Command)) loop
+            declare
+               Bare : constant String := Permissions.Normal (Word);
+            begin
+               if Bare /= "" and then not Result.Contains (Bare)
+                 and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare))
+                 and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Project, Bare)),
+                                               Ada.Directories.Ordinary_File)
+                 and then Named_By_Checks (Item, Profile_Text, Bare)
+               then
+                  Result.Append (Bare);
+               end if;
+            end;
+         end loop;
+      end loop;
+      return Result;
+   end Judged_Files;
 
    procedure Run_Checks
      (Host     : in out Child_Host;

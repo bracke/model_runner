@@ -1,7 +1,9 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 
 with Hostkit.Fs;
 with Hostkit.Process;
@@ -436,6 +438,51 @@ package body Model_Runner.Framework.Verification is
    --  What evidence is checked against: the files as they are now.
    function File_Lines (Files : Repository.Graph) return String;
 
+   package Print_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
+   --  The sources and tests of a graph, each by its print: what checks run
+   --  on, and what a person edits.
+   function Checked_Prints (Files : Repository.Graph) return Print_Maps.Map is
+      Result : Print_Maps.Map;
+   begin
+      for Index in 1 .. Repository.File_Count (Files) loop
+         declare
+            One : constant Repository.File_Entry := Repository.File_At (Files, Index);
+         begin
+            if One.Role in Repository.Source | Repository.Test then
+               Result.Include (To_String (One.Path), To_String (One.Fingerprint));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Checked_Prints;
+
+   --  The sources and tests that differ between two such maps: changed,
+   --  made, or gone.
+   function Differing (Before, After : Print_Maps.Map) return String is
+      Result : Unbounded_String;
+      procedure Add (Path : String) is
+      begin
+         Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF]) & Path);
+      end Add;
+   begin
+      for Position in After.Iterate loop
+         if not Before.Contains (Print_Maps.Key (Position))
+           or else Before.Element (Print_Maps.Key (Position)) /= Print_Maps.Element (Position)
+         then
+            Add (Print_Maps.Key (Position));
+         end if;
+      end loop;
+      for Position in Before.Iterate loop
+         if not After.Contains (Print_Maps.Key (Position)) then
+            Add (Print_Maps.Key (Position));
+         end if;
+      end loop;
+      return To_String (Result);
+   end Differing;
+
    --  The files checks judge, as they are: a document's words change no
    --  build or test, so a README edited leaves evidence standing.
    function Repository_Now (Item : Stores.Store) return String
@@ -709,6 +756,25 @@ package body Model_Runner.Framework.Verification is
       Number   : Natural;
       Diagnostics : Natural := 0;
       State    : Stores.State_Snapshot;
+      Started_On : Print_Maps.Map;
+      --  What the run has left of its time, as each check takes some.
+      Time_Left : Natural := Within;
+
+      --  The state as it was before the checks, on a way out of them that
+      --  is no conclusion: what could not be put back is said.
+      procedure Put_State_Back is
+         Changed, Left : Name_Lists.Vector;
+         Said          : Unbounded_String;
+      begin
+         Stores.Restore_State (Item, State, Changed, Left);
+         for Path of Left loop
+            Append (Said, (if Said = Null_Unbounded_String then "" else ", ") & Path);
+         end loop;
+         if Said /= Null_Unbounded_String then
+            E.Add_Text (Status, "detail", "what the checks changed in the state could not all be put back: "
+                        & To_String (Said));
+         end if;
+      end Put_State_Back;
    begin
       Evidence := Null_Unbounded_String;
       Passed := False;
@@ -1025,6 +1091,11 @@ package body Model_Runner.Framework.Verification is
          end;
 
          Passed := True;
+         --  The sources and tests as the checks start: one a person edits
+         --  while they run is not what they ran on.
+         Started_On := Checked_Prints
+           (if Workspace = "" then Repository.Now (Item)
+            else Repository.Scan (Workspace, Repository.Roots_Of (Item)));
          Stores.Snapshot_State (Item, State);
          for Index in 1 .. Length (Checks) loop
             declare
@@ -1044,7 +1115,7 @@ package body Model_Runner.Framework.Verification is
                end if;
                --  Not past the time the run has left.
                if Within > 0 then
-                  Own.Timeout := Positive'Max (1, Natural'Min (Own.Timeout, Within));
+                  Own.Timeout := Positive'Max (1, Natural'Min (Own.Timeout, Time_Left));
                end if;
                Own.Keep_Whole := Next.Keep_Whole;
                loop
@@ -1053,8 +1124,10 @@ package body Model_Runner.Framework.Verification is
                     (Item, Change, Own, Filled (To_String (Next.Command)),
                      Filled (To_String (Next.Directory), Command => False), Ran, Status, Base => Workspace);
                   if E.Is_Error (Status) then
+                     Put_State_Back;
                      return;
                   end if;
+                  Time_Left := (if Ran.Seconds >= Time_Left then 0 else Time_Left - Ran.Seconds);
 
                   --  Stopped by whoever started it: not a failure of what
                   --  it checks, so nothing is judged and no evidence kept.
@@ -1113,6 +1186,7 @@ package body Model_Runner.Framework.Verification is
                   To_String (Next.Label) & (if Good then " passed" else " failed"),
                   Event, Status);
                if E.Is_Error (Status) then
+                  Put_State_Back;
                   return;
                end if;
 
@@ -1165,6 +1239,16 @@ package body Model_Runner.Framework.Verification is
          --  it would be out of date the moment it was recorded.
          Records.Set (Value, "repository_revision", Repository_Now (Item));
          Records.Set (Value, "files", File_Lines (Repository.Now (Item)));
+         --  A source or test changed while they ran -- by the checks
+         --  themselves, as a build writes its own, or by a person: which
+         --  cannot be told, so it is recorded, and the evidence is not
+         --  handed to a later run as though its files were known.
+         Records.Set
+           (Value, "changed_during",
+            Differing (Started_On,
+                       Checked_Prints
+                         (if Workspace = "" then Repository.Now (Item)
+                          else Repository.Scan (Workspace, Repository.Roots_Of (Item)))));
          Records.Set
            (Value, "workspace_revision",
             (if Workspace = "" then Repository_Now (Item)
@@ -1186,6 +1270,7 @@ package body Model_Runner.Framework.Verification is
          --  finds it there. An entry not written is only checks run again.
          if Records.Get (Value, "state_changed") = ""
            and then Records.Get (Value, "scope_files") = ""
+           and then Records.Get (Value, "changed_during") = ""
          then
             declare
                Path    : constant String :=
@@ -1355,6 +1440,11 @@ package body Model_Runner.Framework.Verification is
          return (if Stop = 0 then Line else Line (Stop + 1 .. Line'Last));
       end Path_Of;
    begin
+      --  A file that cannot be read may be what reaches its tests: nothing
+      --  is known to be outside them.
+      if Repository.Unread_Count (Files) > 0 then
+         return False;
+      end if;
       declare
          Given : constant String := Records.Get (Value, "given.tests");
          Start : Positive := Given'First;
@@ -1800,6 +1890,27 @@ package body Model_Runner.Framework.Verification is
       Reasons := Report.Reasons;
       return Report.Kind = Current;
    end Is_Current;
+
+   -------------------------
+   -- Unreadable_Evidence --
+   -------------------------
+
+   --  The first verification record that will not read, or "".
+   function Unreadable_Evidence (Item : Stores.Store) return String is
+   begin
+      for Name of Stores.Names (Item, Verification_Area) loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Verification_Area, Name, Value, Status);
+            if E.Is_Error (Status) then
+               return Name;
+            end if;
+         end;
+      end loop;
+      return "";
+   end Unreadable_Evidence;
 
    ------------
    -- Latest --
@@ -2256,9 +2367,19 @@ package body Model_Runner.Framework.Verification is
          end;
          Stores.Pending (Change, Tasks_Area, Task_Id & ".state", Held, Staged);
          if Staged then
-            if Evidence /= "" then
-               Records.Set (Held, "current_verification", Evidence);
-            end if;
+            --  This task's own, as its record says: one that will not read
+            --  is no evidence to name as current.
+            declare
+               Kept : Records.Item;
+               Got  : E.Error_Info;
+            begin
+               if Evidence /= "" then
+                  Stores.Read (Item, Verification_Area, Evidence, Kept, Got);
+                  if E.Is_Ok (Got) and then Records.Get (Kept, "task") = Task_Id then
+                     Records.Set (Held, "current_verification", Evidence);
+                  end if;
+               end if;
+            end;
             if By_Hand then
                Records.Set (Held, "completed_by", "hand");
             end if;
@@ -3068,12 +3189,22 @@ package body Model_Runner.Framework.Verification is
             declare
                Defined : Records.Item;
                Read    : E.Error_Info;
-               State   : constant String := Tasks.State_Of (Item, Id);
+               --  As the project counts its state: one of its own states
+               --  that counts as cancelled is cancelled.
+               Raw     : constant String := Tasks.State_Of (Item, Id);
+               State   : constant String := (if Raw = "" then "" else Tasks.Counts_As (Item, Raw));
             begin
                Tasks.Definition (Item, Id, Defined, Read);
                if State in "cancelled" | "rejected" then
                   null;
                elsif E.Is_Error (Read) then
+                  Unread := True;
+               elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                 and then State = ""
+               then
+                  --  Serving it, in a state that will not read: whether it
+                  --  is done cannot be told, and nothing is moved on it.
+                  Serving := Serving + 1;
                   Unread := True;
                elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement) then
                   Serving := Serving + 1;
@@ -3121,7 +3252,7 @@ package body Model_Runner.Framework.Verification is
                Open, Unread, Undone : Boolean;
             begin
                Serving_Tasks (Requirement, Serving, Open, Unread, Undone);
-               if Undone then
+               if Undone and then not Unread then
                   Intent.Move (Item, Change, Intent.Requirement, Requirement, "accepted",
                                [Transitions.Ordinary => True, Transitions.Invalidation => True,
                                 others => False],
@@ -3142,7 +3273,8 @@ package body Model_Runner.Framework.Verification is
 
       for Requirement of Intent.List (Item, Intent.Requirement, "implemented") loop
          declare
-            Evidence : constant String := Supporting (Requirement);
+            Evidence : constant String :=
+              (if Changed.Contains (Requirement) then "" else Supporting (Requirement));
             Value    : Records.Item;
             Staged   : Boolean;
          begin
@@ -3161,7 +3293,21 @@ package body Model_Runner.Framework.Verification is
       end loop;
 
       for Requirement of Intent.List (Item, Intent.Requirement, "verified") loop
-         if Supporting (Requirement) = "" then
+         --  Moved already in this change: as it is staged, not as listed.
+         if not Changed.Contains (Requirement) and then Supporting (Requirement) = "" then
+            --  Evidence that will not read may be what still holds it: that
+            --  it no longer applies is not known, and is not said.
+            declare
+               Unread : constant String := Unreadable_Evidence (Item);
+            begin
+               if Unread /= "" then
+                  Status := E.Make (E.Framework_Integrity_Failed);
+                  E.Add_Text (Status, "name", Unread);
+                  E.Add_Text (Status, "detail", Unread & " will not read, so whether the evidence for "
+                              & Requirement & " still applies cannot be told; /check names it");
+                  return;
+               end if;
+            end;
             Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
                          [Transitions.Ordinary => True, Transitions.Invalidation => True,
                           others => False],

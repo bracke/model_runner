@@ -1249,6 +1249,21 @@ package body Model_Runner.CLI.Intents is
                      [Loc.Named ("name", Word (2) & " (" & To_String (Evidence) & ")"),
                       Loc.Named ("detail", Vf.Why_Not_Verified (Store, Word (2)))]);
                end if;
+               --  Checks that did not pass: a failure, with why, as /check
+               --  says one -- the command does not end as a success.
+               if not Passed then
+                  declare
+                     Failed : E.Error_Info := E.Make (E.Framework_Verification_Failed);
+                     Why    : Unbounded_String;
+                  begin
+                     for Line of Vf.Why_Failed (Store, To_String (Evidence)) loop
+                        Append (Why, (if Why = Null_Unbounded_String then "" else ASCII.LF & "") & Line);
+                     end loop;
+                     E.Add_Text (Failed, "name", To_String (Evidence));
+                     E.Add_Text (Failed, "detail", To_String (Why));
+                     Pres.Report (Screen, Failed);
+                  end;
+               end if;
                for Requirement of Moved loop
                   if Requirement /= Word (2) then
                      Pres.Put_Message

@@ -4,6 +4,7 @@ with Ada.Directories;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
+with Interfaces;
 
 with Hostkit.Fs;
 
@@ -41,6 +42,47 @@ package body Model_Runner.Framework.Files is
    ---------------
    -- Read_Text --
    ---------------
+
+   procedure Print_Of
+     (Path   : String;
+      Print  : out Unbounded_String;
+      Status : out E.Error_Info)
+   is
+      use type Interfaces.Unsigned_64;
+      use type Ada.Streams.Stream_Element_Offset;
+      Digits_Of : constant String := "0123456789abcdef";
+      Value     : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+      Result    : String (1 .. 16);
+      File      : Stream_IO.File_Type;
+      Piece     : Ada.Streams.Stream_Element_Array (1 .. 1_048_576);
+      Last      : Ada.Streams.Stream_Element_Offset;
+   begin
+      Print := Null_Unbounded_String;
+      Status := E.Success;
+      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      loop
+         Stream_IO.Read (File, Piece, Last);
+         exit when Last < Piece'First;
+         for Byte of Piece (Piece'First .. Last) loop
+            Value := (Value xor Interfaces.Unsigned_64 (Byte)) * 16#0000_0100_0000_01B3#;
+         end loop;
+         exit when Last < Piece'Last;
+      end loop;
+      Stream_IO.Close (File);
+      for Index in reverse Result'Range loop
+         Result (Index) := Digits_Of (Natural (Value and 16#F#) + 1);
+         Value := Interfaces.Shift_Right (Value, 4);
+      end loop;
+      Print := To_Unbounded_String (Result);
+   exception
+      when Failure : others =>
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
+         end if;
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
+   end Print_Of;
 
    procedure Read_Text
      (Path   : String;

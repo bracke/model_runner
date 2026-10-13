@@ -115,12 +115,21 @@ package body Model_Runner.Framework.Workspaces is
       if not Dirs.Exists (Path) then
          return "";
       end if;
-      Files.Read_Text (Path, Text, Status);
-      return (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Unknown_Print);
+      --  A piece at a time: the same print as of its whole text, for a
+      --  file of any size.
+      Files.Print_Of (Path, Text, Status);
+      return (if E.Is_Ok (Status) then To_String (Text) else Unknown_Print);
    end Print_Of;
 
    --  Whether two files are known to hold the same: both read, and alike.
    --  Two that cannot be read are not the same as far as anyone knows.
+   --  Whether a file is known to hold what a print says: read, and alike.
+   function Same_Print_As (Path, Print : String) return Boolean is
+      Now : constant String := Print_Of (Path);
+   begin
+      return Now /= Unknown_Print and then Now = Print;
+   end Same_Print_As;
+
    function Same_Print (Left, Right : String) return Boolean is
       Was : constant String := Print_Of (Left);
    begin
@@ -235,7 +244,10 @@ package body Model_Runner.Framework.Workspaces is
                      Held : Workspace;
                   begin
                      Read (Item, Name, Held, Got);
-                     if E.Is_Ok (Got) and then To_String (Held.Status) = "active" then
+                     --  One that will not read may be active: counted.
+                     if Ada.Strings.Fixed.Index (Name, ".") = 0
+                       and then (E.Is_Error (Got) or else To_String (Held.Status) = "active")
+                     then
                         Active := Active + 1;
                      end if;
                   end;
@@ -309,16 +321,22 @@ package body Model_Runner.Framework.Workspaces is
                               Target : constant String :=
                                 Hostkit.Fs.Join (Tree, Maps.Key (Position));
                            begin
-                              if Files.Make_Directory (Dirs.Containing_Directory (Target)) then
-                                 Dirs.Copy_File
-                                   (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
+                              --  Not brought over, it would start from
+                              --  what was committed: copied whole instead.
+                              if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+                                 raise Not_Read;
                               end if;
+                              Dirs.Copy_File
+                                (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
                            end;
                         end if;
                      end loop;
                      for Position in There.Iterate loop
                         if not Here.Contains (Maps.Key (Position)) then
                            Files.Discard (Hostkit.Fs.Join (Tree, Maps.Key (Position)));
+                           if Dirs.Exists (Hostkit.Fs.Join (Tree, Maps.Key (Position))) then
+                              raise Not_Read;
+                           end if;
                         end if;
                      end loop;
                   exception
@@ -1221,6 +1239,7 @@ package body Model_Runner.Framework.Workspaces is
    --  try; all of it put back, the journal goes.
    procedure Roll_Back (Item : Stores.Store; Id : String; Status : out E.Error_Info) is
       Text    : Unbounded_String;
+      Lines   : Name_Lists.Vector;
       Read_It : E.Error_Info;
       Left    : Unbounded_String;
       Project : constant String := Project_Of (Item);
@@ -1232,8 +1251,14 @@ package body Model_Runner.Framework.Workspaces is
          Held : Workspace;
          Got  : E.Error_Info;
       begin
+         --  A kept copy put back: what it wrote is that copy.
          if Id'Length > 8 and then Id (Id'First .. Id'First + 7) = "restore-" then
-            return "";
+            declare
+               Kept : constant String :=
+                 Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), Id (Id'First + 8 .. Id'Last));
+            begin
+               return (if Dirs.Exists (Kept) then Kept else "");
+            end;
          end if;
          Read (Item, Id, Held, Got);
          return (if E.Is_Ok (Got) and then Dirs.Exists (To_String (Held.Path))
@@ -1248,8 +1273,14 @@ package body Model_Runner.Framework.Workspaces is
       function Changed_Since (Path : String; Before_Absent : Boolean) return Boolean is
          Now : constant String := Print_Of (Hostkit.Fs.Join (Project, Path));
       begin
-         if Tree = "" or else Now = "" then
+         if Now = "" then
             return False;
+         --  What was written cannot be seen: put back only what is as it
+         --  was before, which changes nothing -- anything else may be a
+         --  person's, and is left, and said.
+         elsif Tree = "" then
+            return Before_Absent
+              or else not Same_Print (Hostkit.Fs.Join (Project, Path), Saved_Of (Item, Id, Path));
          end if;
          return not Same_Print (Hostkit.Fs.Join (Project, Path), Hostkit.Fs.Join (Tree, Path))
            and then (Before_Absent
@@ -1265,11 +1296,15 @@ package body Model_Runner.Framework.Workspaces is
          Status := Read_It;
          return;
       end if;
-      for Line of Lines_Of (To_String (Text)) loop
+      Lines := Lines_Of (To_String (Text));
+      for Index in 1 .. Natural (Lines.Length) loop
          declare
+            Line   : constant String := Lines (Index);
             Fields : constant Name_Lists.Vector := Split_Tabs (Line);
          begin
-            if Natural (Fields.Length) >= 2 and then Fields (1) /= "task" then
+            --  The first line says whose it is; every other is a file, a
+            --  file named task among them.
+            if Natural (Fields.Length) >= 2 and then Index > 1 then
                declare
                   Path   : constant String := Fields (1);
                   Target : constant String := Hostkit.Fs.Join (Project, Path);
@@ -1330,6 +1365,18 @@ package body Model_Runner.Framework.Workspaces is
    begin
       Absent.Clear;
       Status := E.Success;
+      --  A name the journal cannot hold as one -- a tab or a line break in
+      --  it -- would be read back as another file's: nothing is taken in.
+      for Path of Paths loop
+         if (for some C of Path => C < ' ') then
+            Status := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Status, "name", "a file's name");
+            E.Add_Text (Status, "value", Path);
+            E.Add_Text (Status, "detail", "a file whose name holds a tab or a line break is not taken in;"
+                        & " rename it in the workspace first");
+            return;
+         end if;
+      end loop;
       for Path of Paths loop
          declare
             Target : constant String := Hostkit.Fs.Join (Project, Path);
@@ -1477,6 +1524,12 @@ package body Model_Runner.Framework.Workspaces is
       Held    : Workspace;
       Project : constant String := Project_Of (Item);
       Event   : Unbounded_String;
+
+      --  What a person said is settled: the files the last conflict named,
+      --  and only those -- one the project changed since, beside them, is
+      --  judged as any other.
+      Resolved : constant Name_Lists.Vector :=
+        (if Text_Resolved then Conflict_Files (Item, Id) else Name_Lists.Empty_Vector);
    begin
       Taken.Clear;
       Joined_Last.Clear;
@@ -1513,7 +1566,7 @@ package body Model_Runner.Framework.Workspaces is
          Clashes : constant Name_Lists.Vector := Conflicts (Item, Id);
          Listed  : Unbounded_String;
       begin
-         if not Clashes.Is_Empty and then not Text_Resolved then
+         if (for some Path of Clashes => not Resolved.Contains (Path)) then
             --  Kept, with each workspace copy as it is now, so that what is
             --  settled since can be told from what is not.
             declare
@@ -1600,6 +1653,8 @@ package body Model_Runner.Framework.Workspaces is
       declare
          Wanted  : constant Name_Lists.Vector := Changes (Item, Id);
          Absent  : Name_Lists.Vector;
+         --  What the project held when the workspace was made, read once.
+         Base    : Maps.Map;
 
          --  Everything taken so far back as it was, from the journal. What
          --  cannot be is said with the failure that stopped the taking in.
@@ -1613,6 +1668,10 @@ package body Model_Runner.Framework.Workspaces is
             Taken.Clear;
          end Put_Back;
       begin
+         Read_Baseline (Item, Id, Base, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
          Begin_Journal (Item, Id, To_String (Held.Task_Id), Wanted, Absent, Status);
          if E.Is_Error (Status) then
             return;
@@ -1635,15 +1694,28 @@ package body Model_Runner.Framework.Workspaces is
                   --  Changed in the project since, on other lines: the two
                   --  joined; otherwise the workspace's copy, as settled.
                   declare
-                     Base   : constant Maps.Map := Baseline_Of (Item, Id);
                      Joined : Unbounded_String;
                      Clean  : Boolean := False;
                      Wrote  : E.Error_Info;
+                     --  The project changed it since -- or made it, or
+                     --  cannot be read -- and nobody settled it by hand.
+                     Theirs_Too : constant Boolean :=
+                       not Resolved.Contains (Path) and then Dirs.Exists (Target)
+                       and then (not Base.Contains (Path) or else not Same_Print_As (Target, Base (Path)));
                   begin
-                     if not Text_Resolved and then Dirs.Exists (Target)
-                       and then Base.Contains (Path) and then Print_Of (Target) /= Base (Path)
-                     then
+                     if Theirs_Too then
                         Joined_File (Item, Held, Path, Joined, Clean);
+                        --  Not joined, it is not written over: the person's
+                        --  change is theirs until a conflict is settled.
+                        if not Clean then
+                           Status := E.Make (E.Framework_Integration_Conflict);
+                           E.Add_Text (Status, "name", Id);
+                           E.Add_Text (Status, "detail",
+                                       Path & " changed in the project as it was taken in, and the two"
+                                       & " do not join: nothing was taken in");
+                           Put_Back;
+                           return;
+                        end if;
                      end if;
                      if Clean then
                         Joined_Last.Append (Path);

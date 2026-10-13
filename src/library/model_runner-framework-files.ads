@@ -41,6 +41,17 @@ private package Model_Runner.Framework.Files is
       Text   : out Ada.Strings.Unbounded.Unbounded_String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  A file's print, its bytes read a piece at a time: the same as
+   --  Fingerprint of its whole text, for a file too large to hold.
+   --
+   --  @param Path The file.
+   --  @param Print Its print.
+   --  @param Status IO_Read_Failed when it cannot be read.
+   procedure Print_Of
+     (Path   : String;
+      Print  : out Ada.Strings.Unbounded.Unbounded_String;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Write a whole file, replacing what was there.
    --
    --  @param Path The file.

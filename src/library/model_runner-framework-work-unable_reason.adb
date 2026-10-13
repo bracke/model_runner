@@ -4,8 +4,9 @@ function Unable_Reason (Item : Stores.Store; Task_Id : String) return String is
    Read : E.Error_Info;
 begin
    Tasks.Effective (Item, Task_Id, View, Read);
+   --  What it may do cannot be told: it is not said able.
    if E.Is_Error (Read) then
-      return "";
+      return "what it may do cannot be told: " & Why_Of (Read);
    end if;
    declare
       Allowed : constant Permissions.Permission_Set :=

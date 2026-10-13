@@ -207,6 +207,10 @@ is
 
    Frozen : constant Settings := Resolve;
 
+   --  The files the work is judged by as it starts: not its to change.
+   Judged : constant Name_Lists.Vector :=
+     Judged_Files (Item, Task_Id, To_String (Frozen.Verification_Text));
+
    function Image (Value : Natural) return String is
       Raw : constant String := Natural'Image (Value);
    begin
@@ -579,7 +583,12 @@ begin
          Workspaces.Active_Workspace (Item, Task_Id, Only, Held);
          if E.Is_Error (Held) then
             Change := Stores.No_Changes;
-            Conclude ("blocked", "it has more than one workspace; /check consistency", "failed");
+            Conclude ("blocked",
+                      (if E.Is_Error (Held) and then E."=" (Held.Code, E.Framework_Integrity_Failed)
+                         and then E.Text_Of (Held, "detail") /= ""
+                       then E.Text_Of (Held, "detail")
+                       else "its workspaces cannot be told apart: " & Why_Of (Held))
+                      & "; /check consistency", "failed");
             return;
          end if;
          declare
@@ -743,10 +752,20 @@ begin
                Read       : E.Error_Info;
             begin
                Agents.Read (Item, To_String (Result.Agent_Id), Root_Agent, Read);
-               Files.Write_Text
-                 (Permissions.Permissions_Beside (Prompt),
-                  (if E.Is_Ok (Read) then Permissions.Image (Root_Agent.Allowed) else ""),
-                  Status);
+               --  Held, as a process of its own, from the checks it is
+               --  judged by, as the session's own tools hold it.
+               declare
+                  Held_From : Permissions.Permission_Set := Root_Agent.Allowed;
+               begin
+                  for Path of Judged loop
+                     Held_From (Permissions.Write_Source).Deny.Append (Path);
+                     Held_From (Permissions.Write_Specs).Deny.Append (Path);
+                  end loop;
+                  Files.Write_Text
+                    (Permissions.Permissions_Beside (Prompt),
+                     (if E.Is_Ok (Read) then Permissions.Image (Held_From) else ""),
+                     Status);
+               end;
                if E.Is_Ok (Read) and then not Isolated then
                   Keep_Originals (Item, To_String (Result.Agent_Id), To_String (Place), Before,
                                   Root_Agent.Allowed, Status);
@@ -1116,8 +1135,10 @@ begin
    begin
       Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Held);
       for Path of Result.Changed_Files loop
-         if not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Source, Path)
-           and then not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Specs, Path)
+         --  Nor a check it is judged by, however it was reached.
+         if Judged.Contains (Permissions.Normal (Path))
+           or else (not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Source, Path)
+                    and then not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Specs, Path))
          then
             Append (Denied, (if Denied = Null_Unbounded_String then "" else ", ") & Path);
          end if;
@@ -1784,6 +1805,12 @@ begin
                if E.Is_Ok (Ran) then
                   Stores.Commit (Item, Change, Ran);
                end if;
+               --  Not run, or not kept: nothing of it is committed with the
+               --  conclusion, and no evidence that is not there is named.
+               if E.Is_Error (Ran) then
+                  Change := Stores.No_Changes;
+                  Evidence := Null_Unbounded_String;
+               end if;
                if E.Is_Error (Ran) or else not Passed then
                   Conclude ("blocked",
                             "its " & Stage & " stage did not pass"
@@ -1894,9 +1921,19 @@ begin
                Annotate (Item, Change, Task_Id, "current_verification",
                          To_String (Result.Evidence_Id));
                Stores.Commit (Item, Change, Held);
-            else
+            end if;
+            --  Not run, cancelled, or not kept: no evidence is named that
+            --  is not there, and the run ends saying which.
+            if E.Is_Error (Held) then
                Change := Stores.No_Changes;
-               Passed := False;
+               Result.Evidence_Id := Null_Unbounded_String;
+               Conclude ("blocked",
+                         (if Interrupted (Held) then "its check in " & To_String (Result.Workspace_Id)
+                                                    & " was cancelled"
+                          else "its check in " & To_String (Result.Workspace_Id) & " could not run: "
+                               & Why_Of (Held)),
+                         "completed");
+               return;
             end if;
             Said := To_Unbounded_String
               ("; checked in it: " & (if Passed then "passed" else "did not pass")

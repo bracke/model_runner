@@ -227,6 +227,21 @@ package body Model_Runner.Framework.Consistency is
 
       --  Statements that disagree with what governs their subject, and do
       --  not say they override it.
+      --  Evidence whose record will not read: what it says is not known,
+      --  and what it might be the latest of is held back by it.
+      for Name of Stores.Names (Item, Verification_Area) loop
+         declare
+            Value : Records.Item;
+            Read  : E.Error_Info;
+         begin
+            Stores.Read (Item, Verification_Area, Name, Value, Read);
+            if E.Is_Error (Read) then
+               Found (Missing_Evidence, Name,
+                      "its record will not read, so no task's evidence older than it is taken as its latest");
+            end if;
+         end;
+      end loop;
+
       --  A ruling whose record will not read: what it rules is not known.
       for Name of Authority.Unreadable (Item) loop
          Found (Conflicting_Authority, Name,

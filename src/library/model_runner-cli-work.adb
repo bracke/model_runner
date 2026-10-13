@@ -1589,6 +1589,9 @@ package body Model_Runner.CLI.Work is
                      Done.Requirements.Append (Requirement);
                   end if;
                end loop;
+            else
+               --  Not judged again: what they are shown as is not new.
+               Pres.Report (Screen, Judged);
             end if;
          end;
          for Requirement of Done.Requirements loop
@@ -1638,6 +1641,11 @@ package body Model_Runner.CLI.Work is
                   Tk.Recompute_Readiness (Store, Change, Became, Moved);
                   if E.Is_Ok (Moved) then
                      S.Commit (Store, Change, Moved);
+                  end if;
+                  --  Not kept, nothing became ready: said, and none named.
+                  if E.Is_Error (Moved) then
+                     Pres.Report (Screen, Moved);
+                     Became.Clear;
                   end if;
                   for Id of Became loop
                      if Id /= R.Get (Defined, "parent") then

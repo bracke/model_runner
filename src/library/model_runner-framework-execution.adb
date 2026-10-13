@@ -20,6 +20,30 @@ with Model_Runner.Platform;
 
 package body Model_Runner.Framework.Execution is
 
+   --  Each run's own number in this process, so that two runs -- this
+   --  session's and another's, or two tasks of one -- never share a file
+   --  to write what they say into.
+   protected Output_Numbers is
+      procedure Take (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end Output_Numbers;
+
+   protected body Output_Numbers is
+      procedure Take (Number : out Natural) is
+      begin
+         Count := (if Count = Natural'Last then 0 else Count + 1);
+         Number := Count;
+      end Take;
+   end Output_Numbers;
+
+   function Next_Output_Number return Natural is
+      Number : Natural;
+   begin
+      Output_Numbers.Take (Number);
+      return Number;
+   end Next_Output_Number;
+
    --  How much of a check's output is kept where it says keep=summary.
    Kept_Tail : constant := 4096;
 
@@ -595,7 +619,9 @@ package body Model_Runner.Framework.Execution is
       declare
          Scratch   : constant String :=
            Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "exec");
-         Output    : constant String := Hostkit.Fs.Join (Scratch, "output");
+         Output    : constant String :=
+           Hostkit.Fs.Join (Scratch, "output-" & Trim (Integer'Image (Hostkit.Host.Own_Process_Id))
+                                     & "-" & Trim (Natural'Image (Next_Output_Number)));
          Where     : constant String :=
            (if Directory = "" then Project else Hostkit.Fs.Join (Project, Directory));
          Arguments : Hostkit.String_Vectors.Vector;
@@ -715,7 +741,7 @@ package body Model_Runner.Framework.Execution is
            Whole_Group       => True,
                  Stdout_Path       => Output,
                  Stderr_Path       => Output,
-                 Timeout_Ms        => Rules.Timeout * 1000,
+                 Timeout_Ms        => Natural'Min (Rules.Timeout, Integer'Last / 1000) * 1000,
                  Cancelled         => Stop_Asked'Access,
                  Started           => Record_Group'Access);
             if Current.Store /= null and then Length (Current.Lease) > 0 then
@@ -741,6 +767,12 @@ package body Model_Runner.Framework.Execution is
          if Ada.Directories.Exists (Output) then
             Files.Read_Text (Output, Text, Read);
             Files.Discard (Output);
+            --  What it said, not read, is not said to be nothing.
+            if E.Is_Error (Read) and then not E."=" (Read.Code, E.IO_File_Too_Large) then
+               Status := Read;
+               E.Add_Text (Status, "detail", Command & ": what it said could not be read");
+               return;
+            end if;
          end if;
 
          --  The whole of it kept; a limit's worth of it read.
@@ -831,7 +863,7 @@ package body Model_Runner.Framework.Execution is
                  Whole_Group       => True,
            Stdout_Path       => Output,
            Stderr_Path       => Output & ".stderr",
-           Timeout_Ms        => Timeout * 1000,
+           Timeout_Ms        => Natural'Min (Timeout, Integer'Last / 1000) * 1000,
            Cancelled         => Stop_Asked'Access,
            Started           => Record_Group'Access);
       if Current.Store /= null and then Length (Current.Lease) > 0 then

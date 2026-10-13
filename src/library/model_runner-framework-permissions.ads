@@ -63,6 +63,13 @@ package Model_Runner.Framework.Permissions is
    --  Every capability's grant.
    type Permission_Set is array (Capability) of Grant;
 
+   --  A path as its parts say it: separators of either kind, no empty part
+   --  and no ".", joined by "/" -- ./src//x and src/x are one path.
+   --
+   --  @param Path The path.
+   --  @return It, so written.
+   function Normal (Path : String) return String;
+
    --  Everything, without limit: the identity of intersection.
    Unrestricted : constant Permission_Set;
 

@@ -932,6 +932,43 @@ package body Model_Runner.Framework.Intent is
    is (if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9')
        then Natural'Value (Said) else 0);
 
+   --  A list of sources, a comma or space apart, with one named anew;
+   --  the separators as they were.
+   function Renamed_In (Said, Old_Id, New_Id : String) return String is
+      Result : Unbounded_String;
+      Start  : Natural := Said'First;
+   begin
+      for Index in Said'First .. Said'Last + 1 loop
+         if Index > Said'Last or else Said (Index) in ',' | ' ' then
+            Append (Result, (if Said (Start .. Index - 1) = Old_Id then New_Id else Said (Start .. Index - 1)));
+            if Index <= Said'Last then
+               Append (Result, Said (Index));
+            end if;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Renamed_In;
+
+   --  The same, in each line of what else a decision governs: setting,
+   --  ruling and what it overrides, a tab apart.
+   function Renamed_In_Lines (Said, Old_Id, New_Id : String) return String is
+      Result : Unbounded_String;
+   begin
+      for Line of Split_Lines (Said) loop
+         declare
+            Second : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT], Ada.Strings.Backward);
+            First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                    & (if Second > First and then First > 0
+                       then Line (Line'First .. Second) & Renamed_In (Line (Second + 1 .. Line'Last), Old_Id, New_Id)
+                       else Line));
+         end;
+      end loop;
+      return To_String (Result);
+   end Renamed_In_Lines;
+
    procedure Renumber
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -977,6 +1014,35 @@ package body Model_Runner.Framework.Intent is
          E.Add_Text (Status, "detail", New_Id & " is taken: give that one another first, or choose another");
          return;
       end if;
+      --  Every record that may name it read first: one that will not read
+      --  would go on naming a number no longer there.
+      declare
+         type Area_List is array (Positive range <>) of Area;
+         Named_In : constant Area_List :=
+           [Specs_Area, Requirements_Area, Decisions_Area, Tasks_Area, Project_Area];
+      begin
+         for Where of Named_In loop
+            for Name of Stores.Names (Item, Where) loop
+               if (Where /= Project_Area or else Ada.Strings.Fixed.Index (Name, "instruction.") = 1)
+                 and then Ada.Strings.Fixed.Index (Name, ".rev-") = 0
+               then
+                  declare
+                     Held : Records.Item;
+                     Got  : E.Error_Info;
+                  begin
+                     Stores.Read (Item, Where, Name, Held, Got);
+                     if E.Is_Error (Got) then
+                        Status := E.Make (E.Framework_Integrity_Failed);
+                        E.Add_Text (Status, "name", Name);
+                        E.Add_Text (Status, "detail", Name & " will not read, so whether it names " & Old_Id
+                                    & " cannot be told: nothing was renumbered");
+                        return;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end loop;
+      end;
       --  The record under its new name, every field as it was -- and what
       --  it was before, with how often it had changed: a new record counts
       --  its own changes from one.
@@ -1024,6 +1090,23 @@ package body Model_Runner.Framework.Intent is
                            end if;
                         end;
                      end loop;
+                     --  And what it overrides, there and in what else it
+                     --  governs.
+                     if Renamed_In (Records.Get (Held, "overrides"), Old_Id, New_Id)
+                          /= Records.Get (Held, "overrides")
+                       or else Renamed_In_Lines (Records.Get (Held, "also_governs"), Old_Id, New_Id)
+                                 /= Records.Get (Held, "also_governs")
+                     then
+                        if Records.Has (Held, "overrides") then
+                           Records.Set (Held, "overrides",
+                                        Renamed_In (Records.Get (Held, "overrides"), Old_Id, New_Id));
+                        end if;
+                        if Records.Has (Held, "also_governs") then
+                           Records.Set (Held, "also_governs",
+                                        Renamed_In_Lines (Records.Get (Held, "also_governs"), Old_Id, New_Id));
+                        end if;
+                        Touched := True;
+                     end if;
                      --  And what it supersedes or is superseded by.
                      for Field of Name_Lists.Vector'(["supersedes", "superseded_by"]) loop
                         if Split_Lines (Records.Get (Held, Field)).Contains (Old_Id) then
@@ -1048,6 +1131,35 @@ package body Model_Runner.Framework.Intent is
             end if;
          end loop;
       end loop;
+      --  A person's instruction overriding it overrides it under its new
+      --  number.
+      for Name of Stores.Names (Item, Project_Area) loop
+         if Ada.Strings.Fixed.Index (Name, "instruction.") = 1 then
+            declare
+               Held   : Records.Item;
+               Got    : E.Error_Info;
+               Staged : Boolean;
+            begin
+               Stores.Pending (Change, Project_Area, Name, Held, Staged);
+               if not Staged then
+                  Stores.Read (Item, Project_Area, Name, Held, Got);
+               else
+                  Got := E.Success;
+               end if;
+               if E.Is_Ok (Got)
+                 and then Renamed_In (Records.Get (Held, "overrides"), Old_Id, New_Id)
+                            /= Records.Get (Held, "overrides")
+               then
+                  Records.Set (Held, "overrides", Renamed_In (Records.Get (Held, "overrides"), Old_Id, New_Id));
+                  if not Staged then
+                     Records.Set_Revision (Held, Records.Revision (Held) + 1);
+                  end if;
+                  Stores.Put (Change, Project_Area, Name, Held);
+               end if;
+            end;
+         end if;
+      end loop;
+
       --  Every task serving it, whatever its state -- done work too: its
       --  link and a derived title follow, in the same change, so nothing
       --  is left half renumbered.

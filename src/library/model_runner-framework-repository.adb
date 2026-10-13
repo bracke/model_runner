@@ -1449,14 +1449,22 @@ package body Model_Runner.Framework.Repository is
                      Text   : Unbounded_String;
                      Status : E.Error_Info;
                      Size   : constant Dirs.File_Size := Dirs.Size (Full);
+                     Print  : Unbounded_String;
                      use type Dirs.File_Size;
                   begin
                      if Size <= Largest_Read then
                         Files.Read_Text (Full, Text, Status);
-                        if E.Is_Error (Status) then
-                           Result.Unread.Append (Relative & ": could not be read");
-                           raise Skip_File;
-                        end if;
+                     else
+                        --  Too large to read whole: printed a piece at a
+                        --  time, so a change to it is still a change.
+                        Files.Print_Of (Full, Print, Status);
+                     end if;
+                     if E.Is_Error (Status) then
+                        Result.Unread.Append (Relative & ": could not be read");
+                        raise Skip_File;
+                     end if;
+                     if Size <= Largest_Read then
+                        Print := To_Unbounded_String (Fingerprint (To_String (Text)));
                      end if;
                      --  A built program or object -- bytes, not text, a NUL
                      --  among its first -- is no file of the project's.
@@ -1473,8 +1481,7 @@ package body Model_Runner.Framework.Repository is
                          Language    => To_Unbounded_String (Language_Of (Relative)),
                          Role        => (if Says_Generated (To_String (Text)) then Generated
                                          else Role_Of (Relative, Within)),
-                         Fingerprint => To_Unbounded_String
-                                          (Fingerprint (To_String (Text))),
+                         Fingerprint => Print,
                          Stamp       => To_Unbounded_String (Stamp_Of (Full))));
                      declare
                         Reader : constant Adapter'Class :=
@@ -1623,6 +1630,30 @@ package body Model_Runner.Framework.Repository is
             return "";
       end Text_Of;
 
+      --  A file's print: of its text where it was read whole, else read
+      --  a piece at a time; one that will not read is put down as unread.
+      function Print_Of (Path, Text : String) return String is
+         Full   : constant String := Hostkit.Fs.Join (Project_Directory, Path);
+         Print  : Unbounded_String;
+         Status : E.Error_Info;
+         use type Dirs.File_Size;
+      begin
+         if Dirs.Size (Full) <= Largest_Read then
+            return Fingerprint (Text);
+         end if;
+         Files.Print_Of (Full, Print, Status);
+         if E.Is_Error (Status) and then not Unreadable (Path) then
+            Result.Unread.Append (Path & ": could not be read");
+         end if;
+         return To_String (Print);
+      exception
+         when Failure : others =>
+            if not Unreadable (Path) then
+               Result.Unread.Append (Path & ": " & Why (Failure));
+            end if;
+            return "";
+      end Print_Of;
+
       function Is_Reference (Kind : Relation_Kind) return Boolean
       is (Kind in References | Calls);
 
@@ -1699,7 +1730,8 @@ package body Model_Runner.Framework.Repository is
             Result.Reading := To_Unbounded_String (Path);
             if Changed.Contains (Path) then
                declare
-                  Text : constant String := Text_Of (Path);
+                  Text  : constant String := Text_Of (Path);
+                  Print : constant String := Print_Of (Path, Text);
                begin
                   Read_Again := Read_Again + 1;
                   --  One that could not be read is left out, as Scan
@@ -1711,7 +1743,7 @@ package body Model_Runner.Framework.Repository is
                          Language    => To_Unbounded_String (Language_Of (Path)),
                          Role        => (if Says_Generated (Text) then Generated
                                          else Role_Of (Path, Within)),
-                         Fingerprint => To_Unbounded_String (Fingerprint (Text)),
+                         Fingerprint => To_Unbounded_String (Print),
                          Stamp       => To_Unbounded_String (Now_Stamps (Index))));
                      begin
                         Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);

@@ -290,6 +290,10 @@ package body Model_Runner.Framework.Orchestration is
          Read    : E.Error_Info;
       begin
          Tasks.Definition (Item, Id, Defined, Read);
+         --  One that will not read may write: waited on as a writer.
+         if E.Is_Error (Read) then
+            return True;
+         end if;
          declare
             Allowed : constant Permissions.Permission_Set :=
               Permissions.Effective (Item, Records.Get (Defined, "kind"), "",
@@ -306,6 +310,10 @@ package body Model_Runner.Framework.Orchestration is
          Read    : E.Error_Info;
       begin
          Tasks.Definition (Item, Id, Defined, Read);
+         --  One that will not read may work in the project itself.
+         if E.Is_Error (Read) then
+            return False;
+         end if;
          declare
             Kind : constant String := Records.Get (Defined, "kind");
          begin

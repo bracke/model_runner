@@ -2230,9 +2230,19 @@ package body Model_Runner.Tools.Builtin is
       Self.Base := U.To_Unbounded_String (Base);
    end Set_Base;
 
+   --  A file as what was seen of it is kept under: its parts, as they say
+   --  it -- one from the root kept apart from one in the project.
+   function Seen_Key (Path : String) return String is
+      Bare : constant String := Model_Runner.Framework.Permissions.Normal (Path);
+   begin
+      return (if Bare = "" then Path
+              elsif Path'Length > 0 and then Path (Path'First) = '/' then "/" & Bare
+              else Bare);
+   end Seen_Key;
+
    procedure Note_Seen (Self : in out Instance; Path : String; Revision : String) is
    begin
-      Self.Seen.Put (Path, Revision);
+      Self.Seen.Put (Seen_Key (Path), Revision);
    end Note_Seen;
 
    ----------
@@ -2475,10 +2485,13 @@ package body Model_Runner.Tools.Builtin is
          elsif File_Tool (Named) then
             declare
                Have : Boolean;
-               Path : constant String := Text_Argument (Arguments, "path", Have);
+               Spelt : constant String := Text_Argument (Arguments, "path", Have);
+               --  Known by the file, not by how it was spelt: ./a.adb and
+               --  a.adb are one, and a change under either is seen.
+               Path : constant String := Seen_Key (Spelt);
                Now  : constant String :=
                  (if Writes (Named) and then Have and then Self.Seen.Has (Path)
-                  then Model_Runner.Tools.Editing.Revision_Of (Path, U.To_String (Self.Base)) else "");
+                  then Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base)) else "");
             begin
                --  Changed under it since it last read or wrote it: made over
                --  what it did not see, the other change would be lost.
