@@ -8,7 +8,6 @@ with Hostkit.Durability;
 with Hostkit.Fs;
 
 with Model_Runner.Agent_Runtime;
-with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Events;
@@ -730,6 +729,15 @@ package body Model_Runner.Framework.Work is
    --  What running a profile takes: what the configuration says of it,
    --  scalar profile_capability.NAME -- else, by its name, tests or
    --  analysis, and anything else a build, which may run whatever it names.
+   --  How often a failed required helper is run again: scalar
+   --  agents.child_retries, else once.
+   function Retries_Allowed (Item : Stores.Store) return Natural is
+      Text : constant String := Scalar (Item, "agents.child_retries");
+   begin
+      return (if Text'Length in 1 .. 3 and then (for all C of Text => C in '0' .. '9')
+              then Natural'Value (Text) else 1);
+   end Retries_Allowed;
+
    function Check_Capability (Item : Stores.Store; Profile : String) return Permissions.Capability is
       Named : constant String := Ada.Characters.Handling.To_Lower (Profile);
       Said  : constant String := Scalar (Item, "profile_capability." & Profile);
@@ -1245,18 +1253,37 @@ package body Model_Runner.Framework.Work is
    --  worker's is not. Where the task it is held by cannot be read, what
    --  the project allows now cannot be known, and nothing is allowed: a
    --  live limit that lapses when its authority is unreadable is none.
-   function Allowed_Now (Host : Child_Host; Role : String) return Permissions.Permission_Set is
+   function Allowed_For
+     (Item : Stores.Store; Task_Id : String; Role : String) return Permissions.Permission_Set
+   is
       Defined : Records.Item;
       Read    : E.Error_Info;
    begin
-      Tasks.Definition (Host.Item.all, To_String (Host.Task_Id), Defined, Read);
+      Tasks.Definition (Item, Task_Id, Defined, Read);
       if E.Is_Error (Read) then
          return Permissions.Nothing;
       end if;
-      return Permissions.Effective (Host.Item.all, Records.Get (Defined, "kind"),
+      return Permissions.Effective (Item, Records.Get (Defined, "kind"),
                                     (if Role = "" then "worker" else Role),
                                     Task_Level => Records.Get (Defined, "permissions"));
-   end Allowed_Now;
+   end Allowed_For;
+
+   function Allowed_Now (Host : Child_Host; Role : String) return Permissions.Permission_Set
+   is (Allowed_For (Host.Item.all, To_String (Host.Task_Id), Role));
+
+   --  Holds_Now for a caller that has the agent and not a host: what the
+   --  harness decides for a run once it is over -- what it wrote that it
+   --  may not, whether it may propose or be taken in -- is decided as the
+   --  project allows it now, as the run's own calls were.
+   function Allows_Now
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Held    : Agents.Agent;
+      What    : Permissions.Capability;
+      Path    : String := "") return Boolean
+   is (Permissions.Allows (Held.Allowed, What, Path)
+       and then Permissions.Allows
+                  (Allowed_For (Item, Task_Id, To_String (Held.Role)), What, Path));
 
    --  Whether an agent holds a capability now: as it was given when it
    --  started, which is the most it has, and as the project allows its

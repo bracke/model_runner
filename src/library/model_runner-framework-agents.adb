@@ -373,9 +373,11 @@ package body Model_Runner.Framework.Agents is
       Budget : Natural;
       Id     : out Ada.Strings.Unbounded.Unbounded_String;
       Status : out Model_Runner.Errors.Error_Info;
-      Retry_Of : String := "")
+      Retry_Of : String := "";
+      Run_Limits : access constant Limits := null)
    is
-      Bounds : constant Limits := Limits_Of (Item);
+      Bounds : constant Limits :=
+        (if Run_Limits /= null then Run_Limits.all else Limits_Of (Item));
       Value  : Records.Item;
 
       --  Its children, less those run again for one that failed.

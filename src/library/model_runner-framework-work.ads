@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Context;
+with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Stores;
 
@@ -865,6 +866,12 @@ private
       Profile_Text   : Ada.Strings.Unbounded.Unbounded_String;
       Profile_Need   : Permissions.Capability := Permissions.Run_Build;
       Profile_Frozen : Boolean := False;
+
+      --  And how often a failed helper is run again, and how far helpers
+      --  reach, as they stood when the work started.
+      Child_Retries  : Natural := 1;
+      Limits         : aliased Agents.Limits;
+      Limits_Frozen  : Boolean := False;
 
       --  When the work must be over, where it is bounded.
       Bounded     : Boolean := False;

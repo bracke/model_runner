@@ -1777,12 +1777,14 @@ package body Model_Runner.Framework.Verification is
    function Choose
      (Item    : Stores.Store;
       Task_Id : String;
-      Changed : Name_Lists.Vector) return Choice
+      Changed : Name_Lists.Vector;
+      Own_Profile : String := "") return Choice
    is
       use type Traceability.Scope;
       Result    : Choice;
       Settings  : constant Records.Item := Config (Item);
-      Own       : constant String := Profile_Of (Item, Task_Id);
+      Own       : constant String :=
+        (if Own_Profile /= "" then Own_Profile else Profile_Of (Item, Task_Id));
       Defined   : Records.Item;
       Read      : E.Error_Info;
       Selected  : Traceability.Selection;

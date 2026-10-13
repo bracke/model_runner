@@ -214,11 +214,14 @@ package Model_Runner.Framework.Verification is
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @param Changed The files its work changed.
+   --  @param Own_Profile The task's own profile as a run resolved it when
+   --    it started; empty for the configuration's now.
    --  @return The choice; an empty profile when none applies.
    function Choose
      (Item    : Stores.Store;
       Task_Id : String;
-      Changed : Name_Lists.Vector) return Choice;
+      Changed : Name_Lists.Vector;
+      Own_Profile : String := "") return Choice;
 
    --  The diagnostics a piece of evidence recorded.
    --

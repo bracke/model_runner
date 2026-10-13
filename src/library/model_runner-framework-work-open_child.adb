@@ -38,9 +38,21 @@ begin
       return;
    end if;
 
+   --  As the project allows its work now, not only as it did when the
+   --  parent started: a /reconfigure that took create_children away stops
+   --  helpers at once, as it stops writes and checks (May, Holds_Now).
+   if not May (Host, Permissions.Create_Children) then
+      Status := E.Make (E.Framework_Permission_Denied);
+      E.Add_Text (Status, "name", Parent);
+      E.Add_Text (Status, "detail", "it may not make helpers");
+      Budget := 0;
+      return;
+   end if;
+
    Agents.Spawn_Child
      (Host.Item.all, Change, Parent, Named, Obliged, Permissions.Unrestricted, Budget,
-      Child_Id, Status, Retry_Of => Retry_Of);
+      Child_Id, Status, Retry_Of => Retry_Of,
+      Run_Limits => (if Host.Limits_Frozen then Host.Limits'Access else null));
    if E.Is_Ok (Status) then
       Stores.Commit (Host.Item.all, Change, Status);
    end if;
@@ -65,7 +77,17 @@ begin
          Held : Agents.Agent;
          Got  : E.Error_Info;
          Said : Unbounded_String;
+
+         --  Its tools as its calls are judged: checks by the profile the
+         --  run resolved and the authority held now (May_Check), as the
+         --  host that runs it decides them, not as the configuration says
+         --  them since.
+         Offered : Model_Runner.Tools.Registry.Capabilities :=
+           Tools_Of (Host.Item.all, To_String (Child_Id), To_String (Host.Task_Id));
       begin
+         Offered (Model_Runner.Tools.Registry.Project_Checks) :=
+           Offered (Model_Runner.Tools.Registry.Project_Checks)
+           and then May_Check (Host, Task_Profile (Host));
          Agents.Read (Host.Item.all, To_String (Child_Id), Held, Got);
          if E.Is_Error (Got) then
             return "";
@@ -90,8 +112,7 @@ begin
          begin
             return ASCII.LF & "## What you may do" & ASCII.LF
               & "Your tools -- these and no others: "
-              & Model_Runner.Tools.Registry.Offered_Names
-                  (Tools_Of (Host.Item.all, To_String (Child_Id), To_String (Host.Task_Id)))
+              & Model_Runner.Tools.Registry.Offered_Names (Offered)
               & "." & ASCII.LF
               & "You may " & (if Said = Null_Unbounded_String then "only read what you are given"
                               else To_String (Said))

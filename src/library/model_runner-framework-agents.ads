@@ -131,6 +131,8 @@ package Model_Runner.Framework.Agents is
    --  @param Status Framework_Permission_Denied when the parent may not make
    --    children, Framework_Limit_Exceeded when a limit of depth, children,
    --    active agents or budget would be passed.
+   --  @param Run_Limits The project's limits as the run resolved them when
+   --    it began; null for the configuration's now.
    procedure Spawn_Child
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -141,7 +143,8 @@ package Model_Runner.Framework.Agents is
       Budget : Natural;
       Id     : out Ada.Strings.Unbounded.Unbounded_String;
       Status : out Model_Runner.Errors.Error_Info;
-      Retry_Of : String := "");
+      Retry_Of : String := "";
+      Run_Limits : access constant Limits := null);
 
    --  Read an agent.
    --

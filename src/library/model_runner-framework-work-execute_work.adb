@@ -63,8 +63,8 @@ is
    begin
       Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Read);
       for Path of Result.Changed_Files loop
-         if not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Source, Path)
-           and then not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Specs, Path)
+         if not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Source, Path)
+           and then not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Specs, Path)
          then
             Append (Named, (if Named = Null_Unbounded_String then "" else ", ") & Path);
          end if;
@@ -161,6 +161,14 @@ is
       Verification_Profile : Unbounded_String;
       Verification_Text    : Unbounded_String;
       Check_Need           : Permissions.Capability := Permissions.Run_Build;
+
+      --  How its work is taken in, how often a failed helper is run
+      --  again, the stages run after it and how far helpers reach.
+      Integrate        : Unbounded_String;
+      Child_Retries    : Natural := 1;
+      Generate_Stage   : Unbounded_String;
+      Format_Stage     : Unbounded_String;
+      Limits           : Agents.Limits;
    end record;
 
    function Resolve return Settings is
@@ -189,6 +197,11 @@ is
           (Records.Get (Config, "profile." & To_String (Result.Verification_Profile)));
       Result.Check_Need :=
         Check_Capability (Item, To_String (Result.Verification_Profile));
+      Result.Integrate := To_Unbounded_String (Work_Setting (Item, "integrate"));
+      Result.Child_Retries := Retries_Allowed (Item);
+      Result.Generate_Stage := To_Unbounded_String (Scalar (Item, "stage.generate"));
+      Result.Format_Stage := To_Unbounded_String (Scalar (Item, "stage.format"));
+      Result.Limits := Agents.Limits_Of (Item);
       return Result;
    end Resolve;
 
@@ -200,6 +213,12 @@ is
       return Raw (Raw'First + 1 .. Raw'Last);
    end Image;
 
+   --  The checks of the run's own profile as they were when it started,
+   --  for that profile; "" for another, which is read as it is.
+   function Frozen_Definition (Profile : String) return String
+   is (if Profile = To_String (Frozen.Verification_Profile)
+       then To_String (Frozen.Verification_Text) else "");
+
    --  Those, as the lines an invocation keeps them in.
    function Resolved_Lines return String is
      ("config_revision=" & Image (Frozen.Config_Revision) & ASCII.LF
@@ -208,7 +227,9 @@ is
       & "max_tool_calls=" & Image (Frozen.Max_Tool_Calls) & ASCII.LF
       & "token_budget=" & Image (Frozen.Token_Budget) & ASCII.LF
       & "on_child_failure=" & To_String (Frozen.On_Child_Failure) & ASCII.LF
-      & "verification_profile=" & To_String (Frozen.Verification_Profile));
+      & "verification_profile=" & To_String (Frozen.Verification_Profile) & ASCII.LF
+      & "integrate=" & To_String (Frozen.Integrate) & ASCII.LF
+      & "child_retries=" & Image (Frozen.Child_Retries));
    Place    : Unbounded_String := To_Unbounded_String (Project);
 
    --  End the work with the task moved and the agent recorded.
@@ -754,6 +775,9 @@ begin
          Host.Profile_Text := Frozen.Verification_Text;
          Host.Profile_Need := Frozen.Check_Need;
          Host.Profile_Frozen := True;
+         Host.Child_Retries := Frozen.Child_Retries;
+         Host.Limits := Frozen.Limits;
+         Host.Limits_Frozen := True;
          Host.Open.Append (To_String (Result.Agent_Id));
          Host.Calls.Append (To_String (Result.Invocation_Id));
          Host.Opened.Append (Ada.Calendar.Clock);
@@ -864,8 +888,8 @@ begin
             Agents.Read (Item, To_String (Result.Agent_Id), Root_Agent, Read);
             for Path of Result.Changed_Files loop
                if E.Is_Ok (Read)
-                 and then not Permissions.Allows (Root_Agent.Allowed, Permissions.Write_Source, Path)
-                 and then not Permissions.Allows (Root_Agent.Allowed, Permissions.Write_Specs, Path)
+                 and then not Allows_Now (Item, Task_Id, Root_Agent, Permissions.Write_Source, Path)
+                 and then not Allows_Now (Item, Task_Id, Root_Agent, Permissions.Write_Specs, Path)
                then
                   declare
                      Back : E.Error_Info;
@@ -1083,8 +1107,8 @@ begin
    begin
       Agents.Read (Item, To_String (Result.Agent_Id), Held_Agent, Held);
       for Path of Result.Changed_Files loop
-         if not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Source, Path)
-           and then not Permissions.Allows (Held_Agent.Allowed, Permissions.Write_Specs, Path)
+         if not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Source, Path)
+           and then not Allows_Now (Item, Task_Id, Held_Agent, Permissions.Write_Specs, Path)
          then
             Append (Denied, (if Denied = Null_Unbounded_String then "" else ", ") & Path);
          end if;
@@ -1305,7 +1329,7 @@ begin
    begin
       Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
       May_Propose := E.Is_Ok (Held)
-        and then Permissions.Allows (Held_Root.Allowed, Permissions.Propose_Tasks);
+        and then Allows_Now (Item, Task_Id, Held_Root, Permissions.Propose_Tasks);
       Tasks.Definition (Item, Task_Id, Defined, Held);
       for Line of Proposed loop
          declare
@@ -1402,7 +1426,18 @@ begin
          --  Parts are proposals, which propose_tasks allows; how many,
          --  and how deep, create_children bounds -- the agent's, or where
          --  it has none, the project's.
-         Own   : constant Permissions.Grant := Held_Root.Allowed (Permissions.Create_Children);
+         --  As the project allows it now: a grant taken away since the run
+         --  began bounds nothing.
+         function Live_Grant return Permissions.Grant is
+            Given : Permissions.Grant := Held_Root.Allowed (Permissions.Create_Children);
+         begin
+            if not Allows_Now (Item, Task_Id, Held_Root, Permissions.Create_Children) then
+               Given.Granted := False;
+            end if;
+            return Given;
+         end Live_Grant;
+
+         Own   : constant Permissions.Grant := Live_Grant;
          Limit : constant Permissions.Grant :=
            (if Own.Granted then Own
             else Permissions.Effective (Item, "", "", Within_Sandbox => False)
@@ -1426,7 +1461,7 @@ begin
          --  Bounded as helpers are too: the project's agents.max_depth
          --  and agents.max_children hold for parts as for children.
          declare
-            Bounds   : constant Agents.Limits := Agents.Limits_Of (Item);
+            Bounds   : constant Agents.Limits := Frozen.Limits;
             Deepest  : constant Natural := Natural'Min (Limit.Max_Depth, Bounds.Max_Depth);
             Most     : constant Natural := Natural'Min (Limit.Max_Children, Bounds.Max_Children);
          begin
@@ -1622,13 +1657,15 @@ begin
    then
       declare
          Chosen : constant Verification.Choice :=
-           Verification.Choose (Item, Task_Id, Result.Changed_Files);
+           Verification.Choose (Item, Task_Id, Result.Changed_Files,
+                               Own_Profile => To_String (Frozen.Verification_Profile));
          Passed : Boolean;
       begin
          if To_String (Chosen.Profile) /= "" then
             Verification.Run_Profile
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
-               Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+               Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+               Definition => Frozen_Definition (To_String (Chosen.Profile)));
             if E.Is_Ok (Held) then
                Stores.Commit (Item, Change, Status);
             else
@@ -1721,7 +1758,8 @@ begin
    --  sets the task aside with its evidence.
    for Stage of Name_Lists.Vector'(["generate", "format"]) loop
       declare
-         Profile  : constant String := Scalar (Item, "stage." & Stage);
+         Profile  : constant String :=
+           To_String (if Stage = "generate" then Frozen.Generate_Stage else Frozen.Format_Stage);
          Evidence : Unbounded_String;
          Passed   : Boolean;
          Ran      : E.Error_Info;
@@ -1829,7 +1867,8 @@ begin
       --  in on its own.
       declare
          Chosen : constant Verification.Choice :=
-           Verification.Choose (Item, Task_Id, Result.Changed_Files);
+           Verification.Choose (Item, Task_Id, Result.Changed_Files,
+                               Own_Profile => To_String (Frozen.Verification_Profile));
          Space  : Workspaces.Workspace;
          Passed : Boolean := True;
          Said   : Unbounded_String;
@@ -1839,7 +1878,8 @@ begin
             Verification.Run_Profile
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
                Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
-               Workspace => To_String (Space.Path));
+               Workspace => To_String (Space.Path),
+               Definition => Frozen_Definition (To_String (Chosen.Profile)));
             if E.Is_Ok (Held) then
                --  Its evidence, as the task's audit reads it.
                Annotate (Item, Change, Task_Id, "current_verification",
@@ -1872,7 +1912,7 @@ begin
             return;
          --  Nothing written, nothing to take in: it goes on at once, as
          --  an analysis's answer is all its work.
-         elsif Work_Setting (Item, "integrate") /= "automatic"
+         elsif To_String (Frozen.Integrate) /= "automatic"
            and then not (Ada.Strings.Fixed.Index (May_Do (Item, Task_Id), "write") = 0
                          and then Workspaces.Changes (Item, To_String (Result.Workspace_Id)).Is_Empty)
          then
@@ -1900,7 +1940,7 @@ begin
       begin
          Agents.Read (Item, To_String (Result.Agent_Id), Held_Root, Held);
          if (E.Is_Error (Held)
-             or else not Permissions.Allows (Held_Root.Allowed, Permissions.Request_Integration))
+             or else not Allows_Now (Item, Task_Id, Held_Root, Permissions.Request_Integration))
            and then not (Ada.Strings.Fixed.Index (May_Do (Item, Task_Id), "write") = 0
                          and then Workspaces.Changes (Item, To_String (Result.Workspace_Id)).Is_Empty)
          then
@@ -1953,7 +1993,8 @@ begin
    --  policy: a model has no say in it.
    declare
       Chosen  : constant Verification.Choice :=
-        Verification.Choose (Item, Task_Id, Result.Changed_Files);
+        Verification.Choose (Item, Task_Id, Result.Changed_Files,
+                               Own_Profile => To_String (Frozen.Verification_Profile));
       Profile : constant String := To_String (Chosen.Profile);
       Passed  : Boolean := False;
    begin
@@ -1965,7 +2006,8 @@ begin
       end if;
       Verification.Run_Profile
         (Item, Change, Profile, Task_Id, Result.Evidence_Id, Passed, Status,
-         Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+         Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+         Definition => Frozen_Definition (Profile));
       if E.Is_Error (Status) then
          Held := Status;
          Status := E.Success;

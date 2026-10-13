@@ -17,9 +17,12 @@ is
      (if Affected and then not Changed.Is_Empty
       then Verification.Choose (Host.Item.all, To_String (Host.Task_Id), Changed)
       else (others => <>));
+   --  Narrower only where the agent may run that profile too, as it may
+   --  now: what it takes is its own, not the task's profile's.
    Narrow  : constant Boolean :=
      Affected and then Length (Chosen.Profile) > 0 and then To_String (Chosen.Profile) /= Profile
-     and then May_Check (Host, Profile);
+     and then May_Check (Host, Profile)
+     and then May_Check (Host, To_String (Chosen.Profile));
    Running : constant String := (if Narrow then To_String (Chosen.Profile) else Profile);
    Scope_Said : constant String :=
      (if not Affected then ""

@@ -24,12 +24,9 @@ is
    Lineage_Runs   : Natural := 0;
    Lineage_Status : E.Error_Info := E.Success;
 
+   --  As the run resolved it when it began, where it did.
    Retries : constant Natural :=
-     (declare
-        Text : constant String := Scalar (Host.Item.all, "agents.child_retries");
-      begin
-        (if Text'Length in 1 .. 3 and then (for all C of Text => C in '0' .. '9')
-         then Natural'Value (Text) else 1));
+     (if Host.Limits_Frozen then Host.Child_Retries else Retries_Allowed (Host.Item.all));
 begin
    Told := Null_Unbounded_String;
    Retry := False;

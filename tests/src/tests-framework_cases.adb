@@ -10787,6 +10787,8 @@ package body Tests.Framework_Cases is
                     "a running agent could not write where its task is");
             Assert (Children.May_Check (Children.Task_Profile),
                     "a running agent could not run its task's checks");
+            Assert (Children.May (Pm.Create_Children),
+                    "a running agent could not make helpers before its permissions were taken");
             declare
                Changes  : Model_Runner.Framework.Configurations.Value_Maps.Map;
                Planned  : Model_Runner.Framework.Configurations.Change_Plan;
@@ -10810,6 +10812,12 @@ package body Tests.Framework_Cases is
                     "a permission taken away while the agent ran was still its");
             Assert (not Children.May_Check (Children.Task_Profile),
                     "the checks a running agent may no longer run were still its to run");
+            --  Nor helpers: delegating is held to what the project allows
+            --  now, as every other call is.
+            Children.Open_Child
+              ("reviewer", "required", "look at hello", "", Id, Context, Budget, Parent_Status);
+            Assert (Parent_Status.Code = E.Framework_Permission_Denied and then Children.Current = Root,
+                    "a helper was made after making helpers was taken away: " & Code_Of (Parent_Status));
          when Child_Unstarted =>
             --  A helper that cannot be started is not left the one working:
             --  its parent goes on as itself, and nothing is held up by it.
