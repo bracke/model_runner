@@ -1839,7 +1839,10 @@ every check runs under `bwrap`, the host read-only to it but for the project or
 workspace tree it runs for -- its state and `.git` still read-only within it --
 and a `/tmp` of its own; on a host without `bwrap`, checks are refused rather
 than run unconfined. It is off by default because a build that writes outside
-its tree -- a compiler's cache in your home -- would then fail. Values the
+its tree -- a compiler's cache in your home -- would then fail. Alire is one:
+with the home directory read-only, `alr` takes its settings from `/tmp`, does
+not see the toolchain you selected, and tries to download another; it works
+only with a writable home, so an Alire project leaves this off. Values the
 harness fills into a check (`{tests}`, `{scope}`) are passed as their own
 arguments, quoted, and a value with a quote or a control character in it is
 refused.
