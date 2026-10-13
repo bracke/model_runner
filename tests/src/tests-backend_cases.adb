@@ -1379,12 +1379,12 @@ package body Tests.Backend_Cases is
       --  a walk that carries the few vectors at once; and a ninth, seven,
       --  which the k-quants and the formats but the codebooks' walk too.
       --
-      --  And rows of 512 and 1024, one vector and three: a row of fewer
+      --  And rows of 512, 768 and 1024, one vector and three: a row of fewer
       --  groups than the codebooks' kernels keep in flight puts their lanes
       --  in clusters, a row each, summed a cluster at a time -- an expert's
       --  way down is 512 wide -- and rows of 256 alone reach only the
       --  smallest cluster.
-      Shapes : constant array (1 .. 13) of Shape :=
+      Shapes : constant array (1 .. 15) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
@@ -1397,7 +1397,9 @@ package body Tests.Backend_Cases is
          (Tall => 13, Batch => 1, Tiled => False, Across => 512),
          (Tall => 13, Batch => 3, Tiled => False, Across => 512),
          (Tall => 13, Batch => 1, Tiled => False, Across => 1024),
-         (Tall => 13, Batch => 3, Tiled => False, Across => 1024)];
+         (Tall => 13, Batch => 3, Tiled => False, Across => 1024),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 768),
+         (Tall => 13, Batch => 3, Tiled => False, Across => 768)];
 
       --  How far the device and the processor may differ.
       --

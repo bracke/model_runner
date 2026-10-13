@@ -3325,6 +3325,21 @@ void main_many() {
 
     uint first_row = MANY_R * gl_WorkGroupID.x;
     uint groups = (shape.columns + 255u) / 256u;
+
+    //  A row of fewer groups than are in flight -- Qwen3-Coder's way down
+    //  is three wide -- leaves lanes idle and sums every row over all
+    //  sixty-four: each group of lanes takes rows of its own instead, and
+    //  every group of its row, and one clustered sum adds all the groups'
+    //  rows at once. As the codebooks' walk does it (a check of four on a
+    //  512-wide row 1.5 to 3.5 times a long row's cost, every format).
+#if !defined(LANE32) && !defined(OWN_ACTIVATIONS)
+    bool short_rows = groups < IN_FLIGHT && MANY_R % IN_FLIGHT == 0u;
+#else
+    const bool short_rows = false;
+#endif
+    uint per = short_rows ? MANY_R / IN_FLIGHT : MANY_R;
+    uint i_from = short_rows ? 0u : ix;
+    uint i_step = short_rows ? 1u : IN_FLIGHT;
 #if defined(IQ4_NL) || defined(SUB_BYTES_OF_32)
     uint span = (shape.columns / 32u) * (BLOCK_BYTES / 8u);
 #else
@@ -3338,7 +3353,7 @@ void main_many() {
         }
     }
 
-    for (uint i = ix; i < groups; i += IN_FLIGHT) {
+    for (uint i = i_from; i < groups; i += i_step) {
 #ifdef LANE32
         uint col = i * 256u + itid * 32u;
         if (col < shape.columns) {
@@ -3348,7 +3363,10 @@ void main_many() {
             //  fast at four vectors, and four vectors' held would be a
             //  hundred and twenty-eight registers a lane.
             for (uint r = 0u; r < MANY_R; ++r) {
-                uint row = min(first_row + r, shape.rows - 1u);
+                if (r >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? r * IN_FLIGHT + ix : r), shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
                 vec4 wv[8];
@@ -3366,7 +3384,10 @@ void main_many() {
 #elif defined(OWN_ACTIVATIONS)
         if (i * 256u + (itid / 2u) * 32u < shape.columns) {
             for (uint r = 0u; r < MANY_R; ++r) {
-                uint row = min(first_row + r, shape.rows - 1u);
+                if (r >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? r * IN_FLIGHT + ix : r), shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + i * BLOCK_BYTES;
                 for (uint k = 0u; k < MULTI; ++k) {
@@ -3400,7 +3421,10 @@ void main_many() {
                                          + dotPacked4x8EXT(qa[k][3], 0x01010101));
             }
             for (uint r = 0u; r < MANY_R; ++r) {
-                uint row = min(first_row + r, shape.rows - 1u);
+                if (r >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? r * IN_FLIGHT + ix : r), shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
                 int wq[4];
@@ -3433,7 +3457,10 @@ void main_many() {
                                vec4(1.0));
             }
             for (uint r = 0u; r < MANY_R; ++r) {
-                uint row = min(first_row + r, shape.rows - 1u);
+                if (r >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? r * IN_FLIGHT + ix : r), shape.rows - 1u);
                 uint at = shape.base + slice + row * span
                           + block * BLOCK_BYTES;
 #ifdef WEIGHTS16
@@ -3457,11 +3484,19 @@ void main_many() {
     }
 
     for (uint r = 0u; r < MANY_R; ++r) {
-        uint row = first_row + r;
+        if (r >= per) {
+            continue;
+        }
+        uint row = first_row + (short_rows ? r * IN_FLIGHT + ix : r);
         for (uint k = 0u; k < MULTI; ++k) {
-            float whole = subgroupAdd(temp[r][k]);
+            float whole;
+            if (short_rows) {
+                whole = subgroupClusteredAdd(temp[r][k], 16u);
+            } else {
+                whole = subgroupAdd(temp[r][k]);
+            }
 
-            if (tid == 0u && row < shape.rows && real_k[k]) {
+            if ((short_rows ? itid == 0u : tid == 0u) && row < shape.rows && real_k[k]) {
                 uint out_at = listed
                               ? (run_at + k) * shape.rows + row
                               : member * shape.rows * shape.count
@@ -3584,7 +3619,18 @@ void main_one() {
     }
 #endif
 
-    for (uint i = ix; i < groups; i += IN_FLIGHT) {
+    //  A short row's groups of lanes each take rows of their own, every
+    //  group of them, summed a cluster at a time, as main_many does.
+#if !defined(LANE32) && !defined(OWN_ACTIVATIONS) && !defined(GLU)
+    bool short_rows = groups < IN_FLIGHT && NUM_ROWS % IN_FLIGHT == 0u;
+#else
+    const bool short_rows = false;
+#endif
+    uint per = short_rows ? NUM_ROWS / IN_FLIGHT : NUM_ROWS;
+    uint i_from = short_rows ? 0u : ix;
+    uint i_step = short_rows ? 1u : IN_FLIGHT;
+
+    for (uint i = i_from; i < groups; i += i_step) {
 #ifdef LANE32
         uint col = i * 256u + itid * 32u;
         if (col < shape.columns) {
@@ -3633,7 +3679,10 @@ void main_one() {
                 uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
                           + row * span + block * BLOCK_BYTES;
 #else
-                uint row = min(first_row + r, shape.rows - 1u);
+                if (r >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? r * IN_FLIGHT + ix : r), shape.rows - 1u);
                 uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
 #endif
                 temp[r] += lane_dot(at, within, a0, a1, a2, a3);
@@ -3656,10 +3705,18 @@ void main_one() {
     return;
 #endif
     for (uint r = 0u; r < NUM_ROWS; ++r) {
-        float whole = subgroupAdd(temp[r]);
-        uint row = first_row + r;
+        if (r >= per) {
+            continue;
+        }
+        float whole;
+        if (short_rows) {
+            whole = subgroupClusteredAdd(temp[r], 16u);
+        } else {
+            whole = subgroupAdd(temp[r]);
+        }
+        uint row = first_row + (short_rows ? r * IN_FLIGHT + ix : r);
 
-        if (tid == 0u && row < shape.rows) {
+        if ((short_rows ? itid == 0u : tid == 0u) && row < shape.rows) {
             uint out_at = listed
                           ? run_at * shape.rows + row
                           : member * shape.rows * shape.count
