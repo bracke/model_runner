@@ -63,4 +63,29 @@ package Model_Runner.Platform.Pages is
       Length    : Model_Runner.Bytes.Byte_Count;
       Scattered : Boolean);
 
+   --  Copy a run of a file's read-only mapping from the file itself, in
+   --  large reads that pass the host's cache by, rather than through the
+   --  mapping's faults.
+   --
+   --  A mapping read for the first time is read a fault at a time, and
+   --  each fault reads ahead only as far as the host's read-ahead goes --
+   --  128 KiB on this machine's drive, which answers a third of a
+   --  gigabyte a second that way and two and a half in reads of
+   --  megabytes. A model uploaded to the device is read once and its
+   --  pages given back (Page_Out), so the host's cache was never going to
+   --  keep it.
+   --
+   --  @param From The run's first byte, inside a mapping noted with its
+   --    file (Mapped_Ranges.Note).
+   --  @param Into Where it goes: Length bytes nobody else is writing.
+   --  @param Length Its bytes.
+   --  @param Done True where it was read; False where it was not -- a
+   --    host without such reads, a run outside a noted mapping, a read the
+   --    host refused -- and Into then holds nothing the caller may use.
+   procedure Read_Direct
+     (From   : System.Address;
+      Into   : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count;
+      Done   : out Boolean);
+
 end Model_Runner.Platform.Pages;

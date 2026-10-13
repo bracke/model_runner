@@ -11,7 +11,12 @@ package Model_Runner.Platform.Mapped_Ranges is
    --
    --  @param Start Its first byte.
    --  @param Length Its bytes.
-   procedure Note (Start : System.Address; Length : Model_Runner.Bytes.Byte_Count);
+   --  @param Handle The host's handle on the file it maps, open while the
+   --    mapping is, from its first byte; negative where there is none.
+   procedure Note
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count;
+      Handle : Long_Long_Integer := -1);
 
    --  Forget one, as it closes.
    --
@@ -26,5 +31,18 @@ package Model_Runner.Platform.Mapped_Ranges is
    function Holds
      (Start : System.Address; Length : Model_Runner.Bytes.Byte_Count)
       return Boolean;
+
+   --  The file behind a run that lies wholly inside one noted mapping.
+   --
+   --  @param Start The run's first byte.
+   --  @param Length Its bytes.
+   --  @param Handle The mapping's file, as noted.
+   --  @param Offset Where the run begins in that file.
+   --  @return True where the run is a noted mapping's and it noted a handle.
+   function Locate
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count;
+      Handle : out Long_Long_Integer;
+      Offset : out Model_Runner.Bytes.Byte_Count) return Boolean;
 
 end Model_Runner.Platform.Mapped_Ranges;

@@ -23,6 +23,7 @@ with Model_Runner.Platform;
 with Model_Runner.Platform.Mapping;
 with Model_Runner.Panel_Cache;
 with System;
+with System.Storage_Elements;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Pages;
 
@@ -463,6 +464,78 @@ package body Tests.Accounting_Cases is
 
       Ada.Directories.Delete_Tree (Folder);
    end Only_The_Newest_Panel_Files_Stay;
+
+   --  A run of a file's mapping read past the host's cache is the run, from
+   --  an offset no block begins at and across several of the reads it is
+   --  taken in; the process's own memory and a run too small to be worth
+   --  it are left to the caller to copy. Linux reads them; a host without
+   --  such reads says so and is not held to the bytes.
+   procedure A_Mapping_Reads_Past_The_Cache
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package B renames Model_Runner.Bytes;
+      package Map renames Model_Runner.Platform.Mapping;
+      use type B.Byte_Count;
+      use type System.Storage_Elements.Storage_Offset;
+      use System.Storage_Elements;
+
+      Path : constant String := "obj/read-direct-test.bin";
+      Size : constant := 19 * 1024 * 1024 + 777;
+      From : constant := 4099;
+      Part : constant := 17 * 1024 * 1024 + 5;
+
+      Content : B.Byte_Array_Access :=
+        new B.Byte_Array'
+          ([for Index in 1 .. B.Byte_Count (Size) =>
+              B.Byte ((Integer (Index) * 13 + Integer (Index) / 4096) mod 251)]);
+      Back : B.Byte_Array_Access := new B.Byte_Array'(1 .. Part => 0);
+
+      Region    : Map.Region;
+      Available : Boolean;
+      Done      : Boolean;
+   begin
+      declare
+         use Ada.Streams.Stream_IO;
+         Output : File_Type;
+         Words  : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Size))
+           with Import, Address => Content.all (1)'Address;
+      begin
+         Create (Output, Out_File, Path);
+         Write (Output, Words);
+         Close (Output);
+      end;
+
+      --  Not a mapping: the caller copies it.
+      Model_Runner.Platform.Pages.Read_Direct
+        (Content.all (1)'Address, Back.all (1)'Address, Part, Done);
+      Assert (not Done, "the process's own memory was read as a file");
+
+      Map.Open (Region, Path, Available);
+      if Available then
+         --  Too small to be worth a second opening.
+         Model_Runner.Platform.Pages.Read_Direct
+           (Map.Base (Region), Back.all (1)'Address, 4096, Done);
+         Assert (not Done, "a run of a page was read past the cache");
+
+         Model_Runner.Platform.Pages.Read_Direct
+           (Map.Base (Region) + Storage_Offset (From),
+            Back.all (1)'Address, Part, Done);
+         if Model_Runner.Platform.Host_Name = "linux" then
+            Assert (Done, "a run of a mapping was not read past the cache");
+         end if;
+         if Done then
+            Assert (B."=" (Back.all, Content.all (From + 1 .. From + Part)),
+                    "a run read past the cache is not what the file holds");
+         end if;
+         Map.Close (Region);
+      end if;
+
+      Ada.Directories.Delete_File (Path);
+      B.Free (Content);
+      B.Free (Back);
+   end A_Mapping_Reads_Past_The_Cache;
 
    --  A file's mapping is noted while it is open, and a run inside it given
    --  back to the host reads again as it was -- from the file; a run of the
@@ -1130,6 +1203,10 @@ package body Tests.Accounting_Cases is
         (T, Only_The_Newest_Panel_Files_Stay'Access,
          "of a family of panel cache files the newest are kept and the "
          & "rest go");
+      Register_Routine
+        (T, A_Mapping_Reads_Past_The_Cache'Access,
+         "a run of a mapping read past the host's cache is what the file "
+         & "holds, from an offset no block begins at");
       Register_Routine
         (T, A_Mapping_Pages_Out_And_Reads_Again'Access,
          "a mapping given back to the host reads again as it was, and the "

@@ -2497,7 +2497,8 @@ package body Model_Runner.Platform.Device.Products is
    --  thousand threads for a small model's first prompt.
    task type Byte_Copier is
       entry Go
-        (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count);
+        (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count;
+         Direct : Boolean);
    end Byte_Copier;
    type Byte_Copier_Access is access Byte_Copier;
    Copiers : array (1 .. 8) of Byte_Copier_Access;
@@ -2550,15 +2551,18 @@ package body Model_Runner.Platform.Device.Products is
    task body Byte_Copier is
       To, Source : System.Address;
       Size       : Model_Runner.Bytes.Byte_Count;
+      Past_Cache : Boolean;
    begin
       loop
          select
             accept Go
-              (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count)
+              (Into, From : System.Address; Length : Model_Runner.Bytes.Byte_Count;
+               Direct : Boolean)
             do
                To := Into;
                Source := From;
                Size := Length;
+               Past_Cache := Direct;
             end Go;
          or
             terminate;
@@ -2566,12 +2570,25 @@ package body Model_Runner.Platform.Device.Products is
 
          if Size > 0 then
             declare
-               Target : Model_Runner.Bytes.Byte_Array (1 .. Size)
-                 with Import, Address => To;
-               Origin : constant Model_Runner.Bytes.Byte_Array (1 .. Size)
-                 with Import, Address => Source;
+               Read : Boolean := False;
             begin
-               Target := Origin;
+               --  A file's mapping from the file itself, in large reads
+               --  past the host's cache, where the host has them: three
+               --  times what the mapping's faults read. See Read_Direct.
+               if Past_Cache then
+                  Model_Runner.Platform.Pages.Read_Direct
+                    (Source, To, Size, Read);
+               end if;
+               if not Read then
+                  declare
+                     Target : Model_Runner.Bytes.Byte_Array (1 .. Size)
+                       with Import, Address => To;
+                     Origin : constant Model_Runner.Bytes.Byte_Array (1 .. Size)
+                       with Import, Address => Source;
+                  begin
+                     Target := Origin;
+                  end;
+               end if;
             end;
          end if;
          Copy_Count.One_Done;
@@ -2581,7 +2598,8 @@ package body Model_Runner.Platform.Device.Products is
    procedure Write_Bytes
      (Where  : Address;
       Values : Model_Runner.Bytes.Byte_Array;
-      Ok     : out Boolean) is
+      Ok     : out Boolean;
+      Direct : Boolean := False) is
    begin
       Ok := False;
 
@@ -2625,7 +2643,7 @@ package body Model_Runner.Platform.Device.Products is
                   begin
                      Copiers (K).Go
                        (Room (Lo)'Address, Values (Lo)'Address,
-                        (if Hi >= Lo then Hi - Lo + 1 else 0));
+                        (if Hi >= Lo then Hi - Lo + 1 else 0), Direct);
                   end;
                end loop;
                Copy_Count.Finished;
@@ -7331,12 +7349,25 @@ package body Model_Runner.Platform.Device.Products is
                return;
             end if;
 
+            --  Past the host's cache where the matrix is to be kept, as
+            --  below: its file pages are given back once it is copied, so
+            --  the cache would not have kept them. A matrix streamed, or
+            --  borrowed for one call, is read again; the cache may answer
+            --  that, and a read past it would ask the drive every time.
             Write_Bytes
               (Weight_Mapped,
                Weights (Weights'First + At_Byte
                         .. Weights'First + At_Byte
                            + Model_Runner.Bytes.Byte_Count (Weight_Bytes) - 1),
-               Good);
+               Good,
+               Direct =>
+                 Key /= System.Null_Address
+                 and then not Stream
+                 and then not Item.Keep_Pages
+                 and then Item.Used < Max_Resident
+                 and then (Item.Budget = 0
+                           or else Item.Tier_Kept (Weight_Tier) + Weight_Bytes
+                                   <= Item.Tier_Limit (Weight_Tier)));
             if not Good then
                Release_Weight
                  (Item, Weight_Buffer, Weight_Memory, Weight_Mapped);

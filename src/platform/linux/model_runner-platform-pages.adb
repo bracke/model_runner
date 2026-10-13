@@ -1,5 +1,6 @@
 with Model_Runner.Platform.Mapped_Ranges;
 with Interfaces.C;
+with Interfaces.C.Strings;
 with System.Storage_Elements;
 
 --  Large pages on Linux: madvise with MADV_HUGEPAGE over the whole pages
@@ -120,5 +121,145 @@ package body Model_Runner.Platform.Pages is
          end if;
       end;
    end Expect_Scattered;
+
+   --  Read_Direct's calls: the file opened again past the host's cache,
+   --  through the process's own handle on it, and an aligned buffer the
+   --  reads land in.
+   O_Direct    : constant := 8#40000#;
+   Prot_Rw     : constant := 3;
+   Map_Private_Anonymous : constant := 16#22#;
+   Direct_Least : constant := 1_048_576;
+   Direct_Chunk : constant := 8_388_608;
+
+   function C_Open
+     (Path : Interfaces.C.Strings.chars_ptr; Flags : Interfaces.C.int)
+      return Interfaces.C.int
+   with Import, Convention => C, External_Name => "open";
+
+   function C_Close (Handle : Interfaces.C.int) return Interfaces.C.int
+   with Import, Convention => C, External_Name => "close";
+
+   function C_Pread
+     (Handle : Interfaces.C.int;
+      Buffer : System.Address;
+      Count  : Interfaces.C.size_t;
+      Offset : Interfaces.C.long) return Interfaces.C.long
+   with Import, Convention => C, External_Name => "pread";
+
+   function C_Mmap
+     (Address : System.Address;
+      Length  : Interfaces.C.size_t;
+      Protect : Interfaces.C.int;
+      Flags   : Interfaces.C.int;
+      Handle  : Interfaces.C.int;
+      Offset  : Interfaces.C.long) return System.Address
+   with Import, Convention => C, External_Name => "mmap";
+
+   function C_Munmap
+     (Address : System.Address; Length : Interfaces.C.size_t)
+      return Interfaces.C.int
+   with Import, Convention => C, External_Name => "munmap";
+
+   procedure Read_Direct
+     (From   : System.Address;
+      Into   : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count;
+      Done   : out Boolean)
+   is
+      use type Interfaces.C.int;
+      use type Interfaces.C.long;
+      use type System.Address;
+
+      Handle : Long_Long_Integer;
+      Offset : Model_Runner.Bytes.Byte_Count;
+      Again  : Interfaces.C.int;
+      Bounce : System.Address;
+   begin
+      Done := False;
+
+      --  A small run is not worth a second opening of the file.
+      if Length < Direct_Least
+        or else not Model_Runner.Platform.Mapped_Ranges.Locate
+                      (From, Length, Handle, Offset)
+      then
+         return;
+      end if;
+
+      declare
+         Image : constant String := Long_Long_Integer'Image (Handle);
+         Name  : constant String :=
+           "/proc/self/fd/" & Image (Image'First + 1 .. Image'Last);
+         C_Name : Interfaces.C.Strings.chars_ptr :=
+           Interfaces.C.Strings.New_String (Name);
+      begin
+         Again := C_Open (C_Name, O_Direct);
+         Interfaces.C.Strings.Free (C_Name);
+      end;
+      if Again < 0 then
+         return;
+      end if;
+
+      Bounce := C_Mmap (System.Null_Address, Direct_Chunk, Prot_Rw,
+                        Map_Private_Anonymous, -1, 0);
+      if Bounce = To_Address (Integer_Address'Last)
+        or else Bounce = System.Null_Address
+      then
+         if C_Close (Again) /= 0 then
+            null;
+         end if;
+         return;
+      end if;
+
+      declare
+         --  From the whole page the run begins in: a read past the cache
+         --  starts and ends where the drive's blocks do.
+         At_Page : Model_Runner.Bytes.Byte_Count := Offset / Page * Page;
+         Skip    : Model_Runner.Bytes.Byte_Count := Offset - At_Page;
+         Copied  : Model_Runner.Bytes.Byte_Count := 0;
+         Got     : Interfaces.C.long;
+         Failed  : Boolean := False;
+      begin
+         while Copied < Length loop
+            --  As much as is left, to the page it ends in, and no more:
+            --  a read past the run is the drive's time spent for nothing.
+            Got := C_Pread
+              (Again, Bounce,
+               Interfaces.C.size_t
+                 (Model_Runner.Bytes.Byte_Count'Min
+                    (Direct_Chunk,
+                     (Skip + Length - Copied + Page - 1) / Page * Page)),
+               Interfaces.C.long (At_Page));
+            if Got <= Interfaces.C.long (Skip) then
+               Failed := True;
+               exit;
+            end if;
+
+            declare
+               Take : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count'Min
+                   (Model_Runner.Bytes.Byte_Count (Got) - Skip,
+                    Length - Copied);
+               Target : Model_Runner.Bytes.Byte_Array (1 .. Take)
+                 with Import, Address => Into + Storage_Offset (Copied);
+               Origin : constant Model_Runner.Bytes.Byte_Array (1 .. Take)
+                 with Import, Address => Bounce + Storage_Offset (Skip);
+            begin
+               Target := Origin;
+               Copied := Copied + Take;
+            end;
+
+            At_Page := At_Page + Model_Runner.Bytes.Byte_Count (Got);
+            Skip := 0;
+         end loop;
+
+         if C_Munmap (Bounce, Direct_Chunk) /= 0 then
+            null;
+         end if;
+         if C_Close (Again) /= 0 then
+            null;
+         end if;
+         Done := not Failed;
+      end;
+   end Read_Direct;
 
 end Model_Runner.Platform.Pages;

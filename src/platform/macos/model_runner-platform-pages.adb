@@ -37,4 +37,15 @@ package body Model_Runner.Platform.Pages is
       null;
    end Expect_Scattered;
 
+   procedure Read_Direct
+     (From   : System.Address;
+      Into   : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count;
+      Done   : out Boolean)
+   is
+      pragma Unreferenced (From, Into, Length);
+   begin
+      Done := False;
+   end Read_Direct;
+
 end Model_Runner.Platform.Pages;
