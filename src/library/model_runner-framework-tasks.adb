@@ -915,6 +915,9 @@ package body Model_Runner.Framework.Tasks is
 
       --  What the move changes beyond the state.
       Runtime (Item, Change, Id, Value, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       if Next = Tasks.Running then
          declare
             Generation : constant String := Records.Get (Value, "generation");

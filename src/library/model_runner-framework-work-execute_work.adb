@@ -590,6 +590,11 @@ begin
             --  as it is, and the task has one workspace, not two.
             if Stale /= "" then
                Workspaces.Abandon (Item, Change, Stale, Held);
+               --  Kept at once: its tree is gone already, and the slot it
+               --  held is what the new workspace is counted against.
+               if E.Is_Ok (Held) then
+                  Stores.Commit (Item, Change, Held);
+               end if;
                if E.Is_Error (Held) then
                   Change := Stores.No_Changes;
                   Conclude ("blocked", "its earlier workspace cannot be set aside", "failed");
@@ -1966,15 +1971,17 @@ begin
          end if;
          Report_Integration
            (Item, Change, To_String (Result.Workspace_Id), Task_Id, Taken, Status);
-         if E.Is_Ok (Status) then
-            Stores.Commit (Item, Change, Status);
-         end if;
-         --  The files taken in kept with their records, or put back.
+         --  The files taken in kept with their records, or put back: kept
+         --  once the change is marked, whatever fails after it.
          declare
             Settled : E.Error_Info;
+            Marked  : Boolean := False;
          begin
+            if E.Is_Ok (Status) then
+               Stores.Commit (Item, Change, Status, Marked);
+            end if;
             Workspaces.Settle_Integration
-              (Item, To_String (Result.Workspace_Id), Kept => E.Is_Ok (Status), Status => Settled);
+              (Item, To_String (Result.Workspace_Id), Kept => Marked, Status => Settled);
             if E.Is_Ok (Status) then
                Status := Settled;
             end if;

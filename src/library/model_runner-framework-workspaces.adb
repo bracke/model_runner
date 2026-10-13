@@ -186,11 +186,12 @@ package body Model_Runner.Framework.Workspaces is
       return Fingerprint (To_String (Text));
    end Baseline_Print;
 
-   ------------
-   -- Create --
-   ------------
+   ------------------
+   -- Create_Whole --
+   ------------------
 
-   procedure Create
+   --  Create's work; Create below takes away what it leaves on failure.
+   procedure Create_Whole
      (Item       : Stores.Store;
       Change     : in out Stores.Transaction;
       Task_Id    : String;
@@ -411,7 +412,7 @@ package body Model_Runner.Framework.Workspaces is
 
          Events.Emit (Item, Change, Events.Workspace_Created, Id, Task_Id, Event, Status);
       end;
-   end Create;
+   end Create_Whole;
 
    ----------
    -- Read --
@@ -1101,6 +1102,36 @@ package body Model_Runner.Framework.Workspaces is
          E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
    end Remove_Tree;
 
+   ------------
+   -- Create --
+   ------------
+
+   procedure Create
+     (Item       : Stores.Store;
+      Change     : in out Stores.Transaction;
+      Task_Id    : String;
+      Agent      : String;
+      Generation : String;
+      Prefer_Git : Boolean;
+      Result     : out Workspace;
+      Status     : out Model_Runner.Errors.Error_Info) is
+   begin
+      Create_Whole (Item, Change, Task_Id, Agent, Generation, Prefer_Git, Result, Status);
+      --  Refused once its directory was begun -- a copy, a base, its event
+      --  -- what it made is nobody's: its number goes with the change the
+      --  caller drops, and the next workspace would be given this one's
+      --  leftover tree. Taken away here, for every caller.
+      if E.Is_Error (Status) and then Length (Result.Id) > 0
+        and then Dirs.Exists (Dirs.Containing_Directory (To_String (Result.Path)))
+      then
+         declare
+            Gone : E.Error_Info;
+         begin
+            Remove_Tree (Item, Result, Gone);
+         end;
+      end if;
+   end Create;
+
    procedure Set_Status
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -1648,9 +1679,24 @@ package body Model_Runner.Framework.Workspaces is
 
       Set_Status (Item, Change, Id, "integrated",
                   Image (Natural (Taken.Length)) & " files taken in");
-      Files.Discard (Conflict_Record (Item, Id));
       Events.Emit (Item, Change, Events.Workspace_Integrated, Id,
                    To_String (Held.Task_Id), Event, Status);
+      --  Its event refused, the records say nothing of the files taken in:
+      --  put back, as a write that failed puts them back, so no caller is
+      --  left with a project holding work its records do not.
+      if E.Is_Error (Status) then
+         declare
+            Back : E.Error_Info;
+         begin
+            Roll_Back (Item, Id, Back);
+            if E.Is_Error (Back) then
+               E.Add_Text (Status, "detail", "and " & E.Text_Of (Back, "detail"));
+            end if;
+            Taken.Clear;
+         end;
+         return;
+      end if;
+      Files.Discard (Conflict_Record (Item, Id));
       --  Its tree stays until the integration is kept: Release removes it.
    end Integrate;
 

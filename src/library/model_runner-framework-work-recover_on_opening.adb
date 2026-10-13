@@ -179,13 +179,17 @@ begin
                declare
                   Now : constant String := Tasks.State_Of (Item, To_String (Held.Task_Id));
                begin
+                  --  Said as it went: abandoned, or why it could not be.
                   if not Ada.Directories.Exists (To_String (Held.Path)) then
                      Workspaces.Abandon (Item, Change, To_String (Held.Id), Read);
-                     Said.Append (To_String (Held.Id) & ": its directory is gone; abandoned");
+                     Said.Append (To_String (Held.Id) & ": its directory is gone; "
+                                  & (if E.Is_Ok (Read) then "abandoned"
+                                     else "it could not be abandoned: " & Why_Of (Read)));
                   elsif Now in "complete" | "cancelled" | "failed" then
                      Workspaces.Abandon (Item, Change, To_String (Held.Id), Read);
-                     Said.Append (To_String (Held.Id) & ": its task is " & Now
-                                  & "; abandoned");
+                     Said.Append (To_String (Held.Id) & ": its task is " & Now & "; "
+                                  & (if E.Is_Ok (Read) then "abandoned"
+                                     else "it could not be abandoned: " & Why_Of (Read)));
                   end if;
                end;
             end if;
@@ -240,6 +244,10 @@ begin
    begin
       Reevaluate (Item, Moved, Status);
       Said.Append (Moved);
+      --  Not left for the commits after to write over.
+      if E.Is_Error (Status) then
+         return;
+      end if;
    end;
 
    --  What of the state goes into the repository, as the policy says.

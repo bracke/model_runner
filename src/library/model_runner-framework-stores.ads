@@ -399,6 +399,22 @@ package Model_Runner.Framework.Stores is
       Change : in out Transaction;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Commit, saying as well whether the change was marked: past that
+   --  point it is the state's, whatever fails after -- the next opening
+   --  finishes it -- so what was done outside the store for it, files put
+   --  in the project, is to stay. A failure before the mark leaves nothing.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Status As Commit.
+   --  @param Marked Whether the change will stand, now or once the store
+   --    is next opened.
+   procedure Commit
+     (Item   : in out Store;
+      Change : in out Transaction;
+      Status : out Model_Runner.Errors.Error_Info;
+      Marked : out Boolean);
+
    --  Whether a change was left in the journal: staged and never marked,
    --  or marked and never finished. An open store has recovered what it
    --  found, so this is a change made since, or one that could not be

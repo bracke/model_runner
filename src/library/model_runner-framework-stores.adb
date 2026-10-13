@@ -1206,6 +1206,19 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Commit;
 
+   procedure Commit
+     (Item   : in out Store;
+      Change : in out Transaction;
+      Status : out Model_Runner.Errors.Error_Info;
+      Marked : out Boolean) is
+   begin
+      Commit (Item, Change, Status);
+      --  Failed after the mark, the journal holds the marked change, which
+      --  the next opening rolls forward.
+      Marked := E.Is_Ok (Status)
+        or else Dirs.Exists (Join (Journal_Directory (Root (Item)), Manifest_File));
+   end Commit;
+
    ---------------------------------------------------------------------------
    --  Opening.
    ---------------------------------------------------------------------------

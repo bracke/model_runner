@@ -146,6 +146,13 @@ begin
                Change := Stores.No_Changes;
             end if;
          end if;
+         --  The workspace or its check that could not be had is a check
+         --  not run: nothing goes to the project unchecked.
+         if E.Is_Error (Held) then
+            Change := Stores.No_Changes;
+            Status := Held;
+            return;
+         end if;
       end;
       Change := Stores.No_Changes;
    end if;
@@ -303,23 +310,29 @@ begin
          end;
       end;
    end if;
-   if E.Is_Ok (Status) then
-      Stores.Commit (Item, Change, Status);
-   end if;
-   --  The files taken in kept with the records that say so, or put back
-   --  without them: never one without the other past here.
-   if Integrated then
-      declare
-         Settled : E.Error_Info;
-      begin
-         Workspaces.Settle_Integration (Item, Id, Kept => E.Is_Ok (Status), Status => Settled);
-         if E.Is_Error (Settled) and then E.Is_Error (Status) then
-            E.Add_Text (Status, "detail", E.Text_Of (Settled, "detail"));
-         elsif E.Is_Error (Settled) then
-            Status := Settled;
-         end if;
-      end;
-   end if;
+   declare
+      Marked : Boolean := False;
+   begin
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status, Marked);
+      end if;
+      --  The files taken in kept with the records that say so, or put back
+      --  without them: never one without the other past here. Kept once the
+      --  change is marked, failed after or not: the next opening finishes it,
+      --  and files put back under records saying they are in would be lost.
+      if Integrated then
+         declare
+            Settled : E.Error_Info;
+         begin
+            Workspaces.Settle_Integration (Item, Id, Kept => Marked, Status => Settled);
+            if E.Is_Error (Settled) and then E.Is_Error (Status) then
+               E.Add_Text (Status, "detail", E.Text_Of (Settled, "detail"));
+            elsif E.Is_Error (Settled) then
+               Status := Settled;
+            end if;
+         end;
+      end if;
+   end;
    if E.Is_Ok (Status) then
       declare
          Left : E.Error_Info;
@@ -351,6 +364,11 @@ begin
             Stores.Commit (Item, Change, Moved);
          end if;
          Result.Reason := To_Unbounded_String (Why);
+         --  A task that could not be moved is not said to have been.
+         if E.Is_Error (Moved) then
+            Change := Stores.No_Changes;
+            Status := Moved;
+         end if;
       end Leave;
    begin
       Result.Scope := Chosen.Scope;
@@ -368,7 +386,11 @@ begin
             Annotate (Item, Change, Task_Id, "current_verification",
                       To_String (Result.Evidence_Id));
             Stores.Commit (Item, Change, Status);
-            if not Passed then
+            --  Its evidence not kept, nothing is judged by it.
+            if E.Is_Error (Status) then
+               Change := Stores.No_Changes;
+               return;
+            elsif not Passed then
                Leave ("failed", To_String (Result.Evidence_Id) & " did not pass"
                       & First_Diagnostics (Item, To_String (Result.Evidence_Id)));
             else
