@@ -40,6 +40,7 @@ with Interfaces;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Llama;
 with Model_Runner.Tensors;
 with Model_Runner.Localization;
@@ -3569,9 +3570,10 @@ package body Tests.Inference_Cases is
          Cache   : L.Cache_Precision := L.Exact;
          Team    : Model_Runner.Backend.CPU.Pool_Reference := null)
       is
-         Held    : aliased constant B.Byte_Array := Image.all;
+         --  Read where it lies: a copy on the stack is past the stack for a
+         --  mixture of sixty-four experts at the deep widths.
          Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
-           (Held'Access);
+           (Image.all'Unchecked_Access);
          Item    : Containers.Container;
          Model   : L.Model;
          Session : L.Session;
@@ -3667,29 +3669,45 @@ package body Tests.Inference_Cases is
             Heads   : Positive;
             Experts : Natural := 0;
             Used    : Natural := 0;
+            Rounded : Boolean := False;
          end record;
-         Rows : constant array (1 .. 15) of Case_Row :=
-           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1, 0, 0),
-            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1, 0, 0),
-            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2),
-            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0),
-            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2),
-            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0),
+         Rows : constant array (1 .. 17) of Case_Row :=
+           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1, 0, 0, False),
+            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1, 0, 0, False),
+            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2, False),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2, False),
+            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0, False),
 
             --  A mixture that routes each position to more experts than one
             --  gather reads at once: twenty experts, seventeen of them
             --  chosen, so the device spills the gather into a full round of
             --  sixteen and one more and sums the two, which must land where
             --  the processor's one sum of seventeen does.
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 20, 17)];
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 20, 17, False),
+
+            --  And mixtures of many experts each chosen by few positions:
+            --  sixty-four, two a position, five an expert in a batch of a
+            --  hundred and sixty and one or two in a chunk of forty-one, so
+            --  a long batch's experts split between the matrix kernel and
+            --  the walks as integers (Split_Listed), in the two formats
+            --  whose walks round.
+            --  The walks round as a run has them, and at these widths eight
+            --  bits of an activation are coarse: the split comes to five
+            --  hundredths in one batch and twelve in chunks, where the walks
+            --  that already took a check of seven come to seventy-five.
+            --  Held to two tenths, where a wrong binding or a missing walk
+            --  answers by whole tenths or more.
+            (Tiny_Model.Qwen3, Tiny_Model.Q4_K, 0, 1, 64, 2, True),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True)];
       begin
          for Row of Rows loop
             declare
@@ -3717,6 +3735,10 @@ package body Tests.Inference_Cases is
                --  narrow tile, and the only one of the three the
                --  fixture's width reaches -- and a position at a time,
                --  which is the path a generated token takes.
+               if Row.Rounded then
+                  Model_Runner.Backend.Device.Round_Walks
+                    (Model_Runner.Platform.Device.Products.Rounds_Every);
+               end if;
                for Chunk in reverse 1 .. 3 loop
                   Logits_On
                     (Image, Model_Runner.Backend.Backend_Device,
@@ -3730,7 +3752,7 @@ package body Tests.Inference_Cases is
                   for Index in Host'Range loop
                      Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
                   end loop;
-                  Assert (Worst <= Tolerance,
+                  Assert (Worst <= (if Row.Rounded then 0.2 else Tolerance),
                           "on " & Name
                           & (if Chunk = 3 then " in one batch"
                              elsif Chunk = 2 then " in chunks of forty-one"
@@ -3738,6 +3760,10 @@ package body Tests.Inference_Cases is
                           & " the device's logits differ from the "
                           & "processor's by " & N.Real'Image (Worst));
                end loop;
+               if Row.Rounded then
+                  Model_Runner.Backend.Device.Round_Walks
+                    (Model_Runner.Platform.Device.Products.Rounds_None);
+               end if;
                B.Free (Image);
             end;
          end loop;

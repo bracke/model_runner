@@ -71,7 +71,7 @@ layout(push_constant) uniform Shape {
 //  bytes, or -- for a walk that reads its experts' runs by slot, which may
 //  be many more rows than eight -- past the room the push block's table
 //  word says, in rows.
-#define SCALES_AT ((shape.routed == 3u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+#define SCALES_AT ((shape.routed >= 2u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
 #endif
 
 //  GLU: a feed-forward's gate and up projections at once, as
@@ -2929,6 +2929,12 @@ void main_many() {
         return;
     }
 
+    //  A run longer than the walk's vectors is the matrix kernel's:
+    //  a long batch's experts with few positions walk, the rest tile.
+    if (listed && run_count > MULTI) {
+        return;
+    }
+
     uint from_k[MULTI];
     bool real_k[MULTI];
     for (uint k = 0u; k < MULTI; ++k) {
@@ -3061,6 +3067,12 @@ void main_many() {
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
+        return;
+    }
+
+    //  A run longer than the walk's vectors is the matrix kernel's:
+    //  a long batch's experts with few positions walk, the rest tile.
+    if (listed && run_count > MULTI) {
         return;
     }
 
@@ -3308,6 +3320,12 @@ void main_many() {
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
+        return;
+    }
+
+    //  A run longer than the walk's vectors is the matrix kernel's:
+    //  a long batch's experts with few positions walk, the rest tile.
+    if (listed && run_count > MULTI) {
         return;
     }
 

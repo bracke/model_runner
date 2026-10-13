@@ -1702,6 +1702,12 @@ void main() {
         return;
     }
 
+    //  A run no longer than members[1] is walked instead, where a long
+    //  batch splits its experts between the walk and this.
+    if (listed && shape.members[1] != 0u && run_count <= shape.members[1]) {
+        return;
+    }
+
     //  This lane group's quarter of the tile's vectors.
     uint vec0 = run_at + gl_WorkGroupID.y * TILE_V
                 + (gl_LocalInvocationID.x >> 6u) * (TILE_V / SUBS);

@@ -161,6 +161,10 @@ package body Model_Runner.Platform.Device.Products is
    --  many rows of a narrower one as fit.
    Round_Bytes   : constant := 4 * 1024 * 1024;
 
+   --  The longest run a long batch's listed product walks rather than
+   --  tiles; see Split_Listed.
+   Split_Most    : constant := 4;
+
    --  And a second region past it that only a normalization rounding its
    --  own answer writes, for the walks that read that answer: a walk's own
    --  rounding between the two would otherwise overwrite it.
@@ -13316,6 +13320,50 @@ package body Model_Runner.Platform.Device.Products is
                         / Interfaces.Unsigned_64 (4 * Steps.Items (Which).Columns))
           else 0);
 
+      --  The rows a step's rounding covers: every slot where its runs are
+      --  read by slot, the batch's positions otherwise.
+      function Round_Rows (Which : Positive) return Natural
+      is (if Slot_Rows (Which) > 0 then Slot_Rows (Which) else Count);
+
+      --  Whether a long batch's listed product splits its experts: those
+      --  with at most Split_Most positions walk as integers, the rest go
+      --  to the matrix kernel, which skips the short ones. A batch of a
+      --  hundred spreads eight hundred choices over 256 experts, three or
+      --  four an expert, and a tile of sixty-four decoding the weights for
+      --  three is the tile's whole cost: the walk reads them as bytes.
+      function Split_Listed (Which : Positive) return Boolean
+      is (Listed_Tiled (Which)
+          and then not Steps.Items (Which).Exact
+          and then Rounds_Walks (Item) = Rounds_Every
+          and then Steps.Items (Which).Columns mod 32 = 0
+          and then Steps.Items (Which).Columns <= Round_Columns
+          and then Natural'Max (Round_Rows (Which), 8)
+                   * Steps.Items (Which).Columns / 8 * 9 <= Round_Bytes
+          and then Dots_Line (Item, Steps.Items (Which).Packing, Split_Most,
+                              Steps.Items (Which).Columns) /= Null_Handle);
+
+      --  The descriptor set a split step's walk binds: one of those past
+      --  the sequence's steps, written as a walk's -- its lists where the
+      --  walk reads them, where the matrix kernel reads the runs' copy --
+      --  or nought where none is left, and the step does not split.
+      function Spare_Of (Which : Positive) return Natural is
+         Ahead : Natural := 0;
+      begin
+         if not Split_Listed (Which) then
+            return 0;
+         end if;
+         for Earlier in 1 .. Which loop
+            if Split_Listed (Earlier) then
+               Ahead := Ahead + 1;
+            end if;
+         end loop;
+         return (if Steps.Held + Ahead <= Sequence_Limit
+                 then Steps.Held + Ahead else 0);
+      end Spare_Of;
+
+      function Splits (Which : Positive) return Boolean
+      is (Spare_Of (Which) /= 0);
+
       --  Whether a product walks as integers over its activations rounded
       --  first: a Q4_K walk of a few positions, its gate and up or any of
       --  them as Round_Walks says, reading its one activation from the
@@ -14294,7 +14342,8 @@ package body Model_Runner.Platform.Device.Products is
       --  And the room the integer walks' rounding writes, the first time
       --  any walk rounds; it is one size whatever the model.
       if Item.Round_Buffer = Null_Handle
-        and then (for some Index in 1 .. Steps.Held => Dotted (Index))
+        and then (for some Index in 1 .. Steps.Held =>
+                    Dotted (Index) or else Splits (Index))
       then
          Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
                Good);
@@ -14914,8 +14963,22 @@ package body Model_Runner.Platform.Device.Products is
                Notes (Binding).Buffers := Told (Binding)'Address;
             end loop;
 
-            Update (Item.Logical, (if Dotted (Index) then 7 else 6),
+            Update (Item.Logical,
+                    (if Dotted (Index) or else Splits (Index) then 7 else 6),
                     Notes'Address, 0, Null_Handle);
+
+            --  And a split step's walk's set: the same, but the lists where
+            --  the walk reads them, at binding three.
+            if Splits (Index) then
+               Told (4) :=
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Places (Steps.Items (Index).Routed).At_Byte,
+                  Extent => Places (Steps.Items (Index).Routed).Bytes);
+               for Binding in Told'Range loop
+                  Notes (Binding).Target := Item.Sets (Spare_Of (Index));
+               end loop;
+               Update (Item.Logical, 7, Notes'Address, 0, Null_Handle);
+            end if;
 
             <<Next_Set>>
          end loop;
@@ -15013,11 +15076,12 @@ package body Model_Runner.Platform.Device.Products is
 
             --  The rows rounded: the batch's positions, or a mixture's
             --  every slot where its runs are read by slot.
-            Rows : constant Natural :=
-              (if Slot_Rows (Index) > 0 then Slot_Rows (Index) else Count);
+            Rows : constant Natural := Round_Rows (Index);
 
+            --  Rows says where the scales go: past room for eight rows, or
+            --  for as many as are rounded where that is more.
             Shape : aliased Shape_Constants :=
-              (Rows    => C.unsigned (Slot_Rows (Index)),
+              (Rows    => C.unsigned (Rows),
                Columns => C.unsigned (This.Columns),
                Count   => C.unsigned (Rows),
                First   => 0,
@@ -17015,6 +17079,8 @@ package body Model_Runner.Platform.Device.Products is
                         Joins   => 0,
                         Table   => 0,
                         Members => [0 => C.unsigned (This.Gathers),
+                                    1 => (if Splits (Index)
+                                          then C.unsigned (Split_Most) else 0),
                                     others => 0],
                         Stride  => C.unsigned (Slice_Bytes (Index)),
                         Apart   => 0,
@@ -17047,6 +17113,60 @@ package body Model_Runner.Platform.Device.Products is
                           ((Count + 15 + Listed_Vectors - 1)
                            / Listed_Vectors),
                         C.unsigned (This.Gathers));
+
+                     --  And the short runs, walked as integers over the
+                     --  step's activations rounded: the walk skips the runs
+                     --  longer than its vectors, which the tile took.
+                     if Splits (Index) then
+                        declare
+                           Spare : aliased Address :=
+                             Item.Sets (Spare_Of (Index));
+                        begin
+                           Bind_Sets (Item.Buffer, Bind_Point_Compute,
+                                      Item.Layout, 0, 1, Spare'Address, 0,
+                                      Null_Handle);
+                        end;
+                        Round_For (Index);
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute,
+                           Dots_Line (Item, This.Packing, Split_Most,
+                                      This.Columns));
+                        declare
+                           Walk : aliased Shape_Constants :=
+                             (Rows    => C.unsigned (This.Each),
+                              Columns => C.unsigned (This.Columns),
+                              Count   => C.unsigned (Split_Most),
+                              First   => 0,
+                              Packing =>
+                                C.unsigned (Weight_Packing'Pos (This.Packing)),
+                              Base    => C.unsigned (Places (Index).Base),
+                              Joins   => 0,
+                              Table   => C.unsigned (Round_Rows (Index)),
+                              Members => [0 => C.unsigned (This.Gathers),
+                                          others => 0],
+                              Stride  => C.unsigned (Slice_Bytes (Index)),
+                              Apart   => 0,
+                              Routed  => (if This.By_Slot then 3 else 2));
+                        begin
+                           Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                                 Product_Bytes, Walk'Address);
+                           Dispatch
+                             (Item.Buffer,
+                              C.unsigned
+                                ((Row_Reach (Item, This.Packing, Split_Most,
+                                             This.Each, This.Columns)
+                                    * Row_Lane_Count (Item, This.Packing,
+                                                      Split_Most)
+                                  + Row_Width (Item, This.Packing, Split_Most)
+                                  - 1)
+                                 / Row_Width (Item, This.Packing, Split_Most)),
+                              1,
+                              C.unsigned (This.Gathers));
+                        end;
+                        Bind_Sets (Item.Buffer, Bind_Point_Compute,
+                                   Item.Layout, 0, 1, Bound'Address, 0,
+                                   Null_Handle);
+                     end if;
 
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,

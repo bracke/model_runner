@@ -81,5 +81,4 @@ package Model_Runner.Delta_Rule.Kernel is
       Count : Element_Count;
       Head  : Element_Count);
 
-
 end Model_Runner.Delta_Rule.Kernel;

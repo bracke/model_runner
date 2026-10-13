@@ -4058,7 +4058,6 @@ package body Model_Runner.Llama is
    is (Natural (Conv_Room (Item.Owner.Settings)
                 + State_At (Item.Owner.Settings, Index)));
 
-
    --  A Mamba2 mixer as the device takes it, the session's seat in the
    --  state room included -- with the layer's normalization on the way in
    --  where the whole layer goes, residual and all.
