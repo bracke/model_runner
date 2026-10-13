@@ -4205,9 +4205,21 @@ package body Tests.Backend_Cases is
          Down_Bias (Index) := N.Real ((Index * 3) mod 11) / 11.0 - 0.4;
       end loop;
 
-      for Round in 1 .. 3 loop
+      for Round in 1 .. 4 loop
          Clamped := Round > 1;
          Biased := Round = 3;
+
+         --  And a router whose experts come in pairs that score alike:
+         --  equal shares are taken lower numbered first, as the host takes
+         --  them, so the device has to break the ties the same way.
+         if Round = 4 then
+            for Index in Router'Range loop
+               Router (Index) :=
+                 N.Real ((Index mod N.Element_Count (Width)) mod 11) / 11.0 - 0.45
+                 + N.Real ((Index / N.Element_Count (Width)) / 2) / 7.0;
+            end loop;
+         end if;
+
          Wanted := [others => 0.0];
          Host_Mixture;
 

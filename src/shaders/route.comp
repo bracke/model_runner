@@ -1,4 +1,6 @@
 #version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
 
 //  A mixture's router, decided on the device.
 //
@@ -101,18 +103,20 @@ void main() {
         mine = max(mine, s);
     }
 
-    best_score[lane] = mine;
+    //  The largest a subgroup at a time, then across the subgroups: a
+    //  maximum is the same whatever the order it is taken in.
+    float most = subgroupMax(mine);
+    if (subgroupElect()) {
+        best_score[gl_SubgroupID] = most;
+    }
     barrier();
 
-    for (uint step = LANES / 2u; step > 0u; step >>= 1u) {
-        if (lane < step) {
-            best_score[lane] = max(best_score[lane], best_score[lane + step]);
-        }
-        barrier();
-    }
-
     if (lane == 0u) {
-        largest = best_score[0];
+        float m = best_score[0];
+        for (uint s = 1u; s < gl_NumSubgroups; ++s) {
+            m = max(m, best_score[s]);
+        }
+        largest = m;
     }
     barrier();
 
@@ -123,54 +127,69 @@ void main() {
     }
     barrier();
 
+    //  Eight read before any is added, in the same order: each read
+    //  waited for alone was most of what the step cost.
     if (lane == 0u) {
         float s = 0.0;
-        for (uint e = 0u; e < experts; ++e) {
+        uint e = 0u;
+        for (; e + 8u <= experts; e += 8u) {
+            float v[8];
+            for (uint j = 0u; j < 8u; ++j) {
+                v[j] = score[e + j];
+            }
+            for (uint j = 0u; j < 8u; ++j) {
+                s += v[j];
+            }
+        }
+        for (; e < experts; ++e) {
             s += score[e];
         }
         sum = s;
     }
     barrier();
 
-    for (uint e = lane; e < experts; e += LANES) {
-        score[e] = score[e] / sum;
-    }
-    barrier();
 
-    //  The choosing: each expert's rank is how many others beat it -- a
-    //  larger share, or the same share and a lower number -- and the ones
-    //  ranked below Used are the chosen, in rank order. The same experts in
-    //  the same order as taking the largest Used times over, a round of
-    //  barriers a pick, but with two barriers for all of them. A share that
-    //  is not a number ranks as the lowest, where the rounds never took it.
-    //
-    //  Read four at a time: the shares as keys, padded past the last
-    //  expert with one below every key so the padding never counts.
+    //  The choosing: the shares as keys, padded past the last expert with
+    //  one below every key so the padding is never chosen, and a share
+    //  that is not a number as the lowest real key, where the host never
+    //  takes it.
     for (uint e = lane; e < MOST; e += LANES) {
-        float key = e < experts ? score[e] : -2.0;
+        float key = e < experts ? score[e] / sum : -2.0;
         keys[e >> 2u][e & 3u] = isnan(key) ? -1.0 : key;
     }
     barrier();
 
-    uint quads = (experts + 3u) >> 2u;
+    //  Then Used rounds in the first subgroup, each taking the largest
+    //  share left -- the lowest numbered of equal ones, which is what the
+    //  ranking counted -- and setting it below the padding. The same
+    //  experts in the same order as ranking each against every other,
+    //  which was three quarters of the step: two hundred and fifty-six
+    //  ranks for eight chosen.
+    if (gl_SubgroupID == 0u) {
+        uint sl = gl_SubgroupInvocationID;
+        uint ss = gl_SubgroupSize;
 
-    for (uint e = lane; e < experts; e += LANES) {
-        float mine_share = keys[e >> 2u][e & 3u];
-        vec4 mine4 = vec4(mine_share);
-        uvec4 ranks = uvec4(0u);
-
-        for (uint q = 0u; q < quads; ++q) {
-            vec4 other = keys[q];
-            uvec4 j = uvec4(4u * q) + uvec4(0u, 1u, 2u, 3u);
-            ranks += uvec4(greaterThan(other, mine4))
-                   | (uvec4(equal(other, mine4)) & uvec4(lessThan(j, uvec4(e))));
-        }
-
-        uint rank = ranks.x + ranks.y + ranks.z + ranks.w;
-
-        if (rank < shape.used) {
-            chosen[rank] = e;
-            share[rank] = mine_share;
+        for (uint k = 0u; k < shape.used; ++k) {
+            float best = -4.0;
+            uint at = 0xFFFFFFFFu;
+            for (uint e = sl; e < experts; e += ss) {
+                float v = keys[e >> 2u][e & 3u];
+                if (v > best) {
+                    best = v;
+                    at = e;
+                }
+            }
+            float top = subgroupMax(best);
+            uint who = subgroupMin(best == top ? at : 0xFFFFFFFFu);
+            if (sl == 0u) {
+                chosen[k] = who;
+                share[k] = top;
+            }
+            if (at == who) {
+                keys[who >> 2u][who & 3u] = -3.0;
+            }
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
         }
     }
     barrier();
