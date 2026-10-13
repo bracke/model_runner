@@ -15,6 +15,7 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_clustered : require
 #extension GL_KHR_shader_subgroup_basic : require
 #ifdef DOTS
 #extension GL_EXT_integer_dot_product : require
@@ -153,7 +154,17 @@ void main() {
         }
     }
 
-    for (uint i = ix; i < blocks; i += 4u) {
+    //  A row of fewer super-blocks than the four groups of lanes in flight
+    //  -- an expert's 512 is two -- left lanes idle and summed every row over
+    //  all sixty-four: each group of sixteen takes rows of its own instead,
+    //  and every super-block of its row, and one clustered sum adds the
+    //  groups' rows at once, as row_product_wave_low's walks do.
+    bool short_rows = blocks < 4u && NUM_ROWS % 4u == 0u;
+    uint per = short_rows ? NUM_ROWS / 4u : NUM_ROWS;
+    uint i_from = short_rows ? 0u : ix;
+    uint i_step = short_rows ? 1u : 4u;
+
+    for (uint i = i_from; i < blocks; i += i_step) {
 #ifdef DOTS
         //  Each region's four rounded values and its scale, and the sum
         //  of the four, which carries the thirty-two every weight is
@@ -183,7 +194,10 @@ void main() {
 #endif
 
         for (uint r = 0u; r < NUM_ROWS; ++r) {
-            uint row = min (first_row + r, shape.rows - 1u);
+            if (r >= per) {
+                continue;
+            }
+            uint row = min (first_row + (short_rows ? r * 4u + ix : r), shape.rows - 1u);
             uint at = shape.base + slice + row * span + i * 210u;
             uint qlb = at;
             uint qhb = at + 128u;
@@ -243,10 +257,13 @@ void main() {
     }
 
     for (uint r = 0u; r < NUM_ROWS; ++r) {
-        uint row = first_row + r;
+        if (r >= per) {
+            continue;
+        }
+        uint row = first_row + (short_rows ? r * 4u + ix : r);
         for (uint k = 0u; k < VEC; ++k) {
-            float whole = subgroupAdd (temp[r][k]);
-            if (tid == 0u && row < shape.rows && real_k[k]) {
+            float whole = (short_rows ? subgroupClusteredAdd (temp[r][k], 16u) : subgroupAdd (temp[r][k]));
+            if ((short_rows ? itid == 0u : tid == 0u) && row < shape.rows && real_k[k]) {
                 uint out_at = listed
                               ? (run_at + k) * shape.rows + row
                               : member * shape.rows * shape.count
