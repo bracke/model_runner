@@ -312,6 +312,13 @@ package Model_Runner.Framework.Tasks is
    --  @return True when it holds its parent.
    function Holds_Parent (Item : Stores.Store; Child : String; State : String) return Boolean;
 
+   --  The tasks whose definitions cannot be read: any of them may be a part
+   --  of any task, or serve anything, as far as anyone can tell.
+   --
+   --  @param Item The store.
+   --  @return Their identifiers.
+   function Unreadable (Item : Stores.Store) return Name_Lists.Vector;
+
    --  The children of a task.
    --
    --  @param Item The store.

@@ -448,17 +448,32 @@ package body Model_Runner.Framework.Results is
       if not Ada.Directories.Exists (Directory) then
          return;
       end if;
-      for Id of Stores.Names (Item, Results_Area) loop
-         declare
-            Stored : Records.Item;
-            Status : E.Error_Info;
-         begin
-            Stores.Read (Item, Results_Area, Id, Stored, Status);
-            if E.Is_Ok (Status) and then Records.Get (Stored, "payload_file") /= "" then
-               Wanted.Append (Records.Get (Stored, "payload_file") & ".txt");
-            end if;
-         end;
-      end loop;
+      declare
+         Names : constant Name_Lists.Vector := Stores.Names (Item, Results_Area);
+      begin
+         --  No result to name a payload that is there: the listing failed,
+         --  or the records are gone, and either way nothing tells which
+         --  payloads are wanted -- none is thrown away on that.
+         if Names.Is_Empty and then not Files.Files_In (Directory).Is_Empty then
+            return;
+         end if;
+         for Id of Names loop
+            declare
+               Stored : Records.Item;
+               Status : E.Error_Info;
+            begin
+               Stores.Read (Item, Results_Area, Id, Stored, Status);
+               --  A result that cannot be read may want its payload, and
+               --  one put right later would find it gone for good: none
+               --  is collected while any cannot be read.
+               if E.Is_Error (Status) then
+                  return;
+               elsif Records.Get (Stored, "payload_file") /= "" then
+                  Wanted.Append (Records.Get (Stored, "payload_file") & ".txt");
+               end if;
+            end;
+         end loop;
+      end;
       for Name of Files.Files_In (Directory) loop
          if not Wanted.Contains (Name) then
             Files.Discard (Directory & "/" & Name);

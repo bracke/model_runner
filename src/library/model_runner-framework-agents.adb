@@ -356,6 +356,22 @@ package body Model_Runner.Framework.Agents is
             end;
          end if;
       end loop;
+      --  And those the parent's own record names, whether or not they can
+      --  be read: a child whose record will not read is still its child,
+      --  and still going as far as anyone can tell.
+      declare
+         Owner  : Agent;
+         Status : E.Error_Info;
+      begin
+         Read (Item, Parent, Owner, Status);
+         if E.Is_Ok (Status) then
+            for Named of Lines_Of (To_String (Owner.Children)) loop
+               if Named /= "" and then not Result.Contains (Named) then
+                  Result.Append (Named);
+               end if;
+            end loop;
+         end if;
+      end;
       return Result;
    end Children;
 
@@ -739,7 +755,11 @@ package body Model_Runner.Framework.Agents is
             Status : E.Error_Info;
          begin
             Read (Item, Child, Held, Status);
-            if Held.Need = Required then
+            if E.Is_Error (Status) then
+               Reason := To_Unbounded_String
+                 ("its child " & Child & " cannot be read, so whether it is done cannot be told");
+               return False;
+            elsif Held.Need = Required then
                if To_String (Held.Status) in "created" | "running" | "waiting" then
                   Reason := To_Unbounded_String ("its required child " & Child
                                                  & " is still going");

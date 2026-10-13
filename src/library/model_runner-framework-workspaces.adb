@@ -116,8 +116,16 @@ package body Model_Runner.Framework.Workspaces is
          return "";
       end if;
       Files.Read_Text (Path, Text, Status);
-      return (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else "?");
+      return (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Unknown_Print);
    end Print_Of;
+
+   --  Whether two files are known to hold the same: both read, and alike.
+   --  Two that cannot be read are not the same as far as anyone knows.
+   function Same_Print (Left, Right : String) return Boolean is
+      Was : constant String := Print_Of (Left);
+   begin
+      return Was /= Unknown_Print and then Was = Print_Of (Right);
+   end Same_Print;
 
    procedure Failed (Detail : String; Status : out E.Error_Info) is
    begin
@@ -548,6 +556,23 @@ package body Model_Runner.Framework.Workspaces is
       return Found;
    end Every_Active;
 
+   function Unreadable_Records (Item : Stores.Store) return Name_Lists.Vector is
+      Found : Name_Lists.Vector;
+   begin
+      for Name of Stores.Names (Item, Workspaces_Area) loop
+         declare
+            Held   : Workspace;
+            Status : E.Error_Info;
+         begin
+            Read (Item, Name, Held, Status);
+            if E.Is_Error (Status) then
+               Found.Append (Name);
+            end if;
+         end;
+      end loop;
+      return Found;
+   end Unreadable_Records;
+
    function Active_For (Item : Stores.Store; Task_Id : String) return String is
       Found : constant Name_Lists.Vector := Every_Active (Item, Task_Id);
    begin
@@ -568,7 +593,14 @@ package body Model_Runner.Framework.Workspaces is
    begin
       Id := Null_Unbounded_String;
       Status := E.Success;
-      if Natural (Found.Length) > 1 then
+      --  One that cannot be read may be the task's: which it works in
+      --  cannot be told, and none is chosen.
+      if not Unreadable_Records (Item).Is_Empty then
+         Status := E.Make (E.Framework_Integrity_Failed);
+         E.Add_Text (Status, "name", Unreadable_Records (Item).First_Element);
+         E.Add_Text (Status, "detail", "a workspace record cannot be read, so which workspace "
+                     & Task_Id & " has cannot be told; /check says what it is");
+      elsif Natural (Found.Length) > 1 then
          Status := E.Make (E.Framework_Integrity_Failed);
          E.Add_Text (Status, "name", Task_Id);
          E.Add_Text (Status, "value",
@@ -1521,7 +1553,7 @@ package body Model_Runner.Framework.Workspaces is
             begin
                --  What would change nothing -- the project holds it as the
                --  workspace does, or neither holds it -- is not taken in.
-               if (Dirs.Exists (From) and then Dirs.Exists (Target) and then Print_Of (From) = Print_Of (Target))
+               if (Dirs.Exists (From) and then Dirs.Exists (Target) and then Same_Print (From, Target))
                  or else (not Dirs.Exists (From) and then not Dirs.Exists (Target))
                then
                   goto Next_Path;
@@ -2240,8 +2272,8 @@ package body Model_Runner.Framework.Workspaces is
                              = Other'First
                     and then Name_Lists."=" (Kept_Files (Item, Other), Kept_Files (Item, Mine))
                     and then (for all Path of Kept_Files (Item, Mine) =>
-                                Print_Of (Hostkit.Fs.Join (Into, Path))
-                                = Print_Of (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
+                                Same_Print (Hostkit.Fs.Join (Into, Path),
+                                            Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Other), Path)))
                   then
                      declare
                         Gone : E.Error_Info;

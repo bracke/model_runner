@@ -1554,8 +1554,11 @@ package body Model_Runner.Framework.Work is
          return "";
       end if;
       Stores.Read (Item, Invocations_Area, "manifest." & Manifest_Id, Held, Read);
+      --  What the work was told cannot be read back: whether the words it
+      --  was done against still stand cannot be told, which is not that
+      --  they do.
       if E.Is_Error (Read) then
-         return "";
+         return Manifest_Id & " (what it was told cannot be read back)";
       end if;
       for Index in 1 .. Records.Field_Count (Held) loop
          declare

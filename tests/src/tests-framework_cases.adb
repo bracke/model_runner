@@ -1822,6 +1822,23 @@ package body Tests.Framework_Cases is
       Assert (Ls.Holder (Store, "workspace-9") = "",
               "a lease held on after its work was done");
 
+      --  One that is there and will not read is not free: held by someone
+      --  unnamed, refused to whoever asks for it, and not let go.
+      Put_File (S.Root (Store) & "/runtime/lease.workspace-8.rec", "not a record" & ASCII.LF);
+      Assert (Ls.Holder (Store, "workspace-8") /= ""
+              and then Ls.Holder (Store, "workspace-8") /= "agent-a",
+              "an unreadable lease was taken as free, or as somebody's: "
+              & Ls.Holder (Store, "workspace-8"));
+      Ls.Acquire (Store, Change, "workspace-8", "agent-a", 600, Status);
+      Assert (Status.Code = E.Framework_Integrity_Failed,
+              "an unreadable lease was taken over: " & Code_Of (Status));
+      Change := S.No_Changes;
+      Ls.Release (Store, Change, "workspace-8", "agent-a", Status);
+      Assert (Status.Code = E.Framework_Integrity_Failed,
+              "an unreadable lease was let go: " & Code_Of (Status));
+      Change := S.No_Changes;
+      Dirs.Delete_File (S.Root (Store) & "/runtime/lease.workspace-8.rec");
+
       --  One whose process is gone from this machine is stale at once,
       --  however long it had to run; one of a process still there holds.
       Assert (Hostkit.Process."=" (Hostkit.Process.Presence_Of (Hostkit.Host.Own_Process_Id),
@@ -7124,6 +7141,20 @@ package body Tests.Framework_Cases is
                     and then Dirs.Exists (Files_Apart.First_Element),
                     "payloads were not collected as their results say");
          end;
+         --  While a result cannot be read, none is collected: it may be
+         --  the one wanting a payload, and put right later it would find
+         --  that payload gone.
+         Put_File (S.Root (Store) & "/results/payloads/ORPHAN.txt", "left behind");
+         Put_File (S.Root (Store) & "/results/RES-BROKEN.rec", "not a record" & ASCII.LF);
+         declare
+            Collected : Natural;
+         begin
+            Rs.Collect_Payloads (Store, Collected);
+            Assert (Collected = 0 and then Dirs.Exists (S.Root (Store) & "/results/payloads/ORPHAN.txt"),
+                    "payloads were collected while a result could not be read");
+         end;
+         Dirs.Delete_File (S.Root (Store) & "/results/RES-BROKEN.rec");
+         Dirs.Delete_File (S.Root (Store) & "/results/payloads/ORPHAN.txt");
       end;
 
       --  Cancelling the root takes down what is still going beneath it.
@@ -9136,6 +9167,48 @@ package body Tests.Framework_Cases is
               "a format stage that did not pass let the task go on: " & To_String (Done.Reason));
       S.Close (Store);
    end Harness_Runs_Routine_Stages;
+
+   --  A record that is there and will not read is not taken for one that
+   --  is absent: a task that cannot be read may be anyone's part, a
+   --  workspace that cannot be read may be anyone's, and nothing is ready,
+   --  passed or chosen on the strength of not having read them.
+   procedure Unreadable_Records_Hold_Back
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Plain  : Unbounded_String;
+      Space  : Unbounded_String;
+      Broken_Task  : constant String := "TASK-BROKEN";
+      Broken_Space : constant String := "WS-999999";
+   begin
+      Task_Project (Store, "unreadable-records");
+      Tk.Create (Store, Change, Fields ("Plain", "analysis"), "user", "", Plain, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Plain), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.Ready (Store, To_String (Plain)).Ready, "a plain accepted task was not ready");
+
+      Put_File (S.Root (Store) & "/tasks/" & Broken_Task & ".rec", "not a record" & ASCII.LF);
+      Assert (Tk.Unreadable (Store).Contains (Broken_Task),
+              "a task that cannot be read was not said to be one");
+      Assert (not Tk.Ready (Store, To_String (Plain)).Ready,
+              "a task was ready while another that may be its part could not be read");
+
+      Put_File (S.Root (Store) & "/workspaces/" & Broken_Space & ".rec", "not a record" & ASCII.LF);
+      Ws.Active_Workspace (Store, To_String (Plain), Space, Status);
+      Assert (Status.Code = E.Framework_Integrity_Failed and then Length (Space) = 0,
+              "a task's workspace was told while a workspace record could not be read: "
+              & Code_Of (Status));
+
+      Dirs.Delete_File (S.Root (Store) & "/tasks/" & Broken_Task & ".rec");
+      Dirs.Delete_File (S.Root (Store) & "/workspaces/" & Broken_Space & ".rec");
+      Assert (Tk.Ready (Store, To_String (Plain)).Ready,
+              "a task put right still held another back");
+      S.Close (Store);
+   end Unreadable_Records_Hold_Back;
 
    --  A task is ready only while what it serves is agreed; it names only
    --  tasks and requirements, not records beside them; and a requirement
@@ -12766,6 +12839,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Workspaces_Start_And_End_Whole'Access,
          "workspaces start from the project as it is and end once their work is kept");
+      Register_Routine
+        (T, Unreadable_Records_Hold_Back'Access,
+         "a record that will not read holds back what could depend on it");
       Register_Routine
         (T, Readiness_Follows_What_Is_Served'Access,
          "a task is ready only while what it serves is agreed, and names only what is there");

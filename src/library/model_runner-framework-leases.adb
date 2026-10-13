@@ -61,22 +61,41 @@ package body Model_Runner.Framework.Leases is
       Running_Here.Remove (Key_Of (Resource, Owner));
    end Done_Working;
 
-   --  The lease on a resource, if there is one that can be read.
+   --  The lease on a resource, if there is one that can be read; and
+   --  whether there is one that cannot. A lease that is there and will not
+   --  read is held by someone this cannot name -- a newer build's, one
+   --  damaged -- and is not free: taken over, it would hand a running task
+   --  to whoever asked next, and recovery would end the work holding it.
    procedure Held_Lease
-     (Item     : Stores.Store;
-      Resource : String;
-      Value    : out Records.Item;
-      Found    : out Boolean)
+     (Item       : Stores.Store;
+      Resource   : String;
+      Value      : out Records.Item;
+      Found      : out Boolean;
+      Unreadable : out Boolean)
    is
       Status : E.Error_Info;
    begin
       Found := False;
+      Unreadable := False;
       Value := Records.Create ("", 1, "", 0);
       if Stores.Exists (Item, Runtime_Area, Prefix & Resource) then
          Stores.Read (Item, Runtime_Area, Prefix & Resource, Value, Status);
          Found := E.Is_Ok (Status);
+         Unreadable := not Found;
       end if;
    end Held_Lease;
+
+   --  Who holds a lease that cannot be read: nobody this can name, and so
+   --  nobody any owner is.
+   Unknown_Holder : constant String := "(an unreadable lease)";
+
+   procedure Refuse_Unreadable (Resource : String; Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Make (E.Framework_Integrity_Failed);
+      E.Add_Text (Status, "name", Prefix & Resource);
+      E.Add_Text (Status, "detail", "the lease on it is there and cannot be read; "
+                  & "/check says what it is, and it is put right or removed by hand");
+   end Refuse_Unreadable;
 
    --  This process, as a lease names it.
    function Own_Process return String
@@ -141,8 +160,9 @@ package body Model_Runner.Framework.Leases is
       Seconds  : Positive;
       Status   : out Model_Runner.Errors.Error_Info)
    is
-      Held  : Records.Item;
-      Found : Boolean;
+      Held       : Records.Item;
+      Found      : Boolean;
+      Unreadable : Boolean;
    begin
       Status := E.Success;
       if not Stores.Is_Name (Prefix & Resource) then
@@ -151,8 +171,11 @@ package body Model_Runner.Framework.Leases is
          return;
       end if;
 
-      Held_Lease (Item, Resource, Held, Found);
-      if Found and then Running (Held)
+      Held_Lease (Item, Resource, Held, Found, Unreadable);
+      if Unreadable then
+         Refuse_Unreadable (Resource, Status);
+         return;
+      elsif Found and then Running (Held)
         and then Records.Get (Held, "owner") /= Owner
       then
          Refuse (Resource, Held, Status);
@@ -197,12 +220,16 @@ package body Model_Runner.Framework.Leases is
       Owner    : String;
       Status   : out Model_Runner.Errors.Error_Info)
    is
-      Held  : Records.Item;
-      Found : Boolean;
+      Held       : Records.Item;
+      Found      : Boolean;
+      Unreadable : Boolean;
    begin
       Status := E.Success;
-      Held_Lease (Item, Resource, Held, Found);
-      if not Found then
+      Held_Lease (Item, Resource, Held, Found, Unreadable);
+      if Unreadable then
+         Refuse_Unreadable (Resource, Status);
+         return;
+      elsif not Found then
          return;
       elsif Running (Held) and then Records.Get (Held, "owner") /= Owner then
          Refuse (Resource, Held, Status);
@@ -216,12 +243,14 @@ package body Model_Runner.Framework.Leases is
    ------------
 
    function Holder (Item : Stores.Store; Resource : String) return String is
-      Held  : Records.Item;
-      Found : Boolean;
+      Held       : Records.Item;
+      Found      : Boolean;
+      Unreadable : Boolean;
    begin
-      Held_Lease (Item, Resource, Held, Found);
+      Held_Lease (Item, Resource, Held, Found, Unreadable);
       return
-        (if Found and then Running (Held) then Records.Get (Held, "owner")
+        (if Unreadable then Unknown_Holder
+         elsif Found and then Running (Held) then Records.Get (Held, "owner")
          else "");
    end Holder;
 
@@ -239,10 +268,11 @@ package body Model_Runner.Framework.Leases is
             declare
                Resource : constant String :=
                  Name (Name'First + Prefix'Length .. Name'Last);
-               Held     : Records.Item;
-               Found    : Boolean;
+               Held       : Records.Item;
+               Found      : Boolean;
+               Unreadable : Boolean;
             begin
-               Held_Lease (Item, Resource, Held, Found);
+               Held_Lease (Item, Resource, Held, Found, Unreadable);
                if Found and then not Running (Held) then
                   Result.Append (Resource);
                end if;

@@ -1139,6 +1139,14 @@ package body Model_Runner.Framework.Tasks is
               ("its child " & Child & " is " & State_Said (State_In (Item, Change, Child)));
          end if;
       end loop;
+      --  A task that cannot be read may be one of its parts, open: not
+      --  ready while that cannot be told.
+      for Other of Unreadable (Item) loop
+         if Other /= Id then
+            Result.Reasons.Append
+              (Other & " cannot be read, so whether it is an open part of this cannot be told");
+         end if;
+      end loop;
 
       for Requirement of Split (Records.Get (Defined, "requirements")) loop
          declare
@@ -1445,6 +1453,23 @@ package body Model_Runner.Framework.Tasks is
    --------------
    -- Children --
    --------------
+
+   function Unreadable (Item : Stores.Store) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+   begin
+      for Id of List (Item) loop
+         declare
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Definition (Item, Id, Value, Status);
+            if E.Is_Error (Status) then
+               Result.Append (Id);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Unreadable;
 
    function Children
      (Item   : Stores.Store;
@@ -1783,8 +1808,14 @@ package body Model_Runner.Framework.Tasks is
             Read  : E.Error_Info;
          begin
             Definition (Item, Id, Value, Read);
-            if E.Is_Ok (Read) and then Records.Get (Value, "derivation_key") /= ""
-            then
+            --  A task that cannot be read may be the one derived already:
+            --  nothing is derived beside it while that cannot be told.
+            if E.Is_Error (Read) then
+               Status := Read;
+               E.Add_Text (Status, "detail", Id & " cannot be read, so what is derived already "
+                           & "cannot be told; nothing is derived until it is put right");
+               return;
+            elsif Records.Get (Value, "derivation_key") /= "" then
                Done.Append (Records.Get (Value, "derivation_key"));
             end if;
          end;
@@ -1819,6 +1850,13 @@ package body Model_Runner.Framework.Tasks is
                   Read        : E.Error_Info;
                begin
                   Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                  --  Its event consumed and the requirement unread would be
+                  --  a derivation lost for good: the change is not made.
+                  if Fresh and then E.Is_Error (Read) then
+                     Status := Read;
+                     E.Add_Text (Status, "detail", Requirement & " cannot be read to derive its work");
+                     return;
+                  end if;
                   if Fresh and then E.Is_Ok (Read)
                     and then To_String (Held.State) = Tasks.Accepted
                   then

@@ -92,6 +92,13 @@ package Model_Runner.Framework.Workspaces is
    --  @return Their identifiers, in the store's order.
    function Every_Active (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
 
+   --  The workspace records that cannot be read: any of them may be a
+   --  task's active workspace, as far as anyone can tell.
+   --
+   --  @param Item The store.
+   --  @return Their identifiers.
+   function Unreadable_Records (Item : Stores.Store) return Name_Lists.Vector;
+
    --  The one workspace a task's work is in, for what acts on it.
    --
    --  @param Item The store.

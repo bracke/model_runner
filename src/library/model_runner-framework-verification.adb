@@ -1507,7 +1507,12 @@ package body Model_Runner.Framework.Verification is
             Read  : E.Error_Info;
          begin
             Stores.Read (Item, Tasks_Area, Records.Get (Value, "task") & ".state", State, Read);
-            if E.Is_Ok (Read) and then Records.Get (State, "generation") /= ""
+            --  Whose attempt is current cannot be told: not taken as this
+            --  one's.
+            if E.Is_Error (Read) then
+               Note (Stale_Generation, Evidence & " was taken for " & Records.Get (Value, "task")
+                     & ", whose state cannot be read to tell whether it is this attempt's");
+            elsif Records.Get (State, "generation") /= ""
               and then Records.Get (State, "generation") /= Records.Get (Value, "generation")
             then
                Note (Stale_Generation, Evidence & " was taken in an earlier attempt at " & Records.Get (Value, "task")
@@ -1953,6 +1958,13 @@ package body Model_Runner.Framework.Verification is
                      Append (Open, (if Open = Null_Unbounded_String then "" else ", ") & Child);
                   end if;
                end loop;
+               --  And any task that cannot be read, which may be one.
+               for Other of Tasks.Unreadable (Item) loop
+                  if Other /= Task_Id then
+                     Append (Open, (if Open = Null_Unbounded_String then "" else ", ")
+                             & Other & " (cannot be read)");
+                  end if;
+               end loop;
                Judge (Name, Open = Null_Unbounded_String,
                       "these parts are not done: " & To_String (Open));
             end;
@@ -1967,9 +1979,17 @@ package body Model_Runner.Framework.Verification is
             end;
          elsif Name = "integration" then
             declare
-               Open : constant String := Workspaces.Active_For (Item, Task_Id);
+               Open    : constant String := Workspaces.Active_For (Item, Task_Id);
+               Unknown : constant Name_Lists.Vector := Workspaces.Unreadable_Records (Item);
             begin
-               Judge (Name, Open = "", Open & " has not been taken into the project");
+               --  One that cannot be read may hold this task's work, not
+               --  taken in: not passed while that cannot be told.
+               if Open = "" and then not Unknown.Is_Empty then
+                  Judge (Name, False, Unknown.First_Element & " cannot be read, so whether it holds "
+                         & "this task's work, not taken in, cannot be told");
+               else
+                  Judge (Name, Open = "", Open & " has not been taken into the project");
+               end if;
             end;
          elsif Name = "implementation_present" then
             Judge (Name, not Changed.Is_Empty, "its work changed no file");
@@ -2177,9 +2197,10 @@ package body Model_Runner.Framework.Verification is
                      Got : E.Error_Info;
                   begin
                      Tasks.Definition (Item, Other, Its, Got);
-                     Open := Open or else
-                       (E.Is_Ok (Got)
-                        and then Lines_Of (Records.Get (Its, "requirements")).Contains (Requirement));
+                     --  One that cannot be read may serve it: open, as far
+                     --  as this can tell, and nothing implemented by it.
+                     Open := Open or else E.Is_Error (Got)
+                       or else Lines_Of (Records.Get (Its, "requirements")).Contains (Requirement);
                   end;
                end if;
             end loop;
@@ -2546,9 +2567,12 @@ package body Model_Runner.Framework.Verification is
                Got     : E.Error_Info;
             begin
                Tasks.Definition (Item, Id, Defined, Got);
-               if E.Is_Ok (Got)
-                 and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
-               then
+               --  A task that cannot be read may serve it, and what it
+               --  changed is then unknown: no failure is excused as
+               --  another's.
+               if E.Is_Error (Got) then
+                  return False;
+               elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement) then
                   Stores.Read (Item, Tasks_Area, Id & ".state", State, Got);
                   if E.Is_Ok (Got) then
                      for Path of Lines_Of (Records.Get (State, "changed_files")) loop
@@ -2692,8 +2716,10 @@ package body Model_Runner.Framework.Verification is
             State   : constant String := Tasks.State_Of (Item, Id);
          begin
             Tasks.Definition (Item, Id, Defined, Read);
-            if E.Is_Ok (Read)
-              and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+            if E.Is_Error (Read) and then State not in "cancelled" | "rejected" then
+               return Lacks (Id & " cannot be read, so whether it serves it and how it stands "
+                             & "cannot be told; /check says what it is");
+            elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
               and then State not in "cancelled" | "rejected"
             then
                Any := True;
@@ -2942,8 +2968,10 @@ package body Model_Runner.Framework.Verification is
                   State   : constant String := Tasks.State_Of (Item, Id);
                begin
                   Tasks.Definition (Item, Id, Defined, Read);
-                  if E.Is_Ok (Read)
-                    and then Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
+                  if E.Is_Error (Read) and then State not in "cancelled" | "rejected" then
+                     --  May serve it: open, as far as this can tell.
+                     Open := True;
+                  elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
                     and then State not in "cancelled" | "rejected"
                   then
                      Serving := Serving + 1;
