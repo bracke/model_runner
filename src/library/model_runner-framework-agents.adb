@@ -822,4 +822,67 @@ package body Model_Runner.Framework.Agents is
       return To_String (Text);
    end Child_Results;
 
+   -------------------
+   -- Retry_Lineage --
+   -------------------
+
+   procedure Retry_Lineage
+     (Item   : Stores.Store;
+      Id     : String;
+      Runs   : out Natural;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      --  More than any parent's retries could make: a run again is made
+      --  only while the ones before it number fewer than the limit, which
+      --  the configuration keeps to three digits.
+      Longest : constant := 1_000;
+
+      Seen    : Name_Lists.Vector;
+      Here    : Agent;
+      Before  : Agent;
+
+      procedure Damaged (Detail : String) is
+      begin
+         Status := E.Make (E.Framework_Integrity_Failed);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "detail", "its retry lineage " & Detail);
+      end Damaged;
+   begin
+      Runs := 0;
+      Read (Item, Id, Here, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Seen.Append (Id);
+
+      while Here.Retry_Of /= Null_Unbounded_String loop
+         declare
+            Named : constant String := To_String (Here.Retry_Of);
+            Was   : constant String := To_String (Here.Id);
+         begin
+            if Seen.Contains (Named) then
+               Damaged ("goes round: " & Was & " names " & Named & ", named already");
+               return;
+            elsif Runs >= Longest then
+               Damaged ("is longer than any run could make");
+               return;
+            end if;
+            Read (Item, Named, Before, Status);
+            if E.Is_Error (Status) then
+               Damaged (Was & " names " & Named & ", which cannot be read");
+               return;
+            elsif Before.Parent /= Here.Parent or else Before.Task_Id /= Here.Task_Id then
+               Damaged (Was & " names " & Named & ", another parent's or task's helper");
+               return;
+            elsif Named'Length /= Was'Length or else Named >= Was then
+               Damaged (Was & " names " & Named & ", not a helper made before it");
+               return;
+            end if;
+            Seen.Append (Named);
+            Runs := Runs + 1;
+            Here := Before;
+         end;
+      end loop;
+   end Retry_Lineage;
+
 end Model_Runner.Framework.Agents;

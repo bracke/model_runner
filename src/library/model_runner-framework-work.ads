@@ -856,6 +856,16 @@ private
       Max_Steps   : Natural := 24;
       Max_Calls   : Natural := 0;
 
+      --  The profile the work's checks run and what running it takes, as
+      --  they stood when the work started: what a check means is fixed
+      --  for the run, as its other limits are, while whether the agent
+      --  may still run it is asked live (May_Check). Unfrozen, the task's
+      --  profile as the configuration says it now.
+      Profile        : Ada.Strings.Unbounded.Unbounded_String;
+      Profile_Text   : Ada.Strings.Unbounded.Unbounded_String;
+      Profile_Need   : Permissions.Capability := Permissions.Run_Build;
+      Profile_Frozen : Boolean := False;
+
       --  When the work must be over, where it is bounded.
       Bounded     : Boolean := False;
       Deadline    : Ada.Calendar.Time := Ada.Calendar.Clock;

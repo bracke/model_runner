@@ -87,7 +87,12 @@ begin
          Stands_For => (if Narrow then Profile else ""),
          Offline => not May (Host, Permissions.Use_Network, ""),
          Workspace => (if Host.Apart then To_String (Host.Tree) else ""),
-         Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0));
+         Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0),
+         --  The work's own profile as it stood when the work started.
+         Definition =>
+           (if Host.Profile_Frozen and then not Narrow
+              and then Running = To_String (Host.Profile)
+            then To_String (Host.Profile_Text) else ""));
       if E.Is_Ok (Status) then
          Stores.Commit (Host.Item.all, Change, Status);
       end if;

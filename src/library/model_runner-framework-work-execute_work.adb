@@ -156,6 +156,11 @@ is
       Token_Budget     : Natural := 0;
       On_Child_Failure : Unbounded_String;
       Seconds_From     : Unbounded_String;
+
+      --  The profile its checks run, and what running that takes.
+      Verification_Profile : Unbounded_String;
+      Verification_Text    : Unbounded_String;
+      Check_Need           : Permissions.Capability := Permissions.Run_Build;
    end record;
 
    function Resolve return Settings is
@@ -177,6 +182,13 @@ is
         (if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= "" then "task.max_seconds." & Kind
          elsif Scalar (Item, "agents.max_seconds") /= "" then "agents.max_seconds"
          else "work.lease");
+      Result.Verification_Profile :=
+        To_Unbounded_String (Verification.Profile_Of (Item, Task_Id));
+      Result.Verification_Text :=
+        To_Unbounded_String
+          (Records.Get (Config, "profile." & To_String (Result.Verification_Profile)));
+      Result.Check_Need :=
+        Check_Capability (Item, To_String (Result.Verification_Profile));
       return Result;
    end Resolve;
 
@@ -195,7 +207,8 @@ is
       & "max_steps=" & Image (Frozen.Max_Steps) & ASCII.LF
       & "max_tool_calls=" & Image (Frozen.Max_Tool_Calls) & ASCII.LF
       & "token_budget=" & Image (Frozen.Token_Budget) & ASCII.LF
-      & "on_child_failure=" & To_String (Frozen.On_Child_Failure));
+      & "on_child_failure=" & To_String (Frozen.On_Child_Failure) & ASCII.LF
+      & "verification_profile=" & To_String (Frozen.Verification_Profile));
    Place    : Unbounded_String := To_Unbounded_String (Project);
 
    --  End the work with the task moved and the agent recorded.
@@ -737,6 +750,10 @@ begin
          end;
          Host.Max_Calls := Frozen.Max_Tool_Calls;
          Host.Max_Steps := Frozen.Max_Steps;
+         Host.Profile := Frozen.Verification_Profile;
+         Host.Profile_Text := Frozen.Verification_Text;
+         Host.Profile_Need := Frozen.Check_Need;
+         Host.Profile_Frozen := True;
          Host.Open.Append (To_String (Result.Agent_Id));
          Host.Calls.Append (To_String (Result.Invocation_Id));
          Host.Opened.Append (Ada.Calendar.Clock);

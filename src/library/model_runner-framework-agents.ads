@@ -155,6 +155,24 @@ package Model_Runner.Framework.Agents is
       Result : out Agent;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  How many times the helper an agent stands for was run before it: the
+   --  agents its retry_of names, one before another. Walked a step at a
+   --  time and held to what the harness makes of it -- each a helper that
+   --  can be read, of the same parent and task, made before the one that
+   --  names it, none named twice, no longer than a run could make -- so a
+   --  damaged state answers as damaged rather than going round for ever.
+   --
+   --  @param Item The store.
+   --  @param Id The agent.
+   --  @param Runs How many ran before it; 0 for one that is no rerun.
+   --  @param Status Framework_Integrity_Failed naming the link that does
+   --    not hold; a failure to read Id itself is passed on.
+   procedure Retry_Lineage
+     (Item   : Stores.Store;
+      Id     : String;
+      Runs   : out Natural;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  How many agents are going: made and not ended.
    --
    --  @param Item The store.

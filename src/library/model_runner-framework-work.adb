@@ -1258,6 +1258,30 @@ package body Model_Runner.Framework.Work is
                                     Task_Level => Records.Get (Defined, "permissions"));
    end Allowed_Now;
 
+   --  Whether an agent holds a capability now: as it was given when it
+   --  started, which is the most it has, and as the project allows its
+   --  work now -- a permission taken away since, /reconfigure from another
+   --  terminal, is gone at once, not at the next run; a grant waits for
+   --  the next. A check's profile is asked of both the same way. The one
+   --  place either kind of call is decided.
+   function Holds_Now
+     (Host    : Child_Host;
+      Held    : Agents.Agent;
+      What    : Permissions.Capability;
+      Path    : String := "";
+      Profile : String := "") return Boolean
+   is
+      Now : constant Permissions.Permission_Set :=
+        Allowed_Now (Host, To_String (Held.Role));
+   begin
+      if Profile /= "" then
+         return Permissions.Allows_Profile (Held.Allowed, What, Profile)
+           and then Permissions.Allows_Profile (Now, What, Profile);
+      end if;
+      return Permissions.Allows (Held.Allowed, What, Path)
+        and then Permissions.Allows (Now, What, Path);
+   end Holds_Now;
+
    function May
      (Host : Child_Host;
       What : Permissions.Capability;
@@ -1267,12 +1291,7 @@ package body Model_Runner.Framework.Work is
       Status : E.Error_Info;
    begin
       Agents.Read (Host.Item.all, Current (Host), Held, Status);
-      return E.Is_Ok (Status) and then Permissions.Allows (Held.Allowed, What, Path)
-        --  And as the project allows its work now: what the agent was
-        --  given when it started is the most it has, and a permission
-        --  taken away since -- /reconfigure from another terminal -- is
-        --  gone at once, not at the next run. A grant waits for the next.
-        and then Permissions.Allows (Allowed_Now (Host, To_String (Held.Role)), What, Path)
+      return E.Is_Ok (Status) and then Holds_Now (Host, Held, What, Path)
         --  Children only where one could be made: room for one, a level
         --  below.
         and then (Permissions."/=" (What, Permissions.Create_Children)
@@ -1374,7 +1393,8 @@ package body Model_Runner.Framework.Work is
    function Store_Of (Host : Child_Host) return not null access Stores.Store is (Host.Item.all'Unchecked_Access);
 
    function Task_Profile (Host : Child_Host) return String
-   is (Verification.Profile_Of (Host.Item.all, To_String (Host.Task_Id)));
+   is (if Host.Profile_Frozen then To_String (Host.Profile)
+       else Verification.Profile_Of (Host.Item.all, To_String (Host.Task_Id)));
 
    ---------------
    -- May_Check --
@@ -1383,14 +1403,20 @@ package body Model_Runner.Framework.Work is
    function May_Check (Host : Child_Host; Profile : String) return Boolean is
       Held   : Agents.Agent;
       Status : E.Error_Info;
-      Needed : constant Permissions.Capability := Check_Capability (Host.Item.all, Profile);
+
+      --  What running it takes: for the work's own profile, as it was
+      --  when the work started; for another, as the configuration says.
+      Needed : constant Permissions.Capability :=
+        (if Host.Profile_Frozen and then Profile = To_String (Host.Profile)
+         then Host.Profile_Need
+         else Check_Capability (Host.Item.all, Profile));
    begin
       if Profile = "" then
          return False;
       end if;
       Agents.Read (Host.Item.all, Current (Host), Held, Status);
       return E.Is_Ok (Status)
-        and then Permissions.Allows_Profile (Held.Allowed, Needed, Profile);
+        and then Holds_Now (Host, Held, Needed, Profile => Profile);
    end May_Check;
 
    ----------------
@@ -1420,7 +1446,8 @@ package body Model_Runner.Framework.Work is
       declare
          Checks : constant Verification.Check_List :=
            Verification.Parse_Profile
-             (Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host)));
+             (if Host.Profile_Frozen then To_String (Host.Profile_Text)
+              else Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host)));
       begin
          for At_Check in 1 .. Verification.Length (Checks) loop
             for Word of Execution.Words_Of (To_String (Verification.Element (Checks, At_Check).Command)) loop

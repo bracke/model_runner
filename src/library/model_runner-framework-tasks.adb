@@ -804,6 +804,10 @@ package body Model_Runner.Framework.Tasks is
    is
       Value : Records.Item;
 
+      --  Each requirement a completed task serves and what it meant, a
+      --  name and its meaning a tab apart.
+      Served : Name_Lists.Vector;
+
       procedure Not_Ready (Detail : String) is
       begin
          Status := E.Make (E.Framework_Task_Not_Ready);
@@ -869,6 +873,38 @@ package body Model_Runner.Framework.Tasks is
          return;
       end if;
 
+      --  What each requirement a task completed serves meant when it was
+      --  done, read before anything moves: a task cannot truthfully be
+      --  complete for a requirement whose words cannot be read, so the move
+      --  is refused, not made with that requirement's meaning left out.
+      if Next = Tasks.Complete then
+         declare
+            Defined : Records.Item;
+            Read    : E.Error_Info;
+         begin
+            Definition (Item, Id, Defined, Read);
+            if E.Is_Error (Read) then
+               Status := Read;
+               return;
+            end if;
+            for Requirement of Split (Records.Get (Defined, "requirements")) loop
+               declare
+                  Held : Intent.Entity;
+               begin
+                  Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                  if E.Is_Error (Read) then
+                     Status := Read;
+                     E.Add_Text (Status, "detail",
+                                 Id & " serves " & Requirement
+                                 & ", whose meaning cannot be read to record what it completed");
+                     return;
+                  end if;
+                  Served.Append (Requirement & ASCII.HT & To_String (Held.Meaning));
+               end;
+            end loop;
+         end;
+      end if;
+
       Transitions.Apply
         (Item, Change, Lifecycle_Of (Item), Tasks_Area, Id & State_Suffix, Next, Granted,
          Event_For (Next), Status, Actor, Subject => Id,
@@ -894,24 +930,17 @@ package body Model_Runner.Framework.Tasks is
       elsif Next = Tasks.Failed then
          Records.Set (Value, "current_failure", Reason);
       elsif Next = Tasks.Complete then
-         --  What each requirement it served meant when it was done: work
-         --  done for other words implements nothing of the new ones.
-         declare
-            Defined : Records.Item;
-            Read    : E.Error_Info;
-         begin
-            Definition (Item, Id, Defined, Read);
-            for Requirement of Split (Records.Get (Defined, "requirements")) loop
-               declare
-                  Held : Intent.Entity;
-               begin
-                  Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
-                  if E.Is_Ok (Read) then
-                     Records.Set (Value, "served." & Requirement, To_String (Held.Meaning));
-                  end if;
-               end;
-            end loop;
-         end;
+         --  What each requirement it served meant when it was done, as
+         --  read above: work done for other words implements nothing of the
+         --  new ones.
+         for Pair of Served loop
+            declare
+               Cut : constant Natural := Ada.Strings.Fixed.Index (Pair, [1 => ASCII.HT]);
+            begin
+               Records.Set (Value, "served." & Pair (Pair'First .. Cut - 1),
+                            Pair (Cut + 1 .. Pair'Last));
+            end;
+         end loop;
       elsif Next = Tasks.Accepted then
          Records.Remove (Value, "blocking_reasons");
          Records.Remove (Value, "current_failure");

@@ -12,7 +12,6 @@ with Hostkit;
 with Hostkit.Fs;
 with Hostkit.Metadata;
 
-with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
@@ -167,6 +166,17 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end loop;
    end Copy_Tree;
+
+   --  What a baseline comes to: its paths and prints, in path order, a
+   --  line each.
+   function Baseline_Print (Baseline : Maps.Map) return String is
+      Text : Unbounded_String;
+   begin
+      for Position in Baseline.Iterate loop
+         Append (Text, Maps.Key (Position) & Tab & Maps.Element (Position) & ASCII.LF);
+      end loop;
+      return Fingerprint (To_String (Text));
+   end Baseline_Print;
 
    ------------
    -- Create --
@@ -333,15 +343,19 @@ package body Model_Runner.Framework.Workspaces is
             Result.Kind := File_Copy;
          end if;
 
-         --  The project's files as they are now, kept beside the tree: what
-         --  a change made to both sides since is joined against.
+         --  The project's files as the tree was made from them, kept beside
+         --  it: what a change made to both sides since is joined against.
+         --  Copied from the tree and not from the project, which an editor
+         --  may have changed meanwhile: the base, the tree and the baseline
+         --  below are one set of bytes, or the join and the conflict check
+         --  would each take a different file for what the work began from.
          --  Without it, changes to both sides are settled by a person.
          --  A base that could not be kept whole is none: a later change to
          --  both sides is then settled by a person, not joined from it.
          declare
             Kept : E.Error_Info;
          begin
-            Copy_Tree (Project, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item), Kept);
+            Copy_Tree (Tree, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item), Kept);
             --  And a partial one left behind would be joined from: gone,
             --  or the workspace is not made.
             if E.Is_Error (Kept) then
@@ -380,6 +394,10 @@ package body Model_Runner.Framework.Workspaces is
                Records.Set (Value, "baseline." & Image (Count),
                             Maps.Key (Position) & Tab & Maps.Element (Position));
             end loop;
+            --  And how many, and what they come to, so that a baseline read
+            --  back with one missing or changed is known for that.
+            Records.Set (Value, "baseline_count", Image (Count));
+            Records.Set (Value, "baseline_fingerprint", Baseline_Print (Baseline));
             Stores.Put (Change, Workspaces_Area, Id, Value);
          end;
 
@@ -416,29 +434,94 @@ package body Model_Runner.Framework.Workspaces is
          Status     => To_Unbounded_String (Records.Get (Value, "status")));
    end Read;
 
-   --  The baseline a workspace was made with.
-   function Baseline_Of (Item : Stores.Store; Id : String) return Maps.Map is
-      Value  : Records.Item;
-      Status : E.Error_Info;
-      Result : Maps.Map;
+   --  The baseline a workspace was made with, held to what its record says
+   --  of it: as many entries as it counts, numbered one on from one, each
+   --  a path and a print, coming to the fingerprint it keeps. Anything else
+   --  is a record that cannot be believed, not a smaller baseline: a file
+   --  missing from it would read as one the work created.
+   procedure Read_Baseline
+     (Item     : Stores.Store;
+      Id       : String;
+      Baseline : out Maps.Map;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Value : Records.Item;
+
+      procedure Damaged (Detail : String) is
+      begin
+         Baseline.Clear;
+         Status := E.Make (E.Framework_Integrity_Failed);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "detail", "its baseline " & Detail);
+      end Damaged;
+
+      Entries : Natural := 0;
    begin
+      Baseline.Clear;
       Stores.Read (Item, Workspaces_Area, Id, Value, Status);
       if E.Is_Error (Status) then
-         return Result;
+         return;
       end if;
       for Index in 1 .. Records.Field_Count (Value) loop
          declare
             Field : constant String := Records.Field_Name (Value, Index);
-            Text  : constant String := Records.Get (Value, Field);
-            Cut   : constant Natural := Ada.Strings.Fixed.Index (Text, [1 => Tab]);
          begin
-            if Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "baseline."
-              and then Cut > Text'First
-            then
-               Result.Include (Text (Text'First .. Cut - 1), Text (Cut + 1 .. Text'Last));
+            if Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "baseline." then
+               Entries := Entries + 1;
             end if;
          end;
       end loop;
+
+      declare
+         Counted : constant String := Records.Get (Value, "baseline_count");
+         Printed : constant String := Records.Get (Value, "baseline_fingerprint");
+      begin
+         --  A workspace made before the count was kept says nothing of it:
+         --  held to its entries running one on from one, well formed.
+         if Counted /= "" then
+            if Counted'Length > 9 or else (for some C of Counted => C not in '0' .. '9') then
+               Damaged ("count " & Counted & " is not a number");
+               return;
+            elsif Natural'Value (Counted) /= Entries then
+               Damaged ("counts" & Natural'Image (Natural'Value (Counted))
+                        & " files and holds" & Natural'Image (Entries));
+               return;
+            end if;
+         end if;
+
+         for Number in 1 .. Entries loop
+            declare
+               Text : constant String := Records.Get (Value, "baseline." & Image (Number));
+               Cut  : constant Natural := Ada.Strings.Fixed.Index (Text, [1 => Tab]);
+            begin
+               if Text = "" then
+                  Damaged ("has no entry" & Natural'Image (Number));
+                  return;
+               elsif Cut <= Text'First or else Cut = Text'Last then
+                  Damaged ("entry" & Natural'Image (Number) & " is not a path and a print");
+                  return;
+               elsif Baseline.Contains (Text (Text'First .. Cut - 1)) then
+                  Damaged ("names " & Text (Text'First .. Cut - 1) & " twice");
+                  return;
+               end if;
+               Baseline.Insert (Text (Text'First .. Cut - 1), Text (Cut + 1 .. Text'Last));
+            end;
+         end loop;
+
+         if Counted /= "" and then Printed /= Baseline_Print (Baseline) then
+            Damaged ("does not come to the fingerprint kept with it");
+            return;
+         end if;
+      end;
+   end Read_Baseline;
+
+   --  The baseline where only a list is wanted: empty where it cannot be
+   --  believed, which Integrate refuses before anything is decided by it.
+   function Baseline_Of (Item : Stores.Store; Id : String) return Maps.Map is
+      Result : Maps.Map;
+      Status : E.Error_Info;
+   begin
+      Read_Baseline (Item, Id, Result, Status);
       return Result;
    end Baseline_Of;
 
@@ -1310,6 +1393,17 @@ package body Model_Runner.Framework.Workspaces is
          E.Add_Text (Status, "name", Id);
          return;
       end if;
+
+      --  Nothing taken in by a baseline that cannot be believed: what the
+      --  work changed, and what the project did since, are both told by it.
+      declare
+         Baseline : Maps.Map;
+      begin
+         Read_Baseline (Item, Id, Baseline, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end;
 
       declare
          Clashes : constant Name_Lists.Vector := Conflicts (Item, Id);

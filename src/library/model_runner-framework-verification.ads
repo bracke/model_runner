@@ -170,6 +170,9 @@ package Model_Runner.Framework.Verification is
    --    names the tree's own revision, and never counts as the project's.
    --  @param Within Seconds left for the whole run where it is bounded --
    --    an agent's own time -- no check running past them; 0 for no bound.
+   --  @param Definition The profile's checks as a run resolved them when it
+   --    started, which a /reconfigure since does not change; empty for the
+   --    configuration's own now.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -182,7 +185,8 @@ package Model_Runner.Framework.Verification is
       Stands_For : String := "";
       Offline  : Boolean := False;
       Workspace : String := "";
-      Within   : Natural := 0);
+      Within   : Natural := 0;
+      Definition : String := "");
 
    --  How widely a task's work is verified, and with what.
    type Choice is record

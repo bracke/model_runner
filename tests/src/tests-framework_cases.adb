@@ -6148,6 +6148,28 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (E.Is_Ok (Status) and then Made.Kind = Ws.File_Copy,
               "a copy workspace was not made");
+
+      --  Its merge base, its tree and its baseline are one set of bytes:
+      --  the base copied from the tree, the baseline read from it, and the
+      --  baseline held to the count and fingerprint kept with it.
+      declare
+         Home     : constant String := Dirs.Containing_Directory (To_String (Made.Path));
+         Baseline : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Read_It  : E.Error_Info;
+      begin
+         Ws.Read_Baseline (Store, To_String (Made.Id), Baseline, Read_It);
+         Assert (E.Is_Ok (Read_It) and then not Baseline.Is_Empty,
+                 "a fresh workspace's baseline could not be read: " & Code_Of (Read_It));
+         for Position in Baseline.Iterate loop
+            declare
+               Path : constant String :=
+                 Model_Runner.Framework.Configurations.Value_Maps.Key (Position);
+            begin
+               Assert (Read_Whole (Home & "/base/" & Path) = Read_Whole (To_String (Made.Path) & "/" & Path),
+                       "a workspace's merge base differs from its tree at " & Path);
+            end;
+         end loop;
+      end;
       Put_File (To_String (Made.Path) & "/src/shared.adb", "two");
       Put_File (Fresh_Root (Store) & "/src/shared.adb", "three");
       Assert (Ws.Conflicts (Store, To_String (Made.Id)).Contains ("src/shared.adb"),
@@ -6201,6 +6223,39 @@ package body Tests.Framework_Cases is
          --  said once, none the second time it is asked.
          Assert (Ws.Last_Replaced_Copy = "" and then Ws.Last_Replaced_Copy = "",
                  "an earlier copy was said to be replaced where none was");
+      end;
+
+      --  A baseline read back short, or changed, is a damaged record and not
+      --  a smaller baseline: refused, and nothing taken in by it.
+      declare
+         Damaged  : Ws.Workspace;
+         Value    : R.Item;
+         Baseline : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Read_It  : E.Error_Info;
+      begin
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Damaged, Status);
+         S.Commit (Store, Change, Status);
+         for Edit in 1 .. 2 loop
+            S.Read (Store, F.Workspaces_Area, To_String (Damaged.Id), Value, Read_It);
+            if Edit = 1 then
+               R.Set (Value, "baseline.1", "src/elsewhere.adb" & ASCII.HT & "0000");
+            else
+               R.Remove (Value, "baseline.1");
+            end if;
+            R.Set_Revision (Value, R.Revision (Value) + 1);
+            S.Put (Change, F.Workspaces_Area, To_String (Damaged.Id), Value);
+            S.Commit (Store, Change, Status);
+            Assert (E.Is_Ok (Status), "the damaged baseline was not written: " & Code_Of (Status));
+            Ws.Read_Baseline (Store, To_String (Damaged.Id), Baseline, Read_It);
+            Assert (Read_It.Code = E.Framework_Integrity_Failed and then Baseline.Is_Empty,
+                    "a baseline " & (if Edit = 1 then "changed" else "missing an entry")
+                    & " was read as the baseline: " & Code_Of (Read_It));
+            Ws.Integrate (Store, Change, To_String (Damaged.Id), True, Taken, Read_It);
+            Assert (Read_It.Code = E.Framework_Integrity_Failed and then Taken.Is_Empty,
+                    "a workspace with a damaged baseline was taken in: " & Code_Of (Read_It));
+         end loop;
+         Ws.Abandon (Store, Change, To_String (Damaged.Id), Status);
+         S.Commit (Store, Change, Status);
       end;
 
       --  Taken in, and stopped before its records were committed: the next
@@ -6797,6 +6852,62 @@ package body Tests.Framework_Cases is
       Ag.Spawn_Child (Store, Change, To_String (Root), "reviewer", Ag.Optional,
                       Pm.Unrestricted, 100, Second, Status);
       S.Commit (Store, Change, Status);
+
+      --  A rerun's lineage is walked a step at a time and held to what the
+      --  harness makes: one sibling made before it counts once; a lineage
+      --  that goes round -- through another, or to itself -- is a damaged
+      --  state, said as that and by the consistency check, not followed
+      --  for ever.
+      declare
+         procedure Name_Retry (Agent_Id, Of_Id : String) is
+            Value : R.Item;
+            Got   : E.Error_Info;
+         begin
+            S.Read (Store, F.Runtime_Area, "agent." & Agent_Id, Value, Got);
+            R.Set (Value, "retry_of", Of_Id);
+            R.Set_Revision (Value, R.Revision (Value) + 1);
+            S.Put (Change, F.Runtime_Area, "agent." & Agent_Id, Value);
+            S.Commit (Store, Change, Got);
+            Assert (E.Is_Ok (Got), "an agent's retry_of was not written: " & Code_Of (Got));
+         end Name_Retry;
+
+         function Lineage_Found return Boolean is
+            Findings : constant Model_Runner.Framework.Consistency.Finding_List :=
+              Model_Runner.Framework.Consistency.Check (Store);
+            use type Model_Runner.Framework.Consistency.Finding_Kind;
+         begin
+            for Index in 1 .. Model_Runner.Framework.Consistency.Length (Findings) loop
+               if Model_Runner.Framework.Consistency.Element (Findings, Index).Kind
+                    = Model_Runner.Framework.Consistency.Agent_Assignment
+                 and then Ada.Strings.Fixed.Index
+                            (To_String (Model_Runner.Framework.Consistency.Element
+                                          (Findings, Index).Detail), "retry lineage") > 0
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Lineage_Found;
+
+         Runs : Natural;
+         Got  : E.Error_Info;
+      begin
+         Name_Retry (To_String (Second), To_String (First));
+         Ag.Retry_Lineage (Store, To_String (Second), Runs, Got);
+         Assert (E.Is_Ok (Got) and then Runs = 1 and then not Lineage_Found,
+                 "a rerun of an earlier sibling was not counted once: " & Code_Of (Got));
+         Name_Retry (To_String (First), To_String (Second));
+         Ag.Retry_Lineage (Store, To_String (Second), Runs, Got);
+         Assert (Got.Code = E.Framework_Integrity_Failed and then Lineage_Found,
+                 "a retry lineage going round two helpers was followed: " & Code_Of (Got));
+         Name_Retry (To_String (Second), "");
+         Name_Retry (To_String (First), To_String (First));
+         Ag.Retry_Lineage (Store, To_String (First), Runs, Got);
+         Assert (Got.Code = E.Framework_Integrity_Failed and then Lineage_Found,
+                 "a helper naming itself its own rerun was followed: " & Code_Of (Got));
+         Name_Retry (To_String (First), "");
+         Assert (not Lineage_Found, "a mended lineage was still found damaged");
+      end;
       Ag.Spawn_Child (Store, Change, To_String (Root), "extra", Ag.Advisory,
                       Pm.Unrestricted, 10, Third, Status);
       Assert (Status.Code = E.Framework_Limit_Exceeded,
@@ -8993,6 +9104,51 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Tk.Ready (Store, To_String (First)).Ready, "a task serving an accepted requirement waits");
 
+      --  A task is not complete for a requirement whose words cannot be
+      --  read: what it served cannot be recorded, so the move is refused
+      --  and the task stays where it was.
+      declare
+         Lost, Third : Unbounded_String;
+         Given       : Tk.Field_Map := Fields ("Three", "analysis");
+         Was         : R.Item;
+      begin
+         Nt.Propose (Store, Change, Nt.Requirement, "IO", "Write", "It SHALL write.", "",
+                     "user", "", "io", Lost, Status);
+         Nt.Move (Store, Change, Nt.Requirement, To_String (Lost), "accepted",
+                  Tr.Ordinary_Only, Status);
+         S.Commit (Store, Change, Status);
+         Given.Include ("requirements", To_String (Lost));
+         Tk.Create (Store, Change, Given, "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "running", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "verification", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (Tk.State_Of (Store, To_String (Third)) = "verification",
+                 "a task serving a requirement did not reach verification: " & Code_Of (Status));
+         S.Read (Store, Model_Runner.Framework.Requirements_Area, To_String (Lost), Was, Status);
+         S.Remove (Change, Model_Runner.Framework.Requirements_Area, To_String (Lost));
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the requirement could not be taken away: " & Code_Of (Status));
+         Tk.Move (Store, Change, To_String (Third), "complete", "", Gates_Passed => True,
+                  Status => Status);
+         Assert (E.Is_Error (Status),
+                 "a task was completed for a requirement whose meaning could not be read");
+         Change := S.No_Changes;
+         Assert (Tk.State_Of (Store, To_String (Third)) = "verification",
+                 "a refused completion moved the task: " & Tk.State_Of (Store, To_String (Third)));
+         --  Put back, and the same move is made.
+         S.Put (Change, Model_Runner.Framework.Requirements_Area, To_String (Lost), Was);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Third), "complete", "", Gates_Passed => True,
+                  Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Third)) = "complete",
+                 "a task serving a readable requirement was not completed: " & Code_Of (Status));
+      end;
+
       --  Another agent writing in the project holds it up: one writer in a
       --  tree at a time.
       Model_Runner.Framework.Leases.Acquire
@@ -10555,19 +10711,31 @@ package body Tests.Framework_Cases is
             --  from another terminal -- is gone at once, not at the next run.
             Assert (Children.May (Pm.Write_Source, "src/hello.adb"),
                     "a running agent could not write where its task is");
+            Assert (Children.May_Check (Children.Task_Profile),
+                    "a running agent could not run its task's checks");
             declare
                Changes  : Model_Runner.Framework.Configurations.Value_Maps.Map;
                Planned  : Model_Runner.Framework.Configurations.Change_Plan;
                Revision : Natural;
                Changed  : E.Error_Info;
+               Was      : constant String := Children.Task_Profile;
             begin
                Changes.Include ("map.permission.kind.analysis", "none");
+               --  And what its checks are, which is the run's as it started:
+               --  the next run's, not this one's.
+               Changes.Include ("profile.other", "exists: true");
+               Changes.Include ("scalar.verification.default", "other");
                Model_Runner.Framework.Configurations.Plan_Change (Revoking_In.all, Changes, Planned, Changed);
                Model_Runner.Framework.Configurations.Reconfigure (Revoking_In.all, Planned, Revision, Changed);
                Assert (E.Is_Ok (Changed), "the permission was not taken away: " & Code_Of (Changed));
+               Assert (Children.Task_Profile = Was,
+                       "the profile a running agent's checks run changed under it: "
+                       & Children.Task_Profile);
             end;
             Assert (not Children.May (Pm.Write_Source, "src/hello.adb"),
                     "a permission taken away while the agent ran was still its");
+            Assert (not Children.May_Check (Children.Task_Profile),
+                    "the checks a running agent may no longer run were still its to run");
          when Child_Unstarted =>
             --  A helper that cannot be started is not left the one working:
             --  its parent goes on as itself, and nothing is held up by it.

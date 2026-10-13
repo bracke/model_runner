@@ -1323,6 +1323,23 @@ package body Model_Runner.Framework.Consistency is
          end loop;
       end;
 
+      --  Each rerun helper's lineage holds together: what it names was run
+      --  before it, for the same parent and task, and goes nowhere round.
+      for Name of Stores.Names (Item, Runtime_Area) loop
+         if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "agent." then
+            declare
+               Id   : constant String := Name (Name'First + 6 .. Name'Last);
+               Runs : Natural;
+               Got  : E.Error_Info;
+            begin
+               Agents.Retry_Lineage (Item, Id, Runs, Got);
+               if E."=" (Got.Code, E.Framework_Integrity_Failed) then
+                  Found (Agent_Assignment, Id, E.Text_Of (Got, "detail"));
+               end if;
+            end;
+         end if;
+      end loop;
+
       --  A kind or role that says it may do more than the project allows
       --  is given what the project allows: clamped, as reconfigure says, and
       --  nothing that does not hold together.

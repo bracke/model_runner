@@ -1,6 +1,7 @@
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Stores;
 
 --  Where an agent writes, apart from the project until its work is taken in.
@@ -104,6 +105,20 @@ package Model_Runner.Framework.Workspaces is
       Task_Id : String;
       Id      : out Ada.Strings.Unbounded.Unbounded_String;
       Status  : out Model_Runner.Errors.Error_Info);
+
+   --  The files a workspace's tree held when it was made, each with its
+   --  print, held to the count and fingerprint its record keeps of them.
+   --
+   --  @param Item The store.
+   --  @param Id The workspace.
+   --  @param Baseline Path to print; empty on failure.
+   --  @param Status Framework_Integrity_Failed when the record's baseline
+   --    is short, out of order, malformed or not what its fingerprint says.
+   procedure Read_Baseline
+     (Item     : Stores.Store;
+      Id       : String;
+      Baseline : out Configurations.Value_Maps.Map;
+      Status   : out Model_Runner.Errors.Error_Info);
 
    --  The files an agent changed in its workspace, against the baseline.
    --

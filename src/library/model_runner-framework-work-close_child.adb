@@ -18,15 +18,11 @@ is
    Why     : Unbounded_String;
    Kept    : Results.Result;
 
-   --  How many times the child it stands for has been run before it.
-   function Runs_Before (Id : String) return Natural is
-      Held_Agent : Agents.Agent;
-      Read       : E.Error_Info;
-   begin
-      Agents.Read (Host.Item.all, Id, Held_Agent, Read);
-      return (if E.Is_Error (Read) or else Held_Agent.Retry_Of = Null_Unbounded_String
-              then 0 else 1 + Runs_Before (To_String (Held_Agent.Retry_Of)));
-   end Runs_Before;
+   --  How many times the child it stands for has been run before it, and
+   --  whether that can be told: a lineage the state holds damaged is not
+   --  one to run again from.
+   Lineage_Runs   : Natural := 0;
+   Lineage_Status : E.Error_Info := E.Success;
 
    Retries : constant Natural :=
      (declare
@@ -143,10 +139,14 @@ begin
       --  it -- a helper sent to fix an overflow repeated one edit until
       --  stopped, was run again, and did it again. The parent hears of it
       --  at once, and may do the part itself.
+      if not Good then
+         Agents.Retry_Lineage (Host.Item.all, Id, Lineage_Runs, Lineage_Status);
+      end if;
       Retry := not Good and then not Interrupted (Ran) and then not Out_Of_Time (Ran)
         and then not Went_Round (Ran)
         and then Agents."=" (Child.Need, Agents.Required)
-        and then Runs_Before (Id) < Retries;
+        and then E.Is_Ok (Lineage_Status)
+        and then Lineage_Runs < Retries;
       Told := To_Unbounded_String
         (Id & " (" & Ada.Characters.Handling.To_Lower (Agents.Obligation'Image (Child.Need))
          & ") " & (if Good then "done" elsif Interrupted (Ran) then "cancelled" else "failed")
@@ -154,6 +154,9 @@ begin
          & ": " & To_String (Why)
          & (if Good and then Invocations.Claim (Said, "findings") /= ""
             then ASCII.LF & Invocations.Claim (Said, "findings") else "")
-         & (if Retry then ASCII.LF & "It is run once more." else ""));
+         & (if Retry then ASCII.LF & "It is run once more." else "")
+         & (if E.Is_Error (Lineage_Status)
+            then ASCII.LF & "It is not run again: " & E.Text_Of (Lineage_Status, "detail") & "."
+            else ""));
    end;
 end Close_Child;

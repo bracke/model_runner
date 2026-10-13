@@ -603,10 +603,13 @@ package body Model_Runner.Framework.Verification is
       Stands_For : String := "";
       Offline  : Boolean := False;
       Workspace : String := "";
-      Within   : Natural := 0)
+      Within   : Natural := 0;
+      Definition : String := "")
    is
       Settings : constant Records.Item := Config (Item);
-      Text     : constant String := Records.Get (Settings, "profile." & Profile);
+      Text     : constant String :=
+        (if Definition /= "" then Definition
+         else Records.Get (Settings, "profile." & Profile));
 
       --  A check's text with each {NAME} given replaced by its value -- not
       --  ${NAME}, which a template fills in when the project is made.
