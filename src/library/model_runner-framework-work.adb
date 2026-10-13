@@ -2093,8 +2093,9 @@ package body Model_Runner.Framework.Work is
       declare
          Agent : constant String := To_String (Result.Agent_Id);
       begin
+         --  Its own by the lease's record, as Execute_Work asks it.
          if Agent /= "" and then Tasks.State_Of (Item, Task_Id) = "running"
-           and then Leases.Holder (Item, Lease_Of (Task_Id)) = Agent
+           and then Leases.Owner_Of (Item, Lease_Of (Task_Id)) = Agent
          then
             declare
                Change : Stores.Transaction;
@@ -2112,7 +2113,7 @@ package body Model_Runner.Framework.Work is
                   Holds.Append (Tasks.Component_Lease (Component_Of (Item, Task_Id)));
                end if;
                for Held of Holds loop
-                  if E.Is_Ok (Moved) and then Leases.Holder (Item, Held) = Agent then
+                  if E.Is_Ok (Moved) and then Leases.Owner_Of (Item, Held) = Agent then
                      Leases.Release (Item, Change, Held, Agent, Moved);
                   end if;
                end loop;

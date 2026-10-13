@@ -60,6 +60,17 @@ package Model_Runner.Framework.Leases is
       Owner    : String;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Who a lease's record names as its owner, run out or not: what a run
+   --  that holds the project asks of its own lease, since nobody else can
+   --  have taken it while it holds the project -- a lease that ran out
+   --  under it is still its own. "" where there is none, or it cannot be
+   --  read.
+   --
+   --  @param Item The store.
+   --  @param Resource The resource.
+   --  @return The owner the record names.
+   function Owner_Of (Item : Stores.Store; Resource : String) return String;
+
    --  Who holds a resource now.
    --
    --  @param Item The store.

@@ -10016,6 +10016,17 @@ package body Tests.Framework_Cases is
       Model_Runner.Framework.Leases.Acquire
         (Store, Change, "task." & To_String (Task_A), "AG-1", 60, Status);
       S.Commit (Store, Change, Status);
+      --  A request made of an earlier run on the task -- another holder --
+      --  is not this run's: gone, and not heeded.
+      Model_Runner.Framework.Execution.Ask_To_Stop
+        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A), Holder => "AG-0");
+      Model_Runner.Framework.Execution.Watch_Lease
+        (Store'Unchecked_Access, "task." & To_String (Task_A), "AG-1");
+      delay 1.1;
+      Assert (not Model_Runner.Framework.Execution.Work_Withdrawn
+              and then not Dirs.Exists (S.Root (Store) & "/runtime/stop." & To_String (Task_A)),
+              "a request to stop an earlier run stopped this one, or was left for the next");
+      Model_Runner.Framework.Execution.Watch_Lease (null);
       Model_Runner.Framework.Execution.Watch_Lease
         (Store'Unchecked_Access, "task." & To_String (Task_A), "AG-1");
       Assert (not Model_Runner.Framework.Execution.Work_Withdrawn, "a run was stopped unasked");

@@ -238,6 +238,19 @@ package body Model_Runner.Framework.Leases is
       Stores.Remove (Change, Runtime_Area, Prefix & Resource);
    end Release;
 
+   --------------
+   -- Owner_Of --
+   --------------
+
+   function Owner_Of (Item : Stores.Store; Resource : String) return String is
+      Held       : Records.Item;
+      Found      : Boolean;
+      Unreadable : Boolean;
+   begin
+      Held_Lease (Item, Resource, Held, Found, Unreadable);
+      return (if Found then Records.Get (Held, "owner") else "");
+   end Owner_Of;
+
    ------------
    -- Holder --
    ------------

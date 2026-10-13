@@ -25,6 +25,7 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Workspaces;
+with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -5820,7 +5821,9 @@ package body Model_Runner.CLI.Tasks is
             then
                Pres.Put_Note (Screen, "cli.task.stop_asked_already", [Loc.Named ("name", First_Word)]);
             else
-               Model_Runner.Framework.Execution.Ask_To_Stop (Directory, First_Word);
+               Model_Runner.Framework.Execution.Ask_To_Stop
+                 (Directory, First_Word,
+                  Holder => Model_Runner.Framework.Leases.Holder (Store, "task." & First_Word));
                Pres.Put_Note (Screen, "cli.task.stop_asked", [Loc.Named ("name", First_Word)]);
             end if;
             S.Close (Store);

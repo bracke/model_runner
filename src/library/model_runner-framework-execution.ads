@@ -126,10 +126,14 @@ package Model_Runner.Framework.Execution is
    --  @param Project_Directory The project.
    --  @param Task_Id The task.
    --  @param Cancel Whether the task is to end cancelled, not set aside.
+   --  @param Holder Who holds the task's lease as the asker saw it: the
+   --    request is for that run only, and a later run on the task, by
+   --    another holder, does not take it as its own. "" for any run.
    procedure Ask_To_Stop
      (Project_Directory : String;
       Task_Id           : String;
-      Cancel            : Boolean := True);
+      Cancel            : Boolean := True;
+      Holder            : String := "");
 
    --  Whether the run watched was stopped because another process asked
    --  for its task to be cancelled, rather than only set aside.

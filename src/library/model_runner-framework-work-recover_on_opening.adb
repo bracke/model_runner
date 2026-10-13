@@ -330,6 +330,22 @@ begin
    end;
 
    --  9: what is still wrong, for someone to settle.
+   --  A request to stop a task nobody runs is for a run that is over: left,
+   --  it would stop the next run on the task as soon as it began.
+   declare
+      Runtime : constant String := Hostkit.Fs.Join (Stores.Root (Item), "runtime");
+   begin
+      if Ada.Directories.Exists (Runtime) then
+         for Name of Files.Files_In (Runtime) loop
+            if Name'Length > 5 and then Name (Name'First .. Name'First + 4) = "stop."
+              and then Tasks.State_Of (Item, Name (Name'First + 5 .. Name'Last)) /= Tasks.Running
+            then
+               Files.Discard (Hostkit.Fs.Join (Runtime, Name));
+            end if;
+         end loop;
+      end if;
+   end;
+
    declare
       Wrong : constant Consistency.Finding_List := Consistency.Check (Item);
 

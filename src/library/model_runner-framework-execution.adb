@@ -187,6 +187,25 @@ package body Model_Runner.Framework.Execution is
    -- Stopped_For --
    -----------------
 
+   --  Whom a stop request is for, as it says: "" where it names nobody.
+   function Addressed_To (Said : String) return String is
+      Mark : constant String := "for=";
+      At_Mark : constant Natural := Ada.Strings.Fixed.Index (Said, Mark);
+   begin
+      if At_Mark = 0 then
+         return "";
+      end if;
+      declare
+         From : constant Positive := At_Mark + Mark'Length;
+         Upto : Natural := From - 1;
+      begin
+         while Upto < Said'Last and then Said (Upto + 1) not in ASCII.LF | ASCII.CR loop
+            Upto := Upto + 1;
+         end loop;
+         return Said (From .. Upto);
+      end;
+   end Addressed_To;
+
    function Stopped_For return Stop_Reason is
       Here : constant not null Control_Access := Current;
    begin
@@ -220,7 +239,15 @@ package body Model_Runner.Framework.Execution is
                   Read : E.Error_Info;
                begin
                   Files.Read_Text (Request, Said, Read);
-                  if E.Is_Ok (Read) and then Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0 then
+                  --  For another run on the task -- one before this, which
+                  --  ended before it was seen -- it is not this one's: gone,
+                  --  and not heeded.
+                  if E.Is_Ok (Read)
+                    and then Addressed_To (To_String (Said)) /= ""
+                    and then Addressed_To (To_String (Said)) /= To_String (Here.Owner)
+                  then
+                     Here.Reason := Not_Stopped;
+                  elsif E.Is_Ok (Read) and then Ada.Strings.Fixed.Index (To_String (Said), "cancel") > 0 then
                      Here.Reason := Cancel_Requested_Elsewhere;
                   end if;
                   Ada.Directories.Delete_File (Request);
@@ -329,7 +356,8 @@ package body Model_Runner.Framework.Execution is
    procedure Ask_To_Stop
      (Project_Directory : String;
       Task_Id           : String;
-      Cancel            : Boolean := True)
+      Cancel            : Boolean := True;
+      Holder            : String := "")
    is
       Ignored : E.Error_Info;
    begin
@@ -337,7 +365,8 @@ package body Model_Runner.Framework.Execution is
         (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Project_Directory, State_Directory),
                                            "runtime"),
                           "stop." & Task_Id),
-         (if Cancel then "cancel" else "stop"), Ignored);
+         (if Cancel then "cancel" else "stop")
+         & (if Holder = "" then "" else ASCII.LF & "for=" & Holder), Ignored);
    end Ask_To_Stop;
 
    function Cancel_Asked_From_Outside return Boolean

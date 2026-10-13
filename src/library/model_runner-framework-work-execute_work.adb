@@ -988,8 +988,12 @@ begin
 
    --  Ended elsewhere while it ran: what that did stands, and nothing of
    --  this run is added to a task that is no longer its.
+   --  By the lease's record, run out or not: this run has held the project
+   --  throughout, so nobody else can have taken the task, and a lease
+   --  whose time ran out under it -- a long check, a short work.lease --
+   --  is still its own.
    if Tasks.State_Of (Item, Task_Id) /= "running"
-     or else Leases.Holder (Item, Lease_Of (Task_Id)) /= To_String (Result.Agent_Id)
+     or else Leases.Owner_Of (Item, Lease_Of (Task_Id)) /= To_String (Result.Agent_Id)
    then
       Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
       Result.Reason := To_Unbounded_String
