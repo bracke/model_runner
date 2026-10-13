@@ -155,6 +155,16 @@ package Model_Runner.Framework.Agents is
       Result : out Agent;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The root an agent works under: itself, or the first of its ancestors
+   --  with no parent. Walked a step at a time, no ancestor twice and no
+   --  deeper than an agent can be made; a parent that cannot be read, or a
+   --  chain that goes round, has no root to tell, and answers "".
+   --
+   --  @param Item The store.
+   --  @param Id The agent.
+   --  @return The root, or "" where the chain does not hold together.
+   function Root_Of (Item : Stores.Store; Id : String) return String;
+
    --  How many times the helper an agent stands for was run before it: the
    --  agents its retry_of names, one before another. Walked a step at a
    --  time and held to what the harness makes of it -- each a helper that

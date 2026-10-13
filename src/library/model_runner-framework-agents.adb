@@ -664,22 +664,37 @@ package body Model_Runner.Framework.Agents is
       Mine : constant Name_Lists.Vector := Children (Item, Id);
 
       --  Whether a failed child was run again until one of its runs
-      --  completed.
+      --  completed: its reruns, theirs, and so on, each once -- a lineage
+      --  the state holds going round is not one that was made good.
       function Made_Good (Failed : String) return Boolean is
+         Waiting : Name_Lists.Vector;
+         Seen    : Name_Lists.Vector;
       begin
-         for Child of Mine loop
+         Waiting.Append (Failed);
+         Seen.Append (Failed);
+         while not Waiting.Is_Empty loop
             declare
-               Held   : Agent;
-               Status : E.Error_Info;
+               Run : constant String := Waiting.First_Element;
             begin
-               Read (Item, Child, Held, Status);
-               if To_String (Held.Retry_Of) = Failed
-                 and then (To_String (Held.Status) = "completed"
-                           or else (To_String (Held.Status) = "failed"
-                                    and then Made_Good (Child)))
-               then
-                  return True;
-               end if;
+               Waiting.Delete_First;
+               for Child of Mine loop
+                  declare
+                     Held   : Agent;
+                     Status : E.Error_Info;
+                  begin
+                     Read (Item, Child, Held, Status);
+                     if E.Is_Ok (Status) and then To_String (Held.Retry_Of) = Run then
+                        if To_String (Held.Status) = "completed" then
+                           return True;
+                        elsif To_String (Held.Status) = "failed"
+                          and then not Seen.Contains (Child)
+                        then
+                           Seen.Append (Child);
+                           Waiting.Append (Child);
+                        end if;
+                     end if;
+                  end;
+               end loop;
             end;
          end loop;
          return False;
@@ -694,8 +709,21 @@ package body Model_Runner.Framework.Agents is
                Status : E.Error_Info;
             begin
                Read (Item, Child, Held, Status);
-               if To_String (Held.Retry_Of) = Failed then
-                  return True;
+               --  Another helper, whose own lineage holds together: one
+               --  naming itself, or two naming each other, is no later
+               --  run, and the failure stands.
+               if E.Is_Ok (Status) and then To_String (Held.Retry_Of) = Failed
+                 and then Child /= Failed
+               then
+                  declare
+                     Runs  : Natural;
+                     Holds : E.Error_Info;
+                  begin
+                     Retry_Lineage (Item, Child, Runs, Holds);
+                     if E.Is_Ok (Holds) then
+                        return True;
+                     end if;
+                  end;
                end if;
             end;
          end loop;
@@ -821,6 +849,36 @@ package body Model_Runner.Framework.Agents is
       end loop;
       return To_String (Text);
    end Child_Results;
+
+   -------------
+   -- Root_Of --
+   -------------
+
+   function Root_Of (Item : Stores.Store; Id : String) return String is
+      Longest : constant := 1_000;
+      Seen    : Name_Lists.Vector;
+      Here    : Unbounded_String := To_Unbounded_String (Id);
+      Held    : Agent;
+      Read_It : E.Error_Info;
+   begin
+      loop
+         Read (Item, To_String (Here), Held, Read_It);
+         if E.Is_Error (Read_It) then
+            --  The agent asked about, unread, is its own answer as it was;
+            --  an ancestor unread is a chain broken.
+            return (if Seen.Is_Empty then Id else "");
+         elsif Held.Parent = Null_Unbounded_String then
+            return To_String (Here);
+         elsif Seen.Contains (To_String (Held.Parent))
+           or else To_String (Held.Parent) = To_String (Here)
+           or else Natural (Seen.Length) >= Longest
+         then
+            return "";
+         end if;
+         Seen.Append (To_String (Here));
+         Here := Held.Parent;
+      end loop;
+   end Root_Of;
 
    -------------------
    -- Retry_Lineage --

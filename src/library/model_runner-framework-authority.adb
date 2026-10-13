@@ -320,19 +320,35 @@ package body Model_Runner.Framework.Authority is
          return False;
       end Names_It;
 
-      function Overrides (Rule, Other : Statement; Depth : Natural := 0) return Boolean is
+      --  Walked over the statements it reaches, each once: overrides that
+      --  name each other, or many a statement, are a set to search and not
+      --  a tree to unfold.
+      function Overrides (Rule, Other : Statement) return Boolean is
+         use type Ada.Containers.Count_Type;
+         Waiting : Statement_Vectors.Vector;
+         Reached : Statement_Vectors.Vector;
       begin
-         if Rule.Overrides = Null_Unbounded_String or else Depth > 8 then
-            return False;
-         elsif Names_It (Rule, Other.Source) then
-            return True;
-         end if;
-         for Next of From.Statements loop
-            if Next.Subject = Rule.Subject and then Names_It (Rule, Next.Source)
-              and then Overrides (Next, Other, Depth + 1)
-            then
-               return True;
-            end if;
+         Waiting.Append (Rule);
+         Reached.Append (Rule);
+         while Waiting.Length > 0 loop
+            declare
+               Here : constant Statement := Waiting.First_Element;
+            begin
+               Waiting.Delete_First;
+               if Here.Overrides /= Null_Unbounded_String then
+                  if Names_It (Here, Other.Source) then
+                     return True;
+                  end if;
+                  for Next of From.Statements loop
+                     if Next.Subject = Rule.Subject and then Names_It (Here, Next.Source)
+                       and then not (for some Was of Reached => Was.Source = Next.Source)
+                     then
+                        Reached.Append (Next);
+                        Waiting.Append (Next);
+                     end if;
+                  end loop;
+               end if;
+            end;
          end loop;
          return False;
       end Overrides;

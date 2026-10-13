@@ -9,15 +9,9 @@ is
    Put_Back : Name_Lists.Vector;
 
    --  The root of an agent: itself, or the first of its ancestors with no
-   --  parent.
-   function Root_Of (Id : String) return String is
-      Held : Agents.Agent;
-      Read : E.Error_Info;
-   begin
-      Agents.Read (Item, Id, Held, Read);
-      return (if E.Is_Error (Read) or else Held.Parent = Null_Unbounded_String then Id
-              else Root_Of (To_String (Held.Parent)));
-   end Root_Of;
+   --  parent; "" where its chain does not hold together, which no lease
+   --  names, so such an agent is not live and is ended as one left over.
+   function Root_Of (Id : String) return String is (Agents.Root_Of (Item, Id));
 
    --  Whether something is running an agent: its root holds its task.
    function Live (Id : String) return Boolean is

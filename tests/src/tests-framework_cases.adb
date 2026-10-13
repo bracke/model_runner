@@ -2211,6 +2211,33 @@ package body Tests.Framework_Cases is
       begin
          Assert (not Found, "a subject nobody spoke to has a ruling");
       end;
+
+      --  Statements that each say they override all the others: a set to
+      --  search once, not a tree unfolded eight deep -- twelve of them
+      --  were twelve to the eighth calls.
+      declare
+         Round : Au.Statement_List;
+         All_Of : Unbounded_String;
+         Ruled  : Au.Resolution;
+      begin
+         for Number in 1 .. 12 loop
+            Append (All_Of, (if Number = 1 then "" else ",") & "R"
+                    & Ada.Strings.Fixed.Trim (Number'Image, Ada.Strings.Left));
+         end loop;
+         for Number in 1 .. 12 loop
+            Au.Append (Round, Said (Au.Project_Decision,
+                                    "R" & Ada.Strings.Fixed.Trim (Number'Image, Ada.Strings.Left),
+                                    "loop.subject", "value" & Number'Image,
+                                    Overrides => To_String (All_Of)));
+         end loop;
+         Ruled := Au.Resolve (Round);
+         declare
+            Rule : constant Au.Statement := Au.Governing (Ruled, "loop.subject", Found);
+            pragma Unreferenced (Rule);
+         begin
+            Assert (Found, "statements overriding one another left their subject unruled");
+         end;
+      end;
    end Authority_Is_Resolved;
 
    --  What decisions and the configuration say is gathered from the state,
@@ -6907,6 +6934,53 @@ package body Tests.Framework_Cases is
                  "a helper naming itself its own rerun was followed: " & Code_Of (Got));
          Name_Retry (To_String (First), "");
          Assert (not Lineage_Found, "a mended lineage was still found damaged");
+
+         --  A failed required helper naming itself its own rerun: whether
+         --  it was made good is answered, no, rather than asked for ever.
+         declare
+            Value : R.Item;
+            Was   : R.Item;
+            Got   : E.Error_Info;
+            Why   : Unbounded_String;
+         begin
+            S.Read (Store, F.Runtime_Area, "agent." & To_String (First), Value, Got);
+            Was := Value;
+            R.Set (Value, "state", "failed");
+            R.Set (Value, "retry_of", To_String (First));
+            R.Set_Revision (Value, R.Revision (Value) + 1);
+            S.Put (Change, F.Runtime_Area, "agent." & To_String (First), Value);
+            S.Commit (Store, Change, Got);
+            Assert (not Ag.May_Complete (Store, To_String (Root), Why) and then Length (Why) > 0,
+                    "a parent whose required helper failed and names itself its rerun could complete");
+            S.Read (Store, F.Runtime_Area, "agent." & To_String (First), Value, Got);
+            R.Set_Revision (Was, R.Revision (Value) + 1);
+            S.Put (Change, F.Runtime_Area, "agent." & To_String (First), Was);
+            S.Commit (Store, Change, Got);
+         end;
+
+         --  And an agent whose parents go round has no root to tell: what
+         --  recovery asks of it as it opens, answered rather than recursed.
+         declare
+            procedure Name_Parent (Agent_Id, Of_Id : String) is
+               Value : R.Item;
+               Got   : E.Error_Info;
+            begin
+               S.Read (Store, F.Runtime_Area, "agent." & Agent_Id, Value, Got);
+               R.Set (Value, "parent", Of_Id);
+               R.Set_Revision (Value, R.Revision (Value) + 1);
+               S.Put (Change, F.Runtime_Area, "agent." & Agent_Id, Value);
+               S.Commit (Store, Change, Got);
+            end Name_Parent;
+         begin
+            Assert (Ag.Root_Of (Store, To_String (Second)) = To_String (Root),
+                    "a helper's root was not its parent's: " & Ag.Root_Of (Store, To_String (Second)));
+            Name_Parent (To_String (First), To_String (Second));
+            Name_Parent (To_String (Second), To_String (First));
+            Assert (Ag.Root_Of (Store, To_String (Second)) = "",
+                    "an agent whose parents go round was given a root");
+            Name_Parent (To_String (First), To_String (Root));
+            Name_Parent (To_String (Second), To_String (Root));
+         end;
       end;
       Ag.Spawn_Child (Store, Change, To_String (Root), "extra", Ag.Advisory,
                       Pm.Unrestricted, 10, Third, Status);
