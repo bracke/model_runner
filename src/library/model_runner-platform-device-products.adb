@@ -14,6 +14,7 @@ with Model_Runner.Shaders.Low;
 with Model_Runner.Shaders.Low_Dots;
 with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
+with Model_Runner.Shaders.Super;
 
 --  Products on a device, through the same interface the parent opened it
 --  with.
@@ -2811,7 +2812,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super;
+              Model_Runner.Shaders.Super.Row_Product_Super;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -2830,7 +2831,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super5;
+              Model_Runner.Shaders.Super.Row_Product_Super5;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -2849,7 +2850,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super6;
+              Model_Runner.Shaders.Super.Row_Product_Super6;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -2866,15 +2867,15 @@ package body Model_Runner.Platform.Device.Products is
                --  and Q4_K's gate and up at once for one and for a few.
                declare
                   Glu  : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Row_Product_Super_Glu;
+                    Model_Runner.Shaders.Super.Row_Product_Super_Glu;
                   Glus : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Row_Product_Super_Glu_Multi;
+                    Model_Runner.Shaders.Super.Row_Product_Super_Glu_Multi;
                   Four : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Row_Product_Super_Multi;
+                    Model_Runner.Shaders.Super.Row_Product_Super_Multi;
                   Six  : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Row_Product_Super6_Multi;
+                    Model_Runner.Shaders.Super.Row_Product_Super6_Multi;
                   Five : aliased constant Model_Runner.Shaders.Word_Array :=
-                    Model_Runner.Shaders.Row_Product_Super5_Multi;
+                    Model_Runner.Shaders.Super.Row_Product_Super5_Multi;
                begin
                   Request.Size := Interfaces.C.size_t (Four'Length * 4);
                   Request.Code := Four'Address;
@@ -2922,16 +2923,19 @@ package body Model_Runner.Platform.Device.Products is
                if Has_Integer_Dot (On) then
                   declare
                      Dots  : aliased constant Model_Runner.Shaders.Word_Array
-                       := Model_Runner.Shaders.Row_Product_Super_Multi_Dots;
+                       := Model_Runner.Shaders.Super
+                            .Row_Product_Super_Multi_Dots;
                      Glus  : aliased constant Model_Runner.Shaders.Word_Array
-                       := Model_Runner.Shaders
+                       := Model_Runner.Shaders.Super
                             .Row_Product_Super_Glu_Multi_Dots;
                      Round : aliased constant Model_Runner.Shaders.Word_Array
                        := Model_Runner.Shaders.Round_Vectors;
                      Five  : aliased constant Model_Runner.Shaders.Word_Array
-                       := Model_Runner.Shaders.Row_Product_Super5_Multi_Dots;
+                       := Model_Runner.Shaders.Super
+                            .Row_Product_Super5_Multi_Dots;
                      Six   : aliased constant Model_Runner.Shaders.Word_Array
-                       := Model_Runner.Shaders.Row_Product_Super6_Multi_Dots;
+                       := Model_Runner.Shaders.Super
+                            .Row_Product_Super6_Multi_Dots;
                   begin
                      Request.Size := Interfaces.C.size_t (Five'Length * 4);
                      Request.Code := Five'Address;
@@ -2981,7 +2985,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super6_Long;
+              Model_Runner.Shaders.Super.Row_Product_Super6_Long;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -3000,7 +3004,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super6_Mid;
+              Model_Runner.Shaders.Super.Row_Product_Super6_Mid;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -3019,7 +3023,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super_Long;
+              Model_Runner.Shaders.Super.Row_Product_Super_Long;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then
@@ -3038,7 +3042,7 @@ package body Model_Runner.Platform.Device.Products is
             Create : constant Create_Call :=
               To_Create (Point ("vkCreateShaderModule"));
             Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Row_Product_Super5_Long;
+              Model_Runner.Shaders.Super.Row_Product_Super5_Long;
             Request : aliased Shader_Create_Info;
          begin
             if Create /= null then

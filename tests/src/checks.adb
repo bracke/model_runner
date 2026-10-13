@@ -28,6 +28,7 @@ with Model_Runner.Shaders.Low;
 with Model_Runner.Shaders.Low_Dots;
 with Model_Runner.Shaders.Low_Tiles;
 with Model_Runner.Shaders.Attend;
+with Model_Runner.Shaders.Super;
 with Shader_Generation;
 with Tool_Commands;
 with Spec_Conformance;
@@ -6976,36 +6977,45 @@ package body Checks is
 
             Recorded : constant Interfaces.Unsigned_64 :=
               (case Which is
-                  when 1 => Model_Runner.Shaders.Row_Product_Super_Digest,
-                  when 2 => Model_Runner.Shaders.Row_Product_Super5_Digest,
-                  when 3 => Model_Runner.Shaders.Row_Product_Super6_Digest,
+                  when 1 => Model_Runner.Shaders.Super
+                              .Row_Product_Super_Digest,
+                  when 2 => Model_Runner.Shaders.Super
+                              .Row_Product_Super5_Digest,
+                  when 3 => Model_Runner.Shaders.Super
+                              .Row_Product_Super6_Digest,
                   when 4 =>
-                     Model_Runner.Shaders.Row_Product_Super_Long_Digest,
+                     Model_Runner.Shaders.Super.Row_Product_Super_Long_Digest,
                   when 5 =>
-                     Model_Runner.Shaders.Row_Product_Super5_Long_Digest,
+                     Model_Runner.Shaders.Super.Row_Product_Super5_Long_Digest,
                   when 6 =>
-                     Model_Runner.Shaders.Row_Product_Super6_Long_Digest,
+                     Model_Runner.Shaders.Super.Row_Product_Super6_Long_Digest,
                   when 8 =>
-                     Model_Runner.Shaders.Row_Product_Super_Multi_Digest,
+                     Model_Runner.Shaders.Super.Row_Product_Super_Multi_Digest,
                   when 9 =>
-                     Model_Runner.Shaders.Row_Product_Super6_Multi_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super6_Multi_Digest,
                   when 10 =>
-                     Model_Runner.Shaders.Row_Product_Super_Glu_Digest,
+                     Model_Runner.Shaders.Super.Row_Product_Super_Glu_Digest,
                   when 11 =>
-                     Model_Runner.Shaders.Row_Product_Super_Glu_Multi_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super_Glu_Multi_Digest,
                   when 12 =>
-                     Model_Runner.Shaders.Row_Product_Super5_Multi_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super5_Multi_Digest,
                   when 13 =>
-                     Model_Runner.Shaders.Row_Product_Super_Multi_Dots_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super_Multi_Dots_Digest,
                   when 14 =>
-                     Model_Runner.Shaders
+                     Model_Runner.Shaders.Super
                        .Row_Product_Super_Glu_Multi_Dots_Digest,
                   when 15 =>
-                     Model_Runner.Shaders.Row_Product_Super5_Multi_Dots_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super5_Multi_Dots_Digest,
                   when 16 =>
-                     Model_Runner.Shaders.Row_Product_Super6_Multi_Dots_Digest,
+                     Model_Runner.Shaders.Super
+                       .Row_Product_Super6_Multi_Dots_Digest,
                   when others =>
-                     Model_Runner.Shaders.Row_Product_Super6_Mid_Digest);
+                     Model_Runner.Shaders.Super.Row_Product_Super6_Mid_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 

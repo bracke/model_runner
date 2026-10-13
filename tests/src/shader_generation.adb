@@ -324,9 +324,18 @@ package body Shader_Generation is
            and then Ada.Strings.Fixed.Index (Name, "Attention") = Name'First;
       end Is_Attend;
 
+      --  And the k-quants' super-block row kernels to a fifth, once their
+      --  short-row walks left the parent too near that size to take another.
+      function Is_Super (Pair : Shader_Pair) return Boolean is
+         Name : constant String := Ada_Name (Pair.Compiled.all);
+      begin
+         return Ada.Strings.Fixed.Index (Name, "Row_Product_Super") = Name'First;
+      end Is_Super;
+
       function In_Parent (Pair : Shader_Pair) return Boolean
       is (not Is_Low (Pair) and then not Is_Low_Tile (Pair)
-          and then not Is_Attend (Pair) and then not Is_Low_Dots (Pair));
+          and then not Is_Attend (Pair) and then not Is_Low_Dots (Pair)
+          and then not Is_Super (Pair));
 
       --  One child package: every shader Belongs says is its, under the
       --  heading About, where there is any.
@@ -454,6 +463,14 @@ package body Shader_Generation is
         (Root & "/src/library/model_runner-shaders-low_tiles.ads",
          "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles'",
          Is_Low_Tile'Access, Good);
+      if not Good then
+         return;
+      end if;
+
+      Write_Child
+        (Root & "/src/library/model_runner-shaders-super.ads",
+         "Model_Runner.Shaders.Super", "The k-quants' super-block row kernels'",
+         Is_Super'Access, Good);
       if not Good then
          return;
       end if;
