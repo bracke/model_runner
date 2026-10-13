@@ -321,9 +321,12 @@ package body Model_Runner.Framework.Work is
    -----------------
 
    procedure Note_Undone
-     (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info)
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Copy    : String;
+      Status  : out Model_Runner.Errors.Error_Info)
    is
-      Change : Stores.Transaction;
       Held   : Records.Item;
       Got    : E.Error_Info;
       Event  : Unbounded_String;
@@ -341,6 +344,14 @@ package body Model_Runner.Framework.Work is
             Stores.Spoil (Change, Status);
          end if;
       end if;
+   end Note_Undone;
+
+   procedure Note_Undone
+     (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+   begin
+      Note_Undone (Item, Change, Task_Id, Copy, Status);
       Stores.Commit (Item, Change, Status);
    end Note_Undone;
 
@@ -349,10 +360,12 @@ package body Model_Runner.Framework.Work is
    -------------------
 
    procedure Note_Restored
-     (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector;
-      Status : out Model_Runner.Errors.Error_Info)
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Files   : Name_Lists.Vector;
+      Status  : out Model_Runner.Errors.Error_Info)
    is
-      Change  : Stores.Transaction;
       Held    : Records.Item;
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
       Prints  : Unbounded_String;
@@ -375,7 +388,18 @@ package body Model_Runner.Framework.Work is
          Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
       end loop;
       Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
-      Stores.Commit (Item, Change, Status);
+   end Note_Restored;
+
+   procedure Note_Restored
+     (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Change : Stores.Transaction;
+   begin
+      Note_Restored (Item, Change, Task_Id, Files, Status);
+      if E.Is_Ok (Status) then
+         Stores.Commit (Item, Change, Status);
+      end if;
    end Note_Restored;
 
    ---------------

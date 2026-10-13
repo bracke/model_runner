@@ -6666,6 +6666,11 @@ package body Model_Runner.CLI.Tasks is
                                  Got   : E.Error_Info;
                                  Noted : E.Error_Info := E.Success;
 
+                                 --  Everything said of whose work the project
+                                 --  holds, kept as one change or not at all.
+                                 Notes  : Model_Runner.Framework.Stores.Transaction;
+                                 Marked : Boolean := False;
+
                                  procedure Keep_Noted (Said : E.Error_Info) is
                                  begin
                                     if E.Is_Error (Said) and then E.Is_Ok (Noted) then
@@ -6676,15 +6681,15 @@ package body Model_Runner.CLI.Tasks is
                                  --  Its work gone from the project: kept in its
                                  --  history, so nothing there is credited to it.
                                  if Undo and then State /= "" then
-                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, Name, Got);
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Notes, Owner, Name, Got);
                                     Keep_Noted (Got);
                                  --  Its work back in the project: undone no more,
                                  --  and the files as they are now its.
                                  elsif State /= "" then
-                                    Model_Runner.Framework.Work.Note_Undone (Store, Owner, "", Got);
+                                    Model_Runner.Framework.Work.Note_Undone (Store, Notes, Owner, "", Got);
                                     Keep_Noted (Got);
                                     Model_Runner.Framework.Work.Note_Restored
-                                      (Store, Owner, Ws.Kept_Files (Store, Name), Got);
+                                      (Store, Notes, Owner, Ws.Kept_Files (Store, Name), Got);
                                     Keep_Noted (Got);
                                  end if;
                                  --  Work a restore brings back of another task --
@@ -6701,11 +6706,12 @@ package body Model_Runner.CLI.Tasks is
                                                        .Contains (File)
                                           then
                                              if Now_Holder = Other then
-                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, "", Got);
+                                                Model_Runner.Framework.Work.Note_Undone (Store, Notes, Other, "", Got);
                                                 Keep_Noted (Got);
                                              elsif Now_Holder /= "" and then State_Field (Other, "undone_by") = ""
                                              then
-                                                Model_Runner.Framework.Work.Note_Undone (Store, Other, Name, Got);
+                                                Model_Runner.Framework.Work.Note_Undone
+                                                  (Store, Notes, Other, Name, Got);
                                                 Keep_Noted (Got);
                                              end if;
                                           end if;
@@ -6714,8 +6720,15 @@ package body Model_Runner.CLI.Tasks is
                                  end loop;
                                  --  The files kept with what is said of whose they
                                  --  are, or put back without it.
+                                 --  Kept once, and the files kept with it where
+                                 --  it is marked -- whatever fails after, the
+                                 --  next opening finishes it -- or put back.
+                                 if E.Is_Ok (Noted) then
+                                    Model_Runner.Framework.Stores.Commit (Store, Notes, Got, Marked);
+                                    Keep_Noted (Got);
+                                 end if;
                                  Model_Runner.Framework.Workspaces.Settle_Restore
-                                   (Store, Name, Kept => E.Is_Ok (Noted), Status => Got);
+                                   (Store, Name, Kept => Marked, Status => Got);
                                  Keep_Noted (Got);
                                  if E.Is_Error (Noted) then
                                     Fail (Noted);

@@ -6458,6 +6458,39 @@ package body Tests.Framework_Cases is
                  "a taking in committed was not kept whole, or its journal stayed");
       end;
 
+      --  Its commit failing once its change is marked -- which the next
+      --  opening finishes -- the files stay with it: put back, they would
+      --  leave records saying the work is in and a project without it.
+      Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Marked_File : constant String := Fresh_Root (Store) & "/src/marked.adb";
+         Settled     : E.Error_Info;
+         Marked      : Boolean;
+         Report      : S.Recovery_Report;
+         Held        : Ws.Workspace;
+         Project_Dir : constant String := Fresh_Root (Store);
+      begin
+         Put_File (To_String (Made.Path) & "/src/marked.adb", "marked");
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         Assert (E.Is_Ok (Status), "a workspace to take in was refused: " & Code_Of (Status));
+         S.Crash_At (S.Fail_After_Mark);
+         S.Commit (Store, Change, Status, Marked);
+         Assert (E.Is_Error (Status) and then Marked,
+                 "a commit failing after its mark did not say it was marked: " & Code_Of (Status));
+         Ws.Settle_Integration (Store, To_String (Made.Id), Kept => Marked, Status => Settled);
+         Assert (Dirs.Exists (Marked_File),
+                 "the files of a change marked and not finished were put back");
+         Change := S.No_Changes;
+         S.Close (Store);
+         S.Open (Store, Project_Dir, Report, Status);
+         Ws.Read (Store, To_String (Made.Id), Held, Status);
+         Assert (E.Is_Ok (Status) and then To_String (Held.Status) = "integrated"
+                 and then Dirs.Exists (Marked_File),
+                 "the records and the files of a marked change disagree after opening: "
+                 & To_String (Held.Status));
+      end;
+
       --  A project with a file that cannot be read is not copied into a
       --  workspace without it: refused, the file named, rather than a copy
       --  that is missing it and a baseline that does not know.
@@ -6477,6 +6510,12 @@ package body Tests.Framework_Cases is
                                (Model_Runner.Text.To_String (Said.Text_Value), "src/secret.adb") > 0,
                     "a workspace was made of a project with a file that cannot be read: "
                     & Code_Of (Status));
+            --  And what it began is gone with it: its number goes with the
+            --  change dropped, and the next workspace would be given this
+            --  one's leftover tree.
+            Assert (Length (Made.Path) = 0
+                    or else not Dirs.Exists (Dirs.Containing_Directory (To_String (Made.Path))),
+                    "a workspace that could not be made left its directory behind");
          end if;
          GNAT.OS_Lib.Set_Readable (Secret);
          Dirs.Delete_File (Secret);
@@ -7773,6 +7812,7 @@ package body Tests.Framework_Cases is
          & "scalar work.max_workspaces = 1" & LF);
       declare
          Id : Unbounded_String;
+         First_Slot : Unbounded_String;
          Changes  : Cf.Value_Maps.Map;
          Planned  : Cf.Change_Plan;
          Revision : Natural;
@@ -7783,6 +7823,9 @@ package body Tests.Framework_Cases is
          for Round in 1 .. 2 loop
             Tk.Create (Store, Change, Fields ("Slot" & Round'Image, "analysis"), "user", "",
                        Id, Status);
+            if Round = 1 then
+               First_Slot := Id;
+            end if;
             S.Commit (Store, Change, Status);
             Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
             S.Commit (Store, Change, Status);
@@ -7802,6 +7845,25 @@ package body Tests.Framework_Cases is
                  or else Iv.State_Of (Store, To_String (Done.Invocation_Id)) = "failed",
                  "a model call never made was left started: "
                  & Iv.State_Of (Store, To_String (Done.Invocation_Id)));
+
+         --  The task holding the one slot, run again: the workspace its
+         --  earlier attempt left is set aside and kept as that before the
+         --  new one is counted, so the slot it frees is the slot it takes.
+         Tk.Move (Store, Change, To_String (First_Slot), "blocked", "set aside", Status => Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (First_Slot), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (Tk.State_Of (Store, To_String (First_Slot)) = "accepted",
+                 "the task holding the slot could not be accepted again: "
+                 & Tk.State_Of (Store, To_String (First_Slot)) & " " & Code_Of (Status));
+         Wk.Execute (Store, To_String (First_Slot),
+                     Scripted_Agent'(File => Null_Unbounded_String,
+                                     Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Reason) /= "no workspace slot is free",
+                 "a task's own earlier workspace kept the slot it was to free: "
+                 & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       end;
       S.Close (Store);
    end Schemas_Retention_Adapter_And_Slots;

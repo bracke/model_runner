@@ -675,6 +675,22 @@ package Model_Runner.Framework.Work is
    procedure Note_Undone
      (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info);
 
+   --  Note_Undone, staged in a change of the caller's rather than kept on
+   --  its own: what a restore says of several tasks is kept as one, or not
+   --  at all.
+   --
+   --  @param Item The store.
+   --  @param Change The change it is staged in.
+   --  @param Task_Id The task.
+   --  @param Copy The kept copy put back; "" for its work back.
+   --  @param Status A failure staging it; the change is then spoiled.
+   procedure Note_Undone
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Copy    : String;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Note in a task's history that a copy of its work was put back in the
    --  project: the files as they are now are its, as if taken in.
    --
@@ -686,6 +702,20 @@ package Model_Runner.Framework.Work is
    procedure Note_Restored
      (Item : in out Stores.Store; Task_Id : String; Files : Name_Lists.Vector;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  Note_Restored, staged in a change of the caller's.
+   --
+   --  @param Item The store.
+   --  @param Change The change it is staged in.
+   --  @param Task_Id The task.
+   --  @param Files The files put back, as the project names them.
+   --  @param Status A failure reading the task.
+   procedure Note_Restored
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Files   : Name_Lists.Vector;
+      Status  : out Model_Runner.Errors.Error_Info);
 
    --  The task whose work a file holds now, by what it holds: the one whose
    --  taking in -- or a copy of its work put back -- left it just so.

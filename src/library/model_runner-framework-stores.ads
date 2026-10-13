@@ -360,8 +360,12 @@ package Model_Runner.Framework.Stores is
    --  crash, and a test asserts the state holds together after either.
    --  Mid_Integration stops a workspace's taking in with some of its files
    --  written and the rest not, its records not committed: the opening
-   --  after puts the files back.
-   type Crash_Point is (No_Crash, After_Journal, After_Mark, Mid_Apply, Mid_Integration);
+   --  after puts the files back. Fail_After_Mark is not a crash: the commit
+   --  returns a failure once its change is marked, as a device that fails
+   --  while the change is applied would have it -- which the next opening
+   --  finishes.
+   type Crash_Point is
+     (No_Crash, After_Journal, After_Mark, Mid_Apply, Mid_Integration, Fail_After_Mark);
 
    --  Raised where a commit is stopped short at a Crash_Point.
    Simulated_Crash : exception;

@@ -1197,6 +1197,13 @@ package body Model_Runner.Framework.Stores is
          Mark (Item, Status);
       end if;
       Crash_Here (After_Mark);
+      --  For a test: failed once marked, the change left for the next
+      --  opening to finish.
+      if E.Is_Ok (Status) and then Crash_Armed = Fail_After_Mark then
+         Crash_Armed := No_Crash;
+         Write_Failed (Journal_Directory (Root (Item)), Status);
+         return;
+      end if;
       if E.Is_Ok (Status) then
          Finish (Item, Status);
       end if;
