@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 
@@ -17,6 +18,16 @@ package body Model_Runner.CLI.Checkpoint is
    procedure Save
      (Path : String; Messages : Model_Runner.Conversation.History)
    is
+      Ignored : E.Error_Info;
+   begin
+      Save (Path, Messages, Ignored);
+   end Save;
+
+   procedure Save
+     (Path     : String;
+      Messages : Model_Runner.Conversation.History;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
       File : Stream_IO.File_Type;
@@ -27,6 +38,7 @@ package body Model_Runner.CLI.Checkpoint is
          US.Append (Buf, T.Image (Long_Long_Integer (S'Length)) & " " & S);
       end LP;
    begin
+      Status := E.Success;
       for I in 1 .. Conv.Length (Messages) loop
          declare
             Role  : constant String :=
@@ -70,10 +82,13 @@ package body Model_Runner.CLI.Checkpoint is
       end;
       Close (File);
    exception
-      when others =>
+      when Failure : others =>
          if Is_Open (File) then
             Close (File);
          end if;
+         Status := E.Make (E.IO_Write_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
    end Save;
 
    ----------

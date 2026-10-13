@@ -143,7 +143,13 @@ begin
          end;
       end loop;
       for Line of Said.Changes loop
-         Of_Each.Append (Made_By (Line (Line'First + 3 .. Line'Last)));
+         --  A rename is by whoever made the file it is now.
+         declare
+            Paths : constant String := Line (Line'First + 3 .. Line'Last);
+            Arrow : constant Natural := Ada.Strings.Fixed.Index (Paths, " -> ");
+         begin
+            Of_Each.Append (Made_By (if Arrow = 0 then Paths else Paths (Arrow + 4 .. Paths'Last)));
+         end;
          if not Is_State (Line) and then not Is_Nested_State (Line)
            and then not Groups.Contains (Of_Each.Last_Element)
          then

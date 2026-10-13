@@ -32,6 +32,19 @@ begin
          end loop;
          Command.Template_Name := T.To_Bounded (To_String (Template));
       end;
+      --  A home directory named as a shell names it: ~ and ~/x are under
+      --  HOME, not a directory called ~.
+      declare
+         Given : constant String := T.To_String (Command.Project_Directory);
+      begin
+         if Given'Length >= 1 and then Given (Given'First) = '~'
+           and then (Given'Length = 1 or else Given (Given'First + 1) = '/')
+           and then Ada.Environment_Variables.Exists ("HOME")
+         then
+            Command.Project_Directory := T.To_Bounded
+              (Ada.Environment_Variables.Value ("HOME") & Given (Given'First + 1 .. Given'Last));
+         end if;
+      end;
       --  A directory named relative is from where the session was
       --  started, as completion and /bootstrap take it.
       declare

@@ -1,7 +1,9 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Command_Line;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
@@ -14,39 +16,46 @@ with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Stores is
 
-   --  The records commits wrote, in the order written, each as its root
-   --  and its name a tab apart: what Restore_State leaves as the
-   --  harness's own. Several tasks of one session commit, so it is guarded.
+   --  The records commits wrote, each as its root and its name a tab
+   --  apart, with the number of the commit that last wrote it: what
+   --  Restore_State leaves as the harness's own. One entry a record, so it
+   --  grows with the records, not the commits. Several tasks of one
+   --  session commit, so it is guarded.
+   package Seen_At is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Natural, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
    protected Written is
       procedure Add (Root_Path : String; Names : Name_Lists.Vector);
       function Count return Natural;
       function Since (Root_Path : String; From : Natural) return Name_Lists.Vector;
    private
-      Lines : Name_Lists.Vector;
+      Commits : Natural := 0;
+      Last    : Seen_At.Map;
    end Written;
 
    protected body Written is
       procedure Add (Root_Path : String; Names : Name_Lists.Vector) is
       begin
+         Commits := Commits + 1;
          for Name of Names loop
-            Lines.Append (Root_Path & ASCII.HT & Name);
+            Last.Include (Root_Path & ASCII.HT & Name, Commits);
          end loop;
       end Add;
 
-      function Count return Natural is (Natural (Lines.Length));
+      function Count return Natural is (Commits);
 
       function Since (Root_Path : String; From : Natural) return Name_Lists.Vector is
          Result : Name_Lists.Vector;
          Prefix : constant String := Root_Path & ASCII.HT;
       begin
-         for Index in From + 1 .. Natural (Lines.Length) loop
+         for Position in Last.Iterate loop
             declare
-               Line : constant String := Lines (Index);
+               Key : constant String := Seen_At.Key (Position);
             begin
-               if Line'Length > Prefix'Length
-                 and then Line (Line'First .. Line'First + Prefix'Length - 1) = Prefix
+               if Seen_At.Element (Position) > From and then Key'Length > Prefix'Length
+                 and then Key (Key'First .. Key'First + Prefix'Length - 1) = Prefix
                then
-                  Result.Append (Line (Line'First + Prefix'Length .. Line'Last));
+                  Result.Append (Key (Key'First + Prefix'Length .. Key'Last));
                end if;
             end;
          end loop;
@@ -1228,11 +1237,17 @@ package body Model_Runner.Framework.Stores is
    -- Commit --
    ------------
 
-   procedure Commit
-     (Item   : in out Store;
-      Change : in out Transaction;
-      Status : out Model_Runner.Errors.Error_Info) is
+   --  A commit, saying whether this change's own mark was made: failed
+   --  after it, the journal holds this change for the next opening;
+   --  failed before -- a leftover not finished first among them -- it
+   --  holds none of it, whatever journal is there.
+   procedure Commit_Marking
+     (Item     : in out Store;
+      Change   : in out Transaction;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Own_Mark : out Boolean) is
    begin
+      Own_Mark := False;
       Status := E.Success;
       if E.Is_Error (Change.Spoiled) then
          Status := Change.Spoiled;
@@ -1270,6 +1285,7 @@ package body Model_Runner.Framework.Stores is
       Crash_Here (After_Journal);
       if E.Is_Ok (Status) then
          Mark (Item, Status);
+         Own_Mark := E.Is_Ok (Status);
       end if;
       Crash_Here (After_Mark);
       --  For a test: failed once marked, the change left for the next
@@ -1286,19 +1302,31 @@ package body Model_Runner.Framework.Stores is
          Change.Operations.Clear;
          Change.Id := Null_Unbounded_String;
       end if;
+   end Commit_Marking;
+
+   procedure Commit
+     (Item   : in out Store;
+      Change : in out Transaction;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Own_Mark : Boolean;
+   begin
+      Commit_Marking (Item, Change, Status, Own_Mark);
    end Commit;
 
    procedure Commit
      (Item   : in out Store;
       Change : in out Transaction;
       Status : out Model_Runner.Errors.Error_Info;
-      Marked : out Boolean) is
+      Marked : out Boolean)
+   is
+      Own_Mark : Boolean;
    begin
-      Commit (Item, Change, Status);
-      --  Failed after the mark, the journal holds the marked change, which
-      --  the next opening rolls forward.
-      Marked := E.Is_Ok (Status)
-        or else Dirs.Exists (Join (Journal_Directory (Root (Item)), Manifest_File));
+      Commit_Marking (Item, Change, Status, Own_Mark);
+      --  Failed after its own mark, the journal holds this change, which
+      --  the next opening rolls forward; another's left there is not it.
+      Marked := E.Is_Ok (Status) or else (Own_Mark and then Dirs.Exists
+                                             (Join (Journal_Directory (Root (Item)), Manifest_File)));
    end Commit;
 
    ---------------------------------------------------------------------------
@@ -1750,6 +1778,12 @@ package body Model_Runner.Framework.Stores is
                --  Nor the journal: a change under way, or one left for the
                --  next opening, is the commit's own, put right by it.
                if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads" | "runtime/journal"
+                 --  Nor what a taking in holds while it is under way: its
+                 --  journal's own to settle, as the store's is. What work
+                 --  is told by -- before-, kept- -- stays held: an agent
+                 --  could write it to hide what it did.
+                 and then not (Under = "runtime"
+                               and then Ada.Strings.Fixed.Index (Name, "integrating-") = Name'First)
                  and then not (Under = "workspaces")
                  and then not (Under = "runtime"
                                and then (Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First
@@ -1760,6 +1794,8 @@ package body Model_Runner.Framework.Stores is
                   Gather (Root, Relative, Into);
                end if;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
+              and then not (Under = "runtime"
+                            and then Ada.Strings.Fixed.Index (Name, "integrating-") = Name'First)
               and then Relative not in "runtime/lock" | "runtime/lock.holder" | "runtime/written.log"
                                      | "runtime/harness.log" | "runtime/consistency.said"
               and then not (Relative'Length > 13

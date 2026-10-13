@@ -1273,6 +1273,7 @@ package body Model_Runner.Framework.Workspaces is
    --  try; all of it put back, the journal goes.
    procedure Roll_Back (Item : Stores.Store; Id : String; Status : out E.Error_Info) is
       Text    : Unbounded_String;
+      Hand    : Unbounded_String;
       Lines   : Name_Lists.Vector;
       Read_It : E.Error_Info;
       Left    : Unbounded_String;
@@ -1349,7 +1350,13 @@ package body Model_Runner.Framework.Workspaces is
                   Target : constant String := Hostkit.Fs.Join (Project, Path);
                   Done   : Boolean := True;
                begin
-                  if Changed_Since (Path, Before_Absent => Fields (2) = "absent") then
+                  if Changed_Since (Path, Before_Absent => Fields (2) = "absent")
+                    and then (Fields (2) = "absent" or else Dirs.Exists (Saved_Of (Item, Id, Path)))
+                  then
+                     --  A person's change since: theirs, left and said --
+                     --  not a putting back that failed, kept for ever.
+                     Append (Hand, (if Length (Hand) = 0 then "" else ", ") & Path);
+                  elsif Changed_Since (Path, Before_Absent => Fields (2) = "absent") then
                      Done := False;
                   elsif Fields (2) = "absent" then
                      Done := Files.Delete_If_Present (Target);
@@ -1381,12 +1388,22 @@ package body Model_Runner.Framework.Workspaces is
          Status := E.Make (E.Framework_Transaction_Failed);
          E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
          E.Add_Text (Status, "detail", "what " & Id & " took in could not all be put back -- "
-                     & "not read, not written, or changed by hand since: " & To_String (Left));
+                     & "not read or not written: " & To_String (Left)
+                     & (if Length (Hand) = 0 then ""
+                        else "; and changed by hand since, so left as they are: " & To_String (Hand)));
          return;
       end if;
       Files.Discard (Journal_Of (Item, Id));
       Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
       Files.Discard_Tree (Journal_Of (Item, Id) & ".joined");
+      --  All else put back; what a person changed since is theirs, and
+      --  said -- the journal done with, so nothing waits on it.
+      if Length (Hand) > 0 then
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
+         E.Add_Text (Status, "detail", "what " & Id & " took in was put back but for files changed by hand"
+                     & " since, which are left as they are -- look at each: " & To_String (Hand));
+      end if;
    end Roll_Back;
 
    --  A journal begun for files about to be written in the project: each
@@ -1467,7 +1484,10 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end loop;
       Files.Write_Whole (Journal_Of (Item, Id), To_String (Journal), Status);
+      --  Not kept, it is not left: a journal there without its copies
+      --  would read every file as changed by hand.
       if E.Is_Error (Status) then
+         Files.Discard (Journal_Of (Item, Id));
          Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
       end if;
    end Begin_Journal;

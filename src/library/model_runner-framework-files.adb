@@ -189,7 +189,10 @@ package body Model_Runner.Framework.Files is
       begin
          Model_Runner.Tools.Editing.Replace (Path, Text, Put);
          Status := E.Success;
-         if Put.Failed or else not Put.Durable then
+         --  A file not made durable is refused before it is put in place
+         --  (Replace); once in place, it is written -- a folder that would
+         --  not sync after is no write that failed.
+         if Put.Failed then
             Write_Failed (Path, Status);
          end if;
       end;

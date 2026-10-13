@@ -1092,6 +1092,35 @@ package body Tests.Framework_Cases is
          Tp.Compose (Holding, "trio", Made, Status);
          Assert (E.Is_Ok (Status), "an override after two that disagree was a conflict: "
                  & Code_Of (Status));
+         --  What the template chosen says itself is not overridden by one
+         --  it includes.
+         Tp.Add (Holding, Parsed ("template = own" & LF & "name = O" & LF
+                                  & "description = D" & LF & "version = 1" & LF
+                                  & "includes = first" & LF & "scalar k = mine" & LF));
+         Tp.Compose (Holding, "own", Made, Status);
+         Assert (Status.Code = E.Framework_Template_Conflict,
+                 "an included template overrode what the template chosen says itself: " & Code_Of (Status));
+      end;
+
+      --  A permission as a template writes it is held to what /reconfigure
+      --  holds one to; and one that does not read grants nothing.
+      declare
+         Holding : Tp.Registry;
+         Made    : Tp.Composition;
+         Given   : Cf.Value_Maps.Map;
+         Planned : Cf.Plan;
+         Done    : Cf.Outcome;
+         Store   : S.Store;
+      begin
+         Tp.Add (Holding, Parsed ("template = loud" & LF & "name = L" & LF
+                                  & "description = D" & LF & "version = 1" & LF
+                                  & "map permission.project.use_network = Off" & LF));
+         Tp.Compose (Holding, "loud", Made, Status);
+         Cf.Prepare (Made, Fresh ("loud-permission"), Given, Planned, Status);
+         if E.Is_Ok (Status) then
+            Cf.Initialize (Store, Fresh ("loud-permission"), Planned, Done, Status);
+         end if;
+         Assert (E.Is_Error (Status), "a template's permission that does not read as one was taken");
       end;
 
       Tp.Add (Registry, Parsed ("template = loop-a" & LF & "name = A" & LF & "description = D" & LF
@@ -7098,6 +7127,24 @@ package body Tests.Framework_Cases is
       Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
               "the intersection with nothing granted something");
 
+      --  Specifications unscoped are where specifications are kept: met
+      --  with roots elsewhere, they are no way into code there.
+      declare
+         Specs_Only : Pm.Permission_Set := Pm.Nothing;
+         Into_Src   : Pm.Permission_Set := Pm.Nothing;
+      begin
+         Specs_Only (Pm.Write_Specs) := (Granted => True, others => <>);
+         Into_Src (Pm.Write_Specs) := (Granted => True, others => <>);
+         Into_Src (Pm.Write_Specs).Roots.Append ("src/");
+         Assert (not Pm.Allows (Pm.Intersect (Specs_Only, Into_Src), Pm.Write_Specs, "src/x.adb")
+                 and then Pm.Allows (Pm.Intersect (Specs_Only, Specs_Only), Pm.Write_Specs, "docs/x.md"),
+                 "write_specs met with roots reached past where specifications are kept");
+         Into_Src (Pm.Write_Specs).Roots.Append ("docs/api/");
+         Assert (Pm.Allows (Pm.Intersect (Specs_Only, Into_Src), Pm.Write_Specs, "docs/api/x.md")
+                 and then not Pm.Allows (Pm.Intersect (Into_Src, Specs_Only), Pm.Write_Specs, "src/y.adb"),
+                 "write_specs met with roots lost the specifications' place within them");
+      end;
+
       --  A kind's capability turned off by /reconfigure stays off, written
       --  so, and the rest of what the kind may do is the project's still.
       declare
@@ -11160,6 +11207,10 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status) and then Said_Back,
                  "a configuration that could not be read was not put back from its history: "
                  & Code_Of (Status));
+         --  Put back as it was last, not as it was first: the revision the
+         --  recovery policy came in with stands.
+         Assert (R.Get (Config, "scalar.recovery.running") = "accepted",
+                 "a configuration was put back from an earlier revision than its last");
          Assert (Dirs.Exists (S.Root (Store) & "/runtime/config-set-aside-1.rec")
                  and then Read_Whole (S.Root (Store) & "/runtime/config-set-aside-1.rec") = "model_runner-rec",
                  "a damaged configuration was replaced without being kept aside");

@@ -47,7 +47,7 @@ ordinal is never reused, not because they might appear.
 | --- | --- | --- | --- | --- |
 | `MR-IO-0001` | `error.io.open_failed` | recovery_user_correctable | 6 | raised |
 | `MR-IO-0002` | `error.io.read_failed` | recovery_user_correctable | 6 | raised |
-| `MR-IO-0003` | `error.io.write_failed` | recovery_user_correctable | 6 | reserved |
+| `MR-IO-0003` | `error.io.write_failed` | recovery_user_correctable | 6 | raised |
 | `MR-IO-0004` | `error.io.file_too_large` | recovery_resource_limited | 6 | raised |
 | `MR-IO-0005` | `error.io.not_a_regular_file` | recovery_user_correctable | 6 | raised |
 | `MR-IO-0006` | `error.io.invalid_utf8` | recovery_user_correctable | 6 | raised |

@@ -2534,7 +2534,20 @@ package body Model_Runner.Tools.Builtin is
                   There : constant String :=
                     Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base));
                begin
-                  if There /= "" and then not (Self.Whole.Has (Path) and then Self.Whole.Get (Path) = There) then
+                  --  One that cannot be read whole -- too large, not
+                  --  text -- cannot have been seen whole: not written over
+                  --  whole either. A directory is the tool's to refuse.
+                  if There = ""
+                    and then Ada.Directories."="
+                               (Ada.Directories.Kind
+                                  (Model_Runner.Tools.Editing.On_Disk (U.To_String (Self.Base), Spelt)),
+                                Ada.Directories.Ordinary_File)
+                  then
+                     return Failure
+                       (Spelt & " is there and cannot be read whole -- too large, or not text -- so it is"
+                        & " not written over whole: change a part of it with edit_file");
+                  elsif There /= "" and then not (Self.Whole.Has (Path) and then Self.Whole.Get (Path) = There)
+                  then
                      return Failure
                        (Spelt & " is there and you have not read the whole of it as it is now, so"
                         & " writing it whole would lose what you did not see: read_file it, or change"

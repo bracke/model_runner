@@ -885,12 +885,17 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
             else
                declare
-                  Path : constant String := Line (Asked.First .. Asked.Last);
+                  Path  : constant String := Line (Asked.First .. Asked.Last);
+                  Wrote : E.Error_Info;
                begin
-                  Model_Runner.CLI.Checkpoint.Save (Path, Messages);
-                  Pres.Put_Note
-                    (Screen, "cli.interactive.saved",
-                     [Loc.Named ("detail", Path)]);
+                  Model_Runner.CLI.Checkpoint.Save (Path, Messages, Wrote);
+                  if E.Is_Error (Wrote) then
+                     Pres.Report (Screen, Wrote);
+                  else
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.saved",
+                        [Loc.Named ("detail", Path)]);
+                  end if;
                end;
             end if;
 
@@ -902,15 +907,24 @@ package body Model_Runner.CLI.Interactive is
                   Path    : constant String := Line (Asked.First .. Asked.Last);
                   Loaded  : Boolean;
                   Outcome : E.Error_Info;
+                  Trial   : Conv.History;
                begin
+                  --  Read first on its own: a file that will not load leaves
+                  --  the conversation as it is, not gone.
+                  Conv.Open (Trial, Bounds, Outcome);
+                  if E.Is_Ok (Outcome) then
+                     Model_Runner.CLI.Checkpoint.Load (Path, Trial, Loaded, Outcome);
+                  end if;
                   --  Loading replaces the conversation, so the old one goes
                   --  and the cached positions with it.
-                  Conv.Clear (Messages);
-                  Model_Runner.CLI.Checkpoint.Load
-                    (Path, Messages, Loaded, Outcome);
-                  L.Reset (Session);
-                  Model_Runner.CLI.Pictures.Release (Pictures);
-                  Have_Stats := False;
+                  if E.Is_Ok (Outcome) and then Loaded then
+                     Conv.Clear (Messages);
+                     Model_Runner.CLI.Checkpoint.Load
+                       (Path, Messages, Loaded, Outcome);
+                     L.Reset (Session);
+                     Model_Runner.CLI.Pictures.Release (Pictures);
+                     Have_Stats := False;
+                  end if;
                   if E.Is_Error (Outcome) then
                      Pres.Report (Screen, Outcome);
                   elsif not Loaded then

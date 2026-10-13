@@ -33,10 +33,10 @@ package body Model_Runner.CLI.Completion is
 
    package Sorting is new Names.Generic_Sorting;
 
-   --  The project's own commands, beside the session's.
-   Project_Commands : constant String :=
-     " /init /bootstrap /state /config /reconfigure /task /accept /reject /work /cancel /check /req /decision"
-     & " /spec /result /scan /tree /sym /refs /deps /users /impact /trace /git /sandbox /instruct ";
+   --  The project's own commands, beside the session's: from the table
+   --  they are run from, so none is left out.
+   function Project_Commands return String
+   is (Model_Runner.CLI.Project_Commands.Command_Names);
 
    --  Words a space apart, as a list.
    function Words_Of (Text : String) return Names.Vector is
@@ -67,7 +67,7 @@ package body Model_Runner.CLI.Completion is
        elsif Command = "/reconfigure" then "add remove"
        elsif Command = "/result" then "dismiss dismissed restore"
        elsif Command = "/instruct" then "withdraw"
-       elsif Command = "/sandbox" then "on off"
+       elsif Command = "/sandbox" then "off"
        elsif Command = "/check" then "consistency"
        else "");
 
@@ -774,8 +774,10 @@ package body Model_Runner.CLI.Completion is
             end if;
             Offer_Words ("model= steps= profile=");
          elsif Command = "/cancel" and then Position = 2 then
+            --  As /cancel takes them: a candidate is rejected, not
+            --  cancelled.
             for Id of Tk.List (Store) loop
-               if Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected" then
+               if Tk.State_Of (Store, Id) not in "complete" | "cancelled" | "rejected" | "candidate" then
                   Offer (Id);
                end if;
             end loop;

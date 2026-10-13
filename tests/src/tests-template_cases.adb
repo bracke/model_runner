@@ -2025,6 +2025,10 @@ package body Tests.Template_Cases is
          Assert (Conv.Parts_At (Talk, 2) = "",
                  "a turn given as words has parts");
 
+         --  One that cannot be written is said not written.
+         Model_Runner.CLI.Checkpoint.Save ("/nonexistent-directory/x.chk", Talk, Status);
+         Assert (Status.Code = E.IO_Write_Failed, "a conversation that could not be saved was said saved");
+         Status := E.Success;
          Model_Runner.CLI.Checkpoint.Save (File, Talk);
          Conv.Open (Again, Status => Status);
          Model_Runner.CLI.Checkpoint.Load (File, Again, Loaded, Status);

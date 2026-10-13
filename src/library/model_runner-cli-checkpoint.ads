@@ -24,6 +24,17 @@ package Model_Runner.CLI.Checkpoint is
    procedure Save
      (Path : String; Messages : Model_Runner.Conversation.History);
 
+   --  The same, saying whether it was written: what a person asked to be
+   --  saved is not said saved when it was not.
+   --
+   --  @param Path File to write.
+   --  @param Messages Conversation to save.
+   --  @param Status IO_Write_Failed where it could not be written.
+   procedure Save
+     (Path     : String;
+      Messages : Model_Runner.Conversation.History;
+      Status   : out Model_Runner.Errors.Error_Info);
+
    --  Rebuild a conversation from Path into Messages, which the caller has
    --  opened. A file that is missing or will not parse leaves Messages as it
    --  was; Loaded says whether anything was read, and Status carries a read

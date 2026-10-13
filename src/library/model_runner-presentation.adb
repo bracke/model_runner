@@ -1146,7 +1146,8 @@ package body Model_Runner.Presentation is
       if E.Is_Ok (Condition) then
          return;
       end if;
-      if Condition.Severity = E.Severity_Error then
+      --  A fault of the program's own is an error too, and counted.
+      if Condition.Severity in E.Severity_Error | E.Severity_Internal then
          Item.Error_Count := Item.Error_Count + 1;
          if Item.Failure = 0 then
             Item.Failure := E.Exit_Status (Condition);

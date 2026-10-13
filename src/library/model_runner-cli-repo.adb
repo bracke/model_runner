@@ -251,6 +251,9 @@ package body Model_Runner.CLI.Repo is
                           To_String (Rp.File_At (Found, Index).Path) = Argument)
             then
                Pres.Put_Note (Screen, "cli.repo.file_not_symbol", [Loc.Named ("name", Argument)]);
+               --  Not found as asked, all the same: the command did not
+               --  answer it.
+               Status := E.Exit_Status (E.Make (E.Framework_Not_Found));
                return;
             end if;
             --  An entry of the project's state is traced, not looked up in

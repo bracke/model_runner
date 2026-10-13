@@ -2868,7 +2868,10 @@ package body Model_Runner.Framework.Bootstrap is
                   Simple : constant String := Ada.Directories.Simple_Name (Found);
                begin
                   --  A project of its own below is its own: not read here.
+                  --  Nor a link to a directory: it may lead out of the
+                  --  project, or back into it without end.
                   if Simple (Simple'First) /= '.'
+                    and then not Hostkit.Fs.Is_Link (Ada.Directories.Full_Name (Found))
                     and then not Ada.Directories.Exists
                                    (Ada.Directories.Full_Name (Found) & "/" & State_Directory)
                   then

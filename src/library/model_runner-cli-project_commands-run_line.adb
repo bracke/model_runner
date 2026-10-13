@@ -7,6 +7,19 @@ is
    All_Words  : constant Names.Vector := Identifiers_As_Kept (Split (Line));
    Open_Quote : constant Boolean := Left_Open;
    Word       : constant String := All_Words.First_Element;
+
+   --  A command whose words after its action are text a person wrote -- a
+   --  note, a title, a requirement's words: a word there that looks like
+   --  an option is the text's, not an option.
+   Free_Text  : constant Boolean :=
+     Natural (All_Words.Length) >= 2
+     and then ((Word = "/task"
+                and then Ada.Characters.Handling.To_Lower (All_Words (2))
+                           in "new" | "note" | "edit" | "split" | "reject" | "cancel")
+               or else (Word in "/req" | "/spec" | "/decision"
+                        and then Ada.Characters.Handling.To_Lower (All_Words (2))
+                                   in "new" | "revise" | "edit" | "reject" | "obsolete")
+               or else Word in "/instruct" | "/decide");
    Positional : Names.Vector;
    Command    : Model_Runner.CLI.Project_Requests.Request;
    To_Task    : Boolean := False;
@@ -137,6 +150,19 @@ is
       end if;
    end Say_Still_Waiting;
 
+   --  The action a command was given, as the commands read it.
+   function Verb return String is (Ada.Characters.Handling.To_Lower (Argument (1)));
+
+   --  Whether the command only looks: what may be done while another run
+   --  holds the project, and what changes nothing to judge again after.
+   function Looks_Only return Boolean
+   is (Word in "/state" | "/config" | "/git" | "/why" | "/history" | "/brief"
+       or else (Word = "/result" and then Verb not in "dismiss" | "restore")
+       or else (Word in "/req" | "/decision" | "/spec"
+                and then Verb not in "new" | "accept" | "reject" | "reconsider" | "obsolete" | "block"
+                                   | "unblock" | "revise" | "edit" | "link" | "unlink" | "supersede"
+                                   | "govern" | "move" | "renumber" | "verify"));
+
    --  Open the project, or say there is none.
    procedure With_Store (Act : not null access procedure (Store : in out S.Store)) is
       Store  : S.Store;
@@ -145,13 +171,7 @@ is
       S.Open (Store, Here, Report, Outcome);
 
       --  Held by a run in progress, what only looks can still look.
-      if E."=" (Outcome.Code, E.Framework_Locked)
-        and then (Word in "/state" | "/config" | "/result"
-                  or else (Word in "/req" | "/decision" | "/spec"
-                           and then Argument (1) not in "new" | "accept" | "reject"
-                              | "reconsider" | "obsolete" | "block" | "unblock" | "revise"
-                              | "link" | "supersede" | "govern" | "move"))
-      then
+      if E."=" (Outcome.Code, E.Framework_Locked) and then Looks_Only then
          S.Open_To_Read (Store, Here, Outcome);
          if E.Is_Ok (Outcome) then
             Pres.Put_Note (Screen, "cli.project.read_only");
@@ -183,9 +203,9 @@ is
       --  only looks changes nothing, and so leaves this to the next that
       --  does.
       if not S.Is_Read_Only (Store)
-        and then not (Word in "/state" | "/config" | "/trace" | "/result" | "/help"
-                      or else (Word in "/req" | "/spec" | "/decision" | "/task"
-                               and then Argument (1) in "" | "show" | "list" | "audit" | "context" | "diff"))
+        and then not (Looks_Only or else Word in "/trace" | "/help"
+                      or else (Word = "/task"
+                               and then Verb in "" | "show" | "list" | "audit" | "context" | "diff"))
       then
          declare
             Said : Names.Vector;
@@ -320,7 +340,7 @@ begin
       Command.Session_Profile := Wk.Parenting_Runner'Class (Agent).Profile;
       Command.Has_Session_Profile := True;
    end if;
-   if All_Words.Contains ("--verbose")
+   if All_Words.Contains ("--verbose") and then not Free_Text
      --  Read before the words are parsed: the action is the second.
      and then not (Word = "/task"
                    and then (Natural (All_Words.Length) < 2
@@ -346,7 +366,7 @@ begin
 
    --  A session works in the directory it was started in: another is
    --  refused by name, not worked in unasked or taken for text.
-   if Word /= "/init"
+   if Word /= "/init" and then not Free_Text
      and then (for some One of All_Words =>
                  One = "--directory"
                  or else (One'Length > 12 and then One (One'First .. One'First + 11) = "--directory="))

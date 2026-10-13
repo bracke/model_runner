@@ -126,16 +126,22 @@ package body Model_Runner.Framework.Configurations is
       Bearing : constant Name_Lists.Vector :=
         ["profile.", "list.verification.", "scalar.verification.", "scalar.profile_capability.",
          "scalar.build.", "adapter.", "set.repository.", "set.source", "set.directories",
-         "set.execution.shell", "set.execution.environment", "scalar.execution.network",
-         "scalar.execution.memory", "scalar.execution.cpu", "scalar.execution.processes",
-         "scalar.execution.file", "map.component.", "set.components", "input.project_name"];
+         --  Every execution setting: with what the checks run, within what
+         --  limits and how confined -- not how much of what they said is
+         --  shown, nor how many run at once, nor which programs may run:
+         --  a check that ran, ran; one refused now is refused when run.
+         "set.execution.", "scalar.execution.",
+         "map.component.", "set.components", "input.project_name"];
+      Not_Bearing : constant Name_Lists.Vector :=
+        ["scalar.execution.output_limit", "scalar.execution.process_slots", "set.execution.allowed"];
       Meaning : Records.Item := Records.Create (Current_Entity, 1, "", 1);
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
          declare
             Name : constant String := Records.Field_Name (Value, Index);
          begin
-            if (for some Prefix of Bearing =>
+            if not Not_Bearing.Contains (Name)
+              and then (for some Prefix of Bearing =>
                   Name'Length >= Prefix'Length
                   and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix)
             then
@@ -1835,6 +1841,11 @@ package body Model_Runner.Framework.Configurations is
                end loop;
             elsif Name = "scalar.task.derived_kind" and then not Has ("task_kind." & Value) then
                return Name & " names the task kind " & Value & ", which is not there";
+            --  A permission as a template writes it is held to what
+            --  /reconfigure holds one to: one not read as written grants
+            --  what nobody meant.
+            elsif Starts (Name, "map.permission.") and then Problem (Name, Value) /= "" then
+               return Problem (Name, Value);
             end if;
          end;
       end loop;
@@ -3962,6 +3973,15 @@ package body Model_Runner.Framework.Configurations is
    -- Recover --
    -------------
 
+   --  A kept revision's fingerprint as it was taken: before the history
+   --  copy was told which revision it is.
+   function Fingerprint_As_Kept (Kept : Records.Item) return String is
+      Bare : Records.Item := Kept;
+   begin
+      Records.Remove (Bare, "configuration_revision");
+      return Configuration_Fingerprint (Bare);
+   end Fingerprint_As_Kept;
+
    procedure Recover
      (Item     : in out Stores.Store;
       Restored : out Natural;
@@ -3997,8 +4017,7 @@ package body Model_Runner.Framework.Configurations is
             begin
                Stores.Read (Item, Config_Area, Name, Kept, Got);
                if E.Is_Ok (Got) and then Rev > Found
-                 and then Records.Get (Kept, "configuration_fingerprint")
-                            = Configuration_Fingerprint (Kept)
+                 and then Records.Get (Kept, "configuration_fingerprint") = Fingerprint_As_Kept (Kept)
                then
                   Found := Rev;
                   Best := Kept;

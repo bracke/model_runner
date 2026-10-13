@@ -827,9 +827,10 @@ package body Model_Runner.CLI.Project_Commands is
       --  that, where asked once it reports.
       for Round in 1 .. (if Root then 3 else 2) loop
          --  The rounds share the run's steps and tokens: a round after the
-         --  first has what the earlier left, and none left, there is none.
-         exit when Round > 1
-           and then (Steps_Taken >= Step_Limit or else (Budget > 0 and then All_Spent >= Budget));
+         --  first has what the earlier left -- and, asked to mend its report
+         --  or fix what failed, two steps at least to do it, bounded by the
+         --  rounds; no tokens left, there is none.
+         exit when Round > 1 and then Budget > 0 and then All_Spent >= Budget;
          --  One memory of the calls across the rounds: a second round
          --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
@@ -843,7 +844,8 @@ package body Model_Runner.CLI.Project_Commands is
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,
-            Max_Steps   => Positive'Max (1, Step_Limit - Natural'Min (Steps_Taken, Step_Limit)),
+            Max_Steps   => Positive'Max ((if Round = 1 then 1 else 2),
+                                         Step_Limit - Natural'Min (Steps_Taken, Step_Limit)),
             Max_Total_Tokens => (if Budget = 0 then 0 else Natural'Max (1, Budget - Natural'Min (All_Spent, Budget))),
             Max_Seconds => (if Host = null then 0.0 else Host.Time_Left),
             Cancel      => Self.Cancel,
@@ -1090,14 +1092,14 @@ package body Model_Runner.CLI.Project_Commands is
       --  The call failed, in the words given.
       function Fails (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
+         Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Tokens => Spent, others => <>);
          return Text;
       end Fails;
 
       --  The call refused: no helper may be made here.
       function Refuses (Text : String) return String is
       begin
-         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, others => <>);
+         Ended := (Answer => Tr.Refused, Refusal => Tr.Not_Permitted, Tokens => Spent, others => <>);
          return Text;
       end Refuses;
 
@@ -1204,7 +1206,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  The helper's last run is the call's ending: failed where it
             --  failed, however its answer reads.
             if not Retry and then E.Is_Error (Ran) then
-               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Tokens => Spent, others => <>);
             end if;
             exit when not Retry;
             Retry_Of := Id;
@@ -1234,7 +1236,7 @@ package body Model_Runner.CLI.Project_Commands is
                              else " not written: " & To_String (Missing) & ";")
                           & ")");
             if Missing /= Null_Unbounded_String then
-               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, others => <>);
+               Ended := (Answer => Tr.Failed, Refusal => Tr.Not_Refused, Tokens => Spent, others => <>);
                --  The harness's finding first, where a small model reads: it
                --  went by a helper's "done" on the first line, and claimed
                --  the file the helper never wrote.
@@ -2429,6 +2431,15 @@ package body Model_Runner.CLI.Project_Commands is
 
    function Is_Project_Command (Word : String) return Boolean
    is (for some Known of Commands => Known.Name.all = Word);
+
+   function Command_Names return String is
+      Result : Unbounded_String := To_Unbounded_String (" ");
+   begin
+      for Known of Commands loop
+         Append (Result, Known.Name.all & " ");
+      end loop;
+      return To_String (Result);
+   end Command_Names;
 
    function Runs_Mid_Message (Word : String) return Boolean
    is (for some Known of Commands => Known.Name.all = Word and then Known.Mid_Message);

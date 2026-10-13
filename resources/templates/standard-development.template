@@ -32,24 +32,45 @@ set task.gates.test = integration
 set task.gates.test = implementation_present
 
 # What an agent may do, by kind, within the project's least: analysis reads
-# and checks, documentation writes documents, tests write tests.
+# and checks, documentation writes documents, tests write tests. A kind's
+# level names only how it differs from the project's, so what a kind may
+# not do is said off: unsaid, it would have the project's.
 map permission.kind.analysis.read_source =
 map permission.kind.analysis.read_specs =
 map permission.kind.analysis.run_build =
 map permission.kind.analysis.run_tests =
 map permission.kind.analysis.run_static_analysis =
 map permission.kind.analysis.propose_tasks =
+map permission.kind.analysis.write_source = off
+map permission.kind.analysis.write_specs = off
+map permission.kind.analysis.create_children = off
+map permission.kind.analysis.request_integration = off
+map permission.kind.analysis.use_network = off
+map permission.kind.analysis.execute_external_process = off
 map permission.kind.documentation.read_source =
 map permission.kind.documentation.read_specs =
 map permission.kind.documentation.write_source = roots=docs/|doc/|README.md|README
 map permission.kind.documentation.write_specs = roots=docs/|doc/
 map permission.kind.documentation.propose_tasks =
+map permission.kind.documentation.run_build = off
+map permission.kind.documentation.run_tests = off
+map permission.kind.documentation.run_static_analysis = off
+map permission.kind.documentation.create_children = off
+map permission.kind.documentation.request_integration = off
+map permission.kind.documentation.use_network = off
+map permission.kind.documentation.execute_external_process = off
 map permission.kind.test.read_source =
 map permission.kind.test.read_specs =
 map permission.kind.test.write_source = roots=tests/|test/
 map permission.kind.test.run_build =
 map permission.kind.test.run_tests =
 map permission.kind.test.propose_tasks =
+map permission.kind.test.write_specs = off
+map permission.kind.test.run_static_analysis = off
+map permission.kind.test.create_children = off
+map permission.kind.test.request_integration = off
+map permission.kind.test.use_network = off
+map permission.kind.test.execute_external_process = off
 
 # The fields of its own a kind lists, each with what it is: text, number,
 # identifier, path, list, or choice A|B|C.

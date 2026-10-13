@@ -852,6 +852,9 @@ package body Model_Runner.Framework.Templates is
                Values    : Name_Lists.Vector;
                Overrides : Name_Lists.Vector;
                Said      : Unbounded_String;
+               --  What the template chosen says of it itself, if anything.
+               Own       : Unbounded_String;
+               Says_Own  : Boolean := False;
             begin
                if not Done.Contains (Key_Of) then
                   Done.Append (Key_Of);
@@ -863,6 +866,10 @@ package body Model_Runner.Framework.Templates is
                                       & (if Other.Override then " (override)" else ""));
                         if not Values.Contains (To_String (Other.Value)) then
                            Values.Append (To_String (Other.Value));
+                        end if;
+                        if To_String (Other.From) = Id then
+                           Own := Other.Value;
+                           Says_Own := True;
                         end if;
                         if Other.Override then
                            Winner := Other;
@@ -877,6 +884,13 @@ package body Model_Runner.Framework.Templates is
                      return;
                   elsif Overrides.Is_Empty and then Natural (Values.Length) > 1 then
                      Conflict (Key_Of, To_String (Said) & ", and none says override");
+                     return;
+                  --  What the template chosen says itself is not overridden
+                  --  by one it includes: that would be its own word taken
+                  --  back unseen.
+                  elsif Says_Own and then To_String (Winner.From) /= Id and then Winner.Value /= Own then
+                     Conflict (Key_Of, To_String (Said) & ", and an included template overrides what "
+                               & Id & " itself says");
                      return;
                   end if;
                   Result.Settings.Append (Winner);

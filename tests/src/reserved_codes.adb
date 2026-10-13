@@ -19,7 +19,6 @@ package body Reserved_Codes is
       case Code is
          when E.CLI_Invalid_Locale
             | E.CLI_Invalid_Mapping_Mode
-            | E.IO_Write_Failed
             | E.IO_Output_Closed
             | E.IO_Seek_Failed
             | E.GGUF_Unsupported_Tensor_Type

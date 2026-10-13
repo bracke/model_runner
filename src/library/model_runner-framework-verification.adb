@@ -3229,6 +3229,26 @@ package body Model_Runner.Framework.Verification is
       end Serving_Tasks;
 
       Event : Unbounded_String;
+
+      --  The first evidence record that will not read, found once.
+      Unread_Known : Boolean := False;
+      Unread_Name  : Unbounded_String;
+
+      --  Whether what a requirement lacks is a record that will not read:
+      --  that its evidence no longer applies is then not known.
+      function Rests_On_Unread (Requirement : String) return Boolean is
+         Why : Unbounded_String;
+         Ignored : constant String := Support (Item, Requirement, Configuration, Why);
+         pragma Unreferenced (Ignored);
+      begin
+         if not Unread_Known then
+            Unread_Name := To_Unbounded_String (Unreadable_Evidence (Item));
+            Unread_Known := True;
+         end if;
+         return Unread_Name /= Null_Unbounded_String
+           and then (Ada.Strings.Fixed.Index (To_String (Why), "will not read") > 0
+                     or else Ada.Strings.Fixed.Index (To_String (Why), To_String (Unread_Name)) > 0);
+      end Rests_On_Unread;
    begin
       Changed.Clear;
       Status := E.Success;
@@ -3309,7 +3329,7 @@ package body Model_Runner.Framework.Verification is
          --  it no longer applies is not known, and is not said -- it stays
          --  as it is, the rest judged, and /check names the record.
          if not Changed.Contains (Requirement) and then Supporting (Requirement) = ""
-           and then Unreadable_Evidence (Item) = ""
+           and then not Rests_On_Unread (Requirement)
          then
             Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
                          [Transitions.Ordinary => True, Transitions.Invalidation => True,

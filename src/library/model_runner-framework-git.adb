@@ -177,9 +177,17 @@ package body Model_Runner.Framework.Git is
             --  further down, from the project's, as everything else does.
             for Line of Lines_Of (Standard.Version.Status.Porcelain_Status_Text (Seen)) loop
                if Line'Length > 3 then
-                  Result.Changes.Append
-                    (Line (Line'First .. Line'First + 2)
-                     & Within_Project (Line (Line'First + 3 .. Line'Last), Prefix));
+                  declare
+                     Paths : constant String := Line (Line'First + 3 .. Line'Last);
+                     Arrow : constant Natural := Ada.Strings.Fixed.Index (Paths, " -> ");
+                  begin
+                     --  A rename names two paths: each from the project's.
+                     Result.Changes.Append
+                       (Line (Line'First .. Line'First + 2)
+                        & (if Arrow = 0 then Within_Project (Paths, Prefix)
+                           else Within_Project (Paths (Paths'First .. Arrow - 1), Prefix) & " -> "
+                                & Within_Project (Paths (Arrow + 4 .. Paths'Last), Prefix)));
+                  end;
                end if;
             end loop;
          end;

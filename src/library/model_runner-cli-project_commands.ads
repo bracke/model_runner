@@ -128,6 +128,12 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True when it is.
    function Is_Project_Command (Word : String) return Boolean;
 
+   --  Every project command's name, a space before and after each: what
+   --  completion offers, from the one table the commands are run from.
+   --
+   --  @return The names.
+   function Command_Names return String;
+
    --  What a line asks, read once: the command, its words, its settings --
    --  every command's line read by this one reader before it is acted on.
    --

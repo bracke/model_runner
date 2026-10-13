@@ -259,7 +259,12 @@ package body Model_Runner.Framework.Permissions is
                --  inherit: what the level above gives, read when it is
                --  asked -- the project's default for the project, and for
                --  a kind or role no narrowing of the level above at all.
-               if Records.Get (Config, Field) = "off" then
+               --  A value that does not read as one -- OFF, ROOTS=src/ --
+               --  grants nothing: unread, it is no grant.
+               if Records.Get (Config, Field) = "off"
+                 or else (Records.Get (Config, Field) /= "inherit"
+                          and then Constraint_Problem (Records.Get (Config, Field)) /= "")
+               then
                   Result (Item_Kind) := (Granted => False, others => <>);
                elsif Records.Get (Config, Field) = "inherit" then
                   Result (Item_Kind) :=
@@ -469,6 +474,7 @@ package body Model_Runner.Framework.Permissions is
    ---------------
 
    function Intersect (Left, Right : Permission_Set) return Permission_Set is
+      Spec_Places : constant Name_Lists.Vector := ["docs/", "doc/", "specs/", "spec/"];
       Result : Permission_Set := Nothing;
    begin
       for Item in Capability loop
@@ -479,7 +485,18 @@ package body Model_Runner.Framework.Permissions is
          begin
             G.Granted := L.Granted and then R.Granted;
             if G.Granted then
-               G.Roots := Narrowest (L.Roots, R.Roots);
+               --  Specifications unscoped are where specifications are kept,
+               --  not everywhere: met with roots, what lies in both is the
+               --  places of specifications within them -- roots=src/ is no
+               --  way out of docs/ for write_specs.
+               if Item = Write_Specs and then L.Roots.Is_Empty /= R.Roots.Is_Empty then
+                  G.Roots := Narrowest (Spec_Places, (if L.Roots.Is_Empty then R.Roots else L.Roots));
+                  if G.Roots.Is_Empty then
+                     G.Granted := False;
+                  end if;
+               else
+                  G.Roots := Narrowest (L.Roots, R.Roots);
+               end if;
                if not L.Roots.Is_Empty and then not R.Roots.Is_Empty
                  and then G.Roots.Is_Empty
                then

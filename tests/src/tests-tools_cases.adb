@@ -2754,6 +2754,11 @@ package body Tests.Tools_Cases is
                     "a search let go still held what it shows: " & Room (Room'First .. Last));
          end;
 
+         --  Completion offers every command the table runs.
+         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Command_Names, " /why ") > 0
+                 and then Ada.Strings.Fixed.Index (Model_Runner.CLI.Project_Commands.Command_Names, " /brief ") > 0,
+                 "a project command was left out of the names offered");
+
          --  One argument given anew, by its name, not where its text first
          --  appears.
          Assert (Model_Runner.Tools.Builtin.With_Text_Argument
