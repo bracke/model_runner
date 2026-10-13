@@ -9267,7 +9267,9 @@ package body Model_Runner.Platform.Device.Products is
 
    procedure Keep_File_Pages (Item : in out Engine; Keep : Boolean) is
    begin
-      Item.Keep_Pages := Keep;
+      Item.Keep_Pages :=
+        Keep and then (Item.Keep_Pages or else not Item.Pages_Told);
+      Item.Pages_Told := True;
    end Keep_File_Pages;
 
    --  Where a run of halves lies in a copy that holds it alone, or

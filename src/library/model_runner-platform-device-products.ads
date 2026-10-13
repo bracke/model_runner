@@ -2554,7 +2554,10 @@ package Model_Runner.Platform.Device.Products is
    --  reads them from the disk again -- 4.2 s of Qwen3 8B's every prompt
    --  -- and kept, a model that is most of the memory holds itself twice,
    --  which sent ThinkingCap's device pages to swap. The loader says
-   --  which, by the model's size against the device's.
+   --  which, by the model's size against the device's, for every model
+   --  it loads; one told to let them go lets them go for the rest, so a
+   --  small draft loaded after a large model does not keep the large
+   --  one's pages.
    --
    --  @param Item Engine.
    --  @param Keep True to keep them.
@@ -4012,8 +4015,9 @@ private
       Second_At     : System.Address := System.Null_Address;
       Use_Second    : Boolean := False;
 
-      --  See Keep_File_Pages.
+      --  See Keep_File_Pages; Pages_Told says whether a model has.
       Keep_Pages    : Boolean := False;
+      Pages_Told    : Boolean := False;
 
       --  The cache mapped once and left mapped. A position is written every
       --  layer of every token -- hundreds of writes a run, at a millisecond
