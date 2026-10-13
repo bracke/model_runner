@@ -19,6 +19,7 @@ package body Model_Runner.Platform.Pages is
    Out_Advice  : constant := 21;   --  MADV_PAGEOUT
    Random_Advice : constant := 1;  --  MADV_RANDOM
    Normal_Advice : constant := 0;  --  MADV_NORMAL
+   Need_Advice   : constant := 3;  --  MADV_WILLNEED
 
    function Madvise
      (Start  : System.Address;
@@ -261,5 +262,29 @@ package body Model_Runner.Platform.Pages is
          Done := not Failed;
       end;
    end Read_Direct;
+
+   procedure Fetch_Soon
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count)
+   is
+   begin
+      if Length = 0
+        or else not Model_Runner.Platform.Mapped_Ranges.Holds (Start, Length)
+      then
+         return;
+      end if;
+
+      declare
+         First    : constant Integer_Address := To_Integer (Start);
+         Begin_At : constant Integer_Address := First / Page * Page;
+         Last     : constant Integer_Address := First + Integer_Address (Length);
+         Answer   : Interfaces.C.int;
+      begin
+         Answer := Madvise (To_Address (Begin_At),
+                            Interfaces.C.size_t (Last - Begin_At),
+                            Need_Advice);
+         pragma Unreferenced (Answer);
+      end;
+   end Fetch_Soon;
 
 end Model_Runner.Platform.Pages;

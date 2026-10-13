@@ -582,6 +582,9 @@ package body Tests.Accounting_Cases is
       Model_Runner.Platform.Pages.Page_Out (Own.all (1)'Address, Size);
       Assert (B."=" (Own.all, Content.all),
               "the process's own memory changed under the advice");
+      Model_Runner.Platform.Pages.Fetch_Soon (Own.all (1)'Address, Size);
+      Assert (B."=" (Own.all, Content.all),
+              "the process's own memory changed under the asking");
 
       Map.Open (Region, Path, Available);
       if Available then
@@ -594,6 +597,15 @@ package body Tests.Accounting_Cases is
          end if;
 
          Model_Runner.Platform.Pages.Page_Out (Base, Size);
+
+         --  Asked for again ahead of the read, a page at a time: the
+         --  fingerprint's way. The read is what it would have been.
+         for Page in 0 .. Size / 4096 - 1 loop
+            Model_Runner.Platform.Pages.Fetch_Soon
+              (System.Storage_Elements."+"
+                 (Base, System.Storage_Elements.Storage_Offset (Page * 4096)),
+               1);
+         end loop;
          Map.Copy (Region, 0, Back.all, Ok);
          Assert (Ok and then B."=" (Back.all, Content.all),
                  "a mapping given back did not read again as it was");

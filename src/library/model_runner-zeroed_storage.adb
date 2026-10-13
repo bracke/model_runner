@@ -78,4 +78,12 @@ package body Model_Runner.Zeroed_Storage is
         (Start, Model_Runner.Bytes.Byte_Count (Length), Scattered);
    end Expect_Scattered;
 
+   procedure Fetch_Soon
+     (Start  : System.Address;
+      Length : System.Storage_Elements.Storage_Count) is
+   begin
+      Model_Runner.Platform.Pages.Fetch_Soon
+        (Start, Model_Runner.Bytes.Byte_Count (Length));
+   end Fetch_Soon;
+
 end Model_Runner.Zeroed_Storage;

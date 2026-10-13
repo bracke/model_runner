@@ -77,4 +77,13 @@ package Model_Runner.Zeroed_Storage is
       Length    : System.Storage_Elements.Storage_Count;
       Scattered : Boolean);
 
+   --  Platform.Pages.Fetch_Soon, for a caller that holds a model's mapping:
+   --  a run it is about to read, asked for now with the others it will.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes from Start.
+   procedure Fetch_Soon
+     (Start  : System.Address;
+      Length : System.Storage_Elements.Storage_Count);
+
 end Model_Runner.Zeroed_Storage;

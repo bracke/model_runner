@@ -63,6 +63,18 @@ package Model_Runner.Platform.Pages is
       Length    : Model_Runner.Bytes.Byte_Count;
       Scattered : Boolean);
 
+   --  Ask for a run of a file's mapping to be read now, in the background,
+   --  ahead of the reads that will want it: scattered reads asked for one
+   --  after another wait for the drive one after another, and asked for
+   --  together are answered together. Advice only; a run of the process's
+   --  own memory, or one shorter than a page, is let be.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes in the run.
+   procedure Fetch_Soon
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count);
+
    --  Copy a run of a file's read-only mapping from the file itself, in
    --  large reads that pass the host's cache by, rather than through the
    --  mapping's faults.

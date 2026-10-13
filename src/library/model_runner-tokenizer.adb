@@ -663,6 +663,11 @@ package body Model_Runner.Tokenizer is
       --  costs once every piece has been read.
       Item.Unknown_Cost := Float'Last;
 
+      --  Room for every piece and every entry at once: grown as they came,
+      --  the maps rehashed every piece read so far a dozen times over.
+      Item.Lookup.Reserve_Capacity (Ada.Containers.Count_Type (Count));
+      Item.Entries.Reserve_Capacity (Ada.Containers.Count_Type (Count));
+
       for Index in 1 .. Count loop
          declare
             Buffer : String (1 .. Max_Token_Bytes);
@@ -753,8 +758,15 @@ package body Model_Runner.Tokenizer is
                   then Unescape_RWKV (Buffer (1 .. Last))
                   else Buffer (1 .. Last));
             begin
-               if Text /= "" and then not Item.Lookup.Contains (Text) then
-                  Item.Lookup.Insert (Text, Token_Id (Index - 1));
+               if Text /= "" then
+                  declare
+                     Where    : Token_Maps.Cursor;
+                     Inserted : Boolean;
+                  begin
+                     --  A repeated piece keeps its first, lower id.
+                     Item.Lookup.Insert
+                       (Text, Token_Id (Index - 1), Where, Inserted);
+                  end;
                end if;
             end;
          end;
@@ -1051,6 +1063,9 @@ package body Model_Runner.Tokenizer is
                return;
             end if;
 
+            Item.Merges.Reserve_Capacity
+              (Ada.Containers.Count_Type (Merge_Count));
+
             for Index in 1 .. Merge_Count loop
                declare
                   Buffer : String (1 .. Max_Token_Bytes * 2 + 1);
@@ -1068,9 +1083,13 @@ package body Model_Runner.Tokenizer is
                   --  Kept keyed exactly as written, so looking one up is
                   --  joining the two pieces with a space rather than parsing
                   --  anything. A repeated pair keeps its first, lower rank.
-                  if not Item.Merges.Contains (Buffer (1 .. Last)) then
-                     Item.Merges.Insert (Buffer (1 .. Last), Index);
-                  end if;
+                  declare
+                     Where    : Merge_Maps.Cursor;
+                     Inserted : Boolean;
+                  begin
+                     Item.Merges.Insert
+                       (Buffer (1 .. Last), Index, Where, Inserted);
+                  end;
                end;
             end loop;
          end;

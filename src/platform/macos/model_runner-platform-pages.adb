@@ -48,4 +48,13 @@ package body Model_Runner.Platform.Pages is
       Done := False;
    end Read_Direct;
 
+   procedure Fetch_Soon
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count)
+   is
+      pragma Unreferenced (Start, Length);
+   begin
+      null;
+   end Fetch_Soon;
+
 end Model_Runner.Platform.Pages;
