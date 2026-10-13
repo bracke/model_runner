@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Task_Attributes;
@@ -752,6 +753,7 @@ package body Model_Runner.Framework.Execution is
             end if;
             if Current.Group_Unrecorded then
                Current.Group_Unrecorded := False;
+               Files.Discard (Output);
                Files.Write_Failed (Group_File (Stores.Root (Item), To_String (Current.Lease)), Status);
                E.Add_Text (Status, "detail", Command & ": " & Unrecorded_Said);
                return;
@@ -766,9 +768,42 @@ package body Model_Runner.Framework.Execution is
 
          if Ada.Directories.Exists (Output) then
             Files.Read_Text (Output, Text, Read);
+            --  More than is read whole: its end, which is where a program
+            --  says why it stopped, read on its own.
+            if E.Is_Error (Read) and then E."=" (Read.Code, E.IO_File_Too_Large) then
+               declare
+                  use Ada.Streams;
+                  use type Stream_IO.Count;
+                  File  : Stream_IO.File_Type;
+                  Size  : constant Stream_IO.Count := Stream_IO.Count (Ada.Directories.Size (Output));
+                  Want  : constant Stream_IO.Count := Stream_IO.Count'Min (Size, Stream_IO.Count (Kept_Tail));
+                  Piece : Stream_Element_Array (1 .. Stream_Element_Offset (Want));
+                  Last  : Stream_Element_Offset;
+                  Tail  : String (1 .. Natural (Want));
+               begin
+                  Stream_IO.Open (File, Stream_IO.In_File, Output);
+                  Stream_IO.Set_Index (File, Size - Want + 1);
+                  Stream_IO.Read (File, Piece, Last);
+                  Stream_IO.Close (File);
+                  for Index in 1 .. Natural (Last) loop
+                     Tail (Index) := Character'Val (Piece (Stream_Element_Offset (Index)));
+                  end loop;
+                  Text := To_Unbounded_String ("[the start of what it said was too large to keep]" & ASCII.LF
+                                               & Tail (1 .. Natural (Last)));
+                  Read := E.Success;
+               exception
+                  when Failure : others =>
+                     if Stream_IO.Is_Open (File) then
+                        Stream_IO.Close (File);
+                     end if;
+                     Read := E.Make (E.IO_Read_Failed);
+                     E.Add_Text (Read, "path", Output, E.Param_Path);
+                     E.Add_Text (Read, "detail", Ada.Exceptions.Exception_Name (Failure));
+               end;
+            end if;
             Files.Discard (Output);
             --  What it said, not read, is not said to be nothing.
-            if E.Is_Error (Read) and then not E."=" (Read.Code, E.IO_File_Too_Large) then
+            if E.Is_Error (Read) then
                Status := Read;
                E.Add_Text (Status, "detail", Command & ": what it said could not be read");
                return;

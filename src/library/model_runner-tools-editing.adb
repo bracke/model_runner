@@ -286,6 +286,15 @@ package body Model_Runner.Tools.Editing is
          --  it can.
          Result.Durable := Hostkit.Durability.Sync_File (Partial) /= Hostkit.Durability.Failed;
       end;
+      --  Not on the device, it is not put in its place: renamed over, a
+      --  crash could leave the file empty where it held what it held.
+      if not Result.Durable then
+         if Ada.Directories.Exists (Partial) then
+            Ada.Directories.Delete_File (Partial);
+         end if;
+         Fail ("could not write " & Path & ": what was written could not be made durable");
+         return;
+      end if;
       --  What the file was allowed keeps being allowed: a script stays one.
       if There then
          declare
@@ -603,7 +612,20 @@ package body Model_Runner.Tools.Editing is
          Ends_CR    : constant Boolean :=
            First_Line'Length > 0 and then First_Line (First_Line'Last) = ASCII.CR;
          Moved : U.Unbounded_String;
-         Fresh : constant Line_Lists.Vector := Lines_Of (New_Text);
+         --  Trimmed as what it replaces was: blank lines at its ends were
+         --  no part of what was found, and are none of what is put.
+         function Trimmed return Line_Lists.Vector is
+            Result : Line_Lists.Vector := Lines_Of (New_Text);
+         begin
+            while not Result.Is_Empty and then Bare (U.To_String (Result.First_Element)) = "" loop
+               Result.Delete_First;
+            end loop;
+            while not Result.Is_Empty and then Bare (U.To_String (Result.Last_Element)) = "" loop
+               Result.Delete_Last;
+            end loop;
+            return Result;
+         end Trimmed;
+         Fresh : constant Line_Lists.Vector := Trimmed;
          After : U.Unbounded_String;
       begin
          for Index in 1 .. Natural (Fresh.Length) loop
@@ -730,7 +752,20 @@ package body Model_Runner.Tools.Editing is
                return (if Within = 1 then Where else 0);
             end Near;
 
-            Times_There : constant Natural := Ada.Strings.Fixed.Count (Text, Old_Text);
+            --  Every start, overlapping ones too: end; end; end; holds
+            --  end; end; twice, and that is not one place.
+            function Starts return Natural is
+               Found : Natural := 0;
+               From  : Natural := Ada.Strings.Fixed.Index (Text, Old_Text);
+            begin
+               while From > 0 loop
+                  Found := Found + 1;
+                  From := (if From >= Text'Last then 0 else Ada.Strings.Fixed.Index (Text, Old_Text, From + 1));
+               end loop;
+               return Found;
+            end Starts;
+
+            Times_There : constant Natural := Starts;
             Chosen      : constant Natural := (if Times_There > 1 then Near else 0);
             At_Text : constant Natural :=
               (if Chosen > 0 then Chosen else Ada.Strings.Fixed.Index (Text, Old_Text));
@@ -843,14 +878,36 @@ package body Model_Runner.Tools.Editing is
                   Shifted := True;
                end Lay_Out;
 
+               --  Lines ended as the file ends them: in one that ends them
+               --  CR LF, a line break given alone is given its CR.
+               function Fitted (Given : String) return String is
+                  Line_End : constant Natural :=
+                    Ada.Strings.Fixed.Index (Text (At_Text .. Text'Last), [1 => ASCII.LF]);
+                  Crlf     : constant Boolean := Line_End > Text'First and then Text (Line_End - 1) = ASCII.CR;
+                  Result   : U.Unbounded_String;
+               begin
+                  if not Crlf then
+                     return Given;
+                  end if;
+                  for Index in Given'Range loop
+                     if Given (Index) = ASCII.LF
+                       and then (Index = Given'First or else Given (Index - 1) /= ASCII.CR)
+                     then
+                        U.Append (Result, ASCII.CR);
+                     end if;
+                     U.Append (Result, Given (Index));
+                  end loop;
+                  return U.To_String (Result);
+               end Fitted;
+
                function Laid_Out return String is
                begin
                   if Only_Indent and then Ada.Strings.Fixed.Index (New_Text, [1 => ASCII.LF]) > 0 then
                      Lay_Out;
                   end if;
                   return (if Shifted
-                          then Text (Text'First .. Line_Start - 1) & U.To_String (Moved)
-                          else Text (Text'First .. At_Text - 1) & New_Text);
+                          then Text (Text'First .. Line_Start - 1) & Fitted (U.To_String (Moved))
+                          else Text (Text'First .. At_Text - 1) & Fitted (New_Text));
                end Laid_Out;
 
                After : constant String :=

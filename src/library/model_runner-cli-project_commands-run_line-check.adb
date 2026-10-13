@@ -19,6 +19,8 @@ begin
          Passed      : Boolean;
          Changed     : Names.Vector;
          Failing     : Names.Vector;
+         --  A check that did not run: not said to have passed.
+         Errored     : Boolean := False;
       begin
          Model_Runner.Framework.Intent.Read
            (Store, Model_Runner.Framework.Intent.Requirement, Requirement, Held, Got);
@@ -58,6 +60,7 @@ begin
                   --  Not run, or not kept: said, as a failure of its own.
                   if E.Is_Error (Got) then
                      Change := S.No_Changes;
+                     Errored := True;
                      Pres.Report (Screen, Got);
                   else
                      Field (Id, To_String (Evidence) & (if Passed then " passed" else " failed"));
@@ -73,6 +76,7 @@ begin
             S.Commit (Store, Change, Got);
          end if;
          if E.Is_Error (Got) then
+            Errored := True;
             Pres.Report (Screen, Got);
          else
             Field (Requirement, To_String (Evidence) & (if Passed then " passed" else " failed"));
@@ -107,7 +111,7 @@ begin
          --  Its checks passed and it is not verified: said as what it
          --  is -- not a check that failed -- with what it waits for,
          --  and the command ends without success all the same.
-         if To_String (Held.State) /= "verified" and then Failing.Is_Empty then
+         if To_String (Held.State) /= "verified" and then Failing.Is_Empty and then not Errored then
             Pres.Put_Message
               (Screen, "cli.check.passed_not_verified",
                [Loc.Named ("name", Requirement),

@@ -43,6 +43,29 @@ package body Tests.Tools_Cases is
    package Builtin renames Model_Runner.Tools.Builtin;
    package Constraint renames Model_Runner.Tools.Constraint;
 
+   --  A file's bytes, whole.
+   function Whole_File (Path : String) return String is
+      File : Ada.Streams.Stream_IO.File_Type;
+   begin
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      declare
+         Text : String (1 .. Natural (Ada.Streams.Stream_IO.Size (File)));
+      begin
+         String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
+         Ada.Streams.Stream_IO.Close (File);
+         return Text;
+      end;
+   end Whole_File;
+
+   --  A file of exactly these bytes.
+   procedure Put_Bytes (Path, Text : String) is
+      File : Ada.Streams.Stream_IO.File_Type;
+   begin
+      Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Path);
+      String'Write (Ada.Streams.Stream_IO.Stream (File), Text);
+      Ada.Streams.Stream_IO.Close (File);
+   end Put_Bytes;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -2635,8 +2658,15 @@ package body Tests.Tools_Cases is
             Ada.Text_IO.Put (Outside, "as shown");
             Ada.Text_IO.Close (Outside);
             Placed.Note_Seen ("shown.txt", Model_Runner.Tools.Editing.Revision_Of (Tree & "/shown.txt"));
+            --  An excerpt shown is not the whole: written over whole, it
+            --  is read whole first.
             Placed.Run ("write_file", "{""path"": ""shown.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
-            Assert (Ended.Changed, "a file shown as it stands was refused: " & Room (Room'First .. Last));
+            Assert (not Ended.Changed
+                    and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "not read the whole") > 0,
+                    "a file seen only as shown was written over whole: " & Room (Room'First .. Last));
+            Placed.Run ("read_file", "{""path"": ""./shown.txt""}", Room, Last, Ended, Status);
+            Placed.Run ("write_file", "{""path"": ""shown.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
+            Assert (Ended.Changed, "a file read whole as it stands was refused: " & Room (Room'First .. Last));
             Placed.Note_Seen ("shown.txt", Model_Runner.Tools.Editing.Revision ("an older excerpt"));
             Placed.Run ("write_file", "{""path"": ""shown.txt"", ""content"": ""again""}", Room, Last, Ended, Status);
             Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "has changed since you last read") > 0,
@@ -2654,6 +2684,84 @@ package body Tests.Tools_Cases is
          Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "within the lines you last read") > 0,
                  "an edit there twice was not taken where the lines last read hold it: "
                  & Room (Room'First .. Last));
+
+         --  Its own edit moves the lines it read: the range is no guide
+         --  after, and a passage there twice is asked about again.
+         Placed.Run ("edit_file", "{""path"": ""twice.txt"", ""old_text"": ""y"", ""new_text"": ""z\nx""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""twice.txt"", ""old_text"": ""x"", ""new_text"": ""w""}",
+                     Room, Last, Ended, Status);
+         Assert (not Ended.Changed,
+                 "an edit took a place by lines read before its own edit moved them: "
+                 & Room (Room'First .. Last));
+
+         --  A passage overlapping itself is there more than once.
+         Placed.Run ("write_file", "{""path"": ""ends.txt"", ""content"": ""end;\nend;\nend;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""ends.txt"", ""old_text"": ""end;\nend;"", ""new_text"": ""x""}",
+                     Room, Last, Ended, Status);
+         Assert (not Ended.Changed,
+                 "a passage there twice, overlapping, was taken as there once: " & Room (Room'First .. Last));
+
+         --  Lines ended as the file ends them, exactly matched or not.
+         declare
+            Read : Ada.Strings.Unbounded.Unbounded_String;
+            use Ada.Strings.Unbounded;
+         begin
+            Put_Bytes (Tree & "/crlf.txt", "a();" & ASCII.CR & ASCII.LF & "b();" & ASCII.CR & ASCII.LF);
+            Placed.Run ("read_file", "{""path"": ""crlf.txt""}", Room, Last, Ended, Status);
+            Placed.Run ("edit_file", "{""path"": ""crlf.txt"", ""old_text"": ""a();"", ""new_text"": ""a();\nc();""}",
+                        Room, Last, Ended, Status);
+            Read := To_Unbounded_String (Whole_File (Tree & "/crlf.txt"));
+            Assert (To_String (Read) = "a();" & ASCII.CR & ASCII.LF & "c();" & ASCII.CR & ASCII.LF
+                                       & "b();" & ASCII.CR & ASCII.LF,
+                    "an edit to a file of CRLF lines left a bare line break");
+         end;
+
+         --  Matched with the spaces at line ends left out, what is put has
+         --  no blank line the given text did not hold.
+         Placed.Run ("write_file", "{""path"": ""loose.txt"", ""content"": ""foo  \nbaz\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""loose.txt"", ""old_text"": ""foo\n"", ""new_text"": ""bar\n""}",
+                     Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/loose.txt") = "bar" & ASCII.LF & "baz" & ASCII.LF,
+                 "a loose edit put a blank line in: " & Whole_File (Tree & "/loose.txt"));
+
+         --  Seen, and gone since: not made again over what was seen.
+         Placed.Run ("read_file", "{""path"": ""loose.txt""}", Room, Last, Ended, Status);
+         Ada.Directories.Delete_File (Tree & "/loose.txt");
+         Placed.Run ("write_file", "{""path"": ""loose.txt"", ""content"": ""back""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed and then not Ada.Directories.Exists (Tree & "/loose.txt"),
+                 "a file seen and gone since was made again unseen: " & Room (Room'First .. Last));
+
+         --  A search held to what may be read shows nothing of a place
+         --  denied; let go, it shows it again.
+         declare
+            package Pm renames Model_Runner.Framework.Permissions;
+            Held : Pm.Permission_Set := Pm.Unrestricted;
+         begin
+            Ada.Directories.Create_Path (Tree & "/secret");
+            Put_Bytes (Tree & "/secret/key.txt", "hidden value" & ASCII.LF);
+            Held (Pm.Read_Source).Deny.Append ("secret");
+            Held (Pm.Read_Specs).Deny.Append ("secret");
+            Builtin.Hold_Reads (Tree, Held);
+            Placed.Run ("search_code", "{""path"": ""."", ""pattern"": ""hidden value""}", Room, Last, Ended, Status);
+            Builtin.Let_Reads_Go;
+            Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "secret/key.txt") = 0,
+                    "a search showed a file the agent may not read: " & Room (Room'First .. Last));
+            Placed.Run ("search_code", "{""path"": ""."", ""pattern"": ""hidden value""}", Room, Last, Ended, Status);
+            Assert (Ada.Strings.Fixed.Index (Room (Room'First .. Last), "key.txt") > 0,
+                    "a search let go still held what it shows: " & Room (Room'First .. Last));
+         end;
+
+         --  One argument given anew, by its name, not where its text first
+         --  appears.
+         Assert (Model_Runner.Tools.Builtin.With_Text_Argument
+                   ("{""content"": ""/a"", ""path"": ""/a""}", "path", "a")
+                 = "{""content"":""/a"",""path"":""a""}",
+                 "an argument given anew changed another that spelt the same: "
+                 & Model_Runner.Tools.Builtin.With_Text_Argument
+                     ("{""content"": ""/a"", ""path"": ""/a""}", "path", "a"));
 
          --  Changed under it since it read it: refused, not made over what
          --  it did not see; read again, it may.

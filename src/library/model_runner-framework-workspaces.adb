@@ -540,6 +540,25 @@ package body Model_Runner.Framework.Workspaces is
             return;
          end if;
       end;
+
+      --  Made before a file too large to read whole was printed by what
+      --  it holds, such a file stands in it as empty: printed now from
+      --  the copy of the project the workspace keeps, where it has one.
+      declare
+         Base  : constant String :=
+           Hostkit.Fs.Join (Dirs.Containing_Directory (Records.Get (Value, "path")), "base");
+         Empty : constant String := Fingerprint ("");
+         use type Dirs.File_Size;
+      begin
+         for Position in Baseline.Iterate loop
+            if Maps.Element (Position) = Empty
+              and then Dirs.Exists (Hostkit.Fs.Join (Base, Maps.Key (Position)))
+              and then Dirs.Size (Hostkit.Fs.Join (Base, Maps.Key (Position))) > 0
+            then
+               Baseline.Replace_Element (Position, Print_Of (Hostkit.Fs.Join (Base, Maps.Key (Position))));
+            end if;
+         end loop;
+      end;
    end Read_Baseline;
 
    --  The baseline where only a list is wanted: empty where it cannot be
@@ -669,7 +688,8 @@ package body Model_Runner.Framework.Workspaces is
    function Conflict_Files
      (Item           : Stores.Store;
       Id             : String;
-      Unsettled_Only : Boolean := False) return Name_Lists.Vector
+      Unsettled_Only : Boolean := False;
+      Project_Unchanged_Only : Boolean := False) return Name_Lists.Vector
    is
       Result : Name_Lists.Vector;
       Text   : Unbounded_String;
@@ -685,12 +705,20 @@ package body Model_Runner.Framework.Workspaces is
          declare
             Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
             Path : constant String := (if Tab = 0 then Line else Line (Line'First .. Tab - 1));
-            Then_Print : constant String := (if Tab = 0 then "" else Line (Tab + 1 .. Line'Last));
+            Rest : constant String := (if Tab = 0 then "" else Line (Tab + 1 .. Line'Last));
+            Second : constant Natural := Ada.Strings.Fixed.Index (Rest, [1 => ASCII.HT]);
+            Then_Print : constant String := (if Second = 0 then Rest else Rest (Rest'First .. Second - 1));
+            Project_Then : constant String := (if Second = 0 then "" else Rest (Second + 1 .. Rest'Last));
          begin
-            if not Unsettled_Only
-              or else (E.Is_Ok (Status)
-                       and then Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) = Then_Print)
+            if (Unsettled_Only
+                and then not (E.Is_Ok (Status)
+                              and then Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) = Then_Print))
+              or else (Project_Unchanged_Only
+                       and then (Project_Then = ""
+                                 or else Print_Of (Hostkit.Fs.Join (Project_Of (Item), Path)) /= Project_Then))
             then
+               null;
+            else
                Result.Append (Path);
             end if;
          end;
@@ -1191,6 +1219,12 @@ package body Model_Runner.Framework.Workspaces is
    function Journal_Of (Item : Stores.Store; Id : String) return String
    is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "integrating-" & Id));
 
+   --  What a taking in wrote of a file it joined, kept before it is
+   --  written: neither the workspace's copy nor the project's, it is
+   --  what putting back knows its own writing by.
+   function Joined_Of (Item : Stores.Store; Id, Path : String) return String
+   is (Hostkit.Fs.Join (Journal_Of (Item, Id) & ".joined", Path));
+
    function Saved_Of (Item : Stores.Store; Id, Path : String) return String
    is (Hostkit.Fs.Join (Journal_Of (Item, Id) & ".before", Path));
 
@@ -1275,6 +1309,11 @@ package body Model_Runner.Framework.Workspaces is
       begin
          if Now = "" then
             return False;
+         --  Joined: what it wrote is kept beside the journal.
+         elsif Dirs.Exists (Joined_Of (Item, Id, Path)) then
+            return not Same_Print (Hostkit.Fs.Join (Project, Path), Joined_Of (Item, Id, Path))
+              and then (Before_Absent
+                        or else not Same_Print (Hostkit.Fs.Join (Project, Path), Saved_Of (Item, Id, Path)));
          --  What was written cannot be seen: put back only what is as it
          --  was before, which changes nothing -- anything else may be a
          --  person's, and is left, and said.
@@ -1347,6 +1386,7 @@ package body Model_Runner.Framework.Workspaces is
       end if;
       Files.Discard (Journal_Of (Item, Id));
       Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+      Files.Discard_Tree (Journal_Of (Item, Id) & ".joined");
    end Roll_Back;
 
    --  A journal begun for files about to be written in the project: each
@@ -1367,6 +1407,16 @@ package body Model_Runner.Framework.Workspaces is
       Status := E.Success;
       --  A name the journal cannot hold as one -- a tab or a line break in
       --  it -- would be read back as another file's: nothing is taken in.
+      --  One left unsettled is the only record of what the project held
+      --  before it: not begun over, which would keep what it wrote as
+      --  what was there.
+      if Dirs.Exists (Journal_Of (Item, Id)) then
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
+         E.Add_Text (Status, "detail", "an earlier taking in of " & Id & " was not settled; opening the"
+                     & " project again puts it back, or says what it cannot");
+         return;
+      end if;
       for Path of Paths loop
          if (for some C of Path => C < ' ') then
             Status := E.Make (E.Framework_Input_Invalid);
@@ -1436,6 +1486,7 @@ package body Model_Runner.Framework.Workspaces is
       if Kept then
          Files.Discard (Journal_Of (Item, Id));
          Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+         Files.Discard_Tree (Journal_Of (Item, Id) & ".joined");
       else
          Roll_Back (Item, Id, Status);
       end if;
@@ -1529,7 +1580,8 @@ package body Model_Runner.Framework.Workspaces is
       --  and only those -- one the project changed since, beside them, is
       --  judged as any other.
       Resolved : constant Name_Lists.Vector :=
-        (if Text_Resolved then Conflict_Files (Item, Id) else Name_Lists.Empty_Vector);
+        (if Text_Resolved then Conflict_Files (Item, Id, Project_Unchanged_Only => True)
+         else Name_Lists.Empty_Vector);
    begin
       Taken.Clear;
       Joined_Last.Clear;
@@ -1574,8 +1626,11 @@ package body Model_Runner.Framework.Workspaces is
                Noted   : E.Error_Info;
             begin
                for Path of Clashes loop
+                  --  And the project's copy then: settled by a person,
+                  --  it is settled against that, not a later edit.
                   Append (Kept, Path & ASCII.HT
-                          & Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) & ASCII.LF);
+                          & Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)) & ASCII.HT
+                          & Print_Of (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
                end loop;
                --  What conflicted, and how the workspace held it then, is
                --  what settling it is later told by: not kept, there is no
@@ -1741,6 +1796,19 @@ package body Model_Runner.Framework.Workspaces is
                               Put_Back;
                               return;
                         end;
+                        --  What is written, kept first: putting back knows
+                        --  it as its own, not as a person's change.
+                        if not Files.Make_Directory (Dirs.Containing_Directory (Joined_Of (Item, Id, Path))) then
+                           Files.Write_Failed (Joined_Of (Item, Id, Path), Status);
+                           Put_Back;
+                           return;
+                        end if;
+                        Files.Write_Whole (Joined_Of (Item, Id, Path), To_String (Joined), Wrote);
+                        if E.Is_Error (Wrote) then
+                           Status := Wrote;
+                           Put_Back;
+                           return;
+                        end if;
                         Put_File (Target, To_String (Joined), 0, False, Wrote);
                         if E.Is_Error (Wrote) then
                            Status := Wrote;

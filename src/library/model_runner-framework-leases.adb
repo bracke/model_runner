@@ -231,7 +231,7 @@ package body Model_Runner.Framework.Leases is
          Refuse (Resource, Held, Status);
          return;
       end if;
-      Stores.Remove (Change, Runtime_Area, Prefix & Resource);
+      Stores.Remove (Change, Runtime_Area, Prefix & Resource, Seen => Records.Revision (Held));
    end Release;
 
    --------------
@@ -301,8 +301,18 @@ package body Model_Runner.Framework.Leases is
       Cleared : out Name_Lists.Vector) is
    begin
       Cleared := Stale (Item);
+      --  Each as it was found stale: renewed since, it is not cleared.
       for Resource of Cleared loop
-         Stores.Remove (Change, Runtime_Area, Prefix & Resource);
+         declare
+            Held       : Records.Item;
+            Found      : Boolean;
+            Unreadable : Boolean;
+         begin
+            Held_Lease (Item, Resource, Held, Found, Unreadable);
+            if Found and then not Unreadable then
+               Stores.Remove (Change, Runtime_Area, Prefix & Resource, Seen => Records.Revision (Held));
+            end if;
+         end;
       end loop;
    end Clear_Stale;
 

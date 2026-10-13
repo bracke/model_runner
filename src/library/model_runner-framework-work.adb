@@ -9,6 +9,7 @@ with Ada.Strings.Maps;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Hostkit.Process;
 
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Framework.Configurations;
@@ -1378,6 +1379,17 @@ package body Model_Runner.Framework.Work is
         and then Permissions.Allows (Now, What, Path);
    end Holds_Now;
 
+   function Grants_Now (Host : Child_Host) return Permissions.Permission_Set is
+      Held   : Agents.Agent;
+      Status : E.Error_Info;
+   begin
+      Agents.Read (Host.Item.all, Current (Host), Held, Status);
+      if E.Is_Error (Status) then
+         return Permissions.Nothing;
+      end if;
+      return Permissions.Intersect (Held.Allowed, Allowed_Now (Host, To_String (Held.Role)));
+   end Grants_Now;
+
    function May
      (Host : Child_Host;
       What : Permissions.Capability;
@@ -1568,21 +1580,37 @@ package body Model_Runner.Framework.Work is
       --  As its parts say it: ././x and src//x are x and src/x.
       Bare    : constant String := Permissions.Normal (Path);
       Existing : constant Boolean := Bare /= "" and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Bare));
+
+      --  Where it lands, through any link on the way: a link to a test is
+      --  that test.
+      function Landed return String is
+         Real : constant String := Hostkit.Fs.Real_Path (Hostkit.Fs.Join (Project, Bare));
+         Base : constant String := Hostkit.Fs.Real_Path (Project);
+      begin
+         if Base /= "" and then Real'Length > Base'Length + 1
+           and then Real (Real'First .. Real'First + Base'Length) = Base & "/"
+         then
+            return Permissions.Normal (Real (Real'First + Base'Length + 1 .. Real'Last));
+         end if;
+         return Bare;
+      end Landed;
+
+      --  Under the tests, or a word of a check's command that is this
+      --  file -- a script it runs, a list it reads -- and not a source the
+      --  work is to write, which a check names to look at.
+      function Judged (Where : String) return Boolean
+      is (Repository.Under_Roots (Repository.Roots_Of (Host.Item.all).Tests, Where)
+          or else Named_By_Checks
+                    (Host.Item.all,
+                     (if Host.Profile_Frozen then To_String (Host.Profile_Text)
+                      else Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host))),
+                     Where));
    begin
       if Kind_Of_Task (Host.Item.all, To_String (Host.Task_Id)) = "test" or else not Existing then
          --  A new file judges nothing yet: tests may be added.
          return False;
-      elsif Repository.Under_Roots (Repository.Roots_Of (Host.Item.all).Tests, Bare) then
-         return True;
       end if;
-      --  A word of a check's command that is this file -- a script it
-      --  runs, a list it reads -- and not a source the work is to write,
-      --  which a check names to look at.
-      return Named_By_Checks
-        (Host.Item.all,
-         (if Host.Profile_Frozen then To_String (Host.Profile_Text)
-          else Records.Get (Configurations.Required (Host.Item.all), "profile." & Task_Profile (Host))),
-         Bare);
+      return Judged (Bare) or else Judged (Landed);
    end Judged_By;
 
    ------------------

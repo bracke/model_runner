@@ -451,7 +451,9 @@ package body Model_Runner.CLI.Tasks is
                      end if;
                   end loop;
                else
-                  --  Not judged again: said, and none named as moved.
+                  --  Not judged again: said, none named as moved, and none
+                  --  of it left staged for a later commit.
+                  Change := S.No_Changes;
                   Pres.Report (Screen, Judged);
                end if;
             end;
@@ -4925,13 +4927,31 @@ package body Model_Runner.CLI.Tasks is
          if E.Is_Ok (Outcome) then
             S.Commit (Store, Change, Outcome);
          end if;
-         if E.Is_Ok (Outcome) then
-            Model_Runner.Framework.Verification.Reevaluate_Requirements
-              (Store, Change, Changed, Outcome);
-         end if;
-         if E.Is_Ok (Outcome) then
-            Commit;
-         end if;
+         --  Complete once committed: the requirements judged after, apart,
+         --  so that not judging them is said as that and not as the task
+         --  left undone.
+         declare
+            Judged : E.Error_Info := E.Success;
+         begin
+            if E.Is_Ok (Outcome) then
+               Model_Runner.Framework.Verification.Reevaluate_Requirements
+                 (Store, Change, Changed, Judged);
+               if E.Is_Error (Judged) then
+                  Change := S.No_Changes;
+                  Changed.Clear;
+               end if;
+            end if;
+            if E.Is_Ok (Outcome) then
+               Commit;
+            end if;
+            if E.Is_Ok (Outcome) and then E.Is_Error (Judged) then
+               Pres.Put_Message
+                 (Screen, "cli.task.moved",
+                  [Loc.Named ("name", Argument), Loc.Named ("value", "complete")]);
+               Fail (Judged);
+               return;
+            end if;
+         end;
          if E.Is_Error (Outcome) then
             Fail (Outcome);
             if E."=" (Outcome.Code, E.Framework_Task_Not_Ready) then

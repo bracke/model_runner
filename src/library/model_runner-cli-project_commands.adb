@@ -464,7 +464,7 @@ package body Model_Runner.CLI.Project_Commands is
       Self.Shown := To_Unbounded_String (Result);
       --  A write that changed a file: one of what the file already held is
       --  no work done.
-      if Named = "write_file" and then Ended.Answer = Tr.Answered and then Ended.Changed then
+      if Named in "write_file" | "edit_file" and then Ended.Answer = Tr.Answered and then Ended.Changed then
          Self.Wrote := True;
       end if;
       --  Refused by a permission, a sandbox, the execution policy or the
@@ -739,6 +739,15 @@ package body Model_Runner.CLI.Project_Commands is
       Request  : Model_Runner.Generation.Request;
       Outcome  : Model_Runner.Agent.Outcome;
       Calls    : Natural := 0;
+
+      --  The steps the run may take over all its rounds, and those taken.
+      Step_Limit  : constant Positive :=
+        (if Root and then Host /= null then Host.Steps elsif Root then 24 else 16);
+      Steps_Taken : Natural := 0;
+
+      --  The tokens its rounds generated, its helpers' too: what the
+      --  budget is held to.
+      All_Spent : Natural := 0;
       Asked_To_Report : Boolean := False;
       Asked_To_Fix    : Boolean := False;
       --  What the loop holds of its calls, carried from round to round.
@@ -817,6 +826,10 @@ package body Model_Runner.CLI.Project_Commands is
       --  went round repeating ended with no report, and was failed for
       --  that, where asked once it reports.
       for Round in 1 .. (if Root then 3 else 2) loop
+         --  The rounds share the run's steps and tokens: a round after the
+         --  first has what the earlier left, and none left, there is none.
+         exit when Round > 1
+           and then (Steps_Taken >= Step_Limit or else (Budget > 0 and then All_Spent >= Budget));
          --  One memory of the calls across the rounds: a second round
          --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
@@ -830,9 +843,8 @@ package body Model_Runner.CLI.Project_Commands is
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,
-            Max_Steps   => (if Root and then Host /= null then Host.Steps
-                            elsif Root then 24 else 16),
-            Max_Total_Tokens => Budget,
+            Max_Steps   => Positive'Max (1, Step_Limit - Natural'Min (Steps_Taken, Step_Limit)),
+            Max_Total_Tokens => (if Budget = 0 then 0 else Natural'Max (1, Budget - Natural'Min (All_Spent, Budget))),
             Max_Seconds => (if Host = null then 0.0 else Host.Time_Left),
             Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,
@@ -852,6 +864,8 @@ package body Model_Runner.CLI.Project_Commands is
          --  Held back and never a call: the reply's own text, written.
          Release_Held (Sink);
          Calls := Calls + Outcome.Calls;
+         Steps_Taken := Steps_Taken + Outcome.Steps;
+         All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;
          Runner.Thoughts_Closed := Runner.Thoughts_Closed + Outcome.Thoughts_Closed;
          Tokens := Tokens + Outcome.Generated_Tokens;
          if Length (Outcome.Work_Record) > 0 then
@@ -1070,6 +1084,9 @@ package body Model_Runner.CLI.Project_Commands is
    is
       package Tr renames Model_Runner.Tools.Runner;
 
+      --  The tokens its helpers' runs generated.
+      Spent : Natural := 0;
+
       --  The call failed, in the words given.
       function Fails (Text : String) return String is
       begin
@@ -1131,6 +1148,7 @@ package body Model_Runner.CLI.Project_Commands is
       if Model_Runner.Framework.Execution.Work_Withdrawn then
          return Fails ("error: the work was cancelled; no helper is made");
       end if;
+      Spent := 0;
       loop
          declare
             Id      : Unbounded_String;
@@ -1173,6 +1191,7 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
                                    Prompt_Tokens => Prompt);
+            Spent := Spent + Tokens;
             --  A run that failed and is run again is said now, before the
             --  next starts; the answer then names it, and says the last.
             if Retry then
@@ -1191,6 +1210,9 @@ package body Model_Runner.CLI.Project_Commands is
             Retry_Of := Id;
          end;
       end loop;
+      --  What the helpers spent, every run of them: counted against the
+      --  parent's budget as it goes, not only after.
+      Ended.Tokens := Spent;
 
       --  The outputs it was to write, checked: written where their content
       --  is not what it was, and the call failed where one is not.
@@ -1278,6 +1300,11 @@ package body Model_Runner.CLI.Project_Commands is
 
       function Within_Project (Path : String) return Boolean
       is (Project_Commands.Within_Project (Root, Path));
+
+      --  What the agent now working may do: nothing held back where there
+      --  is no host to ask.
+      Grants : constant Pm.Permission_Set :=
+        (if Self.Host = null then Pm.Unrestricted else Wk.Grants_Now (Self.Host.all));
 
       function Exists (Path : String) return Boolean
       is (Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Self.Base, Path)));
@@ -1411,17 +1438,15 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       if Given_Path and then File_Tool (Named) and then Inside /= "" then
          declare
-            Quoted : constant String := '"' & Path & '"';
-            At_Path : constant Natural := Ada.Strings.Fixed.Index (Arguments, Quoted);
+            Taken : constant String := Inside;
+            --  Its path given anew, and only its path: a content that
+            --  happens to spell it stays as it is.
+            Moved : constant String := Model_Runner.Tools.Builtin.With_Text_Argument (Arguments, "path", Taken);
          begin
-            if At_Path > 0 then
+            if Moved /= "" then
                declare
-                  Taken : constant String := Inside;
                begin
-                  Run (Self, Named,
-                       Arguments (Arguments'First .. At_Path - 1) & '"' & Taken & '"'
-                       & Arguments (At_Path + Quoted'Length .. Arguments'Last),
-                       Result, Last, Outcome, Status);
+                  Run (Self, Named, Moved, Result, Last, Outcome, Status);
                   --  Read from a shorter end of the path it gave: said, so
                   --  the agent knows which file it was.
                   if not Writes (Named) and then Taken /= "." and then Last >= Result'First
@@ -1515,14 +1540,16 @@ package body Model_Runner.CLI.Project_Commands is
             end;
          end if;
       elsif File_Tool (Named)
-        and then Pm.Path_Refusal (Root, Path, Writing => Writes (Named)) /= ""
+        and then Pm.Path_Refusal (Root, Path, Writing => Writes (Named), Allowed => Grants) /= ""
       then
+         --  Judged where it lands, against what the agent may: a link in
+         --  a place it may write leads nowhere it may not.
          Refuse
-           (case Pm.Path_Refused_As (Root, Path, Writing => Writes (Named)) is
+           (case Pm.Path_Refused_As (Root, Path, Writing => Writes (Named), Allowed => Grants) is
               when Pm.Path_Outside       => Tr.Outside_Project,
               when Pm.Path_Harness_Owned => Tr.Harness_Owned,
               when others                => Tr.Not_Permitted);
-         Put ("error: " & Pm.Path_Refusal (Root, Path, Writing => Writes (Named)));
+         Put ("error: " & Pm.Path_Refusal (Root, Path, Writing => Writes (Named), Allowed => Grants));
       elsif File_Tool (Named) and then Self.Host /= null and then not Wk.Authority_Readable (Self.Host.all) then
          --  Not denied: not known. Said as that, nothing done.
          Refuse (Tr.Not_Permitted);
@@ -1558,9 +1585,21 @@ package body Model_Runner.CLI.Project_Commands is
                Put ("error: " & Path & " was not written: a copy of it as it was could not be"
                     & " kept first, so the write could not be undone");
             else
-               Model_Runner.Tools.Builtin.Run
-                 (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
-                  Outcome, Status);
+               --  What a search shows held to what the agent may read,
+               --  file by file, as each lands.
+               if Self.Host /= null then
+                  Model_Runner.Tools.Builtin.Hold_Reads (Root, Grants);
+               end if;
+               begin
+                  Model_Runner.Tools.Builtin.Run
+                    (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last,
+                     Outcome, Status);
+               exception
+                  when others =>
+                     Model_Runner.Tools.Builtin.Let_Reads_Go;
+                     raise;
+               end;
+               Model_Runner.Tools.Builtin.Let_Reads_Go;
                --  How the work went, counted as it goes.
                if Named = "read_file"
                  and then Ada.Strings.Fixed.Index (Arguments, """first_line""") = 0

@@ -235,6 +235,10 @@ private
       Subject : Ada.Strings.Unbounded.Unbounded_String;
       Kind    : Model_Runner.Tools.Runner.Call_Kind;
       Ended   : Model_Runner.Tools.Runner.Call_Outcome;
+
+      --  Whether any call of it changed what it names: a later failure,
+      --  or "unchanged", does not take back a change that was made.
+      Changed_Ever : Boolean := False;
    end record;
 
    package Entry_Vectors is new Ada.Containers.Vectors (Positive, Entry_Row);

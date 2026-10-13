@@ -1026,13 +1026,19 @@ package body Model_Runner.Agent is
                      declare
                         Source : constant Positive :=
                           (if Items (Call).Copy_Of > 0 then Items (Call).Copy_Of else Call);
+                        --  An answer too large to return is not a change
+                        --  not made: one the tool made is said, and kept.
+                        Made_It : constant Boolean :=
+                          Items (Source).Failed and then Items (Source).Ended.Changed;
                         Said_By_Tool : constant String :=
                           (if Items (Source).Failed
                            then "error: the tool's answer was too large to "
-                                & "return"
+                                & "return" & (if Made_It then "; it did make its change -- read what it changed"
+                                              else "")
                            else U.To_String (Items (Source).Text));
                         Ended : constant Model_Runner.Tools.Runner.Call_Outcome :=
-                          (if Items (Source).Failed then Failed_Note else Items (Source).Ended);
+                          (if Made_It then Items (Source).Ended
+                           elsif Items (Source).Failed then Failed_Note else Items (Source).Ended);
 
                         Args    : constant String := U.To_String (Items (Call).Args);
                         Key     : constant String := Model_Runner.Agent.Recall.Identity (Named, Args);

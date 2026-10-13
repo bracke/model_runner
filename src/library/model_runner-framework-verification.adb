@@ -1113,13 +1113,24 @@ package body Model_Runner.Framework.Verification is
                if Next.Timeout > 0 then
                   Own.Timeout := Next.Timeout;
                end if;
-               --  Not past the time the run has left.
-               if Within > 0 then
-                  Own.Timeout := Positive'Max (1, Natural'Min (Own.Timeout, Time_Left));
-               end if;
                Own.Keep_Whole := Next.Keep_Whole;
                loop
                   Tries := Tries + 1;
+                  --  Not past the time the run has left, each try; none
+                  --  left, the checks are not run -- a check given no time
+                  --  is not one that failed.
+                  if Within > 0 and then Time_Left = 0 then
+                     Evidence := Null_Unbounded_String;
+                     Status := E.Make (E.Framework_Limit_Exceeded);
+                     E.Add_Text (Status, "name", "the time the run is allowed");
+                     E.Add_Text (Status, "detail", "it ran out before " & To_String (Next.Label)
+                                 & ", so its checks were not all run and nothing of them is kept");
+                     Put_State_Back;
+                     return;
+                  elsif Within > 0 then
+                     Own.Timeout := Positive'Max (1, Natural'Min ((if Next.Timeout > 0 then Next.Timeout
+                                                                   else Rules.Timeout), Time_Left));
+                  end if;
                   Execution.Run
                     (Item, Change, Own, Filled (To_String (Next.Command)),
                      Filled (To_String (Next.Directory), Command => False), Ran, Status, Base => Workspace);
@@ -3294,20 +3305,12 @@ package body Model_Runner.Framework.Verification is
 
       for Requirement of Intent.List (Item, Intent.Requirement, "verified") loop
          --  Moved already in this change: as it is staged, not as listed.
-         if not Changed.Contains (Requirement) and then Supporting (Requirement) = "" then
-            --  Evidence that will not read may be what still holds it: that
-            --  it no longer applies is not known, and is not said.
-            declare
-               Unread : constant String := Unreadable_Evidence (Item);
-            begin
-               if Unread /= "" then
-                  Status := E.Make (E.Framework_Integrity_Failed);
-                  E.Add_Text (Status, "name", Unread);
-                  E.Add_Text (Status, "detail", Unread & " will not read, so whether the evidence for "
-                              & Requirement & " still applies cannot be told; /check names it");
-                  return;
-               end if;
-            end;
+         --  Evidence that will not read may be what still holds it: that
+         --  it no longer applies is not known, and is not said -- it stays
+         --  as it is, the rest judged, and /check names the record.
+         if not Changed.Contains (Requirement) and then Supporting (Requirement) = ""
+           and then Unreadable_Evidence (Item) = ""
+         then
             Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
                          [Transitions.Ordinary => True, Transitions.Invalidation => True,
                           others => False],

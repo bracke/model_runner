@@ -1,7 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Command_Line;
 with Ada.Directories;
-with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
 with Hostkit.Durability;
@@ -14,6 +13,46 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Schemas;
 
 package body Model_Runner.Framework.Stores is
+
+   --  The records commits wrote, in the order written, each as its root
+   --  and its name a tab apart: what Restore_State leaves as the
+   --  harness's own. Several tasks of one session commit, so it is guarded.
+   protected Written is
+      procedure Add (Root_Path : String; Names : Name_Lists.Vector);
+      function Count return Natural;
+      function Since (Root_Path : String; From : Natural) return Name_Lists.Vector;
+   private
+      Lines : Name_Lists.Vector;
+   end Written;
+
+   protected body Written is
+      procedure Add (Root_Path : String; Names : Name_Lists.Vector) is
+      begin
+         for Name of Names loop
+            Lines.Append (Root_Path & ASCII.HT & Name);
+         end loop;
+      end Add;
+
+      function Count return Natural is (Natural (Lines.Length));
+
+      function Since (Root_Path : String; From : Natural) return Name_Lists.Vector is
+         Result : Name_Lists.Vector;
+         Prefix : constant String := Root_Path & ASCII.HT;
+      begin
+         for Index in From + 1 .. Natural (Lines.Length) loop
+            declare
+               Line : constant String := Lines (Index);
+            begin
+               if Line'Length > Prefix'Length
+                 and then Line (Line'First .. Line'First + Prefix'Length - 1) = Prefix
+               then
+                  Result.Append (Line (Line'First + Prefix'Length .. Line'Last));
+               end if;
+            end;
+         end loop;
+         return Result;
+      end Since;
+   end Written;
 
    package E renames Model_Runner.Errors;
    package Dirs renames Ada.Directories;
@@ -47,11 +86,6 @@ package body Model_Runner.Framework.Stores is
 
    function Area_Directory (Root : String; Where : Area) return String
    is (Join (Root, Directory_Name (Where)));
-
-   --  The log of the records commits wrote, each by its path under the
-   --  state root, a line each.
-   function Written_Log (Root_Path : String) return String
-   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Root_Path, "runtime"), "written.log"));
 
    function Record_Path
      (Root : String; Where : Area; Name : String) return String
@@ -435,14 +469,16 @@ package body Model_Runner.Framework.Stores is
    procedure Remove
      (Change : in out Transaction;
       Where  : Area;
-      Name   : String)
+      Name   : String;
+      Seen   : Natural := 0)
    is
       Held : constant Natural := Position (Change, Where, Name);
+      --  The revision it was read at, carried as its value's.
       Next : constant Operation :=
         (Kind  => Remove_Operation,
          Where => Where,
          Name  => To_Unbounded_String (Name),
-         Value => Records.Create ("", 1, "", 0));
+         Value => Records.Create ("", 1, "", Seen));
    begin
       if Held = 0 then
          Change.Operations.Append (Next);
@@ -707,7 +743,26 @@ package body Model_Runner.Framework.Stores is
       end if;
 
       Read (Item, Indexes_Area, Index_Name, Index, Status);
-      if E.Is_Error (Status) then
+      if E.Is_Error (Status) and then Item.Read_Only then
+         --  Not the reader's to write: the session holding the store may
+         --  be writing it now. Built here, for this lookup only.
+         Index := Records.Create (Schemas.Index_Schema, 1, Index_Entity, 1);
+         for Kept in Area loop
+            if Indexed (Kept) then
+               for Named of Names (Item, Kept) loop
+                  declare
+                     Value : Records.Item;
+                     Got   : E.Error_Info;
+                  begin
+                     Read (Item, Kept, Named, Value, Got);
+                     if E.Is_Ok (Got) then
+                        Records.Set (Index, "entity." & Records.Entity_Id (Value), Place_Of (Kept, Named));
+                     end if;
+                  end;
+               end loop;
+            end if;
+         end loop;
+      elsif E.Is_Error (Status) then
          Rebuild_Index (Item, Status);
          Read (Item, Indexes_Area, Index_Name, Index, Status);
          if E.Is_Error (Status) then
@@ -886,6 +941,17 @@ package body Model_Runner.Framework.Stores is
                      & Records.Entity_Id (Next.Value));
 
                when Remove_Operation =>
+                  --  Removed on what it said at a revision since replaced:
+                  --  the newer is not taken away unseen.
+                  if Found and then Records.Revision (Next.Value) > 0
+                    and then Records.Revision (Held) /= Records.Revision (Next.Value)
+                  then
+                     Status := E.Make (E.Framework_Revision_Conflict);
+                     E.Add_Text (Status, "name", Name);
+                     E.Add_Integer (Status, "actual", Long_Long_Integer (Records.Revision (Held)));
+                     E.Add_Integer (Status, "expected", Long_Long_Integer (Records.Revision (Next.Value)));
+                     return;
+                  end if;
                   Records.Set
                     (Manifest, "op." & Six (Index),
                      "remove " & Directory_Name (Next.Where) & " " & Name & " "
@@ -998,9 +1064,7 @@ package body Model_Runner.Framework.Stores is
       --  compared with: a change the harness made is not taken for one made
       --  behind its back.
       declare
-         use Ada.Streams.Stream_IO;
-         Log  : File_Type;
-         Said : Unbounded_String;
+         Said : Name_Lists.Vector;
       begin
          for Op in 1 .. Count loop
             declare
@@ -1010,23 +1074,12 @@ package body Model_Runner.Framework.Stores is
             begin
                Area_Of (Word (Line, 2), Where, Known);
                if Known and then Is_Name (Word (Line, 3)) then
-                  Append (Said, Record_Name (Where, Word (Line, 3)) & ASCII.LF);
+                  Said.Append (Record_Name (Where, Word (Line, 3)));
                end if;
             end;
          end loop;
-         Append (Said, Record_Name (Indexes_Area, Index_Name) & ASCII.LF);
-         if Ada.Directories.Exists (Written_Log (Root (Item))) then
-            Open (Log, Append_File, Written_Log (Root (Item)));
-         else
-            Create (Log, Out_File, Written_Log (Root (Item)));
-         end if;
-         String'Write (Stream (Log), To_String (Said));
-         Close (Log);
-      exception
-         when others =>
-            if Is_Open (Log) then
-               Close (Log);
-            end if;
+         Said.Append (Record_Name (Indexes_Area, Index_Name));
+         Written.Add (Root (Item), Said);
       end;
 
       for Op in 1 .. Count loop
@@ -1194,6 +1247,16 @@ package body Model_Runner.Framework.Stores is
          E.Add_Text (Status, "path", Root (Item), E.Param_Path);
          E.Add_Text (Status, "detail", "it was opened to be read, while another session holds it");
          return;
+      end if;
+
+      --  An earlier change marked and not finished is finished first, and
+      --  apart: not finished, it stays for the next opening -- clearing
+      --  what this one staged would take its mark with it.
+      if Ada.Directories.Exists (Join (Journal_Directory (Root (Item)), Manifest_File)) then
+         Finish (Item, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       Stage (Item, Change, Status);
@@ -1378,7 +1441,11 @@ package body Model_Runner.Framework.Stores is
          procedure Sweep (Directory : String) is
          begin
             for File of Files_In (Directory) loop
-               if Ends_With (File, Partial_Suffix)
+               --  And what a whole-file write left part way: its own
+               --  partial, hidden beside the file (Editing.Replace). Only the
+               --  session holding the lock writes here, and it is opening.
+               if (Ends_With (File, Partial_Suffix)
+                   or else Ada.Strings.Fixed.Index (File, ".model_runner-partial.") > 0)
                  and then Delete_If_Present (Join (Directory, File))
                then
                   Report.Partials_Removed := Report.Partials_Removed + 1;
@@ -1653,6 +1720,10 @@ package body Model_Runner.Framework.Stores is
 
    --  Every state file below a directory, relative to the root, with what
    --  it holds; the scratch, the lock and a workspace's tree are left out.
+   --  What a snapshot holds of a file that would not read: no text a
+   --  record has.
+   Unread_Mark : constant String := ASCII.NUL & "unread";
+
    procedure Gather
      (Root, Under : String;
       Into        : in out Text_Maps.Map)
@@ -1676,7 +1747,9 @@ package body Model_Runner.Framework.Stores is
                --  by name, from what they hold -- not by a commit.
                --  Nor the copies kept of work given up or files it
                --  replaced: kept for a person, written by no commit.
-               if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads"
+               --  Nor the journal: a change under way, or one left for the
+               --  next opening, is the commit's own, put right by it.
+               if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads" | "runtime/journal"
                  and then not (Under = "workspaces")
                  and then not (Under = "runtime"
                                and then (Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First
@@ -1699,9 +1772,9 @@ package body Model_Runner.Framework.Stores is
                   Read : E.Error_Info;
                begin
                   Files.Read_Text (Ada.Directories.Full_Name (Found), Text, Read);
-                  if E.Is_Ok (Read) then
-                     Into.Include (Relative, Text);
-                  end if;
+                  --  One that will not read is there all the same: kept as
+                  --  that, so it is neither put back nor taken for new.
+                  Into.Include (Relative, (if E.Is_Ok (Read) then Text else To_Unbounded_String (Unread_Mark)));
                end;
             end if;
          end;
@@ -1715,9 +1788,7 @@ package body Model_Runner.Framework.Stores is
       Into.Logged := 0;
       if Ada.Directories.Exists (Root (Item)) then
          Gather (Root (Item), "", Into.Files);
-         if Ada.Directories.Exists (Written_Log (Root (Item))) then
-            Into.Logged := Natural (Ada.Directories.Size (Written_Log (Root (Item))));
-         end if;
+         Into.Logged := Written.Count;
       end if;
    end Snapshot_State;
 
@@ -1742,17 +1813,7 @@ package body Model_Runner.Framework.Stores is
       Snapshot_State (Item, Now);
       Changed.Clear;
       Left.Clear;
-      declare
-         Log  : Unbounded_String;
-         Read : E.Error_Info;
-      begin
-         if Ada.Directories.Exists (Written_Log (Root (Item))) then
-            Files.Read_Text (Written_Log (Root (Item)), Log, Read);
-            if E.Is_Ok (Read) and then Length (Log) > From.Logged then
-               Committed := Lines_Of (Slice (Log, From.Logged + 1, Length (Log)));
-            end if;
-         end if;
-      end;
+      Committed := Written.Since (Root (Item), From.Logged);
       for Position in From.Files.Iterate loop
          declare
             Name : constant String := Text_Maps.Key (Position);
@@ -1760,12 +1821,22 @@ package body Model_Runner.Framework.Stores is
          begin
             if Committed.Contains (Name) then
                null;
+            elsif (not Now.Files.Contains (Name)
+                   or else Now.Files (Name) /= Text_Maps.Element (Position))
+              and then (To_String (Text_Maps.Element (Position)) = Unread_Mark
+                        or else (Now.Files.Contains (Name)
+                                 and then To_String (Now.Files (Name)) = Unread_Mark))
+            then
+               --  What it was, or is, cannot be read: not put back, said.
+               Changed.Append (Name);
+               Left.Append (Name & ": it could not be read, before or now, so it is not put back");
             elsif not Now.Files.Contains (Name)
               or else Now.Files (Name) /= Text_Maps.Element (Position)
             then
                Changed.Append (Name);
                if Files.Make_Directory (Ada.Directories.Containing_Directory (Path)) then
-                  Files.Write_Text (Path, To_String (Text_Maps.Element (Position)), Status);
+                  --  Whole or not at all: a write cut short is no record.
+                  Files.Write_Whole (Path, To_String (Text_Maps.Element (Position)), Status);
                   if E.Is_Error (Status) then
                      Left.Append (Name & ": cannot be written back");
                   end if;

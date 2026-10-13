@@ -226,10 +226,14 @@ package Model_Runner.Framework.Stores is
    --  @param Change The transaction.
    --  @param Where Its area.
    --  @param Name Its name.
+   --  @param Seen The revision it was read at, when the removal rests on
+   --    what it said: changed since, the commit is refused, as a Put over
+   --    a newer revision is. Zero holds it to nothing.
    procedure Remove
      (Change : in out Transaction;
       Where  : Area;
-      Name   : String);
+      Name   : String;
+      Seen   : Natural := 0);
 
    --  The record a transaction will write in place of a name, if it
    --  stages one: what a second change to the same record in the same
@@ -497,8 +501,10 @@ private
    type State_Snapshot is record
       Files : Text_Maps.Map;
 
-      --  How long the log of what commits wrote was when it was taken:
-      --  what is written after is the harness's, whichever process made it.
+      --  How many records commits had written when it was taken: what is
+      --  written after is the harness's. Only the session holding the lock
+      --  commits, so it is kept in this process -- not in a file inside the
+      --  state, which what is checked could write to itself.
       Logged : Natural := 0;
    end record;
 

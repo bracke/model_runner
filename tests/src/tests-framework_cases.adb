@@ -10250,6 +10250,47 @@ package body Tests.Framework_Cases is
                  "a commit made meanwhile was put back, or a write behind the harness kept");
       end;
 
+      --  A record written behind the harness that names itself in a log
+      --  as committed is not the harness's for that.
+      declare
+         Taken   : S.State_Snapshot;
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Target  : constant String := Fresh_Root (Store) & "/.model_runner/tasks/" & To_String (Id) & ".rec";
+         Was     : constant String := Read_Whole (Target);
+         Log     : Ada.Text_IO.File_Type;
+      begin
+         S.Snapshot_State (Store, Taken);
+         Put_File (Target, Was & "# edited behind the harness" & LF);
+         Ada.Text_IO.Create (Log, Ada.Text_IO.Append_File, Fresh_Root (Store) & "/.model_runner/runtime/written.log");
+         Ada.Text_IO.Put_Line (Log, "tasks/" & To_String (Id) & ".rec");
+         Ada.Text_IO.Close (Log);
+         S.Restore_State (Store, Taken, Changed, Left);
+         Assert (Read_Whole (Target) = Was,
+                 "a record written behind the harness was kept because a log in the state said it was committed");
+      end;
+
+      --  A removal resting on a revision since replaced is refused.
+      declare
+         Value   : R.Item;
+         Got     : E.Error_Info;
+         Seen_At : Natural;
+         Name    : constant String := To_String (Id);
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, Name, Value, Got);
+         Seen_At := R.Revision (Value);
+         R.Set (Value, "notes", "changed since");
+         R.Set_Revision (Value, Seen_At + 1);
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, Name, Value);
+         S.Commit (Store, Change, Got);
+         S.Remove (Change, Model_Runner.Framework.Tasks_Area, Name, Seen => Seen_At);
+         S.Commit (Store, Change, Got);
+         Assert (Got.Code = E.Framework_Revision_Conflict
+                 and then S.Exists (Store, Model_Runner.Framework.Tasks_Area, Name),
+                 "a record was removed on what it said at a revision since replaced: " & Code_Of (Got));
+         Change := S.No_Changes;
+      end;
+
       --  What cannot be taken back out is said, not passed off as put back.
       declare
          Taken   : S.State_Snapshot;

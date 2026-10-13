@@ -347,6 +347,14 @@ package Model_Runner.Framework.Work is
    --  @return Its id.
    function Current (Host : Child_Host) return String;
 
+   --  What the agent now working may do, as May weighs it: its own
+   --  grants and what is allowed now, together; nothing where its record
+   --  will not read.
+   --
+   --  @param Host The host.
+   --  @return The set.
+   function Grants_Now (Host : Child_Host) return Permissions.Permission_Set;
+
    --  Whether the agent now working may do something.
    --
    --  @param Host The host.

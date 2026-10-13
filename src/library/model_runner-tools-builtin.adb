@@ -4,6 +4,7 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
+with Ada.Task_Attributes;
 with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
@@ -13,6 +14,7 @@ with Hostkit.Metadata;
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
+with Jsonlib.Serializers;
 
 with Model_Runner.Processes;
 
@@ -21,7 +23,6 @@ with Http_Client.Errors;
 
 with Model_Runner.Cancellation;
 with Model_Runner.Agent_Runtime;
-with Model_Runner.Framework.Permissions;
 with Model_Runner.Tools.DOC;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.OOXML;
@@ -148,6 +149,19 @@ package body Model_Runner.Tools.Builtin is
       Found := True;
       return Doc.As_String (Document, Item);
    end Text_Argument;
+
+   function With_Text_Argument (Args : String; Key : String; Value : String) return String is
+      Document : Doc.Document;
+      Item     : Doc.Node;
+      Present  : Boolean;
+   begin
+      Member (Args, Key, Document, Item, Present);
+      if not Present then
+         return "";
+      end if;
+      Doc.Set_Member (Document, Doc.Root (Document), Key, Doc.New_String (Document, Value));
+      return Jsonlib.Serializers.To_String (Document);
+   end With_Text_Argument;
 
    procedure Text_List_Argument
      (Args        : String;
@@ -1204,10 +1218,34 @@ package body Model_Runner.Tools.Builtin is
    --  started this program as an agent, by the same judgement read_file is
    --  held to -- its read permissions, what they deny -- file by file, not
    --  only the folder the search began at.
+   --  What a task's searches are held to, where Hold_Reads said.
+   type Held_Reads is record
+      Held    : Boolean := False;
+      Root    : U.Unbounded_String;
+      Allowed : Model_Runner.Framework.Permissions.Permission_Set :=
+        Model_Runner.Framework.Permissions.Unrestricted;
+   end record;
+
+   package Reads_Held is new Ada.Task_Attributes (Held_Reads, (others => <>));
+
+   procedure Hold_Reads (Root : String; Allowed : Model_Runner.Framework.Permissions.Permission_Set) is
+   begin
+      Reads_Held.Set_Value ((Held => True, Root => U.To_Unbounded_String (Root), Allowed => Allowed));
+   end Hold_Reads;
+
+   procedure Let_Reads_Go is
+   begin
+      Reads_Held.Set_Value ((others => <>));
+   end Let_Reads_Go;
+
    function May_Read_Found (Path : String) return Boolean is
       package Pm renames Model_Runner.Framework.Permissions;
       package Env renames Ada.Environment_Variables;
+      Here : constant Held_Reads := Reads_Held.Value;
    begin
+      if Here.Held then
+         return Pm.Path_Refusal (U.To_String (Here.Root), Path, Writing => False, Allowed => Here.Allowed) = "";
+      end if;
       return not Env.Exists (Pm.Agent_Root_Variable)
         or else Pm.Path_Refusal
                   (Env.Value (Pm.Agent_Root_Variable), Path,
@@ -2458,6 +2496,120 @@ package body Model_Runner.Tools.Builtin is
          return Said;
       end Confined;
 
+      --  A file tool's call on its path as given: held to what was seen of
+      --  the file, and what it now sees noted.
+      function File_Call (Args : String) return Reply is
+      begin
+         declare
+            Have : Boolean;
+            Spelt : constant String := Text_Argument (Args, "path", Have);
+            --  Known by the file, not by how it was spelt: ./a.adb and
+            --  a.adb are one, and a change under either is seen.
+            Path : constant String := Seen_Key (Spelt);
+            Now  : constant String :=
+              (if Writes (Named) and then Have and then Self.Seen.Has (Path)
+               then Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base)) else "");
+         begin
+            --  Changed under it since it last read or wrote it: made over
+            --  what it did not see, the other change would be lost.
+            if Now /= "" and then Now /= Self.Seen.Get (Path) then
+               return Failure
+                 (Path & " has changed since you last read or wrote it (revision " & Self.Seen.Get (Path)
+                  & " then, " & Now & " now), by something other than you: read it again, then"
+                  & " change what is there");
+            --  Seen, and now not to be read -- grown past what is read,
+            --  no longer text, gone: not written over unseen.
+            elsif Writes (Named) and then Have and then Self.Seen.Has (Path) and then Now = "" then
+               return Failure
+                 (Path & " cannot be read as it is now -- gone, grown too large or no longer text --"
+                  & " so it is not changed over what you saw of it: read it again first");
+            end if;
+            --  Written whole over a file there, it is written over what
+            --  was seen of it whole: a part read, or none, would lose the
+            --  rest.
+            if Named = "write_file" and then Have
+              and then Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (U.To_String (Self.Base), Spelt))
+            then
+               declare
+                  There : constant String :=
+                    Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base));
+               begin
+                  if There /= "" and then not (Self.Whole.Has (Path) and then Self.Whole.Get (Path) = There) then
+                     return Failure
+                       (Spelt & " is there and you have not read the whole of it as it is now, so"
+                        & " writing it whole would lose what you did not see: read_file it, or change"
+                        & " a part of it with edit_file");
+                  end if;
+               end;
+            end if;
+            declare
+               --  The lines last read of the file, where they were a part.
+               Near : constant String :=
+                 (if Named = "edit_file" and then Have and then Self.Read_At.Has (Path)
+                  then Self.Read_At.Get (Path) else "");
+               Colon : constant Natural := Ada.Strings.Fixed.Index (Near, ":");
+
+               function Answered return Reply is
+               begin
+                  if Colon > Near'First and then Colon < Near'Last then
+                     return Edit_File_Near
+                       (Args, U.To_String (Self.Base),
+                        Natural'Value (Near (Near'First .. Colon - 1)),
+                        Natural'Value (Near (Colon + 1 .. Near'Last)));
+                  end if;
+                  return File_Answer (Named, Args, U.To_String (Self.Base));
+               end Answered;
+
+               Given : constant Reply := Answered;
+            begin
+               --  Which lines it read: a part, kept; the whole, none.
+               if Have and then not Given.Failed and then Named in "read_file" | "read_range" then
+                  declare
+                     First, Last : Long_Long_Integer := 0;
+                     Have_F, Have_L : Boolean;
+                  begin
+                     Integer_Argument (Args, "first_line", First, Have_F);
+                     Integer_Argument (Args, "last_line", Last, Have_L);
+                     if Have_F and then First in 1 .. 100_000_000 then
+                        Self.Read_At.Put
+                          (Path, Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (First), Ada.Strings.Left) & ":"
+                                 & (if Have_L and then Last in First .. 100_000_000
+                                    then Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Last), Ada.Strings.Left)
+                                    else "100000000"));
+                     else
+                        Self.Read_At.Put (Path, "");
+                     end if;
+                  end;
+               end if;
+               --  The file as the agent now knows it, read or written.
+               if Have and then not Given.Failed
+                 and then Given.After_Revision /= Model_Runner.Tools.Runner.No_Revision
+               then
+                  Self.Seen.Put (Path, Given.After_Revision);
+                  --  Seen whole: read whole and not cut short, or written
+                  --  whole; changed in part over what was seen whole, it
+                  --  is still known whole. Anything else, not.
+                  if (Named = "read_file" and then not Given.Truncated
+                      and then Ada.Strings.Fixed.Index (Args, """first_line""") = 0)
+                    or else Named = "write_file"
+                    or else (Writes (Named) and then Self.Whole.Has (Path)
+                             and then Self.Whole.Get (Path) = Given.Before_Revision)
+                  then
+                     Self.Whole.Put (Path, Given.After_Revision);
+                  elsif Writes (Named) and then Self.Whole.Has (Path) then
+                     Self.Whole.Put (Path, "");
+                  end if;
+                  --  Its own change moves the lines it last read: the
+                  --  range read is no guide to where a passage is now.
+                  if Writes (Named) and then Given.Changed then
+                     Self.Read_At.Put (Path, "");
+                  end if;
+               end if;
+               return Given;
+            end;
+         end;
+      end File_Call;
+
       function Answer return Reply is
       begin
          if File_Tool (Named)
@@ -2469,86 +2621,22 @@ package body Model_Runner.Tools.Builtin is
                Have  : Boolean;
                Given : constant String := Text_Argument (Arguments, "path", Have);
                Taken : constant String := Rooted (Named, Arguments);
-               At_Path : constant Natural := Ada.Strings.Fixed.Index (Arguments, """" & Given & """");
-               Moved : constant String :=
-                 Arguments (Arguments'First .. At_Path) & Taken
-                 & Arguments (At_Path + Given'Length + 1 .. Arguments'Last);
+               --  Its path given anew, and only its path: a content that
+               --  happens to spell it stays as it is.
+               Moved : constant String := With_Text_Argument (Arguments, "path", Taken);
                Taken_As : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
             begin
-               if Confined (Named, Moved) /= "" then
+               if Moved = "" then
+                  return Failure ("the call's arguments could not be read again with " & Taken & " as its path");
+               elsif Confined (Named, Moved) /= "" then
                   return Failure (Confinement (Named, Moved));
                end if;
-               return Prefixed (Taken_As, File_Answer (Named, Moved, U.To_String (Self.Base)));
+               return Prefixed (Taken_As, File_Call (Moved));
             end;
          elsif Confined (Named, Arguments) /= "" then
             return Failure (Confinement (Named, Arguments));
          elsif File_Tool (Named) then
-            declare
-               Have : Boolean;
-               Spelt : constant String := Text_Argument (Arguments, "path", Have);
-               --  Known by the file, not by how it was spelt: ./a.adb and
-               --  a.adb are one, and a change under either is seen.
-               Path : constant String := Seen_Key (Spelt);
-               Now  : constant String :=
-                 (if Writes (Named) and then Have and then Self.Seen.Has (Path)
-                  then Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base)) else "");
-            begin
-               --  Changed under it since it last read or wrote it: made over
-               --  what it did not see, the other change would be lost.
-               if Now /= "" and then Now /= Self.Seen.Get (Path) then
-                  return Failure
-                    (Path & " has changed since you last read or wrote it (revision " & Self.Seen.Get (Path)
-                     & " then, " & Now & " now), by something other than you: read it again, then"
-                     & " change what is there");
-               end if;
-               declare
-                  --  The lines last read of the file, where they were a part.
-                  Near : constant String :=
-                    (if Named = "edit_file" and then Have and then Self.Read_At.Has (Path)
-                     then Self.Read_At.Get (Path) else "");
-                  Colon : constant Natural := Ada.Strings.Fixed.Index (Near, ":");
-
-                  function Answered return Reply is
-                  begin
-                     if Colon > Near'First and then Colon < Near'Last then
-                        return Edit_File_Near
-                          (Arguments, U.To_String (Self.Base),
-                           Natural'Value (Near (Near'First .. Colon - 1)),
-                           Natural'Value (Near (Colon + 1 .. Near'Last)));
-                     end if;
-                     return File_Answer (Named, Arguments, U.To_String (Self.Base));
-                  end Answered;
-
-                  Given : constant Reply := Answered;
-               begin
-                  --  Which lines it read: a part, kept; the whole, none.
-                  if Have and then not Given.Failed and then Named in "read_file" | "read_range" then
-                     declare
-                        First, Last : Long_Long_Integer := 0;
-                        Have_F, Have_L : Boolean;
-                     begin
-                        Integer_Argument (Arguments, "first_line", First, Have_F);
-                        Integer_Argument (Arguments, "last_line", Last, Have_L);
-                        if Have_F and then First in 1 .. 100_000_000 then
-                           Self.Read_At.Put
-                             (Path, Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (First), Ada.Strings.Left) & ":"
-                                    & (if Have_L and then Last in First .. 100_000_000
-                                       then Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Last), Ada.Strings.Left)
-                                       else "100000000"));
-                        else
-                           Self.Read_At.Put (Path, "");
-                        end if;
-                     end;
-                  end if;
-                  --  The file as the agent now knows it, read or written.
-                  if Have and then not Given.Failed
-                    and then Given.After_Revision /= Model_Runner.Tools.Runner.No_Revision
-                  then
-                     Self.Seen.Put (Path, Given.After_Revision);
-                  end if;
-                  return Given;
-               end;
-            end;
+            return File_Call (Arguments);
          end if;
          for One of Handlers loop
             if One.Name.all = Named then

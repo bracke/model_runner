@@ -356,6 +356,35 @@ begin
       end if;
    end;
 
+   --  What a check said, left by a process that is gone -- each run's own
+   --  file, named for its process -- and an hour old at least: what a
+   --  host cannot tell is gone is not taken from a run still going.
+   declare
+      Exec : constant String :=
+        Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "exec");
+      use type Ada.Calendar.Time;
+   begin
+      if Ada.Directories.Exists (Exec) then
+         for Name of Files.Files_In (Exec) loop
+            if Name'Length > 7 and then Name (Name'First .. Name'First + 6) = "output-" then
+               declare
+                  Rest : constant String := Name (Name'First + 7 .. Name'Last);
+                  Dash : constant Natural := Ada.Strings.Fixed.Index (Rest, "-");
+                  Pid  : constant String := (if Dash = 0 then Rest else Rest (Rest'First .. Dash - 1));
+                  Full : constant String := Hostkit.Fs.Join (Exec, Name);
+               begin
+                  if Pid'Length in 1 .. 9 and then (for all C of Pid => C in '0' .. '9')
+                    and then Hostkit.Process.Identity_Of (Integer'Value (Pid)) = ""
+                    and then Ada.Calendar.Clock - Ada.Directories.Modification_Time (Full) > 3600.0
+                  then
+                     Files.Discard (Full);
+                  end if;
+               end;
+            end if;
+         end loop;
+      end if;
+   end;
+
    --  9: what is still wrong, for someone to settle.
    --  A request to stop a task nobody runs is for a run that is over: left,
    --  it would stop the next run on the task as soon as it began.

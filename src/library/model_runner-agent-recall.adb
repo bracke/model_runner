@@ -187,6 +187,9 @@ package body Model_Runner.Agent.Recall is
 
    ----------
 
+   function Made_Change (Ended : Model_Runner.Tools.Runner.Call_Outcome) return Boolean
+   is (Model_Runner.Tools.Runner."=" (Ended.Answer, Model_Runner.Tools.Runner.Answered) and then Ended.Changed);
+
    procedure Note
      (Self    : in out Work_Log;
       Named   : String;
@@ -199,6 +202,7 @@ package body Model_Runner.Agent.Recall is
       for Row of Self.Rows loop
          if Row.Named = Named and then Row.Subject = Subject then
             Row.Ended := Ended;
+            Row.Changed_Ever := Row.Changed_Ever or else Made_Change (Ended);
             return;
          end if;
       end loop;
@@ -206,7 +210,8 @@ package body Model_Runner.Agent.Recall is
         (Entry_Row'(Named   => To_Unbounded_String (Named),
           Subject => To_Unbounded_String (Subject),
                     Kind    => Kind,
-                    Ended   => Ended));
+                    Ended   => Ended,
+                    Changed_Ever => Made_Change (Ended)));
    end Note;
 
    -----------------
@@ -225,7 +230,7 @@ package body Model_Runner.Agent.Recall is
 
       function Of_Section (Row : Entry_Row; Which : Section) return Boolean
       is (case Which is
-            when Changed => Row.Ended.Answer = Tr.Answered and then Row.Ended.Changed,
+            when Changed => Row.Changed_Ever,
             when Read    => Row.Ended.Answer = Tr.Answered and then Row.Kind /= Tr.Changes,
             when Failing => Row.Ended.Answer in Tr.Failed | Tr.Timed_Out | Tr.Cancelled,
             when Refused => Row.Ended.Answer = Tr.Refused);

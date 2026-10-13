@@ -966,6 +966,10 @@ package body Model_Runner.Framework.Intent is
                        else Line));
          end;
       end loop;
+      --  Its last line ended as it was: unchanged, it compares equal.
+      if Said'Length > 0 and then Said (Said'Last) = ASCII.LF then
+         Append (Result, ASCII.LF);
+      end if;
       return To_String (Result);
    end Renamed_In_Lines;
 

@@ -1325,6 +1325,7 @@ package body Model_Runner.Framework.Consistency is
             for Name of Files.Files_In (Runtime) loop
                if Name'Length > 12 and then Name (Name'First .. Name'First + 11) = "integrating-"
                  and then (Name'Length < 7 or else Name (Name'Last - 6 .. Name'Last) /= ".before")
+                 and then (Name'Length < 7 or else Name (Name'Last - 6 .. Name'Last) /= ".joined")
                then
                   Found (Incomplete_Transaction, "runtime/" & Name,
                          "a taking in a stop left part way; the next opening settles it, or puts its"

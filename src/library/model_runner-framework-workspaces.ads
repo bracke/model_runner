@@ -160,11 +160,14 @@ package Model_Runner.Framework.Workspaces is
    --  @param Id The workspace.
    --  @param Unsettled_Only Only those whose workspace copy has not
    --    changed since: not settled yet.
+   --  @param Project_Unchanged_Only Only those the project still holds as
+   --    it did then: one edited since was not what was settled.
    --  @return Their paths.
    function Conflict_Files
      (Item           : Stores.Store;
       Id             : String;
-      Unsettled_Only : Boolean := False) return Name_Lists.Vector;
+      Unsettled_Only : Boolean := False;
+      Project_Unchanged_Only : Boolean := False) return Name_Lists.Vector;
 
    --  Settle an integration once the change it staged is committed, or is
    --  not: the files taken in stay and its journal goes, or they are put

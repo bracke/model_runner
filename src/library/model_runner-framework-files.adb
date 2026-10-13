@@ -189,7 +189,7 @@ package body Model_Runner.Framework.Files is
       begin
          Model_Runner.Tools.Editing.Replace (Path, Text, Put);
          Status := E.Success;
-         if Put.Failed then
+         if Put.Failed or else not Put.Durable then
             Write_Failed (Path, Status);
          end if;
       end;

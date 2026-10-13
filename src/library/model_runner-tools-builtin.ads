@@ -3,6 +3,7 @@ with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Permissions;
 with Model_Runner.Numerics;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Tools.Schemas;
@@ -233,6 +234,16 @@ package Model_Runner.Tools.Builtin is
    function Text_Argument (Args : String; Key : String; Found : out Boolean)
      return String;
 
+   --  A call's arguments with one string argument given another value --
+   --  that argument alone, by its name, not by where its text first
+   --  appears.
+   --
+   --  @param Args The call's arguments, a JSON object.
+   --  @param Key The argument's name.
+   --  @param Value Its new content.
+   --  @return The arguments as JSON, or "" when they hold no such argument.
+   function With_Text_Argument (Args : String; Key : String; Value : String) return String;
+
    --  A list-of-strings argument of a call, each decoded from its JSON.
    --
    --  @param Args The call's arguments, a JSON object.
@@ -294,6 +305,18 @@ package Model_Runner.Tools.Builtin is
    --  @param Path The file, as the agent names it.
    --  @param Revision Its revision as shown.
    procedure Note_Seen (Self : in out Instance; Path : String; Revision : String);
+
+   --  Hold what this task's searches find to what the agent now working
+   --  may read, judged where each file lands, until Let_Reads_Go: a
+   --  search over a folder is a read of each file it shows. A process of
+   --  its own is held by its environment instead.
+   --
+   --  @param Root The tree the work is done in.
+   --  @param Allowed What the agent may.
+   procedure Hold_Reads (Root : String; Allowed : Model_Runner.Framework.Permissions.Permission_Set);
+
+   --  End what Hold_Reads began, for this task.
+   procedure Let_Reads_Go;
 
    --  The directory the file tools work in, as Set_Base named it; "" for
    --  the process's own.
@@ -370,6 +393,11 @@ private
       --  FIRST:LAST ("" after a whole read): a passage an edit finds in more
       --  than one place is taken where it starts within them.
       Read_At : Revisions;
+
+      --  The revision of each file this runner's agent last saw whole --
+      --  read whole and not cut short, or wrote whole: a file written over
+      --  is written over what it saw, not over a middle it never read.
+      Whole  : Revisions;
 
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;

@@ -765,11 +765,12 @@ begin
                     (Permissions.Permissions_Beside (Prompt),
                      (if E.Is_Ok (Read) then Permissions.Image (Held_From) else ""),
                      Status);
+                  --  Kept, as anything it may not write is, to be put back.
+                  if E.Is_Ok (Read) and then not Isolated then
+                     Keep_Originals (Item, To_String (Result.Agent_Id), To_String (Place), Before,
+                                     Held_From, Status);
+                  end if;
                end;
-               if E.Is_Ok (Read) and then not Isolated then
-                  Keep_Originals (Item, To_String (Result.Agent_Id), To_String (Place), Before,
-                                  Root_Agent.Allowed, Status);
-               end if;
             end;
          end if;
       else
@@ -912,8 +913,10 @@ begin
             Agents.Read (Item, To_String (Result.Agent_Id), Root_Agent, Read);
             for Path of Result.Changed_Files loop
                if E.Is_Ok (Read)
-                 and then not Allows_Now (Item, Task_Id, Root_Agent, Permissions.Write_Source, Path)
-                 and then not Allows_Now (Item, Task_Id, Root_Agent, Permissions.Write_Specs, Path)
+                 and then (Judged.Contains (Permissions.Normal (Path))
+                           or else (not Allows_Now (Item, Task_Id, Root_Agent, Permissions.Write_Source, Path)
+                                    and then not Allows_Now (Item, Task_Id, Root_Agent,
+                                                             Permissions.Write_Specs, Path)))
                then
                   declare
                      Back : E.Error_Info;
@@ -2108,15 +2111,30 @@ begin
       --  one is still in verification.
       Stores.Commit (Item, Change, Status);
       if E.Is_Ok (Status) then
-         Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Status);
-      end if;
-      if E.Is_Ok (Status) then
-         --  Done, and with files changed it did not say it changed, or
-         --  files it said it changed and did not: said, as what a person
-         --  looks at before trusting its report.
-         Conclude ("", Unreported_Note
-                   & (if Unreported_Note /= "" and then Overclaimed_Note /= "" then "; " else "")
-                   & Overclaimed_Note, "completed");
+         declare
+            Judged : E.Error_Info;
+            Unjudged_Note : Unbounded_String;
+         begin
+            Verification.Reevaluate_Requirements (Item, Change, Result.Requirements, Judged);
+            --  Complete all the same -- that is committed -- and ended as
+            --  such, its agent and what it held let go; the requirements
+            --  not judged again are said, as what is still to be done.
+            if E.Is_Error (Judged) then
+               Change := Stores.No_Changes;
+               Result.Requirements.Clear;
+               Unjudged_Note := To_Unbounded_String
+                 ("the requirements it serves could not be judged again: " & Why_Of (Judged));
+            end if;
+            --  Done, and with files changed it did not say it changed, or
+            --  files it said it changed and did not: said, as what a person
+            --  looks at before trusting its report.
+            Conclude ("", Unreported_Note
+                      & (if Unreported_Note /= "" and then Overclaimed_Note /= "" then "; " else "")
+                      & Overclaimed_Note
+                      & (if Unjudged_Note /= Null_Unbounded_String
+                           and then Unreported_Note & Overclaimed_Note /= "" then "; " else "")
+                      & To_String (Unjudged_Note), "completed");
+         end;
       end if;
    end;
 end Execute_Work;
