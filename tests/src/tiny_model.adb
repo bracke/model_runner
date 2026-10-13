@@ -74,7 +74,8 @@ package body Tiny_Model is
       Code_Norms   : Boolean := True;
       Ranking      : Boolean := False;
       Padding      : Natural := 0;
-      Wide_State   : Boolean := False)
+      Wide_State   : Boolean := False;
+      Expert_Width : Natural := 0)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -116,7 +117,8 @@ package body Tiny_Model is
       --  separately. A quantized row is still a whole number of blocks, so
       --  the narrowest each fixture can be is what it is.
       Expert_Feed : constant Natural :=
-        (if Deep then Deep_Feed_Forward
+        (if Expert_Width > 0 then Expert_Width
+         elsif Deep then Deep_Feed_Forward
          elsif Quantized then 32
          else 8);
       --  A key head twice the width the embedding implies and a value head

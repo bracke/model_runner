@@ -3670,29 +3670,30 @@ package body Tests.Inference_Cases is
             Experts : Natural := 0;
             Used    : Natural := 0;
             Rounded : Boolean := False;
+            Expert_Width : Natural := 0;
          end record;
          Rows : constant array (1 .. 17) of Case_Row :=
-           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1, 0, 0, False),
-            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1, 0, 0, False),
-            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2, False),
-            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0, False),
-            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2, False),
-            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0, False),
+           [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Gemma, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Gemma2, Tiny_Model.Q8_0, 8, 1, 0, 0, False, 0),
+            (Tiny_Model.Gemma3, Tiny_Model.Q8_0, 8, 1, 0, 0, False, 0),
+            (Tiny_Model.Phi3, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.GPT2, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Phi2, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Falcon, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 4, 2, False, 0),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
+            (Tiny_Model.Qwen35, Tiny_Model.Q8_0, 0, 1, 4, 2, False, 0),
+            (Tiny_Model.Gemma3, Tiny_Model.Q4_K, 8, 2, 0, 0, False, 0),
 
             --  A mixture that routes each position to more experts than one
             --  gather reads at once: twenty experts, seventeen of them
             --  chosen, so the device spills the gather into a full round of
             --  sixteen and one more and sums the two, which must land where
             --  the processor's one sum of seventeen does.
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 20, 17, False),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 20, 17, False, 0),
 
             --  And mixtures of many experts each chosen by few positions:
             --  sixty-four, two a position, five an expert in a batch of a
@@ -3706,8 +3707,8 @@ package body Tests.Inference_Cases is
             --  that already took a check of seven come to seventy-five.
             --  Held to two tenths, where a wrong binding or a missing walk
             --  answers by whole tenths or more.
-            (Tiny_Model.Qwen3, Tiny_Model.Q4_K, 0, 1, 64, 2, True),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True)];
+            (Tiny_Model.Qwen3, Tiny_Model.Q4_K, 0, 1, 64, 2, True, 512),
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True, 0)];
       begin
          for Row of Rows loop
             declare
@@ -3725,7 +3726,8 @@ package body Tests.Inference_Cases is
                Tiny_Model.Build
                  (Image, Row.Format, Room => Room, Kind => Row.Kind,
                   Window => Row.Window, Head_Factor => Row.Heads,
-                  Experts => Row.Experts, Experts_Used => Row.Used);
+                  Experts => Row.Experts, Experts_Used => Row.Used,
+                  Expert_Width => Row.Expert_Width);
                Logits_On
                  (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
                Assert (Why = E.No_Error,

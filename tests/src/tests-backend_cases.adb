@@ -8273,7 +8273,9 @@ package body Tests.Backend_Cases is
    --  out of the one rounding, and the down projection after them its
    --  runs by slot out of a rounding of every slot -- answer what the
    --  binary32 walks answer, to the rounding of the activations. Q4_K
-   --  stacks, four positions.
+   --  stacks, four positions, rows of 512: a row of one super-block is not
+   --  walked as integers at all (Dots_Line), whose walks answered whole
+   --  logits away on a mixture of such rows.
    procedure Listed_Walks_As_Integers_Stay_Close
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -8282,8 +8284,8 @@ package body Tests.Backend_Cases is
 
       Experts : constant := 4;
       Used    : constant := 2;
-      Width   : constant := 256;
-      Feed    : constant := 256;
+      Width   : constant := 512;
+      Feed    : constant := 512;
       Count   : constant := 4;
       Padded  : constant Natural := Products.Run_Slots (Experts, Used, Count);
 

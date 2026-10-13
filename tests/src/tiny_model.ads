@@ -378,6 +378,10 @@ package Tiny_Model is
    --    embedding and of the output: what Qwen's larger models do, whose
    --    vocabularies are padded past the tokens their small ones number.
    --    Written on the SentencePiece road only.
+   --  @param Expert_Width How wide one expert's feed-forward is, where not
+   --    nought: the deep fixture's 256 is a single super-block a row, which
+   --    the device's integer walks are not taken for (Dots_Line), so a
+   --    test of those walks over a mixture asks for 512.
    --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
    --    twenty-eight wide, as the real models' are, rather than four: the
    --    one width the device keeps a state in registers for.
@@ -403,6 +407,7 @@ package Tiny_Model is
       Code_Norms     : Boolean := True;
       Ranking        : Boolean := False;
       Padding        : Natural := 0;
-      Wide_State     : Boolean := False);
+      Wide_State     : Boolean := False;
+      Expert_Width   : Natural := 0);
 
 end Tiny_Model;

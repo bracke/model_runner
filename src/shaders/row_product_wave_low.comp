@@ -3639,7 +3639,9 @@ void main_one() {
 
     //  A short row's groups of lanes each take rows of their own, every
     //  group of them, summed a cluster at a time, as main_many does.
-#if !defined(LANE32) && !defined(OWN_ACTIVATIONS) && !defined(GLU)
+    //  Not Q8_0's: its gate-and-up twins land other row counts than its
+    //  plain compilations, and the pair must add as its parts do.
+#if !defined(LANE32) && !defined(OWN_ACTIVATIONS) && !defined(Q8_0)
     bool short_rows = groups < IN_FLIGHT && NUM_ROWS % IN_FLIGHT == 0u;
 #else
     const bool short_rows = false;
@@ -3693,7 +3695,15 @@ void main_one() {
 
             for (uint r = 0u; r < ACC; ++r) {
 #ifdef GLU
-                uint row = min(first_row + r % NUM_ROWS, shape.rows - 1u);
+                //  The gate's rows and the up's, each as the plain kernel
+                //  takes a row, short rows included, so that the pair
+                //  answers what the two products do to the bit.
+                if (r % NUM_ROWS >= per) {
+                    continue;
+                }
+                uint row = min(first_row + (short_rows ? (r % NUM_ROWS) * IN_FLIGHT + ix
+                                                       : r % NUM_ROWS),
+                               shape.rows - 1u);
                 uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
                           + row * span + block * BLOCK_BYTES;
 #else
@@ -3712,11 +3722,21 @@ void main_one() {
 
 #ifdef GLU
     for (uint r = 0u; r < NUM_ROWS; ++r) {
-        float gate = subgroupAdd(temp[r]);
-        float up = subgroupAdd(temp[r + NUM_ROWS]);
-        uint row = first_row + r;
+        if (r >= per) {
+            continue;
+        }
+        float gate;
+        float up;
+        if (short_rows) {
+            gate = subgroupClusteredAdd(temp[r], 16u);
+            up = subgroupClusteredAdd(temp[r + NUM_ROWS], 16u);
+        } else {
+            gate = subgroupAdd(temp[r]);
+            up = subgroupAdd(temp[r + NUM_ROWS]);
+        }
+        uint row = first_row + (short_rows ? r * IN_FLIGHT + ix : r);
 
-        if (tid == 0u && row < shape.rows) {
+        if ((short_rows ? itid == 0u : tid == 0u) && row < shape.rows) {
             y[shape.first * shape.rows + row] = gate_unit(gate) * up;
         }
     }

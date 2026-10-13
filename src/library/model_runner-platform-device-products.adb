@@ -6081,6 +6081,7 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Packing : Weight_Packing; Count : Natural;
       Columns : Natural) return Address
    is (if Count not in Many_Count
+         or else Columns < 512
          or else Columns mod 32 /= 0
          or else (Packing not in Packed_Q8_0 | Packed_IQ4_NL | Packed_MXFP4
                   and then Columns mod 256 /= 0)
