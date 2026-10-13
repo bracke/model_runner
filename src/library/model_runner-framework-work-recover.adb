@@ -4,7 +4,41 @@ procedure Recover
    Recovered : out Name_Lists.Vector;
    Status    : out Model_Runner.Errors.Error_Info)
 is
+   --  Each task put back in a change of its own, and one that cannot be is
+   --  passed over for the rest, its failure the one said.
    Change : Stores.Transaction;
+   First  : E.Error_Info := E.Success;
+
+   --  The mark of what a task's files were, let go once what it says is
+   --  kept: let go first, a failure after would leave it said nowhere.
+   Mark_Done : Unbounded_String;
+
+   procedure Keep (Id : String) is
+      Kept : E.Error_Info;
+   begin
+      Stores.Commit (Item, Change, Kept);
+      if E.Is_Ok (Kept) then
+         Recovered.Append (Id);
+         if Mark_Done /= Null_Unbounded_String then
+            Files.Discard (To_String (Mark_Done));
+         end if;
+      else
+         Change := Stores.No_Changes;
+         if E.Is_Ok (First) then
+            First := Kept;
+         end if;
+      end if;
+      Mark_Done := Null_Unbounded_String;
+   end Keep;
+
+   procedure Pass_Over (Failed : E.Error_Info) is
+   begin
+      Change := Stores.No_Changes;
+      Mark_Done := Null_Unbounded_String;
+      if E.Is_Ok (First) then
+         First := Failed;
+      end if;
+   end Pass_Over;
 begin
    Recovered.Clear;
    Status := E.Success;
@@ -37,7 +71,7 @@ begin
                     & " when it started was not kept";
                end if;
                Files.Read_Text (Mark, Was, Read);
-               Files.Discard (Mark);
+               Mark_Done := To_Unbounded_String (Mark);
                if E.Is_Error (Read) then
                   return "; what it changed in the project cannot be told: what the files were"
                     & " when it started cannot be read";
@@ -114,7 +148,9 @@ begin
                "its agent " & (if Agent = "" then "" else Agent & " ")
                & "stopped without finishing" & Given_Up, Status => Status);
             if E.Is_Error (Status) then
-               return;
+               Pass_Over (Status);
+               Status := E.Success;
+               goto Next_Running;
             end if;
             if Agent /= "" then
                Stop_Children (Item, Change, Agent, "its parent stopped without finishing");
@@ -138,11 +174,14 @@ begin
                Tasks.Move (Item, Change, Id, "accepted", "", Status => Status);
             end if;
             if E.Is_Error (Status) then
-               return;
+               Pass_Over (Status);
+               Status := E.Success;
+               goto Next_Running;
             end if;
-            Recovered.Append (Id);
+            Keep (Id);
          end;
       end if;
+      <<Next_Running>>
    end loop;
 
    --  A task left in verification with nothing to wait for -- no work
@@ -155,12 +194,13 @@ begin
          Tasks.Move (Item, Change, Id, "blocked",
                      "its verification stopped without finishing", Status => Status);
          if E.Is_Error (Status) then
-            return;
+            Pass_Over (Status);
+         else
+            Leases.Release (Item, Change, Lease_Of (Id), Holder_Record (Item, Id), Status);
+            Keep (Id);
          end if;
-         Leases.Release (Item, Change, Lease_Of (Id), Holder_Record (Item, Id), Status);
          Status := E.Success;
-         Recovered.Append (Id);
       end if;
    end loop;
-   Stores.Commit (Item, Change, Status);
+   Status := First;
 end Recover;

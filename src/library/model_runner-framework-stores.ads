@@ -47,6 +47,11 @@ package Model_Runner.Framework.Stores is
 
       --  Whether the entity index had to be built again.
       Index_Rebuilt    : Boolean := False;
+
+      --  What the index built again could not hold, a record that would
+      --  not read: said, and the project opened with the rest, rather than
+      --  refused once and opened without it the next time unsaid.
+      Index_Unread     : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  A change to the state, staged and not yet committed.

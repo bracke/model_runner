@@ -1277,9 +1277,64 @@ package body Model_Runner.Framework.Consistency is
                             & Tasks.State_Of (Item, To_String (Held.Task_Id))
                             & " and still has a workspace");
                   end if;
+                  --  Its baseline as its record says it: what taking it in
+                  --  would refuse is said here first.
+                  declare
+                     Baseline : Configurations.Value_Maps.Map;
+                     Held_Up  : E.Error_Info;
+                  begin
+                     Workspaces.Read_Baseline (Item, Name, Baseline, Held_Up);
+                     if E.Is_Error (Held_Up) then
+                        Found (Workspace_Assignment, Name, E.Text_Of (Held_Up, "detail"));
+                     end if;
+                  end;
                end if;
             end;
          end loop;
+      end;
+
+      --  What only an opening says, and only once, said here as long as it
+      --  stands: a taking in a stop left part way, a workspace whose making
+      --  was cut short, and a workspace directory no record names.
+      declare
+         Runtime : constant String := Ada.Directories.Compose (Stores.Root (Item), "runtime");
+         Homes   : constant String := Ada.Directories.Compose (Stores.Root (Item), "workspaces");
+      begin
+         if Ada.Directories.Exists (Runtime) then
+            for Name of Files.Files_In (Runtime) loop
+               if Name'Length > 12 and then Name (Name'First .. Name'First + 11) = "integrating-"
+                 and then (Name'Length < 7 or else Name (Name'Last - 6 .. Name'Last) /= ".before")
+               then
+                  Found (Incomplete_Transaction, "runtime/" & Name,
+                         "a taking in a stop left part way; the next opening settles it, or puts its"
+                         & " files back");
+               elsif Name'Length > 8 and then Name (Name'First .. Name'First + 7) = "aborted-" then
+                  Found (Workspace_Assignment, "runtime/" & Name,
+                         "a workspace whose making was cut short, its tree to remove");
+               end if;
+            end loop;
+         end if;
+         if Ada.Directories.Exists (Homes) then
+            declare
+               Search : Ada.Directories.Search_Type;
+               Entry_Found : Ada.Directories.Directory_Entry_Type;
+            begin
+               Ada.Directories.Start_Search
+                 (Search, Homes, "WS-*", [Ada.Directories.Directory => True, others => False]);
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, Entry_Found);
+                  declare
+                     Dir : constant String := Ada.Directories.Simple_Name (Entry_Found);
+                  begin
+                     if not Stores.Exists (Item, Workspaces_Area, Dir) then
+                        Found (Workspace_Assignment, "workspaces/" & Dir,
+                               "a workspace directory no record names");
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end;
+         end if;
       end;
 
       --  A result retired before retiring kept a print of what it was:
@@ -1322,6 +1377,20 @@ package body Model_Runner.Framework.Consistency is
             end;
          end loop;
       end;
+
+      --  And each agent's parents, which recovery follows to its root.
+      for Name of Stores.Names (Item, Runtime_Area) loop
+         if Name'Length > 6 and then Name (Name'First .. Name'First + 5) = "agent." then
+            declare
+               Id : constant String := Name (Name'First + 6 .. Name'Last);
+            begin
+               if Agents.Root_Of (Item, Id) = "" then
+                  Found (Agent_Assignment, Id,
+                         "its parents do not lead to a root: one cannot be read, or they go round");
+               end if;
+            end;
+         end if;
+      end loop;
 
       --  Each rerun helper's lineage holds together: what it names was run
       --  before it, for the same parent and task, and goes nowhere round.

@@ -634,13 +634,15 @@ package body Model_Runner.Framework.Stores is
    -------------------
 
    procedure Rebuild_Index
-     (Item   : in out Store;
-      Status : out Model_Runner.Errors.Error_Info)
+     (Item    : in out Store;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Written : out Boolean)
    is
       Index : Records.Item :=
         Records.Create (Schemas.Index_Schema, 1, Index_Entity, 1);
       First : E.Error_Info := E.Success;
    begin
+      Written := False;
       if not Item.Opened then
          Not_Open (Item, Status);
          return;
@@ -667,9 +669,19 @@ package body Model_Runner.Framework.Stores is
       end loop;
 
       Write_Index (Item, Index, Status);
+      Written := E.Is_Ok (Status);
       if E.Is_Ok (Status) then
          Status := First;
       end if;
+   end Rebuild_Index;
+
+   procedure Rebuild_Index
+     (Item   : in out Store;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Written : Boolean;
+   begin
+      Rebuild_Index (Item, Status, Written);
    end Rebuild_Index;
 
    ------------
@@ -1496,6 +1508,19 @@ package body Model_Runner.Framework.Stores is
       Format_Path : constant String := Join (State, Format_File);
       Root_Record : Records.Item;
       Text        : Unbounded_String;
+      --  An index written whole but for records that would not read: the
+      --  project opens, and what was left out is said.
+      Written : Boolean := False;
+
+      procedure Index_Kept_Without (Built : in out E.Error_Info) is
+      begin
+         if E.Is_Error (Built) and then Written then
+            Report.Index_Unread := To_Unbounded_String
+              (E.Text_Of (Built, "path") & E.Text_Of (Built, "name") & " ("
+               & E.Error_Code'Image (Built.Code) & ")");
+            Built := E.Success;
+         end if;
+      end Index_Kept_Without;
    begin
       Close (Item);
       Report := (others => <>);
@@ -1548,16 +1573,18 @@ package body Model_Runner.Framework.Stores is
       if E.Is_Ok (Status)
         and then not Dirs.Exists (Index_Path (State))
       then
-         Rebuild_Index (Item, Status);
+         Rebuild_Index (Item, Status, Written);
          Report.Index_Rebuilt := True;
+         Index_Kept_Without (Status);
       elsif E.Is_Ok (Status) then
          declare
             Index : Records.Item;
          begin
             Read (Item, Indexes_Area, Index_Name, Index, Status);
             if E.Is_Error (Status) then
-               Rebuild_Index (Item, Status);
+               Rebuild_Index (Item, Status, Written);
                Report.Index_Rebuilt := True;
+               Index_Kept_Without (Status);
             end if;
          end;
       end if;

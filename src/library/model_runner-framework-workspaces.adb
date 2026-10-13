@@ -1224,6 +1224,37 @@ package body Model_Runner.Framework.Workspaces is
       Read_It : E.Error_Info;
       Left    : Unbounded_String;
       Project : constant String := Project_Of (Item);
+
+      --  Where what the taking in wrote is still to be seen: its
+      --  workspace's tree, until the taking in is settled; "" where it
+      --  cannot be told -- a kept copy put back, a workspace not read.
+      function Tree_Of return String is
+         Held : Workspace;
+         Got  : E.Error_Info;
+      begin
+         if Id'Length > 8 and then Id (Id'First .. Id'First + 7) = "restore-" then
+            return "";
+         end if;
+         Read (Item, Id, Held, Got);
+         return (if E.Is_Ok (Got) and then Dirs.Exists (To_String (Held.Path))
+                 then To_String (Held.Path) else "");
+      end Tree_Of;
+
+      Tree : constant String := Tree_Of;
+
+      --  Whether a person has changed a file since it was taken in: it is
+      --  neither what was written nor what was there before. Put back, it
+      --  would lose what they wrote; it is left, and said.
+      function Changed_Since (Path : String; Before_Absent : Boolean) return Boolean is
+         Now : constant String := Print_Of (Hostkit.Fs.Join (Project, Path));
+      begin
+         if Tree = "" or else Now = "" then
+            return False;
+         end if;
+         return not Same_Print (Hostkit.Fs.Join (Project, Path), Hostkit.Fs.Join (Tree, Path))
+           and then (Before_Absent
+                     or else not Same_Print (Hostkit.Fs.Join (Project, Path), Saved_Of (Item, Id, Path)));
+      end Changed_Since;
    begin
       Status := E.Success;
       if not Dirs.Exists (Journal_Of (Item, Id)) then
@@ -1244,7 +1275,9 @@ package body Model_Runner.Framework.Workspaces is
                   Target : constant String := Hostkit.Fs.Join (Project, Path);
                   Done   : Boolean := True;
                begin
-                  if Fields (2) = "absent" then
+                  if Changed_Since (Path, Before_Absent => Fields (2) = "absent") then
+                     Done := False;
+                  elsif Fields (2) = "absent" then
                      Done := Files.Delete_If_Present (Target);
                   else
                      declare
@@ -1273,7 +1306,8 @@ package body Model_Runner.Framework.Workspaces is
       if Length (Left) > 0 then
          Status := E.Make (E.Framework_Transaction_Failed);
          E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
-         E.Add_Text (Status, "detail", "what " & Id & " took in could not all be put back: " & To_String (Left));
+         E.Add_Text (Status, "detail", "what " & Id & " took in could not all be put back -- "
+                     & "not read, not written, or changed by hand since: " & To_String (Left));
          return;
       end if;
       Files.Discard (Journal_Of (Item, Id));
@@ -1410,6 +1444,13 @@ package body Model_Runner.Framework.Workspaces is
                end if;
             elsif E.Is_Ok (Got) and then To_String (Held.Status) = "integrated" then
                Settle_Integration (Item, Id, True, Back);
+            elsif E.Is_Error (Got) then
+               --  Whether its taking in was kept cannot be told: its files
+               --  stay as they are and its journal with them, said, rather
+               --  than put back under records that may say they are in.
+               Back := Got;
+               E.Add_Text (Back, "detail", Id & " cannot be read, so whether its taking in was kept"
+                           & " cannot be told; its journal is kept until it can be");
             else
                Roll_Back (Item, Id, Back);
                if E.Is_Ok (Back) then

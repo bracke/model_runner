@@ -71,6 +71,10 @@ package Model_Runner.Framework.Leases is
    --  @return The owner the record names.
    function Owner_Of (Item : Stores.Store; Resource : String) return String;
 
+   --  What Holder says of a lease that is there and cannot be read: held,
+   --  by nobody this can name, and so by nobody any owner is.
+   Unknown_Holder : constant String := "(an unreadable lease)";
+
    --  Who holds a resource now.
    --
    --  @param Item The store.

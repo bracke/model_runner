@@ -6438,6 +6438,20 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "four") > 0,
                  "an integration did not write its journal before its files: " & Code_Of (Status));
          Change := S.No_Changes;
+         --  With its workspace's record unreadable, whether it was kept
+         --  cannot be told: its files and its journal stay, said.
+         declare
+            Record_File : constant String := S.Root (Store) & "/workspaces/" & To_String (Made.Id) & ".rec";
+            Was_Record  : constant String := Read_Whole (Record_File);
+         begin
+            Put_File (Record_File, "not a record" & LF);
+            Ws.Recover_Integrations (Store, Back, Settled);
+            Put_File (Record_File, Was_Record);
+            Assert (E.Is_Error (Settled) and then Dirs.Exists (Journal)
+                    and then Ada.Strings.Fixed.Index (Read_Whole (Shared), "four") > 0,
+                    "a taking in whose workspace could not be read was put back: " & Code_Of (Settled));
+            Back.Clear;
+         end;
          Ws.Recover_Integrations (Store, Back, Settled);
          Assert (E.Is_Ok (Settled) and then Back.Contains (To_String (Made.Id))
                  and then not Dirs.Exists (Journal)
@@ -9487,6 +9501,32 @@ package body Tests.Framework_Cases is
               "a task's workspace was told while a workspace record could not be read: "
               & Code_Of (Status));
 
+      --  What an opening says only once is said by /check as long as it
+      --  stands: a taking in left part way, a workspace directory no record
+      --  names, a workspace baseline that does not hold.
+      Put_File (S.Root (Store) & "/runtime/integrating-WS-777777", "task" & ASCII.HT & "TASK-X" & LF);
+      Dirs.Create_Path (S.Root (Store) & "/workspaces/WS-777776/tree");
+      declare
+         Findings : constant Cn.Finding_List := Cn.Check (Store);
+         Journal_Said, Dir_Said : Boolean := False;
+         use type Cn.Finding_Kind;
+      begin
+         for Index in 1 .. Cn.Length (Findings) loop
+            Journal_Said := Journal_Said
+              or else (Cn.Element (Findings, Index).Kind = Cn.Incomplete_Transaction
+                       and then Ada.Strings.Fixed.Index
+                                  (To_String (Cn.Element (Findings, Index).Subject), "integrating-WS-777777") > 0);
+            Dir_Said := Dir_Said
+              or else Ada.Strings.Fixed.Index
+                        (To_String (Cn.Element (Findings, Index).Subject), "WS-777776") > 0;
+         end loop;
+         Assert (Journal_Said, "a taking in left part way was not found by the consistency check");
+         Assert (Dir_Said, "a workspace directory no record names was not found by the consistency check");
+      end;
+      Dirs.Delete_File (S.Root (Store) & "/runtime/integrating-WS-777777");
+      Dirs.Delete_Directory (S.Root (Store) & "/workspaces/WS-777776/tree");
+      Dirs.Delete_Directory (S.Root (Store) & "/workspaces/WS-777776");
+
       Dirs.Delete_File (S.Root (Store) & "/tasks/" & Broken_Task & ".rec");
       Dirs.Delete_File (S.Root (Store) & "/workspaces/" & Broken_Space & ".rec");
       Assert (Tk.Ready (Store, To_String (Plain)).Ready,
@@ -10820,6 +10860,9 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status) and then Said_Back,
                  "a configuration that could not be read was not put back from its history: "
                  & Code_Of (Status));
+         Assert (Dirs.Exists (S.Root (Store) & "/runtime/config-set-aside-1.rec")
+                 and then Read_Whole (S.Root (Store) & "/runtime/config-set-aside-1.rec") = "model_runner-rec",
+                 "a damaged configuration was replaced without being kept aside");
          Assert (Acted, "events nothing had acted on were not acted on at opening");
       end;
       S.Close (Store);

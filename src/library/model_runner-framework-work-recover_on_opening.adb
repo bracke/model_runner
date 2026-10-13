@@ -19,8 +19,13 @@ is
       Read : E.Error_Info;
    begin
       Agents.Read (Item, Id, Held, Read);
+      --  A lease that cannot be read is held, as far as can be told, and
+      --  what runs under it with it: Recover leaves its task running, and
+      --  its agents are not ended here either.
       return E.Is_Ok (Read)
-        and then Leases.Holder (Item, Lease_Of (To_String (Held.Task_Id))) = Root_Of (Id);
+        and then (Leases.Holder (Item, Lease_Of (To_String (Held.Task_Id))) = Root_Of (Id)
+                  or else Leases.Holder (Item, Lease_Of (To_String (Held.Task_Id)))
+                          = Leases.Unknown_Holder);
    end Live;
 begin
    Said.Clear;
@@ -54,6 +59,11 @@ begin
    if Opened.Index_Rebuilt then
       Said.Append ("built the entity index again");
    end if;
+   if Ada.Strings.Unbounded.Length (Opened.Index_Unread) > 0 then
+      Said.Append ("the entity index built again leaves out what would not read: "
+                   & Ada.Strings.Unbounded.To_String (Opened.Index_Unread)
+                   & "; /check consistency says what it is");
+   end if;
 
    --  3: what a killed run left running is stopped, and the tasks it
    --  left running with no one running them put back.
@@ -63,9 +73,32 @@ begin
       Execution.Stop_Left_Groups (Item, Stopped);
       Said.Append (Stopped);
    end;
+
+   --  2b: an integration a stop left between its files and its records:
+   --  kept where the state says it was taken in, put back where it does
+   --  not -- before anything reads the project's files, the tasks' left
+   --  running among them.
+   declare
+      Back  : Name_Lists.Vector;
+      Taken : E.Error_Info;
+   begin
+      Workspaces.Recover_Integrations (Item, Back, Taken);
+      for Id of Back loop
+         Said.Append (Id & ": its taking in stopped part way, and the files it had written were put back");
+      end loop;
+      if E.Is_Error (Taken) then
+         Said.Append (E.Text_Of (Taken, "detail"));
+      end if;
+   end;
+
+   --  A task that could not be put back is said, and the rest of what
+   --  opening puts right still done: one damaged record does not leave
+   --  everything after it undone, every opening.
    Recover (Item, Put_Back, Status);
    if E.Is_Error (Status) then
-      return;
+      Said.Append ("a task left running could not all be put back: " & E.Text_Of (Status, "detail")
+                   & " (" & E.Error_Code'Image (Status.Code) & ")");
+      Status := E.Success;
    end if;
    for Id of Put_Back loop
       declare
@@ -138,22 +171,6 @@ begin
       end if;
    end loop;
 
-   --  5: workspaces. First an integration a stop left between its files
-   --  and its records: kept where the state says it was taken in, put
-   --  back where it does not -- before anything reads the project's files.
-   declare
-      Back  : Name_Lists.Vector;
-      Taken : E.Error_Info;
-   begin
-      Workspaces.Recover_Integrations (Item, Back, Taken);
-      for Id of Back loop
-         Said.Append (Id & ": its taking in stopped part way, and the files it had written were put back");
-      end loop;
-      if E.Is_Error (Taken) then
-         Said.Append (E.Text_Of (Taken, "detail"));
-      end if;
-   end;
-
    --  The evidence reuse index rid of what names evidence gone.
    declare
       Pruned : constant Natural := Verification.Prune_Reuse_Index (Item);
@@ -174,7 +191,9 @@ begin
             Read  : E.Error_Info;
          begin
             Workspaces.Read (Item, Name, Held, Read);
-            Recorded.Append (To_String (Held.Id));
+            --  By its record's name, read or not: a record that will not
+            --  read is still a record, and its tree not one to remove.
+            Recorded.Append (Name);
             if E.Is_Ok (Read) and then To_String (Held.Status) = "active" then
                declare
                   Now : constant String := Tasks.State_Of (Item, To_String (Held.Task_Id));

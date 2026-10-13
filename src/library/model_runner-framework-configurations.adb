@@ -3976,6 +3976,14 @@ package body Model_Runner.Framework.Configurations is
       Read (Item, Current, Status);
       if E.Is_Ok (Status) then
          return;
+      --  Put back only what is damaged -- its fingerprint broken, not a
+      --  record, not what its schema says -- or not there: a configuration
+      --  a newer program wrote, or one a passing failure kept from being
+      --  read, is the person's still, and left as it is, said.
+      elsif Status.Code not in E.Framework_Integrity_Failed | E.Framework_Record_Malformed
+                              | E.Framework_Schema_Violation | E.Framework_Not_Found
+      then
+         return;
       end if;
 
       --  The newest revision the history keeps whole.
@@ -4002,13 +4010,37 @@ package body Model_Runner.Framework.Configurations is
          return;
       end if;
 
-      --  A record that cannot be read at all is no revision to follow: it
-      --  goes, and the history's takes its place from the first.
-      if Status.Code /= E.Framework_Integrity_Failed then
-         Files.Discard
-           (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), Directory_Name (Config_Area)),
-                             Current_Name & ".rec"));
-      end if;
+      --  What is there is kept aside first, whole, for the person: the
+      --  history's takes its place, and nothing they wrote is lost by it.
+      declare
+         Here  : constant String :=
+           Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), Directory_Name (Config_Area)),
+                            Current_Name & ".rec");
+         Aside : constant String :=
+           Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "config-set-aside");
+         Taken : Natural := 1;
+
+         function Numbered (Stem : String; Number : Natural) return String
+         is (Stem & "-" & Ada.Strings.Fixed.Trim (Natural'Image (Number), Ada.Strings.Both) & ".rec");
+      begin
+         if Ada.Directories.Exists (Here) then
+            while Ada.Directories.Exists (Numbered (Aside, Taken)) loop
+               Taken := Taken + 1;
+            end loop;
+            begin
+               Ada.Directories.Copy_File (Here, Numbered (Aside, Taken));
+            exception
+               when others =>
+                  --  Not kept aside, not replaced.
+                  return;
+            end;
+         end if;
+         --  A record that cannot be read at all is no revision to follow:
+         --  it goes, and the history's takes its place from the first.
+         if Status.Code /= E.Framework_Integrity_Failed then
+            Files.Discard (Here);
+         end if;
+      end;
       declare
          Change : Stores.Transaction;
          Back   : Records.Item := Copy (Best, Current_Entity);

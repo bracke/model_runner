@@ -85,10 +85,6 @@ package body Model_Runner.Framework.Leases is
       end if;
    end Held_Lease;
 
-   --  Who holds a lease that cannot be read: nobody this can name, and so
-   --  nobody any owner is.
-   Unknown_Holder : constant String := "(an unreadable lease)";
-
    procedure Refuse_Unreadable (Resource : String; Status : out Model_Runner.Errors.Error_Info) is
    begin
       Status := E.Make (E.Framework_Integrity_Failed);
