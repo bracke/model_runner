@@ -72,8 +72,10 @@ layout(push_constant) uniform Shape {
 //  Where the rounding's scales begin: past room for eight positions'
 //  bytes, or -- for a walk that reads its experts' runs by slot, which may
 //  be many more rows than eight -- past the room the push block's table
-//  word says, in rows.
-#define SCALES_AT ((shape.routed >= 2u && shape.table != 0u ? shape.table : 8u) * shape.columns / 4u)
+//  word says, in rows. Never fewer than eight, as round_vectors.comp lays
+//  them out: two positions' runs over two experts each are four slots,
+//  and a walk that took four read its scales from the bytes.
+#define SCALES_AT (max (shape.routed >= 2u && shape.table != 0u ? shape.table : 8u, 8u) * shape.columns / 4u)
 #endif
 
 //  A sixteen-bit field of the weights, index into the array of them that

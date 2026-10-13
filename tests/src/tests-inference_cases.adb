@@ -3702,11 +3702,11 @@ package body Tests.Inference_Cases is
             --  the walks as integers (Split_Listed), in the two formats
             --  whose walks round.
             --  The walks round as a run has them, and at these widths eight
-            --  bits of an activation are coarse: the split comes to five
-            --  hundredths in one batch and twelve in chunks, where the walks
-            --  that already took a check of seven come to seventy-five.
-            --  Held to two tenths, where a wrong binding or a missing walk
-            --  answers by whole tenths or more.
+            --  bits of an activation are coarse: the Q4_K mixture comes to
+            --  forty hundredths in chunks, its gates and ups a single
+            --  super-block wide, and the Q8_0 to eleven. Held to six tenths,
+            --  where a missing walk answered 4.87 and a walk by slot reading
+            --  its scales from the bytes 5.7.
             (Tiny_Model.Qwen3, Tiny_Model.Q4_K, 0, 1, 64, 2, True, 512),
             (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True, 0)];
       begin
@@ -3754,7 +3754,7 @@ package body Tests.Inference_Cases is
                   for Index in Host'Range loop
                      Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
                   end loop;
-                  Assert (Worst <= (if Row.Rounded then 0.2 else Tolerance),
+                  Assert (Worst <= (if Row.Rounded then 0.6 else Tolerance),
                           "on " & Name
                           & (if Chunk = 3 then " in one batch"
                              elsif Chunk = 2 then " in chunks of forty-one"
