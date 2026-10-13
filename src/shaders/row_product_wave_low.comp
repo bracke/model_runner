@@ -1,6 +1,8 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+#extension GL_EXT_control_flow_attributes : enable
 #ifdef DOTS
 #extension GL_EXT_integer_dot_product : require
 #endif
@@ -3094,6 +3096,94 @@ void main_many() {
             }
         }
 
+        //  A short row's lanes in clusters, a row each, as main_one's.
+        uint share = groups < 8u && 8u % groups == 0u ? 8u / groups : 1u;
+        if (share > 1u) {
+            uint g = ix % groups;
+            uint phase = ix / groups;
+            uint per_lane = MANY_R / share;
+            uint col = g * 256u + itid * 32u;
+            uint block = col / BLOCK_ELEMS;
+            if (col < shape.columns) {
+#ifdef DOTS
+                int qa[CHUNK][8];
+                float da[CHUNK];
+                for (uint k = 0u; k < CHUNK; ++k) {
+                    if (c + k < MULTI) {
+                        uint xb = (from_k[k] + col) >> 2u;
+                        for (uint e = 0u; e < 8u; ++e) {
+                            qa[k][e] = qw[xb + e];
+                        }
+                        da[k] = qs[SCALES_AT + ((from_k[k] + col) >> 5u)];
+                    }
+                }
+#endif
+                [[unroll]] for (uint j = 0u; j < MANY_R; ++j) {
+                    if (j < per_lane) {
+                        uint row = min(first_row + j * share + phase, shape.rows - 1u);
+                        uint at = shape.base + slice + row * span
+                                  + block * BLOCK_BYTES;
+#ifdef DOTS
+                        int wq[8];
+                        float s0, s1;
+                        lane_bytes32(at, itid, wq, s0, s1);
+                        for (uint k = 0u; k < CHUNK; ++k) {
+                            if (c + k < MULTI) {
+                                int lo = dotPacked4x8EXT(qa[k][0], wq[0])
+                                       + dotPacked4x8EXT(qa[k][1], wq[1])
+                                       + dotPacked4x8EXT(qa[k][2], wq[2])
+                                       + dotPacked4x8EXT(qa[k][3], wq[3]);
+                                int hi = dotPacked4x8EXT(qa[k][4], wq[4])
+                                       + dotPacked4x8EXT(qa[k][5], wq[5])
+                                       + dotPacked4x8EXT(qa[k][6], wq[6])
+                                       + dotPacked4x8EXT(qa[k][7], wq[7]);
+                                temp[j][k] += da[k] * (s0 * float(lo) + s1 * float(hi));
+                            }
+                        }
+#else
+                        vec4 wv[8];
+                        lane_weights32(at, itid, wv);
+                        for (uint k = 0u; k < CHUNK; ++k) {
+                            if (c + k < MULTI) {
+                                uint xb = (from_k[k] + col) >> 2u;
+                                float sum = 0.0;
+                                for (uint e = 0u; e < 8u; ++e) {
+                                    sum += dot(x4[xb + e], wv[e]);
+                                }
+                                temp[j][k] += sum;
+                            }
+                        }
+#endif
+                    }
+                }
+            }
+            [[unroll]] for (uint j = 0u; j < MANY_R; ++j) {
+                if (j < per_lane) {
+                    uint row = first_row + j * share + phase;
+                    for (uint k = 0u; k < CHUNK; ++k) {
+                        float whole;
+                        if (groups == 1u) {
+                            whole = subgroupClusteredAdd(temp[j][k], 8u);
+                        } else if (groups == 2u) {
+                            whole = subgroupClusteredAdd(temp[j][k], 16u);
+                        } else {
+                            whole = subgroupClusteredAdd(temp[j][k], 32u);
+                        }
+                        if (itid == 0u && g == 0u && row < shape.rows && real_k[k]) {
+                            uint out_at = listed
+                                          ? (run_at + c + k) * shape.rows + row
+                                          : member * shape.rows * shape.count
+                                            + (shape.first + c + k) * shape.rows
+                                            + row;
+                            y[out_at] = shape.joins != 0u ? whole + rj[out_at]
+                                                          : whole;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
         for (uint i = ix; i < groups; i += 8u) {
             uint col = i * 256u + itid * 32u;
             if (col < shape.columns) {
@@ -3441,6 +3531,58 @@ void main_one() {
     for (uint r = 0u; r < ACC; ++r) {
         temp[r] = 0.0;
     }
+
+#if defined(LANE32) && !defined(GLU)
+    //  A row of fewer groups than are in flight -- an expert's way down,
+    //  512 wide, is two -- would leave the other lanes idle and sum every
+    //  row over all sixty-four: the lanes take the same groups of other
+    //  rows instead, a cluster of lanes a row, and one clustered sum adds
+    //  every cluster's row at once. The sums were what a short row paid.
+    uint share = groups < IN_FLIGHT && IN_FLIGHT % groups == 0u
+                 ? IN_FLIGHT / groups : 1u;
+    if (share > 1u) {
+        uint g = ix % groups;
+        uint phase = ix / groups;
+        uint per_lane = NUM_ROWS / share;
+        uint col = g * 256u + itid * 32u;
+        uint block = col / BLOCK_ELEMS;
+        if (col < shape.columns) {
+            uint xb = (from_base + col) >> 2u;
+            vec4 a[8];
+            for (uint k = 0u; k < 8u; ++k) {
+                a[k] = x4[xb + k];
+            }
+            [[unroll]] for (uint j = 0u; j < NUM_ROWS; ++j) {
+                if (j < per_lane) {
+                    uint row = min(first_row + j * share + phase, shape.rows - 1u);
+                    uint at = shape.base + slice + row * span + block * BLOCK_BYTES;
+                    temp[j] += lane_dot32(at, itid, a);
+                }
+            }
+        }
+        [[unroll]] for (uint j = 0u; j < NUM_ROWS; ++j) {
+            if (j < per_lane) {
+                float whole;
+                if (groups == 1u) {
+                    whole = subgroupClusteredAdd(temp[j], 8u);
+                } else if (groups == 2u) {
+                    whole = subgroupClusteredAdd(temp[j], 16u);
+                } else {
+                    whole = subgroupClusteredAdd(temp[j], 32u);
+                }
+                uint row = first_row + j * share + phase;
+                if (itid == 0u && g == 0u && row < shape.rows) {
+                    uint out_at = listed
+                                  ? run_at * shape.rows + row
+                                  : member * shape.rows * shape.count
+                                    + shape.first * shape.rows + row;
+                    y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+                }
+            }
+        }
+        return;
+    }
+#endif
 
     for (uint i = ix; i < groups; i += IN_FLIGHT) {
 #ifdef LANE32
