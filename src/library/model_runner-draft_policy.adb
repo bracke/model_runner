@@ -37,9 +37,14 @@ package body Model_Runner.Draft_Policy is
       --  and the head, which is 0.19 on Qwen3.5-4B, where three proposals a
       --  round read 13.3 -> 17.4 tokens a second sampling, and 0.38 on the
       --  0.8B, whose head is a third of the file and where one proposal a
-      --  round already reads 57 -> 52 -- and a model whose token reads less
-      --  than Next_Draft_Bytes, whose token is its fixed costs. A
-      --  --draft-tokens named is taken as asked.
+      --  round already reads 57 -> 52 -- and a dense model whose token
+      --  reads less than Next_Draft_Bytes, whose token is its fixed costs.
+      --  Not a mixture: its token reads a few experts' bytes and costs far
+      --  more than they say -- qwen3.6-35B-A3B at UD-IQ3_XXS reads 1.8 GB a
+      --  token and drafting three a round from its block reads 24.9 ->
+      --  30.8 tokens a second on text its context does not repeat, and
+      --  39.5 against the lookup's 36.7 on text it does. A --draft-tokens
+      --  named is taken as asked.
       Result.From_Next :=
         Request.Tokens > 0
         and then not Draft_Ready
@@ -47,7 +52,8 @@ package body Model_Runner.Draft_Policy is
         and then L.Drafts_Next (Session)
         and then (Request.Tokens_Set
                   or else (L.Draft_Share (Prepared) <= Next_Draft_Share
-                           and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes));
+                           and then (L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+                                     or else L.Config (Prepared).Experts > 0)));
 
       Result.Tokens :=
         (if Result.From_Next

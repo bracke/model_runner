@@ -3369,6 +3369,27 @@ begin
                end if;
             end;
          end loop;
+
+         --  And the block past the stack's, which drafts: counted in the
+         --  fit above, and never held, its stacks were copied over again
+         --  every draft -- qwen3.6-35B-A3B drafting from it lost to not
+         --  drafting at all, its device idle a third of every round.
+         if Item.Next /= null then
+            for Current of Item.Next.all loop
+               declare
+                  Ignored : E.Error_Info;
+               begin
+                  if T.Is_Present (Current.Gate_Stack) then
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Gate_Stack, Ignored);
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Up_Stack, Ignored);
+                     Model_Runner.Backend.Device.Hold
+                       (Current.Down_Stack, Ignored);
+                  end if;
+               end;
+            end loop;
+         end if;
       end if;
    end if;
 
