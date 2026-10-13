@@ -1868,7 +1868,10 @@ package body Model_Runner.Framework.Workspaces is
    is (Hostkit.Fs.Join (Stores.Root (Item), "runtime"));
 
    function Is_Kept_Name (Name : String) return Boolean
-   is (Name /= "" and then Ada.Strings.Fixed.Index (Name, "/") = 0 and then Name /= ".."
+   --  One folder's name and nothing that steps out of it on any host: no
+   --  separator of either kind, no drive, no control character.
+   is (Name /= "" and then Name /= ".." and then Name /= "."
+       and then (for all C of Name => C not in '/' | '\' | ':' and then Character'Pos (C) >= 32)
        and then (for some Prefix of Name_Lists.Vector'
                    (["given-up-", "overwritten-", "replaced-", "before-restore-"])
                  => Name'Length > Prefix'Length

@@ -14,7 +14,8 @@ is
    Parent  : constant String := Current (Host);
    Owner   : Agents.Agent;
    Read    : E.Error_Info := E.Success;
-   Named   : constant String := (if Trim (Role) = "" then "helper" else Trim (Role));
+   Named   : constant String :=
+     (if Trim (Role) = "" then "helper" else Ada.Characters.Handling.To_Lower (Trim (Role)));
    Obliged : constant Agents.Obligation :=
      (if Need = "optional" then Agents.Optional
       elsif Need = "advisory" then Agents.Advisory

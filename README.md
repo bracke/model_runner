@@ -1830,6 +1830,20 @@ filter, if the model is one you do not trust with your terminal.
 Prompt text given with `--prompt` may be visible to other local processes. Use
 `--prompt-file` or standard input for sensitive text.
 
+A project's checks run code its agents may have written -- a test, a build
+script -- and run it as you. What an agent's own tools may write is held to the
+roots its permissions name, judged where a path lands once links are followed,
+and never the project's state or `.git`; what a check run on its behalf writes
+is not, unless the project sets `scalar execution.confine_writes = true`. Then
+every check runs under `bwrap`, the host read-only to it but for the project or
+workspace tree it runs for -- its state and `.git` still read-only within it --
+and a `/tmp` of its own; on a host without `bwrap`, checks are refused rather
+than run unconfined. It is off by default because a build that writes outside
+its tree -- a compiler's cache in your home -- would then fail. Values the
+harness fills into a check (`{tests}`, `{scope}`) are passed as their own
+arguments, quoted, and a value with a quote or a control character in it is
+refused.
+
 ## Not implemented
 
 Named in the specification, absent here:

@@ -1200,6 +1200,24 @@ package body Model_Runner.Tools.Builtin is
       return As_Reply (Model_Runner.Tools.Editing.Search_File (Path, Pattern, Base));
    end Search_File;
 
+   --  Whether a file a search comes to may be read: where the harness
+   --  started this program as an agent, by the same judgement read_file is
+   --  held to -- its read permissions, what they deny -- file by file, not
+   --  only the folder the search began at.
+   function May_Read_Found (Path : String) return Boolean is
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Env renames Ada.Environment_Variables;
+   begin
+      return not Env.Exists (Pm.Agent_Root_Variable)
+        or else Pm.Path_Refusal
+                  (Env.Value (Pm.Agent_Root_Variable), Path,
+                   Writing => False,
+                   Allowed =>
+                     (if Env.Exists (Pm.Agent_Permissions_Variable)
+                      then Pm.Value (Env.Value (Pm.Agent_Permissions_Variable))
+                      else Pm.Nothing)) = "";
+   end May_Read_Found;
+
    function Search_Code (Args : String; Base : String) return Reply is
       Have_P, Have_T : Boolean;
       Path    : constant String := Text_Argument (Args, "path", Have_P);
@@ -1209,7 +1227,8 @@ package body Model_Runner.Tools.Builtin is
          return Failure ("search_code needs a pattern");
       end if;
       return As_Reply
-        (Model_Runner.Tools.Editing.Search_Code ((if Have_P and then Path /= "" then Path else "."), Pattern, Base));
+        (Model_Runner.Tools.Editing.Search_Code ((if Have_P and then Path /= "" then Path else "."), Pattern, Base,
+                                                 May_Read => May_Read_Found'Access));
    end Search_Code;
 
    function Write_File (Args : String; Base : String) return Reply is
@@ -1318,7 +1337,8 @@ package body Model_Runner.Tools.Builtin is
       then
          return As_Reply (Model_Runner.Tools.Editing.Search_File (Where, Query, Base));
       end if;
-      return As_Reply (Model_Runner.Tools.Editing.Search_Code (Where, Query, Base));
+      return As_Reply (Model_Runner.Tools.Editing.Search_Code (Where, Query, Base,
+                                                               May_Read => May_Read_Found'Access));
    end Find;
 
    --  A file read whole, or by its lines where it is asked for some.

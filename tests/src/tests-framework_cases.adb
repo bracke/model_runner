@@ -4374,6 +4374,38 @@ package body Tests.Framework_Cases is
          Assert (Pm.Path_Refusal (Root, "src/new.adb", True, Pm.Value ("write_source roots=docs/"))
                  = "you may not write src/new.adb",
                  "the grants did not narrow what may be written");
+         --  Version control however a host spells it, and a path judged as
+         --  it lands as well as it is spelled: a link from where it may
+         --  write to where it may not, or into .git, is followed first.
+         Assert (Pm.Path_Refusal (Root, "src/secret" & ASCII.NUL & "x", Writing => False) /= "",
+                 "a path holding a NUL was judged as the part before it");
+         Assert (Pm.Path_Refusal (Root, ".GIT/hooks/pre-commit", Writing => True) /= ""
+                 and then Pm.Path_Refusal (Root, "src/.git. /x", Writing => True) /= "",
+                 "version control spelled otherwise was written");
+         Dirs.Create_Path (Root & "/src");
+         Dirs.Create_Path (Root & "/tests");
+         Dirs.Create_Path (Root & "/.git/hooks");
+         if Hostkit.Fs.Create_Link (Root & "/.git", Root & "/src/g")
+           and then Hostkit.Fs.Create_Link (Root & "/tests", Root & "/src/t")
+         then
+            declare
+               --  Judged first and the links gone before anything is said,
+               --  so a failure leaves no link for the next run to trip on.
+               Into_Git : constant Boolean :=
+                 Pm.Path_Refusal (Root, "src/g/hooks/post-checkout", True,
+                                  Pm.Value ("write_source roots=src/")) /= "";
+               Out_Of_Roots : constant Boolean :=
+                 Pm.Path_Refusal (Root, "src/t/x_test.py", True,
+                                  Pm.Value ("write_source roots=src/")) /= ""
+                 and then Pm.Path_Refusal (Root, "src/x.adb", True,
+                                           Pm.Value ("write_source roots=src/")) = "";
+            begin
+               Gone := Hostkit.Fs.Delete_Link (Root & "/src/g");
+               Gone := Hostkit.Fs.Delete_Link (Root & "/src/t");
+               Assert (Into_Git, "a link from the source into version control was written through");
+               Assert (Out_Of_Roots, "a link out of the roots it may write was written through");
+            end;
+         end if;
          if Hostkit.Fs.Create_Link (Root & "/.model_runner", Link) then
             Assert (Pm.Path_Refusal (Root, "state-link/tasks/x", Writing => True) /= "",
                     "a link into the state was followed");
@@ -4561,6 +4593,35 @@ package body Tests.Framework_Cases is
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
       Assert (Passed and then To_String (Held.State) = "verified",
               "a requirement with its own evidence was not verified: " & To_String (Held.State));
+
+      S.Close (Store);
+
+      --  What a model named reaches a check as its own words: a test path
+      --  with a shell's operator in it is an argument even where checks run
+      --  through a shell, one with a quote of its own is refused, and each
+      --  test is one argument.
+      Task_Project
+        (Store, "given-quoted",
+         "set execution.allowed = echo" & LF
+         & "scalar execution.shell = allowed" & LF
+         & "profile listing = list: echo {tests}" & LF
+         & "scalar verification.default = listing" & LF);
+      declare
+         Given_To : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Given_To.Append ("tests=tests/a_test.py tests/b;false");
+         Model_Runner.Framework.Verification.Run_Profile
+           (Store, Change, "listing", "", Evidence, Passed, Status, Given => Given_To);
+         Assert (E.Is_Ok (Status) and then Passed,
+                 "a shell's operator in a test path ran as the shell's: " & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+         Given_To.Replace_Element (1, "tests=tests/a'b.py");
+         Model_Runner.Framework.Verification.Run_Profile
+           (Store, Change, "listing", "", Evidence, Passed, Status, Given => Given_To);
+         Change := S.No_Changes;
+         Assert (Status.Code = E.Framework_Execution_Refused,
+                 "a value with a quote of its own reached a check: " & Code_Of (Status));
+      end;
       S.Close (Store);
    end Requirements_Verified_By_Policy;
 
@@ -5380,6 +5441,40 @@ package body Tests.Framework_Cases is
       Rules.Memory_MB := 0;
       Rules.CPU_Seconds := 0;
       Change := S.No_Changes;
+
+      --  Writes held to the project where the project asks: inside it, a
+      --  check writes; beside it, or in the project's own state, it cannot.
+      --  Refused where nothing on the host can hold it to that.
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Outside : constant String :=
+           Dirs.Containing_Directory (Project) & "/outside-"
+           & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Both);
+      begin
+         Rules.Allowed.Append ("touch");
+         Rules.Confine_Writes := True;
+         Ex.Run (Store, Change, Rules, "touch inside.txt", "", Ran, Status);
+         if Hostkit.Process.Locate ("bwrap") = "" then
+            Assert (Status.Code = E.Framework_Execution_Refused,
+                    "a confined command ran with nothing to confine it");
+         else
+            Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0 and then Dirs.Exists (Project & "/inside.txt"),
+                    "a confined command could not write in its own tree: " & Code_Of (Status)
+                    & Integer'Image (Ran.Exit_Status) & " " & To_String (Ran.Output));
+            Ex.Run (Store, Change, Rules, "touch " & Outside, "", Ran, Status);
+            Assert (Ran.Exit_Status /= 0 and then not Dirs.Exists (Outside),
+                    "a confined command wrote beside its tree");
+            Ex.Run (Store, Change, Rules, "touch " & S.Root (Store) & "/planted", "", Ran, Status);
+            Assert (Ran.Exit_Status /= 0 and then not Dirs.Exists (S.Root (Store) & "/planted"),
+                    "a confined command wrote into the project's state");
+            Dirs.Delete_File (Project & "/inside.txt");
+         end if;
+         if Dirs.Exists (Outside) then
+            Dirs.Delete_File (Outside);
+         end if;
+         Rules.Confine_Writes := False;
+         Change := S.No_Changes;
+      end;
 
       --  No network where the policy denies it: taken away where the host
       --  can, and the command still runs either way.
@@ -9168,6 +9263,46 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Harness_Runs_Routine_Stages;
 
+   --  A helper's role is the model's to name: one the project does not
+   --  configure, or one spelled in another case, is held as a helper is,
+   --  not given its parent's every right.
+   procedure Unnamed_Roles_Are_Helpers
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ag renames Model_Runner.Framework.Agents;
+      package Pm renames Model_Runner.Framework.Permissions;
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Root   : Unbounded_String;
+      Child  : Unbounded_String;
+      Held   : Ag.Agent;
+   begin
+      Task_Project
+        (Store, "role-fallback",
+         "map permission.project.read_source =" & LF
+         & "map permission.project.write_source = roots=src/" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=4" & LF
+         & "map permission.role.helper.write_source = off" & LF
+         & "scalar agents.max_active = 6" & LF
+         & "scalar agents.token_budget = 1000" & LF);
+      Ag.Start_Root (Store, Change, "TASK-001", "worker", "", Root, Status);
+      S.Commit (Store, Change, Status);
+      for Named of Model_Runner.Framework.Name_Lists.Vector'(["helper", "Helper", "writer"]) loop
+         Ag.Spawn_Child (Store, Change, To_String (Root), Named, Ag.Optional,
+                         Pm.Unrestricted, 50, Child, Status);
+         S.Commit (Store, Change, Status);
+         Ag.Read (Store, To_String (Child), Held, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Pm.Allows (Held.Allowed, Pm.Read_Source, "src/x.adb")
+                 and then not Pm.Allows (Held.Allowed, Pm.Write_Source, "src/x.adb"),
+                 "a helper named " & Named & " was given more than a helper may have: "
+                 & Pm.Image (Held.Allowed));
+      end loop;
+      S.Close (Store);
+   end Unnamed_Roles_Are_Helpers;
+
    --  A record that is there and will not read is not taken for one that
    --  is absent: a task that cannot be read may be anyone's part, a
    --  workspace that cannot be read may be anyone's, and nothing is ready,
@@ -10783,6 +10918,8 @@ package body Tests.Framework_Cases is
                   Assert (E.Is_Error (Got), "a pruned copy was there still to remove");
                   Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, "../escape", Got);
                   Assert (E.Is_Error (Got), "a name outside the kept copies was removed");
+                  Model_Runner.Framework.Workspaces.Drop_Kept (Kept_Store, "given-up-x\..\..\y", Got);
+                  Assert (E.Is_Error (Got), "a kept name stepping out by a backslash was removed");
                   S.Close (Kept_Store);
                end;
             end if;
@@ -12850,6 +12987,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Workspaces_Start_And_End_Whole'Access,
          "workspaces start from the project as it is and end once their work is kept");
+      Register_Routine
+        (T, Unnamed_Roles_Are_Helpers'Access,
+         "a helper's role not configured, or in another case, is held as a helper's");
       Register_Routine
         (T, Unreadable_Records_Hold_Back'Access,
          "a record that will not read holds back what could depend on it");

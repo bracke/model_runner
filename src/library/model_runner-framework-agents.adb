@@ -476,7 +476,16 @@ package body Model_Runner.Framework.Agents is
             Allowed    : Permissions.Permission_Set :=
               Permissions.Intersect (Owner.Allowed, Asked);
          begin
-            Role_Level := Permissions.Level_Of (Item, "role." & Role, Present);
+            --  By the role as the project names roles, whatever case the
+            --  model wrote it in; and a role the project does not name is a
+            --  helper's, where the project says what a helper may: the name
+            --  is the model's to choose, and choosing one nobody configured
+            --  is not a way past what helpers are held to.
+            Role_Level := Permissions.Level_Of
+              (Item, "role." & Ada.Characters.Handling.To_Lower (Role), Present);
+            if not Present then
+               Role_Level := Permissions.Level_Of (Item, "role.helper", Present);
+            end if;
             if Present then
                Allowed := Permissions.Intersect (Allowed, Role_Level);
             end if;

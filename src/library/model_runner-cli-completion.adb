@@ -166,6 +166,8 @@ package body Model_Runner.CLI.Completion is
          Result := Words_Of ("candidate accepted");
       elsif Bare in "execution.network" | "execution.shell" then
          Result := Words_Of ("allowed denied");
+      elsif Bare = "execution.confine_writes" then
+         Result := Words_Of ("true false");
       elsif Bare = "verification.toolchain" then
          Result := Words_Of ("recorded strict");
       elsif Bare = "recovery.running" then

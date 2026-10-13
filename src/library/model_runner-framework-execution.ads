@@ -54,6 +54,14 @@ package Model_Runner.Framework.Execution is
       --  How many commands may run at once across every harness working
       --  on the project; zero for no bound.
       Process_Slots : Natural := 0;
+
+      --  Whether a command may write only in the tree it runs for -- the
+      --  project, or a workspace -- and a /tmp of its own, the rest of the
+      --  host read-only to it (scalar execution.confine_writes = true;
+      --  where bwrap is there to do it, else refused). A check runs code a
+      --  model may have written; without this it runs it with the user's
+      --  every right.
+      Confine_Writes : Boolean := False;
    end record;
 
    --  What became of a command.

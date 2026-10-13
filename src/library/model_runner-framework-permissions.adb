@@ -1119,8 +1119,44 @@ package body Model_Runner.Framework.Permissions is
           or else (Real'Length > Base'Length
                    and then Real (Real'First .. Real'First + Base'Length - 1) = Base
                    and then Real (Real'First + Base'Length) in '/' | '\'));
+
+      --  Whether a path names version control anywhere along it, as a
+      --  host that folds case, or drops a name's trailing dots and spaces,
+      --  would read it: .GIT and ".git." are the same folder there.
+      function Names_Git (Text : String) return Boolean is
+         From : Natural := Text'First;
+      begin
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) in '/' | '\' then
+               declare
+                  Part : constant String :=
+                    Ada.Strings.Fixed.Trim
+                      (Ada.Characters.Handling.To_Lower (Text (From .. Index - 1)),
+                       Ada.Strings.Maps.Null_Set, Ada.Strings.Maps.To_Set (". "));
+               begin
+                  if Index > From and then Part = ".git" then
+                     return True;
+                  end if;
+               end;
+               From := Index + 1;
+            end if;
+         end loop;
+         return False;
+      end Names_Git;
+
+      --  The path as it lands once every link on the way is followed,
+      --  relative to the tree: what is judged as well as the path as it
+      --  is spelled, since a link inside the tree can make one into the
+      --  other.
+      Landing : Unbounded_String := To_Unbounded_String (Path);
    begin
-      if Model_Runner.Framework.Is_Rooted (Path) then
+      --  A character below a space -- a NUL above all -- would have the
+      --  host read another path than the one judged here.
+      if (for some C of Path => Character'Pos (C) < 32) then
+         Said := To_Unbounded_String ("a path does not hold control characters");
+         Verdict := Path_Outside;
+         return;
+      elsif Model_Runner.Framework.Is_Rooted (Path) then
          Said := To_Unbounded_String (Outside);
          Verdict := Path_Outside;
          return;
@@ -1142,7 +1178,7 @@ package body Model_Runner.Framework.Permissions is
            (Path & " is the project's state, which only the harness reads and writes");
          Verdict := Path_Harness_Owned;
          return;
-      elsif Writing and then Parts.Contains (".git") then
+      elsif Writing and then Names_Git (Path) then
          Said := To_Unbounded_String (Path & " is version control, which only the harness writes");
          Verdict := Path_Harness_Owned;
          return;
@@ -1164,6 +1200,23 @@ package body Model_Runner.Framework.Permissions is
          declare
             Real : constant String := Hostkit.Fs.Real_Path (To_String (Nearest));
          begin
+            if Base /= "" and then Real /= "" and then Under (Real, Base) then
+               declare
+                  Joined : constant String :=
+                    Hostkit.Fs.Join (Root, (if Path = "" then "." else Path));
+                  Rest   : constant String :=
+                    Joined (Joined'First + To_String (Nearest)'Length .. Joined'Last);
+                  Inside : constant String :=
+                    (if Real'Length > Base'Length then Real (Real'First + Base'Length + 1 .. Real'Last)
+                     else "");
+               begin
+                  Landing := To_Unbounded_String
+                    (if Inside = "" then
+                       (if Rest'Length > 0 and then Rest (Rest'First) in '/' | '\'
+                        then Rest (Rest'First + 1 .. Rest'Last) else Rest)
+                     else Inside & Rest);
+               end;
+            end if;
             if Base = "" or else Real = "" or else not Under (Real, Base) then
                Said := To_Unbounded_String (Outside);
                Verdict := Path_Outside;
@@ -1182,9 +1235,18 @@ package body Model_Runner.Framework.Permissions is
             return;
       end;
 
+      if Writing and then Names_Git (To_String (Landing)) then
+         Said := To_Unbounded_String (Path & " is version control, which only the harness writes");
+         Verdict := Path_Harness_Owned;
+         return;
+      end if;
+      --  Allowed as spelled, and as it lands: a link from where it may write
+      --  to where it may not is the second.
       if Writing
-        and then not Allows (Allowed, Write_Source, Path)
-        and then not Allows (Allowed, Write_Specs, Path)
+        and then ((not Allows (Allowed, Write_Source, Path)
+                   and then not Allows (Allowed, Write_Specs, Path))
+                  or else (not Allows (Allowed, Write_Source, To_String (Landing))
+                           and then not Allows (Allowed, Write_Specs, To_String (Landing))))
       then
          Said := To_Unbounded_String
            ("you may not write " & Path
@@ -1192,8 +1254,10 @@ package body Model_Runner.Framework.Permissions is
          Verdict := Path_Not_Granted;
          return;
       elsif not Writing
-        and then not Allows (Allowed, Read_Source, Path)
-        and then not Allows (Allowed, Read_Specs, Path)
+        and then ((not Allows (Allowed, Read_Source, Path)
+                   and then not Allows (Allowed, Read_Specs, Path))
+                  or else (not Allows (Allowed, Read_Source, To_String (Landing))
+                           and then not Allows (Allowed, Read_Specs, To_String (Landing))))
       then
          Said := To_Unbounded_String
            ("you may not read " & Path

@@ -166,8 +166,13 @@ package Model_Runner.Tools.Editing is
    --  @param Pattern The text, as it is written.
    --  @param Base The directory a relative path is under; "" for the
    --    process's own.
+   --  @param May_Read Whether a file found may be read, where the caller
+   --    is held to some and not others: what it may not read is passed
+   --    over as unseen. Null for every file. Links are never followed.
    --  @return The hits.
-   function Search_Code (Folder, Pattern : String; Base : String := "") return Said;
+   function Search_Code
+     (Folder, Pattern : String; Base : String := "";
+      May_Read : access function (Path : String) return Boolean := null) return Said;
 
    --  The declarations lines First .. Last of a text fall in or name: the
    --  nearest one opening at or above First, and each one opening within.

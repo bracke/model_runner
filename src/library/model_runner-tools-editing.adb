@@ -1014,7 +1014,9 @@ package body Model_Runner.Tools.Editing is
    -- Search_Code --
    -----------------
 
-   function Search_Code (Folder, Pattern : String; Base : String := "") return Said is
+   function Search_Code
+     (Folder, Pattern : String; Base : String := "";
+      May_Read : access function (Path : String) return Boolean := null) return Said is
       Result : Said;
       Hits   : Natural := 0;
 
@@ -1053,7 +1055,13 @@ package body Model_Runner.Tools.Editing is
                Name : constant String := Ada.Directories.Simple_Name (Found);
                Full : constant String := (if Here = "." then Name else Here & "/" & Name);
             begin
-               if Passed_Over (Name) then
+               --  Not through a link -- one may point anywhere, outside the
+               --  tree the search is of -- and not into what the caller may
+               --  not read.
+               if Passed_Over (Name)
+                 or else Hostkit.Fs.Is_Link (On_Disk (Base, Full))
+                 or else (May_Read /= null and then not May_Read (Full))
+               then
                   null;
                elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
                   Walk (Full);

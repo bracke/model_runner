@@ -83,6 +83,7 @@ package body Model_Runner.Framework.Execution is
       Result.Processes := Amount (Records.Get (Config, "scalar.execution.max_processes"));
       Result.File_MB := Amount (Records.Get (Config, "scalar.execution.max_file_mb"));
       Result.Process_Slots := Amount (Records.Get (Config, "scalar.execution.process_slots"));
+      Result.Confine_Writes := Records.Get (Config, "scalar.execution.confine_writes") = "true";
       return Result;
    end Policy_From;
 
@@ -617,6 +618,39 @@ package body Model_Runner.Framework.Execution is
          loop
             Arguments.Append (To_Unbounded_String (Assignment));
          end loop;
+
+         --  Writing only in its own tree, where the project asks: the host
+         --  read-only to it but for that tree and a /tmp of its own. Refused
+         --  where nothing here can do it, rather than run unconfined.
+         if Rules.Confine_Writes then
+            if Hostkit.Process.Locate ("bwrap") = "" then
+               Refuse ("the project confines what checks write (execution.confine_writes) and bwrap,"
+                       & " which does it, is not on this host");
+               return;
+            end if;
+            Arguments.Append (To_Unbounded_String (Executable ("bwrap")));
+            for Word of Name_Lists.Vector'(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+                                           "--tmpfs", "/tmp", "--bind", Ada.Directories.Full_Name (Project),
+                                           Ada.Directories.Full_Name (Project)])
+            loop
+               Arguments.Append (To_Unbounded_String (Word));
+            end loop;
+            --  Inside the tree, what a check has no business writing: the
+            --  project's state and its repository's hooks and history.
+            for Kept of Name_Lists.Vector'([Hostkit.Fs.Join (Project, State_Directory),
+                                           Hostkit.Fs.Join (Project, ".git")])
+            loop
+               if Ada.Directories.Exists (Kept) then
+                  Arguments.Append (To_Unbounded_String ("--ro-bind"));
+                  Arguments.Append (To_Unbounded_String (Ada.Directories.Full_Name (Kept)));
+                  Arguments.Append (To_Unbounded_String (Ada.Directories.Full_Name (Kept)));
+               end if;
+            end loop;
+            for Word of Name_Lists.Vector'(["--chdir", Ada.Directories.Full_Name (Where),
+                                           "--die-with-parent", "--"]) loop
+               Arguments.Append (To_Unbounded_String (Word));
+            end loop;
+         end if;
 
          --  Its limits, and no network where it may have none and the host
          --  can take it away.

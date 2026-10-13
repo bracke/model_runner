@@ -612,25 +612,98 @@ package body Model_Runner.Framework.Verification is
          else Records.Get (Settings, "profile." & Profile));
 
       --  A check's text with each {NAME} given replaced by its value -- not
-      --  ${NAME}, which a template fills in when the project is made.
-      function Filled (Template : String) return String is
-         Result : Unbounded_String := To_Unbounded_String (Template);
+      --  ${NAME}, which a template fills in when the project is made. In one
+      --  pass, so a value is never itself filled; and in a command, a value
+      --  each word of it a word of the command, quoted where it holds more
+      --  than plain path characters, so a test path a model named cannot
+      --  become two arguments, or a shell's operators where the project
+      --  runs checks through one. A value that
+      --  could not be quoted so is refused before anything runs (Unsafe).
+      function Filled (Template : String; Command : Boolean := True) return String is
+         Result  : Unbounded_String;
+         At_Char : Natural := Template'First;
+
+         function Value_Of (Name : String; Found : out Boolean) return String is
+         begin
+            for Pair of Given loop
+               declare
+                  Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
+               begin
+                  if Equal > Pair'First and then Pair (Pair'First .. Equal - 1) = Name then
+                     Found := True;
+                     return Pair (Equal + 1 .. Pair'Last);
+                  end if;
+               end;
+            end loop;
+            Found := False;
+            return "";
+         end Value_Of;
+
+         function Plain (Value : String) return Boolean
+         is (for all C of Value =>
+               C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '/' | '-' | ':' | '=' | ',' | '+' | '@');
+         --  Each word of a value its own argument, as {tests} lists them,
+         --  and a word of more than plain characters quoted whole.
+         function Quoted_Words (Value : String) return String is
+            Said  : Unbounded_String;
+            Start : Natural := Value'First;
+         begin
+            for Index in Value'First .. Value'Last + 1 loop
+               if Index > Value'Last or else Value (Index) = ' ' then
+                  if Index > Start then
+                     declare
+                        Word : constant String := Value (Start .. Index - 1);
+                     begin
+                        Append (Said, (if Said = Null_Unbounded_String then "" else " ")
+                                & (if Plain (Word) then Word else "'" & Word & "'"));
+                     end;
+                  end if;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return To_String (Said);
+         end Quoted_Words;
       begin
-         for Pair of Given loop
+         while At_Char <= Template'Last loop
             declare
-               Equal : constant Natural := Ada.Strings.Fixed.Index (Pair, "=");
-               Mark  : constant String := "{" & Pair (Pair'First .. Equal - 1) & "}";
-               Value : constant String := Pair (Equal + 1 .. Pair'Last);
-               At_Index : Natural := Index (Result, Mark);
+               Close : constant Natural :=
+                 (if Template (At_Char) = '{'
+                  then Ada.Strings.Fixed.Index (Template (At_Char .. Template'Last), "}")
+                  else 0);
+               Found : Boolean := False;
             begin
-               while At_Index > 0 loop
-                  Replace_Slice (Result, At_Index, At_Index + Mark'Length - 1, Value);
-                  At_Index := Index (Result, Mark, At_Index + Value'Length);
-               end loop;
+               if Close > At_Char + 1 then
+                  declare
+                     Value : constant String := Value_Of (Template (At_Char + 1 .. Close - 1), Found);
+                  begin
+                     if Found then
+                        Append (Result, (if Command then Quoted_Words (Value) else Value));
+                        At_Char := Close + 1;
+                     end if;
+                  end;
+               end if;
+               if not Found then
+                  Append (Result, Template (At_Char));
+                  At_Char := At_Char + 1;
+               end if;
             end;
          end loop;
          return To_String (Result);
       end Filled;
+
+      --  A value given that no quoting carries whole: a quote of its own,
+      --  or a character below a space.
+      function Unsafe return String is
+      begin
+         for Pair of Given loop
+            for C of Pair loop
+               if C = ''' or else Character'Pos (C) < 32 then
+                  return Pair;
+               end if;
+            end loop;
+         end loop;
+         return "";
+      end Unsafe;
       Checks   : constant Check_List := Parse_Profile (Text);
       Rules    : Execution.Policy := Execution.Policy_Of (Item);
       Number   : Natural;
@@ -644,6 +717,12 @@ package body Model_Runner.Framework.Verification is
       if Text = "" then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", "profile " & Profile);
+         return;
+      elsif Unsafe /= "" then
+         Status := E.Make (E.Framework_Execution_Refused);
+         E.Add_Text (Status, "name", "profile " & Profile);
+         E.Add_Text (Status, "detail", "a value given to its checks holds a quote or a control character,"
+                     & " which cannot be passed as one argument: " & Unsafe);
          return;
       end if;
 
@@ -972,7 +1051,7 @@ package body Model_Runner.Framework.Verification is
                   Tries := Tries + 1;
                   Execution.Run
                     (Item, Change, Own, Filled (To_String (Next.Command)),
-                     Filled (To_String (Next.Directory)), Ran, Status, Base => Workspace);
+                     Filled (To_String (Next.Directory), Command => False), Ran, Status, Base => Workspace);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -1017,7 +1096,7 @@ package body Model_Runner.Framework.Verification is
                Records.Set
                  (Value, "parameters." & Pad (Index, 4),
                   "command=" & Filled (To_String (Next.Command))
-                  & ", directory=" & Filled (To_String (Next.Directory))
+                  & ", directory=" & Filled (To_String (Next.Directory), Command => False)
                   & ", timeout=" & Image (Own.Timeout)
                   & ", retry=" & Image (Next.Retries)
                   & ", keep=" & (if Next.Keep_Whole then "whole" else "summary"));
