@@ -2078,7 +2078,7 @@ package body Model_Runner.Framework.Workspaces is
    begin
       for Path of Kept_Files (Item, Name) loop
          if Dirs.Exists (Hostkit.Fs.Join (Project, Path))
-           and then Print_Of (Hostkit.Fs.Join (Project, Path)) /= Print_Of (Hostkit.Fs.Join (Where, Path))
+           and then not Same_Print (Hostkit.Fs.Join (Project, Path), Hostkit.Fs.Join (Where, Path))
          then
             Result.Append (Path);
          end if;

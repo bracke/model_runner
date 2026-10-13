@@ -2027,6 +2027,7 @@ package body Model_Runner.CLI.Intents is
                end Served_By;
                Serving_New : constant String :=
                  (if Nt."=" (Kind, Nt.Requirement) then Served_By (Word (3)) else "");
+               Governed_Before : Unbounded_String;
             begin
                --  A replacement done and verified already is another's work
                --  finished: taking the old one's place would undo that, so
@@ -2096,15 +2097,10 @@ package body Model_Runner.CLI.Intents is
                      return;
                   end if;
                end if;
-               declare
-                  Governed_Before : constant String := Nt.Governs (Store, Kind, Word (2));
-               begin
-                  Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
-                  if E.Is_Ok (Status) and then Governed_Before /= "" then
-                     S.Commit (Store, Change, Status);
-                     Say_Ruling_Gone (Word (2), Governed_Before);
-                  end if;
-               end;
+               --  What it ruled, said once the whole change is in -- the
+               --  work moved to its replacement too, one change.
+               Governed_Before := To_Unbounded_String (Nt.Governs (Store, Kind, Word (2)));
+               Nt.Supersede (Store, Change, Kind, Word (2), Word (3), Status);
 
                --  A candidate replacing one accepted takes its place, and so
                --  is accepted with it: said, not done unsaid.
@@ -2179,6 +2175,9 @@ package body Model_Runner.CLI.Intents is
                if E.Is_Error (Status) then
                   Pres.Report (Screen, Status);
                   return;
+               end if;
+               if Governed_Before /= Null_Unbounded_String then
+                  Say_Ruling_Gone (Word (2), To_String (Governed_Before));
                end if;
 
                --  Said in the order it happened: replaced, what replaces it

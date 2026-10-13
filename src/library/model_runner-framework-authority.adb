@@ -142,6 +142,44 @@ package body Model_Runner.Framework.Authority is
       return Result;
    end Standing_Instructions;
 
+   ----------------
+   -- Unreadable --
+   ----------------
+
+   function Unreadable (Item : Stores.Store) return Name_Lists.Vector is
+      type Area_Pair is array (1 .. 2) of Area;
+      Result : Name_Lists.Vector;
+   begin
+      for Name of Instruction_Names (Item) loop
+         declare
+            Held : Records.Item;
+            Read : E.Error_Info;
+         begin
+            Stores.Read (Item, Project_Area, Name, Held, Read);
+            if E.Is_Error (Read) then
+               Result.Append (Name (Name'First + Instruction_Prefix'Length .. Name'Last));
+            end if;
+         end;
+      end loop;
+      --  An entity's own record, not its earlier revisions kept beside it.
+      for Where of Area_Pair'([Decisions_Area, Specs_Area]) loop
+         for Name of Stores.Names (Item, Where) loop
+            if Ada.Strings.Fixed.Index (Name, ".") = 0 then
+               declare
+                  Held : Records.Item;
+                  Read : E.Error_Info;
+               begin
+                  Stores.Read (Item, Where, Name, Held, Read);
+                  if E.Is_Error (Read) then
+                     Result.Append (Name);
+                  end if;
+               end;
+            end if;
+         end loop;
+      end loop;
+      return Result;
+   end Unreadable;
+
    ------------
    -- Gather --
    ------------

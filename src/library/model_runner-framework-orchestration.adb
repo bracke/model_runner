@@ -275,8 +275,6 @@ package body Model_Runner.Framework.Orchestration is
       Result   : Dispatch_Plan;
       Limits   : constant Agents.Limits := Agents.Limits_Of (Item);
       Settings : constant Records.Item := Config (Item);
-      Isolated : constant Boolean :=
-        Records.Get (Settings, "scalar.work.isolation") = "workspace";
       Running  : Natural := 0;
 
       --  The components being written, and those being read, by the tasks
@@ -301,6 +299,23 @@ package body Model_Runner.Framework.Orchestration is
             return Allowed (Permissions.Write_Source).Granted or else Allowed (Permissions.Write_Specs).Granted;
          end;
       end Writes;
+      --  Whether a task works in a workspace of its own, as its kind says,
+      --  else the project: as readiness and the run itself decide it.
+      function Isolated (Id : String) return Boolean is
+         Defined : Records.Item;
+         Read    : E.Error_Info;
+      begin
+         Tasks.Definition (Item, Id, Defined, Read);
+         declare
+            Kind : constant String := Records.Get (Defined, "kind");
+         begin
+            return (if Tasks.Kind_Policy (Item, Kind, "isolation") /= ""
+                    then Tasks.Kind_Policy (Item, Kind, "isolation")
+                    else Records.Get (Settings, "scalar.work.isolation")) = "workspace";
+         end;
+      end Isolated;
+
+      --  The first task writing in the project itself, running or planned.
       Writer_Running : Unbounded_String;
       Writer_Planned : Unbounded_String;
 
@@ -318,7 +333,7 @@ package body Model_Runner.Framework.Orchestration is
    begin
       for Id of Tasks.List (Item, "running") loop
          Running := Running + 1;
-         if Writer_Running = Null_Unbounded_String and then Writes (Id) then
+         if Writer_Running = Null_Unbounded_String and then Writes (Id) and then not Isolated (Id) then
             Writer_Running := To_Unbounded_String (Id);
          end if;
          declare
@@ -389,7 +404,7 @@ package body Model_Runner.Framework.Orchestration is
             --  In the project itself, one writer at a time: two in one tree
             --  would have each other's changes taken for their own.
             --  A task that only reads waits for no writer, nor holds one.
-            elsif not Isolated and then Writes (To_String (Next.Id))
+            elsif not Isolated (To_String (Next.Id)) and then Writes (To_String (Next.Id))
               and then (Writer_Running /= Null_Unbounded_String or else Writer_Planned /= Null_Unbounded_String)
             then
                Result.Held.Append
@@ -399,10 +414,12 @@ package body Model_Runner.Framework.Orchestration is
                      else "would wait for " & To_String (Writer_Planned)
                           & ", planned before it, to write in the project first")
                   & "; one task writes in it at a time");
-            elsif not Isolated and then Component /= "" and then Written.Contains (Component) then
+            elsif not Isolated (To_String (Next.Id)) and then Component /= ""
+              and then Written.Contains (Component)
+            then
                Result.Held.Append
                  (To_String (Next.Id) & ": another task is writing " & Component);
-            elsif not Isolated and then Component /= "" and then Writes (To_String (Next.Id))
+            elsif not Isolated (To_String (Next.Id)) and then Component /= "" and then Writes (To_String (Next.Id))
               and then Read_In.Contains (Component)
             then
                Result.Held.Append
@@ -410,7 +427,9 @@ package body Model_Runner.Framework.Orchestration is
                   & ", and would read this one's changes half made");
             else
                Result.Start.Append (To_String (Next.Id));
-               if Writer_Planned = Null_Unbounded_String and then Writes (To_String (Next.Id)) then
+               if Writer_Planned = Null_Unbounded_String and then Writes (To_String (Next.Id))
+                 and then not Isolated (To_String (Next.Id))
+               then
                   Writer_Planned := Next.Id;
                end if;
                if Component /= "" then
@@ -516,6 +535,9 @@ package body Model_Runner.Framework.Orchestration is
                               & " to be taken in; /task integrate " & Id);
             end if;
          end;
+      end loop;
+      for Name of Authority.Unreadable (Item) loop
+         Result.Append (Name & ": its record will not read, so what it rules cannot be known");
       end loop;
       --  Within the project, and within each component.
       declare

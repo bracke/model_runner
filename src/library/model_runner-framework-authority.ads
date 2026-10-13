@@ -127,6 +127,14 @@ package Model_Runner.Framework.Authority is
    --  @return The statements.
    function Gather (Item : Stores.Store; Component : String := "") return Statement_List;
 
+   --  The standing instructions, decisions and specifications whose record
+   --  will not read: what each rules is not known, and not to be taken as
+   --  nothing -- Gather leaves them out, and whoever relies on it says so.
+   --
+   --  @param Item The store.
+   --  @return Each by its name.
+   function Unreadable (Item : Stores.Store) return Name_Lists.Vector;
+
    --  Resolve statements.
    --
    --  @param From The statements.

@@ -2221,8 +2221,10 @@ package body Model_Runner.Framework.Work is
       end if;
 
       --  The run over, its baseline goes with it: left, it would stand for
-      --  what the files were before a later run that kept none.
-      if Tasks.State_Of (Item, Task_Id) /= "running" then
+      --  what the files were before a later run that kept none. A state
+      --  that will not read may be running still: kept for the opening
+      --  that puts it right.
+      if Tasks.State_Of (Item, Task_Id) not in "running" | "" then
          Files.Discard (Before_File (Item, Task_Id));
       end if;
    end Execute;

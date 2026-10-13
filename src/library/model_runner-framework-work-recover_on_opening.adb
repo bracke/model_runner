@@ -364,10 +364,20 @@ begin
    begin
       if Ada.Directories.Exists (Runtime) then
          for Name of Files.Files_In (Runtime) loop
-            if Name'Length > 5 and then Name (Name'First .. Name'First + 4) = "stop."
-              and then Tasks.State_Of (Item, Name (Name'First + 5 .. Name'Last)) /= Tasks.Running
-            then
-               Files.Discard (Hostkit.Fs.Join (Runtime, Name));
+            if Name'Length > 5 and then Name (Name'First .. Name'First + 4) = "stop." then
+               declare
+                  State : Records.Item;
+                  Got   : E.Error_Info;
+               begin
+                  Stores.Read (Item, Tasks_Area, Name (Name'First + 5 .. Name'Last) & ".state", State, Got);
+                  --  Known not running, or no task at all; one whose state
+                  --  will not read may be running, and its stop is kept.
+                  if E."=" (Got.Code, E.Framework_Not_Found)
+                    or else (E.Is_Ok (Got) and then Records.Get (State, "state") /= Tasks.Running)
+                  then
+                     Files.Discard (Hostkit.Fs.Join (Runtime, Name));
+                  end if;
+               end;
             end if;
          end loop;
       end if;

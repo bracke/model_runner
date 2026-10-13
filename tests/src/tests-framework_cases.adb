@@ -1586,6 +1586,16 @@ package body Tests.Framework_Cases is
                Status);
       Assert (Status.Code = E.Framework_Identifier_Invalid,
               "an event about no entity was staged");
+      Change := S.No_Changes;
+
+      --  One that will not read is listed, as one this cannot know, at
+      --  the place its name gives it -- not passed over unheard.
+      Put_File (S.Root (Store) & "/events/event-000000099.rec", "not a record" & LF);
+      Listed := Ev.Since (Store, Before + 1);
+      Assert (Ev.Length (Listed) = 1 and then not Ev.Element (Listed, 1).Known
+              and then Ev.Element (Listed, 1).Sequence = 99,
+              "an event that will not read was not listed as unknown");
+      Dirs.Delete_File (S.Root (Store) & "/events/event-000000099.rec");
       S.Close (Store);
    end Events_Commit_With_Their_Change;
 
@@ -2371,6 +2381,29 @@ package body Tests.Framework_Cases is
                  and then Au.Governing (Au.Resolve (Au.Gather (Store)), "scalar.build.command", Found)
                           .Standing = Au.Project_Decision,
                  "a withdrawn instruction still governed: " & Code_Of (Status));
+
+         --  One whose record will not read is not no instruction: named,
+         --  as a judgment to make and as a finding.
+         Au.Instruct (Store, Change, "scalar.build.command", "make", "", "user tester", Given, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            File : constant String := S.Root (Store) & "/project/instruction." & To_String (Given) & ".rec";
+            Was  : constant String := Read_Whole (File);
+            Said : Boolean := False;
+         begin
+            Put_File (File, "not a record" & LF);
+            for Line of Model_Runner.Framework.Orchestration.Needs_Judgment (Store) loop
+               Said := Said or else Ada.Strings.Fixed.Index (Line, To_String (Given) & ":") = Line'First;
+            end loop;
+            Findings := Cn.Check (Store);
+            for Index in 1 .. Cn.Length (Findings) loop
+               Found := To_String (Cn.Element (Findings, Index).Subject) = To_String (Given);
+               exit when Found;
+            end loop;
+            Assert (Au.Unreadable (Store).Contains (To_String (Given)) and then Said and then Found,
+                    "an instruction whose record will not read was passed over as none");
+            Put_File (File, Was);
+         end;
       end;
       S.Close (Store);
    end Authority_Conflicts_Are_Found;
@@ -2967,10 +3000,19 @@ package body Tests.Framework_Cases is
                        "a task of a kind there is none of was found open");
             end;
          end;
-         --  Another identifier for a requirement: under it, and the old gone.
+         --  Another identifier for a requirement: under it, and the old gone
+         --  -- what its work served it as, and the key it was derived by,
+         --  under the new one too.
          declare
             Moved : S.Transaction;
+            Held  : R.Item;
+            Only  : constant String := Tk.List (Store).First_Element;
          begin
+            S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
+            R.Set (Held, "served." & To_String (Req), "its meaning then");
+            R.Set_Revision (Held, R.Revision (Held) + 1);
+            S.Put (Moved, Model_Runner.Framework.Tasks_Area, Only & ".state", Held);
+            S.Commit (Store, Moved, Status);
             Nt.Renumber (Store, Moved, Nt.Requirement, To_String (Req), "REQ-900", Status);
             if E.Is_Ok (Status) then
                S.Commit (Store, Moved, Status);
@@ -2978,6 +3020,39 @@ package body Tests.Framework_Cases is
             Assert (E.Is_Ok (Status) and then Nt.State_Of (Store, Nt.Requirement, "REQ-900") /= ""
                     and then Nt.State_Of (Store, Nt.Requirement, To_String (Req)) = "",
                     "a requirement renumbered was not under its new identifier alone: " & Code_Of (Status));
+            S.Read (Store, Model_Runner.Framework.Tasks_Area, Only & ".state", Held, Status);
+            Assert (R.Get (Held, "served.REQ-900") = "its meaning then"
+                    and then not R.Has (Held, "served." & To_String (Req)),
+                    "what a task served a renumbered requirement as stayed under its old number");
+            Assert (Ada.Strings.Fixed.Index (R.Get (Definition_Of (Store, Only), "derivation_key"),
+                                             "derive:REQ-900#") = 1,
+                    "a task derived from a renumbered requirement kept the old key: "
+                    & R.Get (Definition_Of (Store, Only), "derivation_key"));
+         end;
+
+         --  One accepted and renumbered before its work was derived: derived
+         --  under its new number, and nothing stuck on the old.
+         declare
+            Moved : S.Transaction;
+            Late  : Unbounded_String;
+            Got   : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            Nt.Propose (Store, Moved, Nt.Requirement, "IO", "Write", "It SHALL write.",
+                        "", "user", "", "io", Late, Status);
+            Nt.Move (Store, Moved, Nt.Requirement, To_String (Late), "accepted", Tr.Ordinary_Only, Status);
+            S.Commit (Store, Moved, Status);
+            Nt.Renumber (Store, Moved, Nt.Requirement, To_String (Late), "REQ-901", Status);
+            S.Commit (Store, Moved, Status);
+            Tk.Derive (Store, Moved, Got, Status);
+            S.Commit (Store, Moved, Status);
+            Assert (E.Is_Ok (Status) and then Natural (Got.Length) = 1
+                    and then R.Get (Definition_Of (Store, Got.First_Element), "requirements") = "REQ-901",
+                    "a requirement renumbered before its work was derived stopped derivation, or was"
+                    & " derived under its old number: " & Code_Of (Status));
+            Tk.Derive (Store, Moved, Got, Status);
+            Assert (E.Is_Ok (Status) and then Got.Is_Empty,
+                    "derivation after a renumbering failed or made work twice: " & Code_Of (Status));
+            Moved := S.No_Changes;
          end;
       end;
       S.Close (Store);
@@ -4899,9 +4974,21 @@ package body Tests.Framework_Cases is
               "the project's task lifecycle was not made");
       Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
       S.Commit (Store, Change, Status);
-      Tk.Move (Store, Change, To_String (Id), "rejected", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Id), "rejected", "", Status => Status, Actor => Tr.User);
       Assert (Status.Code = E.Framework_Transition_Invalid, "a forbidden move was made");
       Change := S.No_Changes;
+      --  The harness's own move is not a person's to forbid: it keeps the
+      --  state true.
+      declare
+         Other : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields ("Look again", "analysis"), "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Other), "rejected", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Other)) = "rejected",
+                 "a move the project forbids a person was taken from the harness: " & Code_Of (Status));
+      end;
       Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
       Tk.Move (Store, Change, To_String (Id), "parked", "", Status => Status);
       S.Commit (Store, Change, Status);
@@ -4945,6 +5032,26 @@ package body Tests.Framework_Cases is
               "a core task state was given a meaning by the project");
       Assert (Refused ("set.task.transitions", "accepted -> limbo"),
               "a move to a task state nobody defined was taken");
+      S.Close (Store);
+
+      --  A state that counts as complete is held to what complete is: no
+      --  person says work is done, and nothing is done past its gates.
+      Change := S.No_Changes;
+      Task_Project (Store, "task-lifecycle-done",
+                    "map task.state.done = complete, and signed off" & LF
+                    & "set task.transitions = accepted -> done" & LF);
+      Tk.Create (Store, Change, Fields ("Build", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "done", "", Status => Status, Actor => Tr.User);
+      Assert (Status.Code = E.Framework_Transition_Invalid,
+              "a person moved a task to a state counting as complete: " & Code_Of (Status));
+      Change := S.No_Changes;
+      Tk.Move (Store, Change, To_String (Id), "done", "", Status => Status);
+      Assert (E.Is_Error (Status),
+              "a task went to a state counting as complete past its gates");
+      Change := S.No_Changes;
       S.Close (Store);
    end Task_Lifecycle_Is_The_Projects;
 
@@ -5737,6 +5844,13 @@ package body Tests.Framework_Cases is
               "fresh evidence is not current");
       Assert (Vf.Latest (Store, To_String (Id), "checks") = To_String (Evidence),
               "the latest evidence was not found");
+      --  A later record that will not read may be this task's, failed: it
+      --  is named, not passed over for the older pass.
+      Put_File (S.Root (Store) & "/verification/VER-99999999.rec", "not a record" & LF);
+      Assert (Vf.Latest (Store, To_String (Id), "checks") = "VER-99999999",
+              "a later verification that will not read was passed over for an older one: "
+              & Vf.Latest (Store, To_String (Id), "checks"));
+      Dirs.Delete_File (S.Root (Store) & "/verification/VER-99999999.rec");
       S.Close (Store);
 
       --  The task's own profile, pointed at the passing checks.
@@ -5848,6 +5962,29 @@ package body Tests.Framework_Cases is
       Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
       Assert (To_String (Held.State) = "implemented",
               "a requirement stayed verified on evidence that no longer applies");
+
+      --  New work serving it, proposed: nothing yet; taken up, what it
+      --  rests on is not finished, and it is accepted again.
+      declare
+         More  : Unbounded_String;
+         Serve : Tk.Field_Map := Fields ("More reading", "analysis");
+      begin
+         Serve.Include ("requirements", To_String (Req));
+         Tk.Create (Store, Change, Serve, "user", "", More, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "implemented",
+                 "a requirement went back on work only proposed: " & To_String (Held.State));
+         Tk.Move (Store, Change, To_String (More), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Vf.Reevaluate_Requirements (Store, Change, Changed, Status);
+         S.Commit (Store, Change, Status);
+         Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
+         Assert (To_String (Held.State) = "accepted",
+                 "a requirement stayed " & To_String (Held.State) & " with work serving it open");
+      end;
       S.Close (Store);
    end Completion_Needs_Current_Evidence;
 
@@ -9371,6 +9508,9 @@ package body Tests.Framework_Cases is
                       Pm.Unrestricted, 50, Child, Status);
       S.Commit (Store, Change, Status);
       Put_File (S.Root (Store) & "/runtime/agent." & To_String (Child) & ".rec", "not a record" & LF);
+      Assert (Ag.Active_Count (Store) = 2,
+              "an agent whose record will not read was not counted as at work:"
+              & Natural'Image (Ag.Active_Count (Store)));
 
       Assert (Ada.Strings.Fixed.Index (Ag.Child_Results (Store, To_String (Root)),
                                        To_String (Child) & " (unreadable)") > 0,
@@ -10790,6 +10930,26 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status) and then Said.Is_Empty,
               "a second look found something to do: "
               & (if Said.Is_Empty then "" else Said.First_Element));
+
+      --  A stop asked for a task nobody runs goes; one for a task whose
+      --  state will not read may be for a run still going, and stays.
+      declare
+         Runtime    : constant String := S.Root (Store) & "/runtime/";
+         State_File : constant String := S.Root (Store) & "/tasks/" & To_String (Task_A) & ".state.rec";
+         Was        : constant String := Read_Whole (State_File);
+      begin
+         Put_File (Runtime & "stop.TASK-404404", "stop" & LF);
+         Put_File (Runtime & "stop." & To_String (Task_A), "stop" & LF);
+         Put_File (State_File, "not a record" & LF);
+         Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+         Put_File (State_File, Was);
+         Assert (not Dirs.Exists (Runtime & "stop.TASK-404404")
+                 and then Dirs.Exists (Runtime & "stop." & To_String (Task_A)),
+                 "a stop for no task was kept, or one for a task whose state will not read was let go");
+         Wk.Recover_On_Opening (Store, (others => <>), Said, Status);
+         Assert (not Dirs.Exists (Runtime & "stop." & To_String (Task_A)),
+                 "a stop for a task known not to run was kept");
+      end;
 
       --  A task left in verification with nothing to wait for is blocked,
       --  and a person may fail one that waits there.

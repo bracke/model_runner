@@ -942,6 +942,7 @@ package body Model_Runner.Framework.Intent is
    is
       Value : Records.Item;
       Stem  : constant String := Namespace (Kind) & "-";
+      Key_Stem : constant String := "derive:" & Old_Id & "#";
    begin
       Stores.Read (Item, Area_Of (Kind), Old_Id, Value, Status);
       if E.Is_Error (Status) then
@@ -956,6 +957,18 @@ package body Model_Runner.Framework.Intent is
          E.Add_Text (Status, "name", "the identifier to give " & Old_Id);
          E.Add_Text (Status, "value", New_Id);
          E.Add_Text (Status, "detail", "it is no identifier of this register, as " & Stem & "12 is");
+         return;
+      elsif (for some Name of Stores.Names (Item, Area_Of (Kind)) =>
+               Name'Length > New_Id'Length + 5
+               and then Name (Name'First .. Name'First + New_Id'Length + 4) = New_Id & ".rev-")
+      then
+         --  Its history is another's: what was New_Id before it was given
+         --  another number keeps its earlier revisions under this one, and
+         --  New_Id@N would read them as this one's.
+         Status := E.Make (E.Framework_Input_Invalid);
+         E.Add_Text (Status, "name", "the identifier to give " & Old_Id);
+         E.Add_Text (Status, "value", New_Id);
+         E.Add_Text (Status, "detail", New_Id & " has history of another entity it named once: choose another");
          return;
       elsif Stores.Exists (Item, Area_Of (Kind), New_Id) then
          Status := E.Make (E.Framework_Input_Invalid);
@@ -1011,6 +1024,21 @@ package body Model_Runner.Framework.Intent is
                            end if;
                         end;
                      end loop;
+                     --  And what it supersedes or is superseded by.
+                     for Field of Name_Lists.Vector'(["supersedes", "superseded_by"]) loop
+                        if Split_Lines (Records.Get (Held, Field)).Contains (Old_Id) then
+                           declare
+                              Lines : Unbounded_String;
+                           begin
+                              for Line of Split_Lines (Records.Get (Held, Field)) loop
+                                 Append (Lines, (if Lines = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                                         & (if Line = Old_Id then New_Id else Line));
+                              end loop;
+                              Records.Set (Held, Field, To_String (Lines));
+                              Touched := True;
+                           end;
+                        end if;
+                     end loop;
                      if Touched then
                         Keep_Earlier (Item, Change, Other_Kind, Other);
                         Stores.Put (Change, Area_Of (Other_Kind), Other, Held);
@@ -1048,6 +1076,15 @@ package body Model_Runner.Framework.Intent is
                                    & (if Line = Old_Id then New_Id else Line));
                         end loop;
                         Records.Set (Held, "requirements", To_String (Lines));
+                        --  Its derivation under the new number, so the
+                        --  new number's acceptance does not derive it again.
+                        if Ada.Strings.Fixed.Index (Records.Get (Held, "derivation_key"), Key_Stem) = 1 then
+                           Records.Set (Held, "derivation_key",
+                                        "derive:" & New_Id & "#"
+                                        & Records.Get (Held, "derivation_key")
+                                            (Records.Get (Held, "derivation_key")'First + Key_Stem'Length
+                                             .. Records.Get (Held, "derivation_key")'Last));
+                        end if;
                         if At_Id > 0 then
                            Records.Set (Held, "title", Title (Title'First .. At_Id) & New_Id
                                                         & Title (At_Id + 1 + Old_Id'Length .. Title'Last));
@@ -1059,8 +1096,47 @@ package body Model_Runner.Framework.Intent is
                      end;
                   end if;
                end;
+            --  What a completed task served it as: its meaning then, under
+            --  the number it goes by now, so work done for other words is
+            --  still told from work done for these.
+            elsif Name'Length > 6 and then Name (Name'Last - 5 .. Name'Last) = ".state" then
+               declare
+                  Held   : Records.Item;
+                  Got    : E.Error_Info;
+                  Staged : Boolean;
+               begin
+                  Stores.Pending (Change, Tasks_Area, Name, Held, Staged);
+                  if not Staged then
+                     Stores.Read (Item, Tasks_Area, Name, Held, Got);
+                  else
+                     Got := E.Success;
+                  end if;
+                  if E.Is_Ok (Got) and then Records.Has (Held, "served." & Old_Id) then
+                     Records.Set (Held, "served." & New_Id, Records.Get (Held, "served." & Old_Id));
+                     Records.Remove (Held, "served." & Old_Id);
+                     if not Staged then
+                        Records.Set_Revision (Held, Records.Revision (Held) + 1);
+                     end if;
+                     Stores.Put (Change, Tasks_Area, Name, Held);
+                  end if;
+               end;
             end if;
          end loop;
+         --  An accepted one under its new number, said as accepted: an
+         --  acceptance not yet derived from under the old number, gone
+         --  now, is derived under this one, and one derived already is
+         --  known by its key.
+         if Records.Get (Value, "state") = "accepted" then
+            declare
+               Event : Unbounded_String;
+            begin
+               Events.Emit (Item, Change, Events.Requirement_Accepted, New_Id,
+                            "renumbered from " & Old_Id, Event, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end;
+         end if;
       end if;
       Status := E.Success;
    end Renumber;

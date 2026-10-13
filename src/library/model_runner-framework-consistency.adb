@@ -227,6 +227,12 @@ package body Model_Runner.Framework.Consistency is
 
       --  Statements that disagree with what governs their subject, and do
       --  not say they override it.
+      --  A ruling whose record will not read: what it rules is not known.
+      for Name of Authority.Unreadable (Item) loop
+         Found (Conflicting_Authority, Name,
+                "its record will not read, so what it rules cannot be known");
+      end loop;
+
       --  Within the project, and within each component: statements for
       --  two components do not meet.
       declare

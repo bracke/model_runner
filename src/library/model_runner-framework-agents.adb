@@ -177,8 +177,10 @@ package body Model_Runner.Framework.Agents is
                Status : E.Error_Info;
             begin
                Read (Item, Name (Name'First + Prefix'Length .. Name'Last), Held, Status);
-               if E.Is_Ok (Status)
-                 and then To_String (Held.Status) in "created" | "running" | "waiting"
+               --  One that will not read may be at work: counted, so the
+               --  limit is not passed on what cannot be told.
+               if E.Is_Error (Status)
+                 or else To_String (Held.Status) in "created" | "running" | "waiting"
                then
                   Count := Count + 1;
                end if;

@@ -165,12 +165,30 @@ package body Model_Runner.Framework.Events is
             Number : Natural := 0;
          begin
             Stores.Read (Item, Events_Area, Name, Value, Status);
-            if E.Is_Ok (Status) then
-               for Char of Records.Get (Value, "sequence") loop
-                  Number := Number * 10
-                    + (Character'Pos (Char) - Character'Pos ('0'));
-               end loop;
-            end if;
+            declare
+               Said : constant String :=
+                 (if E.Is_Ok (Status) then Records.Get (Value, "sequence") else "");
+               By_Name : constant Natural :=
+                 (if Name'Length = 15 and then Name (Name'First .. Name'First + 5) = "event-"
+                    and then (for all C of Name (Name'First + 6 .. Name'Last) => C in '0' .. '9')
+                  then Natural'Value (Name (Name'First + 6 .. Name'Last)) else 0);
+            begin
+               if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9') then
+                  Number := Natural'Value (Said);
+               elsif By_Name > After then
+                  --  An event that cannot be read, or whose sequence is not
+                  --  one, is still an event: listed as one this cannot know,
+                  --  at the place its name gives it, so whoever acts on the
+                  --  log stops short of it as at a kind it does not know,
+                  --  rather than settling past it unheard.
+                  Result.Events.Append
+                    (Event'(Id        => To_Unbounded_String (Name),
+                            Sequence  => By_Name,
+                            Kind_Word => To_Unbounded_String ("(unreadable)"),
+                            others    => <>));
+                  goto Next_Name;
+               end if;
+            end;
 
             if E.Is_Ok (Status) and then Number > After then
                declare

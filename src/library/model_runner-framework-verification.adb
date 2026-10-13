@@ -1850,7 +1850,12 @@ package body Model_Runner.Framework.Verification is
             Status : E.Error_Info;
          begin
             Stores.Read (Item, Verification_Area, To_String (One.Name), Value, Status);
-            if E.Is_Ok (Status) and then Records.Get (Value, "task") = Task_Id
+            --  One that cannot be read may be this task's latest, failed:
+            --  named, so whoever uses it finds it unreadable, rather than
+            --  an older pass taken in its place.
+            if E.Is_Error (Status) then
+               return To_String (One.Name);
+            elsif Records.Get (Value, "task") = Task_Id
               and then (Records.Get (Value, "profile") = Profile
                         or else Records.Get (Value, "stands_for") = Profile)
             then
@@ -2548,6 +2553,9 @@ package body Model_Runner.Framework.Verification is
 
       procedure Find_Project_Runs is
          Latest  : Unbounded_String;
+         --  The newest record that would not read: a whole run that
+         --  failed, for all that can be told, so none before it stands.
+         Unread  : Unbounded_String;
          Good    : Boolean := False;
          Reasons : Name_Lists.Vector;
       begin
@@ -2562,6 +2570,9 @@ package body Model_Runner.Framework.Verification is
             begin
                if Latest = Null_Unbounded_String or else Id > To_String (Latest) then
                   Stores.Read (Item, Verification_Area, Id, Value, Read);
+                  if E.Is_Error (Read) and then Id > To_String (Unread) then
+                     Unread := To_Unbounded_String (Id);
+                  end if;
                   --  A run of the whole suite: for no task, or chosen so,
                   --  or run with no tests picked out -- task verify and a
                   --  requirement's check among them.
@@ -2584,7 +2595,8 @@ package body Model_Runner.Framework.Verification is
             end;
          end loop;
          if Latest /= Null_Unbounded_String
-           and then not Is_Current (Item, To_String (Latest), Reasons, Configuration)
+           and then (Unread > Latest
+                     or else not Is_Current (Item, To_String (Latest), Reasons, Configuration))
          then
             Latest := Null_Unbounded_String;
          end if;
@@ -3021,6 +3033,59 @@ package body Model_Runner.Framework.Verification is
          return Support (Item, Requirement, Configuration, Why);
       end Supporting;
 
+      --  The tasks serving Requirement: how many, whether one is still
+      --  open for it or was done for other words, whether one is not
+      --  complete at all, and whether a definition could not be read
+      --  (which may serve it, so nothing is known finished).
+      procedure Serving_Tasks
+        (Requirement : String;
+         Serving     : out Natural;
+         Open        : out Boolean;
+         Unread      : out Boolean;
+         Undone      : out Boolean)
+      is
+         Held     : Intent.Entity;
+         Held_Got : E.Error_Info;
+
+         --  Done while the requirement meant something else: a task that
+         --  completed before a revision changed what it says.
+         function Done_For_Other_Words (Id : String) return Boolean is
+            Runtime_Value : Records.Item;
+            Got           : E.Error_Info;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
+            return Records.Get (Runtime_Value, "served." & Requirement) /= ""
+              and then Records.Get (Runtime_Value, "served." & Requirement)
+                         /= To_String (Held.Meaning);
+         end Done_For_Other_Words;
+      begin
+         Serving := 0;
+         Open := False;
+         Unread := False;
+         Undone := False;
+         Intent.Read (Item, Intent.Requirement, Requirement, Held, Held_Got);
+         for Id of Everything loop
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+               State   : constant String := Tasks.State_Of (Item, Id);
+            begin
+               Tasks.Definition (Item, Id, Defined, Read);
+               if State in "cancelled" | "rejected" then
+                  null;
+               elsif E.Is_Error (Read) then
+                  Unread := True;
+               elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement) then
+                  Serving := Serving + 1;
+                  --  Taken up and not finished: a candidate is proposed
+                  --  work, not work begun.
+                  Undone := Undone or else (State /= Tasks.Complete and then State /= "candidate");
+                  Open := Open or else State /= Tasks.Complete or else Done_For_Other_Words (Id);
+               end if;
+            end;
+         end loop;
+      end Serving_Tasks;
+
       Event : Unbounded_String;
    begin
       Changed.Clear;
@@ -3030,42 +3095,11 @@ package body Model_Runner.Framework.Verification is
       --  implemented -- come back from blocked, say, after they did.
       for Requirement of Intent.List (Item, Intent.Requirement, "accepted") loop
          declare
-            --  Done while the requirement meant something else: a task that
-            --  completed before a revision changed what it says.
-            function Done_For_Other_Words (Id : String) return Boolean is
-               Runtime_Value : Records.Item;
-               Got           : E.Error_Info;
-               Held          : Intent.Entity;
-            begin
-               Stores.Read (Item, Tasks_Area, Id & ".state", Runtime_Value, Got);
-               Intent.Read (Item, Intent.Requirement, Requirement, Held, Got);
-               return Records.Get (Runtime_Value, "served." & Requirement) /= ""
-                 and then Records.Get (Runtime_Value, "served." & Requirement)
-                            /= To_String (Held.Meaning);
-            end Done_For_Other_Words;
-
-            Serving : Natural := 0;
-            Open    : Boolean := False;
+            Serving : Natural;
+            Open, Unread, Undone : Boolean;
          begin
-            for Id of Everything loop
-               declare
-                  Defined : Records.Item;
-                  Read    : E.Error_Info;
-                  State   : constant String := Tasks.State_Of (Item, Id);
-               begin
-                  Tasks.Definition (Item, Id, Defined, Read);
-                  if E.Is_Error (Read) and then State not in "cancelled" | "rejected" then
-                     --  May serve it: open, as far as this can tell.
-                     Open := True;
-                  elsif Lines_Of (Records.Get (Defined, "requirements")).Contains (Requirement)
-                    and then State not in "cancelled" | "rejected"
-                  then
-                     Serving := Serving + 1;
-                     Open := Open or else State /= Tasks.Complete or else Done_For_Other_Words (Id);
-                  end if;
-               end;
-            end loop;
-            if Serving > 0 and then not Open then
+            Serving_Tasks (Requirement, Serving, Open, Unread, Undone);
+            if Serving > 0 and then not Open and then not Unread then
                Intent.Move (Item, Change, Intent.Requirement, Requirement, "implemented",
                             Transitions.Ordinary_Only, Status);
                if E.Is_Error (Status) then
@@ -3074,6 +3108,36 @@ package body Model_Runner.Framework.Verification is
                Changed.Append (Requirement);
             end if;
          end;
+      end loop;
+
+      --  One implemented or verified that a task serving it is open for
+      --  again -- reopened, or new work serving it taken up -- is accepted again:
+      --  what it rests on is not finished. New words are the revision's
+      --  to judge, by the project's policy, not this.
+      for From of Name_Lists.Vector'(["implemented", "verified"]) loop
+         for Requirement of Intent.List (Item, Intent.Requirement, From) loop
+            declare
+               Serving : Natural;
+               Open, Unread, Undone : Boolean;
+            begin
+               Serving_Tasks (Requirement, Serving, Open, Unread, Undone);
+               if Undone then
+                  Intent.Move (Item, Change, Intent.Requirement, Requirement, "accepted",
+                               [Transitions.Ordinary => True, Transitions.Invalidation => True,
+                                others => False],
+                               Status);
+                  if E.Is_Ok (Status) and then From = "verified" then
+                     Events.Emit
+                       (Item, Change, Events.Requirement_Verification_Invalidated,
+                        Requirement, "a task serving it is open again", Event, Status);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Changed.Append (Requirement);
+               end if;
+            end;
+         end loop;
       end loop;
 
       for Requirement of Intent.List (Item, Intent.Requirement, "implemented") loop

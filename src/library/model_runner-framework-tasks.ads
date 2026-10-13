@@ -121,8 +121,13 @@ package Model_Runner.Framework.Tasks is
    --  task.forbidden takes away, of those Forbiddable allows.
    --
    --  @param Item The store.
+   --  @param Forbids Whether the moves the project forbids are taken
+   --    away: a person's moves are held to them; the harness's own -- a task
+   --    blocked on its parts, a failed one taken up again -- are not, or a
+   --    forbid would stop the harness keeping the state true.
    --  @return The machine.
-   function Lifecycle_Of (Item : Stores.Store) return Transitions.Machine;
+   function Lifecycle_Of
+     (Item : Stores.Store; Forbids : Boolean := True) return Transitions.Machine;
 
    --  Whether a task field is one every task may have, whatever its kind:
    --  title, kind, component, requirements, depends_on, priority,

@@ -236,7 +236,8 @@ package body Model_Runner.Framework.Tasks is
       end;
    end Counts_As;
 
-   function Lifecycle_Of (Item : Stores.Store) return Transitions.Machine is
+   function Lifecycle_Of
+     (Item : Stores.Store; Forbids : Boolean := True) return Transitions.Machine is
       Result   : Transitions.Machine := Transitions.Task_Machine;
       Settings : constant Records.Item := Config (Item);
       Known    : Name_Lists.Vector := Core_Task_States;
@@ -268,7 +269,7 @@ package body Model_Runner.Framework.Tasks is
       end loop;
       for Line of Lines_Of (Records.Get (Settings, "set.task.forbidden")) loop
          Sides (Line, From, To);
-         if Forbiddable (To_String (From), To_String (To)) then
+         if Forbids and then Forbiddable (To_String (From), To_String (To)) then
             Transitions.Forbid (Result, To_String (From), To_String (To));
          end if;
       end loop;
@@ -821,147 +822,157 @@ package body Model_Runner.Framework.Tasks is
          return;
       end if;
 
-      --  Checked here, before the machine: a move the machine allows may
-      --  still not be one this task can make now.
-      Transitions.Check
-        (Lifecycle_Of (Item), Id, Records.Get (Value, "state"), Next, Granted, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
+      --  What the move is, and what the task is now, by what they count
+      --  as: a state the project names for itself is held to the gates
+      --  and guards of the one it stands for.
+      declare
+         Next_As : constant String := Counts_As (Item, Next);
+         Now_As  : constant String := Counts_As (Item, Records.Get (Value, "state"));
+      begin
+         --  Checked here, before the machine: a move the machine allows may
+         --  still not be one this task can make now.
+         Transitions.Check
+           (Lifecycle_Of (Item, Forbids => Transitions.By_Person (Actor)), Id,
+            Records.Get (Value, "state"), Next, Granted, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
 
-      --  A person does not make the harness's moves: work starts a task,
-      --  and its checks take it to verification and completion; a task at
-      --  work is stopped by cancelling it, which lets go of what it holds.
-      --  A task waiting in verification -- its work not taken in, or its
-      --  checks gone wrong -- a person may also fail or block.
-      if Transitions.By_Person (Actor)
-        and then (Next in "running" | "verification" | "complete"
-                  or else (Records.Get (Value, "state") = "running"
-                           and then Next /= Tasks.Cancelled)
-                  or else (Records.Get (Value, "state") = "verification"
-                           and then Next not in "cancelled" | "failed" | "blocked"))
-      then
-         Status := E.Make (E.Framework_Transition_Invalid);
-         E.Add_Text (Status, "name", Id);
-         E.Add_Text (Status, "value", Records.Get (Value, "state"));
-         E.Add_Text (Status, "expected", Next);
-         E.Add_Text (Status, "detail",
-                     (if Next = Tasks.Complete and then Records.Get (Value, "state") in "failed" | "blocked"
-                      then "the harness makes this move: /task accept " & Id & " takes it up again and /work "
-                           & Id & " then does it, or /task complete " & Id & " once it is done by hand"
-                      elsif Next = Tasks.Complete
-                      then "the harness makes this move: /work " & Id & " does it, or /task complete "
-                           & Id & " once it is done by hand"
-                      elsif Next in "running" | "verification"
-                      then "the harness makes this move: /work " & Id & " starts it, and its checks"
-                           & " take it to verification and completion"
-                      else "a task at work is stopped by cancelling it: /task cancel " & Id));
-         return;
-      end if;
+         --  A person does not make the harness's moves: work starts a task,
+         --  and its checks take it to verification and completion; a task at
+         --  work is stopped by cancelling it, which lets go of what it holds.
+         --  A task waiting in verification -- its work not taken in, or its
+         --  checks gone wrong -- a person may also fail or block.
+         if Transitions.By_Person (Actor)
+           and then (Next_As in "running" | "verification" | "complete"
+                     or else (Now_As = "running"
+                              and then Next_As /= Tasks.Cancelled)
+                     or else (Now_As = "verification"
+                              and then Next_As not in "cancelled" | "failed" | "blocked"))
+         then
+            Status := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Status, "name", Id);
+            E.Add_Text (Status, "value", Records.Get (Value, "state"));
+            E.Add_Text (Status, "expected", Next);
+            E.Add_Text (Status, "detail",
+                        (if Next = Tasks.Complete and then Records.Get (Value, "state") in "failed" | "blocked"
+                         then "the harness makes this move: /task accept " & Id & " takes it up again and /work "
+                              & Id & " then does it, or /task complete " & Id & " once it is done by hand"
+                         elsif Next = Tasks.Complete
+                         then "the harness makes this move: /work " & Id & " does it, or /task complete "
+                              & Id & " once it is done by hand"
+                         elsif Next in "running" | "verification"
+                         then "the harness makes this move: /work " & Id & " starts it, and its checks"
+                              & " take it to verification and completion"
+                         else "a task at work is stopped by cancelling it: /task cancel " & Id));
+            return;
+         end if;
 
-      if Next = Tasks.Running then
-         declare
-            Now : constant Readiness := Ready_In (Item, Change, Id);
-         begin
-            if not Now.Ready then
-               Not_Ready (Joined (Now.Reasons, "; "));
-               return;
-            end if;
-         end;
-      elsif Next = Tasks.Complete and then not Gates_Passed then
-         Not_Ready ("its completion gates have not passed");
-         return;
-      end if;
+         if Next_As = Tasks.Running then
+            declare
+               Now : constant Readiness := Ready_In (Item, Change, Id);
+            begin
+               if not Now.Ready then
+                  Not_Ready (Joined (Now.Reasons, "; "));
+                  return;
+               end if;
+            end;
+         elsif Next_As = Tasks.Complete and then not Gates_Passed then
+            Not_Ready ("its completion gates have not passed");
+            return;
+         end if;
 
-      --  What each requirement a task completed serves meant when it was
-      --  done, read before anything moves: a task cannot truthfully be
-      --  complete for a requirement whose words cannot be read, so the move
-      --  is refused, not made with that requirement's meaning left out.
-      if Next = Tasks.Complete then
-         declare
-            Defined : Records.Item;
-            Read    : E.Error_Info;
-         begin
-            Definition (Item, Id, Defined, Read);
-            if E.Is_Error (Read) then
-               Status := Read;
-               return;
-            end if;
-            for Requirement of Split (Records.Get (Defined, "requirements")) loop
+         --  What each requirement a task completed serves meant when it was
+         --  done, read before anything moves: a task cannot truthfully be
+         --  complete for a requirement whose words cannot be read, so the move
+         --  is refused, not made with that requirement's meaning left out.
+         if Next_As = Tasks.Complete then
+            declare
+               Defined : Records.Item;
+               Read    : E.Error_Info;
+            begin
+               Definition (Item, Id, Defined, Read);
+               if E.Is_Error (Read) then
+                  Status := Read;
+                  return;
+               end if;
+               for Requirement of Split (Records.Get (Defined, "requirements")) loop
+                  declare
+                     Held : Intent.Entity;
+                  begin
+                     Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
+                     if E.Is_Error (Read) then
+                        Status := Read;
+                        E.Add_Text (Status, "detail",
+                                    Id & " serves " & Requirement
+                                    & ", whose meaning cannot be read to record what it completed");
+                        return;
+                     end if;
+                     Served.Append (Requirement & ASCII.HT & To_String (Held.Meaning));
+                  end;
+               end loop;
+            end;
+         end if;
+
+         Transitions.Apply
+           (Item, Change, Lifecycle_Of (Item, Forbids => Transitions.By_Person (Actor)),
+         Tasks_Area, Id & State_Suffix, Next, Granted,
+            Event_For (Next), Status, Actor, Subject => Id,
+            Reason => (if Next in "blocked" | "failed" | "cancelled" then Reason else ""));
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  What the move changes beyond the state.
+         Runtime (Item, Change, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         if Next_As = Tasks.Running then
+            declare
+               Generation : constant String := Records.Get (Value, "generation");
+               --  As the state keeps it: digits, short of the most a count
+               --  holds, or the record is not what it says.
+               Plain : constant Boolean :=
+                 Generation'Length in 1 .. 9 and then (for all C of Generation => C in '0' .. '9');
+            begin
+               if Generation /= "" and then not Plain then
+                  Status := E.Make (E.Framework_Integrity_Failed);
+                  E.Add_Text (Status, "name", Id);
+                  E.Add_Text (Status, "detail", "its generation is " & Generation
+                              & ", which is not a count this can go on from");
+                  return;
+               end if;
+               Records.Set
+                 (Value, "generation",
+                  Trim (Natural'Image
+                          ((if Generation = "" then 0
+                            else Natural'Value (Generation)) + 1)));
+            end;
+         elsif Next = Tasks.Blocked then
+            Records.Set (Value, "blocking_reasons", Reason);
+         elsif Next = Tasks.Failed then
+            Records.Set (Value, "current_failure", Reason);
+         elsif Next_As = Tasks.Complete then
+            --  What each requirement it served meant when it was done, as
+            --  read above: work done for other words implements nothing of the
+            --  new ones.
+            for Pair of Served loop
                declare
-                  Held : Intent.Entity;
+                  Cut : constant Natural := Ada.Strings.Fixed.Index (Pair, [1 => ASCII.HT]);
                begin
-                  Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
-                  if E.Is_Error (Read) then
-                     Status := Read;
-                     E.Add_Text (Status, "detail",
-                                 Id & " serves " & Requirement
-                                 & ", whose meaning cannot be read to record what it completed");
-                     return;
-                  end if;
-                  Served.Append (Requirement & ASCII.HT & To_String (Held.Meaning));
+                  Records.Set (Value, "served." & Pair (Pair'First .. Cut - 1),
+                               Pair (Cut + 1 .. Pair'Last));
                end;
             end loop;
-         end;
-      end if;
-
-      Transitions.Apply
-        (Item, Change, Lifecycle_Of (Item), Tasks_Area, Id & State_Suffix, Next, Granted,
-         Event_For (Next), Status, Actor, Subject => Id,
-         Reason => (if Next in "blocked" | "failed" | "cancelled" then Reason else ""));
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  What the move changes beyond the state.
-      Runtime (Item, Change, Id, Value, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-      if Next = Tasks.Running then
-         declare
-            Generation : constant String := Records.Get (Value, "generation");
-            --  As the state keeps it: digits, short of the most a count
-            --  holds, or the record is not what it says.
-            Plain : constant Boolean :=
-              Generation'Length in 1 .. 9 and then (for all C of Generation => C in '0' .. '9');
-         begin
-            if Generation /= "" and then not Plain then
-               Status := E.Make (E.Framework_Integrity_Failed);
-               E.Add_Text (Status, "name", Id);
-               E.Add_Text (Status, "detail", "its generation is " & Generation
-                           & ", which is not a count this can go on from");
-               return;
+         elsif Next = Tasks.Accepted then
+            Records.Remove (Value, "blocking_reasons");
+            Records.Remove (Value, "current_failure");
+            if Actor = "" and then Reason /= "" then
+               Records.Set (Value, "accepted_by", Reason);
             end if;
-            Records.Set
-              (Value, "generation",
-               Trim (Natural'Image
-                       ((if Generation = "" then 0
-                         else Natural'Value (Generation)) + 1)));
-         end;
-      elsif Next = Tasks.Blocked then
-         Records.Set (Value, "blocking_reasons", Reason);
-      elsif Next = Tasks.Failed then
-         Records.Set (Value, "current_failure", Reason);
-      elsif Next = Tasks.Complete then
-         --  What each requirement it served meant when it was done, as
-         --  read above: work done for other words implements nothing of the
-         --  new ones.
-         for Pair of Served loop
-            declare
-               Cut : constant Natural := Ada.Strings.Fixed.Index (Pair, [1 => ASCII.HT]);
-            begin
-               Records.Set (Value, "served." & Pair (Pair'First .. Cut - 1),
-                            Pair (Cut + 1 .. Pair'Last));
-            end;
-         end loop;
-      elsif Next = Tasks.Accepted then
-         Records.Remove (Value, "blocking_reasons");
-         Records.Remove (Value, "current_failure");
-         if Actor = "" and then Reason /= "" then
-            Records.Set (Value, "accepted_by", Reason);
          end if;
-      end if;
+      end;
       Stores.Put (Change, Tasks_Area, Id & State_Suffix, Value);
 
       --  What the move does beyond the state, the same whoever makes it:
@@ -1369,7 +1380,10 @@ package body Model_Runner.Framework.Tasks is
 
       for Id of List (Item) loop
          declare
-            Now  : constant Boolean := Ready_In (Item, Change, Id).Ready;
+            --  Held as Ready holds it: one that cannot be worked on here
+            --  is not said to be ready.
+            Now  : constant Boolean :=
+              Ready_In (Item, Change, Id).Ready and then Work.Unable_Reason (Item, Id) = "";
             Held : constant String := Records.Get (Cache, "task." & Id);
          begin
             if Now and then Held /= "ready" then
@@ -1702,6 +1716,14 @@ package body Model_Runner.Framework.Tasks is
                end if;
             end;
          end loop;
+         --  A ruling that will not read is not no ruling: said, so what
+         --  it may forbid is not done as though nothing did.
+         for Name of Authority.Unreadable (Item) loop
+            Records.Set
+              (Value, "conflict." & Name,
+               Name & " will not read, so what it rules is not known: nothing it may speak to is"
+               & " to be settled until it is put right");
+         end loop;
       end;
 
       --  What an agent on it may do, when it must stop, where it writes, and
@@ -1866,7 +1888,10 @@ package body Model_Runner.Framework.Tasks is
                   Intent.Read (Item, Intent.Requirement, Requirement, Held, Read);
                   --  Its event consumed and the requirement unread would be
                   --  a derivation lost for good: the change is not made.
-                  if Fresh and then E.Is_Error (Read) then
+                  --  One that is gone -- renumbered since, its new number
+                  --  accepted under an event of its own -- has nothing left
+                  --  to derive here.
+                  if Fresh and then E.Is_Error (Read) and then E."/=" (Read.Code, E.Framework_Not_Found) then
                      Status := Read;
                      E.Add_Text (Status, "detail", Requirement & " cannot be read to derive its work");
                      return;
