@@ -9325,6 +9325,93 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Harness_Runs_Routine_Stages;
 
+   --  What cannot be determined is not given an ordinary answer: an agent
+   --  whose record will not read is not cancelled by saying so, nor shown
+   --  to its parent as a child that says nothing; a file that will not read
+   --  is not one that is absent, nor ever the same as before; and a task's
+   --  generation that is not a count is not counted on.
+   procedure Undetermined_Is_Not_Ordinary
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ag renames Model_Runner.Framework.Agents;
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Wk2 renames Model_Runner.Framework.Work;
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Root    : Unbounded_String;
+      Child   : Unbounded_String;
+      Stopped : Model_Runner.Framework.Name_Lists.Vector;
+      Id      : Unbounded_String;
+   begin
+      Task_Project
+        (Store, "undetermined",
+         "map permission.project.read_source =" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=2" & LF
+         & "scalar agents.max_active = 4" & LF
+         & "scalar agents.token_budget = 1000" & LF);
+      Ag.Start_Root (Store, Change, "TASK-001", "worker", "", Root, Status);
+      S.Commit (Store, Change, Status);
+      Ag.Spawn_Child (Store, Change, To_String (Root), "helper", Ag.Required,
+                      Pm.Unrestricted, 50, Child, Status);
+      S.Commit (Store, Change, Status);
+      Put_File (S.Root (Store) & "/runtime/agent." & To_String (Child) & ".rec", "not a record" & LF);
+
+      Assert (Ada.Strings.Fixed.Index (Ag.Child_Results (Store, To_String (Root)),
+                                       To_String (Child) & " (unreadable)") > 0,
+              "a child whose record will not read was told as one that says nothing: "
+              & Ag.Child_Results (Store, To_String (Root)));
+      Ag.Cancel (Store, Change, To_String (Root), Stopped, Status);
+      Assert (E.Is_Error (Status),
+              "a cancellation was said done with a helper beneath it that could not be read");
+      Change := S.No_Changes;
+
+      --  A file absent, one that will not read, and one that reads.
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Shut    : constant String := Project & "/shut.txt";
+      begin
+         Put_File (Project & "/open.txt", "open");
+         Put_File (Shut, "shut");
+         GNAT.OS_Lib.Set_Non_Readable (Shut);
+         Assert (Wk2.File_Print (Project & "/gone.txt") = Wk2.Absent_Print,
+                 "an absent file was not said absent");
+         if not GNAT.OS_Lib.Is_Readable_File (Shut) then
+            Assert (Wk2.File_Print (Shut) = Wk2.Unreadable_Print
+                    and then not Wk2.Same_File_Print (Wk2.File_Print (Shut), Wk2.File_Print (Shut)),
+                    "a file that will not read was said absent, or the same as itself");
+         end if;
+         Assert (Wk2.File_Print (Project & "/open.txt") = Model_Runner.Framework.Fingerprint ("open")
+                 and then Wk2.Same_File_Print (Wk2.File_Print (Project & "/open.txt"),
+                                               Wk2.File_Print (Project & "/open.txt")),
+                 "a file read a piece at a time was not printed as its text whole is");
+         GNAT.OS_Lib.Set_Readable (Shut);
+      end;
+
+      --  A generation that is not a count stops the move, as a damaged
+      --  record does, rather than the program.
+      Tk.Create (Store, Change, Fields ("Counted", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Value : R.Item;
+         Got   : E.Error_Info;
+      begin
+         S.Read (Store, F.Tasks_Area, To_String (Id) & ".state", Value, Got);
+         R.Set (Value, "generation", "99999999999");
+         R.Set_Revision (Value, R.Revision (Value) + 1);
+         S.Put (Change, F.Tasks_Area, To_String (Id) & ".state", Value);
+         S.Commit (Store, Change, Got);
+      end;
+      Tk.Move (Store, Change, To_String (Id), "running", "", Status => Status);
+      Assert (Status.Code = E.Framework_Integrity_Failed,
+              "a generation that is not a count was counted on: " & Code_Of (Status));
+      Change := S.No_Changes;
+      S.Close (Store);
+   end Undetermined_Is_Not_Ordinary;
+
    --  A helper's role is the model's to name: one the project does not
    --  configure, or one spelled in another case, is held as a helper is,
    --  not given its parent's every right.
@@ -10215,8 +10302,15 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       --  A request made of an earlier run on the task -- another holder --
       --  is not this run's: gone, and not heeded.
+      --  One that cannot be written is said not to have been delivered.
       Model_Runner.Framework.Execution.Ask_To_Stop
-        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A), Holder => "AG-0");
+        (Dirs.Containing_Directory (S.Root (Store)) & "/no-such-project", To_String (Task_A),
+         Status => Status);
+      Assert (E.Is_Error (Status), "a request to stop that could not be written was said delivered");
+      Model_Runner.Framework.Execution.Ask_To_Stop
+        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A), Holder => "AG-0",
+         Status => Status);
+      Assert (E.Is_Ok (Status), "a request to stop was not written: " & Code_Of (Status));
       Model_Runner.Framework.Execution.Watch_Lease
         (Store'Unchecked_Access, "task." & To_String (Task_A), "AG-1");
       delay 1.1;
@@ -10228,7 +10322,7 @@ package body Tests.Framework_Cases is
         (Store'Unchecked_Access, "task." & To_String (Task_A), "AG-1");
       Assert (not Model_Runner.Framework.Execution.Work_Withdrawn, "a run was stopped unasked");
       Model_Runner.Framework.Execution.Ask_To_Stop
-        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A));
+        (Dirs.Containing_Directory (S.Root (Store)), To_String (Task_A), Status => Status);
       delay 1.1;
       Assert (Model_Runner.Framework.Execution.Work_Withdrawn
               and then Model_Runner.Framework.Execution.Cancel_Asked_From_Outside,
@@ -13049,6 +13143,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Workspaces_Start_And_End_Whole'Access,
          "workspaces start from the project as it is and end once their work is kept");
+      Register_Routine
+        (T, Undetermined_Is_Not_Ordinary'Access,
+         "what cannot be determined is not given an ordinary answer");
       Register_Routine
         (T, Unnamed_Roles_Are_Helpers'Access,
          "a helper's role not configured, or in another case, is held as a helper's");

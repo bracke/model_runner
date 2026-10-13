@@ -112,8 +112,9 @@ begin
                      begin
                         if Tab > Line'First and then Line (Line'First .. Tab - 1) = Path
                           and then Line (Tab + 1 .. Line'Last) /= ""
-                          and then Line (Tab + 1 .. Line'Last)
-                                   /= Model_Runner.Framework.Work.File_Print (Hostkit.Fs.Join (Here, Path))
+                          and then not Model_Runner.Framework.Work.Same_File_Print
+                                         (Line (Tab + 1 .. Line'Last),
+                                          Model_Runner.Framework.Work.File_Print (Hostkit.Fs.Join (Here, Path)))
                         then
                            Append (By, ", edited after");
                         end if;

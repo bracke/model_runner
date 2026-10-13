@@ -807,9 +807,13 @@ package body Model_Runner.Framework.Agents is
          Event : Unbounded_String;
       begin
          Current (Item, Change, Named, Value, Status);
-         if E.Is_Error (Status)
-           or else Records.Get (Value, "state") not in "created" | "running" | "waiting"
-         then
+         --  One that cannot be read may still be going: not taken as ended,
+         --  and the cancellation it is part of does not say it is done.
+         if E.Is_Error (Status) then
+            E.Add_Text (Status, "detail", Named & " cannot be read, so whether it is still going"
+                        & " cannot be told; nothing is cancelled until it is put right");
+            return;
+         elsif Records.Get (Value, "state") not in "created" | "running" | "waiting" then
             Status := E.Success;
             return;
          end if;
@@ -827,9 +831,15 @@ package body Model_Runner.Framework.Agents is
          Stores.Put (Change, Runtime_Area, Prefix & Named, Value);
          Give_Back (Item, Change, Value);
          Events.Emit (Item, Change, Events.Agent_Cancelled, Named, "", Event, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
          Cancelled.Append (Named);
          for Child of Children (Item, Named) loop
             Stop (Child);
+            if E.Is_Error (Status) then
+               return;
+            end if;
          end loop;
       end Stop;
    begin
@@ -869,13 +879,21 @@ package body Model_Runner.Framework.Agents is
             Status : E.Error_Info;
          begin
             Read (Item, Child, Held, Status);
-            Append (Text, Child & " (" & Need_Word (Held.Need) & ", "
-                    & To_String (Held.Status) & ")"
-                    & (if Held.Result = Null_Unbounded_String then ""
-                       else " " & To_String (Held.Result))
-                    & (if First_Line (To_String (Held.Summary)) = "" then ""
-                       else ": " & First_Line (To_String (Held.Summary)))
-                    & ASCII.LF);
+            --  One that cannot be read is said to be that, not shown as a
+            --  child that says nothing: a child's failure is never quietly
+            --  lost from what its parent is told.
+            if E.Is_Error (Status) then
+               Append (Text, Child & " (unreadable): its record cannot be read, so how it ended"
+                       & " cannot be told" & ASCII.LF);
+            else
+               Append (Text, Child & " (" & Need_Word (Held.Need) & ", "
+                       & To_String (Held.Status) & ")"
+                       & (if Held.Result = Null_Unbounded_String then ""
+                          else " " & To_String (Held.Result))
+                       & (if First_Line (To_String (Held.Summary)) = "" then ""
+                          else ": " & First_Line (To_String (Held.Summary)))
+                       & ASCII.LF);
+            end if;
          end;
       end loop;
       return To_String (Text);

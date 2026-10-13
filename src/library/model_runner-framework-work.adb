@@ -1,3 +1,6 @@
+with Interfaces;
+with Ada.Streams;
+with Ada.Streams.Stream_IO;
 with Ada.Exceptions;
 with Ada.Characters.Handling;
 with Ada.Directories;
@@ -305,16 +308,48 @@ package body Model_Runner.Framework.Work is
    -- File_Print --
    ----------------
 
+   --  Read a piece at a time and taken as Fingerprint takes a whole text,
+   --  so a file of any size has one and it is the one a text read whole
+   --  would have; a file that will not read is not one that is absent.
    function File_Print (Path : String) return String is
-      Text : Unbounded_String;
-      Got  : E.Error_Info;
+      use type Interfaces.Unsigned_64;
+      use type Ada.Streams.Stream_Element_Offset;
+      Digits_Of : constant String := "0123456789abcdef";
+      Value     : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+      Result    : String (1 .. 16);
+      File      : Ada.Streams.Stream_IO.File_Type;
+      Piece     : Ada.Streams.Stream_Element_Array (1 .. 1_048_576);
+      Last      : Ada.Streams.Stream_Element_Offset;
    begin
       if not Ada.Directories.Exists (Path) then
-         return "-";
+         return Absent_Print;
       end if;
-      Files.Read_Text (Path, Text, Got);
-      return (if E.Is_Ok (Got) then Fingerprint (To_String (Text)) else "-");
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      loop
+         Ada.Streams.Stream_IO.Read (File, Piece, Last);
+         exit when Last < Piece'First;
+         for Byte of Piece (Piece'First .. Last) loop
+            Value := (Value xor Interfaces.Unsigned_64 (Byte)) * 16#0000_0100_0000_01B3#;
+         end loop;
+         exit when Last < Piece'Last;
+      end loop;
+      Ada.Streams.Stream_IO.Close (File);
+      for Index in reverse Result'Range loop
+         Result (Index) := Digits_Of (Natural (Value and 16#F#) + 1);
+         Value := Interfaces.Shift_Right (Value, 4);
+      end loop;
+      return Result;
+   exception
+      when others =>
+         if Ada.Streams.Stream_IO.Is_Open (File) then
+            Ada.Streams.Stream_IO.Close (File);
+         end if;
+         return Unreadable_Print;
    end File_Print;
+
+   function Same_File_Print (Then_Print, Now_Print : String) return Boolean
+   is (Then_Print /= Unreadable_Print and then Now_Print /= Unreadable_Print
+       and then Then_Print = Now_Print);
 
    -----------------
    -- Note_Undone --
@@ -411,7 +446,8 @@ package body Model_Runner.Framework.Work is
         File_Print (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), Path));
       Found : Unbounded_String;
    begin
-      if Now = "-" then
+      --  Absent, or not read: no task's work is it, as far as can be told.
+      if Now in Absent_Print | Unreadable_Print then
          return "";
       end if;
       for Id of Tasks.List (Item) loop
@@ -607,10 +643,19 @@ package body Model_Runner.Framework.Work is
    is
       Stopped : Name_Lists.Vector;
       Status  : E.Error_Info;
+      First   : E.Error_Info := E.Success;
    begin
       for Child of Agents.Children (Item, Agent) loop
          Agents.Cancel (Item, Change, Child, Stopped, Status, Why => "it was stopped: " & Why);
+         if E.Is_Error (Status) and then E.Is_Ok (First) then
+            First := Status;
+         end if;
       end loop;
+      --  A helper that could not be told ended is not said to be: the change
+      --  that would say the work was stopped is refused, with why.
+      if E.Is_Error (First) then
+         Stores.Spoil (Change, First);
+      end if;
    end Stop_Children;
 
    -------------

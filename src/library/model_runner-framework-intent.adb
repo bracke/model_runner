@@ -926,6 +926,12 @@ package body Model_Runner.Framework.Intent is
    -- Renumber --
    --------------
 
+   --  The changes a renumbered entity had before, as its record keeps them:
+   --  digits, short of the most a count holds, else none counted.
+   function Earlier_Changes (Said : String) return Natural
+   is (if Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9')
+       then Natural'Value (Said) else 0);
+
    procedure Renumber
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -974,7 +980,7 @@ package body Model_Runner.Framework.Intent is
          Records.Set (Fresh, "earlier_changes",
                       Ada.Strings.Fixed.Trim
                         (Natural'Image (Records.Revision (Value)
-                                        + Natural'Value ("0" & Records.Get (Value, "earlier_changes"))),
+                                        + Earlier_Changes (Records.Get (Value, "earlier_changes"))),
                          Ada.Strings.Both));
          Stores.Put (Change, Area_Of (Kind), New_Id, Fresh);
          Stores.Remove (Change, Area_Of (Kind), Old_Id);

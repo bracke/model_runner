@@ -137,11 +137,14 @@ package Model_Runner.Framework.Execution is
    --  @param Holder Who holds the task's lease as the asker saw it: the
    --    request is for that run only, and a later run on the task, by
    --    another holder, does not take it as its own. "" for any run.
+   --  @param Status A failure writing the request: it was not delivered,
+   --    and the run goes on as if it had not been asked.
    procedure Ask_To_Stop
      (Project_Directory : String;
       Task_Id           : String;
       Cancel            : Boolean := True;
-      Holder            : String := "");
+      Holder            : String := "";
+      Status            : out Model_Runner.Errors.Error_Info);
 
    --  Whether the run watched was stopped because another process asked
    --  for its task to be cancelled, rather than only set aside.

@@ -358,16 +358,16 @@ package body Model_Runner.Framework.Execution is
      (Project_Directory : String;
       Task_Id           : String;
       Cancel            : Boolean := True;
-      Holder            : String := "")
+      Holder            : String := "";
+      Status            : out Model_Runner.Errors.Error_Info)
    is
-      Ignored : E.Error_Info;
    begin
       Files.Write_Text
         (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Project_Directory, State_Directory),
                                            "runtime"),
                           "stop." & Task_Id),
          (if Cancel then "cancel" else "stop")
-         & (if Holder = "" then "" else ASCII.LF & "for=" & Holder), Ignored);
+         & (if Holder = "" then "" else ASCII.LF & "for=" & Holder), Status);
    end Ask_To_Stop;
 
    function Cancel_Asked_From_Outside return Boolean

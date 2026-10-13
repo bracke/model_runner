@@ -1259,6 +1259,9 @@ package body Model_Runner.Framework.Verification is
                   Text  : constant String := Records.Get (Value, Field);
                   Parts : Name_Lists.Vector;
                   Start : Natural := Text'First;
+
+                  function Is_Count (Said : String) return Boolean
+                  is (Said'Length in 1 .. 9 and then (for all C of Said => C in '0' .. '9'));
                begin
                   for Place in Text'First .. Text'Last + 1 loop
                      if Place > Text'Last or else Text (Place) = Tab then
@@ -1271,7 +1274,11 @@ package body Model_Runner.Framework.Verification is
                   --  "Build failed" -- is no diagnostic of the project's.
                   --  Nor is one said twice, as a tool that reports a
                   --  failure again in its summary says it.
+                  --  Its line and column counts as kept: digits, short of the
+                  --  most a count holds; a record that says otherwise is not
+                  --  read as a diagnostic at all.
                   if Natural (Parts.Length) in 6 | 10
+                    and then Is_Count (Parts (4)) and then Is_Count (Parts (5))
                     and then not (Parts (3) = ""
                                   and then (Starts (Parts (6), "Command [")
                                             or else Starts (Parts (6), "Build failed")

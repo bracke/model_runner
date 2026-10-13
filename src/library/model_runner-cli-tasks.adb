@@ -1828,7 +1828,8 @@ package body Model_Runner.CLI.Tasks is
                   begin
                      if (Ours.Contains (Path) or else Fresh.Contains (Path))
                        and then Then_Print /= ""
-                       and then Then_Print /= Model_Runner.Framework.Work.File_Print (Whole)
+                       and then not Model_Runner.Framework.Work.Same_File_Print
+                                      (Then_Print, Model_Runner.Framework.Work.File_Print (Whole))
                      then
                         Moved_On.Append (Path);
                      end if;
@@ -5823,7 +5824,14 @@ package body Model_Runner.CLI.Tasks is
             else
                Model_Runner.Framework.Execution.Ask_To_Stop
                  (Directory, First_Word,
-                  Holder => Model_Runner.Framework.Leases.Holder (Store, "task." & First_Word));
+                  Holder => Model_Runner.Framework.Leases.Holder (Store, "task." & First_Word),
+                  Status => Outcome);
+               --  Said asked only where the request was written.
+               if E.Is_Error (Outcome) then
+                  S.Close (Store);
+                  Fail (Outcome);
+                  return;
+               end if;
                Pres.Put_Note (Screen, "cli.task.stop_asked", [Loc.Named ("name", First_Word)]);
             end if;
             S.Close (Store);

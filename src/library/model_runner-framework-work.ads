@@ -735,11 +735,27 @@ package Model_Runner.Framework.Work is
    procedure Forget_Last_Answer
      (Item : in out Stores.Store; Task_Id : String; Status : out Model_Runner.Errors.Error_Info);
 
+   --  What File_Print says of a file that is not there, and of one that is
+   --  and could not be read.
+   Absent_Print     : constant String := "-";
+   Unreadable_Print : constant String := "?";
+
    --  A file's content as a fingerprint, as what a task took in is kept.
    --
    --  @param Path The file.
-   --  @return Its fingerprint; "-" where there is no such file.
+   --  @return Its fingerprint, of every byte however large; Absent_Print
+   --    where there is no such file, Unreadable_Print where it could not be
+   --    read -- not the same, and neither ever a match (Same_File_Print).
    function File_Print (Path : String) return String;
+
+   --  Whether a file is known to hold what it held: both prints read, and
+   --  alike. A file that could not be read either time is not known to be
+   --  unchanged.
+   --
+   --  @param Then_Print The print kept.
+   --  @param Now_Print The print now.
+   --  @return True where they are the same known content, or both absent.
+   function Same_File_Print (Then_Print, Now_Print : String) return Boolean;
 
    --  Everything a project's state needs looked at when it is opened, with
    --  no conversation to go on: what the store's own recovery did to its

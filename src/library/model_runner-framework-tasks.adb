@@ -921,7 +921,18 @@ package body Model_Runner.Framework.Tasks is
       if Next = Tasks.Running then
          declare
             Generation : constant String := Records.Get (Value, "generation");
+            --  As the state keeps it: digits, short of the most a count
+            --  holds, or the record is not what it says.
+            Plain : constant Boolean :=
+              Generation'Length in 1 .. 9 and then (for all C of Generation => C in '0' .. '9');
          begin
+            if Generation /= "" and then not Plain then
+               Status := E.Make (E.Framework_Integrity_Failed);
+               E.Add_Text (Status, "name", Id);
+               E.Add_Text (Status, "detail", "its generation is " & Generation
+                           & ", which is not a count this can go on from");
+               return;
+            end if;
             Records.Set
               (Value, "generation",
                Trim (Natural'Image

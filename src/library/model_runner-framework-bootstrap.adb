@@ -158,7 +158,11 @@ package body Model_Runner.Framework.Bootstrap is
             declare
                Stop : Natural := At_Char + 4;
             begin
-               while Stop < Text'Last and then Text (Stop + 1) in '0' .. '9' loop
+               --  No more digits than a count holds: a longer run is not a
+               --  decision's number.
+               while Stop < Text'Last and then Text (Stop + 1) in '0' .. '9'
+                 and then Stop - (At_Char + 4) < 8
+               loop
                   Stop := Stop + 1;
                end loop;
                Append (Result, "ADR-" & Ada.Strings.Fixed.Trim
