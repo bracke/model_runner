@@ -1408,9 +1408,10 @@ package body Reference_Tokenizer is
 
       --  Cut the text at every marker and encode what lies between, which is
       --  the same rule on both roads. The dummy word marker SentencePiece
-      --  puts in front goes on the first stretch only.
+      --  puts in front goes on the first stretch and on each after a marker,
+      --  as the original tokenizer writes it in its legacy mode; empty text
+      --  is nothing.
       if Text'Length = 0 then
-         Part (Text, True);
          return;
       end if;
 
@@ -1448,7 +1449,7 @@ package body Reference_Tokenizer is
 
             Last := Last + 1;
             Tokens (Tokens'First + Last - 1) := Token;
-            Lead := False;
+            Lead := Item.Model = SentencePiece;
             From := Found + Reach;
          end;
       end loop;

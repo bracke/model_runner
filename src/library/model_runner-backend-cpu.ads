@@ -603,6 +603,14 @@ private
    type Wake_Signal (Workers : Worker_Count) is limited record
       Ticket : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
       Left   : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+
+      --  Odd while a job is being written, even once it is; and the ticket
+      --  the job written belongs to. A worker takes a job only where both
+      --  say it read one whole, and the one its ticket names: one held up
+      --  between the ticket and the job read the next job's team and work
+      --  under the last one's ticket, and took the next job twice.
+      Writing  : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
+      Held_For : aliased System.Atomic_Counters.Atomic_Unsigned := 0;
       Chunk  : aliased Chunk_Counter := 0;
 
       --  Set by a worker whose share raised, read by the submitting task

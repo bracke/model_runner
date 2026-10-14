@@ -108,7 +108,10 @@ begin
             end if;
             Shut := Shut + 1;
          end loop;
-         if Shut > Text'Last then
+         --  Nested no deeper than half of what groups may be: each level
+         --  holds its elements on the stack while the next is read, and a
+         --  file's list of lists twenty deep was past the stack.
+         if Shut > Text'Last or else Group_Depth >= Max_Depth / 2 then
             return;
          end if;
 
@@ -138,7 +141,9 @@ begin
                      return;
                   end if;
                   Given := Given + 1;
+                  Group_Depth := Group_Depth + 1;
                   Read_Operand (Inside, Scan, Held (Given), Read);
+                  Group_Depth := Group_Depth - 1;
                   if not Read then
                      return;
                   end if;
@@ -201,7 +206,7 @@ begin
             end if;
             Shut := Shut + 1;
          end loop;
-         if Shut > Text'Last then
+         if Shut > Text'Last or else Group_Depth >= Max_Depth / 2 then
             return;
          end if;
 
@@ -223,7 +228,9 @@ begin
                      Ok := True;
                      return;
                   end if;
+                  Group_Depth := Group_Depth + 1;
                   Read_Operand (Inside, Scan, Held (2 * Pairs + 1), Read);
+                  Group_Depth := Group_Depth - 1;
                   if not Read then
                      return;
                   end if;
@@ -232,7 +239,9 @@ begin
                      return;
                   end if;
                   Scan := Next + 1;
+                  Group_Depth := Group_Depth + 1;
                   Read_Operand (Inside, Scan, Held (2 * Pairs + 2), Read);
+                  Group_Depth := Group_Depth - 1;
                   if not Read then
                      return;
                   end if;

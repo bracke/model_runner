@@ -28,9 +28,10 @@ package body Model_Runner.CLI.Execute is
    --  says may not reach the filesystem, and a saved context is written by
    --  the program rather than by the model.
    procedure Write_File
-     (Path   : String;
-      Data   : Model_Runner.Bytes.Byte_Array;
-      Status : out E.Error_Info)
+     (Path    : String;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Status  : out E.Error_Info;
+      Durable : Boolean := True)
    is
       use Ada.Streams;
 
@@ -70,7 +71,10 @@ package body Model_Runner.CLI.Execute is
             end;
          end loop;
          Ada.Streams.Stream_IO.Close (Handle);
-         if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
+         --  On the device first where it is kept for its own sake; a cache
+         --  only moved into place -- the next run checks what it reads, and
+         --  a gigabyte synced at the end of every run is seconds of it.
+         if (Durable and then Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed)
            or else not Hostkit.Fs.Replace_File (Partial, Path)
          then
             raise Ada.Streams.Stream_IO.Use_Error;

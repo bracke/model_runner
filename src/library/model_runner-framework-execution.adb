@@ -154,6 +154,10 @@ package body Model_Runner.Framework.Execution is
       --  disk the project's state is on.
       Capture       : Unbounded_String;
       Overflowed    : Boolean := False;
+
+      --  What this run wrote into the process slot it holds, beside its
+      --  process's line: two runs of one process are told apart by it.
+      Slot_Mark     : Unbounded_String;
    end record;
    type Control_Access is access Control;
 
@@ -529,10 +533,21 @@ package body Model_Runner.Framework.Execution is
       Read : E.Error_Info;
    begin
       Files.Read_Text (Slot, Held, Read);
-      if E.Is_Ok (Read) and then To_String (Held) = Process_Line (Hostkit.Host.Own_Process_Id) then
+      if E.Is_Ok (Read)
+        and then To_String (Held)
+                 = Process_Line (Hostkit.Host.Own_Process_Id) & ASCII.LF & To_String (Current.Slot_Mark)
+      then
          Files.Discard (Slot);
       end if;
    end Let_Slot_Go;
+
+   --  A slot's first line, the process's: what Standing_Of reads.
+   function Holder_Line (Held : Unbounded_String) return String is
+      Text : constant String := To_String (Held);
+      Cut  : constant Natural := Ada.Strings.Fixed.Index (Text, [1 => ASCII.LF]);
+   begin
+      return (if Cut = 0 then Text else Text (Text'First .. Cut - 1));
+   end Holder_Line;
 
    --  Take one of the project's process slots: a file of its own, made by
    --  a move that never replaces, holding this process's number, so that a
@@ -549,7 +564,9 @@ package body Model_Runner.Framework.Execution is
       if not Files.Make_Directory (Directory) then
          return "";
       end if;
-      Files.Write_Text (Draft, Process_Line (Hostkit.Host.Own_Process_Id), Written);
+      Current.Slot_Mark := To_Unbounded_String (Ada.Directories.Simple_Name (Draft));
+      Files.Write_Text
+        (Draft, Process_Line (Hostkit.Host.Own_Process_Id) & ASCII.LF & To_String (Current.Slot_Mark), Written);
       if E.Is_Error (Written) then
          return "";
       end if;
@@ -578,14 +595,14 @@ package body Model_Runner.Framework.Execution is
                      --  taken is what was looked at, not one taken afresh
                      --  between the look and the taking.
                      Files.Read_Text (Path, Seen, Looked);
-                     if E.Is_Ok (Looked) and then Standing_Of (To_String (Seen)) = Other_Process
+                     if E.Is_Ok (Looked) and then Standing_Of (Holder_Line (Seen)) = Other_Process
                        and then Hostkit.Fs.Move_No_Replace (Path, Claimed)
                      then
                         Files.Read_Text (Claimed, Held, Read);
                         --  Gone, or another process given its id since: the
                         --  slot is free.
                         if E.Is_Ok (Read) and then Held = Seen
-                          and then Standing_Of (To_String (Held)) = Other_Process
+                          and then Standing_Of (Holder_Line (Held)) = Other_Process
                         then
                            Files.Discard (Claimed);
                            if Hostkit.Fs.Move_No_Replace (Draft, Path) then

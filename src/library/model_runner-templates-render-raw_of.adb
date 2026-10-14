@@ -77,10 +77,9 @@ begin
             then
                return "";
             elsif Value.Kind = Term_Call_Name then
-               return Conv.Call_Name (Messages, At_Message, At_Call);
+               return Call_Name_Text (At_Message, At_Call);
             else
-               return Conv.Call_Arguments
-                 (Messages, At_Message, At_Call);
+               return Call_Arguments_Text (At_Message, At_Call);
             end if;
          end;
       when Term_Indexed_Role | Term_Indexed_Content =>
@@ -118,32 +117,16 @@ begin
          end;
       when Term_Generation_Prompt =>
          return (if Add_Generation_Prompt then "true" else "");
+      --  All four through Loop_Index and Loop_Total, which know every kind
+      --  of loop -- a range() one too, which these read as the message
+      --  loop's and answered for the loop around them.
       when Term_Loop_First =>
-         if Innermost_Is_New then
-            return (if Loops (Loop_Depth).Index = 1 then "true" else "");
-         elsif In_Calls then
-            return (if Call_At = 1 then "true" else "");
-         end if;
-         return (if Current = Loop_Start then "true" else "");
+         return (if Loop_Index = 1 then "true" else "");
       when Term_Loop_Last =>
-         if Innermost_Is_New then
-            return (if Loops (Loop_Depth).Index = Loops (Loop_Depth).Total
-                    then "true" else "");
-         elsif In_Calls then
-            return (if Call_At = Walking_Count then "true" else "");
-         end if;
-         return (if Current = Loop_Stop and then Loop_Stop > 0
+         return (if Loop_Total > 0 and then Loop_Index = Long_Long_Integer (Loop_Total)
                  then "true" else "");
       when Term_Loop_Index_Zero =>
-         if Innermost_Is_New then
-            return Model_Runner.Text.Image
-              (Long_Long_Integer (Loops (Loop_Depth).Index) - 1);
-         elsif In_Calls then
-            return Model_Runner.Text.Image
-              (Long_Long_Integer (Call_At) - 1);
-         end if;
-         return Model_Runner.Text.Image
-           (Long_Long_Integer (Current) - Long_Long_Integer (Loop_Start));
+         return Model_Runner.Text.Image (Loop_Index - 1);
       when Term_Loop_Length =>
          return Model_Runner.Text.Image (Long_Long_Integer (Loop_Total));
       when Term_Loop_Rev_Index_Zero =>
@@ -153,15 +136,7 @@ begin
          return Model_Runner.Text.Image
            (Long_Long_Integer (Loop_Total) - Loop_Index + 1);
       when Term_Loop_Index_One =>
-         if Innermost_Is_New then
-            return Model_Runner.Text.Image
-              (Long_Long_Integer (Loops (Loop_Depth).Index));
-         elsif In_Calls then
-            return Model_Runner.Text.Image (Long_Long_Integer (Call_At));
-         end if;
-         return Model_Runner.Text.Image
-           (Long_Long_Integer (Current) - Long_Long_Integer (Loop_Start)
-            + 1);
+         return Model_Runner.Text.Image (Loop_Index);
       when Term_True =>
          return "true";
       when Term_False | Term_None =>

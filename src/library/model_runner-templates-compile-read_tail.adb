@@ -95,13 +95,31 @@ begin
                   Back  : constant String :=
                     Model_Runner.Text.Trim (Text (Colon + 1 .. Shut - 1));
                   Added : Boolean := True;
+                  --  Each end is measured against the whole. The end cut
+                  --  first keeps the front where it was for a start counted
+                  --  from it; a start counted from the end is cut first
+                  --  instead, which keeps the end where an end counted from
+                  --  it -- or none -- needs it. A start from the end with an
+                  --  end from the front has no order that keeps both, and is
+                  --  refused rather than measured against the cut text.
+                  From_End : constant Boolean := Front'Length > 0 and then Front (Front'First) = '-';
+                  Back_From_Front : constant Boolean := Back'Length > 0 and then Back (Back'First) /= '-';
                begin
-                  if Back'Length > 0 then
-                     Add_Cut (Back, Method_Cut_To, Added);
-                  end if;
-
-                  if Added and then Front'Length > 0 then
+                  if From_End and then Back_From_Front then
+                     Added := False;
+                  elsif From_End then
                      Add_Cut (Front, Method_Cut_From, Added);
+                     if Added and then Back'Length > 0 then
+                        Add_Cut (Back, Method_Cut_To, Added);
+                     end if;
+                  else
+                     if Back'Length > 0 then
+                        Add_Cut (Back, Method_Cut_To, Added);
+                     end if;
+
+                     if Added and then Front'Length > 0 then
+                        Add_Cut (Front, Method_Cut_From, Added);
+                     end if;
                   end if;
 
                   if not Added then

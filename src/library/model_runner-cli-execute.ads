@@ -40,10 +40,14 @@ package Model_Runner.CLI.Execute is
    --  @param Path Destination file.
    --  @param Data Bytes to write.
    --  @param Status Success, or the reason the write did not happen.
+   --  @param Durable Whether the bytes are put on the device before the
+   --    file takes its name; a cache the next run checks needs only the
+   --    move.
    procedure Write_File
-     (Path   : String;
-      Data   : Model_Runner.Bytes.Byte_Array;
-      Status : out Model_Runner.Errors.Error_Info);
+     (Path    : String;
+      Data    : Model_Runner.Bytes.Byte_Array;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Durable : Boolean := True);
 
    --  The backend run takes where none is named: the device where it opens
    --  and the model fits its budget, the processor otherwise -- the one

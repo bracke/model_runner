@@ -558,6 +558,10 @@ package body Model_Runner.Tools.Builtin is
             Piece (I) := Character'Val (Block (Stream_Element_Offset (I)));
          end loop;
          U.Append (Held, Piece (1 .. Natural (Last)));
+         if U.Length (Held) > Model_Runner.Tools.Editing.Text_Most then
+            Close (File);
+            raise Ada.IO_Exceptions.Data_Error;
+         end if;
       end loop;
       Close (File);
       return U.To_String (Held);

@@ -24,8 +24,11 @@ package BPE_Vocabulary is
    --
    --  @param Pre Value for tokenizer.ggml.pre; the empty string omits the key.
    --  @param Image Container bytes; the caller frees them.
+   --  @param Says_Flags Whether the file states its add_bos and add_eos
+   --    flags, both false; without them a reader takes its rule's defaults.
    procedure Build
-     (Pre   : String;
-      Image : out Model_Runner.Bytes.Byte_Array_Access);
+     (Pre        : String;
+      Image      : out Model_Runner.Bytes.Byte_Array_Access;
+      Says_Flags : Boolean := True);
 
 end BPE_Vocabulary;

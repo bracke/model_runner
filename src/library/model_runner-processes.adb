@@ -5,6 +5,7 @@ with Ada.Streams.Stream_IO;
 with Ada.Task_Attributes;
 
 with GNAT.OS_Lib;
+with Model_Runner.UTF8;
 
 package body Model_Runner.Processes is
 
@@ -191,13 +192,26 @@ package body Model_Runner.Processes is
       Output : constant String := U.To_String (Item.Output);
       Errors : constant String := U.To_String (Item.Errors);
 
-      function Kept (Text : String) return String is
-         Head : constant Natural := Told_Most * 3 / 5;
-         Tail : constant Natural := Told_Most - Head - 64;
+      --  Text, whatever a program printed -- bytes that are no character
+      --  are the replacement character -- and cut at characters, never
+      --  inside one: what is told goes into the conversation, which is
+      --  read again as text.
+      function Kept (Said : String) return String is
+         Text : constant String := Model_Runner.UTF8.Repaired (Said);
+         function Continues (At_Byte : Positive) return Boolean is
+           (Character'Pos (Text (At_Byte)) in 16#80# .. 16#BF#);
+         Head : Natural := Told_Most * 3 / 5;
+         Tail : Natural := Told_Most - Head - 64;
       begin
          if Text'Length <= Told_Most then
             return Text;
          end if;
+         while Head > 0 and then Continues (Text'First + Head) loop
+            Head := Head - 1;
+         end loop;
+         while Tail > 0 and then Continues (Text'Last - Tail + 1) loop
+            Tail := Tail - 1;
+         end loop;
          return Text (Text'First .. Text'First + Head - 1) & ASCII.LF & "...["
            & Image (Text'Length - Head - Tail) & " bytes left out]..." & ASCII.LF
            & Text (Text'Last - Tail + 1 .. Text'Last);

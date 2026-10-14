@@ -4294,6 +4294,27 @@ package body Tests.GGUF_Cases is
                  & ") where the rule says (" & Expected & ")");
       end Cuts;
 
+      --  Whether a file under a rule that states no flags begins a text
+      --  with its marker.
+      function Begins (Pre : String) return Boolean is
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Words  : Vocab.Vocabulary;
+         Parse  : E.Error_Info;
+         Status : E.Error_Info;
+         Said   : Boolean;
+      begin
+         BPE_Vocabulary.Build (Pre, Image, Says_Flags => False);
+         Parse_Image (Image.all, Item, Parse);
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the flagless fixture did not load under " & Pre);
+         Said := Vocab.Adds_Beginning (Words);
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+         return Said;
+      end Begins;
+
       LF     : constant String := [1 => Character'Val (10)];
       --  U+0301, a combining acute accent.
       Acute  : constant String :=
@@ -4328,6 +4349,10 @@ package body Tests.GGUF_Cases is
       Stop  : constant String := "x .";
       Grave : constant String := "x `";
    begin
+      --  A byte-pair file that says nothing begins with no marker, as
+      --  llama.cpp reads one, but under the rules whose files do.
+      Assert (not Begins ("gpt-2") and then not Begins ("qwen2") and then Begins ("llama-bpe"),
+              "a byte-pair file stating no flags began a text otherwise than llama.cpp would");
       --  An absent key is not the original rule. It is the default one,
       --  which cuts punctuation out of the text and takes digits in threes;
       --  naming it outright asks for the same.

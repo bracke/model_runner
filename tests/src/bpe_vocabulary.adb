@@ -106,8 +106,9 @@ package body BPE_Vocabulary is
    -----------
 
    procedure Build
-     (Pre   : String;
-      Image : out Model_Runner.Bytes.Byte_Array_Access)
+     (Pre        : String;
+      Image      : out Model_Runner.Bytes.Byte_Array_Access;
+      Says_Flags : Boolean := True)
    is
       Builder : Fixtures.Builder;
    begin
@@ -162,8 +163,10 @@ package body BPE_Vocabulary is
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 24);
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 25);
-      Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", False);
-      Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+      if Says_Flags then
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", False);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+      end if;
 
       Fixtures.Build (Builder, Image);
    end Build;

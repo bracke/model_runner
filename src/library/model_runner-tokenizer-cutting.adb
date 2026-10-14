@@ -700,6 +700,10 @@ package body Model_Runner.Tokenizer.Cutting is
 
       --  The last of a run of code points from From that satisfy Test, or
       --  From - 1 when From does not.
+      --  Every point from inside a run has the same end, so the last run
+      --  found is kept: a rule that takes three digits of a run and asks
+      --  again from the fourth walked the rest of the run each time, and a
+      --  run of a million digits was a trillion steps.
       generic
          with function Test (Code_Point : Natural) return Boolean;
       function Run_End (From : Natural) return Natural;
@@ -713,15 +717,56 @@ package body Model_Runner.Tokenizer.Cutting is
          return Index - 1;
       end Run_End;
 
-      function Letters_End is new Run_End (Is_Letter);
-      function Numbers_End is new Run_End (Is_Number);
-      function Spaces_End is new Run_End (Is_Space);
-      function Others_End is new Run_End (Is_Other);
-      function Letters_Or_Marks_End is new Run_End (Is_Letter_Or_Mark);
-      function Upperish_End is new Run_End (Is_Upperish);
-      function Lowerish_End is new Run_End (Is_Lowerish);
-      function ASCII_Digits_End is new Run_End (Is_ASCII_Digit);
-      function ASCII_Letters_End is new Run_End (Is_ASCII_Letter);
+      generic
+         with function Test (Code_Point : Natural) return Boolean;
+      package Run_Ends is
+         function Run_End (From : Natural) return Natural;
+      end Run_Ends;
+
+      package body Run_Ends is
+         --  The run kept, and the bound it was found under: a piece is cut
+         --  again within a narrower one, and a run's end is the bound's.
+         Kept_From, Kept_End, Kept_Hi : Natural := 0;
+
+         function Run_End (From : Natural) return Natural is
+            Index : Natural := From;
+         begin
+            if Kept_End > 0 and then Kept_Hi = Hi
+              and then From >= Kept_From and then From <= Kept_End
+            then
+               return Kept_End;
+            end if;
+            while Index <= Hi and then Test (Points (Index)) loop
+               Index := Index + 1;
+            end loop;
+            if Index > From then
+               Kept_From := From;
+               Kept_End := Index - 1;
+               Kept_Hi := Hi;
+            end if;
+            return Index - 1;
+         end Run_End;
+      end Run_Ends;
+
+      package Letters_Ends is new Run_Ends (Is_Letter);
+      package Numbers_Ends is new Run_Ends (Is_Number);
+      package Spaces_Ends is new Run_Ends (Is_Space);
+      package Others_Ends is new Run_Ends (Is_Other);
+      package Letters_Or_Marks_Ends is new Run_Ends (Is_Letter_Or_Mark);
+      package Upperish_Ends is new Run_Ends (Is_Upperish);
+      package Lowerish_Ends is new Run_Ends (Is_Lowerish);
+      package ASCII_Digits_Ends is new Run_Ends (Is_ASCII_Digit);
+      package ASCII_Letters_Ends is new Run_Ends (Is_ASCII_Letter);
+
+      function Letters_End (From : Natural) return Natural renames Letters_Ends.Run_End;
+      function Numbers_End (From : Natural) return Natural renames Numbers_Ends.Run_End;
+      function Spaces_End (From : Natural) return Natural renames Spaces_Ends.Run_End;
+      function Others_End (From : Natural) return Natural renames Others_Ends.Run_End;
+      function Letters_Or_Marks_End (From : Natural) return Natural renames Letters_Or_Marks_Ends.Run_End;
+      function Upperish_End (From : Natural) return Natural renames Upperish_Ends.Run_End;
+      function Lowerish_End (From : Natural) return Natural renames Lowerish_Ends.Run_End;
+      function ASCII_Digits_End (From : Natural) return Natural renames ASCII_Digits_Ends.Run_End;
+      function ASCII_Letters_End (From : Natural) return Natural renames ASCII_Letters_Ends.Run_End;
 
       --  Where a contraction beginning at From ends, or 0. The seven the
       --  original rule named, in the order it named them; the later rules
@@ -1020,6 +1065,10 @@ package body Model_Runner.Tokenizer.Cutting is
          return Stop;
       end Symbols_End;
 
+      --  The run the last line-end search was made over, and what it found:
+      --  nought for none.
+      Line_Run_Stop, Line_Run_Last : Natural := 0;
+
       --  Where a run of whitespace beginning at From ends under Kind, or
       --  0. "\s+(?!\S)" takes the whole run when nothing follows it and
       --  all but its last character otherwise, which leaves that character
@@ -1035,14 +1084,23 @@ package body Model_Runner.Tokenizer.Cutting is
             return 0;
          end if;
 
-         --  "\s*[\r\n]+": the run up to its last line end.
+         --  "\s*[\r\n]+": the run up to its last line end -- found once
+         --  a run, as its end is, and kept while the run is asked about.
          if Kind in Later | Cascade then
-            for Index in reverse From .. Stop loop
-               if Is_Line_End (Points (Index)) then
-                  Last_Line_End := Index;
-                  exit;
-               end if;
-            end loop;
+            if Line_Run_Stop = Stop and then Line_Run_Last >= From then
+               Last_Line_End := Line_Run_Last;
+            elsif Line_Run_Stop = Stop and then Line_Run_Last = 0 then
+               Last_Line_End := 0;
+            else
+               for Index in reverse From .. Stop loop
+                  if Is_Line_End (Points (Index)) then
+                     Last_Line_End := Index;
+                     exit;
+                  end if;
+               end loop;
+               Line_Run_Stop := Stop;
+               Line_Run_Last := Last_Line_End;
+            end if;
             if Last_Line_End > 0 then
                return Last_Line_End;
             end if;

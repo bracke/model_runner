@@ -95,6 +95,17 @@ package body Model_Runner.Tools.Editing is
                end if;
             end loop;
             U.Append (Text, Piece (1 .. Natural (Last)));
+            --  A file still being written past the bound it was checked
+            --  against is held to it all the same.
+            if U.Length (Text) > Text_Most then
+               Stream_IO.Close (File);
+               Text := U.Null_Unbounded_String;
+               Status := E.Make (E.IO_File_Too_Large);
+               E.Add_Text (Status, "path", Path, E.Param_Path);
+               E.Add_Text (Status, "detail", "past the " & Image (Text_Most / 1024)
+                           & " KiB a file is read whole");
+               return;
+            end if;
          end loop;
          Stream_IO.Close (File);
       end;

@@ -163,8 +163,13 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             type Token_Room is access Vocab.Token_Array;
             procedure Free is
               new Ada.Unchecked_Deallocation (Vocab.Token_Array, Token_Room);
+            --  Room for the query beside the text where a reranker joins the
+            --  two: sized by the text alone, a pair whose document was short
+            --  had its document cut off, and its score was the query's.
             Held   : Token_Room :=
-              new Vocab.Token_Array (1 .. Prompt.all'Length + 2);
+              new Vocab.Token_Array
+                (1 .. Prompt.all'Length + 4
+                      + (if Item.Query_Text = null then 0 else Item.Query_Text.all'Length));
             Tokens : Vocab.Token_Array renames Held.all;
             Count  : Natural;
 
@@ -195,8 +200,13 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             --  has one. Sets Condition; leaves the pair for the caller to run.
             procedure Encode_Pair (Document : String) is
                use type Vocab.Token_Id;
-               Q_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
-               D_Tokens : Vocab.Token_Array (1 .. Tokens'Length);
+               --  Each as long as its own text can make, and on the heap: a
+               --  document list of megabytes gave two stack arrays its size
+               --  for every document.
+               Q_Room   : Token_Room := new Vocab.Token_Array (1 .. Item.Query_Text.all'Length + 2);
+               D_Room   : Token_Room := new Vocab.Token_Array (1 .. Document'Length + 2);
+               Q_Tokens : Vocab.Token_Array renames Q_Room.all;
+               D_Tokens : Vocab.Token_Array renames D_Room.all;
                Q_Count, D_Count : Natural;
                Beginning : constant Vocab.Token_Id :=
                  Vocab.Beginning_Token (Words.all);
@@ -218,11 +228,15 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                Vocab.Encode (Words.all, Item.Query_Text.all, False, False,
                              Q_Tokens, Q_Count, Condition);
                if E.Is_Error (Condition) then
+                  Free (Q_Room);
+                  Free (D_Room);
                   return;
                end if;
                Vocab.Encode (Words.all, Document, False, False,
                              D_Tokens, D_Count, Condition);
                if E.Is_Error (Condition) then
+                  Free (Q_Room);
+                  Free (D_Room);
                   return;
                end if;
 
@@ -239,7 +253,54 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                end loop;
                Put (Ending);
                Count := K;
+               Free (Q_Room);
+               Free (D_Room);
             end Encode_Pair;
+
+            --  Held to what the session reads: the first positions where the
+            --  caller asked for that, with the end marker kept last where the
+            --  model reads whole texts and was given one; said too long, with
+            --  how many and what would take it, where not -- Fits false.
+            procedure Fit (Fits : out Boolean) is
+               Most : constant Natural := L.Capacity (Session);
+            begin
+               Fits := True;
+               if Count > Most and then Most > 0 then
+                  if Item.Truncate then
+                     declare
+                        use type Vocab.Token_Id;
+                        Ended : constant Boolean :=
+                          not Settings.Causal
+                          and then Vocab.Adds_End (Words.all)
+                          and then Tokens (Count) = Vocab.End_Token (Words.all);
+                     begin
+                        Pres.Put_Note
+                          (Screen, "cli.note.embed_truncated",
+                           [Loc.Named ("value",
+                                       T.Image (Long_Long_Integer (Most))),
+                            Loc.Named ("total",
+                                       T.Image (Long_Long_Integer (Count)))]);
+                        if Ended then
+                           Tokens (Most) := Tokens (Count);
+                        end if;
+                        Count := Most;
+                     end;
+                  else
+                     Pres.Put_Note
+                       (Screen, "cli.note.embed_too_long",
+                        [Loc.Named ("value",
+                                    T.Image (Long_Long_Integer (Most))),
+                         Loc.Named ("total",
+                                    T.Image (Long_Long_Integer (Count)))]);
+                     Condition := E.Make (E.Arch_Context_Too_Large);
+                     E.Add_Integer
+                       (Condition, "requested", Long_Long_Integer (Count));
+                     E.Add_Integer
+                       (Condition, "maximum", Long_Long_Integer (Most));
+                     Fits := False;
+                  end if;
+               end if;
+            end Fit;
          begin
             --  Reranking a query against several documents in one load: where
             --  the prompt is more than one line, each line is a document, each
@@ -265,9 +326,24 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                         if Stop > First then
                            Encode_Pair (Prompt.all (First .. Stop - 1));
                            if E.Is_Error (Condition) then
+                              Free (Held);
                               Fail (Condition);
                               return;
                            end if;
+
+                           --  Each pair held to the session as one text is:
+                           --  cut where asked, else said too long on its own
+                           --  line -- a score of none -- and the rest scored.
+                           declare
+                              Fits : Boolean;
+                           begin
+                              Fit (Fits);
+                              if not Fits then
+                                 Pres.Put_Line (Screen, "nan");
+                                 Condition := E.Success;
+                                 goto Next_Document;
+                              end if;
+                           end;
 
                            L.Rewind (Session, 0, Condition);
                            if E.Is_Error (Condition) then
@@ -307,6 +383,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                            end;
                         end if;
 
+                        <<Next_Document>>
                         First := Stop + 1;
                      end;
                   end loop;
@@ -350,49 +427,15 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                return;
             end if;
 
-            --  Longer than the session reads: the first positions where the
-            --  caller asked for that, with the end marker kept last where
-            --  the model reads whole texts and was given one; refused, with
-            --  how many and what would take it, where not.
+            --  Longer than the session reads: cut, or refused (Fit).
             declare
-               Most : constant Natural := L.Capacity (Session);
+               Fits : Boolean;
             begin
-               if Count > Most and then Most > 0 then
-                  if Item.Truncate then
-                     declare
-                        use type Vocab.Token_Id;
-                        Ended : constant Boolean :=
-                          not Settings.Causal
-                          and then Vocab.Adds_End (Words.all)
-                          and then Tokens (Count) = Vocab.End_Token (Words.all);
-                     begin
-                        Pres.Put_Note
-                          (Screen, "cli.note.embed_truncated",
-                           [Loc.Named ("value",
-                                       T.Image (Long_Long_Integer (Most))),
-                            Loc.Named ("total",
-                                       T.Image (Long_Long_Integer (Count)))]);
-                        if Ended then
-                           Tokens (Most) := Tokens (Count);
-                        end if;
-                        Count := Most;
-                     end;
-                  else
-                     Pres.Put_Note
-                       (Screen, "cli.note.embed_too_long",
-                        [Loc.Named ("value",
-                                    T.Image (Long_Long_Integer (Most))),
-                         Loc.Named ("total",
-                                    T.Image (Long_Long_Integer (Count)))]);
-                     Condition := E.Make (E.Arch_Context_Too_Large);
-                     E.Add_Integer
-                       (Condition, "requested", Long_Long_Integer (Count));
-                     E.Add_Integer
-                       (Condition, "maximum", Long_Long_Integer (Most));
-                     Free (Held);
-                     Fail (Condition);
-                     return;
-                  end if;
+               Fit (Fits);
+               if not Fits then
+                  Free (Held);
+                  Fail (Condition);
+                  return;
                end if;
             end;
 
@@ -417,8 +460,11 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   else N.Element_Count
                          (Natural'Min
                             (Natural'Max (1, Item.Batch_Size),
-                             Model_Runner.Limits.Default_Session_Limits
-                               .Max_Batch)));
+                             --  What one batched call of this model takes,
+                             --  which the evaluator refuses past.
+                             Natural'Min (L.Batch_Limit (Prepared),
+                                          Model_Runner.Limits.Default_Session_Limits
+                                            .Max_Batch))));
 
                Room : Model_Runner.Tensors.Real_Array_Access := null;
                From : Positive := 1;

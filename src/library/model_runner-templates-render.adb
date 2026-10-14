@@ -22,10 +22,62 @@ is
    function Content_Text (At_Message : Positive) return String is
      (if Literal = null then Conv.Content_At (Messages, At_Message)
       else Literal (Conv.Content_At (Messages, At_Message)));
+   --  A message's parts the same, with every \uXXXX escape in their JSON
+   --  written as its character first -- but a quote, a backslash or a
+   --  control, which stay escaped -- so what Literal is asked about is
+   --  the text a part will read as: <|im_start|> written \u003c|im_start|>
+   --  passed it as a marker it could not see.
+   function Escapes_Written (JSON : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Index  : Natural := JSON'First;
+      function Hex (C : Character) return Integer is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+            when others => -1);
+   begin
+      while Index <= JSON'Last loop
+         if JSON (Index) = '\' and then Index + 5 <= JSON'Last and then JSON (Index + 1) = 'u'
+           and then (for all K in Index + 2 .. Index + 5 => Hex (JSON (K)) >= 0)
+         then
+            declare
+               Code : constant Natural :=
+                 Hex (JSON (Index + 2)) * 4096 + Hex (JSON (Index + 3)) * 256
+                 + Hex (JSON (Index + 4)) * 16 + Hex (JSON (Index + 5));
+            begin
+               if Code < 16#20# or else Code in 16#22# | 16#5C# | 16#D800# .. 16#DFFF# then
+                  Ada.Strings.Unbounded.Append (Result, JSON (Index .. Index + 5));
+               else
+                  Ada.Strings.Unbounded.Append (Result, Model_Runner.UTF8.Encode (Code));
+               end if;
+               Index := Index + 6;
+            end;
+         elsif JSON (Index) = '\' and then Index < JSON'Last then
+            Ada.Strings.Unbounded.Append (Result, JSON (Index .. Index + 1));
+            Index := Index + 2;
+         else
+            Ada.Strings.Unbounded.Append (Result, JSON (Index));
+            Index := Index + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Escapes_Written;
+
+   --  A turn's call, its name and its arguments, the same: a write_file
+   --  call's body copied out of a file holding <|im_end|> is content as
+   --  much as a message is.
+   function Call_Name_Text (At_Message, Which : Natural) return String is
+     (if Literal = null then Conv.Call_Name (Messages, At_Message, Which)
+      else Literal (Conv.Call_Name (Messages, At_Message, Which)));
+   function Call_Arguments_Text (At_Message, Which : Natural) return String is
+     (if Literal = null then Conv.Call_Arguments (Messages, At_Message, Which)
+      else Literal (Escapes_Written (Conv.Call_Arguments (Messages, At_Message, Which))));
+
    function Parts_Text (At_Message : Positive) return String is
      (if Literal = null or else Conv.Parts_At (Messages, At_Message) = ""
       then Conv.Parts_At (Messages, At_Message)
-      else Literal (Conv.Parts_At (Messages, At_Message)));
+      else Literal (Escapes_Written (Conv.Parts_At (Messages, At_Message))));
 
    --  How many tools the caller offered. None and none offered are the
    --  same thing to a template: "if tools" is false either way, and a
@@ -319,9 +371,9 @@ is
                return "null";
             end if;
             return "{""type"": ""function"", ""function"": {""name"": "
-              & Quoted (Conv.Call_Name (Messages, Value.Start, Value.Index))
+              & Quoted (Call_Name_Text (Value.Start, Value.Index))
               & ", ""arguments"": "
-              & Conv.Call_Arguments (Messages, Value.Start, Value.Index)
+              & Call_Arguments_Text (Value.Start, Value.Index)
               & "}}";
          when Value_Text => return Quoted (Text_Of (Value));
          when Value_Number => return Text_Of (Value);
@@ -472,7 +524,8 @@ is
    --  JSON text with the blank that marks a tuple taken out, outside
    --  strings.
    function Untupled (Src : String) return String is
-      R     : String (1 .. Src'Length);
+      Held  : Text_Access := new String (1 .. Src'Length);
+      R     : String renames Held.all;
       M     : Natural := 0;
       Quote : Boolean := False;
       I     : Natural := Src'First;
@@ -497,36 +550,22 @@ is
          end if;
          I := I + 1;
       end loop;
-      return R (1 .. M);
+      return Answer : constant String := R (1 .. M) do
+         Free_Text (Held);
+      end return;
    end Untupled;
 
    --  A JSON string's characters. The escapes are the ones JSON
    --  requires; a definition's own are decoded already.
    function Decoded (Src : String) return String is
-      R : String (1 .. Src'Length);
-      M : Natural := 0;
-      I : Natural := Src'First + 1;
    begin
       if not Is_JSON_String (Src) then
          return Src;
       end if;
-      while I < Src'Last loop
-         if Src (I) = '\' and then I + 1 < Src'Last then
-            I := I + 1;
-            M := M + 1;
-            case Src (I) is
-               when 'n' => R (M) := ASCII.LF;
-               when 't' => R (M) := ASCII.HT;
-               when 'r' => R (M) := ASCII.CR;
-               when others => R (M) := Src (I);
-            end case;
-         else
-            M := M + 1;
-            R (M) := Src (I);
-         end if;
-         I := I + 1;
-      end loop;
-      return R (1 .. M);
+      --  Every escape JSON has -- \b, \f, \/ and \uXXXX as well as the
+      --  three that were read here -- as the conversation reads them: an
+      --  argument's \u00e6 read back as u00e6 was another argument.
+      return Conv.Unescaped (Src (Src'First + 1 .. Src'Last - 1));
    end Decoded;
 
    --  A member of a mapping by name, or nothing.
@@ -813,10 +852,10 @@ is
                return Nothing;
             elsif Name = "name" then
                return As_Text
-                 (Conv.Call_Name (Messages, Value.Start, Value.Index));
+                 (Call_Name_Text (Value.Start, Value.Index));
             elsif Name = "arguments" then
                return As_Data
-                 (Conv.Call_Arguments (Messages, Value.Start, Value.Index));
+                 (Call_Arguments_Text (Value.Start, Value.Index));
             elsif Name = "function" then
                --  A call as the conversation's JSON writes it:
                --  {"type": "function", "function": {"name", "arguments"}}.
@@ -979,13 +1018,12 @@ is
          when Value_Undefined | Value_None => return False;
          when Value_Boolean => return Value.Start = 1;
          when Value_Number => return Number_Of (Text_Of (Value)) /= 0;
+         --  Any text but the empty one, as the language has it: a tool's
+         --  answer of "0", a user's "false", is said, not dropped as if
+         --  the turn were empty. A truth is a Value_Boolean now, and no
+         --  longer text standing for one.
          when Value_Text =>
-            declare
-               T : constant String := Text_Of (Value);
-            begin
-               return T /= "" and then T /= "false" and then T /= "none"
-                 and then T /= "0";
-            end;
+            return Text_Of (Value) /= "";
          when Value_Data =>
             declare
                T : constant String := Text_Of (Value);
@@ -1134,6 +1172,14 @@ is
 
    type Fresh_Set is array (1 .. Max_Variables) of Boolean;
 
+   --  The counting loop now running: where it stands, how it counts, and
+   --  the name its number goes to. A loop inside it keeps these aside.
+   Range_At    : Long_Long_Integer := 0;
+   Range_Start : Long_Long_Integer := 0;
+   Range_Stop  : Long_Long_Integer := 0;
+   Range_Step  : Long_Long_Integer := 1;
+   Range_Slot : Natural := 0;
+
    type Loop_State is record
       Kind    : Loop_Kind := Legacy_List;
       Var     : Natural := 0;   --  the slot each element goes to
@@ -1146,6 +1192,18 @@ is
       Message : Natural := 0;   --  the turn a calls loop walks
       From, To : Natural := 0;  --  a message list's ends
       Reversed : Boolean := False;
+
+      --  For a counting loop, the counting loop's around it, put back as
+      --  it ends: the counters are one set, and an inner range() ran the
+      --  outer one on from where the inner stopped.
+      Outer_Slot  : Natural := 0;
+
+      --  How many captures -- set blocks -- were open when it began: a
+      --  break or continue inside one opened in the body would leave it
+      --  open, its text in the output and its slot taken, round after
+      --  round until the stack of them overflowed.
+      Captures_At : Natural := 0;
+      Outer_At, Outer_Start, Outer_Stop, Outer_Step : Long_Long_Integer := 0;
 
       --  What every name held when the loop began, and how much of the
       --  pool was in use. A name assigned inside a loop's body is the
@@ -1173,6 +1231,7 @@ is
          Loops (Loop_Depth) := State;
          Loops (Loop_Depth).Saved := Slots;
          Loops (Loop_Depth).Floor := Pool_Used;
+         Loops (Loop_Depth).Captures_At := Capture_Depth;
       end if;
    end Push_Loop;
 
@@ -1217,6 +1276,13 @@ is
    begin
       if Loop_Depth = 0 then
          return;
+      end if;
+      if Loops (Loop_Depth).Kind = Legacy_Range then
+         Range_Slot := Loops (Loop_Depth).Outer_Slot;
+         Range_At := Loops (Loop_Depth).Outer_At;
+         Range_Start := Loops (Loop_Depth).Outer_Start;
+         Range_Stop := Loops (Loop_Depth).Outer_Stop;
+         Range_Step := Loops (Loop_Depth).Outer_Step;
       end if;
       Restore_Names (Loops (Loop_Depth).Saved, Loops (Loop_Depth).Floor);
 
@@ -1373,18 +1439,6 @@ is
    function Walking_Count return Natural
    is (if Call_Message = 0 or else Call_Message > Count then 0
        else Conv.Call_Count (Messages, Call_Message));
-
-   --  Where a counting loop has got to, where it stops and what it steps
-   --  by, and which name it writes each number to.
-   --
-   --  One set of these rather than one a depth: a counting loop inside
-   --  another counting loop is refused where it is compiled, so there is
-   --  never more than one running.
-   Range_At    : Long_Long_Integer := 0;
-   Range_Start : Long_Long_Integer := 0;
-   Range_Stop  : Long_Long_Integer := 0;
-   Range_Step  : Long_Long_Integer := 1;
-   Range_Slot : Natural := 0;
 
    --  Whether the count has passed its stop, which depends on which way
    --  it is going.
@@ -1711,7 +1765,10 @@ is
       end loop;
 
       declare
-         Room : String (1 .. Needed);
+         --  On the heap: a message's content quoted is a stack array the
+         --  size of the content otherwise.
+         Held : Text_Access := new String (1 .. Needed);
+         Room : String renames Held.all;
 
          procedure Put_Text (Piece : String) is
          begin
@@ -1743,7 +1800,9 @@ is
             end case;
          end loop;
          Put_Text ("""");
-         return Room (1 .. Filled);
+         return Answer : constant String := Room (1 .. Filled) do
+            Free_Text (Held);
+         end return;
       end;
    end Quoted;
 
@@ -1999,9 +2058,9 @@ is
       procedure Add_Call (At_Message, Which : Positive) is
       begin
          Add ("{""type"": ""function"", ""function"": {""name"": "
-              & Quoted (Conv.Call_Name (Messages, At_Message, Which))
+              & Quoted (Call_Name_Text (At_Message, Which))
               & ", ""arguments"": "
-              & Conv.Call_Arguments (Messages, At_Message, Which) & "}}");
+              & Call_Arguments_Text (At_Message, Which) & "}}");
       end Add_Call;
    begin
       case Value.Kind is
@@ -2549,7 +2608,14 @@ is
          return False;
       end if;
       for Index in 2 .. Value.Count loop
-         if Value.Terms (Index).Join = Join_Plus then
+         --  Not where either side calls a macro: resolved here and again
+         --  where it is printed, a macro that counts in a namespace ran
+         --  twice, and a recursive one twice at every level. A macro's
+         --  answer is text, never data, so there is nothing to refuse.
+         if Value.Terms (Index).Join = Join_Plus
+           and then Value.Terms (Index - 1).Kind /= Term_Macro
+           and then Value.Terms (Index).Kind /= Term_Macro
+         then
             declare
                Left  : constant Held := Resolve (Value.Terms (Index - 1));
                Right : constant Held := Resolve (Value.Terms (Index));
@@ -2868,6 +2934,12 @@ is
                                then Text_Of (Right) else Text_Of (Left));
                   Long  : Ada.Strings.Unbounded.Unbounded_String;
                begin
+                  --  Nothing however often is nothing: an empty piece never
+                  --  grows past the bound, and a count of 10 ** 15 spun
+                  --  that many times inside one step.
+                  if Piece = "" then
+                     return "";
+                  end if;
                   for Unused in 1 .. Times loop
                      Ada.Strings.Unbounded.Append (Long, Piece);
                      exit when Ada.Strings.Unbounded.Length (Long)

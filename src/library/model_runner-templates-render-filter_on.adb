@@ -1,5 +1,10 @@
 separate (Model_Runner.Templates.Render)
 function Filter_On (Value : Held; Step : Filter_Step) return Held is
+   --  A width or a count a template gives, held to what any template means
+   --  by one: a file's |indent(2000000000) put a pad that long on the
+   --  stack, and |batch of as many filled a gigabyte.
+   function Bounded (Asked : Long_Long_Integer) return Natural is
+     (Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min (Asked, 65_536))));
 begin
    case Step.Kind is
       when Filter_None | Filter_Safe =>
@@ -19,8 +24,7 @@ begin
             declare
                Width : constant Natural :=
                  Natural'Max
-                   (0, Natural (Number_Of
-                         (Value_Of (Item.Operands.all (Step.Arg1)))));
+                   (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1)))));
             begin
                return As_Text
                  (Indented_JSON (Untupled (JSON_Text (Value)), Width));
@@ -100,8 +104,7 @@ begin
             Places : constant Natural :=
               (if Step.Arg1 = 0 then 0
                else Natural'Max
-                      (0, Natural (Number_Of
-                            (Value_Of (Item.Operands.all (Step.Arg1))))));
+                      (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))))));
             Method : constant String :=
               (if Step.Arg2 = 0 then "common"
                else Value_Of (Item.Operands.all (Step.Arg2)));
@@ -241,8 +244,7 @@ begin
             Src   : constant String := Listed (Value);
             N     : constant Natural :=
               Natural'Max
-                (1, Natural (Number_Of
-                      (Value_Of (Item.Operands.all (Step.Arg1)))));
+                (1, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1)))));
             Fill  : constant String :=
               (if Step.Arg2 = 0 then ""
                else JSON_Text (Held_Of (Item.Operands.all (Step.Arg2))));
@@ -413,8 +415,7 @@ begin
             Width : constant Natural :=
               (if Step.Arg1 = 0 then 79
                else Natural'Max
-                      (1, Natural (Number_Of
-                            (Value_Of (Item.Operands.all (Step.Arg1))))));
+                      (1, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))))));
             Break_Long : constant Boolean :=
               Step.Arg2 = 0
               or else Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
@@ -505,11 +506,12 @@ begin
          --  leeway, as the language cuts.
          declare
             T      : constant String := Printed (Value);
+            --  A length past the text is no cut: not bounded as a width
+            --  is, only held to what a number here can be.
             Length : constant Natural :=
               (if Step.Arg1 = 0 then 255
-               else Natural'Max
-                      (0, Natural (Number_Of
-                            (Value_Of (Item.Operands.all (Step.Arg1))))));
+               else Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min
+                      (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))), Long_Long_Integer (Natural'Last)))));
             Kill   : constant Boolean :=
               Step.Arg2 /= 0
               and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
@@ -548,8 +550,7 @@ begin
             Width : constant Natural :=
               (if Step.Arg1 = 0 then 80
                else Natural'Max
-                      (0, Natural (Number_Of
-                            (Value_Of (Item.Operands.all (Step.Arg1))))));
+                      (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))))));
          begin
             if T'Length >= Width then
                return As_Text (T);
@@ -1065,8 +1066,7 @@ begin
             Width : constant Natural :=
               (if Step.Arg1 = 0 then 4
                else Natural'Max
-                      (0, Natural (Number_Of
-                            (Value_Of (Item.Operands.all (Step.Arg1))))));
+                      (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))))));
             First : constant Boolean :=
               Step.Arg2 /= 0
               and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));

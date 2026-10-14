@@ -9946,14 +9946,13 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Grown only once what is in flight is done with them, and their
-      --  sizes what they are, as One_Product has them; a call that grows
-      --  nothing waits for nothing.
-      if Item.Vector_Bytes < Query_Bytes or else Item.Result_Bytes < Blend_Bytes then
-         Settle (Item, Good);
-         if not Good then
-            return;
-         end if;
+      --  What is in flight done with the shared buffers before they are
+      --  grown or the query written into them, as One_Product has it: a
+      --  sequence handed over without a wait may still read the activation
+      --  this overwrites.
+      Settle (Item, Good);
+      if not Good then
+         return;
       end if;
 
       if Item.Vector_Bytes < Query_Bytes then
@@ -11179,14 +11178,13 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Grown only once what is in flight is done with them, and their
-      --  sizes what they are, as One_Product has them; a call that grows
-      --  nothing waits for nothing.
-      if Item.Vector_Bytes < Query_Bytes or else Item.Result_Bytes < Blend_Bytes then
-         Settle (Item, Good);
-         if not Good then
-            return;
-         end if;
+      --  What is in flight done with the shared buffers before they are
+      --  grown or the query written into them, as One_Product has it: a
+      --  sequence handed over without a wait may still read the activation
+      --  this overwrites.
+      Settle (Item, Good);
+      if not Good then
+         return;
       end if;
 
       if Item.Vector_Bytes < Query_Bytes then
@@ -14421,11 +14419,14 @@ package body Model_Runner.Platform.Device.Products is
               Carry_In and then Was_Buffer /= Null_Handle
               and then Was_Bytes >= Vector_Bytes;
          begin
+            --  Either way the sequence before may still be writing it.
+            Settle (Item, Good);
+            if not Good then
+               Release_All;
+               return;
+            end if;
             if Carrying then
-               Settle (Item, Good);
-               if Good then
-                  Standing (Item, Was_Memory, Was_At, Was_Bytes, Good);
-               end if;
+               Standing (Item, Was_Memory, Was_At, Was_Bytes, Good);
                if not Good then
                   Release_All;
                   return;

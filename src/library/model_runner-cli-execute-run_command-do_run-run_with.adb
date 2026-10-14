@@ -1735,7 +1735,7 @@ begin
                end if;
             else
                Model_Runner.Platform.Ensure_Parent_Directory (Save_Path);
-               Write_File (Save_Path, Room.all, Condition);
+               Write_File (Save_Path, Room.all, Condition, Durable => not Auto);
                Model_Runner.Bytes.Free (Room);
 
                --  The cache kept to its bound, the file just written
@@ -1745,6 +1745,10 @@ begin
                     (Model_Runner.Platform.Cache_Directory, "*.kv",
                      Model_Runner.Platform.Prefill_Cache_Most,
                      Keep => Save_Path);
+                  --  And what a write killed part way left beside one.
+                  Model_Runner.Platform.Trim_Directory
+                    (Model_Runner.Platform.Cache_Directory, "*.kv.partial", 0,
+                     Keep => Save_Path & ".partial");
                end if;
 
                if E.Is_Error (Condition) and then not Auto then

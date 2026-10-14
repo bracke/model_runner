@@ -202,11 +202,14 @@ package body Model_Runner.Backend.CPU is
       --  second, so a worker that wakes on the ticket cannot see any of
       --  them belonging to the job before it. This is the whole of what
       --  publishing a job is now: what a worker reads, it reads from here.
+      AC.Increment (Waking.Writing);
       Waking.Held := Work;
       Waking.Crew := Chunk_Counter (Work.Team);
+      Waking.Held_For := AC.Atomic_Unsigned (Interfaces."+" (Interfaces.Unsigned_32 (Waking.Ticket), 1));
       Waking.Failed := 0;
       Waking.Left := AC.Atomic_Unsigned (Shares);
       Waking.Chunk := 0;
+      AC.Increment (Waking.Writing);
       AC.Increment (Waking.Ticket);
 
       --  And then wake whoever had given up waiting. The order matters: a
@@ -1216,6 +1219,7 @@ package body Model_Runner.Backend.CPU is
          declare
             Posted : constant AC.Atomic_Unsigned := Waking.Ticket;
             Crew   : Chunk_Counter;
+            Before, After, For_Job : AC.Atomic_Unsigned;
          begin
             if Posted = Mine then
                goto Continue;
@@ -1229,9 +1233,15 @@ package body Model_Runner.Backend.CPU is
             --  team under this one's ticket, took the next job twice and
             --  counted it off twice. A ticket moved on means this one was
             --  done without this worker -- it was on no team that waited.
+            Before := Waking.Writing;
             Crew := Waking.Crew;
             Current := Waking.Held;
-            if Waking.Ticket /= Posted then
+            For_Job := Waking.Held_For;
+            After := Waking.Writing;
+            if Before /= After
+              or else Interfaces."/=" (Interfaces."and" (Interfaces.Unsigned_32 (Before), 1), 0)
+              or else For_Job /= Posted
+            then
                goto Continue;
             end if;
 

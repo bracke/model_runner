@@ -1292,15 +1292,17 @@ package body Model_Runner.Grammar is
       --  them carried -- only where what it can still become is something
       --  the grammar could take next: a lead byte the grammar has no
       --  character for was taken, and then nothing could follow it.
+      --  The characters before it refused cheaply first, before a matcher
+      --  is copied for the start that follows them.
+      if Keep > 0 and then not Accepts_Whole (Item, State, Full (Full'First .. Full'First + Keep - 1)) then
+         return False;
+      end if;
       declare
          Here   : Matcher := State;
          Status : Model_Runner.Errors.Error_Info;
       begin
          Here.Partial_Length := 0;
          if Keep > 0 then
-            if not Accepts_Whole (Item, State, Full (Full'First .. Full'First + Keep - 1)) then
-               return False;
-            end if;
             Advance (Item, Here, Full (Full'First .. Full'First + Keep - 1), Status);
             if E.Is_Error (Status) then
                return False;

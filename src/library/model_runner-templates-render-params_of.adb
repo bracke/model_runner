@@ -1,6 +1,8 @@
 separate (Model_Runner.Templates.Render)
 function Params_Of (Src : String; Qwen : Boolean := False) return String is
-   Buf : String (1 .. 8 * Src'Length + 256);
+   --  On the heap: an argument of a megabyte made a stack array of eight.
+   Held : Text_Access := new String (1 .. 8 * Src'Length + 256);
+   Buf  : String renames Held.all;
    N   : Natural := 0;
    I   : Natural := Src'First;
 
@@ -24,30 +26,25 @@ function Params_Of (Src : String; Qwen : Boolean := False) return String is
    --  A JSON string at I ("...") decoded to its characters, I left past
    --  the closing quote.
    function Read_String return String is
-      R : String (1 .. Src'Length);
-      M : Natural := 0;
+      Start : constant Natural := I + 1;
    begin
+      --  To the closing quote, an escaped one passed over; then the body
+      --  decoded with every escape JSON has, as Decoded does.
       I := I + 1;
       while I <= Src'Last and then Src (I) /= '"' loop
          if Src (I) = '\' and then I < Src'Last then
             I := I + 1;
-            M := M + 1;
-            case Src (I) is
-               when 'n'    => R (M) := ASCII.LF;
-               when 't'    => R (M) := ASCII.HT;
-               when 'r'    => R (M) := ASCII.CR;
-               when others => R (M) := Src (I);
-            end case;
-         else
-            M := M + 1;
-            R (M) := Src (I);
          end if;
          I := I + 1;
       end loop;
-      if I <= Src'Last then
-         I := I + 1;
-      end if;
-      return R (1 .. M);
+      declare
+         Body_Last : constant Natural := Natural'Min (I - 1, Src'Last);
+      begin
+         if I <= Src'Last then
+            I := I + 1;
+         end if;
+         return Conv.Unescaped (Src (Start .. Body_Last));
+      end;
    end Read_String;
 
    --  A bare JSON value at I (number, true/false/null, object, array)
@@ -141,5 +138,7 @@ begin
          I := I + 1;
       end if;
    end loop;
-   return Buf (1 .. N);
+   return Answer : constant String := Buf (1 .. N) do
+      Free_Text (Held);
+   end return;
 end Params_Of;

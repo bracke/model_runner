@@ -15,6 +15,8 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
+with Ada.Real_Time;
+with Ada.Unchecked_Deallocation;
 
 with AUnit.Assertions;
 
@@ -7411,6 +7413,69 @@ package body Tests.Inference_Cases is
       end loop;
    end Kept_States_Survive_A_Save;
 
+   --  A draft whose context is shorter than the target's -- a draft
+   --  model trained shorter, opened at its own length -- stops reading
+   --  where it is full and the run goes on: it ended as an error while the
+   --  target had room, and the text is the target's own either way.
+   procedure A_Short_Draft_Does_Not_End_The_Run
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Gen renames Model_Runner.Generation;
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 256);
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+         Live, Alone : L.Session;
+         Short : aliased L.Session;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         Drafted, Plain : Gen.Result;
+         Status  : E.Error_Info;
+         Prompt  : constant String :=
+           "abbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabba";
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, 256, Status => Status);
+         L.Open (Alone, Under.Ready, 256, Status => Status);
+         L.Open (Short, Under.Ready, 24, Status => Status);
+         Assert (E.Is_Ok (Status), "the short draft session did not open");
+         Model_Runner.Stops.Open (Stop);
+         Request.Max_Tokens := 24;
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+         Request.Retain_Text := True;
+         Request.Draft_Tokens := 3;
+         Gen.Generate
+           (Under.Ready, Live, Prompt, Request, Stop, null, null,
+            null, null, null, null,
+            Draft => Under.Ready'Unchecked_Access,
+            Draft_Session => Short'Unchecked_Access,
+            Outcome => Drafted);
+         Assert (not Gen."=" (Drafted.Reason, Gen.Runtime_Error),
+                 "a draft with less room than the target ended the run: "
+                 & E.Error_Code'Image (Drafted.Error.Code) & " " & E.Text_Of (Drafted.Error, "detail"));
+         Request.Draft_Tokens := 0;
+         Gen.Generate
+           (Under.Ready, Alone, Prompt, Request, Stop, null, null,
+            null, null, null, null, Outcome => Plain);
+         Assert (Gen.Generated_Text (Drafted) = Gen.Generated_Text (Plain),
+                 "a short draft changed the text: " & Gen.Generated_Text (Drafted)
+                 & " against " & Gen.Generated_Text (Plain));
+         Gen.Release (Drafted);
+         Gen.Release (Plain);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Short);
+         L.Close (Alone);
+         L.Close (Live);
+      end;
+      B.Free (Image);
+   end A_Short_Draft_Does_Not_End_The_Run;
+
    --  A prompt the session holds whole -- read before, nothing generated
    --  past it -- is asked again: its last token is read again for the
    --  distribution the first draw is from, and the run says what a fresh
@@ -10065,12 +10130,17 @@ package body Tests.Inference_Cases is
             Vocab.Encode
               (Words, "a</s>b", True, False, Mine, Mine_N, Status);
             Assert (E.Is_Ok (Status), "the engine refused a control token");
-            Assert (Mine_N = 4,
+            --  And the text after it begun again, its word marker in
+            --  front, as llama.cpp writes the stretch after a marker.
+            Assert (Mine_N = 5,
                     "a control token in the text was not one token:"
-                    & Natural'Image (Mine_N) & " tokens where four were due");
+                    & Natural'Image (Mine_N) & " tokens where five were due");
             Assert (Mine (1) = 1 and then Mine (2) = 9
-                    and then Mine (3) = 2 and then Mine (4) = 5,
-                    "the control token did not come back as itself");
+                    and then Mine (3) = 2
+                    and then Mine (4) = Vocab.Find (Words, Character'Val (16#E2#) & Character'Val (16#96#)
+                                                     & Character'Val (16#81#))
+                    and then Mine (5) = 5,
+                    "the control token did not come back as itself, or the text after it not begun again");
          end;
 
          Reference_Tokenizer.Close (Second);
@@ -10427,6 +10497,26 @@ package body Tests.Inference_Cases is
                   end;
                end loop;
 
+               --  And long runs -- of digits, of blanks, of line ends -- at
+               --  once under every rule: a rule that takes a few of a run
+               --  and asks again walked the rest of it each time.
+               declare
+                  type Ends_Room is access Vocab.Piece_Ends;
+                  procedure Free is new Ada.Unchecked_Deallocation (Vocab.Piece_Ends, Ends_Room);
+                  Long  : constant Natural := 200_000;
+                  Ends  : Ends_Room := new Vocab.Piece_Ends (1 .. Long + 1);
+                  Used  : Natural;
+                  Begun : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+                  use type Ada.Real_Time.Time;
+               begin
+                  Vocab.Cut (Words, [1 .. Long => '7'], Ends.all, Used, Status);
+                  Vocab.Cut (Words, [1 .. Long => ' '], Ends.all, Used, Status);
+                  Vocab.Cut (Words, [1 .. Long => ASCII.LF], Ends.all, Used, Status);
+                  Assert (Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Begun) < 10.0,
+                          "under " & Name.all & " long runs took past ten seconds to cut");
+                  Free (Ends);
+               end;
+
                Reference_Tokenizer.Close (Second);
                Vocab.Close (Words);
                Containers.Close (Parsed);
@@ -10603,6 +10693,24 @@ package body Tests.Inference_Cases is
                     & E.Error_Code'Image (Status.Code));
             Assert (Last >= 3, "the prompt made too few tokens");
             Assert (Tokens (1) = 1, "the beginning token was not prepended");
+
+            --  A piece of any length: a run of one letter longer than the
+            --  bound the quadratic merge kept is read, and read at once.
+            declare
+               type Room is access Vocab.Token_Array;
+               procedure Free_Tokens is new Ada.Unchecked_Deallocation (Vocab.Token_Array, Room);
+               Many   : Room := new Vocab.Token_Array (1 .. 100_002);
+               Count  : Natural;
+               Begun  : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+               use type Ada.Real_Time.Time;
+            begin
+               Vocab.Encode (Words.all, [1 .. 100_000 => 'a'], False, False, Many.all, Count, Status);
+               Assert (E.Is_Ok (Status) and then Count > 0
+                       and then Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Begun) < 10.0,
+                       "a run of a hundred thousand letters was refused, or took past ten seconds: "
+                       & E.Error_Code'Image (Status.Code));
+               Free_Tokens (Many);
+            end;
 
             --  The mark that defuses a marker in a message is no text to a
             --  byte-pair vocabulary either: the prompt with it is the
@@ -16382,6 +16490,9 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Catches_Up_With_A_Reused_Prefix'Access,
          "a drafted run on a reused prefix brings its draft up to it and "
          & "says what the target says alone");
+      Register_Routine
+        (T, A_Short_Draft_Does_Not_End_The_Run'Access,
+         "a draft with less room than the target stops reading, and the run says what the target says");
       Register_Routine
         (T, A_Slid_Window_Rewinds_To_The_Front'Access,
          "a rewind into what a sliding window let go is refused, and one to the front starts it again");

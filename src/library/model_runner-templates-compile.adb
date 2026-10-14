@@ -1371,10 +1371,14 @@ begin
                  and then Model_Runner.Text.Trim
                             (Source (Body_First .. Body_Last)) = "raw"
                then
-                  --  Everything up to the endraw is text, tags and all.
+                  --  Everything up to the endraw is text, tags and all. The
+                  --  raw tag's own '-' strips what follows it, as any tag's
+                  --  does; the endraw's strip the text before it and after.
                   declare
+                     Open_End : constant Natural := Scan;
                      At_End : Natural := Scan + 2;
                      Found  : Natural := 0;
+                     Close  : Ada.Strings.Unbounded.Unbounded_String;
                   begin
                      while At_End + 1 <= Source'Last loop
                         if Source (At_End .. At_End + 1) = "{%" then
@@ -1386,13 +1390,21 @@ begin
                               loop
                                  Shut := Shut + 1;
                               end loop;
+                              --  endraw with its markers, spaced or not:
+                              --  {%- endraw %} as much as {%-endraw%}.
                               if Shut + 1 <= Source'Last
                                 and then Model_Runner.Text.Trim
-                                           (Source (At_End + 2 .. Shut - 1))
-                                         in "endraw" | "-endraw" | "endraw-"
-                                            | "-endraw-"
+                                           (Source (At_End + 2 .. Shut - 1)) /= ""
+                                and then Model_Runner.Text.Trim
+                                           (Ada.Strings.Fixed.Trim
+                                              (Model_Runner.Text.Trim (Source (At_End + 2 .. Shut - 1)),
+                                               Ada.Strings.Maps.To_Set ("-+"),
+                                               Ada.Strings.Maps.To_Set ("-+")))
+                                         = "endraw"
                               then
                                  Found := At_End;
+                                 Close := Ada.Strings.Unbounded.To_Unbounded_String
+                                   (Model_Runner.Text.Trim (Source (At_End + 2 .. Shut - 1)));
                                  Scan := Shut;
                                  exit;
                               end if;
@@ -1405,15 +1417,33 @@ begin
                         return;
                      end if;
                      declare
-                        Raw_First : constant Natural :=
-                          Line_After (Body_Last + 3, True);
+                        Closing : constant String := Ada.Strings.Unbounded.To_String (Close);
+                        Raw_First : Natural := Line_After (Open_End + 2, True);
+                        Raw_Last  : Natural := Found - 1;
                         Offset, Length : Natural;
                         Stored : Boolean;
                         Where  : Natural;
                      begin
-                        if Found > Raw_First then
+                        if Trim_After then
+                           Raw_First := Open_End + 2;
+                           while Raw_First <= Raw_Last
+                             and then Source (Raw_First) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+                           loop
+                              Raw_First := Raw_First + 1;
+                           end loop;
+                        end if;
+                        if Closing (Closing'First) = '-' then
+                           while Raw_Last >= Raw_First
+                             and then Source (Raw_Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+                           loop
+                              Raw_Last := Raw_Last - 1;
+                           end loop;
+                        end if;
+                        --  The text after the endraw is the endraw's to strip.
+                        Trim_Next := Closing (Closing'Last) = '-';
+                        if Raw_Last >= Raw_First then
                            Store_Literal
-                             (Source (Raw_First .. Found - 1), Offset,
+                             (Source (Raw_First .. Raw_Last), Offset,
                               Length, Stored);
                            if not Stored then
                               Fail (E.Template_Too_Large, "literal");

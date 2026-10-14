@@ -38,9 +38,12 @@ begin
    --  to move and keeps going; its linear layers are passed over below,
    --  where Jamba's, holding no cells, had the layer after them moved
    --  twice.
+   --  Nor one that keeps a ring of its states for rewinds: the ring is
+   --  read by position, and positions shift where the states do not.
    if Hybrid (Settings.Kind)
      or else ((Item.Conv_State /= null or else Item.Delta_State /= null)
-              and then (for some Layer in 0 .. Settings.Layers - 1 => not Linear (Settings, Layer)))
+              and then ((for some Layer in 0 .. Settings.Layers - 1 => not Linear (Settings, Layer))
+                        or else Item.Kept_States > 0))
    then
       Status := E.Make (E.Arch_Unsupported_Feature);
       E.Add_Text (Status, "feature", "shift", E.Param_Identifier);

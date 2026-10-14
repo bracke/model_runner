@@ -3502,6 +3502,59 @@ package body Tests.CLI_Cases is
    --  or read back and then re-read on top of itself, would produce text
    --  that is plausible and different. Both runs below are greedy, so the
    --  two texts have to be the same text.
+   --  A reranker's pair is the query and the document whole: a document
+   --  shorter than the query was cut off -- or refused for a buffer the
+   --  pair did not fit -- where the room was the document's alone, so one
+   --  document scores as it does among several.
+   procedure A_Rerank_Pair_Is_Whole
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Model : constant String := "obj/rerank-model.gguf";
+
+      function Scored (Prompt : String) return String is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "embed");
+         Add (Source, Model);
+         Add (Source, "--query");
+         Add (Source, "a b a b a b a b");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Ran (Source, Status);
+         Assert (Status = 0, "a rerank of <" & Prompt & "> failed with status" & Natural'Image (Status));
+         return Last_Output;
+      end Scored;
+   begin
+      declare
+         Image : Model_Runner.Bytes.Byte_Array_Access;
+         File  : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Ranking => True);
+         Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Model);
+         declare
+            Bytes : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+              with Import, Address => Image.all'Address;
+         begin
+            Ada.Streams.Stream_IO.Write (File, Bytes);
+         end;
+         Ada.Streams.Stream_IO.Close (File);
+         Model_Runner.Bytes.Free (Image);
+      end;
+      declare
+         One  : constant String := Scored ("ab");
+         Both : constant String := Scored ("ab" & ASCII.LF & "ba");
+         Cut  : constant Natural := Ada.Strings.Fixed.Index (Both, [1 => ASCII.LF]);
+         Own  : constant Natural := Ada.Strings.Fixed.Index (One & ASCII.LF, [1 => ASCII.LF]);
+      begin
+         Assert (One'Length > 0 and then Cut > 0
+                 and then One (One'First .. Own - 1) = Both (Both'First .. Cut - 1),
+                 "a document scored alone, <" & One & ">, is not the score it has among others: <" & Both & ">");
+      end;
+      Ada.Directories.Delete_File (Model);
+   end A_Rerank_Pair_Is_Whole;
+
    procedure Saved_Context_Changes_Nothing
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -13829,6 +13882,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Tab_Completes_Commands'Access,
          "Tab at the prompt completes a command, its action and its arguments");
+      Register_Routine
+        (T, A_Rerank_Pair_Is_Whole'Access,
+         "a reranker scores the query and a short document whole, alone as among others");
       Register_Routine
         (T, Hub_Names_Stay_Inside'Access,
          "a file the hub lists is written only where its name stays inside the models directory");

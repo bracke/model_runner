@@ -75,6 +75,17 @@ begin
    if Scan > Text'Last or else Text (Scan) /= ')' then
       return;
    end if;
+
+   --  A cut with nothing in its brackets cuts at every run of white
+   --  space, which is not a marker this engine cuts at: refused, as an
+   --  unreadable method is, rather than cut at the four characters a
+   --  strip takes off.
+   if Doing = Method_Split_First and then Kept = 0 then
+      Result := Refused (Text (From .. Scan));
+      From := Scan + 1;
+      Ok := True;
+      return;
+   end if;
    Scan := Scan + 1;
 
    --  A cut answers with a list, and a template takes one side of it.

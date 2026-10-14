@@ -321,6 +321,11 @@ package body Model_Runner.CLI.Checkpoint is
                E.Add_Text (Status, "path", Path, E.Param_Path);
             end if;
          end;
+      exception
+         when others =>
+            --  The text given back whatever stopped the read.
+            Free (Held);
+            raise;
       end;
    exception
       when others =>

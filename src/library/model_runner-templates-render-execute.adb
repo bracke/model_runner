@@ -71,12 +71,16 @@ begin
          when Op_Jump =>
             Position := Step.Target;
 
-         when Op_Break =>
-            Breaking := True;
-            Position := Step.Target;
-
-         when Op_Continue =>
-            Position := Step.Target;
+         when Op_Break | Op_Continue =>
+            --  Not out of a set block opened inside the loop: refused, as
+            --  the language has no such jump, rather than leave it open.
+            if Loop_Depth > 0 and then Capture_Depth > Loops (Loop_Depth).Captures_At then
+               Refuse (Step.Offset, 0, E.Template_Unsupported_Construct);
+               Position := Item.Program_Used + 1;
+            else
+               Breaking := Step.Op = Op_Break;
+               Position := Step.Target;
+            end if;
 
          when Op_Set_Caller =>
             Pending_Caller := Step.Offset;
@@ -156,7 +160,17 @@ begin
             declare
                Asked : constant Natural := Asked_Count;
             begin
-               if Asked = 0 then
+               --  A message bound as a mapping -- a loop over a filtered
+               --  list of them -- is no turn to count the calls of: read
+               --  as the loop's turn, its calls were another turn's, or
+               --  none. Refused, as a loop over such a list is, rather
+               --  than written without them.
+               if Message_As_Data then
+                  Refuse (Item.Names (Step.Offset).Offset,
+                          Item.Names (Step.Offset).Length,
+                          E.Template_Unsupported_Construct);
+                  Position := Step.Target;
+               elsif Asked = 0 then
                   Position := Step.Target;
                else
                   Call_Message := Bound_Message;
@@ -204,6 +218,10 @@ begin
             --  and this counts to where it was told to at the start.
             declare
                Bounds : Natural renames Step.Value_At;
+               Outer  : constant Loop_State :=
+                 (Kind => Legacy_Range, Outer_Slot => Range_Slot, Outer_At => Range_At,
+                  Outer_Start => Range_Start, Outer_Stop => Range_Stop, Outer_Step => Range_Step,
+                  others => <>);
             begin
                Range_Slot := Step.Offset;
                Range_At :=
@@ -215,12 +233,18 @@ begin
                  Number_Of (Value_Of (Item.Operands.all (Bounds + 2)));
 
                if Range_Step = 0 or else not Counting_On then
+                  --  No loop: the one around it counts on as it was.
+                  Range_Slot := Outer.Outer_Slot;
+                  Range_At := Outer.Outer_At;
+                  Range_Start := Outer.Outer_Start;
+                  Range_Stop := Outer.Outer_Stop;
+                  Range_Step := Outer.Outer_Step;
                   Position := Step.Target;
                else
                   Assign_Text
                     (Range_Slot, Model_Runner.Text.Image (Range_At),
                      Value_Number);
-                  Push_Loop ((Kind => Legacy_Range, others => <>));
+                  Push_Loop (Outer);
                   Position := Position + 1;
                end if;
             end;

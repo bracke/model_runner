@@ -5,6 +5,7 @@ with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.Strings.Unbounded;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 with Ada.Calendar.Time_Zones;
 
 with Interfaces;
@@ -1148,6 +1149,85 @@ package body Tests.Template_Cases is
          & """required"": [""a"", ""op""]}}}]",
          Status);
       Assert (E.Is_Ok (Status), "the tool definitions would not read");
+
+      --  Text is true when it is not empty, whatever it says: a tool's "0"
+      --  or a user's "false" is a turn with something in it.
+      Same ("{% if '0' %}yes{% endif %}{% if 'false' %}!{% endif %}{% if '' %}no{% endif %}", "yes!",
+            "a text that reads as a number or a no was taken for nothing");
+      --  A counting loop's own first, last and index, not the message
+      --  loop's around it or the one no loop has.
+      Same ("{% for i in range(3) %}{% if not loop.first %}, {% endif %}{{ loop.index0 }}{{ i }}"
+            & "{% if loop.last %}.{% endif %}{% endfor %}", "00, 11, 22.",
+            "a counting loop's first, last and index were another loop's");
+      --  One inside another counts as two, the outer on from where it was.
+      Same ("{% for i in range(2) %}{% for j in range(3) %}{{ i }}{{ j }} {% endfor %}{% endfor %}",
+            "00 01 02 10 11 12 ", "a counting loop inside another ran the outer one on from the inner");
+      --  A marker written as escapes in a part's text, or in a call's
+      --  arguments, is seen by the content filter as the marker it reads
+      --  as: \u003c|x|> passed the filter and was <|x|> once decoded.
+      declare
+         function Lit (Text : String) return String is
+            Cut : constant Natural := Ada.Strings.Fixed.Index (Text, "<|x|>");
+         begin
+            return (if Cut = 0 then Text else Text (Text'First .. Cut - 1) & "[x]" & Text (Cut + 5 .. Text'Last));
+         end Lit;
+         Item   : Tmpl.Compiled;
+         Talk   : Conv.History;
+         Room   : String (1 .. 4096);
+         Last   : Natural;
+      begin
+         Tmpl.Compile (Item, "{% for m in messages %}{{ m.content }}|{% endfor %}", Status => Status);
+         Conv.Open (Talk, Status => Status);
+         Conv.Append_Parts
+           (Talk, Conv.User_Role, "[{""type"": ""text"", ""text"": ""say \u003c|x|> now""}]", Status);
+         Tmpl.Render (Item, Talk, "", "", False, Room, Last, Status,
+                      Image_Marker => "<img>", Literal => Lit'Access);
+         Assert (E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Room (1 .. Last), "[x]") > 0
+                 and then Ada.Strings.Fixed.Index (Room (1 .. Last), "<|x|>") = 0,
+                 "an escaped marker in a part passed the content filter: " & Room (1 .. Last));
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+      end;
+
+      --  A slice's ends both against the whole: from the end as well.
+      Same ("{{ 'abcdef'[-3:-1] }}|{{ 'abcdef'[1:-1] }}|{{ 'abcdef'[-2:] }}", "de|bcde|ef",
+            "a slice counted from the end was measured against the cut text");
+      --  A cut at nothing named is refused, not cut at a marker made up.
+      declare
+         Got : constant String := Rendered ("{{ 'a b'.split()[0] }}");
+      begin
+         Assert (Got'Length >= 7 and then Got (Got'First .. Got'First + 6) in "compile" | "render:",
+                 "a cut at no marker was taken: " & Got);
+      end;
+      --  A raw block's own markers strip as a tag's do: the raw tag's
+      --  what follows it, the endraw's what comes before and after.
+      Same ("{% raw %}a{{b}}{% endraw %}|{% raw -%}  x {{y}} {%- endraw %}|", "a{{b}}|x {{y}}|",
+            "a raw block's text began with a stray brace or kept what its markers strip");
+      --  A loop's jump out of a set block opened in it is refused, not
+      --  left with the block open round after round.
+      declare
+         Got : constant String :=
+           Rendered ("{% for i in range(2) %}{% set x %}a{% continue %}b{% endset %}{% endfor %}");
+      begin
+         Assert (Got'Length >= 7 and then Got (Got'First .. Got'First + 6) in "compile" | "render:",
+                 "a continue out of a set block was taken: " & Got);
+      end;
+      --  A macro added to text runs once: its counting is seen once.
+      Same ("{% set ns = namespace(n=0) %}{% macro m() %}{% set ns.n = ns.n + 1 %}{{ ns.n }}{% endmacro %}"
+            & "{{ m() + '' }}", "1", "a macro added to text ran more than once");
+      --  A list of lists past any a template writes is refused where it
+      --  is read, not read until the stack is gone.
+      declare
+         Deep : constant String := "{{ " & [1 .. 24 => '['] & "1" & [1 .. 24 => ']'] & " }}";
+         Got  : constant String := Rendered (Deep);
+      begin
+         Assert (Got'Length >= 8 and then Got (Got'First .. Got'First + 6) in "compile" | "render:",
+                 "a list nested twenty-four deep was not refused: " & Got);
+      end;
+      --  Nothing however often is nothing, at once; a width past any a
+      --  template means is held to one, not put on the stack.
+      Same ("[{{ '' * 999999999999999 }}][{{ ''|indent(2000000000) }}]", "[][]",
+            "an empty text repeated, or indented, past any bound did not come back empty");
 
       --  A list written out is a value: walked, measured, indexed, asked
       --  whether it holds something, and printed as Python prints one.

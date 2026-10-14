@@ -44,17 +44,6 @@ package body Model_Runner.Tokenizer is
    --  the normalization rather than on what went into it.
    Max_Normalized : constant := 1024 * 1024;
 
-   --  Longest piece, in bytes, the byte-pair road will merge: what the
-   --  cutting makes of a word. That merge is quadratic in a piece's length
-   --  and keeps the piece on the stack, so this keeps one hostile word from
-   --  costing unbounded time or the stack; no word of a text anybody writes
-   --  comes near it. It bounded the whole text once, and a prompt of
-   --  sixty-five thousand characters -- some thirteen thousand tokens, a
-   --  third of a long context -- was refused for it; the SentencePiece
-   --  road's merge, the one that was quadratic in the whole text, is a
-   --  logarithm a merge now, and the other roads are linear.
-   Max_Symbols : constant := 65_536;
-
    --  How many pieces one word may be spelled from on the WordPiece road.
    --  A word longer than this is one unknown token rather than a spelling
    --  that grows with the input: the bound refuses rather than allocates,
@@ -100,6 +89,14 @@ package body Model_Runner.Tokenizer is
       Item.Merge_Spaces := False;
       Item.Longest_Piece := 0;
       Item.Unknown_Cost := 0.0;
+      --  And what a load sets only where a file says so: a vocabulary
+      --  loaded again in its place kept whole-word lookup, and the flags,
+      --  of the one before.
+      Item.Whole_First := False;
+      Item.Add_Beginning := True;
+      Item.Add_End := False;
+      Item.Cutting := Rule_Default;
+      Item.Model_Text := Model_Runner.Text.Empty;
 
       if Item.Charsmap /= null then
          if Item.Charsmap.Nodes /= null then
@@ -351,6 +348,11 @@ package body Model_Runner.Tokenizer is
       Has_Types  : Boolean := False;
       Scratch    : E.Error_Info;
       Number     : Long_Long_Integer;
+
+      --  Whether the byte-pair rule the file names is one whose files
+      --  begin a text with a marker where they do not say: the Llama 3
+      --  family's, Tekken's and Chameleon's, as llama.cpp reads them.
+      Rule_Begins : Boolean := False;
    begin
       Close (Item);
 
@@ -462,6 +464,7 @@ package body Model_Runner.Tokenizer is
                   --  it; the four below cut the same way and do not.
                   Item.Cutting := Rule_Llama3;
                   Item.Whole_First := True;
+                  Rule_Begins := True;
                elsif Cutting = "dbrx" or else Cutting = "smaug-bpe"
                  or else Cutting = "glm4" or else Cutting = "chatglm-bpe"
                then
@@ -500,6 +503,7 @@ package body Model_Runner.Tokenizer is
                elsif Cutting = "tekken" then
                   Item.Cutting := Rule_Tekken;
                   Item.Whole_First := True;
+                  Rule_Begins := True;
                elsif Cutting = "gpt-4o" or else Cutting = "llama4"
                  or else Cutting = "kanana2" or else Cutting = "talkie"
                  or else Cutting = "minimax-m2"
@@ -538,6 +542,7 @@ package body Model_Runner.Tokenizer is
                   Item.Cutting := Rule_SuperBPE;
                elsif Cutting = "chameleon" then
                   Item.Cutting := Rule_Chameleon;
+                  Rule_Begins := True;
                elsif Cutting = "smollm" or else Cutting = "starcoder"
                  or else Cutting = "refact" or else Cutting = "command-r"
                  or else Cutting = "codeshell" or else Cutting = "exaone"
@@ -744,7 +749,12 @@ package body Model_Runner.Tokenizer is
                      else Last));
             end if;
 
+            --  Over the scores that are numbers: one of -inf made the
+            --  unknown's cost -inf, and no path through an unknown was ever
+            --  better than none.
             if Entry_Value.Class = Class_Normal
+              and then Entry_Value.Score = Entry_Value.Score
+              and then Entry_Value.Score > Float'First
               and then Entry_Value.Score < Item.Unknown_Cost
             then
                Item.Unknown_Cost := Entry_Value.Score;
@@ -764,9 +774,13 @@ package body Model_Runner.Tokenizer is
                      Where    : Token_Maps.Cursor;
                      Inserted : Boolean;
                   begin
-                     --  A repeated piece keeps its first, lower id.
+                     --  A repeated piece is its last id, as llama.cpp reads
+                     --  one: the text a later entry repeats is that entry's.
                      Item.Lookup.Insert
                        (Text, Token_Id (Index - 1), Where, Inserted);
+                     if not Inserted then
+                        Token_Maps.Replace_Element (Item.Lookup, Where, Token_Id (Index - 1));
+                     end if;
                   end;
                end if;
             end;
@@ -945,10 +959,25 @@ package body Model_Runner.Tokenizer is
       declare
          Flag : Boolean;
       begin
-         if Item.Model = Kind_WordPiece then
-            Item.Add_Beginning := True;
-            Item.Add_End := True;
-         end if;
+         --  What each road's files mean when they say nothing, as llama.cpp
+         --  reads them: SentencePiece a marker in front; byte-pair none,
+         --  but for the rules above; unigram (T5, XLM-R) one at the end.
+         --  A GPT-2, Falcon or StarCoder file that named its beginning
+         --  token and no flag had one put before every text here.
+         case Item.Model is
+            when Kind_WordPiece =>
+               Item.Add_Beginning := True;
+               Item.Add_End := True;
+            when Kind_BPE =>
+               Item.Add_Beginning := Rule_Begins;
+               Item.Add_End := False;
+            when Kind_Unigram =>
+               Item.Add_Beginning := False;
+               Item.Add_End := True;
+            when others =>
+               Item.Add_Beginning := True;
+               Item.Add_End := False;
+         end case;
 
          Containers.Get_Boolean
            (Source, "tokenizer.ggml.add_bos_token", Flag, Scratch);
@@ -1118,6 +1147,13 @@ package body Model_Runner.Tokenizer is
             Containers.Get_Array_Length
               (Source, "tokenizer.ggml.precompiled_charsmap",
                Model_Runner.GGUF.Value_UInt8, Bytes, Scratch);
+            --  Written as signed bytes by some converters, which llama.cpp
+            --  takes the same: the bytes are the bytes.
+            if E.Is_Error (Scratch) and then Scratch.Code /= E.GGUF_Missing_Metadata_Key then
+               Containers.Get_Array_Length
+                 (Source, "tokenizer.ggml.precompiled_charsmap",
+                  Model_Runner.GGUF.Value_Int8, Bytes, Scratch);
+            end if;
 
             if E.Is_Error (Scratch)
               and then Scratch.Code /= E.GGUF_Missing_Metadata_Key
@@ -1147,7 +1183,7 @@ package body Model_Runner.Tokenizer is
                         return;
                      end if;
                      Whole (Index) :=
-                       Character'Val (Natural (Value) mod 256);
+                       Character'Val (Natural (Value mod 256));
                   end loop;
 
                   --  The trie's length, little-endian as the format writes
@@ -1899,19 +1935,18 @@ package body Model_Runner.Tokenizer is
             return;
          end if;
 
-         for Position in Piece'Range loop
-            declare
-               Value : constant Natural := Character'Pos (Piece (Position));
-               Byte_Token : constant Token_Id := Item.Byte_Tokens (Value);
-            begin
-               if Byte_Token /= No_Token then
-                  Emit (Byte_Token, Ok);
-               elsif Item.Unknown /= No_Token then
-                  Emit (Item.Unknown, Ok);
-               end if;
+         --  Its bytes, where the vocabulary has a token for every one of
+         --  them; else one unknown for the symbol, as SentencePiece writes
+         --  one for a piece it cannot spell -- not one a byte, three for a
+         --  CJK character.
+         if (for all Letter of Piece => Item.Byte_Tokens (Character'Pos (Letter)) /= No_Token) then
+            for Letter of Piece loop
+               Emit (Item.Byte_Tokens (Character'Pos (Letter)), Ok);
                exit when not Ok;
-            end;
-         end loop;
+            end loop;
+         elsif Item.Unknown /= No_Token then
+            Emit (Item.Unknown, Ok);
+         end if;
       end Emit_Symbol;
 
       Ok : Boolean;
@@ -2063,9 +2098,19 @@ package body Model_Runner.Tokenizer is
             begin
                while From <= Word'Last loop
                   declare
-                     Stop  : Natural := Word'Last;
+                     --  No longer than the longest piece the vocabulary
+                     --  holds, at a character: a word of a hundred thousand
+                     --  letters was tried at every length from the whole
+                     --  down, for every piece of it.
+                     Stop  : Natural :=
+                       Natural'Min (Word'Last, From + Natural'Max (Item.Longest_Piece, 1) - 1);
                      Found : Token_Id := No_Token;
                   begin
+                     while Stop >= From and then Stop < Word'Last
+                       and then Character'Pos (Word (Stop + 1)) in 128 .. 191
+                     loop
+                        Stop := Stop - 1;
+                     end loop;
                      --  Longest first, shrinking by a code point at a time
                      --  so that a piece never ends inside a character.
                      while Stop >= From loop
@@ -2221,15 +2266,120 @@ package body Model_Runner.Tokenizer is
             end Put;
 
             procedure Emit (Piece : String) is
+               type Text_Room is access String;
+               type Index_Room is array (Positive range <>) of Natural;
+               type Index_Access is access Index_Room;
+               procedure Free is new Ada.Unchecked_Deallocation (String, Text_Room);
+               procedure Free is new Ada.Unchecked_Deallocation (Index_Room, Index_Access);
+
+               --  A candidate merge: the pair's rank, its left symbol, the
+               --  one right of it, and how long the two were together when
+               --  it was found -- a pair either has grown since is stale.
+               type Pair is record
+                  Rank, Left, Right, Size : Natural := 0;
+               end record;
+               type Pair_Room is array (Positive range <>) of Pair;
+               type Pair_Access is access Pair_Room;
+               procedure Free is new Ada.Unchecked_Deallocation (Pair_Room, Pair_Access);
+
                --  Every byte as its printable stand-in, which is the form
-               --  the vocabulary and the merge table are written in.
-               Mapped : String (1 .. Piece'Length * 3);
+               --  the vocabulary and the merge table are written in; on the
+               --  heap, as everything here is sized by the piece, and a
+               --  piece -- a run of digits, of blanks -- may be megabytes.
+               Mapped : Text_Room := new String (1 .. Piece'Length * 3);
                Filled : Natural := 0;
 
-               --  One symbol per stand-in character, merged in place.
-               Starts : array (1 .. Piece'Length + 1) of Natural;
-               Ends   : array (1 .. Piece'Length + 1) of Natural;
+               --  One symbol per stand-in character, linked to its
+               --  neighbours; a merged one is linked past.
                Count  : Natural := 0;
+               Starts : Index_Access := new Index_Room (1 .. Piece'Length + 1);
+               Ends   : Index_Access := new Index_Room (1 .. Piece'Length + 1);
+               Prev   : Index_Access := new Index_Room (1 .. Piece'Length + 1);
+               Next   : Index_Access := new Index_Room (1 .. Piece'Length + 1);
+
+               --  The candidates, a heap ordered by rank and then by where
+               --  the pair stands, leftmost first -- llama.cpp's order, and
+               --  the order a pass that took the first lowest pair kept.
+               Heap   : Pair_Access := new Pair_Room (1 .. 3 * Piece'Length + 3);
+               Held   : Natural := 0;
+
+               function Before (A, B : Pair) return Boolean is
+                 (A.Rank < B.Rank or else (A.Rank = B.Rank and then A.Left < B.Left));
+
+               procedure Push (Item_Pair : Pair) is
+                  At_Pos : Natural;
+               begin
+                  Held := Held + 1;
+                  Heap (Held) := Item_Pair;
+                  At_Pos := Held;
+                  while At_Pos > 1 and then Before (Heap (At_Pos), Heap (At_Pos / 2)) loop
+                     declare
+                        Swap : constant Pair := Heap (At_Pos / 2);
+                     begin
+                        Heap (At_Pos / 2) := Heap (At_Pos);
+                        Heap (At_Pos) := Swap;
+                     end;
+                     At_Pos := At_Pos / 2;
+                  end loop;
+               end Push;
+
+               procedure Pop (Item_Pair : out Pair) is
+                  At_Pos : Natural := 1;
+               begin
+                  Item_Pair := Heap (1);
+                  Heap (1) := Heap (Held);
+                  Held := Held - 1;
+                  loop
+                     declare
+                        Least : Natural := At_Pos;
+                     begin
+                        if 2 * At_Pos <= Held and then Before (Heap (2 * At_Pos), Heap (Least)) then
+                           Least := 2 * At_Pos;
+                        end if;
+                        if 2 * At_Pos + 1 <= Held and then Before (Heap (2 * At_Pos + 1), Heap (Least)) then
+                           Least := 2 * At_Pos + 1;
+                        end if;
+                        exit when Least = At_Pos;
+                        declare
+                           Swap : constant Pair := Heap (Least);
+                        begin
+                           Heap (Least) := Heap (At_Pos);
+                           Heap (At_Pos) := Swap;
+                        end;
+                        At_Pos := Least;
+                     end;
+                  end loop;
+               end Pop;
+
+               --  The pair a symbol makes with the one after it, where the
+               --  merge table has it.
+               procedure Offer (Left : Natural) is
+                  Right : constant Natural := (if Left = 0 then 0 else Next (Left));
+               begin
+                  if Left = 0 or else Right = 0 then
+                     return;
+                  end if;
+                  declare
+                     Key : constant String :=
+                       Mapped (Starts (Left) .. Ends (Left)) & " " & Mapped (Starts (Right) .. Ends (Right));
+                     Found : constant Merge_Maps.Cursor := Item.Merges.Find (Key);
+                  begin
+                     if Merge_Maps.Has_Element (Found) then
+                        Push ((Rank => Merge_Maps.Element (Found), Left => Left, Right => Right,
+                               Size => Ends (Right) - Starts (Left) + 1));
+                     end if;
+                  end;
+               end Offer;
+
+               procedure Give_Back is
+               begin
+                  Free (Mapped);
+                  Free (Starts);
+                  Free (Ends);
+                  Free (Prev);
+                  Free (Next);
+                  Free (Heap);
+               end Give_Back;
             begin
                for Letter of Piece loop
                   declare
@@ -2242,6 +2392,11 @@ package body Model_Runner.Tokenizer is
                      Mapped (Filled + 1 .. Filled + One'Length) := One;
                      Filled := Filled + One'Length;
                      Ends (Count) := Filled;
+                     Prev (Count) := Count - 1;
+                     Next (Count) := 0;
+                     if Count > 1 then
+                        Next (Count - 1) := Count;
+                     end if;
                   end;
                end loop;
 
@@ -2254,89 +2409,120 @@ package body Model_Runner.Tokenizer is
                  and then Find (Item, Mapped (1 .. Filled)) /= No_Token
                then
                   Ends (1) := Filled;
+                  Next (1) := 0;
                   Count := 1;
                end if;
 
                --  Merge the lowest-ranked adjacent pair until none is in the
-               --  table. Written plainly, a pass per merge: a vocabulary's
-               --  pieces are short, and the alternative is a heap for what is
-               --  usually fewer than ten symbols.
-               loop
-                  declare
-                     Best      : Natural := 0;
-                     Best_Rank : Natural := Natural'Last;
-                  begin
-                     for Index in 1 .. Count - 1 loop
-                        declare
-                           Key : constant String :=
-                             Mapped (Starts (Index) .. Ends (Index)) & " "
-                             & Mapped (Starts (Index + 1)
-                                       .. Ends (Index + 1));
-                           Found : constant Merge_Maps.Cursor :=
-                             Item.Merges.Find (Key);
-                        begin
-                           if Merge_Maps.Has_Element (Found)
-                             and then Merge_Maps.Element (Found) < Best_Rank
-                           then
-                              Best := Index;
-                              Best_Rank := Merge_Maps.Element (Found);
+               --  table: every pair offered once, and the two a merge makes
+               --  with its new neighbours offered as it is made. A pass over
+               --  every pair a merge was a piece's length squared, which a
+               --  run of ten thousand letters took seconds over.
+               if Count > 1 then
+                  for Left in 1 .. Count - 1 loop
+                     Offer (Left);
+                  end loop;
+                  while Held > 0 loop
+                     declare
+                        Best : Pair;
+                     begin
+                        Pop (Best);
+                        --  Still the pair it was: both there, side by side,
+                        --  neither grown since.
+                        if Ends (Best.Left) >= Starts (Best.Left)
+                          and then Next (Best.Left) = Best.Right
+                          and then Ends (Best.Right) - Starts (Best.Left) + 1 = Best.Size
+                        then
+                           Ends (Best.Left) := Ends (Best.Right);
+                           Next (Best.Left) := Next (Best.Right);
+                           if Next (Best.Right) /= 0 then
+                              Prev (Next (Best.Right)) := Best.Left;
                            end if;
-                        end;
-                     end loop;
+                           --  The right one is gone: empty, linked to nothing.
+                           Ends (Best.Right) := Starts (Best.Right) - 1;
+                           Next (Best.Right) := 0;
+                           Offer (Prev (Best.Left));
+                           Offer (Best.Left);
+                        end if;
+                     end;
+                  end loop;
+               end if;
 
-                     exit when Best = 0;
+               declare
+                  Index : Natural := (if Count = 0 then 0 else 1);
+               begin
+                  while Index /= 0 loop
+                     declare
+                        Token : constant Token_Id :=
+                          Find (Item, Mapped (Starts (Index) .. Ends (Index)));
+                        --  A symbol the vocabulary does not carry. A byte-level
+                        --  vocabulary carries a piece for every one of the 256
+                        --  stand-in characters, so this cannot happen to a file
+                        --  that was written properly -- and a file that was not
+                        --  is the case this program exists to survive. It used
+                        --  to be dropped, which deleted a piece of the caller's
+                        --  own prompt without saying so.
+                        --  And where it does not carry the symbol, each of its
+                        --  stand-ins alone, as llama.cpp falls back to a byte
+                        --  a token, before it is said not carried at all.
+                        Symbol : constant String := Mapped (Starts (Index) .. Ends (Index));
+                        function Each_Carried return Boolean is
+                           At_Byte : Natural := Symbol'First;
+                           Code, Width : Natural;
+                        begin
+                           while At_Byte <= Symbol'Last loop
+                              Model_Runner.UTF8.Decode_First (Symbol (At_Byte .. Symbol'Last), Code, Width);
+                              if Width = 0 or else Find (Item, Symbol (At_Byte .. At_Byte + Width - 1)) = No_Token then
+                                 return False;
+                              end if;
+                              At_Byte := At_Byte + Width;
+                           end loop;
+                           return True;
+                        end Each_Carried;
+                     begin
+                        if Token /= No_Token then
+                           Put (Token);
+                        elsif Item.Unknown /= No_Token then
+                           Put (Item.Unknown);
+                        elsif Each_Carried then
+                           declare
+                              At_Byte : Natural := Symbol'First;
+                              Code, Width : Natural;
+                           begin
+                              while At_Byte <= Symbol'Last loop
+                                 Model_Runner.UTF8.Decode_First (Symbol (At_Byte .. Symbol'Last), Code, Width);
+                                 Put (Find (Item, Symbol (At_Byte .. At_Byte + Width - 1)));
+                                 At_Byte := At_Byte + Width;
+                              end loop;
+                           end;
+                        elsif not Refused then
+                           Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
+                           E.Add_Text
+                             (Status, "value",
+                              Mapped (Starts (Index) .. Ends (Index)),
+                              E.Param_Identifier);
+                           Refused := True;
+                        end if;
+                     end;
 
-                     --  The two become one slice, and the rest close up.
-                     Ends (Best) := Ends (Best + 1);
-                     for Index in Best + 1 .. Count - 1 loop
-                        Starts (Index) := Starts (Index + 1);
-                        Ends (Index) := Ends (Index + 1);
-                     end loop;
-                     Count := Count - 1;
-                  end;
-               end loop;
-
-               for Index in 1 .. Count loop
-                  declare
-                     Token : constant Token_Id :=
-                       Find (Item, Mapped (Starts (Index) .. Ends (Index)));
-                  begin
-                     --  A symbol the vocabulary does not carry. A byte-level
-                     --  vocabulary carries a piece for every one of the 256
-                     --  stand-in characters, so this cannot happen to a file
-                     --  that was written properly -- and a file that was not
-                     --  is the case this program exists to survive. It used
-                     --  to be dropped, which deleted a piece of the caller's
-                     --  own prompt without saying so.
-                     if Token /= No_Token then
-                        Put (Token);
-                     elsif Item.Unknown /= No_Token then
-                        Put (Item.Unknown);
-                     elsif not Refused then
-                        Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
-                        E.Add_Text
-                          (Status, "value",
-                           Mapped (Starts (Index) .. Ends (Index)),
-                           E.Param_Identifier);
-                        Refused := True;
-                     end if;
-                  end;
-
-                  exit when Refused;
-               end loop;
+                     exit when Refused;
+                     Index := Next (Index);
+                  end loop;
+               end;
+               Give_Back;
+            exception
+               when others =>
+                  Give_Back;
+                  raise;
             end Emit;
             Ends  : Cutting.Piece_Ends_Access;
             Count : Natural;
          begin
             Cutting.Cut (Text, Item.Cutting, Ends, Count);
+            --  A piece of any length: its merge is a heap's logarithm a
+            --  merge and its room on the heap, where a piece past 65,536
+            --  bytes -- a run of blank lines a file can hold -- was refused.
             for Piece in 1 .. Count loop
-               if Ends (Piece) - From + 1 > Max_Symbols then
-                  Status := E.Make (E.Tokenizer_Input_Too_Long);
-                  E.Add_Integer
-                    (Status, "limit", Long_Long_Integer (Max_Symbols));
-                  Refused := True;
-                  exit;
-               end if;
                Emit (Text (From .. Ends (Piece)));
                From := Ends (Piece) + 1;
                exit when Refused;
@@ -2459,7 +2645,15 @@ package body Model_Runner.Tokenizer is
                                 and then Class_Of (Item, Piece)
                                          /= Class_Control
                               then
-                                 if Span = Width then
+                                 --  Covered only from a boundary that is
+                                 --  reached, at a worth that is a number:
+                                 --  a piece of -inf or NaN covered nothing,
+                                 --  and the unknown's edge was left out.
+                                 if Span = Width
+                                   and then Best (At_Byte - 1).Sum > Float'First
+                                   and then Score_Of (Item, Piece) = Score_Of (Item, Piece)
+                                   and then Score_Of (Item, Piece) > Float'First
+                                 then
                                     Covered := True;
                                  end if;
 
@@ -2519,8 +2713,18 @@ package body Model_Runner.Tokenizer is
             --  Walk the edges back from the end, then reverse. A run of
             --  unknowns becomes one unknown: the model was never trained to
             --  see the same piece twice for one unreadable stretch.
+            --  Written into the target from its far end and turned round in
+            --  place: a copy the target's size on the stack overflowed it
+            --  for a text near the bound. An end no path reaches -- every
+            --  piece across a stretch unknown and no unknown to stand for
+            --  it -- is said, not walked into a token of minus one.
+            if Best (Normal'Length).Sum <= Float'First or else Best (Normal'Length).Token = No_Token then
+               Put (E.Tokenizer_Missing_Byte_Fallback);
+               Release;
+               return;
+            end if;
             declare
-               Room  : Token_Array (1 .. Target'Length);
+               Room  : Token_Array renames Target;
                Held  : Natural := 0;
                Where : Natural := Normal'Length;
                Prior_Unknown : Boolean := False;
@@ -2538,7 +2742,7 @@ package body Model_Runner.Tokenizer is
                            return;
                         end if;
                         Held := Held + 1;
-                        Room (Held) := This.Token;
+                        Room (Room'First + Held - 1) := This.Token;
                      end if;
 
                      exit when This.From = 0;
@@ -2547,8 +2751,13 @@ package body Model_Runner.Tokenizer is
                   end;
                end loop;
 
-               for Index in 1 .. Held loop
-                  Target (Target'First + Index - 1) := Room (Held - Index + 1);
+               for Index in 1 .. Held / 2 loop
+                  declare
+                     Swap : constant Token_Id := Room (Room'First + Index - 1);
+                  begin
+                     Room (Room'First + Index - 1) := Room (Room'First + Held - Index);
+                     Room (Room'First + Held - Index) := Swap;
+                  end;
                end loop;
                Last := Held;
             end;
@@ -2953,21 +3162,12 @@ package body Model_Runner.Tokenizer is
       --  inside the byte-pair road alone, which left a SentencePiece model
       --  reading its own template's end marker as a run of bytes.
       --
-      --  The dummy word marker SentencePiece puts in front goes on the first
-      --  stretch only. A stretch that follows a marker is a continuation of
-      --  the text rather than the start of it, and this way a text holding
-      --  no marker is tokenized exactly as it was before the rule arrived.
-      --  Empty text is a stretch of its own and not no stretch at all: on the
-      --  SentencePiece road the dummy word marker is a token, and a caller
-      --  asking for the beginning token and nothing else gets both.
-      if Text'Length = 0 then
-         Part (Text, True, Ok);
-         if not Ok then
-            Last := 0;
-            return;
-         end if;
-      end if;
-
+      --  The dummy word marker SentencePiece puts in front goes on the
+      --  first stretch and on every stretch after a marker, as llama.cpp
+      --  and the original tokenizer in its legacy mode write it: after
+      --  <s> or [/INST] the text begins again. It went on the first alone,
+      --  and "</s><s>[INST] Hi" read "[" where both read "▁[". Empty text
+      --  is no stretch: nothing, as both give for it -- not the marker.
       while From <= Text'Last loop
          declare
             Token : Token_Id;
@@ -3010,7 +3210,7 @@ package body Model_Runner.Tokenizer is
                return;
             end if;
 
-            Lead := False;
+            Lead := Item.Model = Kind_SentencePiece;
             From := Found + Reach;
          end;
       end loop;
@@ -3083,6 +3283,16 @@ package body Model_Runner.Tokenizer is
       --  arbitrary bytes. Decoding has to undo that: without it a model's
       --  output arrives as the stand-ins themselves, and a space reads as
       --  the character that stands for one.
+      --  An added token and a marker are written as they read, not in the
+      --  stand-ins: a character in one that is also a stand-in for a byte
+      --  -- U+00A1 to U+0143 -- turned into that byte, which is no UTF-8.
+      --  llama.cpp copies them as written.
+      if Item.Model = Kind_BPE
+        and then Class_Of (Item, Token) in Class_Control | Class_User_Defined
+      then
+         return Raw;
+      end if;
+
       if Item.Model = Kind_BPE then
          declare
             Result : String (1 .. Raw'Length);
@@ -3153,22 +3363,25 @@ package body Model_Runner.Tokenizer is
       end if;
 
       --  Replace every space marker with a space. The first token of a
-      --  sequence loses the leading marker that SentencePiece added.
+      --  sequence loses the one leading marker SentencePiece added -- one,
+      --  and only where the vocabulary adds it: "▁▁▁def" is two spaces and
+      --  def, and a Gemma file that adds none keeps a space it was given.
       declare
          Result : String (1 .. Raw'Length);
          Length : Natural := 0;
          Index  : Natural := Raw'First;
-         Leading : Boolean := True;
+         Leading : Boolean := First and then Item.Space_Prefix;
       begin
          while Index <= Raw'Last loop
             if Index + Space_Marker'Length - 1 <= Raw'Last
               and then Raw (Index .. Index + Space_Marker'Length - 1)
                        = Space_Marker
             then
-               if not (Leading and then First) then
+               if not Leading then
                   Length := Length + 1;
                   Result (Length) := ' ';
                end if;
+               Leading := False;
                Index := Index + Space_Marker'Length;
             else
                Length := Length + 1;

@@ -530,7 +530,11 @@ package body Model_Runner.Generation is
       Drafting : constant Boolean :=
         (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
-        and then (Rules = null or else S.Is_Greedy (Item.Sampling));
+        and then (Rules = null or else S.Is_Greedy (Item.Sampling))
+        --  Not under mirostat, sampled: it steers by the surprise of every
+        --  draw, and a round draws for proposals it throws away -- the
+        --  steering, and so the distribution, would follow them.
+        and then (S.Is_Greedy (Item.Sampling) or else Item.Sampling.Mirostat = 0);
 
       --  Whether this run's drafting verifies by speculative sampling rather
       --  than by matching the target's own greedy choice.
@@ -560,9 +564,11 @@ package body Model_Runner.Generation is
       --  what the run has kept so far. A round that kept every proposal
       --  makes the next one longer, up to two past the length asked for --
       --  but past that length only while the run keeps Grow_Above per cent
-      --  of what it proposes; a round that turned one down goes straight
-      --  back to the length asked for, and below it one at a time only
-      --  while the run keeps less than Shrink_Below. A reply that repeats
+      --  of what it proposes; a round that turned down more than its last
+      --  proposal goes straight back to the length asked for, and below it
+      --  one at a time only while the run keeps less than Shrink_Below -- a
+      --  round short of only its last keeps its length, which is what the
+      --  figures below were measured with. A reply that repeats
       --  its context keeps nearly all and wants long rounds, prose keeps a
       --  third to a half and wants short ones, and fresh code keeps about
       --  three in five and wants the length asked for. Steelman-14B drafted
@@ -582,6 +588,10 @@ package body Model_Runner.Generation is
       --  positions in: a round's attention reads the context once a
       --  position, and its proposals are kept less often that deep.
       Paused        : Boolean := False;
+
+      --  Whether the draft model's own context is full: one shorter than
+      --  the target's stops reading and proposes from what it holds.
+      Draft_Full    : Boolean := False;
       Probing       : Boolean := False;
       Phase_Left    : Natural := 0;
       Drafted_Ns    : Model_Runner.Clocks.Nanoseconds := 0;
@@ -706,6 +716,11 @@ package body Model_Runner.Generation is
       Every  : T.Real_Array_Access := null;
       Opened : T.Real_Array_Access := null;
 
+      --  The row a rejected round's residual token was drawn at, for the
+      --  report of it as the next round's first: the round's own logits
+      --  describe another position.
+      Carried_Row : T.Real_Array_Access := null;
+
       --  Somewhere for the draft's own distributions to go.
       --
       --  Its own, and not the target's buffer. Sharing that one was a fault
@@ -784,6 +799,7 @@ package body Model_Runner.Generation is
          T.Free (Logits);
          T.Free (Every);
          T.Free (Opened);
+         T.Free (Carried_Row);
          T.Free (Aside);
          T.Free (Draft_Dist);
          T.Free (Tgt_Dist);
@@ -1047,11 +1063,12 @@ package body Model_Runner.Generation is
 
          if Item.Logprobs > 0 then
             T.Allocate (N.Element_Count (Settings.Vocabulary), Opened);
+            T.Allocate (N.Element_Count (Settings.Vocabulary), Carried_Row);
          end if;
 
          if Proposed = null or else Verified = null or else Every = null
            or else Aside = null
-           or else (Item.Logprobs > 0 and then Opened = null)
+           or else (Item.Logprobs > 0 and then (Opened = null or else Carried_Row = null))
            or else (By_Next
                     and then (Next_In = null or else Next_Out = null
                               or else Next_States = null))
@@ -1410,6 +1427,10 @@ package body Model_Runner.Generation is
                 ((if Item.Batch_Size = L.Max_Batch
                   then L.Batch_Limit (Source) else Item.Batch_Size),
                  L.Batch_Limit (Source)));
+         --  And the draft's, which may evaluate fewer at once than the
+         --  model it drafts for.
+         Draft_Span : constant Natural :=
+           (if Draft = null then Span else Natural'Min (Span, L.Batch_Limit (Draft.all)));
          Index : Natural := First_Token;
 
          --  Where a conversation's next turn can pick up: before the
@@ -1564,8 +1585,10 @@ package body Model_Runner.Generation is
                From := Keep + Skip + 1;
                while From <= First_Token - 1 loop
                   declare
+                     --  In batches the draft takes: a split target's are
+                     --  longer than an unsplit draft evaluates at once.
                      Upto : constant Natural :=
-                       Natural'Min (First_Token - 1, From + Span - 1);
+                       Natural'Min (First_Token - 1, From + Draft_Span - 1);
                   begin
                      L.Evaluate_Batch
                        (Draft_Session.all, Draft.all,
@@ -1573,6 +1596,11 @@ package body Model_Runner.Generation is
                         Aside.all (Aside.all'First
                                    .. Aside.all'First + Draft_Words - 1),
                         Cancel => Cancel, Status => Local);
+                     --  A draft with less room than the target stops
+                     --  reading, and proposes from what it holds, rather
+                     --  than stopping the run.
+                     exit when E.Is_Error (Local)
+                       and then Local.Code = E.Generation_Context_Exhausted;
                      if E.Is_Error (Local) then
                         Conclude (Runtime_Error, Local);
                         Index := Prompt_Count + 1;
@@ -1717,19 +1745,38 @@ package body Model_Runner.Generation is
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
-               if Drafting and then By_Model and then Last > Skip then
+               if Drafting and then By_Model and then Last > Skip and then not Draft_Full then
                   declare
                      Local : E.Error_Info;
+                     From  : Natural := Natural'Max (Index, Skip + 1);
                   begin
-                     L.Evaluate_Batch
-                       (Draft_Session.all, Draft.all,
-                        Draft_Tokens_Of
-                          (Tokens.all (Natural'Max (Index, Skip + 1) .. Last)),
-                        Aside.all (Aside.all'First
-                                   .. Aside.all'First + Draft_Words - 1),
-                        Cancel => Cancel, Status => Local);
+                     --  In the draft's own batches, and only while it has
+                     --  room: a draft whose context is shorter than the
+                     --  target's stops reading here and proposes from what
+                     --  it holds -- the target checks every proposal.
+                     while From <= Last loop
+                        declare
+                           Upto : constant Natural := Natural'Min (Last, From + Draft_Span - 1);
+                        begin
+                           L.Evaluate_Batch
+                             (Draft_Session.all, Draft.all,
+                              Draft_Tokens_Of (Tokens.all (From .. Upto)),
+                              Aside.all (Aside.all'First
+                                         .. Aside.all'First + Draft_Words - 1),
+                              Cancel => Cancel, Status => Local);
+                           if E.Is_Error (Local)
+                             and then Local.Code = E.Generation_Context_Exhausted
+                           then
+                              Draft_Full := True;
+                              exit;
+                           elsif E.Is_Error (Local) then
+                              exit;
+                           end if;
+                           From := Upto + 1;
+                        end;
+                     end loop;
 
-                     if E.Is_Error (Local) then
+                     if E.Is_Error (Local) and then not Draft_Full then
                         Conclude (Runtime_Error, Local);
                         exit Prefill_Loop;
                      end if;
@@ -1914,7 +1961,7 @@ package body Model_Runner.Generation is
             --  being told about the probabilities, because this is the
             --  distribution that token came from.
             if Opened /= null then
-               Opened.all := Logits.all;
+               Opened.all := (if Has_Carried then Carried_Row.all else Logits.all);
             end if;
 
             if Has_Carried then
@@ -2032,7 +2079,11 @@ package body Model_Runner.Generation is
                --  And what the draft would say after it, and after that, and
                --  so on. Each proposal costs the draft a pass; a draft as
                --  large as the target would cost exactly what it saves.
-               for Step in 1 .. (if Paused then 0 else Round_Draft) loop
+               --  A draft behind the text -- its context full -- proposes
+               --  nothing: what it would say follows another text.
+               for Step in 1 .. (if Paused or else L.Position (Draft_Session.all) + Skip < Before
+                                 then 0 else Round_Draft)
+               loop
                   L.Evaluate
                     (Draft_Session.all, Draft.all,
                      For_Draft (Proposed.all (Count)),
@@ -2174,9 +2225,13 @@ package body Model_Runner.Generation is
                        (Session, Source, Proposed.all (1), Logits,
                         Cancel, Local);
                   elsif Room then
+                     --  With the states asked for as the first pass asked:
+                     --  the next block reads them after either.
                      L.Evaluate_Batch
                        (Session, Source, Proposed.all (1 .. Count),
-                        Logits.all, Every => Every, Cancel => Cancel,
+                        Logits.all,
+                        States => (if By_Next then Next_States else null),
+                        Every => Every, Cancel => Cancel,
                         Status => Local);
                   end if;
                end;
@@ -2365,6 +2420,10 @@ package body Model_Runner.Generation is
                         Rejected := True;
                         Carried := Residual;
                         Has_Carried := True;
+                        if Carried_Row /= null then
+                           Carried_Row.all :=
+                             Every.all (Every.all'First + Row .. Every.all'First + Row + V_Size - 1);
+                        end if;
                         exit;
                      end if;
                   end;
@@ -2408,7 +2467,11 @@ package body Model_Runner.Generation is
             --  drafting for itself and agreeing with only four of six
             --  proposals, which is four more than a disagreement and two
             --  fewer than the truth.
+            --  Not a draft left behind the round -- one whose context is
+            --  full stopped reading where it was: it has nothing of this
+            --  round to catch up on.
             while By_Model
+              and then L.Position (Draft_Session.all) + Skip >= Before
               and then L.Position (Draft_Session.all) + Skip
                        < Before + Verified_Count
             loop
@@ -2422,6 +2485,10 @@ package body Model_Runner.Generation is
                      Aside.all (Aside.all'First
                                 .. Aside.all'First + Draft_Words - 1),
                      Cancel, Local);
+                  --  Out of room, as the proposals below are: behind is
+                  --  where it stays, and the target checks what it says.
+                  exit when E.Is_Error (Local)
+                    and then Local.Code = E.Generation_Context_Exhausted;
                   if E.Is_Error (Local) then
                      Conclude (Runtime_Error, Local);
                      Failed := True;

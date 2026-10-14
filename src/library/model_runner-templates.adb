@@ -1,6 +1,7 @@
 with Ada.Calendar.Formatting;
 with Ada.Calendar.Time_Zones;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Exceptions;
 with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
@@ -10,6 +11,7 @@ with Interfaces.C;
 with Interfaces.C.Strings;
 
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 
 package body Model_Runner.Templates is
 
