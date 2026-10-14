@@ -7744,6 +7744,220 @@ package body Tests.Backend_Cases is
       B.Free (Down_Bytes);
    end The_Shared_Expert_On_The_Device_Says_What_The_Host_Says;
 
+   ----------------------------------------------
+   -- Paired_Stacks_Are_Read_Where_They_Are_Held --
+   ----------------------------------------------
+
+   --  A mixture's gate and up stacks a short way apart, Q4_K, held as one
+   --  region: the experts the host chose read their slices from that
+   --  region, and answer as the same stacks laid out apart do -- the up's
+   --  rows found past the gate's, not the gate's read twice -- and copy
+   --  nothing for the run. A step that names the gate stack alone, as it
+   --  was not held, is copied for that run, and counted.
+   procedure Paired_Stacks_Are_Read_Where_They_Are_Held
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      package Device renames Model_Runner.Backend.Device;
+
+      Width   : constant N.Element_Count := 256;
+      Feed    : constant N.Element_Count := 256;
+      Experts : constant := 3;
+
+      Gate_Q : constant B.Byte_Array :=
+        Fixtures.Encode_Q4_K
+          (Fixtures.Sequence (Experts * Feed * Width, 31, 0.2));
+      Up_Q   : constant B.Byte_Array :=
+        Fixtures.Encode_Q4_K
+          (Fixtures.Sequence (Experts * Feed * Width, 32, 0.2));
+      Down_Q : constant B.Byte_Array :=
+        Fixtures.Encode_Q4_K
+          (Fixtures.Sequence (Experts * Width * Feed, 33, 0.2));
+
+      --  A row before the gate's, and a gap between the two short of a
+      --  row: the region is rounded to whole rows from the up's end, and
+      --  begins inside the row before.
+      Lead : constant B.Byte_Count := 144;
+      Gap  : constant B.Byte_Count := 64;
+
+      Region_Bytes, Gate_Apart, Up_Apart, Down_Bytes : B.Byte_Array_Access;
+      Gates, Ups, Gates_Apart, Ups_Apart, Downs : T.View;
+      Status : E.Error_Info;
+      Ready  : Boolean;
+
+      Vector, Paired, Apart, Slice : T.Real_Array_Access;
+
+      --  The paired region's answer and the apart stacks', bit for bit:
+      --  the same kernels over the same bytes.
+      procedure Same (Left, Right : T.Real_Array_Access; What : String) is
+         Worst : N.Real := 0.0;
+      begin
+         for Index in Left.all'Range loop
+            Worst := N.Real'Max
+              (Worst, abs (Left.all (Index) - Right.all (Index)));
+         end loop;
+         Assert (Worst = 0.0,
+                 What & " read from the paired region differs from the "
+                 & "same stacks apart by " & N.Real'Image (Worst));
+      end Same;
+   begin
+      Device.Close;
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+
+      B.Allocate (Lead + Gate_Q'Length + Gap + Up_Q'Length, Region_Bytes);
+      Region_Bytes.all := [others => 0];
+      Region_Bytes.all
+        (Region_Bytes.all'First + Lead
+         .. Region_Bytes.all'First + Lead + Gate_Q'Length - 1) := Gate_Q;
+      Region_Bytes.all
+        (Region_Bytes.all'First + Lead + Gate_Q'Length + Gap
+         .. Region_Bytes.all'Last) := Up_Q;
+      T.Make (G.Type_Q4_K, Experts * Feed, Width, Region_Bytes, Lead, Gates,
+              Status);
+      Assert (E.Is_Ok (Status), "the gate stack's view could not be built");
+      T.Make (G.Type_Q4_K, Experts * Feed, Width, Region_Bytes,
+              Lead + Gate_Q'Length + Gap, Ups, Status);
+      Assert (E.Is_Ok (Status), "the up stack's view could not be built");
+
+      --  The same bytes, each stack in a buffer of its own.
+      B.Allocate (Gate_Q'Length, Gate_Apart);
+      Gate_Apart.all := Gate_Q;
+      B.Allocate (Up_Q'Length, Up_Apart);
+      Up_Apart.all := Up_Q;
+      B.Allocate (Down_Q'Length, Down_Bytes);
+      Down_Bytes.all := Down_Q;
+      T.Make (G.Type_Q4_K, Experts * Feed, Width, Gate_Apart, 0, Gates_Apart,
+              Status);
+      T.Make (G.Type_Q4_K, Experts * Feed, Width, Up_Apart, 0, Ups_Apart,
+              Status);
+      T.Make (G.Type_Q4_K, Experts * Width, Feed, Down_Bytes, 0, Downs,
+              Status);
+      Assert (E.Is_Ok (Status), "a stack's view could not be built");
+
+      T.Allocate (Width, Vector);
+      T.Allocate (2 * Width, Paired);
+      T.Allocate (2 * Width, Apart);
+      T.Allocate (Feed, Slice);
+      Vector.all := Fixtures.Sequence (Width, 34, 1.0);
+
+      Device.Hold_Pair (Gates, Ups, Status);
+      Assert (E.Is_Ok (Status), "the paired stacks were not held");
+      Device.Hold (Downs, Status);
+      Assert (E.Is_Ok (Status), "the down stack was not held");
+      Assert (Device.Resident = 2,
+              "the paired stacks and the down stack were held as"
+              & Natural'Image (Device.Resident) & " matrices, not two");
+
+      declare
+         Copied : constant Natural := Device.Streamed_Copies;
+      begin
+         Device.Dispatch_Expert
+           (Gates, Ups, Downs, Feed, Width, 2, 0, Vector, 1, Paired, Status);
+         Assert (E.Is_Ok (Status),
+                 "an expert the host chose did not run on the paired stacks: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Device.Streamed_Copies = Copied
+                 and then Device.Resident = 2,
+                 "an expert on the paired stacks copied"
+                 & Natural'Image (Device.Streamed_Copies - Copied)
+                 & " matrices and left" & Natural'Image (Device.Resident)
+                 & " held, where the region it was held as serves");
+
+         --  The gate stack named alone, which the device does not hold.
+         Device.Dispatch_Slice (Gates, Feed, 1, Vector, 1, Slice, Status);
+         Assert (E.Is_Ok (Status), "the gate's slice did not run");
+         Assert (Device.Streamed_Copies > Copied,
+                 "a stack the device does not hold was not counted as "
+                 & "copied for the run");
+      end;
+
+      Device.Dispatch_Expert
+        (Gates_Apart, Ups_Apart, Downs, Feed, Width, 2, 0, Vector, 1, Apart,
+         Status);
+      Assert (E.Is_Ok (Status), "an expert on the stacks apart did not run");
+
+      Same (Paired, Apart, "an expert");
+
+      --  And a token's two experts at once, the host's choice.
+      declare
+         Chosen : constant Device.Member_List := [1 => 2, 2 => 0, others => 0];
+         Copied : constant Natural := Device.Streamed_Copies;
+      begin
+         Device.Dispatch_Mixture
+           (Gates, Ups, Downs, Feed, Width, Chosen, 2, 0, Vector, Paired,
+            Status);
+         Assert (E.Is_Ok (Status),
+                 "a token's experts did not run on the paired stacks: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Device.Streamed_Copies = Copied,
+                 "a token's experts on the paired stacks copied"
+                 & Natural'Image (Device.Streamed_Copies - Copied)
+                 & " matrices, where the region it was held as serves");
+         Device.Dispatch_Mixture
+           (Gates_Apart, Ups_Apart, Downs, Feed, Width, Chosen, 2, 0, Vector,
+            Apart, Status);
+         Assert (E.Is_Ok (Status),
+                 "a token's experts on the stacks apart did not run");
+         Same (Paired, Apart, "a token's experts");
+      end;
+
+      --  And a member is held to the stack's own rows past the lead: three
+      --  rows before them and ten in all, the second slice of four would
+      --  end past the region.
+      declare
+         Steps : Products.Sequence;
+         Added : Boolean;
+      begin
+         Products.Open_Sequence (Steps);
+         Products.Add_Gathered_Product
+           (Steps, Region_Bytes.all'Address, Region_Bytes.all'Length, 0,
+            Products.Packed_Q4_K, 10, 4, 256, [1 => 1, others => 0], 1, Added,
+            Region_At => 3 * 144);
+         Assert (not Added,
+                 "a member past the region, counted from its lead, was taken");
+         Products.Add_Gathered_Product
+           (Steps, Region_Bytes.all'Address, Region_Bytes.all'Length, 0,
+            Products.Packed_Q4_K, 10, 4, 256, [1 => 0, others => 0], 1, Added,
+            Region_At => 3 * 144);
+         Assert (Added, "a member inside the region past its lead was refused");
+      end;
+
+      --  And the gated gather is held to a routing step it reads: named
+      --  after a plain gather, which chose nothing, it is refused rather
+      --  than reading experts no step wrote.
+      declare
+         Steps : Products.Sequence;
+         Added : Boolean;
+      begin
+         Products.Open_Sequence (Steps);
+         Products.Add_Gathered_Product
+           (Steps, Region_Bytes.all'Address, Region_Bytes.all'Length, 0,
+            Products.Packed_Q4_K, 1024, 256, 256, [1 => 0, others => 0], 1,
+            Added);
+         Assert (Added, "a plain gather of the width was refused");
+         Products.Add_Gathered_Pair
+           (Steps, Region_Bytes.all'Address, Region_Bytes.all'Length,
+            Lead - 80, B.Byte_Count (Gate_Q'Length) + Gap,
+            Products.Packed_Q4_K, Natural (Experts * Feed), Natural (Feed),
+            Natural (Width), 1, 1, Added);
+         Assert (not Added,
+                 "a gated gather was taken reading a step that chose nothing");
+      end;
+
+      Device.Close;
+      T.Free (Vector);
+      T.Free (Paired);
+      T.Free (Apart);
+      T.Free (Slice);
+      B.Free (Region_Bytes);
+      B.Free (Gate_Apart);
+      B.Free (Up_Apart);
+      B.Free (Down_Bytes);
+   end Paired_Stacks_Are_Read_Where_They_Are_Held;
+
    -----------------------------------------------
    -- A_Cache_Past_The_Storage_Bound_Is_Refused --
    -----------------------------------------------
@@ -11460,6 +11674,11 @@ package body Tests.Backend_Cases is
         (T, The_Shared_Expert_On_The_Device_Says_What_The_Host_Says'Access,
          "a mixture's shared expert sent over after the front half and "
          & "fetched later says what the host's own block says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Paired_Stacks_Are_Read_Where_They_Are_Held'Access,
+         "a mixture's paired stacks are read where they are held, as the "
+         & "same stacks apart answer, and a stack not held is counted "
+         & "copied");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Cache_Past_The_Storage_Bound_Is_Refused'Access,
          "a cache past what the device says one storage buffer may hold "

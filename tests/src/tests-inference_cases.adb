@@ -17453,6 +17453,120 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end A_Wrapped_Window_Reads_Alike_On_The_Device;
 
+   --  A mixture's gate and up stacks, Q4_K and a short way apart in the
+   --  file, go to the device once, as one region: the load holds it, the
+   --  token's gated gather reads it, and a batch's two listed products
+   --  read it too. Held as two besides, the stacks would be on the
+   --  device twice; named by a step other than as the load held it, a
+   --  stack is copied for that run alone, every token. Q8_0 stacks are never paired, so their counts
+   --  are what the same steps take with the stacks apart: one matrix
+   --  fewer a layer at the load, and nothing more than that after. That
+   --  the copies are counted at all is the backend's test of the same.
+   procedure Paired_Stacks_Are_Held_Once
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Device renames Model_Runner.Backend.Device;
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      --  What a token and a batch did on a device opened afresh: matrices
+      --  kept after the load and after the run, layers that went in
+      --  pieces, and matrices copied for the run alone.
+      type Tally is record
+         Loaded, Run, Pieces, Copied : Natural := 0;
+      end record;
+
+      function Count (Format : Tiny_Model.Weight_Format) return Tally
+      is
+         Image  : B.Byte_Array_Access;
+         Result : Tally;
+         Awake  : Boolean;
+      begin
+         Device.Close;
+         Device.Open (Awake);
+         Assert (Awake, "the device opened once and not again");
+
+         Tiny_Model.Build
+           (Image, Format, Kind => Tiny_Model.Qwen3_MoE,
+            Experts => 4, Experts_Used => 2);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Last   : Logit_Vector;
+            Status : E.Error_Info;
+            Ready  : Boolean;
+            Handed : Natural;
+            Copied : Natural;
+         begin
+            Start (Under, Model_Runner.Backend.Backend_Device, Ready);
+            Assert (Ready, "the mixture did not prepare on the device");
+            Result.Loaded := Device.Resident;
+            Handed := Device.Layers_Handed;
+            Copied := Device.Streamed_Copies;
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate (Live, Under.Ready, Prompt (1), Last, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the token failed: " & E.Error_Code'Image (Status.Code));
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt (2 .. Prompt'Last), Last,
+               Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the batch failed: " & E.Error_Code'Image (Status.Code));
+
+            Result.Run := Device.Resident;
+            Result.Pieces := Device.Layers_Handed - Handed;
+            Result.Copied := Device.Streamed_Copies - Copied;
+            L.Close (Live);
+            L.Close (Under.Ready, Status);
+         end;
+         B.Free (Image);
+         return Result;
+      end Count;
+
+      Awake : Boolean;
+   begin
+      Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device to hold a mixture's stacks on");
+         return;
+      end if;
+
+      declare
+         Apart  : constant Tally := Count (Tiny_Model.Q8_0);
+         Paired : constant Tally := Count (Tiny_Model.Q4_K);
+      begin
+         Device.Close;
+
+         Assert (Apart.Pieces = 0 and then Paired.Pieces = 0,
+                 "a mixture's layer went to the device in pieces:"
+                 & Natural'Image (Apart.Pieces)
+                 & Natural'Image (Paired.Pieces));
+         Assert (Apart.Loaded = 3 * Tiny_Model.Layers,
+                 "the load held" & Natural'Image (Apart.Loaded)
+                 & " matrices of a mixture's apart stacks, not three a layer");
+         Assert (Paired.Loaded = 2 * Tiny_Model.Layers,
+                 "the load held" & Natural'Image (Paired.Loaded)
+                 & " matrices of a mixture's paired stacks, not two a layer");
+         Assert (Paired.Run - Paired.Loaded = Apart.Run - Apart.Loaded,
+                 "a token and a batch put"
+                 & Natural'Image (Paired.Run - Paired.Loaded)
+                 & " matrices on the device beside the paired stacks, where"
+                 & Natural'Image (Apart.Run - Apart.Loaded)
+                 & " go beside stacks apart: a second copy of a stack");
+         Assert (Apart.Copied = 0 and then Paired.Copied = 0,
+                 "a mixture's run copied"
+                 & Natural'Image (Apart.Copied)
+                 & Natural'Image (Paired.Copied)
+                 & " matrices to the device for itself alone");
+      end;
+   end Paired_Stacks_Are_Held_Once;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -17526,6 +17640,10 @@ package body Tests.Inference_Cases is
         (T, A_Wrapped_Window_Reads_Alike_On_The_Device'Access,
          "a windowed layer's ring, wrapped by a long prompt, reads alike on "
          & "the device and the processor");
+      Register_Routine
+        (T, Paired_Stacks_Are_Held_Once'Access,
+         "a mixture's gate and up stacks a short way apart go to the device "
+         & "once, as one region every step reads");
       Register_Routine
         (T, A_Named_Draft_Length_Is_Kept'Access,
          "a draft length named is kept whichever draft runs");

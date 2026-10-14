@@ -5733,6 +5733,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Second := -1;
       Item.Clock := 0;
       Item.Released := 0;
+      Item.Streamed := 0;
       Item.Taken := 0;
       Item.Heap := 0;
 
@@ -6816,6 +6817,8 @@ package body Model_Runner.Platform.Device.Products is
    end Fit_Budget;
 
    function Given_Back (Item : Engine) return Natural is (Item.Released);
+
+   function Streamed_Copies (Item : Engine) return Natural is (Item.Streamed);
 
    -------------------
    -- Cached_Bytes --
@@ -11748,6 +11751,9 @@ package body Model_Runner.Platform.Device.Products is
          elsif This.Blends then
             return (if This.Unit /= 2 then "combine"
                     elsif This.Folded then "join folded" else "join");
+         elsif This.Glu and then This.Gathers > 0 then
+            return "gated gather " & Shape (This.Each, This.Columns) & " "
+              & Packing_Name (This.Packing);
          elsif This.Gathers > 0 then
             return "gather " & Shape (This.Each, This.Columns) & " "
               & Packing_Name (This.Packing)
@@ -11991,6 +11997,79 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Gated_Pair;
 
+   -----------------------
+   -- Add_Gathered_Pair --
+   -----------------------
+
+   procedure Add_Gathered_Pair
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Pair_At   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Stack     : Natural;
+      Each      : Natural;
+      Columns   : Natural;
+      Count     : Positive;
+      Routed    : Positive;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      From_Step : Natural := 0;
+      Unit      : Natural := 0)
+   is
+      Source : constant Natural :=
+        (if From_Step = 0 then Steps.Held else From_Step);
+
+      --  Bytes a row holds.
+      Wide : constant Model_Runner.Bytes.Byte_Count :=
+        Pair_Row_Bytes (Packing, Columns);
+   begin
+      Added := False;
+      if Steps.Held = 0
+        or else Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Packing /= Packed_Q4_K
+        or else Unit > 1
+        or else Columns = 0
+        or else Columns mod 256 /= 0
+        or else Each = 0
+        or else Stack < Each
+        or else Count > Max_Gather
+        or else Source not in 1 .. Steps.Held
+        or else Columns /= Steps.Items (Source).Rows
+        or else Routed > Steps.Held
+        or else not Steps.Items (Routed).Routes
+        or else Steps.Items (Routed).Used /= Count
+        or else Pair_At < Model_Runner.Bytes.Byte_Count (Stack) * Wide
+        or else Pair_At > Model_Runner.Bytes.Byte_Count (Natural'Last / 2)
+        or else Span < At_Byte
+                       + Model_Runner.Bytes.Byte_Count
+                           (Pair_Pad (Pair_At, Stack, Columns, Packing))
+                       + Pair_At
+                       + Model_Runner.Bytes.Byte_Count (Stack) * Wide
+      then
+         return;
+      end if;
+
+      --  Uploaded as a gather is, the whole region; Stack is its rows.
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
+         Rows => Each * Count, Columns => Columns, Key => Key,
+         Chained => True,
+         Reads => (if From_Step = 0 then 0 else From_Step),
+         Kept => Kept,
+         Blends => False, Unit => Unit, Attends => False,
+         Glu => True, Pair_At => Natural (Pair_At),
+         Gathers => Count, Each => Each, Routed => Routed,
+         Stack => Pair_Rows (Pair_At, Stack, Columns, Packing),
+         Region_At => Pair_Pad (Pair_At, Stack, Columns, Packing),
+         others => <>);
+      Added := True;
+   end Add_Gathered_Pair;
+
    --------------------------
    -- Add_Gathered_Product --
    --------------------------
@@ -12012,7 +12091,8 @@ package body Model_Runner.Platform.Device.Products is
       Chained   : Boolean := False;
       From_Step : Natural := 0;
       Apart     : Natural := 0;
-      Routed    : Natural := 0)
+      Routed    : Natural := 0;
+      Region_At : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -12030,6 +12110,11 @@ package body Model_Runner.Platform.Device.Products is
         or else Each = 0
         or else Stack < Each
         or else (Apart > 0 and then Apart /= Columns)
+        or else (Region_At /= 0
+                 and then (Packing /= Packed_Q4_K
+                           or else Model_Runner.Bytes.Byte_Count (Region_At)
+                                   >= Model_Runner.Bytes.Byte_Count (Stack)
+                                      * Pair_Row_Bytes (Packing, Columns)))
         or else (Chained
                  and then (Steps.Held = 0
                            or else Source not in 1 .. Steps.Held
@@ -12046,11 +12131,21 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       if Routed = 0 then
-         for Index in 1 .. Count loop
-            if (Members (Index) + 1) * Each > Stack then
-               return;
-            end if;
-         end loop;
+         declare
+            --  Rows of the region before the stack's own, whole or not.
+            Lead : constant Natural :=
+              (if Region_At = 0 then 0
+               else Natural
+                      ((Model_Runner.Bytes.Byte_Count (Region_At)
+                        + Pair_Row_Bytes (Packing, Columns) - 1)
+                       / Pair_Row_Bytes (Packing, Columns)));
+         begin
+            for Index in 1 .. Count loop
+               if Lead + (Members (Index) + 1) * Each > Stack then
+                  return;
+               end if;
+            end loop;
+         end;
       end if;
 
       Steps.Held := Steps.Held + 1;
@@ -12063,6 +12158,7 @@ package body Model_Runner.Platform.Device.Products is
          Blends => False, Unit => 0, Attends => False,
          Gathers => Count, Members => Members, Stack => Stack,
          Each => Each, Apart => Apart, Routed => Routed,
+         Region_At => Region_At,
          others => <>);
       Added := True;
    end Add_Gathered_Product;
@@ -12185,7 +12281,8 @@ package body Model_Runner.Platform.Device.Products is
       Kept        : Boolean := True;
       From_Step   : Natural := 0;
       By_Slot     : Boolean := False;
-      Chained     : Boolean := True)
+      Chained     : Boolean := True;
+      Region_At   : Natural := 0)
    is
       Source : constant Natural :=
         (if not Chained then 0
@@ -12206,6 +12303,13 @@ package body Model_Runner.Platform.Device.Products is
         or else Each = 0
         or else Experts = 0
         or else Each * Experts > Stack
+        or else Model_Runner.Bytes.Byte_Count (Region_At)
+                + Model_Runner.Bytes.Byte_Count (Each * Experts)
+                  * Pair_Row_Bytes (Packing, Columns)
+                > Model_Runner.Bytes.Byte_Count (Stack)
+                  * Pair_Row_Bytes (Packing, Columns)
+        or else (Region_At /= 0
+                 and then Packing not in Packed_Q4_K | Packed_Q8_0)
         or else (Chained
                  and then (Source not in 1 .. Steps.Held
                            or else Steps.Items (Source).Rows /= Wanted))
@@ -12230,6 +12334,7 @@ package body Model_Runner.Platform.Device.Products is
          Gathers => Experts, Stack => Stack, Each => Each,
          Routed => Invert_Step, Used => Used,
          Listed => True, By_Slot => By_Slot,
+         Region_At => Region_At,
          others => <>);
       Added := True;
    end Add_Listed_Product;
@@ -14491,6 +14596,9 @@ package body Model_Runner.Platform.Device.Products is
               Places (Index).Borrowed
               and then (This.Gathers > 0 or else This.Listed
                         or else This.Streams);
+            if Places (Index).Streamed then
+               Item.Streamed := Item.Streamed + 1;
+            end if;
             if not Good then
                Release_All;
                return;
@@ -17186,9 +17294,13 @@ package body Model_Runner.Platform.Device.Products is
                      Band : constant Natural :=
                        (if Q8 then (if One and then not Short then 1 else 2)
                         elsif One then 1 else 4);
+                     --  A mixture's gate and up, routed: one position,
+                     --  an expert a workgroup layer, as a gather is.
+                     Gathered : constant Boolean := This.Gathers > 0;
                      --  Or its walk as integers; see Round_Walks.
                      Rounds : constant Boolean :=
-                       Dotted (Index) and then Barrier /= null;
+                       Dotted (Index) and then Barrier /= null
+                       and then not Gathered;
                      Line : constant Address :=
                        (if Rounds then Glu_Dots_Line (This.Packing, This.Columns)
                         elsif not Q8
@@ -17197,21 +17309,35 @@ package body Model_Runner.Platform.Device.Products is
                         elsif not One then Item.Q8_Glu_Multi_Lines (Count)
                         elsif Short then Item.Q8_Glu_Short_Line
                         else Item.Q8_Glu_Line);
+                     --  Rows a workgroup layer covers: an expert's slice,
+                     --  or the whole of a feed-forward's.
+                     Wide : constant Natural :=
+                       (if Gathered then This.Each else This.Rows);
+                     --  A gathered pair's up arm is the joins word, the
+                     --  stride its slices'; see row_product_super.comp.
                      Shape : aliased Shape_Constants :=
-                       (Rows    => C.unsigned (This.Rows),
+                       (Rows    => C.unsigned (Wide),
                         Columns => C.unsigned (This.Columns),
                         Count   => C.unsigned (Count),
                         First   => 0,
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
                         Base    => C.unsigned (Places (Index).Base),
-                        Joins   => 0,
+                        Joins   =>
+                          (if Gathered then C.unsigned (This.Pair_At) else 0),
                         Table   => C.unsigned (This.Unit),
                         Members => [others => 0],
-                        Stride  => C.unsigned (This.Pair_At),
+                        Stride  =>
+                          (if Gathered then C.unsigned (Slice_Bytes (Index))
+                           else C.unsigned (This.Pair_At)),
                         Apart   => 0,
-                        Routed  => 0);
+                        Routed  => (if Gathered then 1 else 0));
                   begin
+                     if Gathered and then (Count /= 1 or else Q8) then
+                        Release_All;
+                        return;
+                     end if;
+
                      if Rounds then
                         Round_For (Index);
                      end if;
@@ -17221,7 +17347,8 @@ package body Model_Runner.Platform.Device.Products is
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
-                        C.unsigned ((This.Rows + Band - 1) / Band), 1, 1);
+                        C.unsigned ((Wide + Band - 1) / Band), 1,
+                        C.unsigned (if Gathered then This.Gathers else 1));
                   end;
 
                   Bind_Pipeline

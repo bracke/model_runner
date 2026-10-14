@@ -273,6 +273,15 @@ package Model_Runner.Backend.Device is
    --  @return Count of matrices released to make room.
    function Given_Back return Natural;
 
+   --  How many matrices have been copied to the device for one run alone
+   --  and given back after it.
+   --
+   --  Zero for a model the device holds, and for every step that names a
+   --  matrix as it was held; see Hold_Pair.
+   --
+   --  @return Count of such copies since the device opened.
+   function Streamed_Copies return Natural;
+
    --  How many layers went over as one sequence and how many did not,
    --  and why the first of those did not.
    --
@@ -2185,6 +2194,18 @@ package Model_Runner.Backend.Device is
    --    wanted, as it always did.
    procedure Hold
      (Weight : Model_Runner.Tensors.View;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Hold a mixture's gate and up stacks, as Hold holds one: where the
+   --  two lie as one region the gated gather reads, the region, which is
+   --  what every step reading either then names; otherwise each.
+   --
+   --  @param Gates The gate stack, whole.
+   --  @param Ups The up stack, whole.
+   --  @param Status Success, or why the device would not hold them.
+   procedure Hold_Pair
+     (Gates  : Model_Runner.Tensors.View;
+      Ups    : Model_Runner.Tensors.View;
       Status : out Model_Runner.Errors.Error_Info);
 
 private

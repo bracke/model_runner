@@ -3511,10 +3511,8 @@ begin
                Ignored : E.Error_Info;
             begin
                if T.Is_Present (Current.Gate_Stack) then
-                  Model_Runner.Backend.Device.Hold
-                    (Current.Gate_Stack, Ignored);
-                  Model_Runner.Backend.Device.Hold
-                    (Current.Up_Stack, Ignored);
+                  Model_Runner.Backend.Device.Hold_Pair
+                    (Current.Gate_Stack, Current.Up_Stack, Ignored);
                   Model_Runner.Backend.Device.Hold
                     (Current.Down_Stack, Ignored);
                end if;
@@ -3531,10 +3529,8 @@ begin
                   Ignored : E.Error_Info;
                begin
                   if T.Is_Present (Current.Gate_Stack) then
-                     Model_Runner.Backend.Device.Hold
-                       (Current.Gate_Stack, Ignored);
-                     Model_Runner.Backend.Device.Hold
-                       (Current.Up_Stack, Ignored);
+                     Model_Runner.Backend.Device.Hold_Pair
+                       (Current.Gate_Stack, Current.Up_Stack, Ignored);
                      Model_Runner.Backend.Device.Hold
                        (Current.Down_Stack, Ignored);
                   end if;

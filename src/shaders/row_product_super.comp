@@ -395,8 +395,14 @@ void main() {
 
         for (uint r = 0u; r < ACC; ++r) {
 #ifdef GLU
+            //  The up arm's rows a fixed distance past the gate's: the
+            //  stride word for a feed-forward's pair, and for a gathered
+            //  pair -- a mixture's gate and up stacks, an expert a slice --
+            //  the joins word, the stride being the slice's.
             uint row = first_row + r % NUM_ROWS;
-            uint at = shape.base + (r >= NUM_ROWS ? shape.stride : 0u)
+            uint pair = shape.routed != 0u ? shape.joins : shape.stride;
+            uint at = shape.base + (shape.routed != 0u ? slice : 0u)
+                      + (r >= NUM_ROWS ? pair : 0u)
                       + row * span + i * 144u;
 #else
             uint row = first_row + r;
@@ -464,7 +470,10 @@ void main() {
         uint row = first_row + r;
 
         if (tid == 0u && row < shape.rows) {
-            y[shape.first * shape.rows + row] = gate_unit (gate) * up;
+            //  A gathered pair writes each member's answer where a gather
+            //  does; a feed-forward's pair is one member.
+            y[member * shape.rows * shape.count + shape.first * shape.rows + row]
+              = gate_unit (gate) * up;
         }
     }
     return;

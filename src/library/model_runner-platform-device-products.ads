@@ -832,6 +832,9 @@ package Model_Runner.Platform.Device.Products is
    --  @param Routed A routing step whose choice replaces Members, so that
    --    the experts a token reads are decided where the router ran; or
    --    zero for Members. Count is then how many that step chose.
+   --  @param Region_At Bytes past At_Byte the stack's own rows begin, where
+   --    Stack counts a region it shares -- a gate and up stack uploaded
+   --    once, as Add_Gathered_Pair uploads them -- or zero.
    procedure Add_Gathered_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -849,7 +852,8 @@ package Model_Runner.Platform.Device.Products is
       Chained   : Boolean := False;
       From_Step : Natural := 0;
       Apart     : Natural := 0;
-      Routed    : Natural := 0);
+      Routed    : Natural := 0;
+      Region_At : Natural := 0);
 
    --  Whether the engine takes a feed-forward's gate and up projections
    --  as one step for a batch of Count, as Add_Gated_Pair names it: Q4_K
@@ -935,6 +939,54 @@ package Model_Runner.Platform.Device.Products is
       Packing   : Weight_Packing;
       Rows      : Natural;
       Columns   : Natural;
+      Added     : out Boolean;
+      Key       : System.Address := System.Null_Address;
+      Kept      : Boolean := True;
+      From_Step : Natural := 0;
+      Unit      : Natural := 0);
+
+   --  Name a mixture's gate and up gathers as one step, routed on the
+   --  device, with the unit on the gate and the two multiplied -- what two
+   --  gathered products and a combination make, the same bits, without
+   --  the combination's dispatch and the barrier before it. One position.
+   --
+   --  The two stacks lie in one region, the up's rows Pair_At bytes past
+   --  the gate's, an expert a slice of Each rows in each; the region from
+   --  Pair_Pad bytes before the gate's first row to the up's last is what
+   --  goes to the device, as Add_Gated_Pair has it.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Base Where the region that holds both begins.
+   --  @param Span Bytes it holds.
+   --  @param At_Byte Where the region begins in it: Pair_Pad bytes before
+   --    the gate's rows.
+   --  @param Pair_At How far past them the up's rows begin, in bytes.
+   --  @param Packing The two stacks' format; Q4_K.
+   --  @param Stack Rows each stack holds.
+   --  @param Each Rows an expert's slice holds.
+   --  @param Columns Elements a row holds.
+   --  @param Count How many experts the routing step chose.
+   --  @param Routed The routing step whose choice is read.
+   --  @param Added False when the sequence is full or the shape does not
+   --    hold together.
+   --  @param Key What the region is known by on the device.
+   --  @param Kept False when nothing on the host reads the answer.
+   --  @param From_Step Step whose answer is the activation, or zero for the
+   --    step before this one.
+   --  @param Unit The unit on the gate, numbered as Add_Combination numbers
+   --    it: nought for the sigmoid-weighted one, one for the Gaussian.
+   procedure Add_Gathered_Pair
+     (Steps     : in out Sequence;
+      Base      : System.Address;
+      Span      : Model_Runner.Bytes.Byte_Count;
+      At_Byte   : Model_Runner.Bytes.Byte_Count;
+      Pair_At   : Model_Runner.Bytes.Byte_Count;
+      Packing   : Weight_Packing;
+      Stack     : Natural;
+      Each      : Natural;
+      Columns   : Natural;
+      Count     : Positive;
+      Routed    : Positive;
       Added     : out Boolean;
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
@@ -1060,6 +1112,9 @@ package Model_Runner.Platform.Device.Products is
    --    position the list names.
    --  @param Chained False to read the vectors from the activation the
    --    caller supplied rather than from a step.
+   --  @param Region_At Bytes past At_Byte the stack's own rows begin, where
+   --    Stack counts a region it shares -- a gate and up stack uploaded
+   --    once, as Add_Gathered_Pair uploads them -- or zero.
    procedure Add_Listed_Product
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -1078,7 +1133,8 @@ package Model_Runner.Platform.Device.Products is
       Kept        : Boolean := True;
       From_Step   : Natural := 0;
       By_Slot     : Boolean := False;
-      Chained     : Boolean := True);
+      Chained     : Boolean := True;
+      Region_At   : Natural := 0);
 
    --  Name a mixture's weighted sum for a sequence to perform.
    --
@@ -3061,6 +3117,15 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of matrices released to make room.
    function Given_Back (Item : Engine) return Natural;
 
+   --  How many matrices have been copied to the device for one run alone
+   --  and given back after it: a mixture's stack the budget leaves to be
+   --  streamed, or one a step names other than as it was held -- the same
+   --  weights under a second shape, copied again every token.
+   --
+   --  @param Item Engine to inspect.
+   --  @return Count of such copies since the engine opened.
+   function Streamed_Copies (Item : Engine) return Natural;
+
    --  How many bytes of context the device is holding.
    --
    --  Zero when the device holds none, which is a different thing from
@@ -3872,6 +3937,7 @@ private
       --  many matrices have been given back to make room.
       Clock      : Interfaces.Unsigned_64 := 0;
       Released   : Natural := 0;
+      Streamed   : Natural := 0;
 
       --  How many of the resident matrices are the host's own memory rather
       --  than a copy of it.

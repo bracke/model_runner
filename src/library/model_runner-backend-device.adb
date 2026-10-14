@@ -664,6 +664,9 @@ package body Model_Runner.Backend.Device is
 
    function Given_Back return Natural is (Products.Given_Back (Engine));
 
+   function Streamed_Copies return Natural
+   is (Products.Streamed_Copies (Engine));
+
    ----------------
    -- Hold_Clock --
    ----------------
@@ -977,6 +980,75 @@ package body Model_Runner.Backend.Device is
          (System.Storage_Elements.To_Integer (Base)
           + System.Storage_Elements.Integer_Address (Offset)));
 
+   --  Where a mixture's gate and up stacks lie as one region, as a gated
+   --  pair reads them: Q4_K, the up stack after the gate's a short way on.
+   --  Every step that reads either stack, and the load that holds them,
+   --  names the region when there is one, so the device keeps it once.
+   type Stack_Pair is record
+      Paired  : Boolean := False;
+      Start   : Model_Runner.Bytes.Byte_Count := 0;
+      Pair_At : Model_Runner.Bytes.Byte_Count := 0;
+      Rows    : Natural := 0;
+      Pad     : Natural := 0;
+      Key     : System.Address := System.Null_Address;
+   end record;
+
+   function Pair_Of (Gates, Ups : T.View) return Stack_Pair is
+      use type Products.Weight_Packing;
+
+      Gate_P, Up_P : Products.Weight_Packing;
+      Gate_Known, Up_Known : Boolean;
+   begin
+      Packing_Of (Gates.Format, Gate_P, Gate_Known);
+      Packing_Of (Ups.Format, Up_P, Up_Known);
+      if not Gate_Known or else not Up_Known
+        or else Gate_P /= Products.Packed_Q4_K
+        or else Up_P /= Gate_P
+        or else Gates.Base = System.Null_Address
+        or else Gates.Base /= Ups.Base
+        or else Gates.Span /= Ups.Span
+        or else Gates.Rows /= Ups.Rows
+        or else Gates.Columns /= Ups.Columns
+        or else Gates.Rows = 0
+        or else Gates.Columns = 0
+        or else Gates.Columns mod 256 /= 0
+      then
+         return (others => <>);
+      end if;
+
+      declare
+         Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
+           Model_Runner.Bytes.Byte_Count (Gates.Columns / 256) * 144
+           * Model_Runner.Bytes.Byte_Count (Gates.Rows);
+      begin
+         if Ups.Offset < Gates.Offset + Gate_Bytes
+           or else Ups.Offset - Gates.Offset - Gate_Bytes > 2**20
+         then
+            return (others => <>);
+         end if;
+
+         declare
+            Pair_At : constant Model_Runner.Bytes.Byte_Count :=
+              Ups.Offset - Gates.Offset;
+            Pad : constant Natural :=
+              Products.Pair_Pad
+                (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns));
+         begin
+            if Gates.Offset < Model_Runner.Bytes.Byte_Count (Pad) then
+               return (others => <>);
+            end if;
+            return
+              (Paired  => True,
+               Start   => Gates.Offset - Model_Runner.Bytes.Byte_Count (Pad),
+               Pair_At => Pair_At,
+               Rows    =>
+                 Products.Pair_Rows
+                   (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns)),
+               Pad     => Pad,
+               Key     => At_Offset (Gates.Base, Gates.Offset));
+         end;
+      end;
+   end Pair_Of;
    --  Why a product that did not run did not run.
    --
    --  This backend has one operation and the device has it, so a product
@@ -2807,6 +2879,10 @@ package body Model_Runner.Backend.Device is
          Mix_P, Z_P, Alpha_P, Beta_P : Products.Weight_Packing;
          Known   : Boolean;
 
+         --  Where a mixture's gate and up stacks lie as one region, held
+         --  and read as one; see Pair_Of.
+         Pair : constant Stack_Pair := Pair_Of (Gate_Stack, Up_Stack);
+
          --  Every step's rows, in order, so the offsets above are a sum rather
          --  than a tally kept by hand.
          procedure Step_Room (Rows : Model_Runner.Numerics.Element_Count) is
@@ -4229,23 +4305,43 @@ package body Model_Runner.Backend.Device is
                     (Model_Runner.Numerics.Element_Count
                        (32 * Experts + 3 * Used));
 
+                  --  Both from the one region where the two stacks are
+                  --  held as one; see Pair_Of.
                   Products.Add_Listed_Product
-                    (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
-                     Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
+                    (Steps, Gate_Stack.Base, Gate_Stack.Span,
+                     (if Pair.Paired then Pair.Start else Gate_Stack.Offset),
+                     Gate_P,
+                     (if Pair.Paired then Pair.Rows
+                      else Natural (Gate_Stack.Rows)),
+                     Feed, Natural (Width),
                      Experts, Used, Step_Route, Positive (Slots), Added,
-                     Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
-                     Kept => False, From_Step => Step_Norm_Feed);
+                     Key =>
+                       (if Pair.Paired then Pair.Key
+                        else At_Offset (Gate_Stack.Base, Gate_Stack.Offset)),
+                     Kept => False, From_Step => Step_Norm_Feed,
+                     Region_At => Pair.Pad);
                   if not Added then
                      return;
                   end if;
                   Step_Room (Model_Runner.Numerics.Element_Count (Padded * Feed));
 
                   Products.Add_Listed_Product
-                    (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
-                     Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
+                    (Steps,
+                     (if Pair.Paired then Gate_Stack.Base else Up_Stack.Base),
+                     Up_Stack.Span,
+                     (if Pair.Paired then Pair.Start else Up_Stack.Offset),
+                     Up_P,
+                     (if Pair.Paired then Pair.Rows
+                      else Natural (Up_Stack.Rows)),
+                     Feed, Natural (Width),
                      Experts, Used, Step_Route, Positive (Slots), Added,
-                     Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
-                     Kept => False, From_Step => Step_Norm_Feed);
+                     Key =>
+                       (if Pair.Paired then Pair.Key
+                        else At_Offset (Up_Stack.Base, Up_Stack.Offset)),
+                     Kept => False, From_Step => Step_Norm_Feed,
+                     Region_At =>
+                       (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At)
+                        else 0));
                   if not Added then
                      return;
                   end if;
@@ -4289,43 +4385,82 @@ package body Model_Runner.Backend.Device is
                   end if;
                end;
             else
-               Products.Add_Gathered_Product
-                 (Steps, Gate_Stack.Base, Gate_Stack.Span, Gate_Stack.Offset,
-                  Gate_P, Natural (Gate_Stack.Rows), Feed, Natural (Width),
-                  [others => 0], Used, Added,
-                  Key => At_Offset (Gate_Stack.Base, Gate_Stack.Offset),
-                  Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-                  Routed => Step_Route);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+               if Pair.Paired
+                 and then Unit in 0 | 1
+                 and then Model_Runner.Numerics."=" (Alpha, 0.0)
+                 and then Model_Runner.Numerics."=" (Limit, 0.0)
+                 and then Gate_Bias = null and then Up_Bias = null
+                 and then Products.Pairs_Gate
+                            (Engine, Gate_P, 1, Natural (Width))
+               then
+                  --  The two arms and the unit between them as one step: the
+                  --  combination and the barrier before it go.
+                  Products.Add_Gathered_Pair
+                    (Steps, Gate_Stack.Base, Gate_Stack.Span, Pair.Start,
+                     Pair.Pair_At, Gate_P, Natural (Gate_Stack.Rows), Feed,
+                     Natural (Width), Used, Step_Route, Added,
+                     Key => Pair.Key, Kept => False,
+                     From_Step => Step_Norm_Feed, Unit => Unit);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+               else
+                  Products.Add_Gathered_Product
+                    (Steps, Gate_Stack.Base, Gate_Stack.Span,
+                     (if Pair.Paired then Pair.Start else Gate_Stack.Offset),
+                     Gate_P,
+                     (if Pair.Paired then Pair.Rows
+                      else Natural (Gate_Stack.Rows)),
+                     Feed, Natural (Width),
+                     [others => 0], Used, Added,
+                     Key =>
+                       (if Pair.Paired then Pair.Key
+                        else At_Offset (Gate_Stack.Base, Gate_Stack.Offset)),
+                     Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+                     Routed => Step_Route, Region_At => Pair.Pad);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-               Products.Add_Gathered_Product
-                 (Steps, Up_Stack.Base, Up_Stack.Span, Up_Stack.Offset,
-                  Up_P, Natural (Up_Stack.Rows), Feed, Natural (Width),
-                  [others => 0], Used, Added,
-                  Key => At_Offset (Up_Stack.Base, Up_Stack.Offset),
-                  Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-                  Routed => Step_Route);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
+                  Products.Add_Gathered_Product
+                    (Steps,
+                     (if Pair.Paired then Gate_Stack.Base else Up_Stack.Base),
+                     Up_Stack.Span,
+                     (if Pair.Paired then Pair.Start else Up_Stack.Offset),
+                     Up_P,
+                     (if Pair.Paired then Pair.Rows
+                      else Natural (Up_Stack.Rows)),
+                     Feed, Natural (Width),
+                     [others => 0], Used, Added,
+                     Key =>
+                       (if Pair.Paired then Pair.Key
+                        else At_Offset (Up_Stack.Base, Up_Stack.Offset)),
+                     Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+                     Routed => Step_Route,
+                     Region_At =>
+                       (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At)
+                        else 0));
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
-               Add_Biases
-                 (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
-                  Model_Runner.Numerics.Element_Count (Used * Feed), Added);
-               if not Added then
-                  return;
-               end if;
+                  Add_Biases
+                    (Gate_Bias, Up_Bias, Feed, Experts, Step_Route,
+                     Model_Runner.Numerics.Element_Count (Used * Feed), Added);
+                  if not Added then
+                     return;
+                  end if;
 
-               Products.Add_Combination (Steps, Unit, Added, Kept => False,
-                                           Alpha => Alpha, Limit => Limit);
-               if not Added then
-                  return;
+                  Products.Add_Combination (Steps, Unit, Added, Kept => False,
+                                              Alpha => Alpha, Limit => Limit);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
                end if;
-               Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
 
                Products.Add_Gathered_Product
                  (Steps, Down_Stack.Base, Down_Stack.Span, Down_Stack.Offset,
@@ -5912,6 +6047,7 @@ package body Model_Runner.Backend.Device is
       Down_Bias : Model_Runner.Tensors.Real_Array_Access := null)
    is
       Steps : Products.Sequence;
+      Pair  : constant Stack_Pair := Pair_Of (Gates, Ups);
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
       Added : Boolean;
 
@@ -5959,21 +6095,35 @@ package body Model_Runner.Backend.Device is
 
       Products.Open_Sequence (Steps);
 
+      --  Both from the one region where the two stacks are held as one;
+      --  see Pair_Of.
       Products.Add_Gathered_Product
-        (Steps, Gates.Base, Gates.Span, Gates.Offset, Gate_Packing,
-         Natural (Gates.Rows), Natural (Feed), Natural (Width),
+        (Steps, Gates.Base, Gates.Span,
+         (if Pair.Paired then Pair.Start else Gates.Offset), Gate_Packing,
+         (if Pair.Paired then Pair.Rows else Natural (Gates.Rows)),
+         Natural (Feed), Natural (Width),
          [1 => Member, others => 0], 1, Added,
-         Key => At_Offset (Gates.Base, Gates.Offset), Kept => False);
+         Key =>
+           (if Pair.Paired then Pair.Key
+            else At_Offset (Gates.Base, Gates.Offset)),
+         Kept => False, Region_At => Pair.Pad);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
       end if;
 
       Products.Add_Gathered_Product
-        (Steps, Ups.Base, Ups.Span, Ups.Offset, Up_Packing,
-         Natural (Ups.Rows), Natural (Feed), Natural (Width),
+        (Steps, (if Pair.Paired then Gates.Base else Ups.Base), Ups.Span,
+         (if Pair.Paired then Pair.Start else Ups.Offset), Up_Packing,
+         (if Pair.Paired then Pair.Rows else Natural (Ups.Rows)),
+         Natural (Feed), Natural (Width),
          [1 => Member, others => 0], 1, Added,
-         Key => At_Offset (Ups.Base, Ups.Offset), Kept => False);
+         Key =>
+           (if Pair.Paired then Pair.Key
+            else At_Offset (Ups.Base, Ups.Offset)),
+         Kept => False,
+         Region_At =>
+           (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At) else 0));
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -6074,6 +6224,55 @@ package body Model_Runner.Backend.Device is
             * Interfaces.Unsigned_64 (T.Row_Bytes (Weight)));
       end if;
    end Hold;
+
+   ---------------
+   -- Hold_Pair --
+   ---------------
+
+   procedure Hold_Pair
+     (Gates  : T.View;
+      Ups    : T.View;
+      Status : out E.Error_Info)
+   is
+      Pair : constant Stack_Pair := Pair_Of (Gates, Ups);
+      Ok   : Boolean;
+   begin
+      if not Pair.Paired then
+         --  Each whatever the other did, as the load held them before.
+         declare
+            Second : E.Error_Info;
+         begin
+            Hold (Gates, Status);
+            Hold (Ups, Second);
+            if not E.Is_Error (Status) then
+               Status := Second;
+            end if;
+         end;
+         return;
+      end if;
+
+      Status := E.Success;
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      declare
+         Storage : Model_Runner.Bytes.Byte_Array (1 .. Gates.Span)
+           with Import, Address => Gates.Base;
+      begin
+         Products.Hold
+           (Engine, Storage, Pair.Start, Products.Packed_Q4_K,
+            Pair.Rows, Natural (Gates.Columns), Key => Pair.Key, Ok => Ok);
+      end;
+
+      if not Ok then
+         Declined
+           (Status,
+            Interfaces.Unsigned_64 (Pair.Rows)
+            * Interfaces.Unsigned_64 (T.Row_Bytes (Gates)));
+      end if;
+   end Hold_Pair;
 
    --------------------
    -- Dispatch_Route --
@@ -6307,6 +6506,7 @@ package body Model_Runner.Backend.Device is
       Down_Bias : Model_Runner.Tensors.Real_Array_Access := null)
    is
       Steps : Products.Sequence;
+      Pair  : constant Stack_Pair := Pair_Of (Gates, Ups);
       Gate_Packing, Up_Packing, Down_Packing : Products.Weight_Packing;
       Added : Boolean;
 
@@ -6388,21 +6588,35 @@ package body Model_Runner.Backend.Device is
       --  own stretch of what the combination made.
       Products.Open_Sequence (Steps);
 
+      --  Both from the one region where the two stacks are held as one;
+      --  see Pair_Of.
       Products.Add_Gathered_Product
-        (Steps, Gates.Base, Gates.Span, Gates.Offset, Gate_Packing,
-         Natural (Gates.Rows), Natural (Feed), Natural (Width),
+        (Steps, Gates.Base, Gates.Span,
+         (if Pair.Paired then Pair.Start else Gates.Offset), Gate_Packing,
+         (if Pair.Paired then Pair.Rows else Natural (Gates.Rows)),
+         Natural (Feed), Natural (Width),
          Chosen, Count, Added,
-         Key => At_Offset (Gates.Base, Gates.Offset), Kept => False);
+         Key =>
+           (if Pair.Paired then Pair.Key
+            else At_Offset (Gates.Base, Gates.Offset)),
+         Kept => False, Region_At => Pair.Pad);
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
       end if;
 
       Products.Add_Gathered_Product
-        (Steps, Ups.Base, Ups.Span, Ups.Offset, Up_Packing,
-         Natural (Ups.Rows), Natural (Feed), Natural (Width),
+        (Steps, (if Pair.Paired then Gates.Base else Ups.Base), Ups.Span,
+         (if Pair.Paired then Pair.Start else Ups.Offset), Up_Packing,
+         (if Pair.Paired then Pair.Rows else Natural (Ups.Rows)),
+         Natural (Feed), Natural (Width),
          Chosen, Count, Added,
-         Key => At_Offset (Ups.Base, Ups.Offset), Kept => False);
+         Key =>
+           (if Pair.Paired then Pair.Key
+            else At_Offset (Ups.Base, Ups.Offset)),
+         Kept => False,
+         Region_At =>
+           (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At) else 0));
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
