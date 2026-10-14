@@ -1449,6 +1449,9 @@ package body Model_Runner.Framework.Repository is
                      Text   : Unbounded_String;
                      Status : E.Error_Info;
                      Size   : constant Dirs.File_Size := Dirs.Size (Full);
+                     --  Taken before it is read: a write between leaves a
+                     --  stamp older than what was read, read again next time.
+                     Stamp  : constant String := Stamp_Of (Full);
                      Print  : Unbounded_String;
                      use type Dirs.File_Size;
                   begin
@@ -1482,7 +1485,7 @@ package body Model_Runner.Framework.Repository is
                          Role        => (if Says_Generated (To_String (Text)) then Generated
                                          else Role_Of (Relative, Within)),
                          Fingerprint => Print,
-                         Stamp       => To_Unbounded_String (Stamp_Of (Full))));
+                         Stamp       => To_Unbounded_String (Stamp)));
                      declare
                         Reader : constant Adapter'Class :=
                           Languages.Adapter_For (Language_Of (Relative));
@@ -1735,8 +1738,13 @@ package body Model_Runner.Framework.Repository is
                begin
                   Read_Again := Read_Again + 1;
                   --  One that could not be read is left out, as Scan
-                  --  leaves it out.
-                  if not Unreadable (Path) then
+                  --  leaves it out -- and a built program or object, bytes
+                  --  not text, a NUL among its first, as Scan leaves it.
+                  if not Unreadable (Path)
+                    and then Ada.Strings.Fixed.Index
+                               (Text (Text'First .. Text'First + Natural'Min (8_192, Text'Length) - 1),
+                                [1 => ASCII.NUL]) = 0
+                  then
                      Add_File
                        (Result,
                         (Path        => To_Unbounded_String (Path),
@@ -1810,15 +1818,26 @@ package body Model_Runner.Framework.Repository is
                   for Unit of Own loop
                      exit when Sees;
                      if Depends.Contains (Unit) then
+                        --  A unit it depends on, or one of that unit's
+                        --  parents, which a with of a child sees as well.
                         for Target of Depends.Constant_Reference (Unit) loop
-                           if Moved.Contains (Target) then
+                           if Moved.Contains (Target)
+                             or else (for some One of Moved =>
+                                        Target'Length > One'Length
+                                        and then Target (Target'First .. Target'First + One'Length) = One & ".")
+                           then
                               Sees := True;
                               exit;
                            end if;
                         end loop;
                      end if;
                   end loop;
-                  Sees := Sees or else (for some Unit of Own => Moved.Contains (Unit));
+                  Sees := Sees or else (for some Unit of Own => Moved.Contains (Unit))
+                    --  A reader that finds what is called by its name, not by
+                    --  what the file depends on -- x.method (), a prefix of
+                    --  a module -- may see any unit that changed: read again
+                    --  whenever one did, as a whole scan reads it.
+                    or else (not Moved.Is_Empty and then Language_Of (Path) /= "Ada");
                   Result.Reading := To_Unbounded_String (Path);
                   if Sees then
                      if not Changed.Contains (Path) then

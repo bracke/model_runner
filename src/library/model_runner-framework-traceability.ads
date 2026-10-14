@@ -138,6 +138,10 @@ private
 
       --  Every component the state names.
       Components : Name_Lists.Vector;
+
+      --  The records that would not read as it was built: what they link
+      --  is not in it, and so nothing it leaves out is known untouched.
+      Unread : Name_Lists.Vector;
    end record;
 
    type Impact is record

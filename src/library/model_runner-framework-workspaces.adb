@@ -1350,8 +1350,12 @@ package body Model_Runner.Framework.Workspaces is
                   Target : constant String := Hostkit.Fs.Join (Project, Path);
                   Done   : Boolean := True;
                begin
+                  --  Known to be a person's only where what was written can
+                  --  be seen: its tree, or its joined copy. Otherwise what
+                  --  was written and what a person wrote look the same.
                   if Changed_Since (Path, Before_Absent => Fields (2) = "absent")
                     and then (Fields (2) = "absent" or else Dirs.Exists (Saved_Of (Item, Id, Path)))
+                    and then (Tree /= "" or else Dirs.Exists (Joined_Of (Item, Id, Path)))
                   then
                      --  A person's change since: theirs, left and said --
                      --  not a putting back that failed, kept for ever.
@@ -1396,6 +1400,7 @@ package body Model_Runner.Framework.Workspaces is
       Files.Discard (Journal_Of (Item, Id));
       Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
       Files.Discard_Tree (Journal_Of (Item, Id) & ".joined");
+      Stores.Release_Own (Item, "runtime/integrating-" & Id);
       --  All else put back; what a person changed since is theirs, and
       --  said -- the journal done with, so nothing waits on it.
       if Length (Hand) > 0 then
@@ -1434,6 +1439,9 @@ package body Model_Runner.Framework.Workspaces is
                      & " project again puts it back, or says what it cannot");
          return;
       end if;
+      --  Its own, as it is under way: a check's put back of the state
+      --  leaves it -- one an agent wrote would not be.
+      Stores.Hold_Own (Item, "runtime/integrating-" & Id);
       for Path of Paths loop
          if (for some C of Path => C < ' ') then
             Status := E.Make (E.Framework_Input_Invalid);
@@ -1507,6 +1515,7 @@ package body Model_Runner.Framework.Workspaces is
          Files.Discard (Journal_Of (Item, Id));
          Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
          Files.Discard_Tree (Journal_Of (Item, Id) & ".joined");
+         Stores.Release_Own (Item, "runtime/integrating-" & Id);
       else
          Roll_Back (Item, Id, Status);
       end if;

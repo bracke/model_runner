@@ -106,6 +106,16 @@ package body Tests.Framework_Cases is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
 
+   --  One whose run faults: the work ends all the same, as any end.
+   type Raising_Agent is new Scripted_Agent with null record;
+
+   overriding procedure Run
+     (Self        : Raising_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
    --  One run apart, as a process of its own is: it says what it used
    --  where the harness reads it.
    type Accounting_Agent is new Scripted_Agent with record
@@ -3112,6 +3122,17 @@ package body Tests.Framework_Cases is
             Assert (E.Is_Ok (Status) and then Got.Is_Empty,
                     "derivation after a renumbering failed or made work twice: " & Code_Of (Status));
             Moved := S.No_Changes;
+            --  The number the first had -- revised, and renumbered since --
+            --  is not given again: its history is under it still.
+            declare
+               Again : Unbounded_String;
+            begin
+               Nt.Propose (Store, Moved, Nt.Requirement, "IO", "Other", "It SHALL other.",
+                           "", "user", "", "io", Again, Status, Given => To_String (Req));
+               Assert (E.Is_Ok (Status) and then Again /= Req,
+                       "a number given another's history was handed out again: " & To_String (Again));
+               Moved := S.No_Changes;
+            end;
          end;
       end;
       S.Close (Store);
@@ -3679,6 +3700,17 @@ package body Tests.Framework_Cases is
             Dirs.Delete_Directory (Away);
          end if;
          pragma Unreferenced (Gone);
+      end;
+
+      --  A class whose list of bases runs to the end of the file is read,
+      --  not left unread.
+      declare
+         Place : constant String := Fresh ("cut-short-class");
+      begin
+         Dirs.Create_Path (Place & "/src");
+         Put_File (Place & "/src/cut.hpp", "class A : B");
+         Assert (Rp.Unread_Count (Rp.Scan (Place)) = 0,
+                 "a header ending inside a class's bases was not read");
       end;
 
       --  A file too large to read whole is printed all the same: changed,
@@ -6125,6 +6157,20 @@ package body Tests.Framework_Cases is
    end Run;
 
    overriding procedure Run
+     (Self        : Raising_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := Null_Unbounded_String;
+      Status := E.Success;
+      raise Constraint_Error with "a fault in the agent";
+   end Run;
+
+   overriding procedure Run
      (Self        : Accounting_Agent;
       Prompt_Path : String;
       Project     : String;
@@ -6320,6 +6366,27 @@ package body Tests.Framework_Cases is
          Assert (E.Is_Ok (Status) and then Length (Kept.Payload) > 0,
                  "a failed call did not refer to a record of its failure: "
                  & R.Get (Call, "failure_result"));
+      end;
+      --  A fault in the run is an end like any: the task set aside, its
+      --  leases let go, its call ended -- not left running.
+      declare
+         Faulted : Unbounded_String;
+         Ran     : Wk.Report;
+         Got     : E.Error_Info;
+      begin
+         Tk.Create (Store, Change, Fields ("Faulting", "analysis"), "user", "", Faulted, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Faulted), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Faulted),
+                     Raising_Agent'(File => Null_Unbounded_String, Answer => Null_Unbounded_String,
+                                    Broken => False),
+                     Model, Ran, Got);
+         Assert (E.Is_Error (Got) and then Tk.State_Of (Store, To_String (Faulted)) /= "running"
+                 and then Model_Runner.Framework.Invocations.State_Of (Store, To_String (Ran.Invocation_Id))
+                            /= "started",
+                 "work whose agent faulted was left running, or its call started: "
+                 & Tk.State_Of (Store, To_String (Faulted)));
       end;
       Assert (To_String (Done.Final_State) = "failed"
               and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "MR-") > 0,
@@ -7127,22 +7194,34 @@ package body Tests.Framework_Cases is
       Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
               "the intersection with nothing granted something");
 
-      --  Specifications unscoped are where specifications are kept: met
-      --  with roots elsewhere, they are no way into code there.
+      --  A grant written on, as a template may write it, is granted whole.
       declare
-         Specs_Only : Pm.Permission_Set := Pm.Nothing;
-         Into_Src   : Pm.Permission_Set := Pm.Nothing;
+         On_Store : S.Store;
       begin
-         Specs_Only (Pm.Write_Specs) := (Granted => True, others => <>);
-         Into_Src (Pm.Write_Specs) := (Granted => True, others => <>);
-         Into_Src (Pm.Write_Specs).Roots.Append ("src/");
-         Assert (not Pm.Allows (Pm.Intersect (Specs_Only, Into_Src), Pm.Write_Specs, "src/x.adb")
-                 and then Pm.Allows (Pm.Intersect (Specs_Only, Specs_Only), Pm.Write_Specs, "docs/x.md"),
-                 "write_specs met with roots reached past where specifications are kept");
-         Into_Src (Pm.Write_Specs).Roots.Append ("docs/api/");
-         Assert (Pm.Allows (Pm.Intersect (Specs_Only, Into_Src), Pm.Write_Specs, "docs/api/x.md")
-                 and then not Pm.Allows (Pm.Intersect (Into_Src, Specs_Only), Pm.Write_Specs, "src/y.adb"),
-                 "write_specs met with roots lost the specifications' place within them");
+         Task_Project (On_Store, "permission-on", "map permission.project.use_network = on" & LF);
+         Assert (Pm.Effective (On_Store, "", "") (Pm.Use_Network).Granted,
+                 "a grant written on was not granted");
+         S.Close (On_Store);
+      end;
+
+      --  The project's specifications unscoped are where specifications are
+      --  kept: narrowed below to roots elsewhere, they are no way into code
+      --  there; roots the project names itself are its own.
+      declare
+         Spec_Store : S.Store;
+      begin
+         Task_Project (Spec_Store, "specs-narrowed",
+                       "map permission.kind.analysis.write_specs = roots=src/|docs/api/" & LF);
+         Assert (not Pm.Allows (Pm.Effective (Spec_Store, "analysis", ""), Pm.Write_Specs, "src/x.adb")
+                 and then Pm.Allows (Pm.Effective (Spec_Store, "analysis", ""), Pm.Write_Specs, "docs/api/x.md")
+                 and then Pm.Allows (Pm.Effective (Spec_Store, "", ""), Pm.Write_Specs, "docs/x.md"),
+                 "write_specs narrowed to roots reached past where specifications are kept");
+         S.Close (Spec_Store);
+         Task_Project (Spec_Store, "specs-own-roots",
+                       "map permission.project.write_specs = roots=requirements/" & LF);
+         Assert (Pm.Allows (Pm.Effective (Spec_Store, "analysis", ""), Pm.Write_Specs, "requirements/r.md"),
+                 "write_specs the project roots itself was taken away");
+         S.Close (Spec_Store);
       end;
 
       --  A kind's capability turned off by /reconfigure stays off, written
@@ -10315,6 +10394,31 @@ package body Tests.Framework_Cases is
          S.Restore_State (Store, Taken, Changed, Left);
          Assert (Read_Whole (Target) = Was,
                  "a record written behind the harness was kept because a log in the state said it was committed");
+      end;
+
+      --  A journal the harness began is its own, and stays; one written
+      --  behind it, beside it, goes.
+      declare
+         Taken   : S.State_Snapshot;
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Runtime : constant String := Fresh_Root (Store) & "/.model_runner/runtime/";
+      begin
+         S.Hold_Own (Store, "runtime/integrating-WS-000123");
+         S.Snapshot_State (Store, Taken);
+         Put_File (Runtime & "integrating-WS-000123", "task" & ASCII.HT & "TASK-X" & LF);
+         Put_File (Runtime & "integrating-WS-000124", "task" & ASCII.HT & "TASK-Y" & LF);
+         S.Restore_State (Store, Taken, Changed, Left);
+         Assert (Dirs.Exists (Runtime & "integrating-WS-000123")
+                 and then not Dirs.Exists (Runtime & "integrating-WS-000124"),
+                 "a journal the harness began was taken, or one written behind it kept");
+         S.Release_Own (Store, "runtime/integrating-WS-000123");
+         S.Snapshot_State (Store, Taken);
+         Dirs.Delete_File (Runtime & "integrating-WS-000123");
+         S.Restore_State (Store, Taken, Changed, Left);
+         Assert (Dirs.Exists (Runtime & "integrating-WS-000123"),
+                 "a journal let go of was not held as any other file is");
+         Dirs.Delete_File (Runtime & "integrating-WS-000123");
       end;
 
       --  A removal resting on a revision since replaced is refused.

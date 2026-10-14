@@ -24,6 +24,62 @@ package body Model_Runner.Framework.Stores is
    package Seen_At is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Natural, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
+   --  What the harness has under way beside the store -- a taking in's
+   --  journal -- each as its root and the start of its path a tab apart:
+   --  its own to settle, not put back by Restore_State; one an agent made
+   --  is not among them, and is.
+   protected Own_Files is
+      procedure Hold (Root_Path, Prefix : String);
+      procedure Release (Root_Path, Prefix : String);
+      function Holds (Root_Path, Relative : String) return Boolean;
+   private
+      Held : Name_Lists.Vector;
+   end Own_Files;
+
+   protected body Own_Files is
+      procedure Hold (Root_Path, Prefix : String) is
+      begin
+         if not Held.Contains (Root_Path & ASCII.HT & Prefix) then
+            Held.Append (Root_Path & ASCII.HT & Prefix);
+         end if;
+      end Hold;
+
+      procedure Release (Root_Path, Prefix : String) is
+         At_Index : constant Natural := Held.Find_Index (Root_Path & ASCII.HT & Prefix);
+      begin
+         if At_Index /= Name_Lists.No_Index then
+            Held.Delete (At_Index);
+         end if;
+      end Release;
+
+      function Holds (Root_Path, Relative : String) return Boolean is
+      begin
+         for Line of Held loop
+            declare
+               Tab    : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+               Prefix : constant String := Line (Tab + 1 .. Line'Last);
+            begin
+               if Line (Line'First .. Tab - 1) = Root_Path and then Relative'Length >= Prefix'Length
+                 and then Relative (Relative'First .. Relative'First + Prefix'Length - 1) = Prefix
+               then
+                  return True;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Holds;
+   end Own_Files;
+
+   procedure Hold_Own (Item : Store; Prefix : String) is
+   begin
+      Own_Files.Hold (Root (Item), Prefix);
+   end Hold_Own;
+
+   procedure Release_Own (Item : Store; Prefix : String) is
+   begin
+      Own_Files.Release (Root (Item), Prefix);
+   end Release_Own;
+
    protected Written is
       procedure Add (Root_Path : String; Names : Name_Lists.Vector);
       function Count return Natural;
@@ -1285,7 +1341,9 @@ package body Model_Runner.Framework.Stores is
       Crash_Here (After_Journal);
       if E.Is_Ok (Status) then
          Mark (Item, Status);
-         Own_Mark := E.Is_Ok (Status);
+         --  Its mark is there once renamed in, whatever failed after: any
+         --  earlier one was finished before this was staged.
+         Own_Mark := Dirs.Exists (Join (Journal_Directory (Root (Item)), Manifest_File));
       end if;
       Crash_Here (After_Mark);
       --  For a test: failed once marked, the change left for the next
@@ -1778,12 +1836,7 @@ package body Model_Runner.Framework.Stores is
                --  Nor the journal: a change under way, or one left for the
                --  next opening, is the commit's own, put right by it.
                if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads" | "runtime/journal"
-                 --  Nor what a taking in holds while it is under way: its
-                 --  journal's own to settle, as the store's is. What work
-                 --  is told by -- before-, kept- -- stays held: an agent
-                 --  could write it to hide what it did.
-                 and then not (Under = "runtime"
-                               and then Ada.Strings.Fixed.Index (Name, "integrating-") = Name'First)
+
                  and then not (Under = "workspaces")
                  and then not (Under = "runtime"
                                and then (Ada.Strings.Fixed.Index (Name, "overwritten-") = Name'First
@@ -1794,8 +1847,6 @@ package body Model_Runner.Framework.Stores is
                   Gather (Root, Relative, Into);
                end if;
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File
-              and then not (Under = "runtime"
-                            and then Ada.Strings.Fixed.Index (Name, "integrating-") = Name'First)
               and then Relative not in "runtime/lock" | "runtime/lock.holder" | "runtime/written.log"
                                      | "runtime/harness.log" | "runtime/consistency.said"
               and then not (Relative'Length > 13
@@ -1855,7 +1906,7 @@ package body Model_Runner.Framework.Stores is
             Name : constant String := Text_Maps.Key (Position);
             Path : constant String := Hostkit.Fs.Join (Root (Item), Name);
          begin
-            if Committed.Contains (Name) then
+            if Committed.Contains (Name) or else Own_Files.Holds (Root (Item), Name) then
                null;
             elsif (not Now.Files.Contains (Name)
                    or else Now.Files (Name) /= Text_Maps.Element (Position))
@@ -1885,6 +1936,7 @@ package body Model_Runner.Framework.Stores is
       for Position in Now.Files.Iterate loop
          if not From.Files.Contains (Text_Maps.Key (Position))
            and then not Committed.Contains (Text_Maps.Key (Position))
+           and then not Own_Files.Holds (Root (Item), Text_Maps.Key (Position))
          then
             Changed.Append (Text_Maps.Key (Position));
             if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))) then

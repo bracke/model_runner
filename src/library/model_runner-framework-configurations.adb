@@ -152,6 +152,33 @@ package body Model_Runner.Framework.Configurations is
       return Records.Fingerprint_Of (Meaning);
    end Verification_Fingerprint;
 
+   function Legacy_Verification_Fingerprint (Value : Records.Item) return String is
+      --  As it was computed before the execution limits were read by their
+      --  own names: the shell and environment, the network, and names that
+      --  matched none of the limits.
+      Bearing : constant Name_Lists.Vector :=
+        ["profile.", "list.verification.", "scalar.verification.", "scalar.profile_capability.",
+         "scalar.build.", "adapter.", "set.repository.", "set.source", "set.directories",
+         "set.execution.shell", "set.execution.environment", "scalar.execution.network",
+         "scalar.execution.memory", "scalar.execution.cpu", "scalar.execution.processes",
+         "scalar.execution.file", "map.component.", "set.components", "input.project_name"];
+      Meaning : Records.Item := Records.Create (Current_Entity, 1, "", 1);
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Name : constant String := Records.Field_Name (Value, Index);
+         begin
+            if (for some Prefix of Bearing =>
+                  Name'Length >= Prefix'Length
+                  and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix)
+            then
+               Records.Set (Meaning, Name, Records.Get (Value, Name));
+            end if;
+         end;
+      end loop;
+      return Records.Fingerprint_Of (Meaning);
+   end Legacy_Verification_Fingerprint;
+
    -----------------
    -- Check_Input --
    -----------------
@@ -1805,6 +1832,10 @@ package body Model_Runner.Framework.Configurations is
    --  or a task kind that is not there, or a policy that is none of its
    --  words. The first found, or nothing. How each changed value reads is
    --  checked as it is given.
+   --  What follows a name's last dot.
+   function Last_Word (Name : String) return String
+   is (Name (Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward) + 1 .. Name'Last));
+
    function Whole_Problem (Config : Records.Item) return String is
       function Has (Field : String) return Boolean is (Records.Get (Config, Field) /= "");
 
@@ -1844,8 +1875,10 @@ package body Model_Runner.Framework.Configurations is
             --  A permission as a template writes it is held to what
             --  /reconfigure holds one to: one not read as written grants
             --  what nobody meant.
-            elsif Starts (Name, "map.permission.") and then Problem (Name, Value) /= "" then
-               return Problem (Name, Value);
+            elsif Starts (Name, "map.permission.")
+              and then Permissions.Grant_Problem (Last_Word (Name), Value) /= ""
+            then
+               return Name & ": " & Permissions.Grant_Problem (Last_Word (Name), Value);
             end if;
          end;
       end loop;

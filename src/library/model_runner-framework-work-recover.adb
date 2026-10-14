@@ -158,7 +158,10 @@ begin
                             Outcome => "blocked");
             end if;
             Leases.Release (Item, Change, Lease_Of (Id), Agent, Status);
-            if E.Is_Ok (Status) and then Component_Of (Item, Id) /= "" then
+            --  Its own only: another's on the component since is theirs.
+            if E.Is_Ok (Status) and then Component_Of (Item, Id) /= ""
+              and then Leases.Owner_Of (Item, Tasks.Component_Lease (Component_Of (Item, Id))) = Agent
+            then
                Leases.Release
                  (Item, Change, Tasks.Component_Lease (Component_Of (Item, Id)), Agent, Status);
             end if;

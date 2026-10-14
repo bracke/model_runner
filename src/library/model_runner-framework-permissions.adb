@@ -78,7 +78,8 @@ package body Model_Runner.Framework.Permissions is
    --  What of a grant's constraints this does not read: a key it has no
    --  constraint called, a word with nothing it belongs to, a count that
    --  is no number. Read as it stood, it would grant more than meant.
-   function Constraint_Problem (Text : String; Capability_Word : String := "") return String is
+   function Constraint_Problem
+     (Text : String; Capability_Word : String := ""; Strict : Boolean := True) return String is
       Last_Key : Unbounded_String;
       --  The constraints the capability takes, where it is known.
       Takes : constant String :=
@@ -101,7 +102,7 @@ package body Model_Runner.Framework.Permissions is
          begin
             if Key = "" then
                null;
-            elsif Equal = 0 and then To_String (Last_Key) in "roots" | "deny"
+            elsif Strict and then Equal = 0 and then To_String (Last_Key) in "roots" | "deny"
               and then Ada.Strings.Fixed.Index (Key, "/") = 0 and then Ada.Strings.Fixed.Index (Key, ".") = 0
             then
                --  A word after the roots that names no path is a slip, not a
@@ -123,7 +124,7 @@ package body Model_Runner.Framework.Permissions is
                         or else (for some C of Value => C not in '0' .. '9'))
             then
                return Key & "=" & Value & " is no count";
-            elsif Key in "roots" | "deny" | "profiles" and then Value = "" then
+            elsif Strict and then Key in "roots" | "deny" | "profiles" and then Value = "" then
                return Key & "= names nothing";
             end if;
             --  A root is a place in the project, named from it.
@@ -148,6 +149,13 @@ package body Model_Runner.Framework.Permissions is
       end loop;
       return "";
    end Constraint_Problem;
+
+   function Grant_Problem (Capability_Word, Text : String) return String
+   is (if Text in "" | "on" | "off" | "inherit"
+          --  A whole level -- kind.X=none -- is no one capability's grant.
+          or else not (for some One in Capability => Word (One) = Capability_Word)
+       then ""
+       else Constraint_Problem (Text, Capability_Word, Strict => False));
 
    function Constrained (Text : String) return Grant is
       Result : Grant := (Granted => True, others => <>);
@@ -261,15 +269,21 @@ package body Model_Runner.Framework.Permissions is
                --  a kind or role no narrowing of the level above at all.
                --  A value that does not read as one -- OFF, ROOTS=src/ --
                --  grants nothing: unread, it is no grant.
+               --  Read as it was always read where that is a reading --
+               --  on, a root that is a bare file name, a list left empty --
+               --  and nothing where it is none: an unknown key, a count
+               --  that is not one.
                if Records.Get (Config, Field) = "off"
-                 or else (Records.Get (Config, Field) /= "inherit"
-                          and then Constraint_Problem (Records.Get (Config, Field)) /= "")
+                 or else (Records.Get (Config, Field) not in "inherit" | "on"
+                          and then Constraint_Problem (Records.Get (Config, Field), Strict => False) /= "")
                then
                   Result (Item_Kind) := (Granted => False, others => <>);
                elsif Records.Get (Config, Field) = "inherit" then
                   Result (Item_Kind) :=
                     (if Level = "project" then Project_Default (Item_Kind)
                      else (Granted => True, others => <>));
+               elsif Records.Get (Config, Field) = "on" then
+                  Result (Item_Kind) := (Granted => True, others => <>);
                else
                   Result (Item_Kind) := Constrained (Records.Get (Config, Field));
                end if;
@@ -474,7 +488,6 @@ package body Model_Runner.Framework.Permissions is
    ---------------
 
    function Intersect (Left, Right : Permission_Set) return Permission_Set is
-      Spec_Places : constant Name_Lists.Vector := ["docs/", "doc/", "specs/", "spec/"];
       Result : Permission_Set := Nothing;
    begin
       for Item in Capability loop
@@ -485,18 +498,7 @@ package body Model_Runner.Framework.Permissions is
          begin
             G.Granted := L.Granted and then R.Granted;
             if G.Granted then
-               --  Specifications unscoped are where specifications are kept,
-               --  not everywhere: met with roots, what lies in both is the
-               --  places of specifications within them -- roots=src/ is no
-               --  way out of docs/ for write_specs.
-               if Item = Write_Specs and then L.Roots.Is_Empty /= R.Roots.Is_Empty then
-                  G.Roots := Narrowest (Spec_Places, (if L.Roots.Is_Empty then R.Roots else L.Roots));
-                  if G.Roots.Is_Empty then
-                     G.Granted := False;
-                  end if;
-               else
-                  G.Roots := Narrowest (L.Roots, R.Roots);
-               end if;
+               G.Roots := Narrowest (L.Roots, R.Roots);
                if not L.Roots.Is_Empty and then not R.Roots.Is_Empty
                  and then G.Roots.Is_Empty
                then
@@ -715,6 +717,19 @@ package body Model_Runner.Framework.Permissions is
             Restriction (Task_Level, Level, Status);
             Result := Intersect (Result, Level);
          end;
+      end if;
+      --  The project's specifications unscoped are where specifications
+      --  are kept, not everywhere: narrowed below it to roots, what is had
+      --  is those places within the roots -- roots=src/ is no way into code
+      --  for write_specs. Roots the project names itself are its own.
+      if Project (Write_Specs).Granted and then Project (Write_Specs).Roots.Is_Empty
+        and then Result (Write_Specs).Granted and then not Result (Write_Specs).Roots.Is_Empty
+      then
+         Result (Write_Specs).Roots :=
+           Narrowest (Name_Lists.Vector'(["docs/", "doc/", "specs/", "spec/"]), Result (Write_Specs).Roots);
+         if Result (Write_Specs).Roots.Is_Empty then
+            Result (Write_Specs).Granted := False;
+         end if;
       end if;
       return Result;
    end Effective;

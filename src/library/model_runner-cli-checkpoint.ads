@@ -45,10 +45,14 @@ package Model_Runner.CLI.Checkpoint is
    --  @param Loaded Whether at least one message was read in.
    --  @param Status Success, or IO_Read_Failed when the file could not be
    --    read, or whatever appending a message reported.
+   --  @param Replace Whether what is read replaces what Messages holds:
+   --    read once, into a history of its own first, and only then put in
+   --    its place -- a file that will not load leaves Messages as it was.
    procedure Load
      (Path     : String;
       Messages : in out Model_Runner.Conversation.History;
       Loaded   : out Boolean;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Replace  : Boolean := False);
 
 end Model_Runner.CLI.Checkpoint;

@@ -447,7 +447,12 @@ package body Model_Runner.Framework.Intent is
          Staged : Boolean;
       begin
          Stores.Pending (Change, Area_Of (Kind), Name, Held, Staged);
-         return Staged or else Stores.Exists (Item, Area_Of (Kind), Name);
+         --  Or once had, and given another since: its history is under
+         --  this one, and Name@N would read another's words.
+         return Staged or else Stores.Exists (Item, Area_Of (Kind), Name)
+           or else (for some Kept of Stores.Names (Item, Area_Of (Kind)) =>
+                      Kept'Length > Name'Length + 5
+                      and then Kept (Kept'First .. Kept'First + Name'Length + 4) = Name & ".rev-");
       end Taken;
 
       --  Whether a new identifier's number is in use already: by one of
@@ -848,22 +853,25 @@ package body Model_Runner.Framework.Intent is
                   return;
                end if;
                declare
+                  As_State       : constant String := Counts_As (Item, State);
                   After_Text     : constant String :=
                     Records.Get (Config, "scalar.requirement.after_text_change");
                   After_Criteria : constant String :=
                     Records.Get (Config, "scalar.requirement.after_criteria_change");
                begin
-                  if New_Text and then State in "implemented" | "verified" then
+                  --  As the project counts its own states: one that counts
+                  --  as verified loses that as verified does.
+                  if New_Text and then As_State in "implemented" | "verified" then
                      Next := To_Unbounded_String
                        (if After_Text = "blocked" then "blocked" else "accepted");
-                  elsif New_Rules and then State in "implemented" | "verified" then
+                  elsif New_Rules and then As_State in "implemented" | "verified" then
                      Next := To_Unbounded_String
                        (if After_Criteria = "accepted" then "accepted"
-                        elsif State = "verified" then "implemented" else State);
+                        elsif As_State = "verified" then "implemented" else State);
                   end if;
                end;
             end;
-            Result.Invalidated := State = "verified" and then Next /= State;
+            Result.Invalidated := Counts_As (Item, State) = "verified" and then Next /= State;
             Records.Set (Value, "state", To_String (Next));
          end if;
          Result.After := Next;
@@ -1498,7 +1506,13 @@ package body Model_Runner.Framework.Intent is
          return;
       end if;
       Keep_Earlier (Item, Change, Kind, New_Id);
-      Records.Set (Value, "supersedes", Old_Id);
+      --  One more it supersedes, the earlier still named: a line each, as
+      --  renumbering reads them.
+      if not Split_Lines (Records.Get (Value, "supersedes")).Contains (Old_Id) then
+         Records.Set (Value, "supersedes",
+                      (if Records.Get (Value, "supersedes") = "" then Old_Id
+                       else Records.Get (Value, "supersedes") & ASCII.LF & Old_Id));
+      end if;
       Stores.Put (Change, Area_Of (Kind), New_Id, Value);
 
       Current (Item, Change, Kind, Old_Id, Value, Status);

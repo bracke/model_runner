@@ -907,20 +907,12 @@ package body Model_Runner.CLI.Interactive is
                   Path    : constant String := Line (Asked.First .. Asked.Last);
                   Loaded  : Boolean;
                   Outcome : E.Error_Info;
-                  Trial   : Conv.History;
                begin
-                  --  Read first on its own: a file that will not load leaves
-                  --  the conversation as it is, not gone.
-                  Conv.Open (Trial, Bounds, Outcome);
-                  if E.Is_Ok (Outcome) then
-                     Model_Runner.CLI.Checkpoint.Load (Path, Trial, Loaded, Outcome);
-                  end if;
-                  --  Loading replaces the conversation, so the old one goes
+                  --  Loading replaces the conversation -- read once, and put
+                  --  in its place only when it read -- so the old one goes,
                   --  and the cached positions with it.
+                  Model_Runner.CLI.Checkpoint.Load (Path, Messages, Loaded, Outcome, Replace => True);
                   if E.Is_Ok (Outcome) and then Loaded then
-                     Conv.Clear (Messages);
-                     Model_Runner.CLI.Checkpoint.Load
-                       (Path, Messages, Loaded, Outcome);
                      L.Reset (Session);
                      Model_Runner.CLI.Pictures.Release (Pictures);
                      Have_Stats := False;

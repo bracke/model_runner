@@ -99,6 +99,15 @@ package Model_Runner.Framework.Configurations is
    --  @return Sixteen hexadecimal digits.
    function Verification_Fingerprint (Value : Records.Item) return String;
 
+   --  The same, as it was computed before the execution limits counted:
+   --  what evidence taken then was held to, so that it is not stale for
+   --  that alone, while a change since to what it covered still makes it
+   --  so.
+   --
+   --  @param Value The configuration record.
+   --  @return Sixteen hexadecimal digits.
+   function Legacy_Verification_Fingerprint (Value : Records.Item) return String;
+
    --  Work out what initializing a project from a composition will do.
    --
    --  @param Composed The composed template.

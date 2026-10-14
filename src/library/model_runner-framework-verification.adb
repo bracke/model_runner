@@ -1497,7 +1497,9 @@ package body Model_Runner.Framework.Verification is
            Traceability.Select_Tests
              (Item, Traceability.Impact_Of (Traceability.Build (Item, Files), Changed));
       begin
-         if Selected.Width = Traceability.Full_Suite then
+         --  Only a selection of certain tests is a list: one of a
+         --  component's runs all its tests, whichever it names.
+         if Selected.Width /= Traceability.Certain_Tests then
             return False;
          end if;
          for Test of Selected.Tests loop
@@ -1764,6 +1766,10 @@ package body Model_Runner.Framework.Verification is
          if Records.Get (Value, "checks_fingerprint")
               /= (if Configuration /= "" then Configuration
                   else Configurations.Verification_Fingerprint (Settings))
+           --  Taken before the limits counted, and what it was held to then
+           --  unchanged: not stale for the way it was counted alone.
+           and then not (Configuration = "" and then Records.Get (Value, "checks_fingerprint")
+                                                    = Configurations.Legacy_Verification_Fingerprint (Settings))
          then
             Note (Stale_Configuration, "the configuration of its checks has changed since " & Evidence);
          end if;

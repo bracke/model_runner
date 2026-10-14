@@ -463,6 +463,20 @@ package Model_Runner.Framework.Stores is
    --  The project's state as its files were at a moment: every file under
    --  the state root but the scratch a run is given, the process slots,
    --  the lock, and the workspaces' trees, with what it held.
+   --  Hold a path of the harness's own under the state -- a taking in's
+   --  journal, begun -- as its own to settle: Restore_State leaves what
+   --  starts with it, where it would take one an agent wrote for its own.
+   --
+   --  @param Item The store.
+   --  @param Prefix The start of the path, under the state's root.
+   procedure Hold_Own (Item : Store; Prefix : String);
+
+   --  End what Hold_Own began.
+   --
+   --  @param Item The store.
+   --  @param Prefix As held.
+   procedure Release_Own (Item : Store; Prefix : String);
+
    type State_Snapshot is private;
 
    --  Take the state as it is: into a snapshot the caller holds, since a

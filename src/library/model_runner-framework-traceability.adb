@@ -156,6 +156,9 @@ package body Model_Runner.Framework.Traceability is
             Status : E.Error_Info;
          begin
             Intent.Read (Item, Intent.Requirement, Id, Held, Status);
+            if E.Is_Error (Status) then
+               Result.Unread.Append (Id);
+            end if;
             if E.Is_Ok (Status) then
                declare
                   Node : constant String := Id & "@" & Image (Held.Revision);
@@ -264,14 +267,24 @@ package body Model_Runner.Framework.Traceability is
             Status  : E.Error_Info;
          begin
             Tasks.Definition (Item, Id, Defined, Status);
+            if E.Is_Error (Status) then
+               Result.Unread.Append (Id);
+            end if;
             if E.Is_Ok (Status) then
                for Requirement of Lines_Of (Records.Get (Defined, "requirements")) loop
                   declare
                      Held : Intent.Entity;
+                     Got  : E.Error_Info;
                   begin
-                     Intent.Read (Item, Intent.Requirement, Requirement, Held, Status);
-                     Link (Result, Requirement & "@" & Image (Held.Revision), Id, "served_by",
-                           Repository.Explicit, Repository.Certain, Id);
+                     Intent.Read (Item, Intent.Requirement, Requirement, Held, Got);
+                     --  One that will not read is not at a revision: not
+                     --  linked as though it were, and said unread.
+                     if E.Is_Error (Got) then
+                        Result.Unread.Append (Requirement);
+                     else
+                        Link (Result, Requirement & "@" & Image (Held.Revision), Id, "served_by",
+                              Repository.Explicit, Repository.Certain, Id);
+                     end if;
                   end;
                end loop;
                if Records.Get (Defined, "component") /= "" then
@@ -684,13 +697,22 @@ package body Model_Runner.Framework.Traceability is
          declare
             Reaches_Anything : Boolean := False;
          begin
+            --  Reaching something is a relation in the code: a component
+            --  that names the file, a task that once changed it, a document
+            --  that is its source, says nothing of what a change to it
+            --  affects. And a build's own files reach everything built.
             for Next of From.Edges loop
                Reaches_Anything := Reaches_Anything
                  or else ((To_String (Next.From) = Seed_Of (Path)
                            or else To_String (Next.To) = Seed_Of (Path))
-                          and then To_String (Next.Kind) /= "is_test");
+                          and then To_String (Next.Kind) not in "is_test" | "names" | "changed" | "part_of"
+                                                              | "applies_to" | "verified_by"
+                          and then Ada.Strings.Fixed.Index (To_String (Next.Kind), "sources") /= 1);
             end loop;
-            if not Reaches_Anything then
+            if not Reaches_Anything
+              or else Repository."=" (Repository.Role_Of (Path), Repository.Build)
+              or else not From.Unread.Is_Empty
+            then
                Result.Unknown.Append (Path);
             end if;
          end;
@@ -737,6 +759,8 @@ package body Model_Runner.Framework.Traceability is
          end if;
       end loop;
 
+      --  Narrow is a project's own choice to test only what is known to be
+      --  affected, whatever is not known: taken as asked.
       if Narrow then
          Result.Width := Certain_Tests;
          Result.Reason := To_Unbounded_String ("the policy tests only what is affected");

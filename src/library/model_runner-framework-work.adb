@@ -2255,7 +2255,15 @@ package body Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null) is
    begin
-      Execute_Work (Item, Task_Id, Runner, Model, Result, Status, Starting);
+      --  A fault anywhere in the work is a way it ended, as any other is:
+      --  said as one, and what follows -- the task set aside, its leases
+      --  let go, its call ended -- still done.
+      begin
+         Execute_Work (Item, Task_Id, Runner, Model, Result, Status, Starting);
+      exception
+         when Fault : others =>
+            Status := E.Unexpected (Fault, "work on " & Task_Id);
+      end;
       Execution.Watch_Lease (null);
 
       --  Whatever way the work ended, a task it started is not left running

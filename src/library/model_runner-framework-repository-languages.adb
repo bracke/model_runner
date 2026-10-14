@@ -581,10 +581,12 @@ package body Model_Runner.Framework.Repository.Languages is
                      begin
                         Declare_Symbol (Into, Typed, "type", Path, Tokens (Index + 1).Line);
                         --  class A : public B, C -- what it extends.
-                        if Is_Mark (Tokens (Index + 2), ":") then
+                        if Index + 2 <= Count and then Is_Mark (Tokens (Index + 2), ":") then
                            for Ahead in Index + 3 .. Count loop
                               exit when Is_Mark (Tokens (Ahead), "{");
-                              if Tokens (Ahead).Kind = Word
+                              --  The file may end inside the list: nothing
+                              --  after the last name to tell it by.
+                              if Ahead < Count and then Tokens (Ahead).Kind = Word
                                 and then To_String (Tokens (Ahead).Text)
                                            not in "public" | "private" | "protected" | "virtual"
                                 and then (Is_Mark (Tokens (Ahead + 1), "{")

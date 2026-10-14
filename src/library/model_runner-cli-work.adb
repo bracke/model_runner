@@ -1,5 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -238,10 +239,15 @@ package body Model_Runner.CLI.Work is
                E.Add_Text (Status, "detail", "it is not a model file: a model is a .gguf file");
             end if;
          exception
-            when others =>
+            --  Not to be read is no model either: said, not passed.
+            when Failure : others =>
                if Is_Open (File) then
                   Close (File);
                end if;
+               Status := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Status, "name", "model");
+               E.Add_Text (Status, "value", Named);
+               E.Add_Text (Status, "detail", "it could not be read: " & Ada.Exceptions.Exception_Name (Failure));
          end;
       end if;
    end Check_Start;
@@ -257,6 +263,8 @@ package body Model_Runner.CLI.Work is
       Arguments : Model_Runner.Framework.Name_Lists.Vector;
       Output    : constant String := Prompt_Path & ".answer";
       Happened  : Model_Runner.Framework.Execution.Outcome;
+      --  Whether what it spent could not be read from its trace.
+      Usage_Unknown : Boolean := False;
       Given     : Model_Runner.Framework.Name_Lists.Vector;
 
       procedure Add (Word : String) is
@@ -390,10 +398,13 @@ package body Model_Runner.CLI.Work is
                Ada.Streams.Stream_IO.Close (File);
             end;
             Ada.Directories.Delete_File (Prompt_Path & ".trace");
+         else
+            Usage_Unknown := True;
          end if;
       exception
+         --  Not told, it is not taken for none: what it spent is not known.
          when others =>
-            null;
+            Usage_Unknown := True;
       end;
       --  Out of time is the work's bound, as the session's agent has it --
       --  the task set aside, not failed; anything else says why, in its
@@ -408,6 +419,14 @@ package body Model_Runner.CLI.Work is
          E.Add_Text (Status, "name", "the agent");
          E.Add_Text (Status, "detail", Ended_Because (Happened.Started, Happened.Exit_Status,
                                                       To_String (Happened.Output)));
+      end if;
+      --  Ran, and what it spent cannot be told: not ended as though it spent
+      --  nothing -- the budget it is held to would mean nothing.
+      if E.Is_Ok (Status) and then Happened.Started and then Usage_Unknown then
+         Status := E.Make (E.Framework_Agent_Failed);
+         E.Add_Text (Status, "name", "the agent");
+         E.Add_Text (Status, "detail", "what it used cannot be told: its trace is missing or would not be read,"
+                     & " so its tokens cannot be counted against its budget");
       end if;
    end Run;
 
@@ -444,6 +463,35 @@ package body Model_Runner.CLI.Work is
          Pres.Report (Screen, Condition);
          Status := E.Exit_Status (Condition);
       end Fail;
+
+      --  Whether any task run so far did not end well.
+      Any_Ill : Boolean := False;
+
+      --  Whether the task last run did not end well: waiting to be taken
+      --  in is where isolated work ends well, and so is a split waiting
+      --  for its parts.
+      function Ended_Ill return Boolean
+      is (To_String (Done.Final_State) /= Tk.Complete
+          and then not (To_String (Done.Final_State) = Tk.Verification
+                        and then Done.Workspace_Id /= Null_Unbounded_String)
+          and then not (To_String (Done.Final_State) = Tk.Blocked
+                        and then Ada.Strings.Fixed.Index
+                                   (To_String (Done.Reason), "waiting for its children: ") = 1));
+
+      --  Whether more than one task is being run: one of them that cannot
+      --  start is said, and the rest go on.
+      function Batch return Boolean
+      is ((Given.Contains ("all") and then Given ("all") = "yes")
+          or else not Remaining.Is_Empty or else not Tried.Is_Empty);
+
+      --  One of many that did not start: counted as ended ill, and named so.
+      procedure Not_Started is
+      begin
+         Tried.Append (To_String (Chosen));
+         Ended.Append (To_String (Chosen) & " not started");
+         Any_Ill := True;
+         Done := (others => <>);
+      end Not_Started;
 
       function Setting (Name, Default : String) return String
       is (if Given.Contains (Name) then Given (Name)
@@ -1208,6 +1256,12 @@ package body Model_Runner.CLI.Work is
                Pres.Put_Note (Screen, "cli.next.way_on",
                               [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
             end if;
+            --  One of many: said, and the rest go on -- a failure stops
+            --  none of them.
+            if Batch then
+               Not_Started;
+               goto After_Task;
+            end if;
             S.Close (Store);
             return;
          end if;
@@ -1219,6 +1273,10 @@ package body Model_Runner.CLI.Work is
             E.Add_Text (Outcome, "name", "the agent of " & To_String (Chosen));
             E.Add_Text (Outcome, "detail", W.Unable_Reason (Store, To_String (Chosen)));
             Fail (Outcome);
+            if Batch then
+               Not_Started;
+               goto After_Task;
+            end if;
             S.Close (Store);
             return;
          end if;
@@ -1282,6 +1340,10 @@ package body Model_Runner.CLI.Work is
                   if E."=" (Got.Code, E.Framework_Context_Overflow) then
                      Fail (Got);
                      Pres.Put_Note (Screen, "cli.work.nothing_started", [Loc.Named ("name", To_String (Chosen))]);
+                     if Batch then
+                        Not_Started;
+                        goto After_Task;
+                     end if;
                      S.Close (Store);
                      return;
                   end if;
@@ -1394,8 +1456,10 @@ package body Model_Runner.CLI.Work is
                                                           (Positive'Value (Setting ("steps", "")),
                                                            W.Steps_Allowed (Store, To_String (Chosen)))),
                                                 Ada.Strings.Both)),
+                               --  What the task is allowed, as said: no
+                               --  floor of its own above it.
                                Timeout => Positive'Max
-                                            (60, W.Time_Allowed (Store, To_String (Chosen))),
+                                            (1, W.Time_Allowed (Store, To_String (Chosen))),
                                Context => Model.Context_Limit,
                                Screen  => Screen'Unchecked_Access),
                   Model, Done, Outcome, Starting => Announce'Access);
@@ -1426,6 +1490,12 @@ package body Model_Runner.CLI.Work is
                           Ada.Strings.Fixed.Trim (To_String (Chosen), Ada.Strings.Both) & " ") = 0
             then
                Pres.Put_Note (Screen, "cli.next.way_on", [Loc.Named ("detail", Way_On (To_String (Chosen)))]);
+            end if;
+            --  Of many, and not for want of a model -- which every one would
+            --  want: said, and the rest go on.
+            if Batch and then not E."=" (Outcome.Code, E.Framework_Input_Missing) then
+               Not_Started;
+               goto After_Task;
             end if;
             S.Close (Store);
             return;
@@ -2151,6 +2221,7 @@ package body Model_Runner.CLI.Work is
          --  All of them: what the plan can start now, of those not tried,
          --  once those it named first are done -- a failure stops none.
          Tried.Append (To_String (Chosen));
+         Any_Ill := Any_Ill or else Ended_Ill;
          --  Named as /task list names it: work to take in, a stop.
          Ended.Append
            (To_String (Chosen) & " "
@@ -2161,6 +2232,7 @@ package body Model_Runner.CLI.Work is
                  and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
                then "stopped"
                else Model_Runner.Framework.State_Said (To_String (Done.Final_State))));
+         <<After_Task>>
          if Remaining.Is_Empty and then Setting ("all", "") = "yes" then
             for Id of Model_Runner.Framework.Orchestration.Plan (Store).Start loop
                if not Tried.Contains (Id) then
@@ -2206,15 +2278,9 @@ package body Model_Runner.CLI.Work is
       if To_String (Done.Final_State) = Tk.Cancelled then
          Status := E.Exit_Cancelled;
 
-      --  Waiting to be taken in is where isolated work ends well; and so
-      --  is a split, waiting for its parts.
-      elsif To_String (Done.Final_State) /= Tk.Complete
-        and then not (To_String (Done.Final_State) = Tk.Verification
-                      and then Done.Workspace_Id /= Null_Unbounded_String)
-        and then not (To_String (Done.Final_State) = Tk.Blocked
-                      and then Ada.Strings.Fixed.Index
-                                 (To_String (Done.Reason), "waiting for its children: ") = 1)
-      then
+      --  Any of them that did not end well: the command did not, whichever
+      --  ran last.
+      elsif Ended_Ill or else Any_Ill then
          Status := E.Exit_Input_Output;
       end if;
       S.Close (Store);

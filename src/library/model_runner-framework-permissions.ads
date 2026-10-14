@@ -193,6 +193,15 @@ package Model_Runner.Framework.Permissions is
       Task_Level : String := "";
       Within_Sandbox : Boolean := True) return Permission_Set;
 
+   --  What keeps a grant as a configuration holds it from being read:
+   --  a key no constraint is called, a count that is not one -- not the
+   --  stricter spellings /reconfigure asks for of what it is given.
+   --
+   --  @param Capability_Word The capability, as its word.
+   --  @param Text The grant as written.
+   --  @return "" where it reads.
+   function Grant_Problem (Capability_Word, Text : String) return String;
+
    --  A task's own restriction, as its permissions field writes it.
    --
    --  @param Text The field.

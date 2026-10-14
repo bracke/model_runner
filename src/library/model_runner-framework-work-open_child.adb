@@ -167,13 +167,20 @@ begin
       if E.Is_Error (Read) then
          --  Cancelled, not failed: it never worked, and a helper the
          --  model was told was not made holds nothing up.
+         --  Its budget given back to its parent as a cancellation gives it,
+         --  so a helper never made costs nothing; and not kept, that is
+         --  the work's record not kept, and said so at its end.
          declare
-            Ended : E.Error_Info;
-            Close : Stores.Transaction;
+            Ended   : E.Error_Info;
+            Close   : Stores.Transaction;
+            Stopped : Name_Lists.Vector;
          begin
-            Agent_State (Host.Item.all, Close, To_String (Child_Id), "cancelled",
-                         "it could not be started: " & Why_Of (Read));
-            Stores.Commit (Host.Item.all, Close, Ended);
+            Agents.Cancel (Host.Item.all, Close, To_String (Child_Id), Stopped, Ended,
+                           Why => "it could not be started: " & Why_Of (Read));
+            if E.Is_Ok (Ended) then
+               Stores.Commit (Host.Item.all, Close, Ended);
+            end if;
+            Keep_Unkept (Host, Ended);
          end;
          Host.Open.Delete_Last;
          Host.Opened.Delete_Last;

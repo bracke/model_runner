@@ -31,6 +31,8 @@ package body Model_Runner.Conversation is
    -- Open --
    ----------
 
+   function Bounds_Of (Item : History) return Model_Runner.Limits.Session_Limits is (Item.Bounds);
+
    procedure Open
      (Item   : in out History;
       Bounds : Model_Runner.Limits.Session_Limits :=

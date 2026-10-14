@@ -823,7 +823,15 @@ begin
                   Starting (To_String (Result.Agent_Id), To_String (Result.Manifest_Id),
                             To_String (Result.Invocation_Id));
                end if;
-               Runner.Run (Prompt, To_String (Place), Answer, Ran);
+               begin
+                  Runner.Run (Prompt, To_String (Place), Answer, Ran);
+               exception
+                  --  Stopped by a fault, what it wrote in the state is put
+                  --  back all the same, before the fault goes on.
+                  when others =>
+                     Stores.Restore_State (Item, State, Tampered, Tamper_Left);
+                     raise;
+               end;
                Stores.Restore_State (Item, State, Tampered, Tamper_Left);
             end;
 
@@ -959,6 +967,10 @@ begin
       Files_Text : Unbounded_String;
    begin
       Results.Add (Item, Change, Kept, Status);
+      --  Not kept, the answer is not named as kept: the run ends on it.
+      if E.Is_Error (Status) then
+         return;
+      end if;
       Last_Result := Kept.Id;
       Invocations.Finish
         (Item, Change, To_String (Result.Invocation_Id),
@@ -968,6 +980,9 @@ begin
          Used,
          To_String (Kept.Id),
          (if E.Is_Ok (Ran) then "" else Why_Of (Ran)), Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       Annotate (Item, Change, Task_Id, "last_result", To_String (Kept.Id));
       for Path of Result.Changed_Files loop
          Append (Files_Text, (if Files_Text = Null_Unbounded_String then "" else ASCII.LF & "")
@@ -1022,6 +1037,21 @@ begin
    if Tasks.State_Of (Item, Task_Id) /= "running"
      or else Leases.Owner_Of (Item, Lease_Of (Task_Id)) /= To_String (Result.Agent_Id)
    then
+      --  Its model call was made, and is recorded as made -- cancelled,
+      --  with what it spent -- apart from the rest of this run, which is
+      --  not kept.
+      Change := Stores.No_Changes;
+      declare
+         Alone : Stores.Transaction;
+         Ended : E.Error_Info;
+      begin
+         Invocations.Finish
+           (Item, Alone, To_String (Result.Invocation_Id), Invocations.Cancelled, Used, "",
+            "the task was ended elsewhere while it ran", Ended);
+         if E.Is_Ok (Ended) then
+            Stores.Commit (Item, Alone, Ended);
+         end if;
+      end;
       Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
       Result.Reason := To_Unbounded_String
         (if Tasks.State_Of (Item, Task_Id) = "running"
@@ -1484,6 +1514,11 @@ begin
                Read_Up    : E.Error_Info;
             begin
                Tasks.Definition (Item, To_String (Up), Defined_Up, Read_Up);
+               --  A parent that will not read may be deep: taken as at the
+               --  bound, so no part goes past it unseen.
+               if E.Is_Error (Read_Up) then
+                  Depth := Natural'Max (Depth, 65);
+               end if;
                exit when E.Is_Error (Read_Up) or else Records.Get (Defined_Up, "parent") = ""
                  or else Depth > 64;
                Up := To_Unbounded_String (Records.Get (Defined_Up, "parent"));

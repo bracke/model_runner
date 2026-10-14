@@ -62,6 +62,12 @@ package Model_Runner.Conversation is
         Model_Runner.Limits.Default_Session_Limits;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The bounds a history was opened with.
+   --
+   --  @param Item The history.
+   --  @return Its bounds.
+   function Bounds_Of (Item : History) return Model_Runner.Limits.Session_Limits;
+
    --  Release a history and clear its content.
    --
    --  @param Item History to release.

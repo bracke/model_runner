@@ -99,7 +99,8 @@ package body Model_Runner.CLI.Checkpoint is
      (Path     : String;
       Messages : in out Model_Runner.Conversation.History;
       Loaded   : out Boolean;
-      Status   : out Model_Runner.Errors.Error_Info)
+      Status   : out Model_Runner.Errors.Error_Info;
+      Replace  : Boolean := False)
    is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
@@ -114,6 +115,111 @@ package body Model_Runner.CLI.Checkpoint is
                                               (1, Stream_Element_Offset (Total)));
          Last  : Stream_Element_Offset := 0;
          Data  : String (1 .. Total);
+         --  The conversation the data holds, read into a history.
+         procedure Parse
+           (Into : in out Model_Runner.Conversation.History;
+            Got  : out Boolean;
+            Said : out Model_Runner.Errors.Error_Info) is
+         begin
+            Got := False;
+            Said := E.Success;
+            declare
+               Pos : Natural := 1;
+
+               --  Read one length-prefixed field; Ok is false when what is there
+               --  is not one, which ends the parse.
+               function Field (Ok : out Boolean) return String is
+                  N    : Natural := 0;
+                  Seen : Boolean := False;
+               begin
+                  Ok := False;
+                  while Pos <= Natural (Last)
+                    and then Data (Pos) in '0' .. '9'
+                  loop
+                     N := N * 10 + (Character'Pos (Data (Pos))
+                                    - Character'Pos ('0'));
+                     Pos  := Pos + 1;
+                     Seen := True;
+                  end loop;
+                  if not (Seen and then Pos <= Natural (Last)
+                          and then Data (Pos) = ' ')
+                    or else Pos + N > Natural (Last) + 1
+                  then
+                     return "";
+                  end if;
+                  Pos := Pos + 1;                    --  the space
+                  declare
+                     R : constant String := Data (Pos .. Pos + N - 1);
+                  begin
+                     Pos := Pos + N;
+                     Ok  := True;
+                     return R;
+                  end;
+               end Field;
+            begin
+               Read_Messages :
+               loop
+                  exit Read_Messages when Pos > Natural (Last);
+                  declare
+                     Ok_R, Ok_C, Ok_N : Boolean;
+                     Role    : constant String := Field (Ok_R);
+                     Content : constant String := Field (Ok_C);
+                     Count_S : constant String :=
+                       (if Ok_R and then Ok_C then Field (Ok_N) else "");
+                     Calls   : Natural := 0;
+                  begin
+                     exit Read_Messages when not (Ok_R and then Ok_C and then Ok_N);
+                     begin
+                        Calls := Natural'Value (Count_S);
+                     exception
+                        when others =>
+                           exit Read_Messages;
+                     end;
+
+                     if Role = "S" then
+                        Conv.Set_System (Into, Content, Said);
+                     elsif Role = "A" and then Calls > 0 then
+                        Conv.Append_Asking (Into, Content, Said);
+                        for C in 1 .. Calls loop
+                           declare
+                              Ok_Nm, Ok_Ar : Boolean;
+                              Nm : constant String := Field (Ok_Nm);
+                              Ar : constant String := Field (Ok_Ar);
+                           begin
+                              exit Read_Messages when not
+                                (Ok_Nm and then Ok_Ar);
+                              if E.Is_Ok (Said) then
+                                 Conv.Append_Call (Into, Nm, Ar, Said);
+                              end if;
+                           end;
+                        end loop;
+                     elsif Role'Length = 2 and then Role (Role'Last) = 'P' then
+                        Conv.Append_Parts
+                          (Into,
+                           (if Role (Role'First) = 'U' then Conv.User_Role
+                            elsif Role (Role'First) = 'T' then Conv.Tool_Role
+                            elsif Role (Role'First) = 'D' then Conv.Developer_Role
+                            elsif Role (Role'First) = 'S' then Conv.System_Role
+                            else Conv.Assistant_Role),
+                           Content, Said);
+                     elsif Content'Length > 0 then
+                        Conv.Append
+                          (Into,
+                           (if Role = "U" then Conv.User_Role
+                            elsif Role = "T" then Conv.Tool_Role
+                            elsif Role = "D" then Conv.Developer_Role
+                            else Conv.Assistant_Role),
+                           Content, Said);
+                     end if;
+
+                     if E.Is_Error (Said) then
+                        exit Read_Messages;
+                     end if;
+                     Got := True;
+                  end;
+               end loop Read_Messages;
+            end;
+         end Parse;
       begin
          if Total > 0 then
             Read (File, Block, Last);
@@ -124,100 +230,25 @@ package body Model_Runner.CLI.Checkpoint is
          end loop;
 
          declare
-            Pos : Natural := 1;
-
-            --  Read one length-prefixed field; Ok is false when what is there
-            --  is not one, which ends the parse.
-            function Field (Ok : out Boolean) return String is
-               N    : Natural := 0;
-               Seen : Boolean := False;
-            begin
-               Ok := False;
-               while Pos <= Natural (Last)
-                 and then Data (Pos) in '0' .. '9'
-               loop
-                  N := N * 10 + (Character'Pos (Data (Pos))
-                                 - Character'Pos ('0'));
-                  Pos  := Pos + 1;
-                  Seen := True;
-               end loop;
-               if not (Seen and then Pos <= Natural (Last)
-                       and then Data (Pos) = ' ')
-                 or else Pos + N > Natural (Last) + 1
-               then
-                  return "";
-               end if;
-               Pos := Pos + 1;                    --  the space
-               declare
-                  R : constant String := Data (Pos .. Pos + N - 1);
-               begin
-                  Pos := Pos + N;
-                  Ok  := True;
-                  return R;
-               end;
-            end Field;
          begin
-            Read_Messages :
-            loop
-               exit Read_Messages when Pos > Natural (Last);
+            --  Read into one of its own first: a file that will not read
+            --  leaves the conversation it would replace as it is, from what
+            --  was read once.
+            if Replace then
                declare
-                  Ok_R, Ok_C, Ok_N : Boolean;
-                  Role    : constant String := Field (Ok_R);
-                  Content : constant String := Field (Ok_C);
-                  Count_S : constant String :=
-                    (if Ok_R and then Ok_C then Field (Ok_N) else "");
-                  Calls   : Natural := 0;
+                  Trial : Model_Runner.Conversation.History;
                begin
-                  exit Read_Messages when not (Ok_R and then Ok_C and then Ok_N);
-                  begin
-                     Calls := Natural'Value (Count_S);
-                  exception
-                     when others =>
-                        exit Read_Messages;
-                  end;
-
-                  if Role = "S" then
-                     Conv.Set_System (Messages, Content, Status);
-                  elsif Role = "A" and then Calls > 0 then
-                     Conv.Append_Asking (Messages, Content, Status);
-                     for C in 1 .. Calls loop
-                        declare
-                           Ok_Nm, Ok_Ar : Boolean;
-                           Nm : constant String := Field (Ok_Nm);
-                           Ar : constant String := Field (Ok_Ar);
-                        begin
-                           exit Read_Messages when not
-                             (Ok_Nm and then Ok_Ar);
-                           if E.Is_Ok (Status) then
-                              Conv.Append_Call (Messages, Nm, Ar, Status);
-                           end if;
-                        end;
-                     end loop;
-                  elsif Role'Length = 2 and then Role (Role'Last) = 'P' then
-                     Conv.Append_Parts
-                       (Messages,
-                        (if Role (Role'First) = 'U' then Conv.User_Role
-                         elsif Role (Role'First) = 'T' then Conv.Tool_Role
-                         elsif Role (Role'First) = 'D' then Conv.Developer_Role
-                         elsif Role (Role'First) = 'S' then Conv.System_Role
-                         else Conv.Assistant_Role),
-                        Content, Status);
-                  elsif Content'Length > 0 then
-                     Conv.Append
-                       (Messages,
-                        (if Role = "U" then Conv.User_Role
-                         elsif Role = "T" then Conv.Tool_Role
-                         elsif Role = "D" then Conv.Developer_Role
-                         else Conv.Assistant_Role),
-                        Content, Status);
+                  Conv.Open (Trial, Conv.Bounds_Of (Messages), Status);
+                  if E.Is_Ok (Status) then
+                     Parse (Trial, Loaded, Status);
                   end if;
-
-                  if E.Is_Error (Status) then
-                     exit Read_Messages;
+                  if E.Is_Error (Status) or else not Loaded then
+                     return;
                   end if;
-                  Loaded := True;
+                  Conv.Clear (Messages);
                end;
-            end loop Read_Messages;
+            end if;
+            Parse (Messages, Loaded, Status);
          end;
       end;
    exception

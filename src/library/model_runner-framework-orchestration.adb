@@ -358,8 +358,13 @@ package body Model_Runner.Framework.Orchestration is
             end if;
          end;
       end loop;
-      Result.Slots :=
-        (if Running >= Limits.Max_Active then 0 else Limits.Max_Active - Running);
+      --  Counted as starting one counts them: every agent at work, its
+      --  helpers among them -- not the tasks running alone.
+      declare
+         Busy : constant Natural := Natural'Max (Running, Agents.Active_Count (Item));
+      begin
+         Result.Slots := (if Busy >= Limits.Max_Active then 0 else Limits.Max_Active - Busy);
+      end;
 
       for Id of Tasks.List (Item, "accepted") loop
          if Tasks.Ready (Item, Id).Ready then
