@@ -84,7 +84,7 @@ package Tiny_Model is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite,
       Olmo2, Glm4, Starcoder2, Stablelm, Gptneox, Internlm2, Baichuan, Mpt,
-      Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba, Deepseek2);
+      Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba, Deepseek2, Mellum);
 
    Linear_State : constant := 4;
    Linear_Heads : constant := 2;

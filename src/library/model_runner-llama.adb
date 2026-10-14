@@ -1348,13 +1348,13 @@ package body Model_Runner.Llama is
    --  positions: a six-token prompt answered, a four-hundred-token one
    --  came apart into a word repeated. GPT-OSS, the other family here that
    --  windows on a base of its own, stretches its windowed layers as the
-   --  rest, which the reference does too. OLMo-3 is Gemma3's way round:
-   --  the reference turns its windowed layers with a scale of one and no
-   --  magnitude, so a file stating YaRN stretched three layers in four
-   --  that were trained unstretched.
+   --  rest, which the reference does too. OLMo-3 and Mellum are Gemma3's
+   --  way round: the reference turns their windowed layers with a scale of
+   --  one and no magnitude, so a file stating YaRN stretched three layers
+   --  in four that were trained unstretched.
    function Turn_Scaling
      (Settings : Configuration; Layer : Natural) return K.Rotary_Scaling
-   is (if Settings.Kind in Gemma3 | Olmo2
+   is (if Settings.Kind in Gemma3 | Olmo2 | Mellum
          and then Windowed_Layer (Settings, Layer)
        then K.Rotary_Scaling'(others => <>)
        else Settings.Scaling);
@@ -8144,6 +8144,14 @@ package body Model_Runner.Llama is
       end if;
 
       Item.Seat := -1;
+
+      --  What the device owed the host is a closed session's, and the next
+      --  session opened in this one's place settles from nothing: carried
+      --  over, its first slide read back the closed session's range into
+      --  the rows the window moved, and every windowed layer attended over
+      --  them -- a perplexity's every chunk past the first read as noise.
+      Item.Owed_Count := 0;
+      Item.Owed_At := 0;
 
       Free_Cells (Item.Cells);
       Free_Cells (Item.At_Keys);

@@ -511,6 +511,15 @@ package body Perplexity_Run is
                      From : constant Natural := (Round - 1) * Chunk + 1;
                      Upto : constant Natural := From + Chunk - 1;
                   begin
+                     --  Each chunk begins as a text does, where the model
+                     --  begins one with a marker: the reference runtime
+                     --  puts the marker in place of a chunk's first token,
+                     --  and a chunk read without one is read as a text
+                     --  begun mid-sentence, scored otherwise than it is
+                     --  there.
+                     if Vocab.Adds_Beginning (L.Vocabulary (Under.Engine).all) then
+                        Held (From) := Vocab.Beginning_Token (L.Vocabulary (Under.Engine).all);
+                     end if;
                      --  At the chunk's own length, so that a chunk longer
                      --  than the model's trained context is scored rather
                      --  than truncated to it. The engine refuses this

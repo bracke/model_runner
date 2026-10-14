@@ -2633,6 +2633,7 @@ package body Reference_Transformer is
          when Qwen2     => "qwen2.",
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
+         when Mellum => "mellum.",
          when GPT_OSS   => "gpt-oss.",
          when Gemma     => "gemma.",
          when Gemma2    => "gemma2.",
@@ -3183,6 +3184,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3;
          elsif Named = "qwen3moe" then
             Item.Kind := Qwen3_MoE;
+         elsif Named = "mellum" then
+            Item.Kind := Mellum;
          elsif Named = "gpt-oss" then
             Item.Kind := GPT_OSS;
          elsif Named = "gemma" then
@@ -3405,12 +3408,12 @@ package body Reference_Transformer is
       --  one mark a layer replaces both.
       Item.Patterned :=
         Item.Kind in Gemma2 | GPT_OSS
-        or else (Item.Kind in Gemma3 | Olmo2 and then Item.Window > 0);
+        or else (Item.Kind in Gemma3 | Olmo2 | Mellum and then Item.Window > 0);
       if Item.Patterned then
          Item.Window_Every :=
            (case Item.Kind is
                when Gemma3 => 6,
-               when Olmo2 => 4,
+               when Olmo2 | Mellum => 4,
                when others => 2);
 
          declare
@@ -4342,7 +4345,7 @@ package body Reference_Transformer is
             --  than on the architecture, so loading it is all that this
             --  needs -- which is why the engine and this disagreed by two
             --  logits in three when only the engine loaded it.
-            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3
+            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3 | Mellum
               or else (Item.Kind in Qwen35 | Qwen35_MoE and then not Is_Linear)
             then
                Current.Query_Norm :=
@@ -5226,7 +5229,7 @@ package body Reference_Transformer is
                   --  The other family that windows on a base of its own,
                   --  GPT-OSS, stretches every layer.
                   Unstretched : constant Boolean :=
-                    Item.Kind in Gemma3 | Olmo2
+                    Item.Kind in Gemma3 | Olmo2 | Mellum
                     and then Windowed (Item, Layer);
 
                   --  The angle as trained, and the angle the model's factor

@@ -89,7 +89,7 @@ begin
                     | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                    | Mamba2 | Rwkv6 | Jamba =>
+                    | Mamba2 | Rwkv6 | Jamba | Mellum =>
                    K.Split);
 
             --  What a position may see. Every architecture here
@@ -1173,12 +1173,13 @@ begin
 
    --  Which layers slide the window, for the architectures that window
    --  some layers and not others: the last of each period sees everything
-   --  -- two for Gemma2 and GPT-OSS, six for Gemma3, four for OLMo-3 --
+   --  -- two for Gemma2 and GPT-OSS, six for Gemma3, four for OLMo-3 and
+   --  Mellum --
    --  unless the file states a period of its own or a list of which layers
-   --  slide. Gemma3 and OLMo2 window only where the file states a window
-   --  at all: Rnj-1 is a gemma3 without one, OLMo-2 an olmo2 without one,
-   --  and both attend to everything on every layer and turn every layer on
-   --  the model's own base and stretch.
+   --  slide. Gemma3, OLMo2 and Mellum window only where the file states a
+   --  window at all: Rnj-1 is a gemma3 without one, OLMo-2 an olmo2
+   --  without one, and both attend to everything on every layer and turn
+   --  every layer on the model's own base and stretch.
    --
    --  The list is read as the file states it, layer by layer, where the
    --  reference runtime reads a period only and falls back to its default
@@ -1189,7 +1190,7 @@ begin
         (case Settings.Kind is
             when Gemma2 | GPT_OSS => 2,
             when Gemma3 => 6,
-            when Olmo2 => 4,
+            when Olmo2 | Mellum => 4,
             when others => 0);
       Key    : constant String :=
         Model_Key (Settings.Kind, "attention.sliding_window_pattern");

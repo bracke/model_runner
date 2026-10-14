@@ -212,11 +212,13 @@ package body Tiny_Model is
 
       --  Jamba is a mixture on some layers whatever the sweep asked for, so
       --  it carries a count of its own where the caller named none.
+      --  Mellum is a mixture on every layer whatever the shape asks: a
+      --  dense mellum is not a file anyone writes.
       Eff_Experts : constant Natural :=
-        (if Kind in Jamba | Deepseek2 and then Experts = 0 then 4
+        (if Kind in Jamba | Deepseek2 | Mellum and then Experts = 0 then 4
          else Experts);
       Eff_Used    : constant Natural :=
-        (if Kind in Jamba | Deepseek2 and then Experts_Used = 0 then 2
+        (if Kind in Jamba | Deepseek2 | Mellum and then Experts_Used = 0 then 2
          else Experts_Used);
 
       --  DeepSeek's mixture layers: every layer past the leading dense ones
@@ -505,7 +507,8 @@ package body Tiny_Model is
            when Mamba2    => "mamba2",
            when Rwkv6     => "rwkv6",
            when Jamba     => "jamba",
-           when Deepseek2 => "deepseek2");
+           when Deepseek2 => "deepseek2",
+           when Mellum    => "mellum");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -920,6 +923,14 @@ package body Tiny_Model is
             Fixtures.Bool_Element (Builder, Block mod 2 = 0);
          end loop;
          Fixtures.End_Array (Builder);
+      end if;
+
+      --  Mellum states its period, here two, so that of the fixture's two
+      --  layers one slides and one sees everything, and the period is read
+      --  rather than the architecture's four assumed.
+      if Window > 0 and then Kind = Mellum then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.sliding_window_pattern", 2);
       end if;
 
       --  Gemma2's two bounds. Small numbers rather than the fifty and
@@ -1710,7 +1721,7 @@ package body Tiny_Model is
             end;
          end if;
 
-         if (Kind in Qwen3 | Qwen3_MoE | Gemma3
+         if (Kind in Qwen3 | Qwen3_MoE | Gemma3 | Mellum
              or else (Kind = Qwen35 and then not Linear_Block (Index)))
            and then not Omit_Biases
          then
@@ -1831,7 +1842,7 @@ package body Tiny_Model is
             null;
          elsif (if Kind = Jamba then Jamba_MoE (Index)
                 elsif Kind = Deepseek2 then DS_MoE (Index)
-                else Experts > 0)
+                else Eff_Experts > 0)
          then
             --  The router, then the experts stacked on an outermost axis,
             --  which is how a file writes them: one tensor a matrix rather

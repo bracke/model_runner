@@ -1451,7 +1451,7 @@ begin
          --  the rotation, with one gain per element of a head shared
          --  across the heads. Required for the architectures that have
          --  it, for the same reason the biases are.
-         if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Gemma3
+         if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Gemma3 | Mellum
            or else (Hybrid (Item.Settings.Kind) and then not Is_Linear)
          then
             Resolve_Norm

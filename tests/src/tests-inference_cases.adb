@@ -13413,6 +13413,9 @@ package body Tests.Inference_Cases is
          (Tiny_Model.Gemma3, Tiny_Model.Reaching),
          (Tiny_Model.Olmo2, Tiny_Model.Windowed),
          (Tiny_Model.Olmo2, Tiny_Model.Reaching),
+         (Tiny_Model.Mellum, Tiny_Model.Plain),
+         (Tiny_Model.Mellum, Tiny_Model.Windowed),
+         (Tiny_Model.Mellum, Tiny_Model.Reaching),
          (Tiny_Model.GPT_OSS, Tiny_Model.Windowed),
          (Tiny_Model.Falcon, Tiny_Model.Plain),
          (Tiny_Model.Starcoder2, Tiny_Model.Plain)];
@@ -13449,6 +13452,25 @@ package body Tests.Inference_Cases is
                  and then not Slid.Window_Layers (1),
                  "an olmo2 file listing which layers slide was not read "
                  & "layer by layer");
+      end;
+
+      --  Mellum windows by the period its file states -- two here, the
+      --  fixture having two layers -- the last of each seeing everything,
+      --  and only where its file states a window at all.
+      declare
+         Plain : constant L.Configuration :=
+           Read_Of (Tiny_Model.Mellum, Tiny_Model.Plain);
+         Slid  : constant L.Configuration :=
+           Read_Of (Tiny_Model.Mellum, Tiny_Model.Windowed);
+      begin
+         Assert (not Plain.Alternating,
+                 "a mellum that states no window alternates one");
+         Assert (Slid.Alternating
+                 and then Slid.Window_Layers (0)
+                 and then not Slid.Window_Layers (1),
+                 "a windowed mellum did not slide by the period its file states");
+         Assert (L."=" (Slid.Kind, L.Mellum) and then Slid.Experts > 0,
+                 "a mellum file was not read as a mixture of its own kind");
       end;
 
       --  What a gemma2 does not state is its window, which is the
@@ -13550,7 +13572,7 @@ package body Tests.Inference_Cases is
                "note: no device to cross a window pattern on");
          else
             for Kind in Tiny_Model.Fixture_Architecture loop
-               if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 then
+               if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 | Tiny_Model.Mellum then
                   declare
                      Image    : B.Byte_Array_Access;
                      Expected : Reference_Transformer.Real_Vector
@@ -17308,6 +17330,129 @@ package body Tests.Inference_Cases is
               "heads with their table were refused");
    end A_Refused_Step_Is_Not_Held;
 
+   --  A windowed layer keeps a ring of the window and a batch's worth of
+   --  positions, and a prompt longer than the ring wraps it: the device
+   --  reads the wrapped ring as the processor does. Mellum's fixture, one
+   --  layer sliding and one seeing everything, over seven hundred tokens.
+   procedure A_Wrapped_Window_Reads_Alike_On_The_Device
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package T renames Model_Runner.Tensors;
+      subtype Element_Count is Model_Runner.Numerics.Element_Count;
+      Image : B.Byte_Array_Access;
+      Count : constant := 2048;
+      Prompt : Vocab.Token_Array (1 .. Count);
+      Awake : Boolean;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) := Vocab.Token_Id ((Index * 7 + Index / 3) mod Tiny_Model.Vocabulary);
+      end loop;
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, "note: no device to cross a wrapped window on");
+         return;
+      end if;
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Mellum, Window => 1024, Room => 2048);
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+         Host_Last, Device_Last : Logit_Vector;
+         Host_Rows, Device_Rows : T.Real_Array_Access;
+         Worst : Long_Float := 0.0;
+
+         procedure Run
+           (Backend : Model_Runner.Backend.Backend_Kind;
+            Last    : out Logit_Vector;
+            Rows    : out T.Real_Array_Access;
+            Times   : Positive := 1) is
+            Pass  : T.Real_Array_Access;
+            Kept  : T.Real_Array_Access;
+            Under  : Harness (Held'Access);
+            Able   : Boolean;
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            T.Allocate (Element_Count (Count) * Tiny_Model.Vocabulary, Kept);
+            T.Allocate (256 * Element_Count (Tiny_Model.Vocabulary), Pass);
+            Start (Under, Backend, Able);
+            Assert (Able, "the model did not prepare on " & Model_Runner.Backend.Backend_Kind'Image (Backend));
+            --  The same model asked again in a new session, as a
+            --  perplexity asks it chunk by chunk.
+            for Time in 1 .. Times loop
+               --  Whole, in one block, as a perplexity opens its sessions.
+               L.Open (Live, Under.Ready, 2048, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+               --  In batches, as a run reads a prompt: one is at most
+               --  Max_Batch positions.
+               declare
+                  From : Positive := Prompt'First;
+               begin
+                  while From <= Prompt'Last loop
+                     declare
+                        Upto : constant Positive := Positive'Min (Prompt'Last, From + 255);
+                     begin
+                        L.Evaluate_Batch (Live, Under.Ready, Prompt (From .. Upto), Last,
+                                          Every => Pass, Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "the batch failed: " & E.Error_Code'Image (Status.Code));
+                        --  Every position's row, as a perplexity reads them.
+                        declare
+                           Wide : constant Element_Count :=
+                             Element_Count (Upto - From + 1) * Tiny_Model.Vocabulary;
+                           At_Row : constant Element_Count :=
+                             Element_Count (From - Prompt'First) * Tiny_Model.Vocabulary;
+                        begin
+                           Kept.all (At_Row .. At_Row + Wide - 1) :=
+                             Pass.all (Pass.all'First .. Pass.all'First + Wide - 1);
+                        end;
+                        From := Upto + 1;
+                     end;
+                  end loop;
+               end;
+               L.Close (Live);
+            end loop;
+            T.Free (Pass);
+            Rows := Kept;
+         end Run;
+      begin
+         Run (Model_Runner.Backend.Backend_CPU, Host_Last, Host_Rows);
+         --  Twice on the device, the second session after the first slid
+         --  its window: a perplexity's second chunk was read as noise.
+         --  And the processor's second session against its first.
+         declare
+            Again_Last : Logit_Vector;
+            Again_Rows : T.Real_Array_Access;
+            Apart      : Long_Float := 0.0;
+         begin
+            Run (Model_Runner.Backend.Backend_CPU, Again_Last, Again_Rows, Times => 2);
+            for Index in Host_Rows'Range loop
+               Apart := Long_Float'Max
+                 (Apart, abs (Long_Float (Host_Rows (Index) - Again_Rows (Index))));
+            end loop;
+            T.Free (Again_Rows);
+            Assert (Apart < 1.0E-4,
+                    "a second session on the processor answers otherwise than the first, by"
+                    & Long_Float'Image (Apart));
+         end;
+         Run (Model_Runner.Backend.Backend_Device, Device_Last, Device_Rows, Times => 2);
+         for Index in Host_Last'Range loop
+            Worst := Long_Float'Max (Worst, abs (Long_Float (Host_Last (Index) - Device_Last (Index))));
+         end loop;
+         for Index in Host_Rows'Range loop
+            Worst := Long_Float'Max
+              (Worst, abs (Long_Float (Host_Rows (Index) - Device_Rows (Index))));
+         end loop;
+         T.Free (Host_Rows);
+         T.Free (Device_Rows);
+         Assert (Worst < 1.0E-2,
+                 "past a wrapped window the device answers otherwise than the processor, by"
+                 & Long_Float'Image (Worst));
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Wrapped_Window_Reads_Alike_On_The_Device;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -17377,6 +17522,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Refused_Step_Is_Not_Held'Access,
          "a step the device's sequence refuses is not left in it");
+      Register_Routine
+        (T, A_Wrapped_Window_Reads_Alike_On_The_Device'Access,
+         "a windowed layer's ring, wrapped by a long prompt, reads alike on "
+         & "the device and the processor");
       Register_Routine
         (T, A_Named_Draft_Length_Is_Kept'Access,
          "a draft length named is kept whichever draft runs");
