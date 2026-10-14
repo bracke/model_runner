@@ -646,7 +646,7 @@ private
       --  submitting task might be asleep below. The stamp is what makes a
       --  late report from a finished job harmless: it opens the barrier for
       --  that job and not for the one after it.
-      procedure Report (Stamp : Natural);
+      procedure Report (Stamp : Interfaces.Unsigned_32);
 
       --  Wait until every share of the job now outstanding has reported.
       --
@@ -662,8 +662,11 @@ private
       function Accepting return Boolean;
 
    private
-      Generation : Natural := 0;
-      Reported   : Natural := 0;
+      --  Counted as the tickets are, round 2**32: a run of days posts more
+      --  jobs than a Natural holds, and the comparisons below are made
+      --  round the wrap.
+      Generation : Interfaces.Unsigned_32 := 0;
+      Reported   : Interfaces.Unsigned_32 := 0;
       Closing    : Boolean := False;
    end Coordinator;
 

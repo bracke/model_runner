@@ -167,7 +167,7 @@ ordinal is never reused, not because they might appear.
 | `MR-ARCH-0001` | `error.architecture.missing_identifier` | recovery_none | 3 | raised |
 | `MR-ARCH-0002` | `error.architecture.unsupported` | recovery_unsupported | 4 | raised |
 | `MR-ARCH-0003` | `error.architecture.missing_metadata` | recovery_none | 3 | reserved |
-| `MR-ARCH-0004` | `error.architecture.invalid_metadata` | recovery_none | 3 | reserved |
+| `MR-ARCH-0004` | `error.architecture.invalid_metadata` | recovery_none | 3 | raised |
 | `MR-ARCH-0005` | `error.architecture.invalid_dimensions` | recovery_none | 3 | raised |
 | `MR-ARCH-0006` | `error.architecture.invalid_head_counts` | recovery_none | 3 | raised |
 | `MR-ARCH-0007` | `error.architecture.invalid_rope` | recovery_none | 3 | raised |

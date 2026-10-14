@@ -19,6 +19,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Numerics;
 with Model_Runner.Grammar;
+with Hostkit.Fs;
 with Hostkit.Metadata;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
@@ -990,6 +991,20 @@ package body Tests.Tools_Cases is
       Working : constant Rg.Capabilities :=
         [Rg.Read_Files | Rg.Write_Files | Rg.Project_Graph | Rg.Project_Checks => True, others => False];
    begin
+      --  A failure that said a lot on both streams is told cut, within
+      --  what an answer may hold -- not refused as too large to tell.
+      declare
+         Loud : constant Pr.Result :=
+           (Started => True, Stopped => False, Exit_Status => 2,
+            Output => Ada.Strings.Unbounded.To_Unbounded_String ([1 .. 30_000 => 'o']),
+            Errors => Ada.Strings.Unbounded.To_Unbounded_String ([1 .. 20_000 => 'e']),
+            Truncated => False);
+         Said : constant String := Pr.Told (Loud, "'make'");
+      begin
+         Assert (Said'Length <= Model_Runner.Tools.Max_Call_Bytes and then Has (Said, "bytes left out")
+                 and then Has (Said, "exit status 2"),
+                 "a long failure was told past what an answer may hold:" & Said'Length'Image);
+      end;
       --  Offered by capability: reading alone is offered read_file,
       --  list_directory and find -- find by text only, with no graph -- and
       --  nothing that writes; a project's agent is offered the graph's
@@ -2904,6 +2919,66 @@ package body Tests.Tools_Cases is
                     "a call that touches no files was given a stamp, or a file change none");
          end;
          Ada.Directories.Delete_File (Path);
+      end;
+
+      --  A file of megabytes is read on a stack of one: read a slice at a
+      --  time, not copied onto the stack whole, twice.
+      declare
+         Path : constant String := "tools-big.txt";
+         File : Ada.Text_IO.File_Type;
+         Read : Boolean := False;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         for Line in 1 .. 32 * 1024 loop
+            Ada.Text_IO.Put_Line (File, [1 .. 63 => 'x']);
+         end loop;
+         Ada.Text_IO.Close (File);
+         declare
+            task Reader with Storage_Size => 1024 * 1024;
+            task body Reader is
+               Text   : Ada.Strings.Unbounded.Unbounded_String;
+               Status : Model_Runner.Errors.Error_Info;
+            begin
+               Model_Runner.Tools.Editing.Read_Text (Path, Text, Status);
+               Read := Model_Runner.Errors.Is_Ok (Status)
+                 and then Ada.Strings.Unbounded.Length (Text) = 2 * 1024 * 1024;
+            exception
+               when others =>
+                  Read := False;
+            end Reader;
+         begin
+            null;
+         end;
+         Ada.Directories.Delete_File (Path);
+         Assert (Read, "a file of two megabytes was not read on a stack of one");
+      end;
+
+      --  A tree with a link back up in it is stamped without following
+      --  the link -- which walked the tree again at every level -- and the
+      --  same twice.
+      declare
+         Folder : constant String := "tools-stamp-loop";
+         Args   : constant String := "{""path"": """ & Folder & """}";
+         Made   : Boolean;
+         Gone   : Boolean;
+      begin
+         Ada.Directories.Create_Path (Folder);
+         Made := Hostkit.Fs.Create_Link ("..", Folder & "/up");
+         if Made then
+            declare
+               First  : constant String := Runner.Stamp ("list_directory", Args);
+               Second : constant String := Runner.Stamp ("list_directory", Args);
+            begin
+               --  Taken down before anything is asserted: a link back up
+               --  left in the tree is one every walk of it follows.
+               Gone := Hostkit.Fs.Delete_Link (Folder & "/up");
+               Ada.Directories.Delete_Directory (Folder);
+               Assert (Gone and then First /= "" and then Second = First,
+                       "a tree with a link back up was not stamped the same twice: " & First);
+            end;
+         else
+            Ada.Directories.Delete_Directory (Folder);
+         end if;
       end;
 
       Assert (Ended ("calculator", "{""a"": 2, ""b"": 2, ""op"": ""+""}") = Tr.Done,

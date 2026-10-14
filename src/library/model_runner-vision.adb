@@ -936,9 +936,8 @@ package body Model_Runner.Vision is
          --  A layer the encoder has: the merger runs after it, and the
          --  layers past it, if any, after the merger.
          if Number < 0 or else Number >= Long_Long_Integer (Item.Blocks) then
-            Status := E.Make (E.Arch_Invalid_Dimensions);
-            E.Add_Integer (Status, "wa_layer_index", Number);
-            E.Add_Integer (Status, "block_count", Long_Long_Integer (Item.Blocks));
+            Status := E.Make (E.Arch_Invalid_Metadata);
+            E.Add_Text (Status, "key", "clip.vision.wa_layer_indexes", E.Param_Identifier);
             Fail (Status);
             return;
          end if;

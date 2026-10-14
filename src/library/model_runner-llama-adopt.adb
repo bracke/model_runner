@@ -107,6 +107,10 @@ is
       --  read where they lie in the file and widened in one loop. An
       --  element at a time, through the readers above, was most of what
       --  reading a saved session of 0.6 GB took.
+      --  Nothing to read: a session saved with nothing committed.
+      if Count = 0 then
+         return;
+      end if;
       if Narrow and then Item.Held = Exact and then not Trouble then
          if At_Byte + B.Byte_Count (Count) * 2 > From'Length then
             Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
@@ -339,6 +343,16 @@ begin
 
             if Begins > Interfaces.Unsigned_64 (Held) then
                Refuse (E.Lifecycle_Cache_Unreadable, "a run past the end");
+               exit;
+            end if;
+
+            --  And no longer than the layer has room for: a window's run
+            --  said to hold more than its window would be written over the
+            --  next layer's.
+            if not Linear (Settings, Layer_Index)
+              and then Interfaces.Unsigned_64 (Held) - Begins > Room
+            then
+               Refuse (E.Lifecycle_Cache_Unreadable, "a run longer than its layer");
                exit;
             end if;
 

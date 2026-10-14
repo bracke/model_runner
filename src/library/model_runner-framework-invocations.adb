@@ -327,8 +327,10 @@ package body Model_Runner.Framework.Invocations is
       --  Inside a fence: quoted -- a file, a log -- and none of the
       --  answer's own fields, whatever it holds.
       In_Fence : Boolean := False;
-      --  Whether the answer says anything outside its fences: then what
-      --  is fenced is quoted, and never its report.
+      --  Whether the answer gives a field of its report outside its
+      --  fences: then what is fenced is quoted, and never the report. A
+      --  line before a fence -- "Here is my report:" -- is no field, and
+      --  the fenced report after it is read.
       Outside  : Boolean := False;
    begin
       Result := (others => <>);
@@ -336,10 +338,10 @@ package body Model_Runner.Framework.Invocations is
 
       --  Read first with what is fenced left out; where that finds no
       --  report and nothing stands outside the fences, the report is what
-      --  is fenced -- a model that wraps its whole answer in a fence -- and
-      --  it is read again whole. An answer with words of its own beside a
-      --  fence did not fence its report: a status in a file it quotes is
-      --  the file's.
+      --  is fenced -- a model that wraps its report in a fence -- and it is
+      --  read again whole. An answer that gives fields of its report
+      --  outside a fence did not fence its report: a status in a file it
+      --  quotes is the file's.
       for Pass in 1 .. 2 loop
          In_Fence := False;
          Current := Null_Unbounded_String;
@@ -349,8 +351,6 @@ package body Model_Runner.Framework.Invocations is
                In_Fence := not In_Fence;
             elsif In_Fence and then Pass = 1 then
                goto Next_Line;
-            elsif Trim (Line) /= "" then
-               Outside := True;
             end if;
             declare
                Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
@@ -391,6 +391,9 @@ package body Model_Runner.Framework.Invocations is
                   Refuse (Name, "the answer has " & Name & ": twice; give it once");
                   return;
                elsif Name /= "" and then Rules.Fields.Contains (Name) then
+                  if not In_Fence then
+                     Outside := True;
+                  end if;
                   Current := To_Unbounded_String (Name);
                   Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
                elsif Name'Length in 1 .. 32

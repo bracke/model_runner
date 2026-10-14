@@ -521,6 +521,19 @@ package body Model_Runner.Framework.Execution is
          return Result;
    end Run_Readable;
 
+   --  Give a slot back -- only while it is still this process's: one
+   --  moved aside by a claim racing it and taken by a third run since is
+   --  that run's, and removing it let a fourth past the limit.
+   procedure Let_Slot_Go (Slot : String) is
+      Held : Unbounded_String;
+      Read : E.Error_Info;
+   begin
+      Files.Read_Text (Slot, Held, Read);
+      if E.Is_Ok (Read) and then To_String (Held) = Process_Line (Hostkit.Host.Own_Process_Id) then
+         Files.Discard (Slot);
+      end if;
+   end Let_Slot_Go;
+
    --  Take one of the project's process slots: a file of its own, made by
    --  a move that never replaces, holding this process's number, so that a
    --  slot a process that is gone left behind can be taken back.
@@ -890,7 +903,7 @@ package body Model_Runner.Framework.Execution is
                   Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
                end if;
                if Slot /= "" then
-                  Files.Discard (Slot);
+                  Let_Slot_Go (Slot);
                end if;
                Status := E.Make (E.Framework_Limit_Exceeded);
                E.Add_Text (Status, "name", "what a check says");
@@ -902,7 +915,7 @@ package body Model_Runner.Framework.Execution is
                Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
             end if;
             if Slot /= "" then
-               Files.Discard (Slot);
+               Let_Slot_Go (Slot);
             end if;
             if Current.Group_Unrecorded then
                Current.Group_Unrecorded := False;

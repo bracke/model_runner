@@ -250,7 +250,7 @@ begin
                  or else (Number > 0 and then Long_Long_Integer (Settings.Heads) mod Number /= 0)
                then
                   Status := E.Make (E.Arch_Invalid_Head_Counts);
-                  E.Add_Integer (Status, "head_count_kv", Number);
+                  E.Add_Integer (Status, "kv_heads", Number);
                   E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
                   return;
                end if;

@@ -5587,6 +5587,14 @@ package body Model_Runner.Platform.Device.Products is
       Ready := True;
    end Open;
 
+   --  Declared here because Close and Forget_Matrices need it and it is written below, with
+   --  the other two of everything a submission holds.
+   procedure Settle (Item : in out Engine; Ok : out Boolean);
+
+   --  The copies in the background landed and their buffers given up,
+   --  claimed or not: before the device they belong to goes.
+   procedure Drop_Prefetches (Item : in out Engine);
+
    --------------------------
    -- Forget_Matrices --
    --------------------------
@@ -5595,7 +5603,15 @@ package body Model_Runner.Platform.Device.Products is
       --  Buffers belong to the instance that made them, so the entry points
       --  have to be the ones this engine was opened with.
       Ignored : constant Boolean := Set_Asking (Item);
+      Settled : Boolean;
    begin
+      --  Nothing in flight reads what goes: a sequence handed over without
+      --  a wait, and the copies in the background -- one of a stack whose
+      --  model's memory is freed after this would read freed host memory,
+      --  and its buffer, matched by address and size alone, be handed to
+      --  the next model whose stack lands where this one's was.
+      Settle (Item, Settled);
+      Drop_Prefetches (Item);
       --  Every slot ever given out, because a live entry keeps its slot
       --  and the ones between are the chain of free ones.
       for Index in 1 .. Item.Slots_Given loop
@@ -5627,14 +5643,6 @@ package body Model_Runner.Platform.Device.Products is
       Item.Tier_Kept := [others => 0];
       Item.Tier_Spare := [others => 0];
    end Forget_Matrices;
-
-   --  Declared here because Close needs it and it is written below, with
-   --  the other two of everything a submission holds.
-   procedure Settle (Item : in out Engine; Ok : out Boolean);
-
-   --  The copies in the background landed and their buffers given up,
-   --  claimed or not: before the device they belong to goes.
-   procedure Drop_Prefetches (Item : in out Engine);
 
    procedure Close (Item : in out Engine) is
       --  Whatever this engine was opened on, which is nothing at all for an
@@ -5782,6 +5790,12 @@ package body Model_Runner.Platform.Device.Products is
       Item.Copy_Bytes := 0;
       Item.Copy_Only := False;
       Item.Cache_Front := 0;
+      --  All of what Release_Cache resets: an engine opened again after a
+      --  close begins as one never opened, not split with a stale count.
+      Item.Copy_Values_Bytes := 0;
+      Item.Cache_Elements := 0;
+      Item.Copy_Split := False;
+      Item.Copy_Keys_Halves := 0;
 
       --  And the linear states' room, the same way.
       declare
@@ -8163,7 +8177,8 @@ package body Model_Runner.Platform.Device.Products is
 
       procedure Release_Borrowed is
       begin
-         if Borrowed then
+         --  Not while the device may still read it: see Release_All.
+         if Borrowed and then not Item.Stalled then
             Give_Back_Buffer (Item, Weight_Buffer, Weight_Memory);
             Borrowed := False;
          end if;
@@ -8217,13 +8232,27 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  The two that change every call, grown when they have to.
+      --  What is in flight is done with the shared buffers before any of
+      --  them is grown or the activation written into them: a sequence
+      --  handed over without a wait still reads the activation and writes
+      --  the result and the halves.
+      Settle (Item, Good);
+      if not Good then
+         Release_Borrowed;
+         return;
+      end if;
+
+      --  The two that change every call, grown when they have to, and the
+      --  size recorded what is there: nought between giving one back and
+      --  taking the next.
       if Item.Vector_Bytes < Vector_Bytes then
          Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Item.Vector_Bytes := 0;
          Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
             Release_Borrowed;
             return;
          end if;
@@ -8233,9 +8262,11 @@ package body Model_Runner.Platform.Device.Products is
       if Item.Result_Bytes < Result_Bytes then
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Item.Result_Bytes := 0;
          Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good, Read => True);
          if not Good then
+            Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
             Release_Borrowed;
             return;
          end if;
@@ -8250,9 +8281,11 @@ package body Model_Runner.Platform.Device.Products is
 
       if Item.Half_Bytes < 3 * Half_Bytes then
          Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
+         Item.Half_Bytes := 0;
          Take (Item, 3 * Half_Bytes,
                Item.Half_Buffer, Item.Half_Memory, Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
             Release_Borrowed;
             return;
          end if;
@@ -8708,6 +8741,7 @@ package body Model_Runner.Platform.Device.Products is
       Carried_Bytes  : Interfaces.Unsigned_64 := 0;
       Carried_Buffer : Address := Null_Handle;
       Carried_Memory : Address := Null_Handle;
+      Carried_At     : Address := Null_Handle;
 
       Copy_Carried_At     : Address := Null_Handle;
       Copy_Carried_Buffer : Address := Null_Handle;
@@ -8716,6 +8750,45 @@ package body Model_Runner.Platform.Device.Products is
       Values_Carried_At     : Address := Null_Handle;
       Values_Carried_Buffer : Address := Null_Handle;
       Values_Carried_Memory : Address := Null_Handle;
+
+      --  A reserve that cannot finish leaves the cache as it was: the new
+      --  buffers given back, the old ones -- still mapped, still holding
+      --  every session's rows -- in their place. It used to keep the new
+      --  ones, half made, with sizes of nought, and the old ones nowhere:
+      --  a retry at the exact size then came up zeroed and every other
+      --  block attended over zeros. Not where the device stalled: what it
+      --  was given is still its own.
+      procedure Undo is
+         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
+      begin
+         Ok := False;
+         if Item.Stalled then
+            return;
+         end if;
+         if Unmap /= null then
+            if Item.Cache_At /= Null_Handle then
+               Unmap (Item.Logical, Item.Cache_Memory);
+            end if;
+            if Item.Copy_At /= Null_Handle then
+               Unmap (Item.Logical, Item.Copy_Memory);
+            end if;
+            if Item.Copy_Values_At /= Null_Handle then
+               Unmap (Item.Logical, Item.Copy_Values_Memory);
+            end if;
+         end if;
+         Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+         Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
+         Give_Back_Buffer (Item, Item.Copy_Values_Buffer, Item.Copy_Values_Memory);
+         Item.Cache_Buffer := Carried_Buffer;
+         Item.Cache_Memory := Carried_Memory;
+         Item.Cache_At := Carried_At;
+         Item.Copy_Buffer := Copy_Carried_Buffer;
+         Item.Copy_Memory := Copy_Carried_Memory;
+         Item.Copy_At := Copy_Carried_At;
+         Item.Copy_Values_Buffer := Values_Carried_Buffer;
+         Item.Copy_Values_Memory := Values_Carried_Memory;
+         Item.Copy_Values_At := Values_Carried_At;
+      end Undo;
    begin
       Ok := False;
 
@@ -8785,19 +8858,19 @@ package body Model_Runner.Platform.Device.Products is
       --  which it did, and cost a third of a round of eight members the
       --  first time that round formed.
       declare
-         Was_Buffer   : Address := Item.Cache_Buffer;
-         Was_Memory   : Address := Item.Cache_Memory;
+         Was_Buffer   : constant Address := Item.Cache_Buffer;
+         Was_Memory   : constant Address := Item.Cache_Memory;
          Was_At       : constant Address := Item.Cache_At;
          Was_Elements : constant Interfaces.Unsigned_64 :=
            Item.Cache_Elements;
          Was_Bytes    : constant Interfaces.Unsigned_64 := Item.Cache_Bytes;
 
-         Was_Copy_Buffer : Address := Item.Copy_Buffer;
-         Was_Copy_Memory : Address := Item.Copy_Memory;
+         Was_Copy_Buffer : constant Address := Item.Copy_Buffer;
+         Was_Copy_Memory : constant Address := Item.Copy_Memory;
          Was_Copy_At     : constant Address := Item.Copy_At;
 
-         Was_Values_Buffer : Address := Item.Copy_Values_Buffer;
-         Was_Values_Memory : Address := Item.Copy_Values_Memory;
+         Was_Values_Buffer : constant Address := Item.Copy_Values_Buffer;
+         Was_Values_Memory : constant Address := Item.Copy_Values_Memory;
          Was_Values_At     : constant Address := Item.Copy_Values_At;
 
          --  What the copy held, in bytes, which is no longer two for
@@ -8806,35 +8879,21 @@ package body Model_Runner.Platform.Device.Products is
          --  bounded by both.
          Was_Copy_Bytes : constant Interfaces.Unsigned_64 := Item.Copy_Bytes;
 
-         Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
-
-         --  Both or neither: a cache without its copy is a cache the
-         --  matrix kernel would read nothing out of. The values' buffer of
-         --  a split copy goes back with them.
+         --  Where a new buffer cannot be had, the old ones back in their
+         --  place, untouched: a retry carries them, and every block dealt
+         --  out of them keeps its rows.
          procedure Give_Both_Back is
          begin
-            if Was_At /= Null_Handle and then Unmap /= null then
-               Unmap (Item.Logical, Was_Memory);
-            end if;
-
-            if Was_Copy_At /= Null_Handle and then Unmap /= null then
-               Unmap (Item.Logical, Was_Copy_Memory);
-            end if;
-
-            if Was_Values_At /= Null_Handle and then Unmap /= null then
-               Unmap (Item.Logical, Was_Values_Memory);
-            end if;
-
-            Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
-            Give_Back_Buffer (Item, Was_Copy_Buffer, Was_Copy_Memory);
-            Give_Back_Buffer (Item, Was_Values_Buffer, Was_Values_Memory);
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
-            Item.Copy_Values_Bytes := 0;
-            Item.Cache_Elements := 0;
-            Item.Copy_Only := False;
-            Item.Copy_Split := False;
-            Item.Cache_Front := 0;
+            Item.Cache_Buffer := Was_Buffer;
+            Item.Cache_Memory := Was_Memory;
+            Item.Cache_At := Was_At;
+            Item.Copy_Buffer := Was_Copy_Buffer;
+            Item.Copy_Memory := Was_Copy_Memory;
+            Item.Copy_At := Was_Copy_At;
+            Item.Copy_Values_Buffer := Was_Values_Buffer;
+            Item.Copy_Values_Memory := Was_Values_Memory;
+            Item.Copy_Values_At := Was_Values_At;
+            Ok := False;
          end Give_Both_Back;
       begin
          Item.Cache_Buffer := Null_Handle;
@@ -8851,6 +8910,7 @@ package body Model_Runner.Platform.Device.Products is
          if F32_Bytes > 0 then
             Take (Item, F32_Bytes, Item.Cache_Buffer, Item.Cache_Memory, Ok);
             if not Ok then
+               Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
                Give_Both_Back;
                return;
             end if;
@@ -8863,6 +8923,7 @@ package body Model_Runner.Platform.Device.Products is
             Take (Item, Copy_Alloc, Item.Copy_Buffer, Item.Copy_Memory, Ok);
             if not Ok then
                Give_Back_Buffer (Item, Item.Cache_Buffer, Item.Cache_Memory);
+               Give_Back_Buffer (Item, Item.Copy_Buffer, Item.Copy_Memory);
                Give_Both_Back;
                return;
             end if;
@@ -8877,6 +8938,8 @@ package body Model_Runner.Platform.Device.Products is
                     (Item, Item.Cache_Buffer, Item.Cache_Memory);
                   Give_Back_Buffer
                     (Item, Item.Copy_Buffer, Item.Copy_Memory);
+                  Give_Back_Buffer
+                    (Item, Item.Copy_Values_Buffer, Item.Copy_Values_Memory);
                   Give_Both_Back;
                   return;
                end if;
@@ -8898,6 +8961,7 @@ package body Model_Runner.Platform.Device.Products is
          Carried_Bytes := Was_Bytes;
          Carried_Buffer := Was_Buffer;
          Carried_Memory := Was_Memory;
+         Carried_At := Was_At;
          Copy_Carried_At := Was_Copy_At;
          Copy_Carried_Buffer := Was_Copy_Buffer;
          Copy_Carried_Memory := Was_Copy_Memory;
@@ -8915,9 +8979,7 @@ package body Model_Runner.Platform.Device.Products is
          Where : aliased Address := Null_Handle;
       begin
          if Map = null then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
+            Undo;
             return;
          end if;
 
@@ -8925,9 +8987,7 @@ package body Model_Runner.Platform.Device.Products is
             if Map (Item.Logical, Item.Cache_Memory, 0, F32_Bytes, 0,
                     Where'Access) /= 0
             then
-               Ok := False;
-               Item.Cache_Bytes := 0;
-               Item.Copy_Bytes := 0;
+               Undo;
                return;
             end if;
 
@@ -8938,9 +8998,7 @@ package body Model_Runner.Platform.Device.Products is
             if Map (Item.Logical, Item.Copy_Memory, 0, Copy_Alloc, 0,
                     Where'Access) /= 0
             then
-               Ok := False;
-               Item.Cache_Bytes := 0;
-               Item.Copy_Bytes := 0;
+               Undo;
                return;
             end if;
 
@@ -8951,10 +9009,7 @@ package body Model_Runner.Platform.Device.Products is
             if Map (Item.Logical, Item.Copy_Values_Memory, 0, Values_Wanted, 0,
                     Where'Access) /= 0
             then
-               Ok := False;
-               Item.Cache_Bytes := 0;
-               Item.Copy_Bytes := 0;
-               Item.Copy_Values_Bytes := 0;
+               Undo;
                return;
             end if;
 
@@ -8998,9 +9053,7 @@ package body Model_Runner.Platform.Device.Products is
          Settle (Item, Good);
 
          if not Good then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
+            Undo;
             return;
          end if;
 
@@ -9010,9 +9063,7 @@ package body Model_Runner.Platform.Device.Products is
            or else Reset_Buffer (Item.Buffer, 0) /= 0
            or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
+            Undo;
             return;
          end if;
 
@@ -9055,11 +9106,13 @@ package body Model_Runner.Platform.Device.Products is
                     Interfaces.Unsigned_64'Min
                       (Interfaces.Unsigned_64'Min (Carried * 4, Carried_Bytes),
                        F32_Bytes));
+               --  And no more than the new copy buffer was made: the keys'
+               --  half alone where it is split.
                Halves : aliased Copy_Region :=
                  (From => 0, Into => 0,
                   Span =>
                     Interfaces.Unsigned_64'Min
-                      (Copy_Carried_Bytes, Copy_Wanted));
+                      (Interfaces.Unsigned_64'Min (Copy_Carried_Bytes, Copy_Wanted), Copy_Alloc));
             begin
                Barrier (Item.Buffer, Pipeline_Stage_Transfer,
                         Pipeline_Stage_Transfer, 0, 1, Wall'Address,
@@ -9083,18 +9136,14 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Stop (Item.Buffer) /= 0 then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
+            Undo;
             return;
          end if;
 
          Submit_And_Wait (Item, Good, Cancelled, null);
 
          if not Good then
-            Ok := False;
-            Item.Cache_Bytes := 0;
-            Item.Copy_Bytes := 0;
+            Undo;
             return;
          end if;
       end;
@@ -9466,8 +9515,11 @@ package body Model_Runner.Platform.Device.Products is
 
          Submit_And_Wait (Item, Good, Cancelled, null);
          if not Good then
-            Unmap (Item.Logical, New_Memory);
-            Give_Back_Buffer (Item, New_Buffer, New_Memory);
+            --  Stalled, the device may still be writing it: left as it is.
+            if not Item.Stalled then
+               Unmap (Item.Logical, New_Memory);
+               Give_Back_Buffer (Item, New_Buffer, New_Memory);
+            end if;
             Ok := False;
             return;
          end if;
@@ -9614,6 +9666,11 @@ package body Model_Runner.Platform.Device.Products is
             begin
                Halve (Values, Halves);
             end;
+         elsif Item.Cache_At = Null_Handle or else Past_Front then
+            --  The copy was the only place for these rows, and they were
+            --  not written there: nothing holds them, and saying so is the
+            --  caller's to act on.
+            return;
          end if;
       end;
 
@@ -9889,12 +9946,24 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  Grown only once what is in flight is done with them, and their
+      --  sizes what they are, as One_Product has them; a call that grows
+      --  nothing waits for nothing.
+      if Item.Vector_Bytes < Query_Bytes or else Item.Result_Bytes < Blend_Bytes then
+         Settle (Item, Good);
+         if not Good then
+            return;
+         end if;
+      end if;
+
       if Item.Vector_Bytes < Query_Bytes then
          Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Item.Vector_Bytes := 0;
          Take (Item, Query_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
             return;
          end if;
          Item.Vector_Bytes := Query_Bytes;
@@ -9903,9 +9972,11 @@ package body Model_Runner.Platform.Device.Products is
       if Item.Result_Bytes < Blend_Bytes then
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Item.Result_Bytes := 0;
          Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good, Read => True);
          if not Good then
+            Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
             return;
          end if;
          Item.Result_Bytes := Blend_Bytes;
@@ -10237,7 +10308,8 @@ package body Model_Runner.Platform.Device.Products is
       if not Is_Ready (Item)
         or else Item.Cache_At = Null_Handle
         or else Values'Length = 0
-        or else At_Byte + Span > Item.Cache_Elements * 4
+        --  As far as the buffer is mapped: a kept front maps only so far.
+        or else At_Byte + Span > Item.Cache_Bytes
       then
          return;
       end if;
@@ -10440,7 +10512,8 @@ package body Model_Runner.Platform.Device.Products is
       From    : Interfaces.Unsigned_64;
       Into    : Interfaces.Unsigned_64;
       Bytes   : Interfaces.Unsigned_64;
-      Copier  : Copy_Buffer_Call);
+      Copier  : Copy_Buffer_Call;
+      Wall_Up : Barrier_Call);
 
    procedure Move_Run
      (Item    : in out Engine;
@@ -10448,7 +10521,8 @@ package body Model_Runner.Platform.Device.Products is
       From    : Interfaces.Unsigned_64;
       Into    : Interfaces.Unsigned_64;
       Bytes   : Interfaces.Unsigned_64;
-      Copier  : Copy_Buffer_Call)
+      Copier  : Copy_Buffer_Call;
+      Wall_Up : Barrier_Call)
    is
       --  Non-overlapping pieces where the two runs overlap: the distance
       --  between them is how much may be moved at once, front to back.
@@ -10464,7 +10538,16 @@ package body Model_Runner.Platform.Device.Products is
 
             Piece : aliased Copy_Region :=
               (From => From + Done, Into => Into + Done, Span => Span);
+            Wall  : aliased Memory_Barrier :=
+              (Wrote  => Access_Transfer_Write,
+               Reads  => C.unsigned (Access_Transfer_Read + Access_Transfer_Write),
+               others => <>);
          begin
+            --  Each piece writes what the one before it read -- of this run,
+            --  or of the run moved before it: copies in one command buffer
+            --  are not ordered, so each waits for the last.
+            Wall_Up (Item.Buffer, Pipeline_Stage_Transfer, Pipeline_Stage_Transfer, 0, 1, Wall'Address,
+                     0, Null_Handle, 0, Null_Handle);
             Copier (Item.Buffer, Buffer, Buffer, 1, Piece'Address);
             Done := Done + Span;
          end;
@@ -10491,6 +10574,8 @@ package body Model_Runner.Platform.Device.Products is
       Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
       Copier : constant Copy_Buffer_Call :=
         To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+      Wall_Up : constant Barrier_Call :=
+        To_Barrier (Point ("vkCmdPipelineBarrier"));
 
       Began : aliased Command_Begin_Info;
 
@@ -10511,7 +10596,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Into >= From
         or else Interfaces.Unsigned_64 (From + Reaches) * 4 > Item.Cache_Bytes
         or else Reset_Buffer = null or else Start = null
-        or else Stop = null or else Copier = null
+        or else Stop = null or else Copier = null or else Wall_Up = null
       then
          return;
       end if;
@@ -10532,7 +10617,7 @@ package body Model_Runner.Platform.Device.Products is
               (Item, Item.Cache_Buffer,
                Interfaces.Unsigned_64 (From + Run.At_Value) * 4,
                Interfaces.Unsigned_64 (Into + Run.At_Value) * 4,
-               Interfaces.Unsigned_64 (Run.Count) * 4, Copier);
+               Interfaces.Unsigned_64 (Run.Count) * 4, Copier, Wall_Up);
 
             if Halves
               and then Item.Copy_Buffer /= Null_Handle
@@ -10543,7 +10628,7 @@ package body Model_Runner.Platform.Device.Products is
                  (Item, Item.Copy_Buffer,
                   Interfaces.Unsigned_64 (From + Run.At_Value) * 2,
                   Interfaces.Unsigned_64 (Into + Run.At_Value) * 2,
-                  Interfaces.Unsigned_64 (Run.Count) * 2, Copier);
+                  Interfaces.Unsigned_64 (Run.Count) * 2, Copier, Wall_Up);
             end if;
          end if;
       end loop;
@@ -10583,6 +10668,8 @@ package body Model_Runner.Platform.Device.Products is
       Stop  : constant End_Call := To_End (Point ("vkEndCommandBuffer"));
       Copier : constant Copy_Buffer_Call :=
         To_Copy_Buffer (Point ("vkCmdCopyBuffer"));
+      Wall_Up : constant Barrier_Call :=
+        To_Barrier (Point ("vkCmdPipelineBarrier"));
 
       Began : aliased Command_Begin_Info;
 
@@ -10596,7 +10683,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Into >= From
         or else From_Byte + Span > Item.State_Bytes
         or else Reset_Buffer = null or else Start = null
-        or else Stop = null or else Copier = null
+        or else Stop = null or else Copier = null or else Wall_Up = null
       then
          return;
       end if;
@@ -10610,7 +10697,7 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      Move_Run (Item, Item.State_Buffer, From_Byte, Into_Byte, Span, Copier);
+      Move_Run (Item, Item.State_Buffer, From_Byte, Into_Byte, Span, Copier, Wall_Up);
 
       if Stop (Item.Buffer) /= 0 then
          return;
@@ -11092,12 +11179,24 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  Grown only once what is in flight is done with them, and their
+      --  sizes what they are, as One_Product has them; a call that grows
+      --  nothing waits for nothing.
+      if Item.Vector_Bytes < Query_Bytes or else Item.Result_Bytes < Blend_Bytes then
+         Settle (Item, Good);
+         if not Good then
+            return;
+         end if;
+      end if;
+
       if Item.Vector_Bytes < Query_Bytes then
          Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Item.Vector_Bytes := 0;
          Take (Item, Query_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
             return;
          end if;
          Item.Vector_Bytes := Query_Bytes;
@@ -11106,9 +11205,11 @@ package body Model_Runner.Platform.Device.Products is
       if Item.Result_Bytes < Blend_Bytes then
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
          Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Item.Result_Bytes := 0;
          Take (Item, Blend_Bytes, Item.Result_Buffer, Item.Result_Memory,
                Good, Read => True);
          if not Good then
+            Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
             return;
          end if;
          Item.Result_Bytes := Blend_Bytes;
@@ -13547,6 +13648,12 @@ package body Model_Runner.Platform.Device.Products is
 
       procedure Release_All is
       begin
+         --  A device that did not finish still reads what it was given: a
+         --  stalled engine leaks it, as Await says, rather than hand it to
+         --  the next borrower.
+         if Item.Stalled then
+            return;
+         end if;
          for Index in 1 .. Steps.Held loop
             if Places (Index).Borrowed then
                declare
@@ -14270,13 +14377,25 @@ package body Model_Runner.Platform.Device.Products is
          <<Next_Step>>
       end loop;
 
-      --  The two that change every call, grown when they have to.
+      --  The two that change every call, grown when they have to -- after
+      --  the sequence before is done with them: one handed over without a
+      --  wait still reads the activation and writes the halves, and a
+      --  buffer given back under it is a buffer it reads after it is gone.
+      --  And what is recorded is what is there: a size kept for a buffer
+      --  given back and not taken again had the next call bind nothing.
       if Item.Vector_Bytes < Vector_Bytes then
+         Settle (Item, Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
          Unmap_Standing (Item, Item.Vector_Memory, Item.Vector_At);
          Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
+         Item.Vector_Bytes := 0;
          Take (Item, Vector_Bytes, Item.Vector_Buffer, Item.Vector_Memory,
                Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Vector_Buffer, Item.Vector_Memory);
             Release_All;
             return;
          end if;
@@ -14319,10 +14438,12 @@ package body Model_Runner.Platform.Device.Products is
             Item.Result_Buffer := Null_Handle;
             Item.Result_Memory := Null_Handle;
             Item.Result_At := Null_Handle;
+            Item.Result_Bytes := 0;
 
             Take (Item, Result_Bytes, Item.Result_Buffer, Item.Result_Memory,
                   Good, Read => True);
             if not Good then
+               Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
                if Carrying then
                   Unmap_Standing (Item, Was_Memory, Was_At);
                   Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
@@ -14366,10 +14487,17 @@ package body Model_Runner.Platform.Device.Products is
       Item.Half_Region := Half_Bytes;
 
       if Item.Half_Bytes < 3 * Half_Bytes then
+         Settle (Item, Good);
+         if not Good then
+            Release_All;
+            return;
+         end if;
          Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
+         Item.Half_Bytes := 0;
          Take (Item, 3 * Half_Bytes,
                Item.Half_Buffer, Item.Half_Memory, Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Half_Buffer, Item.Half_Memory);
             Release_All;
             return;
          end if;
@@ -15917,7 +16045,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  gather a session's scattered pages into the
                         --  copy. A gather's members, in every other step.
                         Members =>
-                          [0 => C.unsigned (This.Pages_At),
+                          [0 => C.unsigned (This.Pages_At mod Second_Table),
                            1 => C.unsigned (This.Page_Shift),
                            2 => C.unsigned (This.First_Position),
                            others => 0],
@@ -15958,7 +16086,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  as place.comp does. A gather's members, in every
                         --  other step's reading of this block.
                         Members =>
-                          [0 => C.unsigned (This.Pages_At),
+                          [0 => C.unsigned (This.Pages_At mod Second_Table),
                            1 => C.unsigned (This.Page_Shift),
                            2 => C.unsigned (This.First_Position),
                            others => 0],
@@ -16016,7 +16144,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  position: a gather's members, in every other
                         --  step's reading of this block.
                         Members =>
-                          [0 => C.unsigned (This.Pages_At),
+                          [0 => C.unsigned (This.Pages_At mod Second_Table),
                            1 => C.unsigned (This.Page_Shift),
                            2 => C.unsigned (This.First_Position),
                            others => 0],

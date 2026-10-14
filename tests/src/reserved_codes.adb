@@ -24,7 +24,6 @@ package body Reserved_Codes is
             | E.GGUF_Unsupported_Tensor_Type
             | E.Template_Unsupported_Role
             | E.Arch_Missing_Metadata
-            | E.Arch_Invalid_Metadata
             | E.Arch_Vocabulary_Mismatch
             | E.Arch_Layer_Numbering_Gap
             | E.Tensor_Rank_Too_High

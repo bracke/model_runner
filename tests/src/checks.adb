@@ -5550,7 +5550,11 @@ package body Checks is
                   Child  : constant String :=
                     Hostkit.Fs.Join (Directory, Simple);
                begin
-                  if Simple = "." or else Simple = ".." then
+                  --  A link is not followed: one that leads back up walks
+                  --  the tree again at every level, and never ends.
+                  if Simple = "." or else Simple = ".."
+                    or else Hostkit.Fs.Is_Link (Path (Child))
+                  then
                      null;
 
                   elsif Dirs.Kind (Item) = Dirs.Directory then

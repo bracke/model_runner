@@ -190,17 +190,29 @@ package body Model_Runner.Processes is
    function Told (Item : Result; Named : String) return String is
       Output : constant String := U.To_String (Item.Output);
       Errors : constant String := U.To_String (Item.Errors);
+
+      function Kept (Text : String) return String is
+         Head : constant Natural := Told_Most * 3 / 5;
+         Tail : constant Natural := Told_Most - Head - 64;
+      begin
+         if Text'Length <= Told_Most then
+            return Text;
+         end if;
+         return Text (Text'First .. Text'First + Head - 1) & ASCII.LF & "...["
+           & Image (Text'Length - Head - Tail) & " bytes left out]..." & ASCII.LF
+           & Text (Text'Last - Tail + 1 .. Text'Last);
+      end Kept;
    begin
       if not Item.Started then
          return "error: " & Named & " could not be run";
       elsif Succeeded (Item) then
-         return (if Output = "" then "(" & Named & " produced no output)" else Output);
+         return Kept (if Output = "" then "(" & Named & " produced no output)" else Output);
       end if;
-      return "error: " & Named
+      return Kept ("error: " & Named
         & (if Item.Stopped then " was stopped before it finished"
            else " failed with exit status " & Image (Item.Exit_Status))
         & (if Errors = "" then "" else ASCII.LF & "stderr:" & ASCII.LF & Errors)
-        & (if Output = "" then "" else ASCII.LF & "stdout:" & ASCII.LF & Output);
+        & (if Output = "" then "" else ASCII.LF & "stdout:" & ASCII.LF & Output));
    end Told;
 
 end Model_Runner.Processes;

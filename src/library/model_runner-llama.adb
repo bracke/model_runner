@@ -8342,6 +8342,26 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      --  Not back into what a sliding window let go: a position it read
+      --  again would find the window before it gone. The front is always
+      --  reached -- the window begins again with nothing.
+      if Position > 0 and then Position < Item.Committed
+        and then Item.Owner /= null and then Item.Origin /= null
+        and then Item.Owner.Settings.Window > 0
+      then
+         for Layer in Item.Origin.all'Range loop
+            if Slides (Item.Owner.Settings, Natural (Layer))
+              and then Item.Origin.all (Layer) > 0
+              and then Natural (Item.Origin.all (Layer)) + Item.Owner.Settings.Window > Position
+            then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               E.Add_Integer (Status, "input", Long_Long_Integer (Position));
+               E.Add_Integer (Status, "expected", Long_Long_Integer (Item.Committed));
+               return;
+            end if;
+         end loop;
+      end if;
+
       --  A linear layer's state is what it is now and cannot be walked
       --  back: it is restored from the ring where the ring reaches, nought
       --  again at the front, and refused past that.
@@ -8458,6 +8478,10 @@ package body Model_Runner.Llama is
       --  Nothing is cleared. What is past the position is not read: every
       --  attention reads the committed length and every write past it is a
       --  write to a slot that will be written again before it is read.
+      --  Back to the front, every window begins again where it began.
+      if Position = 0 and then Item.Origin /= null then
+         Item.Origin.all := [others => 0];
+      end if;
       Item.Committed := Position;
       Item.Marked := Natural'Min (Item.Marked, Position);
    end Rewind;

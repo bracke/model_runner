@@ -1,6 +1,12 @@
+with Ada.Directories;
 with Ada.Exceptions;
+with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
+with Ada.Unchecked_Deallocation;
+
+with Hostkit.Durability;
+with Hostkit.Fs;
 
 with Model_Runner.Text;
 
@@ -30,8 +36,10 @@ package body Model_Runner.CLI.Checkpoint is
    is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
-      File : Stream_IO.File_Type;
-      Buf  : US.Unbounded_String;
+      File    : Stream_IO.File_Type;
+      Buf     : US.Unbounded_String;
+      Partial : constant String := Path & ".partial";
+      use type Hostkit.Durability.Outcome;
 
       procedure LP (S : String) is
       begin
@@ -69,23 +77,56 @@ package body Model_Runner.CLI.Checkpoint is
          end;
       end loop;
 
-      Create (File, Out_File, Path);
+      --  Beside its name first, on the device, and then in its place: a
+      --  save that stops part way -- a full disk, a kill -- leaves the
+      --  conversation saved before, not half of this one. Written a slice
+      --  at a time from where it was built, not copied whole onto a stack.
+      Create (File, Out_File, Partial);
       declare
-         S     : constant String := US.To_String (Buf);
-         Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
+         Slice_Bytes : constant := 64 * 1024;
+         Length      : constant Natural := US.Length (Buf);
+         From        : Natural := 1;
       begin
-         for I in S'Range loop
-            Block (Stream_Element_Offset (I - S'First + 1)) :=
-              Stream_Element (Character'Pos (S (I)));
+         while From <= Length loop
+            declare
+               Upto  : constant Natural := Natural'Min (Length, From + Slice_Bytes - 1);
+               S     : constant String := US.Slice (Buf, From, Upto);
+               Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
+            begin
+               for I in S'Range loop
+                  Block (Stream_Element_Offset (I - S'First + 1)) := Stream_Element (Character'Pos (S (I)));
+               end loop;
+               Write (File, Block);
+               From := Upto + 1;
+            end;
          end loop;
-         Write (File, Block);
       end;
       Close (File);
+      if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
+        or else not Hostkit.Fs.Replace_File (Partial, Path)
+      then
+         raise Ada.IO_Exceptions.Use_Error;
+      end if;
+      declare
+         Listed : constant Hostkit.Durability.Outcome :=
+           Hostkit.Durability.Sync_Directory (Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Path)));
+         pragma Unreferenced (Listed);
+      begin
+         null;
+      end;
    exception
       when Failure : others =>
          if Is_Open (File) then
             Close (File);
          end if;
+         begin
+            if Ada.Directories.Exists (Partial) then
+               Ada.Directories.Delete_File (Partial);
+            end if;
+         exception
+            when others =>
+               null;
+         end;
          Status := E.Make (E.IO_Write_Failed);
          E.Add_Text (Status, "path", Path, E.Param_Path);
          E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Name (Failure));
@@ -110,11 +151,16 @@ package body Model_Runner.CLI.Checkpoint is
       Status := E.Success;
       Open (File, In_File, Path);
       declare
+         type Text_Access is access String;
+         procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
          Total : constant Natural := Natural (Size (File));
-         Block : Stream_Element_Array (1 .. Stream_Element_Offset'Max
-                                              (1, Stream_Element_Offset (Total)));
          Last  : Stream_Element_Offset := 0;
-         Data  : String (1 .. Total);
+         --  On the heap: a conversation of megabytes is past a stack.
+         Held  : Text_Access := new String (1 .. Total);
+         Data  : String renames Held.all;
+         --  Whether the parse read the file to its end: one that stops at
+         --  a record that is none is a file cut short, not a conversation.
+         Whole : Boolean := False;
          --  The conversation the data holds, read into a history.
          procedure Parse
            (Into : in out Model_Runner.Conversation.History;
@@ -159,7 +205,12 @@ package body Model_Runner.CLI.Checkpoint is
             begin
                Read_Messages :
                loop
-                  exit Read_Messages when Pos > Natural (Last);
+                  --  Whole only where a record ends and the file with it:
+                  --  a file cut after a field ends where a field did too.
+                  if Pos > Natural (Last) then
+                     Whole := True;
+                     exit Read_Messages;
+                  end if;
                   declare
                      Ok_R, Ok_C, Ok_N : Boolean;
                      Role    : constant String := Field (Ok_R);
@@ -221,13 +272,22 @@ package body Model_Runner.CLI.Checkpoint is
             end;
          end Parse;
       begin
-         if Total > 0 then
-            Read (File, Block, Last);
-         end if;
+         --  Read a slice at a time into the text.
+         declare
+            Slice : Stream_Element_Array (1 .. 64 * 1024);
+            Got   : Stream_Element_Offset;
+         begin
+            while Natural (Last) < Total loop
+               Read (File, Slice (1 .. Stream_Element_Offset'Min (Slice'Last,
+                                                                 Stream_Element_Offset (Total) - Last)), Got);
+               exit when Got = 0;
+               for I in 1 .. Got loop
+                  Data (Natural (Last + I)) := Character'Val (Slice (I));
+               end loop;
+               Last := Last + Got;
+            end loop;
+         end;
          Close (File);
-         for I in 1 .. Natural (Last) loop
-            Data (I) := Character'Val (Block (Stream_Element_Offset (I)));
-         end loop;
 
          declare
          begin
@@ -242,13 +302,24 @@ package body Model_Runner.CLI.Checkpoint is
                   if E.Is_Ok (Status) then
                      Parse (Trial, Loaded, Status);
                   end if;
+                  if E.Is_Ok (Status) and then Loaded and then not Whole then
+                     Status := E.Make (E.IO_Read_Failed);
+                     E.Add_Text (Status, "path", Path, E.Param_Path);
+                  end if;
                   if E.Is_Error (Status) or else not Loaded then
+                     Free (Held);
                      return;
                   end if;
                   Conv.Clear (Messages);
                end;
             end if;
             Parse (Messages, Loaded, Status);
+            Free (Held);
+            if E.Is_Ok (Status) and then not Whole then
+               --  What was read stays read; that more was not is said.
+               Status := E.Make (E.IO_Read_Failed);
+               E.Add_Text (Status, "path", Path, E.Param_Path);
+            end if;
          end;
       end;
    exception
@@ -257,6 +328,7 @@ package body Model_Runner.CLI.Checkpoint is
             Close (File);
          end if;
          Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
    end Load;
 
 end Model_Runner.CLI.Checkpoint;

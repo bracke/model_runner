@@ -157,6 +157,18 @@ package body Tests.Grammar_Cases is
       Assert (Allows ("root ::= [\u00E6]", String'(1 => Character'Val (16#C3#)))
               and then not Completes ("root ::= [\u00E6]", String'(1 => Character'Val (16#C3#))),
               "half of a code point's bytes was refused, or taken for the whole");
+      --  Only a start the grammar could take: digits have no character a
+      --  lead byte of three begins, and one past what a set holds is none.
+      Assert (not Allows ("root ::= [0-9]+", String'(1 => Character'Val (16#E2#))),
+              "a lead byte was taken where the grammar has no character it could begin");
+      Assert (Allows ("root ::= [\u2014]", String'(1 => Character'Val (16#E2#)))
+              and then Allows ("root ::= [\u2014]", Character'Val (16#E2#) & Character'Val (16#80#))
+              and then not Allows ("root ::= [\u2014]", Character'Val (16#E2#) & Character'Val (16#81#)),
+              "a held start was judged by another range than the one it can still become");
+      Assert (Allows ("root ::= [^a-z]", String'(1 => Character'Val (16#E2#)))
+              and then not Allows ("root ::= [^\u2000-\u2FFF]", String'(1 => Character'Val (16#E2#)))
+              and then Allows ("root ::= [^\u2000-\u2010]", String'(1 => Character'Val (16#E2#))),
+              "an inverted set was judged wrongly for a held start");
       --  Nor does a grammar that could end before it end with it begun.
       Assert (Completes ("root ::= ""a"" [\u00E6]?", "a")
               and then not Completes ("root ::= ""a"" [\u00E6]?",

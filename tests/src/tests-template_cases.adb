@@ -2078,8 +2078,8 @@ package body Tests.Template_Cases is
          --  One that cannot be written is said not written.
          Model_Runner.CLI.Checkpoint.Save ("/nonexistent-directory/x.chk", Talk, Status);
          Assert (Status.Code = E.IO_Write_Failed, "a conversation that could not be saved was said saved");
-         Status := E.Success;
-         Model_Runner.CLI.Checkpoint.Save (File, Talk);
+         Model_Runner.CLI.Checkpoint.Save (File, Talk, Status);
+         Assert (E.Is_Ok (Status), "a conversation that could be saved was said not saved");
          Conv.Open (Again, Status => Status);
          Model_Runner.CLI.Checkpoint.Load (File, Again, Loaded, Status);
          Assert (Loaded and then E.Is_Ok (Status),
@@ -2091,6 +2091,36 @@ package body Tests.Template_Cases is
                  and then Conv.Content_At (Again, 2) = "a cat",
                  "the turn of parts did not survive the checkpoint");
          Conv.Close (Again);
+
+         --  Saved beside its name and moved into place, nothing is left
+         --  beside it; cut short, it is said not read rather than taken up
+         --  for the part that came.
+         Assert (not Ada.Directories.Exists (File & ".partial"), "a save left its partial file");
+         declare
+            use Ada.Streams.Stream_IO;
+            Whole : File_Type;
+            Cut   : File_Type;
+            Size  : Ada.Streams.Stream_Element_Offset;
+         begin
+            Open (Whole, In_File, File);
+            Size := Ada.Streams.Stream_Element_Offset (Ada.Streams.Stream_IO.Size (Whole));
+            declare
+               Bytes : Ada.Streams.Stream_Element_Array (1 .. Size);
+               Last  : Ada.Streams.Stream_Element_Offset;
+            begin
+               Read (Whole, Bytes, Last);
+               Close (Whole);
+               Create (Cut, Out_File, File & ".cut");
+               Write (Cut, Bytes (1 .. Ada.Streams."-" (Last, 3)));
+               Close (Cut);
+            end;
+         end;
+         Conv.Open (Again, Status => Status);
+         Model_Runner.CLI.Checkpoint.Load (File & ".cut", Again, Loaded, Status);
+         Assert (Status.Code = E.IO_Read_Failed, "a checkpoint cut short was taken up without a word: "
+                 & E.Error_Code'Image (Status.Code));
+         Conv.Close (Again);
+         Ada.Directories.Delete_File (File & ".cut");
          Conv.Close (Talk);
          Ada.Directories.Delete_File (File);
       end;

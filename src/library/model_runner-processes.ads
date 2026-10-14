@@ -22,6 +22,11 @@ package Model_Runner.Processes is
    --  be left out.
    Stream_Most : constant := 32 * 1024;
 
+   --  The most Told says: both streams, the sentence and the notes of
+   --  what was left out kept within what a tool's answer may hold, so a
+   --  long failure is told cut, not refused as too large to tell.
+   Told_Most : constant := 31 * 1024;
+
    --  A program to run.
    type Request is record
       Program   : Ada.Strings.Unbounded.Unbounded_String;
@@ -64,7 +69,8 @@ package Model_Runner.Processes is
 
    --  What a model is told of a run: its output where it succeeded, and
    --  where it did not, its exit status and what it said on its standard
-   --  error, then its output.
+   --  error, then its output -- no more than Told_Most of it all, the
+   --  middle left out and said to be.
    --
    --  @param Item The result.
    --  @param Named What it was, as the sentence names it: "the tool

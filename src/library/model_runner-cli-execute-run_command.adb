@@ -79,6 +79,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
         Events     : US.Unbounded_String;
         Count      : Natural := 0;
         Checkpoint : US.Unbounded_String;   --  path, or empty for none
+        Told_Lost  : Boolean := False;      --  a failed save already said
      end record;
 
    overriding procedure On_Call
@@ -110,8 +111,20 @@ package body Model_Runner.CLI.Execute.Run_Command is
    overriding procedure On_Step (Self : in out Agent_Watch) is
    begin
       if Self.Log /= null and then US.Length (Self.Checkpoint) > 0 then
-         Model_Runner.CLI.Checkpoint.Save
-           (US.To_String (Self.Checkpoint), Self.Log.all);
+         declare
+            Saved : E.Error_Info;
+         begin
+            Model_Runner.CLI.Checkpoint.Save
+              (US.To_String (Self.Checkpoint), Self.Log.all, Saved);
+            --  A step not saved is said, once: a run that thinks it can
+            --  be taken up again and cannot is told so while it can act.
+            if E.Is_Error (Saved) and then not Self.Told_Lost then
+               Self.Told_Lost := True;
+               Pres.Report (Self.Screen.all, Saved);
+            elsif E.Is_Ok (Saved) then
+               Self.Told_Lost := False;
+            end if;
+         end;
       end if;
    end On_Step;
 
@@ -343,8 +356,15 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Pres.Put_Note
         (Self.Screen.all, "cli.agent.confirm",
          [Loc.Named ("name", Named), Loc.Named ("arguments", Arguments)]);
+      --  The whole line, however long: what a fixed buffer left of a long
+      --  answer was read as the answer to the next call.
       begin
-         Ada.Text_IO.Get_Line (Line, Last);
+         declare
+            Said : constant String := Ada.Text_IO.Get_Line;
+         begin
+            Last := Natural'Min (Said'Length, Line'Length);
+            Line (1 .. Last) := Said (Said'First .. Said'First + Last - 1);
+         end;
       exception
          when Ada.Text_IO.End_Error =>
             return Model_Runner.Agent.Halt;

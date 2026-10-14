@@ -2942,6 +2942,46 @@ package body Model_Runner.CLI.Options is
          return;
       end if;
 
+      --  Modes that end before what another option asks of them: an
+      --  interactive session is not the agent's loop, and neither saves a
+      --  session file -- the option was taken and did nothing.
+      if Result.Prompt_Kind = Prompt_Interactive and then Result.Agent then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--agent", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--interactive", E.Param_Identifier);
+         return;
+      end if;
+      if not T.Is_Empty (Result.Save_Session)
+        and then (Result.Prompt_Kind = Prompt_Interactive or else Result.Agent)
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--save-session", E.Param_Identifier);
+         E.Add_Text (Status, "other", (if Result.Agent then "--agent" else "--interactive"), E.Param_Identifier);
+         return;
+      end if;
+
+      --  And what only the agent's loop reads, given to a run that is not
+      --  one: it would be read by nothing.
+      if not Result.Agent then
+         declare
+            Unread : constant String :=
+              (if not T.Is_Empty (Result.Checkpoint_File_Path) then "--checkpoint-file"
+               elsif not T.Is_Empty (Result.Memory_File_Path) then "--memory-file"
+               elsif not T.Is_Empty (Result.Trace_File_Path) then "--trace-file"
+               elsif Result.Confirm_Tools then "--confirm-tools"
+               elsif Result.Deny_Tool_Count > 0 then "--deny-tool"
+               elsif Result.Deny_Arg_Count > 0 then "--deny-arg"
+               else "");
+         begin
+            if Unread /= "" then
+               Status := E.Make (E.CLI_Option_Combination);
+               E.Add_Text (Status, "option", Unread, E.Param_Identifier);
+               E.Add_Text (Status, "other", "a run without --agent", E.Param_Identifier);
+               return;
+            end if;
+         end;
+      end if;
+
       --  And no template either, which is where the tools would have been
       --  written. A model given tools it was never told about answers as
       --  though there were none, which is an answer and not an error, so

@@ -518,22 +518,24 @@ package body Model_Runner.Backend.CPU is
             return;
          end if;
 
-         Generation := Generation + 1;
+         Generation := Interfaces."+" (Generation, 1);
          Accepted := True;
       end Post;
 
-      procedure Report (Stamp : Natural) is
+      procedure Report (Stamp : Interfaces.Unsigned_32) is
+         use type Interfaces.Unsigned_32;
       begin
          --  The latest report wins and an older one is ignored, which is
          --  what makes a report that arrives after its submitter has
          --  already gone on harmless: it cannot open the barrier for the
-         --  job after the one it belongs to.
-         if Stamp > Reported then
+         --  job after the one it belongs to. Later is ahead within half
+         --  the counter's round, past the wrap as before it.
+         if Stamp - Reported in 1 .. 16#8000_0000# then
             Reported := Stamp;
          end if;
       end Report;
 
-      entry Await when Closing or else Reported >= Generation is
+      entry Await when Closing or else Interfaces."<" (Interfaces."-" (Reported, Generation), 16#8000_0000#) is
       begin
          null;
       end Await;
@@ -1211,22 +1213,35 @@ package body Model_Runner.Backend.CPU is
 
          --  Nothing new: the spin timed out and the sleep was woken by
          --  something else. Ask again.
-         if Waking.Ticket = Mine then
-            goto Continue;
-         end if;
+         declare
+            Posted : constant AC.Atomic_Unsigned := Waking.Ticket;
+            Crew   : Chunk_Counter;
+         begin
+            if Posted = Mine then
+               goto Continue;
+            end if;
 
-         Mine := Waking.Ticket;
-         Waking.Seen (Position) := Mine;
+            Mine := Posted;
+            Waking.Seen (Position) := Mine;
 
-         --  Not on this job's team: it is taken, and there is nothing to
-         --  report for it.
-         if Share_Count (Position)
-            >= Share_Count (Waking.Crew)
-         then
-            goto Continue;
-         end if;
+            --  The job's team and work, and then the ticket again: read
+            --  apart, a worker held up between them read the next job's
+            --  team under this one's ticket, took the next job twice and
+            --  counted it off twice. A ticket moved on means this one was
+            --  done without this worker -- it was on no team that waited.
+            Crew := Waking.Crew;
+            Current := Waking.Held;
+            if Waking.Ticket /= Posted then
+               goto Continue;
+            end if;
 
-         Current := Waking.Held;
+            --  Not on this job's team: it is taken, and there is nothing to
+            --  report for it.
+            if Share_Count (Position) >= Share_Count (Crew) then
+               goto Continue;
+            end if;
+         end;
+
          Failed := False;
 
          begin
@@ -1264,7 +1279,7 @@ package body Model_Runner.Backend.CPU is
          --  one protected action for a whole job rather than two for every
          --  share of it.
          if AC.Decrement (Waking.Left) then
-            Control.Report (Natural (Mine));
+            Control.Report (Interfaces.Unsigned_32 (Mine));
          end if;
 
          <<Continue>>
@@ -1277,7 +1292,7 @@ package body Model_Runner.Backend.CPU is
          if Waking /= null then
             Waking.Failed := 1;
             if AC.Decrement (Waking.Left) then
-               Control.Report (Natural (Waking.Ticket));
+               Control.Report (Interfaces.Unsigned_32 (Waking.Ticket));
             end if;
          end if;
    end Worker;

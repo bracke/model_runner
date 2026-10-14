@@ -3527,8 +3527,11 @@ package body Model_Runner.Kernels is
 
       Pairs : constant Element_Count := Rotary / 2;
    begin
+      --  The offset too: the rotated part of a head, from where it
+      --  begins, within the head.
       if Heads = 0 or else Head_Size = 0 or else Rotary = 0
         or else Rotary > Head_Size
+        or else Offset > Head_Size - Rotary
         or else Rotary mod 2 /= 0
         or else Vector'Length /= Heads * Head_Size
         or else Element_Count (Cosines'Length) /= Pairs

@@ -3550,6 +3550,9 @@ package body Tests.CLI_Cases is
          Assert (Reused = Plain,
                  "reusing a saved context changed the answer: <" & Reused
                  & "> against <" & Plain & ">");
+         --  Written beside its name and moved into place: nothing beside.
+         Assert (Ada.Directories.Exists (Saved) and then not Ada.Directories.Exists (Saved & ".partial"),
+                 "a saved session left its partial file, or is not there");
       end;
 
       --  A context that is not there is not a context.
@@ -4884,6 +4887,17 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Conflicting_System_Sources,
               "run m.gguf --system a --system-file b");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --raw --system a");
+
+      --  What a mode would not read, refused rather than taken and dropped:
+      --  the agent's loop in an interactive session, a session saved by a
+      --  mode that ends before saving it, the agent's own files without it.
+      Expect (E.CLI_Option_Combination, "run m.gguf --interactive --agent");
+      Expect (E.CLI_Option_Combination, "run m.gguf --interactive --save-session s.bin");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt a --agent --save-session s.bin");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt a --checkpoint-file c.txt");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt a --confirm-tools");
+      Expect (E.No_Error, "run m.gguf --prompt a --agent --checkpoint-file c.txt");
+      Expect (E.No_Error, "run m.gguf --prompt a --save-session s.bin");
 
       --  A draft model with a grammar or a schema drafts where the run is
       --  greedy, and is refused where it samples -- that run cannot draft,

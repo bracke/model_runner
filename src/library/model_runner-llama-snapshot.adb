@@ -28,11 +28,11 @@ is
 
    --  And what it holds instead, written after every layer's values:
    --  every linear layer's convolution memory and state, as they are.
+   --  Every model that keeps one -- Qwen3.5, and Mamba, RWKV and Jamba
+   --  too -- sized by what is written below, not by one family's name.
    States : constant B.Byte_Count :=
-     (if Hybrid (Settings.Kind)
-      then B.Byte_Count (Conv_Room (Settings))
-           + B.Byte_Count (State_Room (Settings))
-      else 0);
+     (if Item.Conv_State /= null then B.Byte_Count (Conv_Room (Settings)) else 0)
+     + (if Item.Delta_State /= null then B.Byte_Count (State_Room (Settings)) else 0);
 
    function Runs return B.Byte_Count;
 
@@ -232,27 +232,31 @@ is
       At_Byte := At_Byte + B.Byte_Count (Count) * 2;
    end Put_Run;
 begin
-   --  What the device wrote and the host was owed, which this
-   --  reads: the copy is brought up to date where it is used
-   --  rather than at the end of every call.
-   declare
-      Settled : Boolean;
-   begin
-      Settle_Cache (Item, Settled);
-   end;
-
-   Narrow := Halves_Already;
-   Width := (if Narrow then 2 else 4);
-
    Into := null;
    Status := E.Success;
 
+   --  A session that holds nothing to save is said so before anything
+   --  of it is read.
    if Item.Current not in Ready | Evaluating_Prompt | Generating
      or else Item.Owner = null
    then
       Status := E.Make (E.Lifecycle_Invalid_State);
       return;
    end if;
+
+   --  What the device wrote and the host was owed, which this
+   --  reads: the copy is brought up to date where it is used
+   --  rather than at the end of every call -- the caches, and the
+   --  linear layers' states, which a device run keeps there.
+   declare
+      Settled : Boolean;
+   begin
+      Settle_Cache (Item, Settled);
+   end;
+   Fetch_States (Item'Unchecked_Access);
+
+   Narrow := Halves_Already;
+   Width := (if Narrow then 2 else 4);
 
    --  Not zeroed: every byte of it is written below, and zeroing a
    --  gigabyte first was a second of the save.
@@ -307,8 +311,12 @@ begin
            Keys_At (Item, Natural (Layer_Index));
       begin
          if Narrow and then Item.Held = Exact then
-            Put_Run (Item.Keys.all, First,
-                     Element_Count (Run_Of (Layer_Index) * KV_Width));
+            --  A layer that holds nothing -- a linear one, a session with
+            --  nothing committed -- has no run, and no place to point at.
+            if Run_Of (Layer_Index) > 0 then
+               Put_Run (Item.Keys.all, First,
+                        Element_Count (Run_Of (Layer_Index) * KV_Width));
+            end if;
          else
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * KV_Width)
                                - 1
@@ -342,8 +350,12 @@ begin
            Values_At (Item, Natural (Layer_Index));
       begin
          if Narrow and then Item.Held = Exact then
-            Put_Run (Item.Values.all, First,
-                     Element_Count (Run_Of (Layer_Index) * V_Width));
+            --  A layer that holds nothing -- a linear one, a session with
+            --  nothing committed -- has no run, and no place to point at.
+            if Run_Of (Layer_Index) > 0 then
+               Put_Run (Item.Values.all, First,
+                        Element_Count (Run_Of (Layer_Index) * V_Width));
+            end if;
          else
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * V_Width)
                                - 1

@@ -33,7 +33,15 @@ begin
    --  is everything before it at once, and a context with the middle
    --  taken out is a context they never saw. Refused by name, and the
    --  caller re-evaluates what it keeps.
-   if Hybrid (Settings.Kind) then
+   --  Any model that keeps such a state beside its attention -- Jamba as
+   --  much as Qwen3.5. One that is all state (Mamba, RWKV) holds no rows
+   --  to move and keeps going; its linear layers are passed over below,
+   --  where Jamba's, holding no cells, had the layer after them moved
+   --  twice.
+   if Hybrid (Settings.Kind)
+     or else ((Item.Conv_State /= null or else Item.Delta_State /= null)
+              and then (for some Layer in 0 .. Settings.Layers - 1 => not Linear (Settings, Layer)))
+   then
       Status := E.Make (E.Arch_Unsupported_Feature);
       E.Add_Text (Status, "feature", "shift", E.Param_Identifier);
       return;
@@ -77,129 +85,133 @@ begin
    --  origin falls inside the dropped range -- and then only far enough
    --  to close it.
    for Index in Item.Owner.Layers'Range loop
-      declare
-         Layer : constant Natural := Natural (Index);
+      --  A linear layer holds no rows: it has nothing to move, and its
+      --  place is the next layer's.
+      if not Linear (Settings, Natural (Index)) then
+         declare
+            Layer : constant Natural := Natural (Index);
 
-         --  The lowest position this layer still holds, before and
-         --  after. Zero and zero for a layer that holds everything,
-         --  which is what this was before a window slid.
-         Low : constant Element_Count :=
-           (if Item.Origin = null then 0 else Item.Origin.all (Layer));
+            --  The lowest position this layer still holds, before and
+            --  after. Zero and zero for a layer that holds everything,
+            --  which is what this was before a window slid.
+            Low : constant Element_Count :=
+              (if Item.Origin = null then 0 else Item.Origin.all (Layer));
 
-         Settled : constant Element_Count :=
-           (if Low <= Element_Count (Keep) then Low
-            elsif Low >= Element_Count (Keep + Drop)
-            then Low - Element_Count (Drop)
-            else Element_Count (Keep));
+            Settled : constant Element_Count :=
+              (if Low <= Element_Count (Keep) then Low
+               elsif Low >= Element_Count (Keep + Drop)
+               then Low - Element_Count (Drop)
+               else Element_Count (Keep));
 
-         Base : constant Element_Count :=
-           Keys_At (Item, Layer);
-         V_Base : constant Element_Count :=
-           Values_At (Item, Layer);
-         Rows_Base : constant Element_Count :=
-           Rows_At (Item, Layer);
-      begin
-         for Step in 0 .. Moved - 1 loop
-            declare
-               --  What the position was and what it becomes.
-               Held_At : constant Element_Count :=
-                 Element_Count (Keep + Drop + Step);
-               Ends_At : constant Element_Count :=
-                 Element_Count (Keep + Step);
+            Base : constant Element_Count :=
+              Keys_At (Item, Layer);
+            V_Base : constant Element_Count :=
+              Values_At (Item, Layer);
+            Rows_Base : constant Element_Count :=
+              Rows_At (Item, Layer);
+         begin
+            for Step in 0 .. Moved - 1 loop
+               declare
+                  --  What the position was and what it becomes.
+                  Held_At : constant Element_Count :=
+                    Element_Count (Keep + Drop + Step);
+                  Ends_At : constant Element_Count :=
+                    Element_Count (Keep + Step);
 
-               --  Where the two sit in this layer, which is not the
-               --  positions themselves for a layer that slides a window
-               --  -- and for one that has slid past this position, is
-               --  nowhere at all.
-               Absent : constant Boolean := Held_At < Low;
+                  --  Where the two sit in this layer, which is not the
+                  --  positions themselves for a layer that slides a window
+                  --  -- and for one that has slid past this position, is
+                  --  nowhere at all.
+                  Absent : constant Boolean := Held_At < Low;
 
-               Was : constant Element_Count :=
-                 (if Absent then 0 else Held_At - Low);
-               Now : constant Element_Count :=
-                 (if Absent then 0 else Ends_At - Settled);
+                  Was : constant Element_Count :=
+                    (if Absent then 0 else Held_At - Low);
+                  Now : constant Element_Count :=
+                    (if Absent then 0 else Ends_At - Settled);
 
-               From : constant Element_Count := Base + Was * KV_Width;
-               Into : constant Element_Count := Base + Now * KV_Width;
+                  From : constant Element_Count := Base + Was * KV_Width;
+                  Into : constant Element_Count := Base + Now * KV_Width;
 
-               V_From : constant Element_Count := V_Base + Was * V_Width;
-               V_Into : constant Element_Count := V_Base + Now * V_Width;
-            begin
-               if not Absent then
-                  if Item.Held in Eighth | Fourth then
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Item.Key_Row.all (Offset) :=
-                          Unpack (Item.Byte_Keys.all, From + Offset,
-                                  KV_Width, Item.Key_Scales.all, Item.Held);
-                     end loop;
-                  elsif Item.Held = Exact then
-                     Item.Key_Row.all (0 .. KV_Width - 1) :=
-                       Item.Keys.all (From .. From + KV_Width - 1);
-                  else
-                     for Offset in 0 .. KV_Width - 1 loop
-                        Item.Key_Row.all (Offset) :=
-                          N.To_Real (Item.Half_Keys.all (From + Offset));
-                     end loop;
+                  V_From : constant Element_Count := V_Base + Was * V_Width;
+                  V_Into : constant Element_Count := V_Base + Now * V_Width;
+               begin
+                  if not Absent then
+                     if Item.Held in Eighth | Fourth then
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Item.Key_Row.all (Offset) :=
+                             Unpack (Item.Byte_Keys.all, From + Offset,
+                                     KV_Width, Item.Key_Scales.all, Item.Held);
+                        end loop;
+                     elsif Item.Held = Exact then
+                        Item.Key_Row.all (0 .. KV_Width - 1) :=
+                          Item.Keys.all (From .. From + KV_Width - 1);
+                     else
+                        for Offset in 0 .. KV_Width - 1 loop
+                           Item.Key_Row.all (Offset) :=
+                             N.To_Real (Item.Half_Keys.all (From + Offset));
+                        end loop;
+                     end if;
+
+                     K.Apply_Rotary
+                       (Item.Key_Row.all, KV_Heads, Head_Size,
+                        Element_Count (Settings.Rotary), Drop,
+                        Turn_Base (Settings, Natural (Index)),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
+                        Settings.Pairing, Backwards => True);
+
+                     if Item.Held in Eighth | Fourth then
+                        --  Turned back and written again, which is a second
+                        --  rounding of a row that was already rounded once.
+                        --  A rolling context in this storage loses a little
+                        --  more of what it keeps every time it rolls, and that
+                        --  is the price of the storage rather than a fault in
+                        --  the shift.
+                        Pack_Row
+                          (Item.Key_Row.all (0 .. KV_Width - 1),
+                           Item.Byte_Keys.all, Into, KV_Width,
+                           Item.Key_Scales.all, Item.Held);
+
+                        --  The values move whole, bytes and scales.
+                        declare
+                           VB : constant B.Byte_Count :=
+                             Row_Bytes (Item.Held_Values, V_Width);
+                           VS : constant Element_Count :=
+                             Blocks_Of (Item.Held_Values, V_Width);
+                           From_Byte : constant B.Byte_Count :=
+                             Byte_Of (Item.Held_Values, V_From, V_Width);
+                           Into_Byte : constant B.Byte_Count :=
+                             Byte_Of (Item.Held_Values, V_Into, V_Width);
+                        begin
+                           Item.Byte_Values.all (Into_Byte .. Into_Byte + VB - 1) :=
+                             Item.Byte_Values.all (From_Byte .. From_Byte + VB - 1);
+                           Item.Value_Scales.all
+                             ((Rows_Base + Now) * VS .. (Rows_Base + Now + 1) * VS - 1) :=
+                             Item.Value_Scales.all
+                               ((Rows_Base + Was) * VS .. (Rows_Base + Was + 1) * VS - 1);
+                        end;
+                     elsif Item.Held = Exact then
+                        Item.Keys.all (Into .. Into + KV_Width - 1) :=
+                          Item.Key_Row.all (0 .. KV_Width - 1);
+                        Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
+                          Item.Values.all (V_From .. V_From + V_Width - 1);
+                     else
+                        Model_Runner.Kernels.To_Halves
+                          (Item.Key_Row.all (0 .. KV_Width - 1),
+                           Item.Half_Keys.all (Into .. Into + KV_Width - 1));
+                        for Offset in 0 .. V_Width - 1 loop
+                           Item.Half_Values.all (V_Into + Offset) :=
+                             Item.Half_Values.all (V_From + Offset);
+                        end loop;
+                     end if;
                   end if;
+               end;
+            end loop;
 
-                  K.Apply_Rotary
-                    (Item.Key_Row.all, KV_Heads, Head_Size,
-                     Element_Count (Settings.Rotary), Drop,
-                     Turn_Base (Settings, Natural (Index)),
-                     Turn_Scaling (Settings, Natural (Index)), Turns (Source),
-                     Settings.Pairing, Backwards => True);
-
-                  if Item.Held in Eighth | Fourth then
-                     --  Turned back and written again, which is a second
-                     --  rounding of a row that was already rounded once.
-                     --  A rolling context in this storage loses a little
-                     --  more of what it keeps every time it rolls, and that
-                     --  is the price of the storage rather than a fault in
-                     --  the shift.
-                     Pack_Row
-                       (Item.Key_Row.all (0 .. KV_Width - 1),
-                        Item.Byte_Keys.all, Into, KV_Width,
-                        Item.Key_Scales.all, Item.Held);
-
-                     --  The values move whole, bytes and scales.
-                     declare
-                        VB : constant B.Byte_Count :=
-                          Row_Bytes (Item.Held_Values, V_Width);
-                        VS : constant Element_Count :=
-                          Blocks_Of (Item.Held_Values, V_Width);
-                        From_Byte : constant B.Byte_Count :=
-                          Byte_Of (Item.Held_Values, V_From, V_Width);
-                        Into_Byte : constant B.Byte_Count :=
-                          Byte_Of (Item.Held_Values, V_Into, V_Width);
-                     begin
-                        Item.Byte_Values.all (Into_Byte .. Into_Byte + VB - 1) :=
-                          Item.Byte_Values.all (From_Byte .. From_Byte + VB - 1);
-                        Item.Value_Scales.all
-                          ((Rows_Base + Now) * VS .. (Rows_Base + Now + 1) * VS - 1) :=
-                          Item.Value_Scales.all
-                            ((Rows_Base + Was) * VS .. (Rows_Base + Was + 1) * VS - 1);
-                     end;
-                  elsif Item.Held = Exact then
-                     Item.Keys.all (Into .. Into + KV_Width - 1) :=
-                       Item.Key_Row.all (0 .. KV_Width - 1);
-                     Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
-                       Item.Values.all (V_From .. V_From + V_Width - 1);
-                  else
-                     Model_Runner.Kernels.To_Halves
-                       (Item.Key_Row.all (0 .. KV_Width - 1),
-                        Item.Half_Keys.all (Into .. Into + KV_Width - 1));
-                     for Offset in 0 .. V_Width - 1 loop
-                        Item.Half_Values.all (V_Into + Offset) :=
-                          Item.Half_Values.all (V_From + Offset);
-                     end loop;
-                  end if;
-               end if;
-            end;
-         end loop;
-
-         if Item.Origin /= null then
-            Item.Origin.all (Layer) := Settled;
-         end if;
-      end;
+            if Item.Origin /= null then
+               Item.Origin.all (Layer) := Settled;
+            end if;
+         end;
+      end if;
    end loop;
 
    --  And the device's copy, which every edit above has just made stale.

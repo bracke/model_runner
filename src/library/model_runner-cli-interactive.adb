@@ -1067,6 +1067,9 @@ package body Model_Runner.CLI.Interactive is
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
+            --  And the pictures it gave, so the next turn does not take them
+            --  for its own: a picture set counts what it holds, not which.
+            Model_Runner.CLI.Pictures.Release (Pictures);
             return;
          end if;
 
@@ -1074,6 +1077,9 @@ package body Model_Runner.CLI.Interactive is
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
+            --  And the pictures it gave, so the next turn does not take them
+            --  for its own: a picture set counts what it holds, not which.
+            Model_Runner.CLI.Pictures.Release (Pictures);
             return;
          end if;
 
@@ -1138,6 +1144,9 @@ package body Model_Runner.CLI.Interactive is
             --  session is reset so that the next turn re-evaluates the prior
             --  committed conversation.
             Conv.Drop_Last (Messages, 1);
+            --  And the pictures it gave, so the next turn does not take them
+            --  for its own: a picture set counts what it holds, not which.
+            Model_Runner.CLI.Pictures.Release (Pictures);
             L.Reset (Session);
             Have_Stats := False;
             return;
@@ -1145,6 +1154,9 @@ package body Model_Runner.CLI.Interactive is
 
          if Last_Result.Reason = Gen.Cancelled then
             Conv.Drop_Last (Messages, 1);
+            --  And the pictures it gave, so the next turn does not take them
+            --  for its own: a picture set counts what it holds, not which.
+            Model_Runner.CLI.Pictures.Release (Pictures);
             L.Reset (Session);
             Have_Stats := False;
             return;
@@ -1176,6 +1188,9 @@ package body Model_Runner.CLI.Interactive is
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
+            --  And the pictures it gave, so the next turn does not take them
+            --  for its own: a picture set counts what it holds, not which.
+            Model_Runner.CLI.Pictures.Release (Pictures);
             L.Reset (Session);
             return;
          end if;

@@ -216,9 +216,15 @@ package body Model_Runner.CLI.Execute.Acquisition is
             declare
                On_Disk : Interfaces.Unsigned_64 := 0;
             begin
-               if Ada.Directories.Exists (Local (I)) then
-                  On_Disk :=
-                    Interfaces.Unsigned_64 (Ada.Directories.Size (Local (I)));
+               --  What is had: the whole file where it is there whole, else
+               --  the part a stopped fetch left beside it, which is what the
+               --  next one resumes. A file of the wrong size at the name is
+               --  had by nothing: the fetch puts the checked one over it.
+               if Model_Complete (Files (I), Local (I)) then
+                  On_Disk := Files (I).Size;
+               elsif Ada.Directories.Exists (Local (I) & ".part") then
+                  On_Disk := Interfaces.Unsigned_64'Min
+                    (Files (I).Size, Interfaces.Unsigned_64 (Ada.Directories.Size (Local (I) & ".part")));
                end if;
                if Files (I).Size > On_Disk then
                   Needed := Needed + (Files (I).Size - On_Disk);

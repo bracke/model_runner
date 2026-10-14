@@ -1185,6 +1185,94 @@ package body Model_Runner.Grammar is
       State : Matcher;
       Text  : String) return Boolean;
 
+   --  Whether a set holds any code point from Low to High: a range of them
+   --  overlaps it, or -- inverted -- they are not all covered by it.
+   function In_Set_Between
+     (Item  : Compiled;
+      Which : Element;
+      Low   : Code_Point;
+      High  : Code_Point) return Boolean
+   is
+      Next : Code_Point := Low;
+      Moved : Boolean;
+   begin
+      if not Which.Inverted then
+         for Index in Which.First .. Which.First + Which.Count - 1 loop
+            if Item.Ranges (Index).Low <= High and then Item.Ranges (Index).High >= Low then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end if;
+      --  Inverted: walk past the ranges that cover the start until one does
+      --  not, or the end is passed.
+      loop
+         Moved := False;
+         for Index in Which.First .. Which.First + Which.Count - 1 loop
+            if Next >= Item.Ranges (Index).Low and then Next <= Item.Ranges (Index).High then
+               if Item.Ranges (Index).High >= High then
+                  return False;
+               end if;
+               Next := Item.Ranges (Index).High + 1;
+               Moved := True;
+            end if;
+         end loop;
+         exit when not Moved;
+      end loop;
+      return True;
+   end In_Set_Between;
+
+   --  Whether some code point a held start of a character can still become
+   --  could begin here: a lead byte names a range of them, each byte after
+   --  it narrows the range.
+   function Could_Begin_Held
+     (Item  : Compiled;
+      State : Matcher;
+      Held  : String) return Boolean
+   is
+      Lead  : constant Natural := Character'Pos (Held (Held'First));
+      Total : constant Natural :=
+        (if Lead in 16#C2# .. 16#DF# then 2 elsif Lead in 16#E0# .. 16#EF# then 3
+         elsif Lead in 16#F0# .. 16#F4# then 4 else 0);
+      Value : Natural;
+      Left  : Natural;
+      Low, High : Natural;
+   begin
+      if Total = 0 or else Held'Length >= Total then
+         return False;
+      end if;
+      Value := Lead mod (2 ** (7 - Total));
+      for Index in Held'First + 1 .. Held'Last loop
+         Value := Value * 64 + Character'Pos (Held (Index)) mod 64;
+      end loop;
+      Left := Total - Held'Length;
+      Low := Value * 64 ** Left;
+      High := Low + 64 ** Left - 1;
+      Low := Natural'Max (Low, (case Total is when 2 => 16#80#, when 3 => 16#800#, when others => 16#1_0000#));
+      High := Natural'Min (High, 16#10_FFFF#);
+      if Low > High then
+         return False;
+      end if;
+      for Index in 1 .. State.Count loop
+         declare
+            Stack : Stack_Entry renames State.Stacks (Index);
+         begin
+            if Stack.Depth > 0 then
+               declare
+                  What : constant Element := Item.Elements (Stack.Slots (Stack.Depth));
+               begin
+                  if What.Kind = Element_Char
+                    and then In_Set_Between (Item, What, Code_Point (Low), Code_Point (High))
+                  then
+                     return True;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Could_Begin_Held;
+
    function Accepts
      (Item  : Compiled;
       State : Matcher;
@@ -1197,10 +1285,29 @@ package body Model_Runner.Grammar is
          return False;
       elsif Full = "" then
          return State.Count > 0;
+      elsif Keep = Full'Length then
+         return Accepts_Whole (Item, State, Full);
       end if;
-      --  The characters it finishes, matched; a start of one after them,
-      --  carried. Only a start: a byte that can begin nothing is not one.
-      return Accepts_Whole (Item, State, Full (Full'First .. Full'First + Keep - 1));
+      --  The characters it finishes, matched, and the start of one after
+      --  them carried -- only where what it can still become is something
+      --  the grammar could take next: a lead byte the grammar has no
+      --  character for was taken, and then nothing could follow it.
+      declare
+         Here   : Matcher := State;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         Here.Partial_Length := 0;
+         if Keep > 0 then
+            if not Accepts_Whole (Item, State, Full (Full'First .. Full'First + Keep - 1)) then
+               return False;
+            end if;
+            Advance (Item, Here, Full (Full'First .. Full'First + Keep - 1), Status);
+            if E.Is_Error (Status) then
+               return False;
+            end if;
+         end if;
+         return Could_Begin_Held (Item, Here, Full (Full'First + Keep .. Full'Last));
+      end;
    end Accepts;
 
    function Accepts_Whole

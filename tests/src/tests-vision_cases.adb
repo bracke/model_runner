@@ -4779,12 +4779,12 @@ package body Tests.Vision_Cases is
       --  said is refused at open, not run into at encode.
       Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Insert => Blocks_M);
       Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
-      Assert (Status.Code = E.Arch_Invalid_Dimensions,
+      Assert (Status.Code = E.Arch_Invalid_Metadata,
               "a merger after a layer past the last was taken: " & E.Error_Code'Image (Status.Code));
       Vision.Close (Eyes);
       Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Insert => -1);
       Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
-      Assert (Status.Code = E.Arch_Invalid_Dimensions,
+      Assert (Status.Code = E.Arch_Invalid_Metadata,
               "a merger before the first layer was taken: " & E.Error_Code'Image (Status.Code));
       Vision.Close (Eyes);
       Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Says_Insert => False);

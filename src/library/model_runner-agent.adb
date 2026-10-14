@@ -939,7 +939,10 @@ package body Model_Runner.Agent is
                            end Next;
                         end Dispatch;
 
-                        task type Worker;
+                        --  A stack of the main task's size and more: a call
+                        --  reads a file whole -- up to its four megabytes --
+                        --  and a worker's default two overflowed under it.
+                        task type Worker with Storage_Size => 32 * 1024 * 1024;
                         task body Worker is
                            Slot : Natural;
                         begin

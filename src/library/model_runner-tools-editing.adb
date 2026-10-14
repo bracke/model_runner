@@ -71,28 +71,32 @@ package body Model_Runner.Tools.Editing is
                      & Image (Text_Most / 1024) & " KiB a file is read whole");
          return;
       end if;
+      --  A slice at a time onto the text: a file of megabytes copied whole
+      --  onto a stack, twice, overflowed a worker's.
       Stream_IO.Open (File, Stream_IO.In_File, Disk);
       declare
-         Length : constant Natural := Natural (Stream_IO.Size (File));
-         Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Length));
-         Last   : Stream_Element_Offset := 0;
-         Whole  : String (1 .. Length);
+         Block : Stream_Element_Array (1 .. 64 * 1024);
+         Last  : Stream_Element_Offset;
+         Piece : String (1 .. Block'Length);
       begin
-         if Length > 0 then
+         while not Stream_IO.End_Of_File (File) loop
             Stream_IO.Read (File, Block, Last);
-         end if;
-         Stream_IO.Close (File);
-         for Index in 1 .. Natural (Last) loop
-            Whole (Index) := Character'Val (Block (Stream_Element_Offset (Index)));
-            --  A NUL is not text: a binary file named like a source.
-            if Whole (Index) = ASCII.NUL then
-               Status := E.Make (E.IO_Read_Failed);
-               E.Add_Text (Status, "path", Path, E.Param_Path);
-               E.Add_Text (Status, "detail", "it is not text");
-               return;
-            end if;
+            exit when Last < Block'First;
+            for Index in 1 .. Natural (Last) loop
+               Piece (Index) := Character'Val (Block (Stream_Element_Offset (Index)));
+               --  A NUL is not text: a binary file named like a source.
+               if Piece (Index) = ASCII.NUL then
+                  Stream_IO.Close (File);
+                  Text := U.Null_Unbounded_String;
+                  Status := E.Make (E.IO_Read_Failed);
+                  E.Add_Text (Status, "path", Path, E.Param_Path);
+                  E.Add_Text (Status, "detail", "it is not text");
+                  return;
+               end if;
+            end loop;
+            U.Append (Text, Piece (1 .. Natural (Last)));
          end loop;
-         Text := U.To_Unbounded_String (Whole (1 .. Natural (Last)));
+         Stream_IO.Close (File);
       end;
    exception
       when others =>

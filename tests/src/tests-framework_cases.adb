@@ -5614,12 +5614,17 @@ package body Tests.Framework_Cases is
       Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & LF & "Status: Done", Said, Status);
       Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
               "a status said again the same was refused: " & Code_Of (Status));
-      --  Words beside a fence: what it fences is quoted, not the report,
-      --  however much it looks like one.
-      Iv.Hold (Iv.Work_Claim, "I edited the settings:" & LF & "```" & LF & "status: done" & LF
-               & "summary: kept" & LF & "```", Said, Status);
+      --  Fields of the report beside a fence: what it fences is quoted,
+      --  not the report, however much it looks like one. A lead-in line
+      --  is no field, and the fenced report after it is read.
+      Iv.Hold (Iv.Work_Claim, "summary: edited the settings" & LF & "```" & LF & "status: done" & LF
+               & "```", Said, Status);
       Assert (Status.Code = E.Framework_Contract_Violation,
               "a status in a quoted file was taken for the answer's: " & Iv.Claim (Said, "status"));
+      Iv.Hold (Iv.Work_Claim, "Here is my report:" & LF & "```" & LF & "status: done" & LF
+               & "summary: kept" & LF & "```", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
+              "a report fenced after a lead-in line was not read: " & Code_Of (Status));
       Iv.Hold (Iv.Work_Claim, "```" & LF & "status: done" & LF & "summary: kept" & LF & "```", Said, Status);
       Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
               "a report fenced whole was not read: " & Code_Of (Status));

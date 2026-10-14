@@ -7296,6 +7296,121 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Draft_Catches_Up_With_A_Reused_Prefix;
 
+   --  A window that slid let its oldest positions go: a rewind into them
+   --  is refused, as Rewind_Point refuses it, and one to the front starts
+   --  the window again -- it kept the old origin, and the next position
+   --  read was a cell before the first.
+   procedure A_Slid_Window_Rewinds_To_The_Front
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Image : B.Byte_Array_Access;
+   begin
+      --  Past the window, a batch and the slack a slide keeps, as
+      --  A_Window_That_Slides_Answers_The_Same reckons them.
+      Tiny_Model.Build (Image, Window => 3, Room => 704);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Logits : Logit_Vector := [others => 0.0];
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Context => 704, Status => Status);
+         Assert (E.Is_Ok (Status), "the windowed session did not open");
+         for Step in 1 .. 600 loop
+            L.Evaluate (Live, Under.Ready, Vocab.Token_Id (3 + Step mod 5), Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "a step of the windowed session failed");
+         end loop;
+         L.Rewind (Live, 2, Status);
+         Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                 "a rewind into what the window let go was taken: " & E.Error_Code'Image (Status.Code));
+         L.Rewind (Live, 0, Status);
+         Assert (E.Is_Ok (Status), "a rewind to the front was refused");
+         for Step in 1 .. 3 loop
+            L.Evaluate (Live, Under.Ready, Vocab.Token_Id (4), Logits, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not read again from the front: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+         L.Close (Live);
+      end;
+      B.Free (Image);
+   end A_Slid_Window_Rewinds_To_The_Front;
+
+   --  Every model that keeps a state -- Mamba, Mamba2, RWKV6, Jamba --
+   --  saves it and reads it back to the same next answer, and an empty
+   --  session saves too; the one with attention beside its state refuses
+   --  a shift, as Qwen3.5 does, where moving its cache moved a layer twice.
+   procedure Kept_States_Survive_A_Save
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Tiny_Model.Fixture_Architecture;
+      use type N.Real_Array;
+      Prompt : constant Vocab.Token_Array (1 .. 5) := [4, 7, 2, 9, 5];
+   begin
+      for Kind in Tiny_Model.Fixture_Architecture range Tiny_Model.Mamba .. Tiny_Model.Fixture_Architecture'Last loop
+         if Kind in Tiny_Model.Mamba | Tiny_Model.Mamba2 | Tiny_Model.Rwkv6 | Tiny_Model.Jamba then
+            declare
+               Image : B.Byte_Array_Access;
+            begin
+               Tiny_Model.Build (Image, Kind => Kind);
+               declare
+                  Held     : aliased constant B.Byte_Array := Image.all;
+                  Under    : Harness (Held'Access);
+                  Status   : E.Error_Info;
+                  Kept     : B.Byte_Array_Access;
+                  Empty    : B.Byte_Array_Access;
+                  Direct   : Logit_Vector := [others => 0.0];
+                  Restored : Logit_Vector := [others => 0.0];
+                  Name     : constant String := Tiny_Model.Fixture_Architecture'Image (Kind);
+               begin
+                  Start (Under);
+                  declare
+                     Live : L.Session;
+                  begin
+                     L.Open (Live, Under.Ready, Status => Status);
+                     L.Snapshot (Live, Under.Ready, Empty, Status);
+                     Assert (E.Is_Ok (Status), Name & ": an empty session did not save: "
+                             & E.Error_Code'Image (Status.Code));
+                     B.Free (Empty);
+                     L.Evaluate_Batch (Live, Under.Ready, Prompt, Direct, Status => Status);
+                     Assert (E.Is_Ok (Status), Name & ": the prompt failed");
+                     L.Snapshot (Live, Under.Ready, Kept, Status);
+                     Assert (E.Is_Ok (Status), Name & ": the session did not save: "
+                             & E.Error_Code'Image (Status.Code));
+                     L.Shift (Live, Under.Ready, Keep => 1, Drop => 2, Status => Status);
+                     Assert ((Kind = Tiny_Model.Jamba) = (Status.Code = E.Arch_Unsupported_Feature),
+                             Name & ": a shift was refused or taken against its kind: "
+                             & E.Error_Code'Image (Status.Code));
+                     L.Close (Live);
+                  end;
+                  declare
+                     Again : L.Session;
+                     Fresh : L.Session;
+                  begin
+                     L.Open (Fresh, Under.Ready, Status => Status);
+                     L.Evaluate_Batch (Fresh, Under.Ready, Prompt, Direct, Status => Status);
+                     L.Evaluate (Fresh, Under.Ready, 6, Direct, Status => Status);
+                     L.Close (Fresh);
+                     L.Open (Again, Under.Ready, Status => Status);
+                     L.Adopt (Again, Under.Ready, Kept.all, Status);
+                     Assert (E.Is_Ok (Status), Name & ": the save was not read back: "
+                             & E.Error_Code'Image (Status.Code));
+                     L.Evaluate (Again, Under.Ready, 6, Restored, Status => Status);
+                     Assert (E.Is_Ok (Status) and then Direct = Restored,
+                             Name & ": the state did not survive its save");
+                     L.Close (Again);
+                  end;
+                  B.Free (Kept);
+               end;
+               B.Free (Image);
+            end;
+         end if;
+      end loop;
+   end Kept_States_Survive_A_Save;
+
    --  A prompt the session holds whole -- read before, nothing generated
    --  past it -- is asked again: its last token is read again for the
    --  distribution the first draw is from, and the run says what a fresh
@@ -16267,6 +16382,12 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Catches_Up_With_A_Reused_Prefix'Access,
          "a drafted run on a reused prefix brings its draft up to it and "
          & "says what the target says alone");
+      Register_Routine
+        (T, A_Slid_Window_Rewinds_To_The_Front'Access,
+         "a rewind into what a sliding window let go is refused, and one to the front starts it again");
+      Register_Routine
+        (T, Kept_States_Survive_A_Save'Access,
+         "every model that keeps a state saves it and reads it back, and one with attention beside it refuses a shift");
       Register_Routine
         (T, A_Prompt_Held_Whole_Is_Read_For_Its_Draw'Access,
          "a prompt the session already holds whole is read again for its first draw");

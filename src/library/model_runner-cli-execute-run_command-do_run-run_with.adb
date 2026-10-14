@@ -721,6 +721,11 @@ begin
             then
                Pres.Report (Screen, Loop_Out.Error);
                Status := E.Exit_Status (Loop_Out.Error);
+            elsif Loop_Out.Reason = Model_Runner.Agent.Cancelled then
+               --  Interrupted is not finished, as a plain run says it is
+               --  not: the table's status for a cancelled generation.
+               Pres.Report (Screen, E.Make (E.Generation_Cancelled));
+               Status := E.Exit_Status (E.Make (E.Generation_Cancelled));
             end if;
 
             --  Write the run's trace, if one was asked for: the calls
@@ -1139,8 +1144,15 @@ begin
 
          --  Checkpoint the conversation so a later run can take it up.
          if not T.Is_Empty (Item.Checkpoint_File_Path) then
-            Model_Runner.CLI.Checkpoint.Save
-              (T.To_String (Item.Checkpoint_File_Path), Messages);
+            declare
+               Saved : E.Error_Info;
+            begin
+               Model_Runner.CLI.Checkpoint.Save
+                 (T.To_String (Item.Checkpoint_File_Path), Messages, Saved);
+               if E.Is_Error (Saved) then
+                  Pres.Report (Screen, Saved);
+               end if;
+            end;
          end if;
 
          Free_Text (Answer);

@@ -1,6 +1,7 @@
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
@@ -9,6 +10,7 @@ with Ada.Unchecked_Deallocation;
 
 with GNAT.OS_Lib;
 
+with Hostkit.Fs;
 with Hostkit.Metadata;
 
 with Jsonlib.Documents;
@@ -536,24 +538,29 @@ package body Model_Runner.Tools.Builtin is
    function Raw_Bytes (Path : String) return String is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
-      File : Stream_IO.File_Type;
+      File  : Stream_IO.File_Type;
+      Held  : U.Unbounded_String;
+      Block : Stream_Element_Array (1 .. 64 * 1024);
+      Last  : Stream_Element_Offset;
+      Piece : String (1 .. Block'Length);
    begin
+      --  Within the bound every text is read to, a slice at a time.
+      if Ada.Directories."<" (Ada.Directories.File_Size (Model_Runner.Tools.Editing.Text_Most),
+                              Ada.Directories.Size (Path))
+      then
+         raise Ada.IO_Exceptions.Data_Error;
+      end if;
       Open (File, In_File, Path);
-      declare
-         Length : constant Natural := Natural (Size (File));
-         Block  : Stream_Element_Array (1 .. Stream_Element_Offset (Length));
-         Last   : Stream_Element_Offset := 0;
-         Result : String (1 .. Length);
-      begin
-         if Length > 0 then
-            Read (File, Block, Last);
-         end if;
-         Close (File);
+      while not End_Of_File (File) loop
+         Read (File, Block, Last);
+         exit when Last < Block'First;
          for I in 1 .. Natural (Last) loop
-            Result (I) := Character'Val (Block (Stream_Element_Offset (I)));
+            Piece (I) := Character'Val (Block (Stream_Element_Offset (I)));
          end loop;
-         return Result (1 .. Natural (Last));
-      end;
+         U.Append (Held, Piece (1 .. Natural (Last)));
+      end loop;
+      Close (File);
+      return U.To_String (Held);
    end Raw_Bytes;
 
    --  Write the runner's notes to its store file, each note as its key length
@@ -575,6 +582,12 @@ package body Model_Runner.Tools.Builtin is
                       & Image (Long_Long_Integer (Value'Length)) & " " & Value);
          end;
       end loop;
+      --  No larger than a later run will read back: notes kept past it
+      --  would be notes no run could find again.
+      if U.Length (Text) > Model_Runner.Tools.Editing.Text_Most then
+         return "the notes would be past the" & Natural'Image (Model_Runner.Tools.Editing.Text_Most / 1024)
+           & " KiB a memory file is read to; remove some first";
+      end if;
       Model_Runner.Tools.Editing.Replace (U.To_String (Self.Store), U.To_String (Text), Put);
       if Put.Failed then
          return U.To_String (Put.Text);
@@ -694,6 +707,10 @@ package body Model_Runner.Tools.Builtin is
          Self.Memory := Read;
          Self.Used := Read_Used;
       end;
+   exception
+      when others =>
+         Self.Used := 0;
+         Refusal := U.To_Unbounded_String ("the memory file " & Path & " could not be read");
    end Load_Store;
 
    procedure Use_Memory_File
@@ -2305,6 +2322,23 @@ package body Model_Runner.Tools.Builtin is
    -- Stamp --
    -----------
 
+   --  Each tree too large to stamp is stamped apart from every other, so
+   --  no two calls over one are taken for the same -- counted apart, as
+   --  calls run on workers side by side.
+   protected Unstamped is
+      procedure Next (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end Unstamped;
+
+   protected body Unstamped is
+      procedure Next (Number : out Natural) is
+      begin
+         Count := Count + 1;
+         Number := Count;
+      end Next;
+   end Unstamped;
+
    overriding function Stamp
      (Self : Instance; Named : String; Arguments : String) return String
    is
@@ -2325,11 +2359,21 @@ package body Model_Runner.Tools.Builtin is
          Sum := (Sum xor 16#0A#) * 16#100000001B3#;
       end Mix;
 
-      procedure Walk (Folder : String) is
+      --  A tree past these is not stamped -- the call is taken afresh
+      --  each time -- rather than walked: a link back up, / itself, or a
+      --  tree of a million files would hold the run for as long as it took.
+      Most_Files : constant := 20_000;
+      Most_Depth : constant := 24;
+      Too_Large  : exception;
+
+      procedure Walk (Folder : String; Depth : Natural := 0) is
          use Ada.Directories;
          Search : Search_Type;
          Found  : Directory_Entry_Type;
       begin
+         if Depth > Most_Depth then
+            raise Too_Large;
+         end if;
          Start_Search (Search, Folder, "", [Ordinary_File | Directory => True, others => False]);
          while More_Entries (Search) loop
             Get_Next_Entry (Search, Found);
@@ -2337,11 +2381,19 @@ package body Model_Runner.Tools.Builtin is
                Name : constant String := Simple_Name (Found);
                Full : constant String := Full_Name (Found);
             begin
-               if Name'Length > 0 and then Name (Name'First) /= '.' then
+               --  A link is not followed: one that leads back up walks the
+               --  tree again at every level. It is named, so a link made or
+               --  moved is seen.
+               if Name'Length > 0 and then Name (Name'First) /= '.' and then Hostkit.Fs.Is_Link (Full) then
+                  Mix ("link " & Full);
+               elsif Name'Length > 0 and then Name (Name'First) /= '.' then
                   if Kind (Found) = Directory then
-                     Walk (Full);
+                     Walk (Full, Depth + 1);
                   else
                      Files := Files + 1;
+                     if Files > Most_Files then
+                        raise Too_Large;
+                     end if;
                      --  The filesystem's own change stamp, to the
                      --  nanosecond, where the host gives one: a quick edit
                      --  that keeps the size is seen. Size and time else.
@@ -2363,6 +2415,8 @@ package body Model_Runner.Tools.Builtin is
          end loop;
          End_Search (Search);
       exception
+         when Too_Large =>
+            raise;
          when others =>
             Mix ("unreadable " & Folder);
       end Walk;
@@ -2390,6 +2444,13 @@ package body Model_Runner.Tools.Builtin is
       end if;
       return "absent " & Where;
    exception
+      when Too_Large =>
+         declare
+            Number : Natural;
+         begin
+            Unstamped.Next (Number);
+            return "unstamped" & Natural'Image (Number);
+         end;
       when others =>
          return "unreadable " & Where;
    end Stamp;

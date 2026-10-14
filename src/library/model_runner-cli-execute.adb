@@ -1,4 +1,9 @@
+with Ada.Directories;
 with Ada.Streams.Stream_IO;
+
+with Hostkit.Durability;
+with Hostkit.Fs;
+
 with Model_Runner.Text;
 with Model_Runner.CLI.Execute.Support;
 with Model_Runner.CLI.Execute.Help_Command;
@@ -40,12 +45,18 @@ package body Model_Runner.CLI.Execute is
 
       Handle  : Ada.Streams.Stream_IO.File_Type;
       Done    : Model_Runner.Bytes.Byte_Count := 0;
+
+      --  Beside its name, on the device, then in its place: a session
+      --  saved over one that was there is the old one or the new one,
+      --  never the old one cut off by a full disk part way.
+      Partial : constant String := Path & ".partial";
+      use type Hostkit.Durability.Outcome;
    begin
       Status := E.Success;
 
       begin
          Ada.Streams.Stream_IO.Create
-           (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+           (Handle, Ada.Streams.Stream_IO.Out_File, Partial);
          while Done < Data'Length loop
             declare
                Size  : constant Model_Runner.Bytes.Byte_Count :=
@@ -59,11 +70,24 @@ package body Model_Runner.CLI.Execute is
             end;
          end loop;
          Ada.Streams.Stream_IO.Close (Handle);
+         if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
+           or else not Hostkit.Fs.Replace_File (Partial, Path)
+         then
+            raise Ada.Streams.Stream_IO.Use_Error;
+         end if;
       exception
          when others =>
             if Ada.Streams.Stream_IO.Is_Open (Handle) then
                Ada.Streams.Stream_IO.Close (Handle);
             end if;
+            begin
+               if Ada.Directories.Exists (Partial) then
+                  Ada.Directories.Delete_File (Partial);
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
             Status := E.Make (E.IO_Open_Failed);
             E.Add_Text (Status, "path", Path, E.Param_Path);
       end;
