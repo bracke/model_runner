@@ -4245,10 +4245,10 @@ package body Model_Runner.CLI.Tasks is
          --  the instructions after it counted in.
          Model_Runner.Framework.Context.Build
            (Store, Id,
-            (if Profile_Given /= "" then Model_Runner.Framework.Context.Profile (Store, Profile_Given)
-             elsif Item.Has_Session_Profile
-             then Model_Runner.Framework.Context.Within_Configured (Store, Item.Session_Profile)
-             else Model_Runner.Framework.Context.Profile (Store, "")),
+            (if Item.Has_Session_Profile
+             then Model_Runner.Framework.Context.Within_Configured
+                    (Store, Item.Session_Profile, Profile_Given)
+             else Model_Runner.Framework.Context.Profile (Store, Profile_Given)),
             Built, Outcome, Instructions => Model_Runner.Framework.Work.Instructions_Of (Store, Id));
          if E.Is_Ok (Outcome) then
             Model_Runner.Framework.Context.Keep (Store, Change, Built, Outcome);

@@ -1703,7 +1703,9 @@ package body Model_Runner.CLI.Project_Commands is
          Streaming      => True,
          Parallel_Calls => False,
          Resource_Class => To_Unbounded_String ("local"),
-         Profile_Reserve => 0);
+         Profile_Reserve => 0,
+         --  This session's model runs the work: its answer's room is kept.
+         Session_Reserve => Natural'Max (Self.Item.Max_Tokens, 1024));
    end Profile;
 
    package Rs renames Model_Runner.Framework.Results;

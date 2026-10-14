@@ -42,6 +42,10 @@ package Model_Runner.Framework.Context is
       --  What the configured profile itself keeps for the answer, where the
       --  session keeps more and so holds over it; 0 where it does not.
       Profile_Reserve : Natural := 0;
+
+      --  What a session's model needs kept for its answer, where it runs
+      --  the work: nothing asked of a kind goes below it. 0 elsewhere.
+      Session_Reserve : Natural := 0;
    end record;
 
    --  How much an item matters, most first.
@@ -75,9 +79,12 @@ package Model_Runner.Framework.Context is
    --  @param Item The store.
    --  @param Session What the session's model can take.
    --  @return The profile a run is planned with.
-   function Within_Configured (Item : Stores.Store; Session : Model_Profile) return Model_Profile;
+   --  @param Named The profile asked for by name, where one was: held to
+   --    the session's room as the configured one is; "" for that one.
+   function Within_Configured
+     (Item : Stores.Store; Session : Model_Profile; Named : String := "") return Model_Profile;
 
-   --  What a text is estimated to cost: a token for every four bytes.
+   --  What a text is estimated to cost: a token for every three bytes.
    --
    --  @param Text The text.
    --  @return The estimate.

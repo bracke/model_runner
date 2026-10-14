@@ -174,8 +174,21 @@ package body Model_Runner.Framework.Invocations is
       --  answer that goes on past its object is not one.
       Start : constant Natural := Ada.Strings.Fixed.Index (Answer, "{");
       Stop  : Natural := Answer'Last;
+
+      --  What comes before the object: nothing, or the fence that opens
+      --  it -- an answer whose report is lines, with an object quoted at
+      --  its end, is lines.
+      function Opens_It return Boolean is
+         Before : constant String := Ada.Strings.Fixed.Trim
+           (Ada.Strings.Fixed.Translate
+              (Answer (Answer'First .. Start - 1),
+               Ada.Strings.Maps.To_Mapping (ASCII.LF & ASCII.CR & ASCII.HT, "   ")),
+            Ada.Strings.Both);
+      begin
+         return Before = "" or else Before = "```" or else Before = "```json";
+      end Opens_It;
    begin
-      if Start = 0 then
+      if Start = 0 or else not Opens_It then
          return "";
       end if;
       while Stop >= Start and then Answer (Stop) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
@@ -311,59 +324,82 @@ package body Model_Runner.Framework.Invocations is
          E.Add_Text (Status, "name", To_String (Rules.Name) & "." & Field);
          E.Add_Text (Status, "detail", Detail);
       end Refuse;
+      --  Inside a fence: quoted -- a file, a log -- and none of the
+      --  answer's own fields, whatever it holds.
+      In_Fence : Boolean := False;
    begin
       Result := (others => <>);
       Status := E.Success;
 
-      for Line of Every_Line (Read_As) loop
-         declare
-            Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
-            Said  : constant String :=
-              (if Colon = 0 then "" else Unquoted (Lower (Trim (Line (Line'First .. Colon - 1)))));
-
-            --  A field named in the singular -- issue: for issues: -- is that
-            --  field, not a line of the list before it.
-            Name  : constant String :=
-              (if Said /= "" and then not Rules.Fields.Contains (Said)
-                 and then Rules.Fields.Contains (Said & "s")
-               then Said & "s" else Said);
-            --  What only frames an answer -- a brace, a bracket, a code
-            --  fence -- ends the field before it and is no part of one.
-            Bare  : constant String := Trim (Line);
-            Frame : constant Boolean :=
-              Bare in "{" | "}" | "[" | "]" | "}," | "],"
-              or else (Bare'Length >= 3 and then Bare (Bare'First .. Bare'First + 2) = "```")
-              or else (Bare'Length >= 2 and then Bare (Bare'First) = '{'
-                       and then Bare (Bare'Last) = '}' and then Name = "");
-         begin
-            --  A blank line ends a list: what follows it -- a log, the
-            --  rest of a report -- is none of its items.
-            if Bare = "" and then To_String (Current) in "changed_files" | "proposed_tasks" | "parts"
-                                                     | "waits_for" | "decisions" | "specifications"
-            then
-               Current := Null_Unbounded_String;
-            elsif Frame then
-               Current := Null_Unbounded_String;
-            elsif Name /= "" and then Rules.Fields.Contains (Name) then
-               Current := To_Unbounded_String (Name);
-               Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
-            elsif Name'Length in 1 .. 32
-              and then (for all C of Name => C in 'a' .. 'z' | '0' .. '9' | '_')
-            then
-               --  A field of the answer's own -- findings: -- ends the one
-               --  before it and is none of its items: a list of what it
-               --  found was taken for files it said it changed.
-               Current := Null_Unbounded_String;
-            elsif Current /= Null_Unbounded_String and then Item_Of (Line) /= "" then
-               declare
-                  Held : constant String := Result.Values (To_String (Current));
-               begin
-                  Result.Values.Include
-                    (To_String (Current),
-                     (if Held = "" then Item_Of (Line) else Held & ASCII.LF & Item_Of (Line)));
-               end;
+      --  Read first with what is fenced left out; where that finds no
+      --  report at all, the report is what is fenced -- a model that
+      --  wraps its whole answer in a fence -- and it is read again whole.
+      for Pass in 1 .. 2 loop
+         In_Fence := False;
+         Current := Null_Unbounded_String;
+         Result := (others => <>);
+         for Line of Every_Line (Read_As) loop
+            if Trim (Line)'Length >= 3 and then Trim (Line) (Trim (Line)'First .. Trim (Line)'First + 2) = "```" then
+               In_Fence := not In_Fence;
+            elsif In_Fence and then Pass = 1 then
+               goto Next_Line;
             end if;
-         end;
+            declare
+               Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
+               Said  : constant String :=
+                 (if Colon = 0 then "" else Unquoted (Lower (Trim (Line (Line'First .. Colon - 1)))));
+
+               --  A field named in the singular -- issue: for issues: -- is that
+               --  field, not a line of the list before it.
+               Name  : constant String :=
+                 (if Said /= "" and then not Rules.Fields.Contains (Said)
+                    and then Rules.Fields.Contains (Said & "s")
+                  then Said & "s" else Said);
+               --  What only frames an answer -- a brace, a bracket, a code
+               --  fence -- ends the field before it and is no part of one.
+               Bare  : constant String := Trim (Line);
+               Frame : constant Boolean :=
+                 Bare in "{" | "}" | "[" | "]" | "}," | "],"
+                 or else (Bare'Length >= 3 and then Bare (Bare'First .. Bare'First + 2) = "```")
+                 or else (Bare'Length >= 2 and then Bare (Bare'First) = '{'
+                          and then Bare (Bare'Last) = '}' and then Name = "");
+            begin
+               --  A blank line ends a list: what follows it -- a log, the
+               --  rest of a report -- is none of its items.
+               if Bare = "" and then To_String (Current) in "changed_files" | "proposed_tasks" | "parts"
+                                                        | "waits_for" | "decisions" | "specifications"
+               then
+                  Current := Null_Unbounded_String;
+               elsif Frame then
+                  Current := Null_Unbounded_String;
+               elsif Name in "status" | "summary" | "verify" and then Result.Values.Contains (Name) then
+                  --  Said twice, which is meant cannot be told.
+                  Refuse (Name, "the answer has " & Name & ": twice; give it once");
+                  return;
+               elsif Name /= "" and then Rules.Fields.Contains (Name) then
+                  Current := To_Unbounded_String (Name);
+                  Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
+               elsif Name'Length in 1 .. 32
+                 and then (for all C of Name => C in 'a' .. 'z' | '0' .. '9' | '_')
+               then
+                  --  A field of the answer's own -- findings: -- ends the one
+                  --  before it and is none of its items: a list of what it
+                  --  found was taken for files it said it changed.
+                  Current := Null_Unbounded_String;
+               elsif Current /= Null_Unbounded_String and then Item_Of (Line) /= "" then
+                  declare
+                     Held : constant String := Result.Values (To_String (Current));
+                  begin
+                     Result.Values.Include
+                       (To_String (Current),
+                        (if Held = "" then Item_Of (Line) else Held & ASCII.LF & Item_Of (Line)));
+                  end;
+               end if;
+            end;
+            <<Next_Line>>
+         end loop;
+         exit when E.Is_Error (Status) or else Result.Values.Contains ("status")
+           or else Ada.Strings.Fixed.Index (Read_As, "```") = 0;
       end loop;
 
       for Field of Rules.Order loop
@@ -447,9 +483,12 @@ package body Model_Runner.Framework.Invocations is
                      Stores.Read (Item, Invocations_Area, Name, Held, Read);
                      --  Calls only: the context manifests kept beside them
                      --  name the task and generation too, and are no call.
+                     --  One that will not read may be this execution's:
+                     --  counted, so damage gives no more calls.
                      if Name'Length > 4 and then Name (Name'First .. Name'First + 3) = "INV-"
-                       and then E.Is_Ok (Read) and then Records.Get (Held, "task") = Task_Id
-                       and then Records.Get (Held, "generation") = Generation
+                       and then (E.Is_Error (Read)
+                                 or else (Records.Get (Held, "task") = Task_Id
+                                          and then Records.Get (Held, "generation") = Generation))
                      then
                         Made := Made + 1;
                      end if;

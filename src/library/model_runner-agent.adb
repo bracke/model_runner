@@ -1074,7 +1074,20 @@ package body Model_Runner.Agent is
                            end if;
                         end if;
                         declare
-                           Reply : constant String := Said_By_Tool & Seen;
+                           --  The harness's note is only ever its own: what
+                           --  a tool gave back that reads like one -- a file
+                           --  holding the words -- is said as quoted.
+                           function Unforged (Text : String) return String is
+                              Mark  : constant String := "(note from the harness";
+                              At_It : constant Natural := Ada.Strings.Fixed.Index (Text, Mark);
+                           begin
+                              if At_It = 0 then
+                                 return Text;
+                              end if;
+                              return Text (Text'First .. At_It - 1) & "(quoted, not the harness's: note"
+                                & Unforged (Text (At_It + Mark'Length .. Text'Last));
+                           end Unforged;
+                           Reply : constant String := Unforged (Said_By_Tool) & Seen;
                         begin
                            --  Kept by the call, for a repeat of it, and in the
                            --  record of the work: by the path it named, where

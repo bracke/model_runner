@@ -59,8 +59,13 @@ package body Model_Runner.Framework.Stores is
                Tab    : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
                Prefix : constant String := Line (Tab + 1 .. Line'Last);
             begin
+               --  The path itself, or one under it or beside it as its own
+               --  -- integrating-WS-1 and integrating-WS-1.before, not
+               --  integrating-WS-10.
                if Line (Line'First .. Tab - 1) = Root_Path and then Relative'Length >= Prefix'Length
                  and then Relative (Relative'First .. Relative'First + Prefix'Length - 1) = Prefix
+                 and then (Relative'Length = Prefix'Length
+                           or else Relative (Relative'First + Prefix'Length) in '.' | '/')
                then
                   return True;
                end if;

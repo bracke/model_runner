@@ -5313,7 +5313,7 @@ package body Tests.Framework_Cases is
               "a model profile was not read from the configuration");
       Assert (Cx.Profile (Store, "").Context_Limit = 8192,
               "the default profile is not the default");
-      Assert (Cx.Estimate ("abcdefgh") = 2, "a text's cost is not estimated");
+      Assert (Cx.Estimate ("abcdefghi") = 3, "a text's cost is not estimated a token in three bytes");
 
       --  Without a kept graph: init keeps one, so it is taken away.
       Dirs.Delete_File (S.Root (Store) & "/indexes/repository.rec");
@@ -5371,6 +5371,26 @@ package body Tests.Framework_Cases is
                    Instructions => [1 .. 4000 => 'x']);
          Assert (Status.Code = E.Framework_Context_Overflow,
                  "instructions past the model's room were not counted");
+         --  What the room leaves out is named, so a file not given is one
+         --  to read, not one that is not there.
+         declare
+            Left_Out : Boolean := False;
+         begin
+            for Size in reverse 1 .. 40 loop
+               Cx.Build (Store, To_String (Id), Profile, Told, Status,
+                         Instructions => [1 .. Size * 50 => 'y']);
+               if E.Is_Ok (Status) then
+                  for Index in 1 .. Cx.Excluded_Count (Told) loop
+                     Left_Out := Left_Out
+                       or else Ada.Strings.Fixed.Index (Cx.Excluded_Why (Told, Index), "over budget") = 1;
+                  end loop;
+               end if;
+               exit when Left_Out;
+            end loop;
+            Assert (Left_Out and then Ada.Strings.Fixed.Index (Cx.Rendered (Told), "## Left out for room") > 0,
+                    "what the room left out was not named");
+         end;
+         Status := E.Success;
       end;
 
       --  A child's context: its rules, the task and what it is asked, and
@@ -5555,6 +5575,15 @@ package body Tests.Framework_Cases is
                                                                         & Character'Val (16#A9#) & " ""ok""",
               "a JSON answer's string was not read as JSON means it: " & Iv.Claim (Said, "summary")
               & " " & Code_Of (Status));
+      --  What is quoted in a fence is not the answer's: its status is the
+      --  one outside; and one said twice is refused.
+      Iv.Hold (Iv.Work_Claim,
+               "status: failed" & LF & "summary: the build broke" & LF & "```" & LF & "status: done" & LF & "```",
+               Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "failed",
+              "a status quoted in a fence was taken for the answer's: " & Iv.Claim (Said, "status"));
+      Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & "status: failed", Said, Status);
+      Assert (Status.Code = E.Framework_Contract_Violation, "an answer saying status twice was taken");
       Iv.Hold (Iv.Work_Claim,
                "{""status"": ""done"", ""summary"": ""finished""}" & LF & "and more besides",
                Said, Status);
@@ -5724,14 +5753,28 @@ package body Tests.Framework_Cases is
          Change := S.No_Changes;
       end;
 
+      --  A program given as a path is that file, allowed only as the list
+      --  writes it: ./echo is not echo. Nothing to run is refused, not
+      --  raised.
+      Assert (Ex.Refusal (Rules, "./echo planted") /= "" and then Ex.Refusal (Rules, "'' x") /= "",
+              "a program given as a path was let past the list by its name, or nothing was run");
+
       --  No network where the policy denies it: taken away where the host
-      --  can, and the command still runs either way.
+      --  can, and refused where it cannot -- not run with it. Where a
+      --  profile only prefers none, it runs either way.
       Rules.No_Network := True;
       Ex.Run (Store, Change, Rules, "echo apart", "", Ran, Status);
-      Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0
-              and then Index (Ran.Output, "apart") > 0,
-              "a command denied the network did not run: " & Code_Of (Status));
+      Assert ((E.Is_Ok (Status) and then Ran.Exit_Status = 0 and then Index (Ran.Output, "apart") > 0)
+              or else (Status.Code = E.Framework_Execution_Refused
+                       and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "cannot take it away") > 0),
+              "a command denied the network ran with it, or did not run where it could: " & Code_Of (Status));
       Rules.No_Network := False;
+      Change := S.No_Changes;
+      Rules.Prefer_Offline := True;
+      Ex.Run (Store, Change, Rules, "echo apart", "", Ran, Status);
+      Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0 and then Index (Ran.Output, "apart") > 0,
+              "a command that only prefers no network did not run: " & Code_Of (Status));
+      Rules.Prefer_Offline := False;
       Change := S.No_Changes;
 
       --  One process slot, held by a process that is running: nothing more
@@ -7194,6 +7237,16 @@ package body Tests.Framework_Cases is
       Assert (Pm.Intersect (Pm.Unrestricted, Pm.Nothing) (Pm.Read_Source).Granted = False,
               "the intersection with nothing granted something");
 
+      --  An empty list grants nothing: unlimited, it would give everywhere.
+      declare
+         Empty_Store : S.Store;
+      begin
+         Task_Project (Empty_Store, "permission-empty", "map permission.kind.analysis.write_source = roots=" & LF);
+         Assert (not Pm.Effective (Empty_Store, "analysis", "") (Pm.Write_Source).Granted,
+                 "a grant of roots= naming nothing was taken for one with no limit");
+         S.Close (Empty_Store);
+      end;
+
       --  A grant written on, as a template may write it, is granted whole.
       declare
          On_Store : S.Store;
@@ -7626,6 +7679,14 @@ package body Tests.Framework_Cases is
          declare
             Collected : Natural;
          begin
+            --  Just written, it may be another session's not yet committed:
+            --  left; an hour old, it is nobody's.
+            Rs.Collect_Payloads (Store, Collected);
+            Assert (Collected = 0 and then Dirs.Exists (S.Root (Store) & "/results/payloads/ORPHAN.txt"),
+                    "a payload just written was collected before its record could be committed");
+            GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp
+              (S.Root (Store) & "/results/payloads/ORPHAN.txt",
+               GNAT.OS_Lib.GM_Time_Of (2020, 1, 1, 0, 0, 0));
             Rs.Collect_Payloads (Store, Collected);
             Assert (Collected = 1
                     and then not Dirs.Exists (S.Root (Store) & "/results/payloads/ORPHAN.txt")
@@ -9210,10 +9271,13 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
          S.Commit (Store, Change, Status);
+         --  Its changed file named as a report writes it -- marked, and
+         --  with a note after -- is that file, not one that is not there.
          Wk.Execute (Store, To_String (Id),
                      Scripted_Agent'(File => To_Unbounded_String ("src/served.adb"),
                                      Answer => To_Unbounded_String
-                                       ("status: done" & LF & "summary: x"),
+                                       ("status: done" & LF & "summary: x" & LF
+                                        & "changed_files: **src/served.adb** (new)"),
                                      Broken => False),
                      Cx.Profile (Store, ""), Done, Status);
          Nt.Read (Store, Nt.Requirement, To_String (Req), Held, Status);
@@ -11614,7 +11678,8 @@ package body Tests.Framework_Cases is
                Assert (E.Is_Ok (Ran)
                        and then Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0
                        and then Ada.Strings.Fixed.Index (To_String (Report), "exists") > 0,
-                       "the checks' report does not say what failed: " & To_String (Report));
+                       "the checks' report does not say what failed: " & To_String (Report) & " "
+                       & Code_Of (Ran) & " " & E.Text_Of (Ran, "detail"));
                Assert (Children.Checks_Failing,
                        "checks that failed were not held as failing, for the work to be sent back");
                --  The checks it is judged by are not its to change: a test

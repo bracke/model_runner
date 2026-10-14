@@ -207,6 +207,20 @@ is
 
    Frozen : constant Settings := Resolve;
 
+   --  Its call recorded as made -- failed, with what it spent -- in a
+   --  change of its own, where the run's own change is not kept.
+   procedure Finish_Apart (Why : String) is
+      Alone : Stores.Transaction;
+      Ended : E.Error_Info;
+   begin
+      Change := Stores.No_Changes;
+      Invocations.Finish
+        (Item, Alone, To_String (Result.Invocation_Id), Invocations.Failed, Used, "", Why, Ended);
+      if E.Is_Ok (Ended) then
+         Stores.Commit (Item, Alone, Ended);
+      end if;
+   end Finish_Apart;
+
    --  The files the work is judged by as it starts: not its to change.
    Judged : constant Name_Lists.Vector :=
      Judged_Files (Item, Task_Id, To_String (Frozen.Verification_Text));
@@ -239,15 +253,69 @@ is
    --  End the work with the task moved and the agent recorded.
    --  Files it changed that its answer did not name, where it named
    --  some: said, as what a person looks at before trusting its report.
+   --  A path as a report writes it, read as the path: spaces, tabs and
+   --  no-break spaces about it, a mark of code or emphasis round it, a
+   --  note after it -- `src/a.adb`, **src/a.adb**, src/a.adb (new) -- and
+   --  ./ before it taken off; the words for none read as none, however
+   --  written.
+   function Claimed_Path (Line : String) return String is
+      No_Break : constant String := Character'Val (16#C2#) & Character'Val (16#A0#);
+      function Trimmed (Text : String) return String is
+         First : Natural := Text'First;
+         Last  : Natural := Text'Last;
+      begin
+         loop
+            if First <= Last and then Text (First) in ' ' | ASCII.HT then
+               First := First + 1;
+            elsif First + 1 <= Last and then Text (First .. First + 1) = No_Break then
+               First := First + 2;
+            elsif Last >= First and then Text (Last) in ' ' | ASCII.HT then
+               Last := Last - 1;
+            elsif Last - 1 >= First and then Text (Last - 1 .. Last) = No_Break then
+               Last := Last - 2;
+            else
+               exit;
+            end if;
+         end loop;
+         return Text (First .. Last);
+      end Trimmed;
+      function Unwrapped (Text : String) return String is
+      begin
+         for Mark of Name_Lists.Vector'(["**", "`", "*", """", "'"]) loop
+            if Text'Length > 2 * Mark'Length
+              and then Text (Text'First .. Text'First + Mark'Length - 1) = Mark
+              and then Text (Text'Last - Mark'Length + 1 .. Text'Last) = Mark
+            then
+               return Unwrapped (Trimmed (Text (Text'First + Mark'Length .. Text'Last - Mark'Length)));
+            end if;
+         end loop;
+         return Text;
+      end Unwrapped;
+      Bare  : constant String := Trimmed (Line);
+      Note  : constant Natural := Ada.Strings.Fixed.Index (Bare, " (");
+      Dash  : constant Natural := Ada.Strings.Fixed.Index (Bare, " " & Character'Val (16#E2#) & Character'Val (16#80#)
+                                                                & Character'Val (16#94#) & " ");
+      Cut   : constant Natural :=
+        (if Note > 0 and then (Dash = 0 or else Note < Dash) then Note else Dash);
+      Path  : constant String := Unwrapped (Trimmed (if Cut > 0 then Bare (Bare'First .. Cut - 1) else Bare));
+      Plain : constant String :=
+        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
+         then Path (Path'First + 2 .. Path'Last) else Path);
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Plain);
+   begin
+      if Lower in "" | "-" | "none" | "none." | "nothing" | "nothing." | "n/a" | "(none)" then
+         return "";
+      end if;
+      return Plain;
+   end Claimed_Path;
+
    function Unreported_Note return String is
       Said_Changed : constant Name_Lists.Vector :=
         Lines_Of (Replaced (Invocations.Claim (Said, "changed_files")));
       Unreported   : Name_Lists.Vector;
    begin
       for Path of Result.Changed_Files loop
-         if not (for some Line of Said_Changed =>
-                   Trim (Line) = Path or else Trim (Line) = "./" & Path)
-         then
+         if not (for some Line of Said_Changed => Claimed_Path (Line) = Path) then
             Unreported.Append (Path);
          end if;
       end loop;
@@ -264,15 +332,11 @@ is
    begin
       for Line of Said_Changed loop
          declare
-            Path : constant String :=
-              (if Trim (Line)'Length > 2 and then Trim (Line) (Trim (Line)'First .. Trim (Line)'First + 1) = "./"
-               then Trim (Line) (Trim (Line)'First + 2 .. Trim (Line)'Last) else Trim (Line));
+            Path : constant String := Claimed_Path (Line);
          begin
             --  "none" is no file: a report that changed nothing says so in
             --  words, and was told it named a file it did not change.
-            if Ada.Characters.Handling.To_Lower (Path) not in "" | "-" | "none" | "nothing" | "n/a" | "(none)"
-              and then not Result.Changed_Files.Contains (Path)
-            then
+            if Path /= "" and then not Result.Changed_Files.Contains (Path) then
                Not_Changed.Append (Path);
             end if;
          end;
@@ -845,6 +909,9 @@ begin
                   Seen   : Natural := 0;
                begin
                   Files.Read_Text (Usage_Beside (Prompt), Text, Read);
+                  --  What it spent, not read, is not taken for nothing: the
+                  --  work's record is not kept, and it ends saying so.
+                  Keep_Unkept (Host, Read);
                   for Line of Lines_Of (To_String (Text)) loop
                      if Ada.Strings.Fixed.Index (Line, "output_tokens ") = Line'First then
                         Spent := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
@@ -967,8 +1034,10 @@ begin
       Files_Text : Unbounded_String;
    begin
       Results.Add (Item, Change, Kept, Status);
-      --  Not kept, the answer is not named as kept: the run ends on it.
+      --  Not kept, the answer is not named as kept: the run ends on it --
+      --  its call recorded as made, with what it spent, apart.
       if E.Is_Error (Status) then
+         Finish_Apart ("its answer could not be kept: " & Why_Of (Status));
          return;
       end if;
       Last_Result := Kept.Id;
@@ -981,6 +1050,7 @@ begin
          To_String (Kept.Id),
          (if E.Is_Ok (Ran) then "" else Why_Of (Ran)), Status);
       if E.Is_Error (Status) then
+         Finish_Apart ("its call could not be recorded with the rest: " & Why_Of (Status));
          return;
       end if;
       Annotate (Item, Change, Task_Id, "last_result", To_String (Kept.Id));
@@ -1048,7 +1118,12 @@ begin
          Invocations.Finish
            (Item, Alone, To_String (Result.Invocation_Id), Invocations.Cancelled, Used, "",
             "the task was ended elsewhere while it ran", Ended);
+         --  Its agent and helpers ended with it: not left at work, holding
+         --  a slot the plan counts.
          if E.Is_Ok (Ended) then
+            Stop_Children (Item, Alone, To_String (Result.Agent_Id), "the task was ended elsewhere");
+            Agent_State (Item, Alone, To_String (Result.Agent_Id), "cancelled",
+                         "the task was ended elsewhere while it ran");
             Stores.Commit (Item, Alone, Ended);
          end if;
       end;
@@ -1258,16 +1333,15 @@ begin
       begin
          for Line of Lines_Of (Replaced (Invocations.Claim (Said, "changed_files"))) loop
             declare
-               Named : constant String := Trim (Line);
-               Path  : constant String :=
-                 (if Named'Length > 2 and then Named (Named'First .. Named'First + 1) = "./"
-                  then Named (Named'First + 2 .. Named'Last) else Named);
+               Path  : constant String := Claimed_Path (Line);
             begin
                --  A file there, written as it was, is no false claim:
-               --  only one that is not there at all is.
-               if Path not in "" | "-" | "none" and then not Result.Changed_Files.Contains (Path)
+               --  only one that is not there at all is. A name no file can
+               --  have -- a control character in it -- is not one there.
+               if Path /= "" and then not Result.Changed_Files.Contains (Path)
                  and then not (not Isolated and then Earlier_Changed.Contains (Path))
-                 and then not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Place), Path))
+                 and then ((for some C of Path => C < ' ')
+                           or else not Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Place), Path)))
                then
                   Missing_Count := Missing_Count + 1;
                   if Missing_Count <= 10 then

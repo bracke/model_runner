@@ -2,6 +2,7 @@ with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Task_Attributes;
@@ -136,8 +137,16 @@ package body Model_Runner.Framework.Execution is
       --  recorded: then nothing could stop it should this process be
       --  killed, so it is stopped now, and the run says why.
       Group_Unrecorded : Boolean := False;
+      --  The file the command now running writes what it says into, and
+      --  whether it said more than is kept: stopped then, not let fill the
+      --  disk the project's state is on.
+      Capture       : Unbounded_String;
+      Overflowed    : Boolean := False;
    end record;
    type Control_Access is access Control;
+
+   --  The most a command may say before it is stopped.
+   Most_Said : constant := 256 * 1024 * 1024;
 
    package Task_Controls is new Ada.Task_Attributes (Control_Access, null);
 
@@ -404,11 +413,29 @@ package body Model_Runner.Framework.Execution is
 
    --  Whether the run has been cancelled, asked while a command waits: by
    --  whoever runs it, or by the work being ended elsewhere.
+   function Said_Too_Much return Boolean;
+
    function Stop_Asked return Boolean
    is ((Model_Runner.Cancellation."/=" (Current.Watched, null)
         and then Model_Runner.Cancellation.Is_Cancelled (Current.Watched))
        or else Work_Withdrawn
-       or else Current.Group_Unrecorded);
+       or else Current.Group_Unrecorded
+       or else Said_Too_Much);
+
+   function Said_Too_Much return Boolean is
+      use type Ada.Directories.File_Size;
+      Path : constant String := To_String (Current.Capture);
+   begin
+      if Path /= "" and then Ada.Directories.Exists (Path)
+        and then Ada.Directories.Size (Path) > Most_Said
+      then
+         Current.Overflowed := True;
+      end if;
+      return Current.Overflowed;
+   exception
+      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+         return Current.Overflowed;
+   end Said_Too_Much;
 
    --  Whether this host can take the network away from one program: asked
    --  once, by trying.
@@ -449,7 +476,9 @@ package body Model_Runner.Framework.Execution is
       Directory : constant String :=
         Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "slots");
       Mine      : constant String := Trim (Integer'Image (Hostkit.Host.Own_Process_Id));
-      Draft     : constant String := Hostkit.Fs.Join (Directory, "draft-" & Mine);
+      --  Its own draft, this run's: two runs of one process share no name.
+      Draft     : constant String :=
+        Hostkit.Fs.Join (Directory, "draft-" & Mine & "-" & Trim (Natural'Image (Next_Output_Number)));
       Written   : E.Error_Info;
    begin
       if not Files.Make_Directory (Directory) then
@@ -472,15 +501,24 @@ package body Model_Runner.Framework.Execution is
                   declare
                      Held  : Unbounded_String;
                      Read  : E.Error_Info;
+                     Claimed : constant String := Draft & ".claimed";
                   begin
-                     Files.Read_Text (Path, Held, Read);
-                     --  Gone, or another process given its id since: the
-                     --  slot is free.
-                     if E.Is_Ok (Read) and then Standing_Of (To_String (Held)) = Other_Process
-                     then
-                        Files.Discard (Path);
-                        if Hostkit.Fs.Move_No_Replace (Draft, Path) then
-                           return Path;
+                     --  Taken aside first, by one only: two that both found
+                     --  it stale do not both free it, nor free one taken
+                     --  afresh between the look and the taking.
+                     if Hostkit.Fs.Move_No_Replace (Path, Claimed) then
+                        Files.Read_Text (Claimed, Held, Read);
+                        --  Gone, or another process given its id since: the
+                        --  slot is free.
+                        if E.Is_Ok (Read) and then Standing_Of (To_String (Held)) = Other_Process then
+                           Files.Discard (Claimed);
+                           if Hostkit.Fs.Move_No_Replace (Draft, Path) then
+                              return Path;
+                           end if;
+                        elsif not Hostkit.Fs.Move_No_Replace (Claimed, Path) then
+                           --  Held after all, and its place taken since: it
+                           --  is not left aside under this run's name.
+                           Files.Discard (Claimed);
                         end if;
                      end if;
                   end;
@@ -544,17 +582,22 @@ package body Model_Runner.Framework.Execution is
    function Refusal (Rules : Policy; Command : String) return String is
       Words : constant Name_Lists.Vector := Words_Of (Command);
    begin
-      if Words.Is_Empty then
+      if Words.Is_Empty or else Words.First_Element = "" then
          return "there is nothing to run";
       elsif Needs_Shell (Command) then
          return (if Rules.Shell_Allowed then ""
                  else "it needs a shell, and the policy does not allow one; /reconfigure"
-                      & " scalar.execution.shell=allowed lets checks use one");
+                      & " scalar.execution.shell=allowed lets checks use one -- and with it run any program"
+                      & " a shell can, set.execution.allowed no longer holding them");
+      --  A program by its name is the one the host finds by it; one given
+      --  as a path is that file, which the work may have written -- allowed
+      --  only as the policy writes it, not by the name it ends in.
       elsif not Rules.Allowed.Contains (Words.First_Element)
-        and then not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element))
+        and then (Ada.Strings.Fixed.Index (Words.First_Element, "/") > 0
+                  or else not Rules.Allowed.Contains (Ada.Directories.Simple_Name (Words.First_Element)))
       then
          return Words.First_Element & " is not a program the policy allows; allow it with"
-           & " /reconfigure add set.execution.allowed " & Ada.Directories.Simple_Name (Words.First_Element);
+           & " /reconfigure add set.execution.allowed " & Words.First_Element;
       elsif (Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
              or else Rules.File_MB > 0)
         and then Hostkit.Process.Locate ("prlimit") = ""
@@ -656,8 +699,15 @@ package body Model_Runner.Framework.Execution is
                return;
             end if;
             Arguments.Append (To_Unbounded_String (Executable ("bwrap")));
+            --  And nothing it could ask to write for it: the sockets under
+            --  /run -- a session bus, an agent, a container daemon -- hidden
+            --  (the resolver kept, which names hosts), its own processes,
+            --  messages and session, none of the caller's to reach.
             for Word of Name_Lists.Vector'(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-                                           "--tmpfs", "/tmp", "--bind", Ada.Directories.Full_Name (Project),
+                                           "--tmpfs", "/tmp", "--tmpfs", "/run",
+                                           "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
+                                           "--unshare-pid", "--unshare-ipc", "--new-session",
+                                           "--bind", Ada.Directories.Full_Name (Project),
                                            Ada.Directories.Full_Name (Project)])
             loop
                Arguments.Append (To_Unbounded_String (Word));
@@ -700,7 +750,15 @@ package body Model_Runner.Framework.Execution is
                  ("--fsize=" & Trim (Long_Long_Integer'Image (Long_Long_Integer (Rules.File_MB) * 1_048_576))));
             end if;
          end if;
-         if Rules.No_Network and then Can_Isolate then
+         --  No network asked and none that can be taken away: refused, as a
+         --  limit or a confinement the host cannot give is -- not run with
+         --  the network it was not to have.
+         if Rules.No_Network and then not Can_Isolate then
+            Refuse ("the project denies checks the network (execution.network) and this host cannot take it"
+                    & " away (no unshare, or user namespaces are off)");
+            return;
+         end if;
+         if (Rules.No_Network or else Rules.Prefer_Offline) and then Can_Isolate then
             Arguments.Append (To_Unbounded_String ("unshare"));
             Arguments.Append (To_Unbounded_String ("--net"));
             Arguments.Append (To_Unbounded_String ("--map-root-user"));
@@ -733,6 +791,8 @@ package body Model_Runner.Framework.Execution is
                return;
             end if;
             Current.Group_Unrecorded := False;
+            Current.Capture := To_Unbounded_String (Output);
+            Current.Overflowed := False;
             Happened :=
               Hostkit.Process.Run_Captured
                 (Program           => Program,
@@ -740,11 +800,30 @@ package body Model_Runner.Framework.Execution is
                  Working_Directory => Where,
                  Stdin_Path        => Hostkit.Fs.Null_Device,
            Whole_Group       => True,
+                 Clean_Wrapper     => True,
                  Stdout_Path       => Output,
                  Stderr_Path       => Output,
                  Timeout_Ms        => Natural'Min (Rules.Timeout, Integer'Last / 1000) * 1000,
                  Cancelled         => Stop_Asked'Access,
                  Started           => Record_Group'Access);
+            Current.Capture := Null_Unbounded_String;
+            --  Said more than is kept: stopped for it, and said so -- not a
+            --  check that failed, nor one that passed.
+            if Current.Overflowed then
+               Current.Overflowed := False;
+               Files.Discard (Output);
+               if Current.Store /= null and then Length (Current.Lease) > 0 then
+                  Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
+               end if;
+               if Slot /= "" then
+                  Files.Discard (Slot);
+               end if;
+               Status := E.Make (E.Framework_Limit_Exceeded);
+               E.Add_Text (Status, "name", "what a check says");
+               E.Add_Text (Status, "detail", Command & " said more than"
+                           & Natural'Image (Most_Said / (1024 * 1024)) & " MiB, and was stopped");
+               return;
+            end if;
             if Current.Store /= null and then Length (Current.Lease) > 0 then
                Files.Discard (Group_File (Stores.Root (Current.Store.all), To_String (Current.Lease)));
             end if;
@@ -808,6 +887,14 @@ package body Model_Runner.Framework.Execution is
                E.Add_Text (Status, "detail", Command & ": what it said could not be read");
                return;
             end if;
+         --  Started, ran its course, and nothing to read of what it said --
+         --  the file it was to say it into not there: not taken for having
+         --  said nothing. One stopped at once may have said nothing yet.
+         elsif Result.Started and then not Result.Timed_Out then
+            Status := E.Make (E.IO_Read_Failed);
+            E.Add_Text (Status, "path", Output, E.Param_Path);
+            E.Add_Text (Status, "detail", Command & ": what it said was not captured");
+            return;
          end if;
 
          --  The whole of it kept; a limit's worth of it read.
@@ -896,6 +983,7 @@ package body Model_Runner.Framework.Execution is
            Working_Directory => Directory,
            Stdin_Path        => Hostkit.Fs.Null_Device,
                  Whole_Group       => True,
+                 Clean_Wrapper     => True,
            Stdout_Path       => Output,
            Stderr_Path       => Output & ".stderr",
            Timeout_Ms        => Natural'Min (Timeout, Integer'Last / 1000) * 1000,

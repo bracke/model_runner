@@ -1847,6 +1847,18 @@ harness fills into a check (`{tests}`, `{scope}`) are passed as their own
 arguments, quoted, and a value with a quote or a control character in it is
 refused.
 
+The programs a check may run are the ones `set execution.allowed` lists, a
+program given by name found on `PATH` and one given as a path allowed only as
+the list writes it. That list holds only while checks run without a shell:
+`scalar execution.shell = allowed` lets a check be a shell line, and a shell
+line runs whatever it names. Confined checks also get their own process,
+IPC and session namespaces and an empty `/run`, so the sockets of your desktop
+session are out of their reach; `scalar execution.network = denied` takes the
+network away, and on a host that cannot, checks are refused. A limit on
+processes (`scalar execution.max_processes`) is the host's limit on your user's
+processes as a whole, not on the check's alone: set it above what your session
+already runs, or every check fails to start one.
+
 ## Not implemented
 
 Named in the specification, absent here:

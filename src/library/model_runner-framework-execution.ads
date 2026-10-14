@@ -42,6 +42,11 @@ package Model_Runner.Framework.Execution is
       Network       : Boolean := False;
       No_Network    : Boolean := False;
 
+      --  No network where the host can take it away, and run all the same
+      --  where it cannot: a check that needs none, said so by its profile
+      --  -- not the project denying it, which No_Network is.
+      Prefer_Offline : Boolean := False;
+
       --  Limits on each command, zero for none: its memory, processor
       --  time, processes and the size of a file it writes. Where a limit is
       --  asked for and cannot be set, the command is refused rather than

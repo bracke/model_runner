@@ -163,15 +163,24 @@ package body Model_Runner.Framework.Configurations is
          "scalar.execution.memory", "scalar.execution.cpu", "scalar.execution.processes",
          "scalar.execution.file", "map.component.", "set.components", "input.project_name"];
       Meaning : Records.Item := Records.Create (Current_Entity, 1, "", 1);
+      function Starts_With (Name, Prefix : String) return Boolean
+      is (Name'Length >= Prefix'Length and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix);
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
          declare
             Name : constant String := Records.Field_Name (Value, Index);
          begin
-            if (for some Prefix of Bearing =>
-                  Name'Length >= Prefix'Length
-                  and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix)
+            --  A setting only the present fingerprint counts, set: what the
+            --  old one was held to is not all that bears now, and nothing
+            --  is current by it.
+            if (Starts_With (Name, "scalar.execution.") or else Starts_With (Name, "set.execution."))
+              and then not (for some Prefix of Bearing => Starts_With (Name, Prefix))
+              and then Name not in "scalar.execution.output_limit" | "scalar.execution.process_slots"
+                                 | "set.execution.allowed"
             then
+               return "";
+            end if;
+            if (for some Prefix of Bearing => Starts_With (Name, Prefix)) then
                Records.Set (Meaning, Name, Records.Get (Value, Name));
             end if;
          end;

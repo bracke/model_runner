@@ -1475,6 +1475,7 @@ package body Model_Runner.Framework.Repository is
                           (Ada.Strings.Unbounded.Head (Text, Natural'Min (8_192, Length (Text))),
                            [1 => ASCII.NUL]) > 0
                      then
+                        Result.Skipped.Append (Relative & ASCII.HT & Stamp);
                         raise Skip_File;
                      end if;
                      Result.Reading := To_Unbounded_String (Relative);
@@ -1695,8 +1696,13 @@ package body Model_Runner.Framework.Repository is
       for Index in 1 .. Natural (Now_Paths.Length) loop
          declare
             Held : constant Natural := Kept_Index (Now_Paths (Index));
+            --  Left out as bytes when last seen, and not touched since:
+            --  left out again, unread.
+            Skip_Line : constant String := Now_Paths (Index) & ASCII.HT & Now_Stamps (Index);
          begin
-            if Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
+            if Held = 0 and then Kept.Skipped.Contains (Skip_Line) and then not Recent (Now_Stamps (Index)) then
+               Result.Skipped.Append (Skip_Line);
+            elsif Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
               or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
               or else Recent (Now_Stamps (Index))
               or else Role_Moved (Kept.Files (Held).Role, Now_Paths (Index))
@@ -1713,6 +1719,7 @@ package body Model_Runner.Framework.Repository is
       if Changed.Is_Empty and then Gone.Is_Empty then
          return Same : Graph := Kept do
             Same.Unread := Result.Unread;
+            Same.Skipped := Result.Skipped;
          end return;
       end if;
 
@@ -1740,6 +1747,13 @@ package body Model_Runner.Framework.Repository is
                   --  One that could not be read is left out, as Scan
                   --  leaves it out -- and a built program or object, bytes
                   --  not text, a NUL among its first, as Scan leaves it.
+                  if not Unreadable (Path)
+                    and then Ada.Strings.Fixed.Index
+                               (Text (Text'First .. Text'First + Natural'Min (8_192, Text'Length) - 1),
+                                [1 => ASCII.NUL]) > 0
+                  then
+                     Result.Skipped.Append (Path & ASCII.HT & Now_Stamps (Index));
+                  end if;
                   if not Unreadable (Path)
                     and then Ada.Strings.Fixed.Index
                                (Text (Text'First .. Text'First + Natural'Min (8_192, Text'Length) - 1),

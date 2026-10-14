@@ -273,9 +273,15 @@ package body Model_Runner.Framework.Permissions is
                --  on, a root that is a bare file name, a list left empty --
                --  and nothing where it is none: an unknown key, a count
                --  that is not one.
+               --  An empty list -- roots= with nothing after it, a value
+               --  that came to nothing -- is no grant: unlimited, it would
+               --  give everywhere.
                if Records.Get (Config, Field) = "off"
                  or else (Records.Get (Config, Field) not in "inherit" | "on"
-                          and then Constraint_Problem (Records.Get (Config, Field), Strict => False) /= "")
+                          and then (Constraint_Problem (Records.Get (Config, Field), Strict => False) /= ""
+                                    or else Ada.Strings.Fixed.Index
+                                              (Constraint_Problem (Records.Get (Config, Field)),
+                                               "names nothing") > 0))
                then
                   Result (Item_Kind) := (Granted => False, others => <>);
                elsif Records.Get (Config, Field) = "inherit" then

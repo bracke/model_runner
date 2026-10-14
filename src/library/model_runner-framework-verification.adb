@@ -778,7 +778,7 @@ package body Model_Runner.Framework.Verification is
    begin
       Evidence := Null_Unbounded_String;
       Passed := False;
-      Rules.No_Network := Rules.No_Network or else Offline;
+      Rules.Prefer_Offline := Offline;
 
       if Text = "" then
          Status := E.Make (E.Framework_Not_Found);

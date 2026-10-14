@@ -114,6 +114,7 @@ package body Model_Runner.Framework.Traceability is
          end if;
       end Component;
    begin
+      Result.Roots := Repository.Roots_Of (Item);
       --  The repository's own relations, as found.
       for Index in 1 .. Repository.Relation_Count (Files) loop
          declare
@@ -710,7 +711,7 @@ package body Model_Runner.Framework.Traceability is
                           and then Ada.Strings.Fixed.Index (To_String (Next.Kind), "sources") /= 1);
             end loop;
             if not Reaches_Anything
-              or else Repository."=" (Repository.Role_Of (Path), Repository.Build)
+              or else Repository."=" (Repository.Role_Of (Path, From.Roots), Repository.Build)
               or else not From.Unread.Is_Empty
             then
                Result.Unknown.Append (Path);

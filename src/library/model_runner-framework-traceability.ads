@@ -142,6 +142,10 @@ private
       --  The records that would not read as it was built: what they link
       --  is not in it, and so nothing it leaves out is known untouched.
       Unread : Name_Lists.Vector;
+
+      --  The project's roots, as it was built: what a path is -- a test, a
+      --  build file -- is as the project says.
+      Roots : Repository.Roots := Repository.Default_Roots;
    end record;
 
    type Impact is record

@@ -2253,7 +2253,9 @@ package body Model_Runner.Framework.Work is
       Model    : Context.Model_Profile;
       Result   : out Report;
       Status   : out Model_Runner.Errors.Error_Info;
-      Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null) is
+      Starting : access procedure (Agent_Id, Manifest_Id, Invocation_Id : String) := null)
+   is
+      Faulted : Boolean := False;
    begin
       --  A fault anywhere in the work is a way it ended, as any other is:
       --  said as one, and what follows -- the task set aside, its leases
@@ -2263,8 +2265,47 @@ package body Model_Runner.Framework.Work is
       exception
          when Fault : others =>
             Status := E.Unexpected (Fault, "work on " & Task_Id);
+            Faulted := True;
       end;
       Execution.Watch_Lease (null);
+
+      --  Stopped by a fault part way, nothing of how far it got is known
+      --  here: put right as an opening puts right work a stopped process
+      --  left -- its hold on the task let go, then the task set aside with
+      --  what it changed named, its workspace given up, its helpers
+      --  stopped, its agent ended.
+      if Faulted and then Length (Result.Agent_Id) > 0
+        and then Tasks.State_Of (Item, Task_Id) = "running"
+        and then Leases.Owner_Of (Item, Lease_Of (Task_Id)) = To_String (Result.Agent_Id)
+      then
+         declare
+            Change : Stores.Transaction;
+            Let_Go : E.Error_Info;
+            Said   : Name_Lists.Vector;
+         begin
+            --  Every hold of its own let go: the task's, and the project's
+            --  and its component's, which a recovery leaves to their owner.
+            Leases.Release (Item, Change, Lease_Of (Task_Id), To_String (Result.Agent_Id), Let_Go);
+            for Held of Name_Lists.Vector'([Tasks.Project_Lease,
+                                            (if Component_Of (Item, Task_Id) = "" then ""
+                                             else Tasks.Component_Lease (Component_Of (Item, Task_Id)))])
+            loop
+               if E.Is_Ok (Let_Go) and then Held /= ""
+                 and then Leases.Owner_Of (Item, Held) = To_String (Result.Agent_Id)
+               then
+                  Leases.Release (Item, Change, Held, To_String (Result.Agent_Id), Let_Go);
+               end if;
+            end loop;
+            if E.Is_Ok (Let_Go) then
+               Stores.Commit (Item, Change, Let_Go);
+            end if;
+            if E.Is_Ok (Let_Go) then
+               Recover (Item, Said, Let_Go);
+               Result.Final_State := To_Unbounded_String (Tasks.State_Of (Item, Task_Id));
+               Result.Reason := To_Unbounded_String ("its work stopped: " & Why_Of (Status));
+            end if;
+         end;
+      end if;
 
       --  Whatever way the work ended, a task it started is not left running
       --  with nobody working it: set aside, with why, its agent ended and
@@ -2320,7 +2361,9 @@ package body Model_Runner.Framework.Work is
          begin
             Invocations.Finish
               (Item, Change, To_String (Result.Invocation_Id), Invocations.Failed, (others => 0), "",
-               "the work stopped before its model ran"
+               (if Faulted then "the work stopped on a fault, where in it is not known, and what the model"
+                                & " spent with it"
+                else "the work stopped before its model ran")
                & (if E.Is_Error (Status) then ": " & Why_Of (Status)
                   elsif Length (Result.Reason) > 0 then ": " & To_String (Result.Reason)
                   else ""),

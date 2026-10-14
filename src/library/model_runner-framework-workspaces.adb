@@ -1439,9 +1439,6 @@ package body Model_Runner.Framework.Workspaces is
                      & " project again puts it back, or says what it cannot");
          return;
       end if;
-      --  Its own, as it is under way: a check's put back of the state
-      --  leaves it -- one an agent wrote would not be.
-      Stores.Hold_Own (Item, "runtime/integrating-" & Id);
       for Path of Paths loop
          if (for some C of Path => C < ' ') then
             Status := E.Make (E.Framework_Input_Invalid);
@@ -1452,6 +1449,10 @@ package body Model_Runner.Framework.Workspaces is
             return;
          end if;
       end loop;
+      --  Its own, as it is under way: a check's put back of the state
+      --  leaves it -- one an agent wrote would not be. Let go again on
+      --  every way out that leaves no journal.
+      Stores.Hold_Own (Item, "runtime/integrating-" & Id);
       for Path of Paths loop
          declare
             Target : constant String := Hostkit.Fs.Join (Project, Path);
@@ -1464,17 +1465,20 @@ package body Model_Runner.Framework.Workspaces is
                if E.Is_Error (Read) then
                   Status := Read;
                   Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  Stores.Release_Own (Item, "runtime/integrating-" & Id);
                   return;
                end if;
                if not Files.Make_Directory (Dirs.Containing_Directory (Saved_Of (Item, Id, Path))) then
                   Files.Write_Failed (Saved_Of (Item, Id, Path), Status);
                   Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  Stores.Release_Own (Item, "runtime/integrating-" & Id);
                   return;
                end if;
                Files.Write_Whole (Saved_Of (Item, Id, Path), To_String (Text), Saved);
                if E.Is_Error (Saved) then
                   Status := Saved;
                   Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+                  Stores.Release_Own (Item, "runtime/integrating-" & Id);
                   return;
                end if;
                declare
@@ -1497,6 +1501,7 @@ package body Model_Runner.Framework.Workspaces is
       if E.Is_Error (Status) then
          Files.Discard (Journal_Of (Item, Id));
          Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
+         Stores.Release_Own (Item, "runtime/integrating-" & Id);
       end if;
    end Begin_Journal;
 

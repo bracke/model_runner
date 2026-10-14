@@ -506,6 +506,10 @@ private
       --  the graph, and a reader of the graph is told so rather than left
       --  to take it as the whole project. Not kept with the graph.
       Unread    : Name_Lists.Vector;
+
+      --  The files left out as bytes, not text -- a built program, an
+      --  image -- each "PATH<tab>STAMP": not read again while unchanged.
+      Skipped   : Name_Lists.Vector;
    end record;
 
 end Model_Runner.Framework.Repository;

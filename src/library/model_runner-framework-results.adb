@@ -1,3 +1,4 @@
+with Ada.IO_Exceptions;
 with Ada.Calendar.Formatting;
 with Ada.Calendar;
 with Ada.Characters.Handling;
@@ -439,6 +440,16 @@ package body Model_Runner.Framework.Results is
    -- Collect_Payloads --
    ----------------------
 
+   --  Whether a file was last written an hour ago or more.
+   function Old_Enough (Path : String) return Boolean is
+      use type Ada.Calendar.Time;
+   begin
+      return Ada.Calendar.Clock - Ada.Directories.Modification_Time (Path) >= 3600.0;
+   exception
+      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+         return False;
+   end Old_Enough;
+
    procedure Collect_Payloads (Item : Stores.Store; Removed : out Natural) is
       Directory : constant String :=
         Stores.Root (Item) & "/" & Directory_Name (Results_Area) & "/payloads";
@@ -474,8 +485,10 @@ package body Model_Runner.Framework.Results is
             end;
          end loop;
       end;
+      --  One written within the hour may be another session's, its record
+      --  not committed yet: left until it is old enough to be nobody's.
       for Name of Files.Files_In (Directory) loop
-         if not Wanted.Contains (Name) then
+         if not Wanted.Contains (Name) and then Old_Enough (Directory & "/" & Name) then
             Files.Discard (Directory & "/" & Name);
             Removed := Removed + 1;
          end if;

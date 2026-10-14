@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.IO_Exceptions;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -333,7 +334,9 @@ package body Model_Runner.CLI.Work is
             First  : constant Natural := At_Key + Key'Length + 3;
             Stop   : Natural := First;
          begin
+            --  Not said: not known, not none.
             if At_Key = 0 then
+               Usage_Unknown := True;
                return "0";
             end if;
             while Stop <= Trace'Last and then Trace (Stop) in '0' .. '9' loop
@@ -464,8 +467,25 @@ package body Model_Runner.CLI.Work is
          Status := E.Exit_Status (Condition);
       end Fail;
 
-      --  Whether any task run so far did not end well.
-      Any_Ill : Boolean := False;
+      --  The seconds a model takes to be read in before its agent works:
+      --  two a gigabyte, five at least, as its file's size says.
+      function Load_Allowance (Model_Path : String) return Natural is
+         use type Ada.Directories.File_Size;
+         Where : constant String := Model_Runner.Platform.Resolve_Model_Path (Model_Path);
+      begin
+         if Model_Path = "" or else not Ada.Directories.Exists (Where) then
+            return 5;
+         end if;
+         return Natural'Max (5, Natural (Ada.Directories.Size (Where) / 500_000_000));
+      exception
+         when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+            return 5;
+      end Load_Allowance;
+
+      --  Whether any task run so far did not end well, and whether any
+      --  before the last one did.
+      Any_Ill   : Boolean := False;
+      Prior_Ill : Boolean := False;
 
       --  Whether the task last run did not end well: waiting to be taken
       --  in is where isolated work ends well, and so is a split waiting
@@ -489,6 +509,7 @@ package body Model_Runner.CLI.Work is
       begin
          Tried.Append (To_String (Chosen));
          Ended.Append (To_String (Chosen) & " not started");
+         Prior_Ill := Any_Ill;
          Any_Ill := True;
          Done := (others => <>);
       end Not_Started;
@@ -1283,11 +1304,13 @@ package body Model_Runner.CLI.Work is
          declare
             --  A runner that knows its model budgets for it; otherwise the
             --  profile the configuration names.
+            --  The session's model runs it unless another is named: then a
+            --  profile asked for by name is held to its room too.
             Model   : constant Model_Runner.Framework.Context.Model_Profile :=
               (if Given_Runner /= null and then Given_Runner.all in W.Parenting_Runner'Class
-                 and then Setting ("profile", "") = "" and then Setting ("model", "") = ""
+                 and then Setting ("model", "") = ""
                then Model_Runner.Framework.Context.Within_Configured
-                      (Store, W.Parenting_Runner'Class (Given_Runner.all).Profile)
+                      (Store, W.Parenting_Runner'Class (Given_Runner.all).Profile, Setting ("profile", ""))
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
             Path    : constant String := Setting ("model", "");
 
@@ -1456,10 +1479,13 @@ package body Model_Runner.CLI.Work is
                                                           (Positive'Value (Setting ("steps", "")),
                                                            W.Steps_Allowed (Store, To_String (Chosen)))),
                                                 Ada.Strings.Both)),
-                               --  What the task is allowed, as said: no
-                               --  floor of its own above it.
+                               --  What the task is allowed, and the time
+                               --  its model takes to be read in first --
+                               --  two seconds a gigabyte, as a cold read of
+                               --  this drive goes -- not a floor of a minute.
                                Timeout => Positive'Max
-                                            (1, W.Time_Allowed (Store, To_String (Chosen))),
+                                            (1, W.Time_Allowed (Store, To_String (Chosen)))
+                                          + Load_Allowance (Path),
                                Context => Model.Context_Limit,
                                Screen  => Screen'Unchecked_Access),
                   Model, Done, Outcome, Starting => Announce'Access);
@@ -1494,7 +1520,17 @@ package body Model_Runner.CLI.Work is
             --  Of many, and not for want of a model -- which every one would
             --  want: said, and the rest go on.
             if Batch and then not E."=" (Outcome.Code, E.Framework_Input_Missing) then
-               Not_Started;
+               --  Begun and then stopped is not "not started": said as where
+               --  the task is now.
+               if Length (Done.Agent_Id) > 0 then
+                  Tried.Append (To_String (Chosen));
+                  Ended.Append (To_String (Chosen) & " "
+                                & Model_Runner.Framework.State_Said (Tk.State_Of (Store, To_String (Chosen))));
+                  Prior_Ill := Any_Ill;
+                  Any_Ill := True;
+               else
+                  Not_Started;
+               end if;
                goto After_Task;
             end if;
             S.Close (Store);
@@ -2221,6 +2257,7 @@ package body Model_Runner.CLI.Work is
          --  All of them: what the plan can start now, of those not tried,
          --  once those it named first are done -- a failure stops none.
          Tried.Append (To_String (Chosen));
+         Prior_Ill := Any_Ill;
          Any_Ill := Any_Ill or else Ended_Ill;
          --  Named as /task list names it: work to take in, a stop.
          Ended.Append
@@ -2274,13 +2311,17 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
+      --  Any earlier one that did not end well: the command did not, a
+      --  cancelled last one notwithstanding.
+      if Prior_Ill then
+         Status := E.Exit_Input_Output;
+
       --  Cancelled, from here or from elsewhere, ends as a cancellation.
-      if To_String (Done.Final_State) = Tk.Cancelled then
+      elsif To_String (Done.Final_State) = Tk.Cancelled then
          Status := E.Exit_Cancelled;
 
-      --  Any of them that did not end well: the command did not, whichever
-      --  ran last.
-      elsif Ended_Ill or else Any_Ill then
+      --  The last one that did not end well: the command did not.
+      elsif Ended_Ill then
          Status := E.Exit_Input_Output;
       end if;
       S.Close (Store);
