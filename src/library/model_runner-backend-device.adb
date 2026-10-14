@@ -6418,9 +6418,14 @@ package body Model_Runner.Backend.Device is
    procedure Give_Back (Weight : Model_Runner.Tensors.View) is
    begin
       Moved_Count := Moved_Count + 1;
+      Forget (Weight);
+   end Give_Back;
+
+   procedure Forget (Weight : Model_Runner.Tensors.View) is
+   begin
       if Ready_Now then
          Products.Give_Back_Matrix (Engine, At_Offset (Weight.Base, Weight.Offset));
       end if;
-   end Give_Back;
+   end Forget;
 
 end Model_Runner.Backend.Device;

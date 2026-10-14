@@ -56,12 +56,6 @@ package body Unreached_Codes is
          --  make one until the shader is taught it too.
             | E.Backend_Unsupported_Format
 
-         --  The same refusal at the level of a single product rather than a
-         --  model, and unreachable for the same reason. A view cannot be
-         --  built in a format the program does not decode, and every format
-         --  it decodes the shader now decodes as well.
-            | E.Backend_Capability_Missing
-
          --  A product the device declined for a reason this program cannot
          --  name. Every reason it can name has its own answer -- a format
          --  the shader has not got, a buffer past what the device says it

@@ -177,6 +177,15 @@ is
       Model_Runner.Grammar.Close (Rules);
       Rules_Ready := False;
       L.Close (Session);
+      --  The draft's and the embedder's sessions and models, closed here
+      --  with the rest -- on the device before the backend is, which
+      --  finalization at the end of the command came after.
+      L.Close (Draft_Session);
+      L.Close (Embed_Session);
+      L.Close (Draft_Model, Ignored);
+      Containers.Close (Draft_Container);
+      Shards.Close (Draft_Source);
+      Draft_Ready := False;
       L.Close (Prepared, Ignored);
       Containers.Close (Container);
       Shards.Close (Source);
@@ -269,6 +278,16 @@ is
    Team_Size : constant Natural := Selected_Workers (Item);
 
 begin
+   --  More workers asked than the run takes -- the machine's cores, or one
+   --  where products are not shared -- is said, not cut without a word.
+   if Item.Threads > Team_Size then
+      Pres.Put_Note
+        (Screen, "cli.run.capped",
+         [Loc.Named ("name", "--threads"),
+          Loc.Named ("value", T.Image (Long_Long_Integer (Item.Threads))),
+          Loc.Named ("count", T.Image (Long_Long_Integer (Team_Size)))]);
+   end if;
+
    --  Which backend runs this. There is one, and going through the choice
    --  rather than around it is what makes --backend an option and not a
    --  word the parser accepts and forgets. The case has no others, so a

@@ -401,6 +401,10 @@ package Tiny_Model is
    --    into attn_k_b and attn_v_b, and the head widths under the _mla
    --    keys beside the latent's under the plain ones. The same values as
    --    the fixture written whole.
+   --  @param Alignment The data section's alignment to state, or nought
+   --    for the default.
+   --  @param Header_Pad Bytes of an extra string in the header, which moves
+   --    where the data begins.
    --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
    --    twenty-eight wide, as the real models' are, rather than four: the
    --    one width the device keeps a state in registers for.
@@ -432,6 +436,8 @@ package Tiny_Model is
       Sigmoid_Routing : Boolean := False;
       Expert_Groups   : Natural := 0;
       Split_Latent    : Boolean := False;
-      Caps            : Boolean := True);
+      Caps            : Boolean := True;
+      Alignment       : Natural := 0;
+      Header_Pad      : Natural := 0);
 
 end Tiny_Model;

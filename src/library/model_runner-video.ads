@@ -24,6 +24,17 @@ package Model_Runner.Video is
 
    type Frame_Indices is array (Positive range <>) of Natural;
 
+   --  The rate a part asks frames to be taken at, held to one an hour at
+   --  least and 240 a second at most, and the default where it asks none
+   --  or nought: 1e300 overflowed the frame count, and 1e-300 set times
+   --  past what a slot's seconds are written in.
+   --
+   --  @param Fps The rate the part states, or nought.
+   --  @return A rate the sampling can take.
+   function Held_Fps (Fps : Long_Float) return Long_Float
+   is (if not (Fps > 0.0) then Default_Fps
+       else Long_Float'Min (240.0, Long_Float'Max (1.0 / 3600.0, Fps)));
+
    --  How many frames the reference takes of a video: its length in
    --  seconds times the rate, cut to a whole number, held between the
    --  bounds and never above the frames there are.

@@ -3488,6 +3488,11 @@ package body Reference_Transformer is
       --  Jamba takes its few as they are whatever the file says.
       Item.Sigmoid_Gate :=
         Metadata (Source, Prefix (Item) & "expert_gating_func", 1) = 2;
+      Item.Expert_Groups :=
+        Metadata (Source, Prefix (Item) & "expert_group_count", 0);
+      Item.Expert_Groups_Used :=
+        Metadata (Source, Prefix (Item) & "expert_group_used_count",
+                  Item.Expert_Groups);
       declare
          Stated : Boolean;
          Status : Model_Runner.Errors.Error_Info;
@@ -5356,6 +5361,75 @@ package body Reference_Transformer is
                   for Index in Scores'Range loop
                      Scores (Index) := Scores (Index) / Total;
                   end loop;
+               end if;
+
+               --  Within groups, where the file says so: a group is worth
+               --  the two best of its experts as they are chosen, the
+               --  best few groups are kept, and every expert of the rest
+               --  is out of the running. Written as the DeepSeek-V3
+               --  reference writes it: a group's members sorted, the top
+               --  two summed; the groups sorted, the top few kept.
+               if Item.Expert_Groups > 1
+                 and then Item.Expert_Groups_Used < Item.Expert_Groups
+               then
+                  declare
+                     Per    : constant Natural :=
+                       Item.Experts / Item.Expert_Groups;
+                     Worth  : array (0 .. Item.Expert_Groups - 1) of Long_Float;
+                     Order  : array (0 .. Item.Expert_Groups - 1) of Natural;
+                     Moving : Natural;
+
+                     function Chosen_By (Index : Natural) return Long_Float
+                     is (Scores (Index)
+                         + (if Current.Select_Bias = null then 0.0
+                            else Current.Select_Bias.all (Index)));
+                  begin
+                     for Group in Worth'Range loop
+                        declare
+                           Members : array (0 .. Per - 1) of Long_Float;
+                           Held    : Long_Float;
+                        begin
+                           for Member in Members'Range loop
+                              Members (Member) := Chosen_By (Group * Per + Member);
+                           end loop;
+                           --  Descending, by insertion.
+                           for I in 1 .. Per - 1 loop
+                              Held := Members (I);
+                              Moving := I;
+                              while Moving > 0 and then Members (Moving - 1) < Held loop
+                                 Members (Moving) := Members (Moving - 1);
+                                 Moving := Moving - 1;
+                              end loop;
+                              Members (Moving) := Held;
+                           end loop;
+                           Worth (Group) := Members (0) + Members (1);
+                        end;
+                        Order (Group) := Group;
+                     end loop;
+
+                     --  Best first, a stable sort, so equal groups keep the
+                     --  lower number first.
+                     for I in 1 .. Order'Last loop
+                        Moving := I;
+                        while Moving > 0
+                          and then Worth (Order (Moving - 1)) < Worth (Order (Moving))
+                        loop
+                           declare
+                              Swap : constant Natural := Order (Moving);
+                           begin
+                              Order (Moving) := Order (Moving - 1);
+                              Order (Moving - 1) := Swap;
+                           end;
+                           Moving := Moving - 1;
+                        end loop;
+                     end loop;
+
+                     for Place in Item.Expert_Groups_Used .. Order'Last loop
+                        for Member in 0 .. Per - 1 loop
+                           Taken (Order (Place) * Per + Member) := True;
+                        end loop;
+                     end loop;
+                  end;
                end if;
 
                --  The highest few, ties going to the lower-numbered

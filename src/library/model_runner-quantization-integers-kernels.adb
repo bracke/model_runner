@@ -23828,6 +23828,20 @@ package body Model_Runner.Quantization.Integers.Kernels is
       is (Shape = G.Type_IQ4_NL
           or else Shape = G.Type_IQ4_XS
           or else Shape = G.Type_MXFP4);
+
+      --  What a call of Count vectors reads, from the vector at First on,
+      --  proved before a kernel runs with its checks off. First and Stride
+      --  count from each array's own first element, as every kernel reads
+      --  them. Asked only once Count is known to be at least one.
+      function Base_Reach return Element_Count is (First + (Count - 1) * Stride);
+      function Values_Fit return Boolean
+      is (First mod Activation_Block = 0
+          and then (Count = 1 or else Stride mod Activation_Block = 0)
+          and then Base_Reach + Blocks * Per <= Values'Length);
+      function Scales_Fit (Per_Block : Element_Count) return Boolean
+      is (Scales'Length >= Base_Reach / Activation_Block + Blocks * Per_Block);
+      function Halves_Fit return Boolean
+      is (Halves'Length >= Base_Reach / Activation_Half + Blocks * 16);
    begin
       Ok := False;
 
@@ -23847,7 +23861,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
       end if;
 
       if Model_Runner.Quantization.Grid_Integers.Is_Grid (Format) then
-         if Interleaved then
+         --  A grid kernel reads a super-block's activations and their eight
+         --  scales with its checks off: proved here, as every other is.
+         if Interleaved
+           or else not Values_Fit
+           or else not Scales_Fit (Per / Activation_Block)
+         then
             return;
          end if;
          Rows_Grid
@@ -23902,11 +23921,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
             Done : Boolean;
          begin
-            if First < Values'First
-              or else First mod Activation_Block /= 0
+            if First mod Activation_Block /= 0
               or else Stride mod Activation_Block /= 0
               or else Reach < First
-              or else Reach - 1 > Values'Last
+              or else Reach > Values'Length
               or else Scales'Length < Blocks_Reach
             then
                return;
@@ -24015,12 +24033,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
                Reach : constant Element_Count := First + Blocks * Per;
                Done  : Boolean;
             begin
-               if First < Values'First
-                 or else First mod Activation_Block /= 0
+               if First mod Activation_Block /= 0
                  or else Reach < First
-                 or else Reach - 1 > Values'Last
+                 or else Reach > Values'Length
                  or else Scales'Length
                            < First / Activation_Block + Blocks * 8
+                 or else not Halves_Fit
                then
                   return;
                end if;
@@ -24049,12 +24067,12 @@ package body Model_Runner.Quantization.Integers.Kernels is
               (First + (Count - 1) * Stride) / Activation_Block + Blocks * 8;
             Done : Boolean;
          begin
-            if First < Values'First
-              or else First mod Activation_Block /= 0
+            if First mod Activation_Block /= 0
               or else Stride mod Activation_Block /= 0
               or else Reach < First
-              or else Reach - 1 > Values'Last
+              or else Reach > Values'Length
               or else Scales'Length < Blocks_Reach
+              or else not Halves_Fit
             then
                return;
             end if;
@@ -24123,10 +24141,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
                Reach : constant Element_Count := First + Blocks * Per;
                Done  : Boolean;
             begin
-               if First < Values'First
-                 or else First mod Activation_Block /= 0
+               if First mod Activation_Block /= 0
                  or else Reach < First
-                 or else Reach - 1 > Values'Last
+                 or else Reach > Values'Length
                  or else Scales'Length
                            < First / Activation_Block + Blocks * 8
                  or else Totals'Length
@@ -24168,11 +24185,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
                At_V  : Element_Count := 0;
                Done  : Boolean;
             begin
-               if First < Values'First
-                 or else First mod Activation_Block /= 0
+               if First mod Activation_Block /= 0
                  or else Stride mod Activation_Block /= 0
                  or else Reach < First
-                 or else Reach - 1 > Values'Last
+                 or else Reach > Values'Length
                  or else Scales'Length < Blocks_Reach
                  or else Totals'Length < Blocks_Reach
                  or else Sums'Length < Rows * Count
@@ -24212,11 +24228,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
 
             Done : Boolean;
          begin
-            if First < Values'First
-              or else First mod Activation_Block /= 0
+            if First mod Activation_Block /= 0
               or else Stride mod Activation_Block /= 0
               or else Reach < First
-              or else Reach - 1 > Values'Last
+              or else Reach > Values'Length
               or else Scales'Length < Blocks_Reach
               or else Totals'Length < Blocks_Reach
             then
@@ -24382,6 +24397,11 @@ package body Model_Runner.Quantization.Integers.Kernels is
       --  otherwise: the load and the store of the accumulator go, and the
       --  separate multiply and add become one fused multiply-add.
       if Deep and then Count = 1 and then Format = G.Type_Q8_0 then
+         --  Proved first, as the batch below proves its own: the kernel
+         --  reads with its checks off.
+         if not Values_Fit or else not Scales_Fit (Per / Activation_Block) then
+            return;
+         end if;
          Rows_Singly
            (Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
             First, 0, 1, Sums);
@@ -24398,11 +24418,10 @@ package body Model_Runner.Quantization.Integers.Kernels is
          Blocks_Reach : constant Element_Count :=
            (First + (Count - 1) * Stride) / Activation_Block + Blocks;
       begin
-         if First < Values'First
-           or else First mod Activation_Block /= 0
+         if First mod Activation_Block /= 0
            or else Stride mod Activation_Block /= 0
            or else Reach < First
-           or else Reach - 1 > Values'Last
+           or else Reach > Values'Length
            or else Scales'Length < Blocks_Reach
            or else Totals'Length < Blocks_Reach
          then

@@ -29,8 +29,12 @@ package body Model_Runner.Text is
 
    function Has_Controls (Item : String) return Boolean is
    begin
-      for Char of Item loop
-         if Is_Control (Char) then
+      for Index in Item'Range loop
+         if Is_Control (Item (Index))
+           or else (Character'Pos (Item (Index)) = 16#C2#
+                    and then Index < Item'Last
+                    and then Character'Pos (Item (Index + 1)) in 16#80# .. 16#9F#)
+         then
             return True;
          end if;
       end loop;
@@ -49,26 +53,44 @@ package body Model_Runner.Text is
       Margin : constant String := (if Indent then "    " else "");
       Result : String (1 .. Item'Length * 5);
       Last   : Natural := 0;
+      Index  : Natural := Item'First;
+
+      procedure Put_Escaped (Char : Character) is
+         Code : constant Natural := Character'Pos (Char);
+      begin
+         Result (Last + 1) := '\';
+         Result (Last + 2) := 'x';
+         Result (Last + 3) := Hex_Digits (Code / 16 + 1);
+         Result (Last + 4) := Hex_Digits (Code mod 16 + 1);
+         Last := Last + 4;
+      end Put_Escaped;
    begin
-      for Char of Item loop
-         if Keep_Line_Breaks and then Char = ASCII.LF then
-            Result (Last + 1) := ASCII.LF;
-            Result (Last + 2 .. Last + 1 + Margin'Length) := Margin;
-            Last := Last + 1 + Margin'Length;
-         elsif Is_Control (Char) then
-            declare
-               Code : constant Natural := Character'Pos (Char);
-            begin
-               Result (Last + 1) := '\';
-               Result (Last + 2) := 'x';
-               Result (Last + 3) := Hex_Digits (Code / 16 + 1);
-               Result (Last + 4) := Hex_Digits (Code mod 16 + 1);
-               Last := Last + 4;
-            end;
-         else
-            Last := Last + 1;
-            Result (Last) := Char;
-         end if;
+      while Index <= Item'Last loop
+         declare
+            Char : constant Character := Item (Index);
+         begin
+            if Keep_Line_Breaks and then Char = ASCII.LF then
+               Result (Last + 1) := ASCII.LF;
+               Result (Last + 2 .. Last + 1 + Margin'Length) := Margin;
+               Last := Last + 1 + Margin'Length;
+            elsif Is_Control (Char) then
+               Put_Escaped (Char);
+            --  A C1 control, U+0080 to U+009F: in UTF-8 it is C2 and a byte
+            --  of 80 to 9F, and a terminal that honours it -- 9B begins a
+            --  sequence as ESC [ does -- is obeyed as surely.
+            elsif Character'Pos (Char) = 16#C2#
+              and then Index < Item'Last
+              and then Character'Pos (Item (Index + 1)) in 16#80# .. 16#9F#
+            then
+               Put_Escaped (Char);
+               Put_Escaped (Item (Index + 1));
+               Index := Index + 1;
+            else
+               Last := Last + 1;
+               Result (Last) := Char;
+            end if;
+         end;
+         Index := Index + 1;
       end loop;
       return Result (1 .. Last);
    end Escape_Controls;

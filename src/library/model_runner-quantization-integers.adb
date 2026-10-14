@@ -73,9 +73,13 @@ package body Model_Runner.Quantization.Integers is
        or else (not Interleaved
                 and then Model_Runner.Quantization.Grid_Integers.Is_Grid (Format))
        or else Format = G.Type_Q4_0
-       or else Format = G.Type_Q4_K
-       or else Format = G.Type_Q5_K
-       or else Format = G.Type_Q6_K
+       --  The k-quants' row kernels are the deepest compilation's alone too:
+       --  the others refuse them, and True there quantized every token's
+       --  activations for a product the floating-point path then took.
+       or else (Deeper
+                and then (Format = G.Type_Q4_K
+                          or else Format = G.Type_Q5_K
+                          or else Format = G.Type_Q6_K))
        or else (Interleaved
                 and then (Format = G.Type_Q4_1
                           or else Format = G.Type_Q5_0

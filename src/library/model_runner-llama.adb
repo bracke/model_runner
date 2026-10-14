@@ -803,11 +803,16 @@ package body Model_Runner.Llama is
       --  And where it sits. A backend states the alignment it needs from
       --  tensor storage; a file is free to place a tensor anywhere its own
       --  alignment allows, and the two are not the same number. Where it
-      --  sits in the storage the view is made over -- the arena, which
-      --  begins where the file's data does -- not in the file: a file of
-      --  alignment two whose data began on an odd pair placed a tensor that
-      --  passed in the file and was not aligned where it was read.
-      if (Containers.Tensor_Offset (Source, Index) - Interfaces.Unsigned_64 (Item.Arena_Base))
+      --  is read, not where it is in the file nor in the data: the view is
+      --  made at Weights_Base -- the file's mapping at the data's start, or
+      --  a heap arena -- plus the tensor's place in the data, and neither
+      --  of the two offsets alone says whether that address is aligned. A
+      --  file of alignment two placed a tensor that passed in the file, or
+      --  in the data, and was not aligned where the mapping put it.
+      if (Interfaces.Unsigned_64
+            (System.Storage_Elements.To_Integer (Item.Weights_Base))
+          + (Containers.Tensor_Offset (Source, Index)
+             - Interfaces.Unsigned_64 (Item.Arena_Base)))
          mod Interfaces.Unsigned_64 (Item.Able.Alignment) /= 0
       then
          Status := E.Make (E.Backend_Capability_Missing);
@@ -2983,11 +2988,91 @@ package body Model_Runner.Llama is
          Length => Weight.Length / B.Byte_Count (Weight.Rows)
                    * B.Byte_Count (Count));
 
-   --  The model's per-dimension divisors, or none when it carries no table.
-   function Turns (Item : Model'Class) return Real_Array
-   is (if Item.Rope_Factors = null
+   --  The per-dimension divisors a session turns by: of LongRoPE's two
+   --  tables the one the session chose as it opened, the model's one table
+   --  where it carries one, and none where it carries none.
+   function Turns (Item : Model'Class; Turning : Session'Class) return Real_Array
+   is (if Item.Rope_Long /= null and then Item.Rope_Short /= null
+       then (if Turning.Long_Rope then Item.Rope_Long.all else Item.Rope_Short.all)
+       elsif Item.Rope_Factors = null
        then K.No_Factors
        else Item.Rope_Factors.all);
+
+   --  Whether a mixture chooses its experts within groups.
+   function Grouped (Settings : Configuration) return Boolean
+   is (Settings.Expert_Groups > 1
+       and then Settings.Expert_Groups_Used < Settings.Expert_Groups);
+
+   --  Experts, a flag each: taken, or out of the running.
+   type Expert_Flags is array (Natural range <>) of Boolean;
+
+   --  Put the experts of every group but the best few out of the running,
+   --  as llama.cpp's build_moe_ffn does: a group's score is the sum of its
+   --  two best selection scores, the Expert_Groups_Used best groups are
+   --  kept -- the lower numbered of equal ones -- and the rest marked
+   --  taken, so the choosing that follows never reaches them.
+   --
+   --  @param Settings The model's, for the group counts.
+   --  @param Picks Each expert's selection score, the first expert first.
+   --  @param Taken Marked for every expert of a group not kept.
+   procedure Keep_Groups
+     (Settings : Configuration;
+      Picks    : Real_Array;
+      Taken    : in out Expert_Flags)
+   is
+      Groups : constant Natural := Settings.Expert_Groups;
+      Per    : constant Natural := Settings.Experts / Natural'Max (Groups, 1);
+   begin
+      if not Grouped (Settings) then
+         return;
+      end if;
+
+      declare
+         Score : array (0 .. Groups - 1) of Real;
+         Kept  : array (0 .. Groups - 1) of Boolean := [others => False];
+      begin
+         for Group in Score'Range loop
+            declare
+               First, Second : Real := Real'First;
+               Value : Real;
+            begin
+               for Member in 0 .. Per - 1 loop
+                  Value := Picks (Picks'First + Element_Count (Group * Per + Member));
+                  if Value > First then
+                     Second := First;
+                     First := Value;
+                  elsif Value > Second then
+                     Second := Value;
+                  end if;
+               end loop;
+               Score (Group) := First + Second;
+            end;
+         end loop;
+
+         for Round in 1 .. Settings.Expert_Groups_Used loop
+            declare
+               Best : Integer := -1;
+            begin
+               for Group in Score'Range loop
+                  if not Kept (Group)
+                    and then (Best < 0 or else Score (Group) > Score (Best))
+                  then
+                     Best := Group;
+                  end if;
+               end loop;
+               Kept (Best) := True;
+            end;
+         end loop;
+
+         for Group in Kept'Range loop
+            if not Kept (Group) then
+               for Member in 0 .. Per - 1 loop
+                  Taken (Taken'First + Group * Per + Member) := True;
+               end loop;
+            end if;
+         end loop;
+      end;
+   end Keep_Groups;
 
    --  Attention for one position, over every head.
    --
@@ -7424,10 +7509,25 @@ package body Model_Runner.Llama is
       begin
          Mix (Interfaces.Unsigned_64 (Value));
       end Mix_Count;
+
+      function Wide_Bits (Item : Wide_Real) return Interfaces.Unsigned_64
+        renames Model_Runner.Numerics.Wide_Bits;
    begin
       if not Item.Ready then
          return 0;
       end if;
+
+      --  How positions are turned, as the file states it or the command
+      --  line asked: keys kept under one base or stretch are not the keys
+      --  another reads, and a cache or session turned at the old rate was
+      --  adopted under --rope-freq-base or --rope-scaling and read as noise.
+      Mix (Wide_Bits (Item.Settings.Rope_Base));
+      Mix_Count (K.Rotary_Scaling_Kind'Pos (Item.Settings.Scaling.Kind));
+      Mix (Wide_Bits (Item.Settings.Scaling.Frequency));
+      Mix_Count (Item.Settings.Scaling.Original);
+      Mix (Wide_Bits (Item.Settings.Scaling.Beta_Fast));
+      Mix (Wide_Bits (Item.Settings.Scaling.Beta_Slow));
+      Mix (Wide_Bits (Item.Settings.Scaling.Attenuation));
 
       Mix_Count (Architecture'Pos (Item.Settings.Kind));
       Mix_Count (Item.Settings.Context_Length);

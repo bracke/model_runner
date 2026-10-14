@@ -46,6 +46,9 @@ package body Model_Runner.CLI.Execute is
 
       Handle  : Ada.Streams.Stream_IO.File_Type;
       Done    : Model_Runner.Bytes.Byte_Count := 0;
+      --  Whether the file opened: past that, a failure is a write's -- a
+      --  full disk, a rename refused -- and is said as one.
+      Opened  : Boolean := False;
 
       --  Beside its name, on the device, then in its place: a session
       --  saved over one that was there is the old one or the new one,
@@ -58,6 +61,7 @@ package body Model_Runner.CLI.Execute is
       begin
          Ada.Streams.Stream_IO.Create
            (Handle, Ada.Streams.Stream_IO.Out_File, Partial);
+         Opened := True;
          while Done < Data'Length loop
             declare
                Size  : constant Model_Runner.Bytes.Byte_Count :=
@@ -92,7 +96,7 @@ package body Model_Runner.CLI.Execute is
                when others =>
                   null;
             end;
-            Status := E.Make (E.IO_Open_Failed);
+            Status := E.Make (if Opened then E.IO_Write_Failed else E.IO_Open_Failed);
             E.Add_Text (Status, "path", Path, E.Param_Path);
       end;
    end Write_File;

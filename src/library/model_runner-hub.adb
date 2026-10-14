@@ -192,6 +192,30 @@ package body Model_Runner.Hub is
    -- Is_Reference --
    ------------------
 
+   --  Whether a name reads as a hub repository, owner/name: one slash, not
+   --  at either end, and nothing a path on this machine begins with. A
+   --  missing /data/m.bin or ~/models/x is a file not found, not a
+   --  question to put to the hub -- which was asked, the path in the
+   --  request, before anything said the file was missing.
+   function Looks_Like_Repository (Repo : String) return Boolean is
+      Slashes : Natural := 0;
+   begin
+      if Repo'Length < 3
+        or else Repo (Repo'First) in '/' | '.' | '~' | '\'
+        or else Repo (Repo'Last) = '/'
+      then
+         return False;
+      end if;
+      for C of Repo loop
+         if C = '/' then
+            Slashes := Slashes + 1;
+         elsif C = '\' then
+            return False;
+         end if;
+      end loop;
+      return Slashes = 1;
+   end Looks_Like_Repository;
+
    function Is_Reference (Named : String) return Boolean is
       Colon : Natural := 0;
    begin
@@ -206,12 +230,7 @@ package body Model_Runner.Hub is
          return False;
       end if;
 
-      for Index in Named'First .. Colon - 1 loop
-         if Named (Index) = '/' then
-            return True;
-         end if;
-      end loop;
-      return False;
+      return Looks_Like_Repository (Named (Named'First .. Colon - 1));
    end Is_Reference;
 
    -------------
@@ -228,7 +247,8 @@ package body Model_Runner.Hub is
             Slash := True;
          end if;
       end loop;
-      return Slash and then not Ends_With (Named, ".gguf");
+      return Slash and then not Ends_With (Named, ".gguf")
+        and then Looks_Like_Repository (Named);
    end Is_Repo;
 
    -----------
@@ -863,6 +883,101 @@ package body Model_Runner.Hub is
       end loop;
    end Remove_Stray_Chunks;
 
+   -----------------
+   -- File_Digest --
+   -----------------
+
+   function File_Digest (Path : String) return String is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      use Ada.Streams;
+      Context : CryptoLib.Hashes.SHA256_Context;
+      In_File : Stream_IO.File_Type;
+      Buffer  : Stream_Element_Array (1 .. 4 * 1024 * 1024);
+      Last    : Stream_Element_Offset;
+      Digest  : CryptoLib.Hashes.SHA256_Digest;
+      Hex     : constant String := "0123456789abcdef";
+      Seen    : String (1 .. 64);
+   begin
+      CryptoLib.Hashes.Initialize_SHA256 (Context);
+      Stream_IO.Open (In_File, Stream_IO.In_File, Path);
+      while not Stream_IO.End_Of_File (In_File) loop
+         Stream_IO.Read (In_File, Buffer, Last);
+         CryptoLib.Hashes.Update (Context, Buffer (1 .. Last));
+      end loop;
+      Stream_IO.Close (In_File);
+      Digest := CryptoLib.Hashes.Finalize (Context);
+      for I in Digest'Range loop
+         Seen (2 * I - 1) := Hex (Natural (Digest (I)) / 16 + 1);
+         Seen (2 * I) := Hex (Natural (Digest (I)) mod 16 + 1);
+      end loop;
+      return Seen;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (In_File) then
+            Stream_IO.Close (In_File);
+         end if;
+         return "";
+   end File_Digest;
+
+   -------------------
+   -- Record_Digest --
+   -------------------
+
+   procedure Record_Digest (Path : String; SHA256 : String) is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      Note : Stream_IO.File_Type;
+   begin
+      Stream_IO.Create (Note, Stream_IO.Out_File, Path & ".sha256");
+      String'Write (Stream_IO.Stream (Note),
+                    Ada.Characters.Handling.To_Lower (SHA256) & ASCII.LF);
+      Stream_IO.Close (Note);
+   exception
+      when others =>
+         if Stream_IO.Is_Open (Note) then
+            Stream_IO.Close (Note);
+         end if;
+   end Record_Digest;
+
+   --------------
+   -- Is_Whole --
+   --------------
+
+   function Is_Whole (File : Download_File; Path : String) return Boolean is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      Wanted : constant String := Ada.Characters.Handling.To_Lower (File.SHA256);
+   begin
+      if not File.Has_Hash then
+         return True;
+      end if;
+      if Ada.Directories.Exists (Path & ".sha256") then
+         declare
+            Note : Stream_IO.File_Type;
+            Held : String (1 .. 64);
+         begin
+            if Ada.Directories."<" (Ada.Directories.Size (Path & ".sha256"), 64) then
+               return False;
+            end if;
+            Stream_IO.Open (Note, Stream_IO.In_File, Path & ".sha256");
+            String'Read (Stream_IO.Stream (Note), Held);
+            Stream_IO.Close (Note);
+            return Held = Wanted;
+         exception
+            when others =>
+               if Stream_IO.Is_Open (Note) then
+                  Stream_IO.Close (Note);
+               end if;
+               return False;
+         end;
+      end if;
+      --  A file from before digests were kept, or put there by hand: read
+      --  once, and kept as known when it is the hub's.
+      if File_Digest (Path) = Wanted then
+         Record_Digest (Path, Wanted);
+         return True;
+      end if;
+      return False;
+   end Is_Whole;
+
    procedure Fetch_Ranges
      (Repo      : String;
       File      : Download_File;
@@ -1090,42 +1205,34 @@ package body Model_Runner.Hub is
                end loop;
                Stream_IO.Close (In_File);
                Ada.Directories.Delete_File (Chunk_Path (K));
+            exception
+               when others =>
+                  if Stream_IO.Is_Open (In_File) then
+                     Stream_IO.Close (In_File);
+                  end if;
+                  raise;
             end;
          end loop;
          Stream_IO.Close (Out_File);
+      exception
+         --  Joined part way -- a full disk, a chunk gone -- the files are
+         --  closed, not left open for the life of the process.
+         when others =>
+            if Stream_IO.Is_Open (Out_File) then
+               Stream_IO.Close (Out_File);
+            end if;
+            raise;
       end;
 
       --  The whole against the hub's digest: a file of the right length
       --  made of the wrong bytes is removed, not opened.
       if File.Has_Hash then
-         declare
-            use Ada.Streams;
-            Context : CryptoLib.Hashes.SHA256_Context;
-            In_File : Stream_IO.File_Type;
-            Buffer  : Stream_Element_Array (1 .. 4 * 1024 * 1024);
-            Last    : Stream_Element_Offset;
-            Digest  : CryptoLib.Hashes.SHA256_Digest;
-            Hex     : constant String := "0123456789abcdef";
-            Seen    : String (1 .. 64);
-         begin
-            CryptoLib.Hashes.Initialize_SHA256 (Context);
-            Stream_IO.Open (In_File, Stream_IO.In_File, Dest_Path);
-            while not Stream_IO.End_Of_File (In_File) loop
-               Stream_IO.Read (In_File, Buffer, Last);
-               CryptoLib.Hashes.Update (Context, Buffer (1 .. Last));
-            end loop;
-            Stream_IO.Close (In_File);
-            Digest := CryptoLib.Hashes.Finalize (Context);
-            for I in Digest'Range loop
-               Seen (2 * I - 1) := Hex (Natural (Digest (I)) / 16 + 1);
-               Seen (2 * I) := Hex (Natural (Digest (I)) mod 16 + 1);
-            end loop;
-            if Ada.Characters.Handling.To_Lower (File.SHA256) /= Seen then
-               Ada.Directories.Delete_File (Dest_Path);
-               Reason := T.To_Bounded ("the file's digest is not the one the hub records; it was removed");
-               return;
-            end if;
-         end;
+         if Ada.Characters.Handling.To_Lower (File.SHA256) /= File_Digest (Dest_Path) then
+            Ada.Directories.Delete_File (Dest_Path);
+            Reason := T.To_Bounded ("the file's digest is not the one the hub records; it was removed");
+            return;
+         end if;
+         Record_Digest (Dest_Path, File.SHA256);
       end if;
       if Report /= null then
          Report (File.Size, File.Size);
@@ -1159,6 +1266,11 @@ package body Model_Runner.Hub is
             Ada.Directories.Delete_File (Dest_Path);
          end if;
          Ada.Directories.Rename (Part, Dest_Path);
+         --  The client checked the bytes against the digest; what it was is
+         --  kept beside them, so the next run knows the file for this one.
+         if File.Has_Hash then
+            Record_Digest (Dest_Path, File.SHA256);
+         end if;
       exception
          when others =>
             Ok := False;

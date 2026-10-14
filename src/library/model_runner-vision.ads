@@ -106,6 +106,15 @@ package Model_Runner.Vision is
    --  @return True when the rows carry a place each.
    function Placed_Rows (Item : Encoder) return Boolean;
 
+   --  Whether a picture's rows read one another both ways in the text
+   --  model, as llama.cpp reads Gemma 3's (mtmd_decode_use_non_causal),
+   --  rather than causally as any text: every other projector's rows go
+   --  through its causal model as text does.
+   --
+   --  @param Item Open encoder.
+   --  @return True for Gemma 3.
+   function Rows_Attend_Both_Ways (Item : Encoder) return Boolean;
+
    --  Width of each row, which is the text model's embedding width.
    --
    --  @param Item Open encoder.

@@ -965,10 +965,10 @@ begin
 
       --  Experts chosen within groups -- the best few groups of experts
       --  first, by their two best scores, then the best experts of those
-      --  -- which DeepSeek-V3 states and this build does not compute. A
-      --  file that states groups and uses fewer than all of them is
-      --  refused rather than routed as though the groups were not there;
-      --  one that uses all of them chooses exactly as without.
+      --  -- as DeepSeek-V2's large models and V3 state them. Groups that
+      --  do not share the experts evenly, a group of one (whose two best
+      --  are not there), or fewer experts in the kept groups than a token
+      --  chooses are refused: each is a file no reference reads either.
       declare
          Groups, Groups_Used : Long_Long_Integer;
       begin
@@ -995,8 +995,17 @@ begin
          end if;
 
          if Groups > 1 and then Groups_Used < Groups then
-            Reject_Feature ("expert_group_count");
-            return;
+            if Groups_Used = 0
+              or else Settings.Experts mod Natural (Groups) /= 0
+              or else Settings.Experts / Natural (Groups) < 2
+              or else Settings.Experts_Used
+                      > Natural (Groups_Used) * (Settings.Experts / Natural (Groups))
+            then
+               Reject_Feature ("expert_group_count");
+               return;
+            end if;
+            Settings.Expert_Groups := Natural (Groups);
+            Settings.Expert_Groups_Used := Natural (Groups_Used);
          end if;
       end;
 
@@ -1418,6 +1427,16 @@ begin
       elsif E.Is_Ok (Local) then
          Settings.Clip_QKV := N.Real (Value);
       end if;
+   end if;
+
+   --  DeepSeek's latent attention makes a key and a value for every head
+   --  out of the one latent row, so this engine keeps a key and a value a
+   --  head, whatever the file says: the current converter states one
+   --  key-value head -- the latent, as an absorbed reader keeps it -- and
+   --  read as that, the cache was a head wide while sixteen were written
+   --  into it.
+   if Is_MLA (Settings.Kind) then
+      Settings.KV_Heads := Settings.Heads;
    end if;
 
    if Settings.Heads mod Settings.KV_Heads /= 0 then

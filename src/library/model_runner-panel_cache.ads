@@ -13,6 +13,16 @@ with Model_Runner.Platform.Mapping;
 --  where it is touched.
 package Model_Runner.Panel_Cache is
 
+   --  The name a build of Path is written under before it is renamed into
+   --  Path: this process's and this build's own. Two loads of one model at
+   --  once -- two runs, or a model and a draft that is the same file --
+   --  wrote one "Path.part", the second truncating what the first had
+   --  mapped for writing, which ends that process with SIGBUS.
+   --
+   --  @param Path Where the cache file goes.
+   --  @return A name beside it no other build is writing.
+   function Part_Name (Path : String) return String;
+
    --  Whether a panel cache file is there to be mapped.
    --
    --  @param Path The caller's path for it.
@@ -104,6 +114,9 @@ private
    type Building is limited record
       Region : Model_Runner.Platform.Mapping.Region;
       Path   : Ada.Strings.Unbounded.Unbounded_String;
+      --  The file it is built in, beside Path: this process's and this
+      --  build's own (Part_Name).
+      Part   : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Panel_Cache;

@@ -40,7 +40,10 @@ begin
    if not T.Is_Empty (Item.Adapter_Path)
      and then Item.Repack = L.To_BF16
    then
-      Fail (E.Make (E.CLI_Conflicting_Prompt_Sources));
+      Condition := E.Make (E.CLI_Option_Combination);
+      E.Add_Text (Condition, "option", "--lora", E.Param_Identifier);
+      E.Add_Text (Condition, "other", "--repack bf16", E.Param_Identifier);
+      Fail (Condition);
       return;
    end if;
 
@@ -556,7 +559,10 @@ begin
    --  program.
    if Item.Agent then
       if Item.Raw then
-         Fail (E.Make (E.CLI_Conflicting_Prompt_Sources));
+         Condition := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Condition, "option", "--raw", E.Param_Identifier);
+         E.Add_Text (Condition, "other", "--agent", E.Param_Identifier);
+         Fail (Condition);
          return;
       end if;
       if not L.Template_Ready (Prepared) then
@@ -730,8 +736,8 @@ begin
 
             --  Write the run's trace, if one was asked for: the calls
             --  and results the watcher recorded, wrapped in the run's
-            --  tally. Best effort -- a trace that will not write does
-            --  not fail the run.
+            --  tally. A trace that will not write does not fail the run,
+            --  but is said.
             if Watcher.Trace then
                declare
                   File : Ada.Text_IO.File_Type;
@@ -759,14 +765,32 @@ begin
                      & "]}");
                   Ada.Text_IO.Close (File);
                exception
+                  --  The run's answer stands; the trace asked for and not
+                  --  written is said, not passed over.
                   when others =>
                      if Ada.Text_IO.Is_Open (File) then
                         Ada.Text_IO.Close (File);
                      end if;
+                     declare
+                        Unwritten : E.Error_Info := E.Make (E.IO_Write_Failed);
+                     begin
+                        E.Add_Text (Unwritten, "path", T.To_String (Item.Trace_File_Path),
+                                    E.Param_Path);
+                        Pres.Report (Screen, Unwritten);
+                     end;
                end;
             end if;
          end Drive;
       begin
+         --  The sessions run at once, said where fewer than asked.
+         if Item.Max_Parallel > Sub_Count then
+            Pres.Put_Note
+              (Screen, "cli.run.capped",
+               [Loc.Named ("name", "--max-parallel"),
+                Loc.Named ("value", T.Image (Long_Long_Integer (Item.Max_Parallel))),
+                Loc.Named ("count", T.Image (Long_Long_Integer (Sub_Count)))]);
+         end if;
+
          if not Model_Runner.Templates.Reads_Tools
                   (L.Template (Prepared).all)
          then
@@ -866,12 +890,31 @@ begin
                   return;
                end if;
             end if;
-            if not Loaded
-              and then Item.Has_System
-              and then Item.System_Text /= null
-            then
-               Conv.Set_System
-                 (Messages, Item.System_Text.all, Condition);
+            --  The system text as given, or the file named for it, which
+            --  the agent's run read nothing of.
+            if not Loaded and then Item.Has_System then
+               declare
+                  System_Text : Opt.Text_Access := null;
+               begin
+                  if Item.System_Text /= null then
+                     System_Text := new String'(Item.System_Text.all);
+                  else
+                     Read_File
+                       (T.To_String (Item.System_Path),
+                        Model_Runner.Limits.Default_Session_Limits
+                          .Max_Prompt_Bytes,
+                        System_Text, Condition);
+                  end if;
+                  if E.Is_Ok (Condition) then
+                     Conv.Set_System (Messages, System_Text.all, Condition);
+                  end if;
+                  Free_Text (System_Text);
+                  if E.Is_Error (Condition) then
+                     Conv.Close (Messages);
+                     Fail (Condition);
+                     return;
+                  end if;
+               end;
             end if;
             if Item.Prompt_Kind = Opt.Prompt_Parts then
                Conv.Append_Parts
@@ -1264,9 +1307,11 @@ begin
                  L.Vocabulary (Prepared);
 
                --  A message's content as the template is to see it: a control
-               --  marker someone wrote in it is text, not a turn.
+               --  marker someone wrote in it is text, not a turn, and a
+               --  picture's token is no picture.
                function Content_Text (Text : String) return String
-               is (Vocab.Defused (Words.all, Text));
+               is (Vocab.Defused
+                     (Words.all, Text, Model_Runner.CLI.Pictures.Picture_Tokens (Seer)));
             begin
                Conv.Open (Messages, Status => Condition);
                if E.Is_Error (Condition) then
@@ -1484,6 +1529,22 @@ begin
          end loop;
 
          for Index in 1 .. Item.Stop_Token_Count loop
+            --  A token the vocabulary has not got is a stop never met: said,
+            --  not run to the limit.
+            if Item.Stop_Tokens (Index)
+               >= Long_Long_Integer (Vocab.Size (L.Vocabulary (Prepared).all))
+            then
+               Condition := E.Make (E.CLI_Option_Out_Of_Range);
+               E.Add_Text (Condition, "option", "--stop-token", E.Param_Identifier);
+               E.Add_Text (Condition, "value", Long_Long_Integer'Image (Item.Stop_Tokens (Index)));
+               E.Add_Integer (Condition, "minimum", 0);
+               E.Add_Integer
+                 (Condition, "maximum",
+                  Long_Long_Integer (Vocab.Size (L.Vocabulary (Prepared).all)) - 1);
+               Release_Rendered;
+               Fail (Condition);
+               return;
+            end if;
             Model_Runner.Stops.Add_Token
               (Stop_Set, Vocab.Token_Id (Item.Stop_Tokens (Index)), Condition);
             if E.Is_Error (Condition) then
@@ -1621,6 +1682,7 @@ begin
             --  restoring it worth anything, and where they diverge the
             --  engine resets and reads the prompt as it would have.
             Request.Reuse_Committed_Prefix := Prefix_Reused;
+            Request.Pictures_Unverified := Prefix_Reused;
             Request.Hold_Back := Hold_Back;
 
             --  What the last prompt retained goes before this one
@@ -1827,9 +1889,9 @@ begin
          --  model running several times slower than it could in that
          --  product, which no rate above says by itself.
          declare
-            Floated : constant Natural :=
+            Floated : constant Long_Long_Integer :=
               Model_Runner.Backend.CPU.Float_Shares;
-            Integer_Taken : constant Natural :=
+            Integer_Taken : constant Long_Long_Integer :=
               Model_Runner.Backend.CPU.Integer_Shares;
             Rowed : constant Natural :=
               Model_Runner.Backend.Device.Untiled_Products;
@@ -1840,10 +1902,9 @@ begin
                Pres.Put_Note
                  (Screen, "cli.run.float_shares",
                   [Loc.Named ("count",
-                              T.Image (Long_Long_Integer (Floated))),
+                              T.Image (Floated)),
                    Loc.Named ("total",
-                              T.Image (Long_Long_Integer
-                                         (Floated + Integer_Taken)))]);
+                              T.Image (Floated + Integer_Taken))]);
             end if;
 
             if Rowed > 0 then

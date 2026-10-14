@@ -65,7 +65,11 @@ package body Model_Runner.Draft_Policy is
          then Split_Next_Draft_Tokens
          elsif Result.From_Next and then not Request.Tokens_Set
          then Next_Draft_Tokens
-         elsif Auto_Drafted then Store_Draft_Tokens
+         --  A found draft starts at its own length -- but a length named
+         --  is the length, whichever draft it is: a paired sidecar took
+         --  the store's three over --draft-tokens.
+         elsif Auto_Drafted and then not Request.Tokens_Set
+         then Store_Draft_Tokens
          --  A named draft model starts where a found one does unless a
          --  length was named: three, then adapting.
          elsif Draft_Ready and then not Request.Tokens_Set

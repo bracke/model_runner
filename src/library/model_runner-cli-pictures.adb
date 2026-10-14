@@ -119,7 +119,7 @@ package body Model_Runner.CLI.Pictures is
                      Found (US.To_String (Path), False, 0.0);
                   elsif US.To_String (Kind) = "video" then
                      Found (US.To_String (Path), True,
-                            (if Fps > 0.0 then Fps else Default_Fps));
+                            Model_Runner.Video.Held_Fps (Fps));
                   end if;
                end if;
                Depth := Natural'Max (0, Depth - 1);
@@ -395,6 +395,25 @@ package body Model_Runner.CLI.Pictures is
    function Video_Marker (Item : Seer) return String
    is (Model_Runner.Text.To_String (Item.Video_Text));
 
+   function Picture_Tokens (Item : Seer) return Model_Runner.Tokenizer.Token_Array is
+      All_Of : constant Model_Runner.Tokenizer.Token_Array :=
+        [Item.Marker, Item.Soft, Item.Closer, Item.Slice_Marker,
+         Item.Slice_Closer, Item.Video_Marker];
+      Result : Model_Runner.Tokenizer.Token_Array (1 .. All_Of'Length);
+      Last   : Natural := 0;
+   begin
+      if not Is_Open (Item) then
+         return Result (1 .. 0);
+      end if;
+      for Token of All_Of loop
+         if Token /= Model_Runner.Tokenizer.No_Token then
+            Last := Last + 1;
+            Result (Last) := Token;
+         end if;
+      end loop;
+      return Result (1 .. Last);
+   end Picture_Tokens;
+
    ----------------------
    -- Names_A_Picture --
    ----------------------
@@ -485,7 +504,11 @@ package body Model_Runner.CLI.Pictures is
       Into.Closer := Item.Closer;
       Into.Per_Picture := Per;
       Into.Keep_Marker := Item.Keeps_Marker;
-      Into.Causal_Rows := Placed;
+      --  Both ways only for Gemma's, as llama.cpp reads them
+      --  (mtmd_decode_use_non_causal); a MiniCPM's rows go through its
+      --  causal text model as any text does, and read both ways each row
+      --  saw the rows after it in the same picture.
+      Into.Causal_Rows := not Model_Runner.Vision.Rows_Attend_Both_Ways (Item.Eyes);
       Into.Marker_Text := Item.Marker_Text;
       Into.Marker_Alias := Item.Marker_Alias;
       Into.Frame_Before := Item.Before;

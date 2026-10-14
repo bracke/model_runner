@@ -291,6 +291,9 @@ package body Model_Runner.Images is
       Deflated      : Z_Bytes_Access := null;
       Deflated_Last : Integer := -1;
 
+      --  Bytes the scanlines inflate to, counted from the header.
+      Expected      : Natural := 0;
+
       Cursor : B.Byte_Index := Data'First + 8;
 
       procedure Refuse (Detail : String) is
@@ -427,13 +430,113 @@ package body Model_Runner.Images is
          return;
       end if;
 
+      --  What the scanlines take, filter bytes and all: the picture's lines,
+      --  or Adam7's seven passes of them, an empty pass taking nothing.
+      --  Inflated to that and a little past it, no further: a stream of
+      --  zeros twenty megabytes long inflates to twenty gigabytes, and
+      --  inflated whole it was held three times over before a line was
+      --  read.
       declare
-         Inflate_Status : Zlib.Status_Code;
-         Rows : Z_Bytes_Access :=
-           new Zlib.Byte_Array'
-             (Zlib.Inflate (Deflated (0 .. Deflated_Last), Inflate_Status));
+         function Span_Of (Columns, Lines : Natural) return Long_Long_Integer is
+           (if Columns = 0 or else Lines = 0 then 0
+            else Long_Long_Integer (Lines)
+                 * (1 + (Long_Long_Integer (Columns) * Long_Long_Integer (Channels)
+                         * Long_Long_Integer (Depth) + 7) / 8));
+         Total : Long_Long_Integer := 0;
+      begin
+         if not Interlaced then
+            Total := Span_Of (Width, Height);
+         else
+            for P in 1 .. 7 loop
+               declare
+                  X0 : constant Natural :=
+                    (case P is when 1 | 3 | 5 | 7 => 0, when 2 => 4, when 4 => 2, when others => 1);
+                  Y0 : constant Natural :=
+                    (case P is when 1 | 2 => 0, when 3 => 4, when 4 => 0, when 5 => 2,
+                               when 6 => 0, when others => 1);
+                  DX : constant Natural :=
+                    (case P is when 1 | 2 => 8, when 3 | 4 => 4, when 5 | 6 => 2, when others => 1);
+                  DY : constant Natural := (case P is when 1 | 2 | 3 => 8, when 4 | 5 => 4, when others => 2);
+               begin
+                  Total := Total + Span_Of
+                    ((if Width > X0 then (Width - X0 + DX - 1) / DX else 0),
+                     (if Height > Y0 then (Height - Y0 + DY - 1) / DY else 0));
+               end;
+            end loop;
+         end if;
+         if Total < 1 or else Total > Long_Long_Integer (Natural'Last) then
+            Refuse ("png size");
+            return;
+         end if;
+         Expected := Natural (Total);
+      end;
+
+      declare
+         Inflate_Status : Zlib.Status_Code := Zlib.Ok;
+         Rows : Z_Bytes_Access := new Zlib.Byte_Array (0 .. Expected - 1);
          Unfiltered : Z_Bytes_Access :=
            new Zlib.Byte_Array (Rows'Range);
+
+         --  Past the scanlines a stream may carry a little -- an encoder's
+         --  padding -- which is read and let go; more than this is not a
+         --  picture's data.
+         Slack : constant := 65_536;
+
+         --  How many of the scanlines' bytes the stream gave.
+         Filled : Natural := 0;
+
+         procedure Inflate_Bounded is
+            Filter   : Zlib.Filter_Type;
+            Input    : Ada.Streams.Stream_Element_Array
+              (0 .. Ada.Streams.Stream_Element_Offset (Deflated_Last));
+            Output   : Ada.Streams.Stream_Element_Array (1 .. 65_536);
+            Next_In  : Ada.Streams.Stream_Element_Offset := 0;
+            In_Last  : Ada.Streams.Stream_Element_Offset;
+            Out_Last : Ada.Streams.Stream_Element_Offset;
+            Extra    : Natural := 0;
+         begin
+            for Index in Input'Range loop
+               Input (Index) := Ada.Streams.Stream_Element
+                 (Deflated (Natural (Index)));
+            end loop;
+            Zlib.Inflate_Init (Filter, Zlib.Zlib_Header);
+            loop
+               if Next_In <= Input'Last then
+                  Zlib.Translate
+                    (Filter, Input (Next_In .. Input'Last), In_Last,
+                     Output, Out_Last, Zlib.Finish);
+                  if In_Last >= Next_In then
+                     Next_In := In_Last + 1;
+                  end if;
+               else
+                  Zlib.Flush (Filter, Output, Out_Last, Zlib.Finish);
+               end if;
+
+               for Index in Output'First .. Out_Last loop
+                  if Filled < Expected then
+                     Rows (Filled) := Zlib.Byte (Output (Index));
+                     Filled := Filled + 1;
+                  else
+                     Extra := Extra + 1;
+                  end if;
+               end loop;
+               if Extra > Slack then
+                  Inflate_Status := Zlib.Unexpected_End_Of_Input;
+                  exit;
+               end if;
+               exit when Zlib.Stream_End (Filter);
+               if Out_Last < Output'First and then Next_In > Input'Last then
+                  --  Neither input left nor output given, and not ended.
+                  Inflate_Status := Zlib.Unexpected_End_Of_Input;
+                  exit;
+               end if;
+            end loop;
+            Zlib.Close (Filter, Ignore_Error => True);
+         exception
+            when Zlib.Zlib_Error | Zlib.Status_Error =>
+               Zlib.Close (Filter, Ignore_Error => True);
+               Inflate_Status := Zlib.Unexpected_End_Of_Input;
+         end Inflate_Bounded;
 
          --  Bytes a scanline of a given width takes, before its filter
          --  byte, and bytes a whole pixel takes for the filter's purposes.
@@ -591,10 +694,17 @@ package body Model_Runner.Images is
          From : Natural := 0;
          Ok   : Boolean;
       begin
+         Inflate_Bounded;
          if Zlib."/=" (Inflate_Status, Zlib.Ok) then
             Free (Rows);
             Free (Unfiltered);
             Refuse ("png deflate");
+            return;
+         end if;
+         if Filled < Expected then
+            Free (Rows);
+            Free (Unfiltered);
+            Refuse ("png scanlines");
             return;
          end if;
 
@@ -705,7 +815,11 @@ package body Model_Runner.Images is
       Jpeglib.Decoding.Initialize
         (Decoder, Source'Access,
          (Output_Format => Jpeglib.Images.RGB_24,
-          Apply_Exif_Orientation => True,
+          --  The frame as stored, as llama.cpp's reader (stb_image)
+          --  takes it: turned by its EXIF mark, a portrait photo's frame
+          --  no longer matched the view made from the header's size and
+          --  every such picture was refused as the codec's output error.
+          Apply_Exif_Orientation => False,
           others => <>));
       Started := True;
 

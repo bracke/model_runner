@@ -155,4 +155,16 @@ package Model_Runner.Hub is
       Reason    : out Model_Runner.Text.Bounded;
       Report    : Progress_Reporter := null);
 
+   --  Whether the file at Path is the one File names: its digest, kept
+   --  beside it as Path & ".sha256" once a download was checked, is the
+   --  hub's. A file of the right size from another repository -- the same
+   --  name, other bytes -- is not taken for this one. One with no digest
+   --  kept is read once and kept as known where it is the hub's; a file
+   --  the hub gives no digest for is whole by its size alone.
+   --
+   --  @param File The file as the hub lists it.
+   --  @param Path Where it is on disk.
+   --  @return True where the bytes are the hub's.
+   function Is_Whole (File : Download_File; Path : String) return Boolean;
+
 end Model_Runner.Hub;

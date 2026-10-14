@@ -1,3 +1,5 @@
+with Ada.Calendar.Formatting;
+with Hostkit.Metadata;
 with AUnit.Test_Cases;
 with System.Storage_Elements;
 with Model_Runner.Zeroed_Storage;
@@ -32,6 +34,7 @@ with Model_Runner.Cancellation;
 with Model_Runner.Limits;
 with Model_Runner.Progress;
 with External_Model;
+with Model_Runner.Draft_Policy;
 with Model_Runner.Platform.Signals;
 
 with Raise_Interrupt;
@@ -3005,6 +3008,32 @@ package body Tests.Inference_Cases is
                  "the changed cache was not written afresh");
       end;
 
+      --  And the same of a byte in the last panel -- a file rewritten in
+      --  place with its size and times kept differs past the first -- and
+      --  of the header's digest of the matrices' formats and shapes.
+      declare
+         Kept : constant B.Byte_Array := Read_Cache;
+
+         procedure Refused_With (At_Byte : B.Byte_Index; What : String) is
+            Broken : B.Byte_Array := Kept;
+            Ready  : L.Model;
+         begin
+            Broken (At_Byte) := Interfaces."xor" (Broken (At_Byte), 16#5A#);
+            Write_Cache (Broken);
+            Load_And_Ask (Ready, Fresh);
+            Assert (L.Panels_Cached (Ready) = 0
+                    and then L.Repacked_Bytes (Ready) > 0,
+                    "a cache changed " & What & " was mapped");
+            Assert (First = Fresh, "the panels written again answer otherwise");
+            Close (Ready);
+            Assert (B."=" (Read_Cache, Kept),
+                    "a cache changed " & What & " was not written afresh");
+         end Refused_With;
+      begin
+         Refused_With (Kept'Last - 3, "in its last panel");
+         Refused_With (Kept'First + 32, "in its shape digest");
+      end;
+
       Ada.Directories.Delete_File (Path);
       B.Free (Image);
    end Panels_Are_Kept_Between_Loads;
@@ -3178,6 +3207,86 @@ package body Tests.Inference_Cases is
       end;
 
       D.Delete_File (Path);
+
+      --  Two builds of one file at once -- two runs of one model -- each
+      --  in a part of its own: one "Path.part" for both had the second
+      --  truncate what the first had mapped, and the first's pages were
+      --  the second's or gone.
+      declare
+         One : constant String := Model_Runner.Panel_Cache.Part_Name (Path);
+         Two : constant String := Model_Runner.Panel_Cache.Part_Name (Path);
+      begin
+         Assert (One /= Two, "two builds were given one part: " & One);
+         Assert (One'Length > Path'Length + 6
+                 and then One (One'First .. One'First + Path'Length) = Path & "."
+                 and then One (One'Last - 4 .. One'Last) = ".part",
+                 "a part is not named beside its file: " & One);
+      end;
+
+      if Map.Is_Supported then
+         declare
+            First, Second : Model_Runner.Panel_Cache.Building;
+            At_First, At_Second : System.Address;
+            Ok_First, Ok_Second, Named : Boolean;
+         begin
+            Model_Runner.Panel_Cache.Begin_Build
+              (First, Path, Header, Total, At_First, Ok_First);
+            Model_Runner.Panel_Cache.Begin_Build
+              (Second, Path, Header, Total, At_Second, Ok_Second);
+            Assert (Ok_First and then Ok_Second, "a second build of one file was refused");
+            declare
+               Into_First : B.Byte_Array (1 .. Total)
+                 with Import, Address => At_First;
+               Into_Second : B.Byte_Array (1 .. Total)
+                 with Import, Address => At_Second;
+            begin
+               Into_First := [others => 16#11#];
+               Into_Second := [others => 16#22#];
+               Assert ((for all Item of Into_First => Item = 16#11#),
+                       "a build's pages were another build's");
+            end;
+            Model_Runner.Panel_Cache.Finish (First, Named);
+            Assert (Named, "the first build was not named");
+            Model_Runner.Panel_Cache.Release (First);
+            Model_Runner.Panel_Cache.Finish (Second, Named);
+            Assert (Named, "the second build was not named");
+            Model_Runner.Panel_Cache.Release (Second);
+         end;
+         D.Delete_File (Path);
+      end if;
+
+      --  A part an ended build left is swept once it has sat an hour, one
+      --  written now is not, and keeping a model's newest files leaves the
+      --  parts alone.
+      declare
+         Old_Part : constant String := Path & ".999999-1.part";
+         New_Part : constant String := Path & ".999999-2.part";
+         Hour_Ago : constant Long_Long_Integer :=
+           Long_Long_Integer
+             (Ada.Calendar."-" (Ada.Calendar.Clock,
+                                Ada.Calendar.Formatting.Time_Of
+                                  (1970, 1, 1, 0, 0, 0, Time_Zone => 0)))
+           - 7200;
+         F : Ada.Text_IO.File_Type;
+         Built  : Model_Runner.Panel_Cache.Building;
+         Panels : System.Address;
+         Ok     : Boolean;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Old_Part);
+         Ada.Text_IO.Close (F);
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, New_Part);
+         Ada.Text_IO.Close (F);
+         Assert (Hostkit.Metadata.Set_File_Times (Old_Part, Hour_Ago, Hour_Ago),
+                 "the old part's time could not be set");
+         Model_Runner.Panel_Cache.Keep_Newest (Path, 0);
+         Assert (D.Exists (New_Part) and then D.Exists (Old_Part),
+                 "keeping the newest files took a part");
+         Model_Runner.Panel_Cache.Begin_Build (Built, Path, Header, Total, Panels, Ok);
+         Model_Runner.Panel_Cache.Abandon (Built);
+         Assert (not D.Exists (Old_Part), "a part left two hours ago was kept");
+         Assert (D.Exists (New_Part), "a part written now was swept");
+         D.Delete_File (New_Part);
+      end;
    end A_Panel_File_Is_Built_In_Place;
 
    --  Evaluation refuses arguments it cannot serve.
@@ -13078,6 +13187,78 @@ package body Tests.Inference_Cases is
               "sessions within and past the trained context answered alike, "
               & "so the two tables were never told apart");
 
+      --  The table is the session's: a second session opened past the
+      --  trained context, on the same model, halfway through the first
+      --  one's prompt, changes nothing the first one says -- the choice
+      --  was a write to the model's one table, and the first session read
+      --  its second half by the long one. And a session saved under one
+      --  table is not adopted by a session turning by the other: the table
+      --  follows the capacity, which a saved session is held to exactly.
+      declare
+         Held    : aliased constant B.Byte_Array := Image.all;
+         Under   : Harness (Held'Access);
+         First   : L.Session;
+         Second  : L.Session;
+         Last    : Logit_Vector;
+         Ignored : Logit_Vector;
+         Kept    : B.Byte_Array_Access;
+         Status  : E.Error_Info;
+         Gap     : Long_Float := 0.0;
+      begin
+         Start (Under);
+         L.Open (First, Under.Ready, Context => Tiny_Model.Context / 2,
+                 Status => Status);
+         Assert (E.Is_Ok (Status), "the first session did not open");
+         for Index in Prompt'First .. Prompt'First + 3 loop
+            L.Evaluate (First, Under.Ready, Prompt (Index), Last, Status => Status);
+         end loop;
+
+         L.Open (Second, Under.Ready, Context => Tiny_Model.Context,
+                 Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+         for Token of Prompt loop
+            L.Evaluate (Second, Under.Ready, Token, Ignored, Status => Status);
+         end loop;
+
+         for Index in Prompt'First + 4 .. Prompt'Last loop
+            L.Evaluate (First, Under.Ready, Prompt (Index), Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the first session's second half failed");
+         end loop;
+         for Index in Within'Range loop
+            Gap := Long_Float'Max
+              (Gap, abs (Long_Float (Within (Index)) - Long_Float (Last (Index))));
+         end loop;
+         Assert (Gap = 0.0,
+                 "a session within the trained context answered otherwise once "
+                 & "a session past it was opened on the same model, by"
+                 & Long_Float'Image (Gap));
+
+         --  Kept from the short table, offered to the long one: refused, as
+         --  a session opened to another reach is.
+         L.Snapshot (First, Under.Ready, Kept, Status);
+         Assert (E.Is_Ok (Status), "the first session did not snapshot");
+         L.Close (Second);
+         L.Open (Second, Under.Ready, Context => Tiny_Model.Context,
+                 Status => Status);
+         L.Adopt (Second, Under.Ready, Kept.all, Status);
+         Assert (Status.Code = E.Lifecycle_Cache_Mismatched,
+                 "a session saved under the short table was adopted by one "
+                 & "turning by the long one, with "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  And by one on the same table, taken.
+         L.Close (Second);
+         L.Open (Second, Under.Ready, Context => Tiny_Model.Context / 2,
+                 Status => Status);
+         L.Adopt (Second, Under.Ready, Kept.all, Status);
+         Assert (E.Is_Ok (Status),
+                 "a session saved under the short table was refused by one "
+                 & "on the same table: " & E.Error_Code'Image (Status.Code));
+         B.Free (Kept);
+         L.Close (Second);
+         L.Close (First);
+      end;
+
       B.Free (Image);
    end Long_Rope_Follows_The_Session;
 
@@ -13438,8 +13619,7 @@ package body Tests.Inference_Cases is
    end Window_Patterns_Are_Read_As_Stated;
 
    --  A sigmoid-gated mixture chooses by the bias it carries and weights
-   --  without it; and grouped choosing, which this build does not compute,
-   --  is refused.
+   --  without it, and within the groups the file states.
    --
    --  DeepSeek-V3's files gate by the logistic, renormalize the chosen few
    --  and carry exp_probs_b, a bias added to the scores to choose the
@@ -13532,27 +13712,100 @@ package body Tests.Inference_Cases is
               "a sigmoid-gated mixture with a selection bias disagrees with "
               & "the independent implementation by" & Long_Float'Image (Worst));
 
-      --  Two groups, one used: a choice this build does not make.
-      Tiny_Model.Build
-        (Image, Kind => Tiny_Model.Deepseek2, Expert_Groups => 2);
+      --  Eight experts in four groups, one kept: the two chosen are the
+      --  kept group's two, as llama.cpp chooses, where without the groups
+      --  they are the best two anywhere. Crossed against the independent
+      --  implementation, a token at a time and as one batch -- and set
+      --  beside the same file read without its groups, so that a reader
+      --  ignoring them is seen to answer otherwise.
       declare
-         Held   : aliased constant B.Byte_Array := Image.all;
-         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
-           (Held'Access);
-         Parsed : Containers.Container;
-         Ready  : L.Model;
-         Status : E.Error_Info;
+         --  The engine's last logits for the prompt, one token at a time
+         --  and then as one batch, the worst gap from the reference's.
+         procedure Grouped_Run
+           (Groups : Natural; Gap : out Long_Float; Last_Of : out Logit_Vector)
+         is
+            Image : B.Byte_Array_Access;
+         begin
+            Gap := 0.0;
+            Tiny_Model.Build
+              (Image, Kind => Tiny_Model.Deepseek2, Experts => 8,
+               Experts_Used => 2, Sigmoid_Routing => True,
+               Expert_Groups => Groups);
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Parsed : Containers.Container;
+               Status : E.Error_Info;
+               Second : Reference_Transformer.Model;
+               Loaded, Made : Boolean;
+               Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               Assert (E.Is_Ok (Status), "the grouped fixture did not parse");
+               Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+               Assert (Loaded, "the reference did not read the grouped model");
+               for Index in Prompt'Range loop
+                  Tokens (Index) := Integer (Prompt (Index));
+               end loop;
+               Reference_Transformer.Run (Second, Tokens, Expected, Made);
+               Assert (Made, "the reference produced no logits");
+               Reference_Transformer.Close (Second);
+               Containers.Close (Parsed);
+            end;
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Under  : Harness (Held'Access);
+               Live   : L.Session;
+               Status : E.Error_Info;
+            begin
+               Start (Under);
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status), "the grouped session did not open");
+               for Token of Prompt loop
+                  L.Evaluate (Live, Under.Ready, Token, Last_Of, Status => Status);
+                  Assert (E.Is_Ok (Status), "grouped evaluation failed: "
+                          & E.Error_Code'Image (Status.Code));
+               end loop;
+               Worst := 0.0;
+               Measure (Last_Of);
+               Gap := Worst;
+               L.Close (Live);
+
+               L.Open (Live, Under.Ready, Status => Status);
+               L.Evaluate_Batch (Live, Under.Ready, Prompt, Last_Of, Status => Status);
+               Assert (E.Is_Ok (Status), "the grouped batch failed: "
+                       & E.Error_Code'Image (Status.Code));
+               Worst := 0.0;
+               Measure (Last_Of);
+               Gap := Long_Float'Max (Gap, Worst);
+               L.Close (Live);
+            end;
+            B.Free (Image);
+         end Grouped_Run;
+
+         Grouped_Gap, Plain_Gap : Long_Float;
+         Grouped_Last, Plain_Last : Logit_Vector;
+         Apart : Long_Float := 0.0;
       begin
-         Containers.Reader.Parse (Parsed, Source, Status => Status);
-         Assert (E.Is_Ok (Status), "the grouped fixture did not parse");
-         L.Prepare (Ready, Parsed, Source, Status => Status);
-         Assert (Status.Code = E.Arch_Unsupported_Feature,
-                 "a mixture choosing within groups was taken with "
-                 & E.Error_Code'Image (Status.Code));
-         L.Close (Ready, Status);
-         Containers.Close (Parsed);
+         Grouped_Run (4, Grouped_Gap, Grouped_Last);
+         Assert (Grouped_Gap < 1.0E-3,
+                 "a mixture choosing within groups disagrees with the "
+                 & "independent implementation by"
+                 & Long_Float'Image (Grouped_Gap));
+
+         Grouped_Run (0, Plain_Gap, Plain_Last);
+         for Index in Grouped_Last'Range loop
+            Apart := Long_Float'Max
+              (Apart, abs (Long_Float (Grouped_Last (Index))
+                           - Long_Float (Plain_Last (Index))));
+         end loop;
+         Assert (Apart > 1.0E-3,
+                 "the groups change nothing on this fixture, so nothing "
+                 & "here tells a reader that ignores them from one that "
+                 & "does not");
       end;
-      B.Free (Image);
    end Sigmoid_Mixture_Chooses_By_Its_Bias;
 
    --  A DeepSeek file written as the current converter writes it answers
@@ -16248,6 +16501,31 @@ package body Tests.Inference_Cases is
             Assert (L.Config (Wider).Trained_Context = Tiny_Model.Context,
                     "the trained context was not kept beside the stretch");
 
+            --  Neither it nor a model turned at another base alone has
+            --  the fingerprint of the model as trained, so a cache or session
+            --  kept under one rotation is not adopted under another.
+            declare
+               Plain_Again, Based : L.Model;
+               Ignored : E.Error_Info;
+            begin
+               L.Prepare (Plain_Again, Under.Parsed, Under.Source, Status => Status);
+               Assert (E.Is_Ok (Status), "the model as trained would not prepare again");
+               L.Prepare
+                 (Based, Under.Parsed, Under.Source, Status => Status,
+                  Stretch => (Base => 12_345.0, others => <>));
+               Assert (E.Is_Ok (Status), "a model with its base asked would not prepare");
+               Assert (L.Config (Based).Context_Length = L.Config (Plain_Again).Context_Length,
+                       "asking a base changed the context");
+               Assert (Interfaces."/=" (L.Fingerprint (Wider), L.Fingerprint (Plain_Again)),
+                       "a stretched model has the fingerprint of the model as "
+                       & "trained, so a cache turned the other way is adopted");
+               Assert (Interfaces."/=" (L.Fingerprint (Based), L.Fingerprint (Plain_Again)),
+                       "a model turned at another base has the fingerprint of the "
+                       & "model as trained");
+               L.Close (Based, Ignored);
+               L.Close (Plain_Again, Ignored);
+            end;
+
             L.Open (Live, Wider, Context => Twice, Status => Status);
             Assert (E.Is_Ok (Status),
                     "a stretched model refused a context it was stretched "
@@ -16857,6 +17135,118 @@ package body Tests.Inference_Cases is
       B.Free (Dense);
    end What_A_Token_Reads_Decides_Whether_It_Fits;
 
+   --  A tensor is held to the backend's alignment where it is read: in a
+   --  heap arena, its place in the data; in the file's mapping, the
+   --  mapping's page plus where the data begins plus that place. A file of
+   --  alignment two whose data begins two past a four keeps every tensor
+   --  four-aligned within the data -- read into an arena, it is taken --
+   --  and two off where the mapping puts it, where it is refused rather
+   --  than read off the grid.
+   procedure Weights_Are_Aligned_Where_They_Are_Read
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Interfaces.Unsigned_64;
+
+      Path  : constant String := "obj/aligned-two.gguf";
+      Image : B.Byte_Array_Access;
+      Found : Boolean := False;
+   begin
+      --  A header long enough that the data begins two past a four.
+      for Pad in 1 .. 4 loop
+         Tiny_Model.Build (Image, Alignment => 2, Header_Pad => Pad);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the alignment-two model did not parse: "
+                    & E.Error_Code'Image (Status.Code));
+            Found := Containers.Data_Offset (Parsed) mod 4 = 2;
+            Containers.Close (Parsed);
+         end;
+         exit when Found;
+         B.Free (Image);
+      end loop;
+      Assert (Found, "no padding put the data two past a four");
+
+      --  Read into an arena: every tensor where the backend wants it.
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+      begin
+         Start (Under);
+      end;
+
+      --  Mapped: the same tensors two off the grid, refused by name.
+      declare
+         use Ada.Streams.Stream_IO;
+         Output : File_Type;
+         File   : Model_Runner.Byte_Sources.Files.File_Source;
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Create (Output, Out_File, Path);
+         B.Byte_Array'Write (Stream (Output), Image.all);
+         Close (Output);
+
+         Model_Runner.Byte_Sources.Files.Open (File, Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the written model would not open");
+         Assert (Model_Runner.Byte_Sources.Files.Is_Mapped (File),
+                 "the written model was not mapped, so nothing here reads "
+                 & "a tensor where a mapping puts it");
+         Containers.Reader.Parse (Parsed, File, Status => Status);
+         Assert (E.Is_Ok (Status), "the written model did not parse");
+         L.Prepare (Ready, Parsed, File, Status => Status);
+         Assert (Status.Code = E.Backend_Capability_Missing,
+                 "a tensor two off the grid where the mapping puts it was "
+                 & "taken with " & E.Error_Code'Image (Status.Code));
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+         Model_Runner.Byte_Sources.Files.Close (File);
+         Ada.Directories.Delete_File (Path);
+      end;
+      B.Free (Image);
+   end Weights_Are_Aligned_Where_They_Are_Read;
+
+   --  A length named for drafting is the length, whichever draft runs: a
+   --  draft found beside the model -- its paired sidecar -- started at the
+   --  store's own length and adapted, and --draft-tokens was read by
+   --  nothing.
+   procedure A_Named_Draft_Length_Is_Kept
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package DP renames Model_Runner.Draft_Policy;
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Live  : L.Session;
+         Status : E.Error_Info;
+         Asked : DP.Asked;
+         Chosen : DP.Plan;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         Asked.Tokens := 7;
+         Asked.Tokens_Set := True;
+         Chosen := DP.Decide (Under.Ready, Live, Asked,
+                              Draft_Ready => True, Auto_Drafted => True);
+         Assert (Chosen.Tokens = 7 and then not Chosen.Adapts,
+                 "a found draft took" & Natural'Image (Chosen.Tokens)
+                 & " a round where seven were named");
+         L.Close (Live);
+      end;
+      B.Free (Image);
+   end A_Named_Draft_Length_Is_Kept;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -16920,6 +17310,13 @@ package body Tests.Inference_Cases is
         (T, Adapter_Merges_What_It_Describes'Access,
          "merging an adapter is the arithmetic it claims");
       Register_Routine
+        (T, Weights_Are_Aligned_Where_They_Are_Read'Access,
+         "a tensor is held to the backend's alignment where it is read: in "
+         & "the arena by its place in the data, in a mapping by its address");
+      Register_Routine
+        (T, A_Named_Draft_Length_Is_Kept'Access,
+         "a draft length named is kept whichever draft runs");
+      Register_Routine
         (T, Hidden_State_Is_Reported'Access,
          "the hidden state is reported, and refused when there is none");
       Register_Routine
@@ -16963,8 +17360,8 @@ package body Tests.Inference_Cases is
         (T, Sigmoid_Mixture_Chooses_By_Its_Bias'Access,
          "a sigmoid-gated mixture chooses its experts by the selection bias "
          & "it carries and weights them without it, as the independent "
-         & "implementation does, a token at a time and as a batch; and a "
-         & "file choosing within groups of experts is refused");
+         & "implementation does, a token at a time and as a batch; and one "
+         & "choosing within groups chooses among the best groups' experts");
       Register_Routine
         (T, Window_Patterns_Are_Read_As_Stated'Access,
          "which layers window, how wide, on what base and with what floor "

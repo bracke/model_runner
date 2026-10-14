@@ -734,6 +734,26 @@ package Model_Runner.Presentation is
       Item   : String;
       Closed : out Boolean);
 
+   --  Text as the screen is to show it: on a terminal its controls written
+   --  out (Model_Runner.Text.Show_Controls), elsewhere as it is. For a
+   --  caller that decorates the model's words before writing them -- the
+   --  decoration's own sequences are not the model's, and are not shown.
+   --
+   --  @param Self Sink instance.
+   --  @param Item The model's text.
+   --  @return The text to decorate and write with Write_Shown.
+   function Shown (Self : in out Standard_Output_Sink; Item : String) return String;
+
+   --  Write text already as the screen is to show it, unchanged.
+   --
+   --  @param Self Sink instance.
+   --  @param Item Text Shown made, decorated or not.
+   --  @param Closed True once the destination has gone away.
+   procedure Write_Shown
+     (Self   : in out Standard_Output_Sink;
+      Item   : String;
+      Closed : out Boolean);
+
    --  Flush buffered output.
    --
    --  @param Self Sink instance.

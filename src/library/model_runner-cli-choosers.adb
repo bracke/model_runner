@@ -979,6 +979,13 @@ package body Model_Runner.CLI.Choosers is
    --  the one before it is not, and forgetting it then would take away an
    --  older one -- a line from another session, perhaps.
    Last_Read_Kept : Boolean := False;
+
+   --  Between the terminal's marks around pasted text (bracketed paste,
+   --  asked for by the editor and put back by its guard). Kept across
+   --  lines: a pasted block's Enter ends a line, and the next line read is
+   --  still the paste's until its closing mark -- its tabs were taken for
+   --  completion from the second line on.
+   Pasting : Boolean := False;
    History_Read : Boolean := False;
 
    --  Where the project here keeps them; "" outside a project.
@@ -1516,11 +1523,9 @@ package body Model_Runner.CLI.Choosers is
 
       Key : Character;
 
-      --  Between the terminal's marks around pasted text (bracketed paste,
-      --  asked for here and put back by the guard).
-      Pasting : Boolean := False;
    begin
       Outcome := Unavailable;
+      Last_Read_Kept := False;
       if not Is_Available (Screen) or else not Term.Save_Mode (Input, Guard.Saved) then
          return "";
       end if;
@@ -1744,6 +1749,11 @@ package body Model_Runner.CLI.Choosers is
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       Finalize (Guard);
       Last_Read_Kept := False;
+      --  A line not entered -- dropped, interrupted, ended -- ends any paste
+      --  too: a closing mark that never came does not hold every later tab.
+      if Outcome /= Entered then
+         Pasting := False;
+      end if;
       if Outcome = Entered and then Length (Text) > 0
         and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
       then
@@ -1758,6 +1768,7 @@ package body Model_Runner.CLI.Choosers is
       --  terminal back, and the prompt comes again.
       when others =>
          Outcome := Escaped;
+         Pasting := False;
          return "";
    end Edited_Line;
 

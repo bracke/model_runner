@@ -263,6 +263,41 @@ package body Model_Runner.Generation is
          Result : Ada.Strings.Unbounded.Unbounded_String;
          From   : Positive := Prompt'First;
          Which  : Natural := 0;
+
+         --  The set's entries are in the conversation's order, a video's
+         --  slots among the pictures, and a picture is the entry after
+         --  every picture and video slot before it: counted by its
+         --  pictures alone, a picture after a video read the crops of the
+         --  one before it, and its slices took another picture's rows.
+         Video_Text : constant String :=
+           Model_Runner.Text.To_String (Pictures.Video_Marker_Text);
+         Videos_Seen : Natural := 0;
+         Slots_Seen  : Natural := 0;
+         Entry_At    : Natural := 0;
+
+         procedure Count_Videos (Upto : Natural) is
+            Look : Positive := From;
+         begin
+            if Video_Text = "" then
+               return;
+            end if;
+            loop
+               declare
+                  At_Video : constant Natural :=
+                    (if Look > Upto then 0
+                     else Ada.Strings.Fixed.Index (Prompt (Look .. Upto), Video_Text));
+               begin
+                  exit when At_Video = 0;
+                  Videos_Seen := Videos_Seen + 1;
+                  if Pictures.Video_Slots /= null
+                    and then Videos_Seen in Pictures.Video_Slots.all'Range
+                  then
+                     Slots_Seen := Slots_Seen + Pictures.Video_Slots.all (Videos_Seen);
+                  end if;
+                  Look := At_Video + Video_Text'Length;
+               end;
+            end loop;
+         end Count_Videos;
       begin
          if Marker = "" then
             return Videos_Written (Prompt);
@@ -281,7 +316,9 @@ package body Model_Runner.Generation is
 
                Ada.Strings.Unbounded.Append
                  (Result, Prompt (From .. At_Marker - 1));
+               Count_Videos (At_Marker - 1);
                Which := Which + 1;
+               Entry_At := Which + Slots_Seen;
 
                --  Where the model numbers its pictures, this one's number
                --  ahead of it, counted from zero: <image_id>k</image_id>
@@ -298,8 +335,8 @@ package body Model_Runner.Generation is
                declare
                   Crops : constant Natural :=
                     (if Pictures.Crops /= null
-                       and then Which in Pictures.Crops.all'Range
-                     then Pictures.Crops.all (Which) else 0);
+                       and then Entry_At in Pictures.Crops.all'Range
+                     then Pictures.Crops.all (Entry_At) else 0);
                begin
                   if Crops = 0 then
                      Ada.Strings.Unbounded.Append (Result, Frame);
@@ -310,9 +347,9 @@ package body Model_Runner.Generation is
                      declare
                         Cols : constant Natural :=
                           (if Pictures.Slice_Cols /= null
-                             and then Which in Pictures.Slice_Cols.all'Range
-                             and then Pictures.Slice_Cols.all (Which) > 0
-                           then Pictures.Slice_Cols.all (Which) else Crops);
+                             and then Entry_At in Pictures.Slice_Cols.all'Range
+                             and then Pictures.Slice_Cols.all (Entry_At) > 0
+                           then Pictures.Slice_Cols.all (Entry_At) else Crops);
                         Slice : constant String :=
                           Model_Runner.Text.To_String
                             (Pictures.Slice_Marker_Text);
@@ -342,9 +379,9 @@ package body Model_Runner.Generation is
                      declare
                         Cols : constant Natural :=
                           (if Pictures.Slice_Cols /= null
-                             and then Which in Pictures.Slice_Cols.all'Range
-                             and then Pictures.Slice_Cols.all (Which) > 0
-                           then Pictures.Slice_Cols.all (Which) else Crops);
+                             and then Entry_At in Pictures.Slice_Cols.all'Range
+                             and then Pictures.Slice_Cols.all (Entry_At) > 0
+                           then Pictures.Slice_Cols.all (Entry_At) else Crops);
                         Slice : constant String :=
                           Model_Runner.Text.To_String
                             (Pictures.Slice_Marker_Text);
@@ -1304,6 +1341,8 @@ package body Model_Runner.Generation is
             while Shared < Committed and then Shared < Prompt_Count
               and then L.Committed_Token (Session, Shared)
                        = Tokens.all (Shared + 1)
+              and then not (Item.Pictures_Unverified
+                            and then Is_Soft (Tokens.all (Shared + 1)))
             loop
                Shared := Shared + 1;
             end loop;

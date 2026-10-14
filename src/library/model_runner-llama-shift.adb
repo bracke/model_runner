@@ -159,7 +159,7 @@ begin
                        (Item.Key_Row.all, KV_Heads, Head_Size,
                         Element_Count (Settings.Rotary), Drop,
                         Turn_Base (Settings, Natural (Index)),
-                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
                         Settings.Pairing, Backwards => True);
 
                      if Item.Held in Eighth | Fourth then

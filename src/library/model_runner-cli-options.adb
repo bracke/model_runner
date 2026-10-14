@@ -224,7 +224,7 @@ package body Model_Runner.CLI.Options is
        Text ("device")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
-      (Text ("--no-mmap"), [Command_Run => True, others => False], Text ("no_mmap")),
+      (Text ("--no-mmap"), [Command_Run | Command_Embed => True, others => False], Text ("no_mmap")),
       (Text ("--show-stats"), [Command_Run | Command_Embed => True, others => False], Text ("show_stats")),
       (Text ("--no-stats"), [Command_Run | Command_Embed => True, others => False], Text ("no_stats")),
       (Text ("--metadata"), [Command_Inspect => True, others => False], Text ("metadata")),
@@ -914,7 +914,10 @@ package body Model_Runner.CLI.Options is
          Flag_Tools, Flag_Tools_File, Flag_Tool_Command,
          Flag_Max_Retries, Flag_Max_Total_Tokens, Flag_Max_Parallel, Flag_Delegate_Depth,
          Flag_Context_Shift, Flag_Context_Keep,
-         Flag_Threads, Flag_Backend);
+         Flag_Threads, Flag_Backend,
+         --  Each pair one setting said two ways: the second is refused as
+         --  a repeat, not taken over the first.
+         Flag_Thinking, Flag_Paging);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -928,6 +931,21 @@ package body Model_Runner.CLI.Options is
             E.Add_Text (Status, "value", Detail);
          end if;
       end Fail;
+
+      --  A value kept in a bounded field, and the first option whose value
+      --  was longer than one holds: a path cut at 512 characters was
+      --  written or read somewhere else than named.
+      Too_Long : T.Bounded := T.Empty;
+      Too_Long_Seen : Boolean := False;
+
+      function Kept (Name : String; Value : String) return T.Bounded is
+      begin
+         if Value'Length > T.Max_Length and then not Too_Long_Seen then
+            Too_Long_Seen := True;
+            Too_Long := T.To_Bounded (if Name = "" then "the model" else Name);
+         end if;
+         return T.To_Bounded (Value);
+      end Kept;
 
       --  Mark an option as seen, rejecting a repeat.
       procedure Mark (Flag : Option_Flag; Name : String; Ok : out Boolean) is
@@ -1022,7 +1040,7 @@ package body Model_Runner.CLI.Options is
                      Take_Value (Name, Value_Present, Value_First, Argument,
                                  Held, Good);
                      if Good then
-                        Target := T.To_Bounded (Held.all);
+                        Target := Kept (Name, Held.all);
                         Free_Text (Held);
                      end if;
                   end Bounded_Value;
@@ -1053,7 +1071,7 @@ package body Model_Runner.CLI.Options is
 
                      if From_File then
                         Result.Turn_Paths (Result.Turn_Count) :=
-                          T.To_Bounded (Held.all);
+                          Kept (Name, Held.all);
                         Free_Text (Held);
                      else
                         Result.Turn_Texts (Result.Turn_Count) := Held;
@@ -1240,7 +1258,7 @@ package body Model_Runner.CLI.Options is
 
                      Result.Adapter_Count := Result.Adapter_Count + 1;
                      Result.Adapters (Result.Adapter_Count) :=
-                       T.To_Bounded (Held.all);
+                       Kept (Name, Held.all);
                      if Result.Adapter_Count = 1 then
                         Result.Adapter_Path :=
                           Result.Adapters (1);
@@ -1497,7 +1515,7 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Deny_Tool_Count := Result.Deny_Tool_Count + 1;
                      Result.Deny_Tools (Result.Deny_Tool_Count) :=
-                       T.To_Bounded (Held.all);
+                       Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--deny-arg" then
@@ -1514,7 +1532,7 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Deny_Arg_Count := Result.Deny_Arg_Count + 1;
                      Result.Deny_Args (Result.Deny_Arg_Count) :=
-                       T.To_Bounded (Held.all);
+                       Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--compact" then
@@ -1663,12 +1681,20 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+                     Mark (Flag_Paging, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Paged := True;
                      Result.Paged_Named := True;
 
                   elsif Name = "--no-paged" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Paging, Name, Good);
                      if not Good then
                         return;
                      end if;
@@ -1716,11 +1742,19 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+                     Mark (Flag_Thinking, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
                      Result.Thinking := Model_Runner.Templates.Thinking_On;
 
                   elsif Name = "--no-think" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Thinking, Name, Good);
                      if not Good then
                         return;
                      end if;
@@ -2139,7 +2173,7 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.Stop_Count := Result.Stop_Count + 1;
                      Result.Stop_Strings (Result.Stop_Count) :=
-                       T.To_Bounded (Held.all);
+                       Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--stop-token" then
@@ -2153,7 +2187,11 @@ package body Model_Runner.CLI.Options is
                            return;
                         end if;
                         To_Number (Held.all, Number, Parsed);
-                        if not Parsed or else Number < 0 then
+                        --  A token is an identifier a vocabulary can hold:
+                        --  past that, the run ended on a conversion error.
+                        if not Parsed or else Number < 0
+                          or else Number > Long_Long_Integer (Integer'Last)
+                        then
                            Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
                            Free_Text (Held);
                            return;
@@ -2179,7 +2217,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Draft_Path := T.To_Bounded (Held.all);
+                     Result.Draft_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--mmproj" then
@@ -2192,7 +2230,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Projector_Path := T.To_Bounded (Held.all);
+                     Result.Projector_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--pan-and-scan" then
@@ -2213,7 +2251,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Embed_Model_Path := T.To_Bounded (Held.all);
+                     Result.Embed_Model_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--memory-file" then
@@ -2226,7 +2264,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Memory_File_Path := T.To_Bounded (Held.all);
+                     Result.Memory_File_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--trace-file" then
@@ -2239,7 +2277,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Trace_File_Path := T.To_Bounded (Held.all);
+                     Result.Trace_File_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--checkpoint-file" then
@@ -2252,7 +2290,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Checkpoint_File_Path := T.To_Bounded (Held.all);
+                     Result.Checkpoint_File_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--draft-lookup" then
@@ -2354,7 +2392,9 @@ package body Model_Runner.CLI.Options is
                            To_Number
                              (Text_Held (Text_Held'First .. Split - 1),
                               Number, Parsed);
-                           if not Parsed or else Number < 0 then
+                           if not Parsed or else Number < 0
+                             or else Number > Long_Long_Integer (Integer'Last)
+                           then
                               Fail (E.CLI_Invalid_Option_Value, Name,
                                     Text_Held);
                               Free_Text (Held);
@@ -2687,12 +2727,12 @@ package body Model_Runner.CLI.Options is
                  and then Result.Models_Remove
                then
                   --  models remove NAME: the model to delete.
-                  Result.Model_Path := T.To_Bounded (Argument);
+                  Result.Model_Path := Kept ("", Argument);
 
                elsif Operands = 2 then
                   case Result.Kind is
                      when Command_Run | Command_Embed | Command_Inspect =>
-                        Result.Model_Path := T.To_Bounded (Argument);
+                        Result.Model_Path := Kept ("", Argument);
                      when Command_Help =>
                         --  A topic is a command name. `help inspekt` used
                         --  to print the general help and exit successfully,
@@ -2704,7 +2744,7 @@ package body Model_Runner.CLI.Options is
                            Fail (E.CLI_Unknown_Command, "", Argument);
                            return;
                         end if;
-                        Result.Help_Topic := T.To_Bounded (Argument);
+                        Result.Help_Topic := Kept ("", Argument);
                      when others =>
                         Fail (E.CLI_Unexpected_Operand, "", Argument);
                         return;
@@ -2971,12 +3011,110 @@ package body Model_Runner.CLI.Options is
                elsif Result.Confirm_Tools then "--confirm-tools"
                elsif Result.Deny_Tool_Count > 0 then "--deny-tool"
                elsif Result.Deny_Arg_Count > 0 then "--deny-arg"
+               elsif Result.Max_Steps /= 8 then "--max-steps"
+               elsif Result.Max_Retries /= 0 then "--max-retries"
+               elsif Result.Max_Total_Tokens /= 0 then "--max-total-tokens"
+               elsif Result.Max_Parallel /= 1 then "--max-parallel"
+               elsif Result.Delegate_Depth /= 1 then "--delegate-depth"
+               elsif not T.Is_Empty (Result.Delegate_System_Path) then "--delegate-system-file"
+               elsif Result.Compact then "--compact"
+               elsif Result.Tool_Command /= null then "--tool-command"
+               elsif not T.Is_Empty (Result.Embed_Model_Path) then "--embed-model"
                else "");
          begin
             if Unread /= "" then
                Status := E.Make (E.CLI_Option_Combination);
                E.Add_Text (Status, "option", Unread, E.Param_Identifier);
                E.Add_Text (Status, "other", "a run without --agent", E.Param_Identifier);
+               return;
+            end if;
+         end;
+      end if;
+
+      if Too_Long_Seen then
+         Status := E.Make (E.CLI_Option_Out_Of_Range);
+         E.Add_Text (Status, "option", T.To_String (Too_Long), E.Param_Identifier);
+         E.Add_Text (Status, "value", "longer than" & Natural'Image (T.Max_Length) & " characters");
+         E.Add_Integer (Status, "minimum", 0);
+         E.Add_Integer (Status, "maximum", Long_Long_Integer (T.Max_Length));
+         return;
+      end if;
+
+      --  Two options that set one thing, both given: one would be dropped
+      --  without a word.
+      declare
+         First, Second : Model_Runner.Text.Bounded;
+      begin
+         if not T.Is_Empty (Result.Chat_Template)
+           and then not T.Is_Empty (Result.Chat_Template_Path)
+         then
+            First := T.To_Bounded ("--chat-template");
+            Second := T.To_Bounded ("--chat-template-file");
+         elsif Result.Scale_Count > Result.Adapter_Count then
+            --  A scale is the Nth adapter's; one past the adapters is
+            --  nobody's.
+            First := T.To_Bounded ("--lora-scale");
+            Second := T.To_Bounded ("--lora");
+         elsif Result.Kind = Command_Embed and then Result.Prompt_Count > 1 then
+            --  embed reads one text; the second was embedded by nobody.
+            First := T.To_Bounded ("--prompt");
+            Second := T.To_Bounded ("embed");
+         end if;
+         if not T.Is_Empty (First) then
+            Status := E.Make (E.CLI_Option_Combination);
+            E.Add_Text (Status, "option", T.To_String (First), E.Param_Identifier);
+            E.Add_Text (Status, "other", T.To_String (Second), E.Param_Identifier);
+            return;
+         end if;
+      end;
+
+      --  Raw text is the prompt as given: no template renders it, so what
+      --  a template would have written -- a developer turn, thinking on or
+      --  off, the template itself -- is refused as --tools is.
+      if Result.Raw then
+         declare
+            Unread : constant String :=
+              (if Result.Developer_Text /= null then "--developer"
+               elsif Model_Runner.Templates."/=" (Result.Thinking,
+                                                  Model_Runner.Templates.Thinking_Unstated)
+               then "--think"
+               elsif not T.Is_Empty (Result.Chat_Template) then "--chat-template"
+               elsif not T.Is_Empty (Result.Chat_Template_Path) then "--chat-template-file"
+               else "");
+         begin
+            if Unread /= "" then
+               Status := E.Make (E.CLI_Raw_Mode_Conflict);
+               E.Add_Text (Status, "option", Unread, E.Param_Identifier);
+               return;
+            end if;
+         end;
+      end if;
+
+      --  And what the agent's loop does not read, given to it: it would be
+      --  taken and do nothing -- a grammar compiled and never applied, a
+      --  stop never looked for, a draft model loaded and never asked.
+      if Result.Agent then
+         declare
+            Unread : constant String :=
+              (if Result.Grammar_Text /= null or else not T.Is_Empty (Result.Grammar_Path)
+               then "--grammar"
+               elsif Result.Stop_Count > 0 then "--stop"
+               elsif Result.Stop_Token_Count > 0 then "--stop-token"
+               elsif Result.Bias_Count > 0 then "--logit-bias"
+               elsif Result.Logprobs > 0 then "--logprobs"
+               elsif not T.Is_Empty (Result.Logprobs_Path) then "--logprobs-file"
+               elsif Result.Context_Shift > 0 then "--context-shift"
+               elsif Result.Context_Keep /= 1 then "--context-keep"
+               elsif Result.Developer_Text /= null then "--developer"
+               elsif Result.Turn_Count > 0 then "--assistant"
+               elsif Result.Prompt_Count > 1 then "--prompt"
+               elsif not T.Is_Empty (Result.Draft_Path) then "--draft-model"
+               else "");
+         begin
+            if Unread /= "" then
+               Status := E.Make (E.CLI_Option_Combination);
+               E.Add_Text (Status, "option", Unread, E.Param_Identifier);
+               E.Add_Text (Status, "other", "--agent", E.Param_Identifier);
                return;
             end if;
          end;

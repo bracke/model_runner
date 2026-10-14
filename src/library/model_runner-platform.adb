@@ -630,7 +630,18 @@ package body Model_Runner.Platform is
    function Resolve_Session_Path
      (Named : String; For_Saving : Boolean) return String is
    begin
+      --  Loading: a bare name is read from the sessions directory first,
+      --  where saving by that name wrote it -- a file of the name in the
+      --  current directory was read instead, and the session just saved
+      --  was not the one loaded.
       if not For_Saving then
+         if Named /= ""
+           and then Ada.Directories.Simple_Name (Named) = Named
+           and then Sessions_Directory /= ""
+           and then Ada.Directories.Exists (Hostkit.Fs.Join (Sessions_Directory, Named))
+         then
+            return Hostkit.Fs.Join (Sessions_Directory, Named);
+         end if;
          return Resolve_In (Named, Sessions_Directory);
       end if;
 

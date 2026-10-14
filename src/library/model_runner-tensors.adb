@@ -1363,6 +1363,10 @@ package body Model_Runner.Tensors is
         or else not QI.Is_Packable (Item.Columns)
         or else Values'Length < Count * Item.Columns
         or else Target'Length < Count * Item.Rows
+        --  A panel's rows are found by the panel they open: a range that
+        --  starts inside one would be read from the panel before it.
+        or else (Item.Interleaved
+                 and then First mod Model_Runner.Quantization.Interleave.Panel_Rows /= 0)
       then
          return;
       end if;

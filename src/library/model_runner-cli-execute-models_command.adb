@@ -1,4 +1,6 @@
+with Ada.Characters.Handling;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
@@ -350,13 +352,15 @@ package body Model_Runner.CLI.Execute.Models_Command is
       --  size. Missing pieces are skipped, so a broken set still lists.
       procedure For_Model
         (First_Path : String; Name : String;
-         Bytes : out Long_Long_Integer; Delete : Boolean)
+         Bytes : out Long_Long_Integer; Delete : Boolean;
+         Failed : out Model_Runner.Errors.Error_Info)
       is
          Count : constant Natural := Shard_Count (Name);
          Base  : constant String :=
            Containing_Directory (First_Path);
       begin
          Bytes := 0;
+         Failed := Model_Runner.Errors.Success;
          for Index in 1 .. Count loop
             declare
                File_Name : constant String :=
@@ -371,11 +375,21 @@ package body Model_Runner.CLI.Execute.Models_Command is
                   Bytes := Bytes + Long_Long_Integer (Size (Path));
                   if Delete then
                      Delete_File (Path);
+                     --  And the digest the download kept beside it.
+                     if Exists (Path & ".sha256") then
+                        Delete_File (Path & ".sha256");
+                     end if;
                   end if;
                end if;
             exception
-               when others =>
-                  null;
+               --  A file that would not go -- no permission, a directory by
+               --  the name -- is said, not counted as removed.
+               when Failure : others =>
+                  if Delete and then E.Is_Ok (Failed) then
+                     Failed := E.Make (E.IO_Write_Failed);
+                     E.Add_Text (Failed, "path", Path, E.Param_Path);
+                     E.Add_Text (Failed, "detail", Ada.Exceptions.Exception_Name (Failure));
+                  end if;
             end;
          end loop;
       end For_Model;
@@ -396,15 +410,33 @@ package body Model_Runner.CLI.Execute.Models_Command is
             Name  : constant String := T.To_String (Item.Model_Path);
             Path  : constant String := Model_Runner.Platform.Models_File (Name);
             Bytes : Long_Long_Integer := 0;
+            Failed : E.Error_Info;
+
+            --  A model of the store by its own name: one file name, a
+            --  GGUF's, nothing that climbs out -- `models remove
+            --  ../../.bashrc` deleted that file.
+            function Is_Store_Name return Boolean is
+              (Name'Length > 5
+               and then Ada.Characters.Handling.To_Lower
+                          (Name (Name'Last - 4 .. Name'Last)) = ".gguf"
+               and then (for all C of Name => C not in '/' | '\' | ':')
+               and then Ada.Strings.Fixed.Index (Name, "..") = 0);
          begin
-            if Path = "" or else not Exists (Path) then
+            if not Is_Store_Name or else Path = "" or else not Exists (Path)
+              or else Kind (Path) /= Ordinary_File
+            then
                Pres.Put_Note
                  (Screen, "cli.models.not_found",
                   [Loc.Named ("name", Name), Loc.Named ("detail", Dir)]);
                Status := E.Exit_Usage;
                return;
             end if;
-            For_Model (Path, Name, Bytes, Delete => True);
+            For_Model (Path, Name, Bytes, Delete => True, Failed => Failed);
+            if E.Is_Error (Failed) then
+               Pres.Report (Screen, Failed);
+               Status := E.Exit_Status (Failed);
+               return;
+            end if;
             Pres.Put_Note
               (Screen, "cli.models.removed",
                [Loc.Named ("name", Name),
@@ -427,7 +459,11 @@ package body Model_Runner.CLI.Execute.Models_Command is
             then
                return;
             end if;
-            For_Model (Full_Path, Label, Bytes, Delete => False);
+            declare
+               Ignored : E.Error_Info;
+            begin
+               For_Model (Full_Path, Label, Bytes, Delete => False, Failed => Ignored);
+            end;
             Total := Total + Bytes;
             Shown := Shown + 1;
             Pres.Put_Note

@@ -570,6 +570,14 @@ package Model_Runner.Llama is
       --  expert_gating_func is two.
       Sigmoid_Gate : Boolean := False;
 
+      --  Experts chosen within groups, as DeepSeek-V2's large models and
+      --  V3 state: the experts in Expert_Groups groups of equal size, each
+      --  group scored by the sum of its two best selection scores, the
+      --  Expert_Groups_Used best groups kept and the experts chosen among
+      --  theirs alone. Nought, or every group used, chooses as without.
+      Expert_Groups      : Natural := 0;
+      Expert_Groups_Used : Natural := 0;
+
       --  The gate unit's two bounds, for an architecture that clamps it.
       --
       --  GPT_OSS does not use the plain sigmoid-weighted gate every other
@@ -3257,6 +3265,13 @@ private
       --  while this one runs changes nothing here.
       Arithmetic : Model_Runner.Backend.CPU.Role_Set :=
         Model_Runner.Backend.CPU.No_Role;
+
+      --  Which of LongRoPE's two tables this session turns by: the long
+      --  one where it is opened past the context the model was trained on.
+      --  The session's, not the model's -- chosen by writing the model's
+      --  one table, a second session opened to another reach turned the
+      --  first one's positions by the other table halfway through.
+      Long_Rope : Boolean := False;
 
       --  Whether this session's products go to the processor's pool
       --  whatever the model's backend: set while a mixture's feed-forward

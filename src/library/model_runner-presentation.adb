@@ -1693,10 +1693,27 @@ package body Model_Runner.Presentation is
    end Close;
 
    -----------
-   -- Write --
+   -- Shown --
    -----------
 
-   overriding procedure Write
+   function Shown (Self : in out Standard_Output_Sink; Item : String) return String is
+   begin
+      --  On a terminal, what a model writes is shown, not obeyed: an escape
+      --  sequence in an answer would otherwise move the cursor, retitle the
+      --  window or write to the clipboard. What is kept of the answer is
+      --  untouched; this is only the screen.
+      if not Self.Asked then
+         Self.Terminal := Model_Runner.Platform.Is_Terminal (1);
+         Self.Asked := True;
+      end if;
+      return (if Self.Terminal then T.Show_Controls (Item, Self.Lead) else Item);
+   end Shown;
+
+   -----------------
+   -- Write_Shown --
+   -----------------
+
+   procedure Write_Shown
      (Self   : in out Standard_Output_Sink;
       Item   : String;
       Closed : out Boolean) is
@@ -1717,27 +1734,8 @@ package body Model_Runner.Presentation is
       --  and sending it through Current_Output puts it in the middle of
       --  whatever else a test was capturing there, which is how a layout
       --  check came to read " a Statistics" as a line.
-      --
-      --  But for a terminal. There what a model writes is shown, not
-      --  obeyed: an escape sequence in an answer would otherwise move the
-      --  cursor, retitle the window or write to the clipboard. What is
-      --  kept of the answer is untouched; this is only the screen.
-      if not Self.Asked then
-         Self.Terminal := Model_Runner.Platform.Is_Terminal (1);
-         Self.Asked := True;
-      end if;
-
-      if Self.Terminal then
-         declare
-            Shown : constant String := T.Show_Controls (Item, Self.Lead);
-         begin
-            String'Write
-              (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Shown);
-         end;
-      else
-         String'Write
-           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
-      end if;
+      String'Write
+        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
       Closed := False;
    exception
       --  A broken pipe is an ordinary end, not a failure to report with a
@@ -1745,6 +1743,20 @@ package body Model_Runner.Presentation is
       when others =>
          Self.Closed := True;
          Closed := True;
+   end Write_Shown;
+
+   -----------
+   -- Write --
+   -----------
+
+   overriding procedure Write
+     (Self   : in out Standard_Output_Sink;
+      Item   : String;
+      Closed : out Boolean)
+   is
+      Screen_Text : constant String := Shown (Self, Item);
+   begin
+      Write_Shown (Self, Screen_Text, Closed);
    end Write;
 
    -----------
@@ -1759,6 +1771,13 @@ package body Model_Runner.Presentation is
          return;
       end if;
 
+      --  A C2 held back for a C1 control that never came is a byte of its
+      --  own: shown, and not carried into the next answer's first piece.
+      if Self.Lead then
+         Self.Lead := False;
+         String'Write
+           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\xC2");
+      end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
       Closed := False;
    exception

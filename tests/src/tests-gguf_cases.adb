@@ -24,6 +24,7 @@ with Model_Runner.Kernels;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Integers;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.UTF8;
@@ -3079,10 +3080,16 @@ package body Tests.GGUF_Cases is
 
          --  The rule as the specification states it, written out here so
          --  that the check is against the rule and not against the code.
+         --  A C1 control, U+0080 to U+009F, is two bytes in UTF-8: C2 and
+         --  one of 80 to 9F, which a terminal honouring C1 obeys as it
+         --  obeys ESC [.
          function Controlled (Item : String) return Boolean is
-           (for some Char of Item =>
-              Character'Pos (Char) < 16#20#
-                or else Character'Pos (Char) = 16#7F#);
+           ((for some Char of Item =>
+               Character'Pos (Char) < 16#20#
+                 or else Character'Pos (Char) = 16#7F#)
+            or else (for some Index in Item'First .. Item'Last - 1 =>
+                       Character'Pos (Item (Index)) = 16#C2#
+                       and then Character'Pos (Item (Index + 1)) in 16#80# .. 16#9F#));
       begin
          for Left in 0 .. 255 loop
             for Right in 0 .. 255 loop
@@ -3128,8 +3135,8 @@ package body Tests.GGUF_Cases is
 
          --  Two bytes, each of which may be one of 33 controls: 33 * 256
          --  pairs where the first is a control, plus 223 * 33 where only the
-         --  second is.
-         Assert (Escapes = 33 * 256 + 223 * 33,
+         --  second is -- and the 32 C1 controls, C2 before 80 to 9F.
+         Assert (Escapes = 33 * 256 + 223 * 33 + 32,
                  "the number of pairs needing an escape is"
                  & Natural'Image (Escapes) & ", which is not what the rule "
                  & "counts");
@@ -8199,6 +8206,48 @@ package body Tests.GGUF_Cases is
                  & Built (1 .. Used) & """");
          Vocab.Close (Words);
       end;
+
+      --  A picture's token a file marks as a word of its own: text, where
+      --  a message spells it and the projector names it, so a pasted
+      --  "<pic>" is no picture; and left as it is where nothing names it,
+      --  as llama.cpp reads a word of the file's own.
+      declare
+         Words  : Vocab.Vocabulary;
+         Tokens : Vocab.Token_Array (1 .. 16);
+         Last   : Natural;
+         Plain  : constant String := "a<pic>a";
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "gpt2");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.pre", "gpt-2");
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.tokens", G.Value_String, 3);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "<pic>");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.merges", G.Value_String, 1);
+         Fixtures.String_Element (Builder, "a a");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 3);
+         Fixtures.Int32_Element (Builder, 2);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 4);
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", False);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+         Load_Built (Builder, Words);
+
+         Assert (Vocab.Defused (Words, Plain) = Plain,
+                 "a word of the file's own was defused where nothing named it");
+         Vocab.Encode (Words, Vocab.Defused (Words, Plain, [Vocab.Token_Id (2)]),
+                       False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status)
+                 and then (for all Index in 1 .. Last => Vocab."/=" (Tokens (Index), 2)),
+                 "a picture's token spelled in a message was read as the token");
+         Vocab.Close (Words);
+      end;
    end Tokenizer_Reads_Markers_And_Leads_As_Llama_Does;
 
    --  Tensors placed in the reverse of the order they are described are
@@ -8302,6 +8351,186 @@ package body Tests.GGUF_Cases is
       end;
    end Placement_And_Slices_Are_Bounded;
 
+   --  What the integer kernels read with their checks off is proved before
+   --  they run, for every way in: one eight-bit vector, a grid format, the
+   --  six-bit format's half sums, activations not counted from zero, and a
+   --  panel range that starts inside a panel; a format the host's kernels
+   --  refuse is not offered; and the float path refuses a stride or count
+   --  no array holds rather than raising.
+   procedure Integer_Kernels_Refuse_What_They_Cannot_Reach
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package QI renames Model_Runner.Quantization.Integers;
+      package IL renames Model_Runner.Quantization.Interleave;
+      package G2 renames Model_Runner.GGUF;
+
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Deep : constant Boolean := Model_Runner.Platform.Byte_Products;
+      Seed : Interfaces.Unsigned_32 := 16#0BAD_F00D#;
+
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+
+      --  One product of Rows rows of Blocks blocks of Format against Count
+      --  vectors, with the activations cut short as asked; whether it ran.
+      function Runs
+        (Format       : G2.Tensor_Type;
+         Blocks       : N.Element_Count;
+         Count        : N.Element_Count;
+         Short_Values : Boolean := False;
+         Short_Scales : Boolean := False;
+         Short_Halves : Boolean := False;
+         Shift_Values : Boolean := False) return Boolean
+      is
+         Per     : constant N.Element_Count := N.Element_Count (G2.Block_Elements (Format));
+         Width   : constant B.Byte_Count := B.Byte_Count (G2.Block_Bytes (Format));
+         Rows    : constant N.Element_Count := 4;
+         Columns : constant N.Element_Count := Per * Blocks;
+         Data    : B.Byte_Array_Access;
+         Vectors : N.Real_Array (0 .. Columns * Count - 1);
+         Values  : QI.Signed_Array (0 .. Columns * Count - 1);
+         Scales  : N.Real_Array (0 .. Columns * Count / QI.Activation_Block - 1);
+         Totals  : QI.Sum_Array (0 .. Columns * Count / QI.Activation_Block - 1);
+         Halves  : QI.Sum_Array (0 .. Columns * Count / QI.Activation_Half - 1);
+         Sums    : N.Wide_Real_Array (0 .. Rows * Count - 1) := [others => 0.0];
+         Ok      : Boolean;
+      begin
+         B.Allocate (Width * B.Byte_Count (Blocks) * B.Byte_Count (Rows), Data);
+         for Index in Data.all'Range loop
+            Data.all (Index) := B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+         end loop;
+         Make_Finite (Data.all, Format, Blocks * Rows);
+         for Index in Vectors'Range loop
+            Vectors (Index) := N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
+         end loop;
+         QI.Quantize_Vectors
+           (Vectors, Count, Columns, Values, Scales, Totals, Halves, Ok,
+            Super => QI.Supers_Vectors (Format));
+         Assert (Ok, "the activations could not be quantized");
+
+         declare
+            V_Last : constant N.Element_Count :=
+              (if Short_Values then Values'Last - QI.Activation_Block else Values'Last);
+            S_Last : constant N.Element_Count :=
+              (if Short_Scales then Scales'Last - 1 else Scales'Last);
+            H_Last : constant N.Element_Count :=
+              (if Short_Halves then Halves'Last - 1 else Halves'Last);
+            Moved  : constant QI.Signed_Array (100 .. 100 + V_Last) := Values (0 .. V_Last);
+         begin
+            if Shift_Values then
+               QI.Accumulate_Rows
+                 (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
+                  Moved, Scales (0 .. S_Last), Totals, Halves (0 .. H_Last),
+                  0, Columns, Count, Sums, Ok);
+            else
+               QI.Accumulate_Rows
+                 (Format, Data.all, 0, Width * B.Byte_Count (Blocks), Rows, Blocks,
+                  Values (0 .. V_Last), Scales (0 .. S_Last), Totals, Halves (0 .. H_Last),
+                  0, Columns, Count, Sums, Ok);
+            end if;
+         end;
+         B.Free (Data);
+         return Ok;
+      end Runs;
+   begin
+      if Deep then
+         QI.Use_Deep_Rows (True);
+
+         --  1. One eight-bit vector: its own entry, short by a block.
+         Assert (Runs (G2.Type_Q8_0, 8, 1),
+                 "one eight-bit vector was refused whole");
+         Assert (not Runs (G2.Type_Q8_0, 8, 1, Short_Values => True),
+                 "one eight-bit vector a block short was read past its end");
+         Assert (not Runs (G2.Type_Q8_0, 8, 1, Short_Scales => True),
+                 "one eight-bit vector a scale short was read past its end");
+
+         --  2. A grid format, short a scale.
+         Assert (Runs (G2.Type_IQ2_XXS, 2, 1),
+                 "a grid product was refused whole");
+         Assert (not Runs (G2.Type_IQ2_XXS, 2, 1, Short_Scales => True),
+                 "a grid product a scale short was read past its end");
+
+         --  3. The six-bit format, short a half sum, one vector and four.
+         Assert (Runs (G2.Type_Q6_K, 2, 1) and then Runs (G2.Type_Q6_K, 2, 4),
+                 "a six-bit product was refused whole");
+         Assert (not Runs (G2.Type_Q6_K, 2, 1, Short_Halves => True)
+                 and then not Runs (G2.Type_Q6_K, 2, 4, Short_Halves => True),
+                 "a six-bit product a half sum short was read past its end");
+
+         --  4. Activations counted from a hundred, which First is counted
+         --  from: a batch, taken whole.
+         Assert (Runs (G2.Type_Q8_0, 8, 4, Shift_Values => True),
+                 "activations not counted from zero were refused");
+
+         --  5. A panel range that starts inside a panel.
+         declare
+            Format  : constant G2.Tensor_Type := G2.Type_Q8_0;
+            Tall    : constant N.Element_Count := 16;
+            Blocks  : constant N.Element_Count := 8;
+            Columns : constant N.Element_Count := 32 * Blocks;
+            Width   : constant B.Byte_Count := B.Byte_Count (G2.Block_Bytes (Format));
+            Plain, Panels : B.Byte_Array_Access;
+            Item    : Model_Runner.Tensors.View;
+            Status  : E.Error_Info;
+            Built, Handled, Ok : Boolean;
+            Vectors : constant N.Real_Array (0 .. Columns - 1) := [others => 1.0];
+            Values  : QI.Signed_Array (0 .. Columns - 1);
+            Scales  : N.Real_Array (0 .. Columns / 32 - 1);
+            Totals  : QI.Sum_Array (0 .. Columns / 32 - 1);
+            Halves  : QI.Sum_Array (0 .. Columns / 16 - 1);
+            Target  : N.Real_Array (0 .. Tall - 1) := [others => 0.0];
+         begin
+            B.Allocate (Width * B.Byte_Count (Blocks) * B.Byte_Count (Tall), Plain);
+            for Index in Plain.all'Range loop
+               Plain.all (Index) := B.Byte (Interfaces.Shift_Right (Next, 24) and 16#FF#);
+            end loop;
+            Make_Finite (Plain.all, Format, Blocks * Tall);
+            B.Allocate (IL.Panel_Bytes (Format, Tall, Blocks), Panels);
+            IL.Build (Format, Plain.all, 0, Panels.all, 0, Tall, Blocks, Built);
+            Assert (Built, "the panels could not be written");
+            Model_Runner.Tensors.Make_Panels (Format, Tall, Columns, Panels, 0, Item, Status);
+            Assert (E.Is_Ok (Status), "the panel view was refused");
+            QI.Quantize_Vectors (Vectors, 1, Columns, Values, Scales, Totals, Halves, Ok);
+            Model_Runner.Tensors.Mat_Mul_Range_Packed
+              (Item, Values, Scales, Totals, Halves, 1, Target, 0, Tall - 1, Handled);
+            Assert (Handled, "a panel range from a panel's start was refused");
+            Model_Runner.Tensors.Mat_Mul_Range_Packed
+              (Item, Values, Scales, Totals, Halves, 1, Target, 4, 11, Handled);
+            Assert (not Handled, "a panel range from inside a panel was answered");
+            B.Free (Plain);
+            B.Free (Panels);
+         end;
+      end if;
+
+      --  6. A k-quant's row kernel is the deepest compilation's alone: not
+      --  offered where it is not in use.
+      QI.Use_Deep_Rows (False);
+      Assert (not QI.Has_Integer_Kernel (G2.Type_Q4_K)
+              and then not QI.Has_Integer_Kernel (G2.Type_Q6_K),
+              "a k-quant's integer kernel was offered where it would be refused");
+      QI.Use_Deep_Rows (Deep);
+      QI.Use_Wide_Rows (Wide);
+
+      --  7. The float path: a stride or count no array holds.
+      declare
+         Data   : B.Byte_Array_Access;
+         Sums   : N.Wide_Real_Array (0 .. 2) := [others => 0.0];
+         Vector : constant N.Real_Array (0 .. 63) := [others => 1.0];
+         Ok     : Boolean;
+      begin
+         B.Allocate (34, Data);
+         Data.all := [others => 0];
+         Model_Runner.Quantization.Accumulate_Dot
+           (G2.Type_Q8_0, Data.all, 0, 1, Vector, 0, N.Element_Count'Last / 2, 3, Sums, Ok);
+         Assert (not Ok, "a stride no vector holds was taken");
+         B.Free (Data);
+      end;
+   end Integer_Kernels_Refuse_What_They_Cannot_Reach;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -8316,6 +8545,10 @@ package body Tests.GGUF_Cases is
         (T, Tokenizer_Reads_Markers_And_Leads_As_Llama_Does'Access,
          "a marker spelled again, a merge the vocabulary lacks and an empty "
          & "first piece are read as llama.cpp reads them");
+      Register_Routine
+        (T, Integer_Kernels_Refuse_What_They_Cannot_Reach'Access,
+         "the integer kernels prove what they read before they read it, and "
+         & "the float path refuses what no array holds");
       Register_Routine
         (T, Byte_Pair_Decoding_Undoes_Encoding'Access,
          "byte-pair decoding undoes byte-pair encoding");

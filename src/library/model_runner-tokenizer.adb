@@ -1550,7 +1550,10 @@ package body Model_Runner.Tokenizer is
       return Result (1 .. Last);
    end Without_Guard;
 
-   function Defused (Item : Vocabulary; Text : String) return String is
+   function Defused
+     (Item : Vocabulary; Text : String; Also : Token_Array := [1 .. 0 => No_Token])
+      return String
+   is
       Result : Ada.Strings.Unbounded.Unbounded_String;
       Index  : Natural := Text'First;
       Token  : Token_Id;
@@ -1561,7 +1564,10 @@ package body Model_Runner.Tokenizer is
       end if;
       while Index <= Text'Last loop
          Marker_At (Item, Text, Index, Token, Span);
-         if Token /= No_Token and then Class_Of (Item, Token) = Class_Control then
+         if Token /= No_Token
+           and then (Class_Of (Item, Token) = Class_Control
+                     or else (for some Named of Also => Named = Token))
+         then
             declare
                --  Its first character whole, so the mark falls between
                --  characters.

@@ -702,22 +702,15 @@ begin
    --  past it, as the reference runtime chooses. Chosen by the file's
    --  reach, a four-thousand-token session of a Phi-3.5 turned every
    --  position by the long table its 128k context asks for.
-   if Source.Rope_Long /= null
-     and then Source.Rope_Short /= null
-     and then Source.Rope_Factors /= null
-     and then Source.Rope_Factors'Length = Source.Rope_Long'Length
-     and then Source.Rope_Factors'Length = Source.Rope_Short'Length
-   then
-      declare
-         Trained : constant Natural :=
-           (if Settings.Rope_Original > 0 then Settings.Rope_Original
-            else Settings.Context_Length);
-      begin
-         Source.Rope_Factors.all :=
-           (if Capacity > Trained then Source.Rope_Long.all
-            else Source.Rope_Short.all);
-      end;
-   end if;
+   --  The session's own choice: the model's tables are left as they are,
+   --  so a second session opened to another reach changes nothing here.
+   declare
+      Trained : constant Natural :=
+        (if Settings.Rope_Original > 0 then Settings.Rope_Original
+         else Settings.Context_Length);
+   begin
+      Item.Long_Rope := Capacity > Trained;
+   end;
 
    --  The arithmetic, fixed for the session's life: the backend's
    --  default as it stands now, read once here and never again while

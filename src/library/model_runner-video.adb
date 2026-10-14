@@ -42,10 +42,15 @@ package body Model_Runner.Video is
    is
       --  The reference's int () cuts towards nought, which for a
       --  positive number is the floor.
-      Wanted : constant Natural :=
+      --  Asked in the reals and held there: a file's rate of a frame in
+      --  two billion seconds asked for more frames than a count holds.
+      Asked  : constant Long_Float :=
         (if Rate > 0.0 and then Fps > 0.0
-         then Natural (Long_Float'Floor (Long_Float (Total) / Rate * Fps))
-         else Total);
+         then Long_Float'Floor (Long_Float (Total) / Rate * Fps)
+         else Long_Float (Total));
+      Wanted : constant Natural :=
+        (if Asked >= Long_Float (Total) then Total
+         else Natural (Long_Float'Max (0.0, Asked)));
    begin
       return Positive'Max
         (1, Natural'Min (Natural'Min (Natural'Max (Wanted, Least_Frames),

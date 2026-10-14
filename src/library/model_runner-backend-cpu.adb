@@ -58,16 +58,19 @@ package body Model_Runner.Backend.CPU is
    package Chunks is new System.Atomic_Operations.Integer_Arithmetic
      (Chunk_Counter);
 
-   --  The two tallies Integer_Shares and Float_Shares read.
-   type Tally is new Integer with Atomic;
+   --  The two tallies Integer_Shares and Float_Shares read. Counted a
+   --  chunk of rows at a time -- tens of thousands a token -- so 64 bits:
+   --  a 32-bit tally passed 2**31 some forty thousand tokens into a long
+   --  session and the statistics raised.
+   type Tally is range 0 .. Long_Long_Integer'Last with Atomic;
 
    package Tallies is new System.Atomic_Operations.Integer_Arithmetic (Tally);
 
    Integer_Tally : aliased Tally := 0;
    Float_Tally   : aliased Tally := 0;
 
-   function Integer_Shares return Natural is (Natural (Integer_Tally));
-   function Float_Shares return Natural is (Natural (Float_Tally));
+   function Integer_Shares return Long_Long_Integer is (Long_Long_Integer (Integer_Tally));
+   function Float_Shares return Long_Long_Integer is (Long_Long_Integer (Float_Tally));
 
    --  A share of a product counted by how it was answered, where its
    --  weight is quantized; a binary32 or half-precision weight has no

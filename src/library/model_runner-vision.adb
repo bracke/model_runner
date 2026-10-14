@@ -45,21 +45,22 @@ package body Model_Runner.Vision is
    Gemma_3 : constant String := "gemma3";
    Qwen_3  : constant String := "qwen3vl_merger";
 
-   --  Qwen2-VL's merger is Qwen3-VL's without the deepstack layers, which
-   --  Qwen3-VL adds and this refuses either way: the same window merge, the
-   --  same two-word position of a patch, the same full attention over the
-   --  patches, the same two-projection head, the same block of a
-   --  normalization, a biased attention and a gated feed-forward. So it
-   --  runs the Qwen path, told apart only by the name the file carries.
-   Qwen_2  : constant String := "qwen2vl_merger";
-
+   --  Qwen2-VL's merger is not Qwen3-VL's: its patches carry no bias and
+   --  no learned position (llama.cpp's qwen2vl.cpp asserts the first and
+   --  turns the patches instead), its attention reads separate queries,
+   --  keys and values, and its feed-forward is a quick GELU. It was named
+   --  as taken and failed at load on a tensor it has not got; it is
+   --  refused by name.
    function Is_Qwen (Item : Encoder) return Boolean
-   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3
-       or else Item.Kind (1 .. Item.Kind_Last) = Qwen_2);
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3);
 
    --  MiniCPM-V's projector, a resampler over a SigLIP encoder, which the
    --  file names for the resampler rather than the model.
    Resampler : constant String := "resampler";
+
+   --  The rows of MiniCPM-V's learned position bank a patch buckets into:
+   --  seventy a side, as SigLIP's scheme numbers them.
+   Bank_Rows : constant := 70 * 70;
 
    function Is_Minicpm (Item : Encoder) return Boolean
    is (Item.Kind (1 .. Item.Kind_Last) = Resampler);
@@ -449,6 +450,14 @@ package body Model_Runner.Vision is
       if E.Is_Ok (Status) then
          Rows_Pos := Element_Count
            (Containers.Tensor_Dimension (Item.Container, Pos_Index, 2));
+         --  The patches bucket into a seventy-a-side bank: one with fewer
+         --  rows bound and then failed on every picture, said once here.
+         if Rows_Pos < Bank_Rows then
+            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+            E.Add_Text (Status, "tensor", "v.position_embd.weight", E.Param_Identifier);
+            E.Add_Integer (Status, "rows", Long_Long_Integer (Rows_Pos));
+            E.Add_Integer (Status, "expected_rows", Long_Long_Integer (Bank_Rows));
+         end if;
       end if;
       Take ("v.position_embd.weight", Rows_Pos, Width, Item.Positions);
       Vec ("v.post_ln.weight", Width, Item.Post_Weight);
@@ -576,6 +585,14 @@ package body Model_Runner.Vision is
       if E.Is_Ok (Status) then
          Rows_Pos := Element_Count
            (Containers.Tensor_Dimension (Item.Container, Pos_Index, 2));
+         --  The patches bucket into a seventy-a-side bank: one with fewer
+         --  rows bound and then failed on every picture, said once here.
+         if Rows_Pos < Bank_Rows then
+            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+            E.Add_Text (Status, "tensor", "v.position_embd.weight", E.Param_Identifier);
+            E.Add_Integer (Status, "rows", Long_Long_Integer (Rows_Pos));
+            E.Add_Integer (Status, "expected_rows", Long_Long_Integer (Bank_Rows));
+         end if;
       end if;
       Take ("v.position_embd.weight", Rows_Pos, Width, Item.Positions);
 
@@ -722,7 +739,7 @@ package body Model_Runner.Vision is
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
          if Kind /= Gemma_3 and then Kind /= Qwen_3
-           and then Kind /= Qwen_2 and then Kind /= Resampler
+           and then Kind /= Resampler
            and then Kind /= Minicpm_46
          then
             Status := E.Make (E.Arch_Unsupported_Projector);
@@ -731,7 +748,7 @@ package body Model_Runner.Vision is
                E.Param_Identifier);
             E.Add_Text
               (Status, "supported",
-               Gemma_3 & " " & Qwen_2 & " " & Qwen_3 & " " & Resampler
+               Gemma_3 & " " & Qwen_3 & " " & Resampler
                & " " & Minicpm_46,
                E.Param_Identifier);
             Fail (Status);
@@ -862,7 +879,7 @@ package body Model_Runner.Vision is
                  (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
                E.Add_Text
                  (Status, "supported",
-               Gemma_3 & " " & Qwen_2 & " " & Qwen_3 & " " & Resampler
+               Gemma_3 & " " & Qwen_3 & " " & Resampler
                & " " & Minicpm_46,
                E.Param_Identifier);
                Fail (Status);
@@ -921,6 +938,17 @@ package body Model_Runner.Vision is
             while Side * Side < Factor loop
                Side := Side + 1;
             end loop;
+            --  The encoder merges two by two, twice, as 4.6 is built: a file
+            --  stating another factor bound its merger at that width and
+            --  failed on every picture where the rows did not fit it.
+            if Factor /= 4 then
+               Status := E.Make (E.Arch_Invalid_Dimensions);
+               E.Add_Text (Status, "tensor", "clip.vision.projector.scale_factor",
+                           E.Param_Identifier);
+               E.Add_Integer (Status, "value", Long_Long_Integer (Factor));
+               Fail (Status);
+               return;
+            end if;
             Item.Merge_Scale := Side;
          end;
          --  The layer the windowed merger is inserted after, borrowed from
@@ -1197,9 +1225,54 @@ package body Model_Runner.Vision is
    -----------
 
    procedure Close (Item : in out Encoder) is
+      --  A matrix the device may hold, given back before its storage goes:
+      --  the device knows a matrix by where its bytes lie, and the next
+      --  projector's of the same shape at the same address would be
+      --  answered with this one's weights.
+      procedure Drop (Weight : in out T.View) is
+      begin
+         if Weight.Rows > 0 then
+            Model_Runner.Backend.Device.Forget (Weight);
+         end if;
+         Weight := T.Empty_View;
+      end Drop;
    begin
       Item.Ready := False;
+      if Item.Layers /= null then
+         for Current of Item.Layers.all loop
+            Drop (Current.Query);
+            Drop (Current.Key);
+            Drop (Current.Value);
+            Drop (Current.Output);
+            Drop (Current.Fused);
+            Drop (Current.Feed_In);
+            Drop (Current.Feed_Out);
+         end loop;
+      end if;
+      Drop (Item.Patch_Weights);
+      Drop (Item.Positions);
+      Drop (Item.Projection);
+      Drop (Item.Patch_Both);
+      Drop (Item.Patch_Pair);
+      Drop (Item.Merge_In);
+      Drop (Item.Merge_Out);
+      Drop (Item.Query_Rows);
+      Drop (Item.Kv_Proj);
+      Drop (Item.R_Attn_Q);
+      Drop (Item.R_Attn_K);
+      Drop (Item.R_Attn_V);
+      Drop (Item.R_Attn_O);
+      Drop (Item.R_Proj);
+      Drop (Item.Merge_Up);
+      Drop (Item.Merge_Down);
+      Drop (Item.VM_Q);
+      Drop (Item.VM_K);
+      Drop (Item.VM_V);
+      Drop (Item.VM_O);
+      Drop (Item.VM_Ds_Up);
+      Drop (Item.VM_Ds_Down);
       for Index in 1 .. Item.Padded_Count loop
+         Drop (Item.Padded (Index).View);
          Model_Runner.Bytes.Free (Item.Padded (Index).Bytes);
          T.Free (Item.Padded (Index).Values);
          Item.Padded (Index) := (others => <>);
@@ -1230,6 +1303,33 @@ package body Model_Runner.Vision is
       T.Free (Item.Patch_Pair_Rows);
       T.Free (Item.Merge_In_Bias);
       T.Free (Item.Merge_Out_Bias);
+      --  And the resampler's, the 4.6 merger's and its windowed merger's
+      --  vectors, which nothing let go: a projector opened again held
+      --  them all a second time.
+      T.Free (Item.R_Attn_Q_B);
+      T.Free (Item.R_Attn_K_B);
+      T.Free (Item.R_Attn_V_B);
+      T.Free (Item.R_Attn_O_B);
+      T.Free (Item.R_Ln_Q_W);
+      T.Free (Item.R_Ln_Q_B);
+      T.Free (Item.R_Ln_Kv_W);
+      T.Free (Item.R_Ln_Kv_B);
+      T.Free (Item.R_Ln_Post_W);
+      T.Free (Item.R_Ln_Post_B);
+      T.Free (Item.Merge_Norm_W);
+      T.Free (Item.Merge_Norm_B);
+      T.Free (Item.Merge_Up_B);
+      T.Free (Item.Merge_Down_B);
+      T.Free (Item.VM_Ln1_W);
+      T.Free (Item.VM_Ln1_B);
+      T.Free (Item.VM_Q_B);
+      T.Free (Item.VM_K_B);
+      T.Free (Item.VM_V_B);
+      T.Free (Item.VM_O_B);
+      T.Free (Item.VM_Ds_Ln_W);
+      T.Free (Item.VM_Ds_Ln_B);
+      T.Free (Item.VM_Ds_Up_B);
+      T.Free (Item.VM_Ds_Down_B);
       Item.Patch_Weights := T.Empty_View;
       Item.Patch_Both := T.Empty_View;
       Item.Patch_Pair := T.Empty_View;
@@ -1254,6 +1354,9 @@ package body Model_Runner.Vision is
    function Fixed_Rows (Item : Encoder) return Boolean is (not Is_Qwen (Item));
 
    function Placed_Rows (Item : Encoder) return Boolean is (Is_Qwen (Item));
+
+   function Rows_Attend_Both_Ways (Item : Encoder) return Boolean
+   is (Projector (Item) = Gemma_3);
 
    function Rows_Per_Picture (Item : Encoder) return Positive
    is (if Is_Qwen (Item) then Item.Most_Rows
@@ -1816,6 +1919,15 @@ package body Model_Runner.Vision is
          return;
       end if;
 
+      --  Room for the whole matrix, asked rather than run off: a view the
+      --  buffer was not sized for is a status, not an exception out of the
+      --  encoder.
+      if Work.Decoded = null
+        or else Weight.Rows * Weight.Columns > Work.Decoded'Length
+      then
+         Work.Status := E.Make (E.Tensor_Out_Of_Bounds);
+         return;
+      end if;
       for Row in 0 .. Weight.Rows - 1 loop
          T.Dequantize_Row
            (Weight, Row,
@@ -3713,7 +3825,8 @@ package body Model_Runner.Vision is
         (Work,
          Element_Count'Max
            (Element_Count'Max (Feed * Width, Width * Patch_Elements),
-            Element_Count'Max (Merged * VFeed, Merged * Merged)),
+            Element_Count'Max (Element_Count'Max (Merged * VFeed, Merged * Merged),
+                               Element_Count'Max (Text * Merged, Text * VFeed))),
          Element_Count'Max (Width, Element_Count'Max (Patch_Elements, Merged)),
          Element_Count'Max (Width, Element_Count'Max (Feed,
                             Element_Count'Max (VFeed, Text))));
@@ -4308,9 +4421,14 @@ package body Model_Runner.Vision is
       T.Allocate (Windows * Joined, Merged);
       Furnish
         (Work,
-         Element_Count'Max (Joined * Joined,
-                            Element_Count'Max (Feed * Width,
-                                               Width * Patch_In)),
+         --  Every view multiplied on the host decoded into one buffer:
+         --  the merger's way out is the text model's width by the merged
+         --  width, which past it -- a 5120-wide text model over a 4608
+         --  merge -- ran off the buffer's end.
+         Element_Count'Max
+           (Element_Count'Max (Joined * Joined, Text_Width * Joined),
+            Element_Count'Max (Element_Count'Max (Feed * Width, 3 * Width * Width),
+                               Width * Patch_In)),
          Element_Count'Max (Joined, Element_Count'Max (Feed, Patch_In)),
          Element_Count'Max (Joined, Element_Count'Max (3 * Width, Feed)));
       Places := new Patch_Place_Array (0 .. Patches - 1);
@@ -4590,6 +4708,14 @@ package body Model_Runner.Vision is
             Fit_Width := OW;
             Fit_Height := OH;
          end;
+         return;
+      end if;
+
+      --  And 4.6 the same, fit as its own picture is: taken through Qwen's
+      --  fit below, a frame was resampled to a multiple of twenty-eight and
+      --  then planned and resampled again when it was encoded.
+      if Is_Minicpm46 (Item) then
+         Minicpm46_Size (Item, Width, Height, Fit_Width, Fit_Height);
          return;
       end if;
 

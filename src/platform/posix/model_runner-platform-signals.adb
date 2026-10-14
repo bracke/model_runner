@@ -139,6 +139,18 @@ package body Model_Runner.Platform.Signals is
       procedure Put_Mode_Back is
       begin
          if Mode_Held then
+            --  And the screen modes a prompt sets: pasted text marked, the
+            --  cursor hidden. Left on, the shell after showed ^[[200~ round
+            --  every paste. (Not the other screen: leaving one not entered
+            --  puts the cursor back where nothing saved it.)
+            declare
+               Back : constant String :=
+                 ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
+               Ignored : constant Integer := Write_Error (2, Back, Back'Length);
+               pragma Unreferenced (Ignored);
+            begin
+               null;
+            end;
             declare
                Ignored : constant Boolean :=
                  Hostkit.Terminal_Control.Restore_Mode

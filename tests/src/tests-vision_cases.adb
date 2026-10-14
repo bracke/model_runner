@@ -367,6 +367,38 @@ package body Tests.Vision_Cases is
               "the grey JPEG decoded wrongly");
       Images.Free (Picture);
 
+      --  The same picture marked by EXIF as turned a quarter -- every
+      --  portrait photo a phone takes -- is its frame as stored, as
+      --  llama.cpp's reader takes it: turned, the frame no longer matched
+      --  the header's size and the picture was refused.
+      declare
+         use Ada.Streams.Stream_IO;
+         F     : File_Type;
+         Exif  : constant B.Byte_Array :=
+           [16#FF#, 16#E1#, 0, 34,
+            Character'Pos ('E'), Character'Pos ('x'), Character'Pos ('i'),
+            Character'Pos ('f'), 0, 0,
+            Character'Pos ('M'), Character'Pos ('M'), 0, 42, 0, 0, 0, 8,
+            0, 1,
+            16#01#, 16#12#, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0,
+            0, 0, 0, 0];
+      begin
+         Open (F, In_File, "fixtures/picture-gray-16x8.jpg");
+         declare
+            Whole : B.Byte_Array (1 .. B.Byte_Count (Size (F)));
+         begin
+            B.Byte_Array'Read (Stream (F), Whole);
+            Close (F);
+            Images.Decode
+              (Whole (1 .. 2) & Exif & Whole (3 .. Whole'Last), "test", Picture, Status);
+            Assert (E.Is_Ok (Status),
+                    "a JPEG marked as turned was refused: " & E.Error_Code'Image (Status.Code));
+            Assert (Picture.Width = 16 and then Picture.Height = 8,
+                    "a JPEG marked as turned was not its frame as stored");
+            Images.Free (Picture);
+         end;
+      end;
+
       --  Refusals, each naming what was wrong.
       Expect_Refusal (Bytes_Of ("GIF89a......"), "format");
       Expect_Refusal (Bytes_Of ("P6 0 1 255 "), "ppm header");
@@ -383,6 +415,22 @@ package body Tests.Vision_Cases is
       Expect_Refusal (Stored_PNG (2, 1, 8, 2, [0, 1, 2]), "png scanlines");
       Expect_Refusal (Stored_PNG (2, 1, 8, 2, [9, 1, 2, 3, 4, 5, 6]),
                       "png scanlines");
+
+      --  A one-by-one picture whose stream goes on far past its one line:
+      --  inflated whole, a small file asked for gigabytes. A little past
+      --  the line is an encoder's padding and is read; far past it is not
+      --  a picture's data.
+      declare
+         Padded : constant B.Byte_Array (1 .. 1_002) := [others => 0];
+         Flood  : constant B.Byte_Array (1 .. 200_002) := [others => 0];
+      begin
+         Images.Decode (Stored_PNG (1, 1, 8, 0, Padded), "test", Picture, Status);
+         Assert (E.Is_Ok (Status),
+                 "a line with a little padding after it was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Images.Free (Picture);
+         Expect_Refusal (Stored_PNG (1, 1, 8, 0, Flood), "png deflate");
+      end;
 
       Images.Load ("fixtures/no-such-picture.png", Picture, Status);
       Assert (Status.Code = E.IO_Open_Failed,
@@ -984,7 +1032,8 @@ package body Tests.Vision_Cases is
          Assert (Vision.Is_Ready (Eyes) and then Vision.Image_Size (Eyes) = Size_P
                  and then Vision.Rows_Per_Picture (Eyes) = 1
                  and then Vision.Row_Width (Eyes) = Text_P
-                 and then Vision.Projector (Eyes) = "gemma3",
+                 and then Vision.Projector (Eyes) = "gemma3"
+                 and then Vision.Rows_Attend_Both_Ways (Eyes),
                  "the small projector's shape was misread");
 
          Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
@@ -1150,6 +1199,49 @@ package body Tests.Vision_Cases is
                null, null, Pictures => Pictures, Outcome => Outcome);
             Assert (Gen.Generated_Text (Outcome) = First_Text,
                     "the same picture twice answered differently");
+
+            --  A prefix held from a file -- a saved session, the prefill
+            --  cache -- is not taken past its first picture: the soft
+            --  positions hold the same token whatever the picture, and a
+            --  second picture asked the same way was answered about the
+            --  first.
+            declare
+               Other     : Gen.Picture_Set := Pictures;
+               Kept_Rows : constant T.Real_Array_Access := Pictures.Rows;
+            begin
+               Other.Rows := null;
+               T.Allocate (Per * Width, Other.Rows);
+               Seed := 4242;
+               for Value of Other.Rows.all loop
+                  Value := Next;
+               end loop;
+
+               declare
+                  Reused : Gen.Request := Request;
+               begin
+                  --  The first picture committed, then the other asked
+                  --  about over the held prefix: read again from the
+                  --  picture's first row, not taken whole.
+                  L.Reset (Live);
+                  Gen.Release (Outcome);
+                  Gen.Generate
+                    (Ready, Live, "cab", Request, Stop, null, null, null,
+                     null, null, null, Pictures => Pictures, Outcome => Outcome);
+                  Gen.Release (Outcome);
+                  Reused.Reuse_Committed_Prefix := True;
+                  Reused.Pictures_Unverified := True;
+                  Gen.Generate
+                    (Ready, Live, "cab", Reused, Stop, null, null, null,
+                     null, null, null, Pictures => Other, Outcome => Outcome);
+                  Assert (Outcome.Reused_Tokens + Per < Outcome.Prompt_Tokens,
+                          "a held prefix was taken past its picture:"
+                          & Natural'Image (Outcome.Reused_Tokens) & " of"
+                          & Natural'Image (Outcome.Prompt_Tokens)
+                          & " tokens reused, the other picture's rows unread");
+               end;
+               T.Free (Other.Rows);
+               Pictures.Rows := Kept_Rows;
+            end;
          end;
 
          --  The marker's text is rewritten before the prompt is tokenized,
@@ -1482,6 +1574,91 @@ package body Tests.Vision_Cases is
             Pictures.Video_As_Frames := False;
             Pictures.Video_Marker_Text := Model_Runner.Text.Empty;
             Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Count := 1;
+         end;
+
+         --  A video before a sliced picture: the set's entries are the
+         --  frame, then the picture, and the picture opens its own two
+         --  slices. Counted by pictures alone it read the frame's none, and
+         --  a picture after it would have taken its slices. Here the video
+         --  mark is "V" (one frame), the picture "c", each slice "b": "Vc"
+         --  is "c" for the frame, then "c", "b", a line break and "b".
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Raw      : Vocab.Token_Array (1 .. 128);
+            Read     : Natural;
+            Text     : constant String := "cc" & "b" & ASCII.LF & "b";
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Video_As_Frames := True;
+            Pictures.Video_Marker_Text := Model_Runner.Text.To_Bounded ("V");
+            Pictures.Video_Slots := new Gen.Crop_Counts'(1 => 1);
+            Pictures.Slice_Marker := Vocab.Find (Words.all, "b");
+            Pictures.Slice_Closer := Vocab.Find (Words.all, "<0x61>");
+            Pictures.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("b");
+            Pictures.Slice_Row_End :=
+              Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+            Pictures.Crops := new Gen.Crop_Counts'(0, 2);
+            Pictures.Slice_Cols := new Gen.Crop_Counts'(0, 1);
+            Pictures.Count := 2;
+            T.Free (Pictures.Rows);
+            T.Allocate (4 * Per * Width, Pictures.Rows);
+            Seed := 717;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+            Assert (E.Is_Ok (Status), "the video-then-picture text did not tokenize");
+            for Index in 1 .. Read loop
+               Count := Count + 1;
+               Expected (Count) := Raw (Index);
+               if Raw (Index) = Pictures.Marker
+                 or else Raw (Index) = Pictures.Slice_Marker
+               then
+                  for Row in 1 .. Per loop
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Soft;
+                  end loop;
+                  Count := Count + 1;
+                  Expected (Count) :=
+                    (if Raw (Index) = Pictures.Marker then Pictures.Closer
+                     else Pictures.Slice_Closer);
+               end if;
+            end loop;
+
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "Vc", Request, Stop, null, null, null, null, null,
+               null, Pictures => Pictures, Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the video-then-picture run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the video-then-picture prompt is"
+                    & Natural'Image (Outcome.Prompt_Tokens)
+                    & " tokens, not" & Natural'Image (Count)
+                    & ": the picture did not open its own slices");
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the video-then-picture prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Free (Pictures.Video_Slots);
+            Free (Pictures.Crops);
+            Free (Pictures.Slice_Cols);
+            Pictures.Video_As_Frames := False;
+            Pictures.Video_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Marker := Vocab.No_Token;
+            Pictures.Slice_Closer := Vocab.No_Token;
+            Pictures.Slice_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Row_End := Model_Runner.Text.Empty;
             Pictures.Count := 1;
          end;
 
@@ -1922,7 +2099,10 @@ package body Tests.Vision_Cases is
    Head_Q   : constant := Width_Q / Heads_Q;
    Feed_Q   : constant := 16;
    Blocks_Q : constant := 2;
-   Text_Q   : constant := 12;
+   --  Wider than the merge, as a 27B's 5120 is wider than its 4608: the
+   --  merger's way out is then the largest view the host decodes, and a
+   --  buffer sized without it ran off its end.
+   Text_Q   : constant := 40;
    Joined_Q : constant := Width_Q * Merge_Q * Merge_Q;
    Elements_Q : constant := 3 * Patch_Q * Patch_Q;
    Cells_Q  : constant := Grid_Q * Grid_Q;
@@ -2474,7 +2654,8 @@ package body Tests.Vision_Cases is
               and then not Vision.Fixed_Rows (Eyes)
               and then Vision.Placed_Rows (Eyes)
               and then Vision.Row_Width (Eyes) = Text_Q
-              and then Vision.Projector (Eyes) = "qwen3vl_merger",
+              and then Vision.Projector (Eyes) = "qwen3vl_merger"
+              and then not Vision.Rows_Attend_Both_Ways (Eyes),
               "the small Qwen projector's shape was misread");
 
       Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
@@ -2514,31 +2695,16 @@ package body Tests.Vision_Cases is
       end;
       Vision.Close (Eyes);
 
-      --  Qwen2-VL's merger is the same shape read under a name of its own,
-      --  its deepstack the one thing Qwen3-VL adds and this leaves out, so
-      --  the same weights written under it encode a picture to the same
-      --  rows: the reference the sweep already computed.
+      --  Qwen2-VL's merger is not this shape -- no patch bias, no learned
+      --  position, separate queries, keys and values, a quick GELU -- and
+      --  a file of it is refused by name, not taken and failed at load.
       Write_Qwen_Projector
         ("obj/vision-qwen.gguf", W.all, Kind => "qwen2vl_merger");
       Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
-      Assert (E.Is_Ok (Status), "the Qwen2-VL projector did not open: "
+      Assert (Status.Code = E.Arch_Unsupported_Projector,
+              "a Qwen2-VL projector was not refused by name: "
               & E.Error_Code'Image (Status.Code));
-      Assert (Vision.Projector (Eyes) = "qwen2vl_merger",
-              "the Qwen2-VL projector's kind was misread");
-      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
-                     Status => Status);
-      Assert (E.Is_Ok (Status), "the Qwen2-VL projector did not encode: "
-              & E.Error_Code'Image (Status.Code));
-      Assert (Rows /= null and then Rows.all'Length = Windows_Q * Text_Q,
-              "the Qwen2-VL encoder made the wrong number of rows");
-      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
-         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
-                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
-                 "Qwen2-VL row element" & N.Element_Count'Image (J)
-                 & " is " & N.Real'Image (Rows (J)) & " where the reference "
-                 & "has " & N.Wide_Real'Image (Wanted (J)));
-      end loop;
-      T.Free (Rows);
+      Assert (not Vision.Is_Ready (Eyes), "a refused Qwen2-VL projector reads as ready");
       Vision.Close (Eyes);
 
       --  The cubic filter: a two-pixel row 0 and 200 stretched to four
@@ -2773,6 +2939,14 @@ package body Tests.Vision_Cases is
       end Write_File;
    begin
       --  The count, and the frames.
+      --  A file's rate or a part's that no count holds is held: a frame
+      --  in two billion seconds, or a part asking 1e300 a second or 1e-300.
+      Assert (Model_Runner.Video.Sampled_Count (100, 1.0E-12, 2.0) = 100
+              and then Model_Runner.Video.Held_Fps (1.0E300) = 240.0
+              and then Model_Runner.Video.Held_Fps (1.0E-300) = 1.0 / 3600.0
+              and then Model_Runner.Video.Held_Fps (0.0) = Model_Runner.Video.Default_Fps
+              and then Model_Runner.Video.Held_Fps (3.0) = 3.0,
+              "a rate past what a count or a time holds was not held");
       Assert (Model_Runner.Video.Sampled_Count (75, 25.0, 2.0) = 6
               and then Model_Runner.Video.Sampled_Count (3, 25.0, 2.0) = 3
               and then Model_Runner.Video.Sampled_Count (10, 1.0, 2.0) = 10
@@ -3332,7 +3506,8 @@ package body Tests.Vision_Cases is
 
    procedure Write_Minicpm_Projector
      (Path : String; W : Minicpm_Weights; Kind : String := "resampler";
-      Swapped : Boolean := False; Version : Natural := 3)
+      Swapped : Boolean := False; Version : Natural := 3;
+      Bank : Positive := Bank_M)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -3376,7 +3551,8 @@ package body Tests.Vision_Cases is
 
       Tensor ("v.patch_embd.weight", [Patch_M, Patch_M, 3, Width_M], W.Patch);
       Tensor ("v.patch_embd.bias", [Width_M], W.Patch_B);
-      Tensor ("v.position_embd.weight", [Width_M, Bank_M], W.Pos);
+      Tensor ("v.position_embd.weight", [Width_M, G.U64 (Bank)],
+              W.Pos (0 .. N.Element_Count (Bank * Width_M) - 1));
       for Index in W.Blocks'Range loop
          declare
             Prefix : constant String :=
@@ -3901,6 +4077,10 @@ package body Tests.Vision_Cases is
                  and then Vision.Rows_Per_Picture (Eyes) = Nq_M
                  and then Vision.Row_Width (Eyes) = P_M
                  and then Vision.Projector (Eyes) = "resampler"
+                 --  Its rows read causally, as llama.cpp reads every
+                 --  projector's but Gemma's: both ways, each row saw the
+                 --  rows after it.
+                 and then not Vision.Rows_Attend_Both_Ways (Eyes)
                  and then Vision.Minicpm_Version (Eyes) = 3,
                  "the small resampler's shape was misread");
 
@@ -3965,6 +4145,15 @@ package body Tests.Vision_Cases is
       Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
       Assert (E.Is_Ok (Status) and then Vision.Minicpm_Version (Eyes) = 2,
               "a version-2 resampler did not read its version");
+      Vision.Close (Eyes);
+
+      --  A bank of positions short of the seventy a side the patches bucket
+      --  into is refused at opening, not on every picture after it.
+      Write_Minicpm_Projector ("obj/vision-minicpm.gguf", W.all, Bank => 70 * 69);
+      Vision.Open (Eyes, "obj/vision-minicpm.gguf", Status);
+      Assert (Status.Code = E.Arch_Invalid_Tensor_Shape,
+              "a short position bank was not refused at opening: "
+              & E.Error_Code'Image (Status.Code));
       Vision.Close (Eyes);
 
       --  A resampler named as another kind is refused by name.
@@ -4669,8 +4858,22 @@ package body Tests.Vision_Cases is
               and then not Vision.Placed_Rows (Eyes)
               and then Vision.Rows_Per_Picture (Eyes) = NP2_M
               and then Vision.Row_Width (Eyes) = Text46
-              and then Vision.Projector (Eyes) = "minicpmv4_6",
+              and then Vision.Projector (Eyes) = "minicpmv4_6"
+              and then not Vision.Rows_Attend_Both_Ways (Eyes),
               "the small 4.6 merger's shape was misread");
+
+      --  A video's frames are fit as a 4.6 picture is: sixteen square,
+      --  already whole merges and within the encoder's bounds, stays as it
+      --  is. Through Qwen's fit it went to that fit's least size and was
+      --  resampled a second time when encoded.
+      declare
+         Fit_Width, Fit_Height : Positive;
+      begin
+         Vision.Frames_Fit (Eyes, Size_M, Size_M, 4, Fit_Width, Fit_Height, Status);
+         Assert (E.Is_Ok (Status) and then Fit_Width = Size_M and then Fit_Height = Size_M,
+                 "a 4.6 video's frames were not fit as its pictures are:"
+                 & Positive'Image (Fit_Width) & " by" & Positive'Image (Fit_Height));
+      end;
 
       Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
                      Status => Status);

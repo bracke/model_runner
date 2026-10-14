@@ -98,7 +98,8 @@ package Model_Runner.Text is
    --  @return The piece, controls shown.
    function Show_Controls (Item : String; Lead : in out Boolean) return String;
 
-   --  Report whether Item contains a C0 or C7F control character.
+   --  Report whether Item contains a C0 or C7F control character, or a C1
+   --  control written in UTF-8 (C2 and one of 80 to 9F).
    --
    --  @param Item Text to test.
    --  @return True when at least one control character is present.

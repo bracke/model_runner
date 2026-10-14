@@ -22,9 +22,12 @@ with Model_Runner.Numerics;
 --  so a divergence fails the suite rather than quietly changing a model's
 --  output.
 --
---  Advertised formats. F32, F16, Q4_0, Q8_0, Q4_K, Q5_K, Q6_K, IQ4_NL and
---  IQ4_XS are decoded here. Model_Runner.GGUF.Is_Supported names the same set; a format that is
---  merely recognized by the parser is rejected before preparation.
+--  Decoded formats. Is_Decodable names every format decoded here -- the
+--  floats, the legacy and k-quants, the IQ and ternary families, MXFP4 and
+--  NVFP4 among them -- and Model_Runner.GGUF.Is_Supported the same set; a
+--  format that is merely recognized by the parser is rejected before
+--  preparation. The layouts below are the ones this file's own kernels
+--  read again; the rest are each decoder's own comment.
 --
 --  Block layouts, in serialized byte order:
 --

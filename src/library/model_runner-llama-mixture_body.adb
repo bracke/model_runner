@@ -11,7 +11,7 @@ is
 
    Chosen : array (0 .. Used - 1) of Natural := [others => 0];
    Share  : array (0 .. Used - 1) of Real := [others => 0.0];
-   Taken  : array (0 .. Settings.Experts - 1) of Boolean :=
+   Taken  : Expert_Flags (0 .. Settings.Experts - 1) :=
      [others => False];
 
    Total  : Real := 0.0;
@@ -32,6 +32,7 @@ is
      --  sigmoid-gated mixture is routed on the host instead.
      and then not Settings.Sigmoid_Gate
      and then Current.Select_Bias = null
+     and then not Grouped (Settings)
      and then T.Is_Present (Current.Gate_Stack)
      and then T.Is_Present (Current.Up_Stack)
      and then T.Is_Present (Current.Down_Stack);
@@ -124,6 +125,28 @@ begin
          return;
       end if;
    end if;
+
+   --  What an expert is chosen by: its score, and the selection bias
+   --  beside it where the layer carries one.
+   declare
+      function Pick (Which : Natural) return Real
+      is (Item.Routing (Element_Count (Which))
+          + (if Current.Select_Bias = null then 0.0
+             else Current.Select_Bias
+                    (Current.Select_Bias'First + Element_Count (Which))));
+   begin
+      --  The best few groups' experts alone, where the model chooses so.
+      if Grouped (Settings) then
+         declare
+            Picks : Real_Array (0 .. Element_Count (Settings.Experts) - 1);
+         begin
+            for Which in Taken'Range loop
+               Picks (Element_Count (Which)) := Pick (Which);
+            end loop;
+            Keep_Groups (Settings, Picks, Taken);
+         end;
+      end if;
+   end;
 
    for Slot in Chosen'Range loop
       declare

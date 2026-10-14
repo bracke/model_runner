@@ -99,6 +99,14 @@ package Model_Runner.CLI.Pictures is
    --  @return The marker text, or "" where there is none.
    function Video_Marker (Item : Seer) return String;
 
+   --  The tokens a picture is written with -- its marker, soft token and
+   --  closer, a slice's marker and closer, a video's marker -- which a
+   --  message's own text is not to spell: empty on a seer that is not open.
+   --
+   --  @param Item Seer to inspect.
+   --  @return The tokens, none of them No_Token.
+   function Picture_Tokens (Item : Seer) return Model_Runner.Tokenizer.Token_Array;
+
    --  Whether a list of parts names a picture or a video: a part of type
    --  image or image_url with a path or url, or of type video with a path.
    --

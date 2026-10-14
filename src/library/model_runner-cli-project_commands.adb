@@ -674,8 +674,14 @@ package body Model_Runner.CLI.Project_Commands is
                end if;
             end Flush_Skipped;
          begin
-            for Raw of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
+            for Said of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
                declare
+                  --  The model's line as the screen shows it, its controls
+                  --  written out, before the colour is put on: coloured
+                  --  first, the colour's own sequences were written out
+                  --  with them.
+                  Raw : constant String :=
+                    Pres.Shown (Pres.Standard_Output_Sink (Self), Said);
                   --  JSON in a fence, or an answer that is JSON whole, coloured
                   --  as JSON where colour shows.
                   Fence : constant Boolean :=
@@ -705,7 +711,7 @@ package body Model_Runner.CLI.Project_Commands is
                end;
             end loop;
             Flush_Skipped;
-            Pres.Standard_Output_Sink (Self).Write (To_String (Shown), Closed);
+            Pres.Standard_Output_Sink (Self).Write_Shown (To_String (Shown), Closed);
          end;
       end if;
       Drop_Held (Self);

@@ -122,9 +122,13 @@ package body Tests.CLI_Cases is
    Max_Arguments : constant := 32;
 
    --  An argument vector supplied by the test rather than by a process.
+   --  Unbounded, as a process's arguments are: a bounded list cut a long
+   --  argument where the command line under test would have refused it.
+   type Argument_Texts is
+     array (1 .. Max_Arguments) of Ada.Strings.Unbounded.Unbounded_String;
+
    type Fixed_Arguments is limited new Opt.Arguments with record
-      Values : Model_Runner.Text.Bounded_List (1 .. Max_Arguments) :=
-        [others => Model_Runner.Text.Empty];
+      Values : Argument_Texts;
       Used   : Natural := 0;
    end record;
 
@@ -133,12 +137,12 @@ package body Tests.CLI_Cases is
 
    overriding function Value
      (Self : Fixed_Arguments; Index : Positive) return String
-   is (T.To_String (Self.Values (Index)));
+   is (Ada.Strings.Unbounded.To_String (Self.Values (Index)));
 
    procedure Add (Item : in out Fixed_Arguments; Value : String) is
    begin
       Item.Used := Item.Used + 1;
-      Item.Values (Item.Used) := T.To_Bounded (Value);
+      Item.Values (Item.Used) := Ada.Strings.Unbounded.To_Unbounded_String (Value);
    end Add;
 
    Max_Captured : constant := 65_536;
@@ -4831,6 +4835,29 @@ package body Tests.CLI_Cases is
       --  offered at execution, so the model is not required here.
       Expect (E.No_Error, "run");
       Expect (E.CLI_Unknown_Option, "run m.gguf --nope");
+
+      --  What the agent's loop does not read is refused beside --agent, and
+      --  what only it reads is refused without it: taken, it did nothing.
+      Expect (E.CLI_Option_Combination, "run m.gguf --agent --prompt hi --stop x");
+      Expect (E.CLI_Option_Combination, "run m.gguf --agent --prompt hi --grammar root::=x");
+      Expect (E.CLI_Option_Combination, "run m.gguf --agent --prompt hi --draft-model d.gguf");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --max-steps 3");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --compact");
+      --  One setting said two ways is refused, not settled by order.
+      Expect (E.CLI_Repeated_Option, "run m.gguf --prompt hi --think --no-think");
+      Expect (E.CLI_Repeated_Option, "run m.gguf --prompt hi --paged --no-paged");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt hi --chat-template chatml --chat-template-file f");
+      Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --lora-scale 0.5");
+      Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --prompt hi --raw --think");
+      Expect (E.CLI_Option_Combination, "embed m.gguf --prompt a --prompt b");
+      Expect (E.No_Error, "embed m.gguf --prompt a --no-mmap");
+      --  A token past what an identifier holds is refused at the command
+      --  line, not by a conversion error once the model is loaded.
+      Expect (E.CLI_Invalid_Option_Value, "run m.gguf --prompt hi --stop-token 3000000000");
+      --  A path longer than a field holds is refused, not cut.
+      Expect (E.CLI_Option_Out_Of_Range,
+              "run m.gguf --prompt hi --save-session " & [1 .. 600 => 'p']);
 
       --  A backend this build has is accepted; one it does not have is
       --  refused by name. An option accepted as a no-op would be worse than
@@ -13574,6 +13601,59 @@ package body Tests.CLI_Cases is
       Assert (not Safe ("./evil.gguf"), "a dot segment is taken");
       Assert (not Safe ("evil" & ASCII.LF & ".gguf"), "a control character is taken");
       Assert (not Safe (""), "an empty name is taken");
+
+      --  And a name is asked of the hub only where it reads as owner/name:
+      --  a missing path on this machine is not sent there.
+      Assert (Model_Runner.Hub.Is_Repo ("Qwen/Qwen3-8B-GGUF")
+              and then Model_Runner.Hub.Is_Reference ("unsloth/Qwen3-8B-GGUF:Q4_K_M"),
+              "a repository or a reference to one was not taken as one");
+      Assert (not Model_Runner.Hub.Is_Repo ("/data/m.bin")
+              and then not Model_Runner.Hub.Is_Repo ("~/models/x")
+              and then not Model_Runner.Hub.Is_Repo ("./models/x")
+              and then not Model_Runner.Hub.Is_Repo ("models/sub/x")
+              and then not Model_Runner.Hub.Is_Reference ("/data/models/x:Q4"),
+              "a path on this machine was taken for a repository to ask the hub about");
+
+      --  A file on disk is the hub's only where its bytes are: by its digest,
+      --  kept beside it once read, and not by its size alone.
+      declare
+         Path : constant String := "obj/hub-whole.gguf";
+         F    : Ada.Streams.Stream_IO.File_Type;
+         File : Model_Runner.Hub.Download_File;
+      begin
+         if Ada.Directories.Exists (Path & ".sha256") then
+            Ada.Directories.Delete_File (Path & ".sha256");
+         end if;
+         Ada.Streams.Stream_IO.Create (F, Ada.Streams.Stream_IO.Out_File, Path);
+         String'Write (Ada.Streams.Stream_IO.Stream (F), "model bytes");
+         Ada.Streams.Stream_IO.Close (F);
+         File.Size := 11;
+         File.Has_Hash := True;
+         File.SHA256 :=
+           "2e1ec3b0bd6bb8dbcc9a1a0b4fdd6bc0e8b1a1c8b0be4fd1e33c3efb22dd5577";
+         Assert (not Model_Runner.Hub.Is_Whole (File, Path),
+                 "a file of the right size and other bytes was taken for the hub's");
+         File.SHA256 :=
+           "9cb7487000bc86ac36ce83c4acfabe8878552be99572a6770f65ab1d048a5c48";
+         Assert (Model_Runner.Hub.Is_Whole (File, Path)
+                 and then Ada.Directories.Exists (Path & ".sha256"),
+                 "the hub's file was not known by its digest, or the digest not kept");
+         Assert (Model_Runner.Hub.Is_Whole (File, Path),
+                 "the digest kept beside the file was not read back");
+
+         --  A digest kept beside it that is another file's: not this one.
+         declare
+            Note : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (Note, Ada.Text_IO.Out_File, Path & ".sha256");
+            Ada.Text_IO.Put_Line (Note, [1 .. 64 => 'a']);
+            Ada.Text_IO.Close (Note);
+         end;
+         Assert (not Model_Runner.Hub.Is_Whole (File, Path),
+                 "a file was taken for the hub's by a digest kept for another");
+         Ada.Directories.Delete_File (Path & ".sha256");
+         Ada.Directories.Delete_File (Path);
+      end;
    end Hub_Names_Stay_Inside;
 
    procedure Tab_Completes_Commands (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -13643,6 +13723,13 @@ package body Tests.CLI_Cases is
                 = "caf" & C2 & Character'Val (16#A0#) & "\xC2\x9B2J",
               "a C1 control was obeyed, or a no-break space escaped");
 
+      --  And what a trace or a file name shows escapes them the same way.
+      Assert (UT.Escape_Controls ("x" & C2 & CSI & "1A") = "x\xC2\x9B1A"
+              and then UT.Escape_Controls ("caf" & C2 & Character'Val (16#A0#))
+                         = "caf" & C2 & Character'Val (16#A0#),
+              "a C1 control in a trace was obeyed, or a no-break space escaped: "
+              & UT.Escape_Controls ("x" & C2 & CSI & "1A"));
+
       --  2. A C1 control cut between two pieces is still seen: the C2 is
       --  held, and the next piece starts from it.
       Lead := False;
@@ -13671,6 +13758,26 @@ package body Tests.CLI_Cases is
               "a cut by columns split a character or overran:"
               & Natural'Image (U8.Fitting (Bytes (Ni & Hon & Go), 5)));
 
+      --  The sink a caller decorates through: off a terminal, what it is
+      --  shown is the text as it is, and what is written is written as it
+      --  was handed over -- the decoration's own sequences untouched.
+      declare
+         Sink   : Model_Runner.Presentation.Standard_Output_Sink;
+         Closed : Boolean;
+      begin
+         Captured_Output.Open ("obj/write-shown.txt");
+         Sink.Write_Shown
+           (Sink.Shown ("ok") & ESC & "[33m" & "done" & ESC & "[0m", Closed);
+         declare
+            Caught : constant String := Captured_Output.Close;
+         begin
+            if Captured_Output.Took_Effect then
+               Assert (not Closed and then Caught = "ok" & ESC & "[33mdone" & ESC & "[0m",
+                       "a decorated line was not written as handed over: " & Caught);
+            end if;
+         end;
+      end;
+
       --  4. Trimming leftovers keeps a file written a moment ago.
       declare
          Folder : constant String := "obj/trim-settled";
@@ -13693,9 +13800,74 @@ package body Tests.CLI_Cases is
       end;
    end Terminal_Text_Is_Shown_And_Measured;
 
+   --  models remove takes a model of the store by its own name, and says
+   --  when a file would not go: a name climbing out of the store deleted
+   --  what it named, and a failed delete was reported as removed.
+   procedure Models_Remove_Stays_In_The_Store
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : constant String := Ada.Directories.Full_Name ("obj/remove-store");
+      Victim : constant String := Ada.Directories.Full_Name ("obj/remove-victim.gguf");
+      Before : constant String :=
+        (if Ada.Environment_Variables.Exists ("MODEL_RUNNER_MODELS")
+         then Ada.Environment_Variables.Value ("MODEL_RUNNER_MODELS") else "");
+
+      procedure Touch (Path : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put_Line (F, "x");
+         Ada.Text_IO.Close (F);
+      end Touch;
+
+      function Removing (Name : String) return Natural is
+         Source : Fixed_Arguments;
+         Code   : Natural;
+      begin
+         Add (Source, "models");
+         Add (Source, "remove");
+         Add (Source, Name);
+         Ran (Source, Code);
+         return Code;
+      end Removing;
+   begin
+      if not Ada.Directories.Exists (Store) then
+         Ada.Directories.Create_Path (Store);
+      end if;
+      Touch (Store & "/kept.gguf");
+      Touch (Victim);
+      Ada.Environment_Variables.Set ("MODEL_RUNNER_MODELS", Store);
+      begin
+         Assert (Removing ("../remove-victim.gguf") /= 0
+                 and then Ada.Directories.Exists (Victim),
+                 "models remove deleted a file outside the store");
+         Assert (Removing ("kept.gguf") = 0
+                 and then not Ada.Directories.Exists (Store & "/kept.gguf"),
+                 "models remove did not remove a model of the store");
+      exception
+         when others =>
+            if Before = "" then
+               Ada.Environment_Variables.Clear ("MODEL_RUNNER_MODELS");
+            else
+               Ada.Environment_Variables.Set ("MODEL_RUNNER_MODELS", Before);
+            end if;
+            raise;
+      end;
+      if Before = "" then
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_MODELS");
+      else
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_MODELS", Before);
+      end if;
+      Ada.Directories.Delete_File (Victim);
+   end Models_Remove_Stays_In_The_Store;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Models_Remove_Stays_In_The_Store'Access,
+         "models remove takes a model of the store by its own name");
       Register_Routine
         (T, Terminal_Text_Is_Shown_And_Measured'Access,
          "what a model writes is shown on a terminal, not obeyed, and a "

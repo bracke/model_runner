@@ -68,7 +68,8 @@ is
        and then Settings.Experts_Used
                 <= Model_Runner.Backend.Device.Max_Members
          and then not Settings.Sigmoid_Gate
-         and then L.Select_Bias = null);
+         and then L.Select_Bias = null
+         and then not Grouped (Settings));
 
    --  A hybrid's linear layer goes whole where the device has the
    --  rule and the convolution, the session a ring that is over, and
@@ -1026,7 +1027,7 @@ begin
                        (Element_Count (Settings.Rotary), Item.Committed,
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)),
-                        Turns (Source),
+                        Turns (Source, Item),
                         Cosines => Cosines, Sines => Sines,
                         Sections => Settings.Sections,
                         Place => Place_At (Item, Item.Committed));
@@ -1408,7 +1409,7 @@ begin
                   then
                      K.Rotary_Table
                        (Element_Count (Settings.Rotary), Item.Committed,
-                        Base, Stretch, Turns (Source),
+                        Base, Stretch, Turns (Source, Item),
                         Cosines => Item.Turned_Cos (0 .. Pairs - 1),
                         Sines => Item.Turned_Sin (0 .. Pairs - 1));
                      Item.Turned := True;
@@ -1434,14 +1435,14 @@ begin
                   K.Apply_Rotary
                     (Item.Query.all, Heads, Head_Size,
                      Element_Count (Settings.Rotary), Item.Committed,
-                     Base, Stretch, Turns (Source), Settings.Pairing,
+                     Base, Stretch, Turns (Source, Item), Settings.Pairing,
                      Sections => Settings.Sections,
                      Place => Place_At (Item, Item.Committed),
                      Offset => Shift);
                   K.Apply_Rotary
                     (Item.Key_Row.all, KV_Heads, Head_Size,
                      Element_Count (Settings.Rotary), Item.Committed,
-                     Base, Stretch, Turns (Source), Settings.Pairing,
+                     Base, Stretch, Turns (Source, Item), Settings.Pairing,
                      Sections => Settings.Sections,
                      Place => Place_At (Item, Item.Committed),
                      Offset => Shift);

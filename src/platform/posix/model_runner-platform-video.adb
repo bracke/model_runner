@@ -546,7 +546,9 @@ package body Model_Runner.Platform.Video is
          Stated := Long_At (Stream, At_Stream_Frames);
       end;
 
-      if Stated > 0 then
+      --  A count past what a count holds is no count the file can mean:
+      --  counted, as one it does not state is.
+      if Stated > 0 and then Stated <= Long_Long_Integer (Positive'Last) then
          Item.Count := Positive (Stated);
       else
          declare
@@ -575,6 +577,13 @@ package body Model_Runner.Platform.Video is
       --  The frames' size is a decoded frame's, read on the first Next;
       --  until then Width and Height say one.
       Item.Ready := True;
+   exception
+      --  Whatever a file's numbers raised is a file that could not be
+      --  read, said so, and the library's contexts given back.
+      when others =>
+         Release (Item);
+         Item.Ready := False;
+         Refuse (Status, Path, "the video's stream could not be read");
    end Open;
 
    -----------

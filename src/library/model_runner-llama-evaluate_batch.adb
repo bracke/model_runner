@@ -229,7 +229,8 @@ is
        and then Settings.Experts_Used
                 <= Model_Runner.Backend.Device.Max_Route
          and then not Settings.Sigmoid_Gate
-         and then L.Select_Bias = null);
+         and then L.Select_Bias = null
+         and then not Grouped (Settings));
 
    --  The next layer's expert stacks, copied to the device in the
    --  background while this layer runs, where the device streams them.
@@ -1493,7 +1494,7 @@ begin
                              (Element_Count (Settings.Rotary),
                               Natural (Sits_At (Which)),
                               Turn_Base (Settings, Natural (Index)),
-                              Turn_Scaling (Settings, Natural (Index)), Turns (Source),
+                              Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
                               Cosines => Cosines, Sines => Sines,
                               Sections => Settings.Sections,
                               Place =>
@@ -2208,7 +2209,7 @@ begin
                         Head_Size, Element_Count (Settings.Rotary),
                         Natural (Sits_At (Which)),
                         Turn_Base (Settings, Natural (Index)),
-                        Turn_Scaling (Settings, Natural (Index)), Turns (Source),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
                         Settings.Pairing,
                         Sections => Settings.Sections,
                         Place =>

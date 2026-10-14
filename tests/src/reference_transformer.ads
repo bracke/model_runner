@@ -460,6 +460,11 @@ private
       Sigmoid_Gate : Boolean := False;
       Renormalize  : Boolean := True;
 
+      --  How many groups the experts are chosen within and how many of
+      --  them are kept, nought for none.
+      Expert_Groups      : Natural := 0;
+      Expert_Groups_Used : Natural := 0;
+
       --  Whether the two halves of the block run side by side from the
       --  layer's input, each with its own normalization. GPT-NeoX does;
       --  every other architecture here runs them one after the other.

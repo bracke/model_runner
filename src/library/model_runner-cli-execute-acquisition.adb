@@ -3,6 +3,7 @@ with Ada.Calendar;
 with Ada.Directories;
 with Ada.Text_IO;
 with Interfaces;
+with Hostkit.Metadata;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Limits;
 with Model_Runner.Platform;
@@ -35,7 +36,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
         and then
           (File.Size = 0
            or else Ada.Directories.Size (Path)
-                   = Ada.Directories.File_Size (File.Size));
+                   = Ada.Directories.File_Size (File.Size))
+        and then Model_Runner.Hub.Is_Whole (File, Path);
    exception
       when others =>
          return False;
@@ -364,12 +366,23 @@ package body Model_Runner.CLI.Execute.Acquisition is
          if Item.No_Cache or else not Ada.Directories.Exists (Path) then
             return "";
          end if;
-         return Model_Runner.Platform.Panel_File
-           (Path
-            & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
-            & "|" & Ada.Calendar.Formatting.Image
-                      (Ada.Directories.Modification_Time (Path),
-                       Include_Time_Fraction => True));
+         --  And by what the file system says of its contents: its
+         --  modification and status-change times to the nanosecond, its
+         --  size and its file number. Size and modification time alone
+         --  were kept by a copy that keeps times (cp -p, rsync -t), and
+         --  the panels of the file that was there were served.
+         declare
+            Known : Boolean;
+            Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Known);
+         begin
+            return Model_Runner.Platform.Panel_File
+              (Path
+               & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
+               & "|" & Ada.Calendar.Formatting.Image
+                         (Ada.Directories.Modification_Time (Path),
+                          Include_Time_Fraction => True)
+               & (if Known then "|" & Stamp else ""));
+         end;
       exception
          when others =>
             return "";

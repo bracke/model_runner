@@ -80,7 +80,9 @@ package body Tiny_Model is
       Sigmoid_Routing : Boolean := False;
       Expert_Groups   : Natural := 0;
       Split_Latent    : Boolean := False;
-      Caps            : Boolean := True)
+      Caps            : Boolean := True;
+      Alignment       : Natural := 0;
+      Header_Pad      : Natural := 0)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -522,7 +524,12 @@ package body Tiny_Model is
       end Layer_Name;
 
    begin
-      Fixtures.Reset (Builder);
+      Fixtures.Reset (Builder, Alignment => G.U64 (Alignment));
+      --  Bytes of header for a test that wants the data to begin at a
+      --  place of its choosing.
+      if Header_Pad > 0 then
+         Fixtures.Add_String (Builder, "fixture.pad", [1 .. Header_Pad => 'x']);
+      end if;
 
       Fixtures.Add_String
         (Builder, "general.architecture", Prefix);
@@ -565,8 +572,13 @@ package body Tiny_Model is
            (Builder, Prefix & ".attention.head_count_kv",
             --  DeepSeek's latent attention reconstructs a key and a value
             --  a head, so it is multi-head rather than grouped-query: every
-            --  head has its own, the count of them the head count.
-            (if Kind = Deepseek2 then Heads else KV_Heads));
+            --  head has its own. The older converter states the head count;
+            --  the current one, writing the latent split, states one -- the
+            --  latent row an absorbed reader keeps -- and a reader that took
+            --  it for the head count would keep a cache a head wide.
+            (if Kind = Deepseek2 and then Split_Latent then 1
+             elsif Kind = Deepseek2 then Heads
+             else KV_Heads));
       end if;
       --  Bert states the same quantity under the key that names the
       --  normalization it belongs to, which is not the root-mean-square

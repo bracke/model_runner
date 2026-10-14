@@ -216,6 +216,7 @@ begin
      --  weight by.
      and then not Settings.Sigmoid_Gate
      and then Current.Select_Bias = null
+     and then not Grouped (Settings)
    then
       declare
          Choice : Model_Runner.Backend.Device.Choice_Array
@@ -267,6 +268,7 @@ begin
    if Count <= Model_Runner.Backend.Device.Front_Route_Most
      and then not Settings.Sigmoid_Gate
      and then Current.Select_Bias = null
+     and then not Grouped (Settings)
      and then Item.Owner.all.Split_Feed
      and then Model_Runner.Backend."="
                 (Item.Owner.Able.Kind,
@@ -313,7 +315,7 @@ begin
          Scores : T.Real_Array renames
            Item.Route_Rows.all (At_Row .. At_Row + Element_Count (Many) - 1);
 
-         Taken : array (0 .. Many - 1) of Boolean := [others => False];
+         Taken : Expert_Flags (0 .. Many - 1) := [others => False];
          Total : Real := 0.0;
       begin
          if Current.Router_Bias /= null then
@@ -328,6 +330,23 @@ begin
                Status := E.Make (E.Tensor_Non_Finite_Value);
                return;
             end if;
+         end if;
+
+         --  The best few groups' experts alone, where the model chooses so.
+         if Grouped (Settings) then
+            declare
+               Picks : Real_Array (0 .. Element_Count (Many) - 1);
+            begin
+               for Which in Taken'Range loop
+                  Picks (Element_Count (Which)) :=
+                    Scores (Scores'First + Element_Count (Which))
+                    + (if Current.Select_Bias = null then 0.0
+                       else Current.Select_Bias
+                              (Current.Select_Bias'First
+                               + Element_Count (Which)));
+               end loop;
+               Keep_Groups (Settings, Picks, Taken);
+            end;
          end if;
 
          for Slot in 0 .. Used - 1 loop

@@ -352,10 +352,17 @@ package body Model_Runner.Quantization is
    begin
       Ok := False;
 
+      --  And a stride or a block count no vector could hold is refused
+      --  before the reach below is worked out from it: multiplied first,
+      --  either overflowed and raised.
       if not Is_Decodable (Format)
         or else Blocks = 0
         or else Count = 0
         or else Sums'Length < Count
+        or else Blocks > Element_Count (Vectors'Length) / Per
+        or else (Count > 1
+                 and then Stride > Element_Count (Vectors'Length) / (Count - 1))
+        or else First > Element_Count'Last / 4
         or else not B.Has_Room (Data, Offset, Width * B.Byte_Count (Blocks))
       then
          return;

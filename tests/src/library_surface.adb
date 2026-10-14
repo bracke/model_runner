@@ -93,7 +93,6 @@ package body Library_Surface is
       new String'("In_Range"),
       new String'("Is_NaN"),
       new String'("To_Natural"),
-      new String'("Wide_Bits"),
 
       --  And where the device's time went, step by step, from its own
       --  clock. `tests speed --device-timeline` is what asks; the command

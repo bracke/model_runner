@@ -276,10 +276,18 @@ package Model_Runner.Tokenizer is
    --  vocabulary's author added as a word of its own -- <think> -- is
    --  left as it is: it is no turn of the template's.
    --
+   --  Also names markers to defuse whatever their class: a projector's
+   --  picture tokens, which a file may mark as words of its own -- a
+   --  pasted "<image>" read as MiniCPM-V's picture marker refused the
+   --  prompt as a count of pictures that did not match.
+   --
    --  @param Item Vocabulary whose markers are meant.
    --  @param Text Message content.
+   --  @param Also Further markers to defuse.
    --  @return Text, each control marker in it defused.
-   function Defused (Item : Vocabulary; Text : String) return String;
+   function Defused
+     (Item : Vocabulary; Text : String; Also : Token_Array := [1 .. 0 => No_Token])
+      return String;
 
    --  Encode text into tokens.
    --

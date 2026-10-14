@@ -179,6 +179,7 @@ en.help.embed.arith =   --arith MODE            how a matrix product multiplies:
 en.help.embed.context_size =   --context-size N        context capacity in tokens; 0 uses the model's
 en.help.embed.memory_limit =   --memory-limit BYTES    refuse a model that would need more
 en.help.embed.mmap =   --mmap=MODE             map the file instead of reading it
+en.help.embed.no_mmap =   --no-mmap               never memory-map the model file
 en.help.embed.quiet =   --quiet                 suppress progress, notes and warnings
 en.help.embed.verbose =   --verbose               report progress and detail on standard error
 en.help.embed.locale =   --locale NAME           locale for program messages
@@ -899,6 +900,7 @@ en.cli.work.runner = {value}: the agent is {name}
 en.cli.work.runner.session = the session's model
 en.cli.work.runner_apart = a model named by model=PATH runs apart, with file tools only: it runs no checks and makes no helpers -- /work without model= runs the session's model, which does
 en.cli.work.steps_capped = steps={value} is more than {name} may take: it runs {count}, as {other} allows
+en.cli.run.capped = {name} {value} is more than this run takes: it runs {count}
 en.cli.work.overwritten_kept = the files it wrote over are kept as they were in {name} -- {detail}: /task kept diff {name} shows what changed, and /task kept restore {name} puts them back
 en.cli.work.section.start = Starting {name}
 en.cli.work.section.run = The run
@@ -1520,6 +1522,7 @@ da.help.embed.arith = --arith TILSTAND        hvordan et matrixprodukt ganges: {
 da.help.embed.context_size = --context-size N        kontekstens størrelse i tegn; 0 bruger modellens
 da.help.embed.memory_limit = --memory-limit BYTES    afvis en model der ville kræve mere
 da.help.embed.mmap = --mmap=TILSTAND         kortlæg filen i stedet for at læse den
+da.help.embed.no_mmap = --no-mmap               hukommelsesafbild aldrig modelfilen
 da.help.embed.quiet = --quiet                 undertryk fremdrift, noter og advarsler
 da.help.embed.verbose = --verbose               rapportér fremdrift og detaljer på standard fejl
 da.help.embed.locale = --locale NAVN           sprog for programmets meddelelser
@@ -2404,6 +2407,7 @@ da.cli.work.runner = {value}: agenten er {name}
 da.cli.work.runner.session = sessionens model
 da.cli.work.runner_apart = en model angivet med model=PATH kører for sig, kun med filværktøjer: den kører ingen tjek og laver ingen hjælpere -- /work uden model= kører sessionens model, som gør
 da.cli.work.steps_capped = steps={value} er flere end {name} må tage: den kører {count}, som {other} tillader
+da.cli.run.capped = {name} {value} er flere end denne kørsel tager: den kører {count}
 da.cli.work.overwritten_kept = de filer den skrev over gemmes som de var i {name} -- {detail}: /task kept diff {name} viser hvad der ændrede sig, og /task kept restore {name} lægger dem tilbage
 da.cli.work.section.start = Starter {name}
 da.cli.work.section.run = Kørslen
@@ -2951,6 +2955,7 @@ qps.help.embed.arith = ⟦  --arith MODE            hów á màŧríx þróðú�
 qps.help.embed.context_size = ⟦  --context-size N        çóñŧéxŧ çáþáçíŧý íñ ŧókéñß⟧
 qps.help.embed.memory_limit = ⟦  --memory-limit BYTES    réfúßé á móðéĺ ŧháŧ wóúĺð ñééð móré⟧
 qps.help.embed.mmap = ⟦  --mmap=MODE             máþ ŧhé fíĺé íñßŧéáð óf réáðíñg íŧ⟧
+qps.help.embed.no_mmap = ⟦  --no-mmap               ñévéŕ mémóŕý-máp ŧhé móðéĺ fíĺé⟧
 qps.help.embed.quiet = ⟦  --quiet                 ßúþþréßß þrógréßß, ñóŧéß áñð wárñíñgß⟧
 qps.help.embed.verbose = ⟦  --verbose               réþórŧ þrógréßß áñð ðéŧáíĺ⟧
 qps.help.embed.locale = ⟦  --locale NAME           ĺóçáĺé fór þrógrám méßßágéß⟧
@@ -3668,6 +3673,7 @@ qps.cli.work.runner = ⟦{value}: ŧhé ágéñŧ íß {name}⟧
 qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
 qps.cli.work.runner_apart = ⟦á móðéĺ ñáméð bý móðéĺ=PAŦH ŕúñß ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý: íŧ ŕúñß ñó çhéçkß áñð mákéß ñó héĺpéŕß -- /wóŕk wíŧhóúŧ móðéĺ= ŕúñß ŧhé ßéßßíóñ'ß móðéĺ, whíçh ðóéß⟧
 qps.cli.work.steps_capped = ⟦ßŧépß={value} íß móŕé ŧháñ {name} máý ŧáké: íŧ ŕúñß {count}, áß {other} áĺĺówß⟧
+qps.cli.run.capped = ⟦{name} {value} íß móŕé ŧháñ ŧhíß ŕúñ ŧáķéß: íŧ ŕúñß {count}⟧
 qps.cli.work.overwritten_kept = ⟦ŧhé fíĺéß íŧ wŕóŧé óvéŕ áŕé képŧ áß ŧhéý wéŕé íñ {name} -- {detail}: /ŧáßk képŧ ðíff {name} ßhówß wháŧ çháñgéð, áñð /ŧáßk képŧ ŕéßŧóŕé {name} púŧß ŧhém báçk⟧
 qps.cli.work.section.start = ⟦Sŧáŕŧíñg {name}⟧
 qps.cli.work.section.run = ⟦Ŧhé ŕúñ⟧

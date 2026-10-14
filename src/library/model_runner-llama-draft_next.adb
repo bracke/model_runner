@@ -163,7 +163,7 @@ begin
         (Item.Query.all, Heads, Item.Key_Row.all, KV_Heads, Head_Size,
          Element_Count (Settings.Rotary), Position,
          Turn_Base (Settings, Layer_Index), Turn_Scaling (Settings, Layer_Index),
-         Turns (Source), Settings.Pairing,
+         Turns (Source, Item), Settings.Pairing,
          Sections => Settings.Sections,
          Place => K.Everywhere (Rope_Next (Item, Position)));
 

@@ -2477,12 +2477,13 @@ begin
              else "");
 
          --  The panel cache's file: a header of Header_Bytes -- a mark,
-         --  the layout's version, the panels' bytes and how many matrices
-         --  -- and then every matrix's panels in Held's order, as the
-         --  rewrite lays them out in memory.
+         --  the layout's version, the panels' bytes, how many matrices and
+         --  a digest of each one's format and shape -- and then every
+         --  matrix's panels in Held's order, as the rewrite lays them out
+         --  in memory. Version 2 added the digest.
          Header_Bytes : constant := 4096;
          Mark         : constant String := "MRPANELS";
-         Version      : constant := 1;
+         Version      : constant := 2;
 
          package Files renames Model_Runner.Byte_Sources.Files;
          package IL renames Model_Runner.Quantization.Interleave;
@@ -2515,11 +2516,31 @@ begin
             return Result;
          end Header_Word;
 
+         --  Every matrix's format, rows and columns, in Held's order, as
+         --  one FNV-1a word: a file whose panels are laid out for other
+         --  matrices of the same total says so before a byte is read.
+         function Shape_Digest return Interfaces.Unsigned_64 is
+            Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+            procedure Mix (Value : Interfaces.Unsigned_64) is
+            begin
+               Hash := (Hash xor Value) * 16#0000_0100_0000_01B3#;
+            end Mix;
+         begin
+            for Where of Held loop
+               Mix (Interfaces.Unsigned_64
+                      (Model_Runner.GGUF.Tensor_Type'Pos (Where.all.Format)));
+               Mix (Interfaces.Unsigned_64 (Where.all.Rows));
+               Mix (Interfaces.Unsigned_64 (Where.all.Columns));
+            end loop;
+            return Hash;
+         end Shape_Digest;
+
          function Header (Total : B.Byte_Count) return String
          is (Mark
              & Header_Word (Version)
              & Header_Word (Interfaces.Unsigned_64 (Total))
-             & Header_Word (Interfaces.Unsigned_64 (Held'Length)));
+             & Header_Word (Interfaces.Unsigned_64 (Held'Length))
+             & Header_Word (Shape_Digest));
 
          --  The cached panels mapped and read where they lie, where the
          --  file is there, is the size and says what these panels say,
@@ -2568,44 +2589,60 @@ begin
                end if;
             end;
 
+            --  The first panel of every matrix and its last: a file
+            --  rewritten in place with its size and time kept differs
+            --  somewhere, and where it does not differ at either end the
+            --  key's change stamp has already told it apart.
             for Which in Held'Range loop
                exit when not Verify;
-               declare
-                  Where : constant View_Access := Held (Which);
-                  Size  : constant B.Byte_Count :=
-                    IL.Panel_Bytes
-                      (Where.all.Format, IL.Panel_Rows, Blocks_Of (Where));
-                  Source : B.Byte_Array (1 .. Where.all.Span)
-                    with Import, Address => Where.all.Base;
-                  Kept  : B.Byte_Array (1 .. Size)
-                    with Import,
-                         Address =>
-                           System.Storage_Elements.To_Address
-                             (System.Storage_Elements.To_Integer
-                                (Files.Base (Map.all))
-                              + System.Storage_Elements.Integer_Address
-                                  (Header_Bytes + Base_Of (Which)));
-                  Probe : B.Byte_Array_Access := new B.Byte_Array (1 .. Size);
-                  Taken : Boolean;
-                  Same  : Boolean;
-               begin
-                  Probe.all := [others => 0];
-                  IL.Build
-                    (Format => Where.all.Format,
-                     Source => Source,
-                     From   => Where.all.Offset,
-                     Target => Probe.all,
-                     Into   => 0,
-                     Rows   => IL.Panel_Rows,
-                     Blocks => Blocks_Of (Where),
-                     Ok     => Taken);
-                  Same := Taken and then B."=" (Probe.all, Kept);
-                  B.Free (Probe);
-                  if not Same then
-                     Give_Up;
-                     return False;
-                  end if;
-               end;
+               for At_End in Boolean loop
+                  declare
+                     Where : constant View_Access := Held (Which);
+                     Size  : constant B.Byte_Count :=
+                       IL.Panel_Bytes
+                         (Where.all.Format, IL.Panel_Rows, Blocks_Of (Where));
+                     Panel : constant B.Byte_Count :=
+                       (if At_End
+                        then B.Byte_Count (Where.all.Rows / IL.Panel_Rows) - 1
+                        else 0);
+                     Row_Size : constant B.Byte_Count :=
+                       B.Byte_Count (Blocks_Of (Where))
+                       * B.Byte_Count
+                           (Model_Runner.GGUF.Block_Bytes (Where.all.Format));
+                     Source : B.Byte_Array (1 .. Where.all.Span)
+                       with Import, Address => Where.all.Base;
+                     Kept  : B.Byte_Array (1 .. Size)
+                       with Import,
+                            Address =>
+                              System.Storage_Elements.To_Address
+                                (System.Storage_Elements.To_Integer
+                                   (Files.Base (Map.all))
+                                 + System.Storage_Elements.Integer_Address
+                                     (Header_Bytes + Base_Of (Which)
+                                      + Panel * Size));
+                     Probe : B.Byte_Array_Access := new B.Byte_Array (1 .. Size);
+                     Taken : Boolean;
+                     Same  : Boolean;
+                  begin
+                     Probe.all := [others => 0];
+                     IL.Build
+                       (Format => Where.all.Format,
+                        Source => Source,
+                        From   => Where.all.Offset
+                                  + Panel * B.Byte_Count (IL.Panel_Rows) * Row_Size,
+                        Target => Probe.all,
+                        Into   => 0,
+                        Rows   => IL.Panel_Rows,
+                        Blocks => Blocks_Of (Where),
+                        Ok     => Taken);
+                     Same := Taken and then B."=" (Probe.all, Kept);
+                     B.Free (Probe);
+                     if not Same then
+                        Give_Up;
+                        return False;
+                     end if;
+                  end;
+               end loop;
             end loop;
 
             for Which in Held'Range loop

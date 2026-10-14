@@ -4,7 +4,9 @@ with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with System.Storage_Elements;
 with Hostkit.Durability;
+with Hostkit.Host;
 with Model_Runner.Platform;
+with Model_Runner.Text;
 
 package body Model_Runner.Panel_Cache is
 
@@ -12,6 +14,66 @@ package body Model_Runner.Panel_Cache is
    use type B.Byte_Count;
    use type Hostkit.Durability.Outcome;
    use type System.Storage_Elements.Integer_Address;
+
+   protected Builds is
+      procedure Next (Value : out Natural);
+   private
+      Count : Natural := 0;
+   end Builds;
+
+   protected body Builds is
+      procedure Next (Value : out Natural) is
+      begin
+         Count := (if Count = Natural'Last then 0 else Count + 1);
+         Value := Count;
+      end Next;
+   end Builds;
+
+   ---------------
+   -- Part_Name --
+   ---------------
+
+   function Part_Name (Path : String) return String is
+      Seq : Natural;
+   begin
+      Builds.Next (Seq);
+      declare
+         Pid : constant String := Integer'Image (Hostkit.Host.Own_Process_Id);
+         Own : constant String := Natural'Image (Seq);
+      begin
+         return Path & "." & Model_Runner.Text.Trim (Pid)
+           & "-" & Own (Own'First + 1 .. Own'Last) & ".part";
+      end;
+   end Part_Name;
+
+   --  Parts an ended process left -- killed while it built -- removed once
+   --  they have sat an hour: a part another load is writing now is no
+   --  leftover, and each name is a build's own so nothing reuses one.
+   procedure Sweep_Parts (Path : String) is
+      use Ada.Directories;
+      use type Ada.Calendar.Time;
+      Now  : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      Look : Search_Type;
+      Item : Directory_Entry_Type;
+   begin
+      Start_Search
+        (Look, Containing_Directory (Path), "*.panels*.part",
+         [Ordinary_File => True, others => False]);
+      while More_Entries (Look) loop
+         Get_Next_Entry (Look, Item);
+         if Now - Modification_Time (Item) > 3600.0 then
+            begin
+               Delete_File (Full_Name (Item));
+            exception
+               when others => null;
+            end;
+         end if;
+      end loop;
+      End_Search (Look);
+   exception
+      when others =>
+         null;
+   end Sweep_Parts;
 
    --------------
    -- Is_There --
@@ -38,10 +100,17 @@ package body Model_Runner.Panel_Cache is
         (Look, Folder, Stem & "*", [Ordinary_File => True, others => False]);
       while More_Entries (Look) and then Held < Most loop
          Get_Next_Entry (Look, Entry_Of);
-         Held := Held + 1;
-         List (Held) :=
-           (Ada.Strings.Unbounded.To_Unbounded_String (Full_Name (Entry_Of)),
-            Modification_Time (Entry_Of));
+         --  Not a part: that is a build under way, another load's perhaps.
+         declare
+            Name : constant String := Full_Name (Entry_Of);
+         begin
+            if Name'Length < 5 or else Name (Name'Last - 4 .. Name'Last) /= ".part" then
+               Held := Held + 1;
+               List (Held) :=
+                 (Ada.Strings.Unbounded.To_Unbounded_String (Name),
+                  Modification_Time (Entry_Of));
+            end if;
+         end;
       end loop;
       End_Search (Look);
 
@@ -111,7 +180,7 @@ package body Model_Runner.Panel_Cache is
       Ok     : out Boolean)
    is
       use Ada.Streams.Stream_IO;
-      Part  : constant String := Path & ".part";
+      Part  : constant String := Part_Name (Path);
       Out_F : File_Type;
       Head  : Ada.Streams.Stream_Element_Array (1 .. Header_Size) :=
         [others => 0];
@@ -119,12 +188,14 @@ package body Model_Runner.Panel_Cache is
       Panels := System.Null_Address;
       Ok := False;
       Item.Path := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+      Item.Part := Ada.Strings.Unbounded.To_Unbounded_String (Part);
 
       if Header'Length > Header_Size then
          return;
       end if;
 
       Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
+      Sweep_Parts (Path);
       for Index in Header'Range loop
          Head (Ada.Streams.Stream_Element_Offset (Index - Header'First + 1)) :=
            Character'Pos (Header (Index));
@@ -161,19 +232,20 @@ package body Model_Runner.Panel_Cache is
 
    procedure Finish (Item : in out Building; Ok : out Boolean) is
       Path : constant String := Ada.Strings.Unbounded.To_String (Item.Path);
+      Part : constant String := Ada.Strings.Unbounded.To_String (Item.Part);
    begin
       Ok := False;
       --  The panels on the device before the name says they are whole: a
       --  crash after a rename that outran the data would leave a file
       --  whose first panel verifies over zeros past it.
-      if Hostkit.Durability.Sync_File (Path & ".part") = Hostkit.Durability.Failed then
+      if Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed then
          Abandon (Item);
          return;
       end if;
       if Ada.Directories.Exists (Path) then
          Ada.Directories.Delete_File (Path);
       end if;
-      Ada.Directories.Rename (Path & ".part", Path);
+      Ada.Directories.Rename (Part, Path);
       Settle_Name (Path);
       Ok := True;
 
@@ -200,11 +272,10 @@ package body Model_Runner.Panel_Cache is
    -------------
 
    procedure Abandon (Item : in out Building) is
-      Part : constant String :=
-        Ada.Strings.Unbounded.To_String (Item.Path) & ".part";
+      Part : constant String := Ada.Strings.Unbounded.To_String (Item.Part);
    begin
       Model_Runner.Platform.Mapping.Close (Item.Region);
-      if Part /= ".part" and then Ada.Directories.Exists (Part) then
+      if Part /= "" and then Ada.Directories.Exists (Part) then
          Ada.Directories.Delete_File (Part);
       end if;
    exception
@@ -245,10 +316,11 @@ package body Model_Runner.Panel_Cache is
       declare
          Path  : constant String := Ada.Strings.Unbounded.To_String (Path_Text);
          Text  : constant String := Ada.Strings.Unbounded.To_String (Head_Text);
-         Part  : constant String := Path & ".part";
+         Part  : constant String := Part_Name (Path);
          Out_F : File_Type;
       begin
          Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
+         Sweep_Parts (Path);
          Create (Out_F, Out_File, Part);
 
          declare

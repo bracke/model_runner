@@ -173,7 +173,6 @@ package body Model_Runner.CLI.Execute.Embed_Command is
               new Vocab.Token_Array
                 (1 .. Prompt.all'Length + 8
                       + (if Item.Query_Text = null then 0 else Item.Query_Text.all'Length));
-            Tokens : Vocab.Token_Array renames Held.all;
             Count  : Natural;
 
             --  Empty where the model has no projection to a distribution,
@@ -197,7 +196,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));
 
-            --  Build the query/document pair a reranker scores, into Tokens
+            --  Build the query/document pair a reranker scores, into Held
             --  and Count: <s> query </s></s> document </s> for the RoBERTa
             --  family, whose separator is its end marker; a [SEP] where a BERT
             --  has one. Sets Condition; leaves the pair for the caller to run.
@@ -226,9 +225,9 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                begin
                   if Tok = Vocab.No_Token or else E.Is_Error (Condition) then
                      return;
-                  elsif K < Tokens'Length then
+                  elsif K < Held'Length then
                      K := K + 1;
-                     Tokens (Tokens'First + K - 1) := Tok;
+                     Held (Held'First + K - 1) := Tok;
                   else
                      Condition := E.Make (E.Tokenizer_Buffer_Too_Small);
                   end if;
@@ -266,6 +265,14 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   return;
                end if;
 
+               --  The pair's room from what the two texts came to, where a
+               --  normalizer made more of them than their bytes: a document
+               --  of U+FDFA grew past the room its length gave.
+               if Q_Count + D_Count + 6 > Held'Length then
+                  Free (Held);
+                  Held := new Vocab.Token_Array (1 .. Q_Count + D_Count + 6);
+               end if;
+
                if Vocab.Adds_Beginning (Words.all) then
                   Put (Beginning);
                end if;
@@ -298,7 +305,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                         Ended : constant Boolean :=
                           not Settings.Causal
                           and then Vocab.Adds_End (Words.all)
-                          and then Tokens (Count) = Vocab.End_Token (Words.all);
+                          and then Held (Count) = Vocab.End_Token (Words.all);
                      begin
                         Pres.Put_Note
                           (Screen, "cli.note.embed_truncated",
@@ -307,7 +314,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                             Loc.Named ("total",
                                        T.Image (Long_Long_Integer (Count)))]);
                         if Ended then
-                           Tokens (Most) := Tokens (Count);
+                           Held (Most) := Held (Count);
                         end if;
                         Count := Most;
                      end;
@@ -384,7 +391,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                               Score : N.Real;
                            begin
                               L.Evaluate_Batch
-                                (Session, Prepared, Tokens (1 .. Count),
+                                (Session, Prepared, Held (1 .. Count),
                                  Logits, States => Room, Status => Condition);
                               if E.Is_Error (Condition) then
                                  Free_Reals (Room);
@@ -440,7 +447,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                Vocab.Encode
                  (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
                   not Settings.Causal and then Vocab.Adds_End (Words.all),
-                  Tokens, Count, Condition);
+                  Held.all, Count, Condition);
                if E.Is_Error (Condition) then
                   Fail (Condition);
                   return;
@@ -505,7 +512,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                        N.Element_Count (Upto - From + 1);
                   begin
                      L.Evaluate_Batch
-                       (Session, Prepared, Tokens (From .. Upto), Logits,
+                       (Session, Prepared, Held (From .. Upto), Logits,
                         States => Room, Status => Condition);
                      if E.Is_Error (Condition) then
                         Free_Reals (Room);

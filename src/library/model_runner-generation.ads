@@ -228,6 +228,13 @@ package Model_Runner.Generation is
       --  that differs from the one being rendered.
       Reuse_Committed_Prefix : Boolean := False;
 
+      --  The committed context came from a file -- a saved session, the
+      --  prefill cache -- whose pictures are not known: a picture's
+      --  positions hold the same placeholder token whatever the picture, so
+      --  reuse stops at the first of them, and a second picture asked about
+      --  the same way is not answered about the first.
+      Pictures_Unverified : Boolean := False;
+
       --  Bytes at the prompt's end that the conversation's next rendering
       --  writes otherwise -- the template's opening of the answer, as
       --  Templates.Opening counts it. A hybrid keeps its states where they

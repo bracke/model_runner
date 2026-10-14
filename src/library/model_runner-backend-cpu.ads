@@ -304,11 +304,11 @@ package Model_Runner.Backend.CPU is
    --  Counted since the process began, for the statistics a run reports.
    --
    --  @return Shares answered by an integer kernel.
-   function Integer_Shares return Natural;
+   function Integer_Shares return Long_Long_Integer;
 
    --  @return Shares of a quantized product taken by the floating-point
    --    path.
-   function Float_Shares return Natural;
+   function Float_Shares return Long_Long_Integer;
 
    --  Row range one share of a job covers.
    --
