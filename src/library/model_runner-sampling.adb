@@ -712,6 +712,7 @@ package body Model_Runner.Sampling is
      (Item : Sampler; Token : Token_Id) return Real
    is
       Longest : Natural := 0;
+      Found   : Boolean := False;
    begin
       if Item.History = null or else Item.Used < 2 then
          return 0.0;
@@ -734,6 +735,7 @@ package body Model_Runner.Sampling is
                   Run := Run + 1;
                end loop;
 
+               Found := True;
                if Run > Longest then
                   Longest := Run;
                end if;
@@ -741,13 +743,27 @@ package body Model_Runner.Sampling is
          end if;
       end loop;
 
-      if Longest <= Item.Settings.DRY_Allowed_Length then
+      --  A run as long as the allowed length is already penalised, at the
+      --  base to the nought -- as llama.cpp does, repeat_len >= allowed --
+      --  where this waited one token more.
+      if not Found or else Longest < Item.Settings.DRY_Allowed_Length then
          return 0.0;
       end if;
 
-      return Item.Settings.DRY_Multiplier
-             * Item.Settings.DRY_Base
-               ** Natural (Longest - Item.Settings.DRY_Allowed_Length);
+      --  And the power held where a float holds it: a loop of eighty-odd
+      --  tokens at base three gave infinity, the logit minus infinity,
+      --  and the run ended on a non-finite logit -- in the loop this is
+      --  here to break. llama.cpp clamps at the same exponent.
+      declare
+         Base     : constant Real := Item.Settings.DRY_Base;
+         Exponent : Natural := Natural (Longest - Item.Settings.DRY_Allowed_Length);
+      begin
+         if Base > 1.000_001 then
+            Exponent := Natural'Min
+              (Exponent, Natural (N.Wide_Real'Truncation (88.722_839_1 / N.Log (N.Wide_Real (Base)))));
+         end if;
+         return Item.Settings.DRY_Multiplier * Base ** Exponent;
+      end;
    end Sequence_Penalty;
 
    --  What the caller added to this token, or nothing. Walked rather than
@@ -1904,6 +1920,42 @@ package body Model_Runner.Sampling is
       Count     : Element_Count := 0;
       Surviving : Element_Count := 0;
 
+      --  Whether the temperature comes last, as llama.cpp's chain has it:
+      --  top-k, typical, top-p, min-p and XTC read the step's own
+      --  probabilities, and the temperature -- the dynamic band too, over
+      --  what is left -- is applied to the survivors. Only where a filter
+      --  reads a probability, or the band reads an entropy: with neither, a
+      --  temperature first and a temperature last are one distribution, and
+      --  the single pass that divides as it reads stays. Mirostat keeps its
+      --  temperature first, as llama.cpp's mirostat chain does.
+      Temperature_Last : constant Boolean :=
+        Item.Settings.Mirostat not in 1 | 2
+        and then (Item.Settings.Dynatemp_Range > 0.0
+                  or else Item.Settings.Top_P < 1.0
+                  or else Item.Settings.Min_P > 0.0
+                  or else Item.Settings.Typical_P < 1.0
+                  or else Item.Settings.Tail_Free < 1.0
+                  or else Item.Settings.Top_A > 0.0
+                  or else Item.Settings.XTC_Probability > 0.0);
+
+      --  The survivors' probabilities made a distribution again, after a
+      --  filter took some away: the next filter reads shares of what is
+      --  left, as llama.cpp's softmax before each of them gives -- a top-p
+      --  after a typical cut to nine tenths never reached its threshold.
+      procedure Renormalize is
+         Total : N.Wide_Real := 0.0;
+      begin
+         for Index in 0 .. Surviving - 1 loop
+            Total := Total + N.Wide_Real (Item.Working.all (Index).Probability);
+         end loop;
+         if Total > 0.0 and then N.Is_Finite (Total) then
+            for Index in 0 .. Surviving - 1 loop
+               Item.Working.all (Index).Probability :=
+                 Real (N.Wide_Real (Item.Working.all (Index).Probability) / Total);
+            end loop;
+         end if;
+      end Renormalize;
+
       --  Whether the top-k was selected already, a block at a time.
       Selected  : Boolean := False;
 
@@ -2017,9 +2069,10 @@ package body Model_Runner.Sampling is
          --  it was; where the band is on, it is read from how uncertain the
          --  step is before the loop runs, so the loop still divides by one
          --  number.
-         Effective_Temp : Real := Item.Settings.Temperature;
+         Effective_Temp : Real :=
+           (if Temperature_Last then 1.0 else Item.Settings.Temperature);
       begin
-         if Item.Settings.Dynatemp_Range > 0.0 then
+         if Item.Settings.Dynatemp_Range > 0.0 and then not Temperature_Last then
             declare
                pragma Suppress (Validity_Check);
                Max_L : Real := Real'First;
@@ -2503,7 +2556,17 @@ package body Model_Runner.Sampling is
                  1.0 - N.Exp (-Eps * N.Log (Vocab));
                Kept  : Element_Count;
             begin
-               if S_Hat <= 0.0 or else Eps <= 0.0 or else Denom <= 0.0 then
+               --  k as llama.cpp computes it, (eps 2^mu / (1 - V^-eps))^(1/s),
+               --  for a tail of either slope, and max (int (k), 1) kept: an
+               --  estimate under one keeps the likeliest alone. It kept
+               --  every candidate, the draw from the whole tail was a
+               --  surprise, the target fell, and the estimate stayed under
+               --  one -- mirostat turned into plain sampling for good. Where
+               --  k is not a number at all -- a flat or empty head -- every
+               --  candidate stays.
+               if S_Hat <= 0.0 or else Denom = 0.0
+                 or else Eps * Power / Denom <= 0.0
+               then
                   Kept := Surviving;
                else
                   declare
@@ -2512,21 +2575,24 @@ package body Model_Runner.Sampling is
                          ((1.0 / S_Hat)
                           * N.Log (Eps * Power / Denom));
                   begin
-                     if not N.Is_Finite (Real (Estimate))
-                       or else Estimate < 1.0
+                     --  Not a number, or past every candidate: all of them.
+                     if Estimate /= Estimate
                        or else Estimate >= N.Wide_Real (Surviving)
                      then
                         Kept := Surviving;
+                     elsif Estimate < 1.0 then
+                        Kept := 1;
                      else
-                        Kept :=
-                          Element_Count (N.Wide_Real'Rounding (Estimate)) + 1;
                         Kept := Element_Count'Max
-                                  (1, Element_Count'Min (Surviving, Kept));
+                                  (1, Element_Count'Min
+                                        (Surviving,
+                                         Element_Count (N.Wide_Real'Truncation (Estimate))));
                      end if;
                   end;
                end if;
 
                Surviving := Kept;
+               Renormalize;
             end;
          end;
       end if;
@@ -2557,6 +2623,7 @@ package body Model_Runner.Sampling is
             end loop;
 
             Surviving := Kept;
+            Renormalize;
          end;
       end if;
 
@@ -2594,6 +2661,7 @@ package body Model_Runner.Sampling is
                end loop;
 
                Surviving := Element_Count'Max (1, Kept);
+               Renormalize;
             end if;
          end;
       end if;
@@ -2685,6 +2753,7 @@ package body Model_Runner.Sampling is
                   end if;
                end loop;
                Surviving := Element_Count'Max (1, Into);
+               Renormalize;
             end;
          end;
       end if;
@@ -2705,6 +2774,7 @@ package body Model_Runner.Sampling is
                end if;
             end loop;
             Surviving := Element_Count'Max (1, Kept);
+            Renormalize;
          end;
       end if;
 
@@ -2720,6 +2790,7 @@ package body Model_Runner.Sampling is
                Kept := Index + 1;
             end loop;
             Surviving := Kept;
+            Renormalize;
          end;
       end if;
 
@@ -2737,6 +2808,7 @@ package body Model_Runner.Sampling is
                Kept := Index + 1;
             end loop;
             Surviving := Kept;
+            Renormalize;
          end;
       end if;
 
@@ -2770,6 +2842,71 @@ package body Model_Runner.Sampling is
                   end loop;
                   Surviving := Surviving - Over + 1;
                end if;
+            end if;
+         end;
+      end if;
+
+      --  8c  the temperature, last, where a filter above read the step's
+      --  own probabilities: over the survivors, at the dynamic band's
+      --  temperature where the band is on -- read from their entropy, not
+      --  the whole vocabulary's, as llama.cpp's temp_ext reads it.
+      if Temperature_Last then
+         declare
+            Applied : Real := Item.Settings.Temperature;
+         begin
+            if Item.Settings.Dynatemp_Range > 0.0 and then Surviving > 1 then
+               Renormalize;
+               declare
+                  Entropy  : N.Wide_Real := 0.0;
+                  Ceiling  : constant N.Wide_Real :=
+                    N.Log (N.Wide_Real (Surviving));
+                  Fraction : N.Wide_Real;
+                  Low      : constant Real :=
+                    Real'Max (0.0, Item.Settings.Temperature - Item.Settings.Dynatemp_Range);
+                  High     : constant Real :=
+                    Item.Settings.Temperature + Item.Settings.Dynatemp_Range;
+                  Shape    : N.Wide_Real;
+               begin
+                  for Index in 0 .. Surviving - 1 loop
+                     declare
+                        P : constant N.Wide_Real :=
+                          N.Wide_Real (Item.Working.all (Index).Probability);
+                     begin
+                        if P > 0.0 then
+                           Entropy := Entropy - P * N.Log (P);
+                        end if;
+                     end;
+                  end loop;
+                  Fraction :=
+                    N.Wide_Real'Max (0.0, N.Wide_Real'Min (1.0, Entropy / Ceiling));
+                  Shape :=
+                    (if Fraction <= 0.0
+                     then (if Item.Settings.Dynatemp_Exponent = 0.0 then 1.0 else 0.0)
+                     else N.Exp (N.Wide_Real (Item.Settings.Dynatemp_Exponent)
+                                 * N.Log (Fraction)));
+                  Applied := Low + (High - Low) * Real (Shape);
+               end;
+               --  A band that reaches nought on a peaked step: greedy in all
+               --  but name, held just above zero.
+               if Applied <= 0.0 then
+                  Applied := 1.0E-6;
+               end if;
+            end if;
+
+            if Applied /= 1.0 and then Surviving > 0 then
+               declare
+                  Largest : Real := Item.Working.all (0).Logit;
+               begin
+                  for Index in 1 .. Surviving - 1 loop
+                     Largest := Real'Max (Largest, Item.Working.all (Index).Logit);
+                  end loop;
+                  for Index in 0 .. Surviving - 1 loop
+                     Item.Working.all (Index).Probability :=
+                       Real (N.Exp ((N.Wide_Real (Item.Working.all (Index).Logit)
+                                     - N.Wide_Real (Largest))
+                                    / N.Wide_Real (Applied)));
+                  end loop;
+               end;
             end if;
          end;
       end if;
@@ -2901,8 +3038,34 @@ package body Model_Runner.Sampling is
          Total := Total + Residual_At (Index);
       end loop;
 
-      if Total <= 0.0 or else not N.Is_Finite (Total) then
+      if not N.Is_Finite (Total) then
          Status := E.Make (E.Sampling_Invalid_Distribution);
+         return;
+      end if;
+
+      --  No residual left: the two distributions agree to the last bit of
+      --  a float, and the rejection that led here was one by rounding. The
+      --  target itself is drawn from, which is what an empty residual
+      --  means; it ended the run as an invalid distribution.
+      if Total <= 0.0 then
+         for Index in 0 .. Last loop
+            Total := Total + N.Wide_Real'Max (0.0, N.Wide_Real (Target (Target'First + Index)));
+         end loop;
+         if Total <= 0.0 or else not N.Is_Finite (Total) then
+            Status := E.Make (E.Sampling_Invalid_Distribution);
+            return;
+         end if;
+         Uniform (Item.State, Draw);
+         Draw := Draw * Total;
+         Token := Token_Id (Last);
+         for Index in 0 .. Last loop
+            Run := Run + N.Wide_Real'Max (0.0, N.Wide_Real (Target (Target'First + Index)));
+            if Draw < Run then
+               Token := Token_Id (Index);
+               exit;
+            end if;
+         end loop;
+         Status := E.Success;
          return;
       end if;
 

@@ -1116,6 +1116,8 @@ package Model_Runner.Backend.Device is
    --    base was. Zero with Page_Shift for a cache in blocks.
    --  @param Page_Shift The page's width in positions, as a shift, or
    --    zero for a cache in blocks.
+   --  @param Cancel Stops the wait for the submission, as a cancel and not
+   --    a redo on the host; null waits it out.
    procedure Attend_And_Feed
      (Query       : Model_Runner.Tensors.Real_Array;
       Residual    : Model_Runner.Tensors.Real_Array;
@@ -1149,7 +1151,8 @@ package Model_Runner.Backend.Device is
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0;
       Pages_At   : Natural := 0;
-      Page_Shift : Natural := 0);
+      Page_Shift : Natural := 0;
+      Cancel     : Model_Runner.Cancellation.Token_Reference := null);
 
    --  Several products of the same activation, in one submission.
    --
@@ -1856,6 +1859,14 @@ package Model_Runner.Backend.Device is
       MLA_Up         : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
       Stream_Feed    : Boolean := False);
+
+   --  Whether the last Whole_Layer refused a layer it was carried into and
+   --  could not bring that layer's input home from the device. A caller
+   --  that carried in fails the evaluation then: the host's copy is the
+   --  layer before's, and a layer run from it answers wrong.
+   --
+   --  @return True where the carried activation was lost.
+   function Carry_Lost return Boolean;
 
    --  A gated feed-forward block, whole, in one submission.
    --

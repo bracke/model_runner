@@ -995,7 +995,7 @@ package body Tests.Tools_Cases is
       --  what an answer may hold -- not refused as too large to tell.
       declare
          Loud : constant Pr.Result :=
-           (Started => True, Stopped => False, Exit_Status => 2,
+           (Started => True, Stopped => False, Overflowed => False, Exit_Status => 2,
             Output => Ada.Strings.Unbounded.To_Unbounded_String ([1 .. 30_000 => 'o']),
             Errors => Ada.Strings.Unbounded.To_Unbounded_String ([1 .. 20_000 => 'e']),
             Truncated => False);

@@ -203,6 +203,9 @@ package body Model_Runner.Framework.Repository is
       return Result;
    end Unread_Paths;
 
+   function Binary_Files (From : Graph) return Name_Lists.Vector
+   is (From.Skipped);
+
    function Symbol_Count (From : Graph) return Natural
    is (Natural (From.Symbols.Length));
 
@@ -229,6 +232,12 @@ package body Model_Runner.Framework.Repository is
       --  state than a whole one, though what it read is the same.
       for Said of From.Unread loop
          Append (Text, "unread" & Tab & Said & ASCII.LF);
+      end loop;
+      --  And the files of bytes, by their stamps: a binary fixture or a
+      --  golden file replaced left the revision as it was, and evidence
+      --  for the tree before was taken for the tree after.
+      for Line of From.Skipped loop
+         Append (Text, "bytes" & Tab & Line & ASCII.LF);
       end loop;
       return Fingerprint (To_String (Text));
    end Graph_Fingerprint;
@@ -1398,6 +1407,10 @@ package body Model_Runner.Framework.Repository is
    is (Name'Length = 0 or else Name in "." | ".." | ".git" | ".hg" | ".svn" | ".model_runner"
                                        | ".alire" | ".cache" | ".venv" | ".tox" | ".mypy_cache"
                                        | ".pytest_cache" | ".gradle" | "__pycache__"
+       --  A whole-file write's own partial (Editing.Replace), which a crash
+       --  can leave beside the file: no file of the project's -- read as
+       --  one it moved the revision and was a change no one made.
+       or else Ada.Strings.Fixed.Index (Name, ".model_runner-partial.") > 0
        or else Named_By (Within.Skip, Relative));
 
    ----------

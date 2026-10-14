@@ -59,6 +59,12 @@ package body Model_Runner.Grammar is
    is
       At_Byte : Natural := Source'First;
 
+      --  The rules a star made -- R ::= x R | -- and where in the source:
+      --  a repeat of something that can match nothing is refused once every
+      --  rule is known, as llama.cpp refuses the left recursion it is.
+      Is_Star     : array (1 .. Max_Rules) of Boolean := [others => False];
+      Star_Offset : array (1 .. Max_Rules) of Natural := [others => 0];
+
       --  Report a diagnostic naming where it happened. The position is
       --  reported rather than the character, because a grammar may hold
       --  bytes that have no business on a terminal.
@@ -541,6 +547,8 @@ package body Model_Runner.Grammar is
             Room (Used) :=
               (Kind => Element_Reference, First => 0, Count => 0,
                Inverted => False, Rule => Rule);
+            Is_Star (Rule) := True;
+            Star_Offset (Rule) := At_Byte - Source'First;
          end if;
 
          --  The alternative that stops: empty, so an Alt marker with nothing
@@ -896,6 +904,67 @@ package body Model_Runner.Grammar is
          Close (Item);
          return;
       end if;
+
+      --  Which rules can match empty text: an alternative of nothing but
+      --  references to such rules, found by rounds until none changes. A
+      --  star over one of them -- ("a"?)*, (ws)* with ws ::= [ ]* -- would
+      --  enter itself again without reading a character, without end.
+      declare
+         Nullable : array (1 .. Max_Rules) of Boolean := [others => False];
+         Changed  : Boolean := True;
+
+         function Empty_Element (Index : Positive) return Boolean
+         is (Item.Elements (Index).Kind = Element_Reference
+             and then Nullable (Item.Elements (Index).Rule));
+      begin
+         while Changed loop
+            Changed := False;
+            for Which in 1 .. Item.Rule_Used loop
+               if not Nullable (Which) then
+                  declare
+                     Index : Natural := Item.Rules (Which).Start;
+                     All_Empty : Boolean := True;
+                  begin
+                     loop
+                        case Item.Elements (Index).Kind is
+                           when Element_Alt | Element_End =>
+                              if All_Empty then
+                                 Nullable (Which) := True;
+                                 Changed := True;
+                                 exit;
+                              end if;
+                              exit when Item.Elements (Index).Kind = Element_End;
+                              All_Empty := True;
+                           when Element_Char =>
+                              All_Empty := False;
+                           when Element_Reference =>
+                              if not Empty_Element (Index) then
+                                 All_Empty := False;
+                              end if;
+                        end case;
+                        Index := Index + 1;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+         end loop;
+
+         for Which in 1 .. Item.Rule_Used loop
+            if Is_Star (Which)
+              and then Empty_Element (Item.Rules (Which).Start)
+            then
+               Status := E.Make (E.Grammar_Syntax_Error);
+               E.Add_Text
+                 (Status, "construct",
+                  "a repeat of what can match nothing", E.Param_Text);
+               E.Add_Integer
+                 (Status, "offset", Long_Long_Integer (Star_Offset (Which)),
+                  E.Param_Offset);
+               Close (Item);
+               return;
+            end if;
+         end loop;
+      end;
 
       Item.Ready := True;
    end Compile;

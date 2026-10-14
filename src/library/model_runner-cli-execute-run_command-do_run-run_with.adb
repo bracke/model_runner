@@ -1682,7 +1682,7 @@ begin
             --  restoring it worth anything, and where they diverge the
             --  engine resets and reads the prompt as it would have.
             Request.Reuse_Committed_Prefix := Prefix_Reused;
-            Request.Pictures_Unverified := Prefix_Reused;
+            Request.Pictures_Unverified := Prefix_Reused and then not Loaded_Prefix_Read;
             Request.Hold_Back := Hold_Back;
 
             --  What the last prompt retained goes before this one
@@ -1717,6 +1717,9 @@ begin
                   else null),
                Pictures => Pictures,
                Outcome  => Outcome);
+            --  Read past what the file held: the pictures after it are now
+            --  this run's own, and the next prompt may keep them.
+            Loaded_Prefix_Read := True;
          end;
 
          Release_Rendered;

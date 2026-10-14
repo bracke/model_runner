@@ -267,6 +267,21 @@ package body Model_Runner.Schema is
          Used := Used + Item'Length;
       end Put;
 
+      --  JSON text written into a grammar literal: its quotes and its own
+      --  backslashes escaped, so the literal is that text exactly -- an
+      --  enum "a\"b" closed the literal at its escaped quote, and "a\nb"
+      --  asked for a real line break where JSON writes a backslash and n.
+      procedure Put_Literal (Item : String) is
+      begin
+         for Char of Item loop
+            case Char is
+               when '"' => Put ("\""");
+               when '\' => Put ("\\");
+               when others => Put ([1 => Char]);
+            end case;
+         end loop;
+      end Put_Literal;
+
       Refused : Boolean := False;
       Refused_By : String (1 .. 64) := [others => ' '];
       Refused_Up : Natural := 0;
@@ -460,7 +475,7 @@ package body Model_Runner.Schema is
                   Count := Count + 1;
 
                   Put ("""\""");
-                  Put (Text (Key_First .. Key_Last));
+                  Put_Literal (Text (Key_First .. Key_Last));
                   Put ("\"":"" ws ");
                   Shape (Value_First, Depth + 1);
 
@@ -590,13 +605,7 @@ package body Model_Runner.Schema is
                --  Written as a literal, with the quotes a JSON string
                --  carries escaped so the grammar reads them as text.
                Put ("""");
-               for Index in First .. Last_At loop
-                  if Text (Index) = '"' then
-                     Put ("\""");
-                  else
-                     Put (Text (Index .. Index));
-                  end if;
-               end loop;
+               Put_Literal (Text (First .. Last_At));
                Put ("""");
 
                Skip_Blanks (Text, Item);
@@ -956,13 +965,7 @@ package body Model_Runner.Schema is
                end if;
 
                Put ("""");
-               for Index in First .. Last_At loop
-                  if Text (Index) = '"' then
-                     Put ("\""");
-                  else
-                     Put (Text (Index .. Index));
-                  end if;
-               end loop;
+               Put_Literal (Text (First .. Last_At));
                Put ("""");
             end;
             return;
@@ -1024,15 +1027,22 @@ package body Model_Runner.Schema is
       Put ("esc ::= ""\\"" ([\""\\/bfnrt] | ""u"" hex hex hex hex)"
            & Character'Val (10));
       Put ("hex ::= [0-9a-fA-F]" & Character'Val (10));
-      Put ("int ::= ""-""? [0-9]+" & Character'Val (10));
-      Put ("num ::= ""-""? [0-9]+ (""."" [0-9]+)? "
-           & "([eE] [-+]? [0-9]+)?" & Character'Val (10));
+      --  Numbers as JSON writes them, and as llama.cpp's converter bounds
+      --  them: no leading zero -- 007 is no JSON number -- and an integral
+      --  part of at most sixteen digits, a fraction of at most sixteen.
+      Put ("int ::= ""-""? integral" & Character'Val (10));
+      Put ("integral ::= ""0"" | [1-9] [0-9]{0,15}" & Character'Val (10));
+      Put ("num ::= ""-""? integral (""."" [0-9]{1,16})? "
+           & "([eE] [-+]? integral)?" & Character'Val (10));
       Put ("bool ::= ""true"" | ""false""" & Character'Val (10));
       --  Whitespace between JSON tokens, so a model constrained by this
       --  grammar may write {"a": 1, "b": 2} with the spacing it was trained
       --  to produce and is not forced into compact {"a":1,"b":2}. It is
       --  optional everywhere, so compact JSON is still accepted.
-      Put ("ws ::= [ \x09\x0A\x0D]*" & Character'Val (10));
+      --  Bounded as llama.cpp's converter bounds it -- a space, or a line
+      --  break or two and an indent of at most twenty -- so a model cannot
+      --  write whitespace to the token limit and call it an object.
+      Put ("ws ::= ( "" "" | [\x0A]{1,2} [ \x09]{0,20} )?" & Character'Val (10));
       --  What a string is in a tag: anything up to the next tag. The
       --  reader takes the whitespace off either end of it.
       --  Text with a '<' in it where no tag follows: code compares with

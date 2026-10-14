@@ -81,6 +81,18 @@ package body Model_Runner.Framework.Workspaces is
       for Path of Unread loop
          Result.Include (Path, Unknown_Print);
       end loop;
+      --  And the files of bytes, by their stamps: written by the work,
+      --  they are changes as any file is -- reported, held to what it may
+      --  write, put back.
+      for Line of Repository.Binary_Files (Found) loop
+         declare
+            Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            if Tab > Line'First then
+               Result.Include (Line (Line'First .. Tab - 1), "bytes:" & Line (Tab + 1 .. Line'Last));
+            end if;
+         end;
+      end loop;
    end Snapshot;
 
    --  The same, for a caller that weighs an unread file as changed: it is
@@ -167,6 +179,28 @@ package body Model_Runner.Framework.Workspaces is
       for Index in 1 .. Repository.File_Count (Found) loop
          declare
             Path   : constant String := To_String (Repository.File_At (Found, Index).Path);
+            Target : constant String := Hostkit.Fs.Join (Into, Path);
+         begin
+            if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+               Failed ("the directory " & Dirs.Containing_Directory (Target) & " cannot be made", Status);
+               return;
+            end if;
+            Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target);
+         exception
+            when Failure : others =>
+               Failed (Path & " could not be copied to " & Target & ": "
+                       & Ada.Exceptions.Exception_Name (Failure) & " "
+                       & Ada.Exceptions.Exception_Message (Failure), Status);
+               return;
+         end;
+      end loop;
+      --  And the files of bytes the graph leaves out -- a fixture, a
+      --  golden file -- which a copy of the project has too: without them
+      --  the tests a workspace ran were not the project's.
+      for Line of Repository.Binary_Files (Found) loop
+         declare
+            Tab    : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+            Path   : constant String := (if Tab > Line'First then Line (Line'First .. Tab - 1) else Line);
             Target : constant String := Hostkit.Fs.Join (Into, Path);
          begin
             if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
@@ -954,6 +988,14 @@ package body Model_Runner.Framework.Workspaces is
       Files.Read_Text (Ours_Path, Ours, R2);
       Files.Read_Text (Theirs_Path, Theirs, R3);
       if E.Is_Error (R1) or else E.Is_Error (R2) or else E.Is_Error (R3) then
+         return;
+      end if;
+      --  Bytes are not lines: two changes to a file of bytes are a conflict
+      --  for a person, not a join of whatever its NULs and newlines cut.
+      if Index (Base, [1 => ASCII.NUL]) > 0
+        or else Index (Ours, [1 => ASCII.NUL]) > 0
+        or else Index (Theirs, [1 => ASCII.NUL]) > 0
+      then
          return;
       end if;
       Join_Changes (To_String (Base), To_String (Ours), To_String (Theirs), Joined, Clean);

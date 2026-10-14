@@ -33,6 +33,10 @@ package body Model_Runner.Platform.Signals is
    function Write_Error (Descriptor : Integer; Text : String; Count : Natural) return Integer
      with Import, Convention => C, External_Name => "write";
 
+   --  isatty, safe where this runs: it asks the descriptor and nothing else.
+   function Is_A_Terminal (Descriptor : Integer) return Integer
+     with Import, Convention => C, External_Name => "isatty";
+
    Stopped_Line : constant String :=
      ASCII.LF & "stopped: told to end (SIGTERM or SIGHUP)" & ASCII.LF;
 
@@ -143,14 +147,18 @@ package body Model_Runner.Platform.Signals is
             --  cursor hidden. Left on, the shell after showed ^[[200~ round
             --  every paste. (Not the other screen: leaving one not entered
             --  puts the cursor back where nothing saved it.)
-            declare
-               Back : constant String :=
-                 ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
-               Ignored : constant Integer := Write_Error (2, Back, Back'Length);
-               pragma Unreferenced (Ignored);
-            begin
-               null;
-            end;
+            --  Said where the editor said them, a terminal: a log the error
+            --  stream goes to is not one, and is not written them.
+            if Is_A_Terminal (2) = 1 then
+               declare
+                  Back : constant String :=
+                    ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
+                  Ignored : constant Integer := Write_Error (2, Back, Back'Length);
+                  pragma Unreferenced (Ignored);
+               begin
+                  null;
+               end;
+            end if;
             declare
                Ignored : constant Boolean :=
                  Hostkit.Terminal_Control.Restore_Mode

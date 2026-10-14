@@ -1369,6 +1369,14 @@ begin
                      Linear_Record_At =>
                        Linear_Record_At (Item, Natural (Index)),
                      No_Feed   => Half);
+                  --  Refused after a layer carried into it, and its input not
+                  --  brought home: the host's copy is a layer old.
+                  if Model_Runner.Backend.Device.Carry_Lost then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Device_Refused);
+                     return;
+                  end if;
                   Half_Done := Half and then Whole_Layer_Done;
                   if Half_Done then
                      Whole_Layer_Done := False;
@@ -1797,6 +1805,14 @@ begin
                      MLA_Up        =>
                        (if Is_MLA (Settings.Kind) then Current.KV_B
                         else T.Empty_View));
+                  --  Refused after a layer carried into it, and its input not
+                  --  brought home: the host's copy is a layer old.
+                  if Model_Runner.Backend.Device.Carry_Lost then
+                     Release;
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Device_Refused);
+                     return;
+                  end if;
                   Half_Done := Half and then Whole_Layer_Done;
                   if Half_Done then
                      Whole_Layer_Done := False;
@@ -2414,7 +2430,8 @@ begin
                                                    Seated => False),
                         Sinks_At  => Sinks_Ready (Current.Sinks, Natural (Index)),
                      Alpha => Settings.Gate_Alpha,
-                     Limit => Settings.Gate_Limit);
+                     Limit => Settings.Gate_Limit,
+                     Cancel => Item.Stopping);
                   end if;
 
                   --  A packed round the device would not take as one

@@ -280,6 +280,22 @@ begin
       end if;
    end;
 
+   --  The event log past its newest fifty thousand, as far as every
+   --  consumer has read it (Events.Prune).
+   declare
+      Removed : Natural;
+   begin
+      Events.Prune (Item, Change, Keep => 50_000, Removed => Removed);
+      if Removed > 0 then
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Said.Append ("let go of" & Natural'Image (Removed)
+                      & " events past the newest fifty thousand");
+      end if;
+   end;
+
    --  Results the project keeps only for a while, let go of.
    declare
       Removed : Natural;

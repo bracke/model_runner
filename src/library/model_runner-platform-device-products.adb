@@ -2513,10 +2513,13 @@ package body Model_Runner.Platform.Device.Products is
 
    protected Copy_Count is
       procedure Expect (Parts : Natural);
-      procedure One_Done;
-      entry Finished;
+      --  A part done; Failed where it could not be copied.
+      procedure One_Done (Failed : Boolean := False);
+      --  Every part done; Failed where any could not be.
+      entry Finished (Failed : out Boolean);
    private
       Left : Natural := 0;
+      Bad  : Boolean := False;
    end Copy_Count;
 
    protected body Copying is
@@ -2535,16 +2538,20 @@ package body Model_Runner.Platform.Device.Products is
       procedure Expect (Parts : Natural) is
       begin
          Left := Parts;
+         Bad := False;
       end Expect;
 
-      procedure One_Done is
+      procedure One_Done (Failed : Boolean := False) is
       begin
-         Left := Left - 1;
+         if Left > 0 then
+            Left := Left - 1;
+         end if;
+         Bad := Bad or else Failed;
       end One_Done;
 
-      entry Finished when Left = 0 is
+      entry Finished (Failed : out Boolean) when Left = 0 is
       begin
-         null;
+         Failed := Bad;
       end Finished;
    end Copy_Count;
 
@@ -2568,6 +2575,10 @@ package body Model_Runner.Platform.Device.Products is
             terminate;
          end select;
 
+         --  A part that raised -- a page of a truncated mapping, a read past
+         --  the cache refused -- is said done and failed, not left: a task
+         --  ended without a word left every later large copy waiting on
+         --  a count that would never come down.
          if Size > 0 then
             declare
                Read : Boolean := False;
@@ -2589,9 +2600,14 @@ package body Model_Runner.Platform.Device.Products is
                      Target := Origin;
                   end;
                end if;
+               Copy_Count.One_Done;
+            exception
+               when others =>
+                  Copy_Count.One_Done (Failed => True);
             end;
+         else
+            Copy_Count.One_Done;
          end if;
-         Copy_Count.One_Done;
       end loop;
    end Byte_Copier;
 
@@ -2619,6 +2635,7 @@ package body Model_Runner.Platform.Device.Products is
          Room : Model_Runner.Bytes.Byte_Array (Values'Range)
            with Import, Address => Where;
          Ways : constant := 8;
+         Failed : Boolean := False;
       begin
          if Values'Length < 1_048_576 then
             Room := Values;
@@ -2646,7 +2663,7 @@ package body Model_Runner.Platform.Device.Products is
                         (if Hi >= Lo then Hi - Lo + 1 else 0), Direct);
                   end;
                end loop;
-               Copy_Count.Finished;
+               Copy_Count.Finished (Failed);
                Copying.Release;
             exception
                when others =>
@@ -2654,9 +2671,8 @@ package body Model_Runner.Platform.Device.Products is
                   raise;
             end;
          end if;
+         Ok := not Failed;
       end;
-
-      Ok := True;
    end Write_Bytes;
 
    ---------------------------------------------------------------------------
@@ -5612,22 +5628,32 @@ package body Model_Runner.Platform.Device.Products is
       --  the next model whose stack lands where this one's was.
       Settle (Item, Settled);
       Drop_Prefetches (Item);
+
       --  Every slot ever given out, because a live entry keeps its slot
-      --  and the ones between are the chain of free ones.
+      --  and the ones between are the chain of free ones. On an engine
+      --  that would not settle -- stalled, lost -- what was in flight may
+      --  still read them, and they are left where they are rather than
+      --  freed under it, as Release_All leaves its own; the table is
+      --  forgotten all the same, so no later model's matrix is matched to
+      --  one of these by an address its memory came to share.
       for Index in 1 .. Item.Slots_Given loop
-         Release_Weight
-           (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
-            Item.Kept (Index).Mapped);
+         if Settled and then not Item.Stalled then
+            Release_Weight
+              (Item, Item.Kept (Index).Buffer, Item.Kept (Index).Memory,
+               Item.Kept (Index).Mapped);
+         end if;
          Item.Kept (Index) := (others => <>);
       end loop;
 
       --  And the ones kept back for reuse, which are the device's memory
       --  as much as the matrices are.
-      for Index in 1 .. Item.Spare_Used loop
-         Release_Weight
-           (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory,
-            Item.Spare (Index).Mapped);
-      end loop;
+      if Settled and then not Item.Stalled then
+         for Index in 1 .. Item.Spare_Used loop
+            Release_Weight
+              (Item, Item.Spare (Index).Buffer, Item.Spare (Index).Memory,
+               Item.Spare (Index).Mapped);
+         end loop;
+      end if;
 
       Item.Spare := [others => <>];
       Item.Spare_Used := 0;
@@ -6946,6 +6972,10 @@ package body Model_Runner.Platform.Device.Products is
       From  : System.Address := System.Null_Address;
       Bytes : Interfaces.Unsigned_64 := 0;
       Slot  : Prefetch_Index := 1;
+      --  Which use of the slot the copy is for. A slot given up on after
+      --  a copy took too long is used again, and the late copier's mark
+      --  is the old use's, not the new one's.
+      Round : Natural := 0;
    end record;
 
    type Copy_Jobs is array (1 .. Prefetch_Slots) of Copy_Job;
@@ -6971,24 +7001,35 @@ package body Model_Runner.Platform.Device.Products is
 
    --  Which slots' copies have landed: every copier's share of them.
    protected Landed is
-      procedure Clear (Slot : Prefetch_Index);
-      procedure Mark (Slot : Prefetch_Index; Good : Boolean);
+      --  A new use of the slot, and which one it is.
+      procedure Clear (Slot : Prefetch_Index; Round : out Natural);
+      --  A copier's share of the slot's copy landed, for the use Round:
+      --  a share of an earlier use -- a copy given up on and still going
+      --  -- marks nothing, where it took a share off the new use's count
+      --  and its half-copied buffer was taken for landed.
+      procedure Mark (Slot : Prefetch_Index; Round : Natural; Good : Boolean);
       entry Wait (Prefetch_Index);
       function Copied (Slot : Prefetch_Index) return Boolean;
    private
-      Left : Landing_Counts := [others => 0];
-      Fine : Landing_Flags := [others => True];
+      Left  : Landing_Counts := [others => 0];
+      Fine  : Landing_Flags := [others => True];
+      Use_Of : Landing_Counts := [others => 0];
    end Landed;
 
    protected body Landed is
-      procedure Clear (Slot : Prefetch_Index) is
+      procedure Clear (Slot : Prefetch_Index; Round : out Natural) is
       begin
+         Use_Of (Slot) := (if Use_Of (Slot) = Natural'Last then 1 else Use_Of (Slot) + 1);
+         Round := Use_Of (Slot);
          Left (Slot) := Copier_Count;
          Fine (Slot) := True;
       end Clear;
 
-      procedure Mark (Slot : Prefetch_Index; Good : Boolean) is
+      procedure Mark (Slot : Prefetch_Index; Round : Natural; Good : Boolean) is
       begin
+         if Round /= Use_Of (Slot) or else Left (Slot) = 0 then
+            return;
+         end if;
          Left (Slot) := Left (Slot) - 1;
          Fine (Slot) := Fine (Slot) and then Good;
       end Mark;
@@ -7046,7 +7087,8 @@ package body Model_Runner.Platform.Device.Products is
                                    (First)),
                      Bytes => (if Share = Copier_Count
                                then Whole.Bytes - First else Piece),
-                     Slot  => Whole.Slot);
+                     Slot  => Whole.Slot,
+                     Round => Whole.Round);
 
                   subtype Room is Model_Runner.Bytes.Byte_Array
                     (1 .. Model_Runner.Bytes.Byte_Count (Job.Bytes));
@@ -7060,7 +7102,7 @@ package body Model_Runner.Platform.Device.Products is
                      Good := False;
                end;
 
-               Landed.Mark (Held (Index).Slot, Good);
+               Landed.Mark (Held (Index).Slot, Held (Index).Round, Good);
             end;
          end loop;
       end loop;
@@ -7077,7 +7119,7 @@ package body Model_Runner.Platform.Device.Products is
       --  marked landed and wrong instead, every copier's share.
       for Index in 1 .. Waiting_Held loop
          for Share in Copier_Index loop
-            Landed.Mark (Waiting (Index).Slot, False);
+            Landed.Mark (Waiting (Index).Slot, Waiting (Index).Round, False);
          end loop;
       end loop;
       Waiting_Held := 0;
@@ -7336,8 +7378,33 @@ package body Model_Runner.Platform.Device.Products is
 
                   Gone := True;
 
+                  --  A matrix given back is kept as a spare, and a spare
+                  --  counts against the budget as a kept matrix does: one
+                  --  given back made no room, and the loop gave back up to
+                  --  Max_Spare matrices still wanted before any memory
+                  --  went. Each one given back is taken for this matrix
+                  --  where it is the right size, and else given up, which
+                  --  is what makes the room.
                   while Gone and then Item.Used > 0 and then not Room loop
                      Give_Back_Least (Item, Gone, Pinned);
+                     if Gone then
+                        declare
+                           Found, Dropped : Boolean;
+                        begin
+                           Take_Spare
+                             (Item, Weight_Bytes, Weight_Buffer, Weight_Memory,
+                              Weight_Mapped, Weight_Tier, Found);
+                           if Found then
+                              Good := True;
+                              exit;
+                           end if;
+                           loop
+                              exit when Room;
+                              Drop_Spare (Item, Dropped);
+                              exit when not Dropped;
+                           end loop;
+                        end;
+                     end if;
                   end loop;
                end;
             end if;
@@ -7542,15 +7609,20 @@ package body Model_Runner.Platform.Device.Products is
       Prefetches (Free) :=
         (Used => True, Key => Key, Buffer => Buffer, Memory => Memory,
          Mapped => Mapped, Tier => Tier, Bytes => Bytes);
-      Landed.Clear (Free);
+      declare
+         Round : Natural;
+      begin
+         Landed.Clear (Free, Round);
 
-      Waiting_Held := Waiting_Held + 1;
-      Waiting (Waiting_Held) :=
-        (Into  => Mapped,
-         From  => System.Storage_Elements."+"
-                    (Base, System.Storage_Elements.Storage_Offset (At_Byte)),
-         Bytes => Bytes,
-         Slot  => Free);
+         Waiting_Held := Waiting_Held + 1;
+         Waiting (Waiting_Held) :=
+           (Into  => Mapped,
+            From  => System.Storage_Elements."+"
+                       (Base, System.Storage_Elements.Storage_Offset (At_Byte)),
+            Bytes => Bytes,
+            Slot  => Free,
+            Round => Round);
+      end;
    end Prefetch;
 
    -----------------
@@ -7656,11 +7728,23 @@ package body Model_Runner.Platform.Device.Products is
       --  No semaphore: the barrier Opened put at the head of the buffer
       --  orders it after what came before, inside the queue.
 
-      if Reset (Item.Logical, 1, Fence_Handle'Address) /= 0
-        or else Submit (Item.Queue, 1, Request'Address, Item.Fence) /= 0
-      then
-         return;
-      end if;
+      declare
+         --  VK_ERROR_DEVICE_LOST: a device that is gone is gone for every
+         --  sequence after this one too. Not marked, each of them was
+         --  submitted, refused and done on the host a layer at a time.
+         Device_Lost : constant C.int := -4;
+         Result      : C.int := Reset (Item.Logical, 1, Fence_Handle'Address);
+      begin
+         if Result = 0 then
+            Result := Submit (Item.Queue, 1, Request'Address, Item.Fence);
+         end if;
+         if Result /= 0 then
+            if Result = Device_Lost then
+               Item.Stalled := True;
+            end if;
+            return;
+         end if;
+      end;
 
       Item.Pending := True;
       Ok := True;
@@ -8296,6 +8380,9 @@ package body Model_Runner.Platform.Device.Products is
          Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
                Good);
          if not Good then
+            --  Taken without its memory, the buffer was kept and bound at
+            --  the next call, which saw it there and took no other.
+            Give_Back_Buffer (Item, Item.Round_Buffer, Item.Round_Memory);
             Release_Borrowed;
             return;
          end if;
@@ -8647,16 +8734,21 @@ package body Model_Runner.Platform.Device.Products is
       --  dealt to packed sessions used to carry a half of every element
       --  of every one of them, which is half again of what the blocks
       --  themselves take.
+      --  Each in whole words: the device zeroes a buffer four bytes at a
+      --  time, and a count of halves that was odd gave a size it would
+      --  not fill to the end.
       Copy_Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Copy_Upto) * 2;
+        (Interfaces.Unsigned_64 (Copy_Upto) * 2 + 3) / 4 * 4;
 
       --  The keys' half of the copy and the values' half, in bytes, where
       --  the caller said in halves where the keys end. A whole number of
       --  the two makes the copy, so the values are what is left.
       Keys_Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Keys_Upto) * 2;
+        (Interfaces.Unsigned_64 (Keys_Upto) * 2 + 3) / 4 * 4;
       Values_Wanted : constant Interfaces.Unsigned_64 :=
-        (if Copy_Wanted >= Keys_Wanted then Copy_Wanted - Keys_Wanted else 0);
+        (if Copy_Upto >= Keys_Upto
+         then (Interfaces.Unsigned_64 (Copy_Upto - Keys_Upto) * 2 + 3) / 4 * 4
+         else 0);
 
       --  Split the copy in two -- keys apart from values -- where even the
       --  copy would not fit one storage buffer but its keys and its values
@@ -9414,8 +9506,9 @@ package body Model_Runner.Platform.Device.Products is
    is
       Ignored : constant Boolean := Set_Asking (Item);
 
+      --  In whole words, as the first copy's room is: see Reserve_Exact.
       Wanted : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Copy_Upto) * 2;
+        (Interfaces.Unsigned_64 (Copy_Upto) * 2 + 3) / 4 * 4;
 
       Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
       Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
@@ -9446,6 +9539,7 @@ package body Model_Runner.Platform.Device.Products is
 
       Take (Item, Wanted, New_Buffer, New_Memory, Ok);
       if not Ok then
+         Give_Back_Buffer (Item, New_Buffer, New_Memory);
          return;
       end if;
       if Map (Item.Logical, New_Memory, 0, Wanted, 0, Where'Access) /= 0 then
@@ -10349,6 +10443,27 @@ package body Model_Runner.Platform.Device.Products is
       Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
       Map   : constant Map_Call := To_Map (Point ("vkMapMemory"));
       Where : aliased Address := Null_Handle;
+
+      --  A room that could not be made leaves the one there was, whole:
+      --  the new one given back, the old one kept as it stood -- the rings
+      --  of every seated session in it. It was given back with the new
+      --  one, or kept mapped and lost, and each session's state with it.
+      --  On a stalled engine the new room may still be the device's, and
+      --  is kept rather than freed under it.
+      procedure Undo is
+      begin
+         if not Item.Stalled then
+            if Item.State_At /= Null_Handle and then Unmap /= null then
+               Unmap (Item.Logical, Item.State_Memory);
+            end if;
+            Give_Back_Buffer (Item, Item.State_Buffer, Item.State_Memory);
+         end if;
+         Item.State_Buffer := Was_Buffer;
+         Item.State_Memory := Was_Memory;
+         Item.State_At := Was_At;
+         Item.State_Bytes := Was_Bytes;
+         Ok := False;
+      end Undo;
    begin
       Ok := False;
 
@@ -10378,24 +10493,14 @@ package body Model_Runner.Platform.Device.Products is
 
       Take (Item, Wanted, Item.State_Buffer, Item.State_Memory, Ok);
       if not Ok then
-         if Was_At /= Null_Handle and then Unmap /= null then
-            Unmap (Item.Logical, Was_Memory);
-         end if;
-         Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
-         Item.State_Bytes := 0;
+         Undo;
          return;
       end if;
 
       if Map (Item.Logical, Item.State_Memory, 0, Wanted, 0, Where'Access)
          /= 0
       then
-         Ok := False;
-         Give_Back_Buffer (Item, Item.State_Buffer, Item.State_Memory);
-         if Was_At /= Null_Handle and then Unmap /= null then
-            Unmap (Item.Logical, Was_Memory);
-         end if;
-         Give_Back_Buffer (Item, Was_Buffer, Was_Memory);
-         Item.State_Bytes := 0;
+         Undo;
          return;
       end if;
 
@@ -10435,8 +10540,7 @@ package body Model_Runner.Platform.Device.Products is
            or else Reset_Buffer (Item.Buffer, 0) /= 0
            or else Opened (Item.Buffer, Start, Began'Address) /= 0
          then
-            Ok := False;
-            Item.State_Bytes := 0;
+            Undo;
             return;
          end if;
 
@@ -10467,16 +10571,14 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          if Stop (Item.Buffer) /= 0 then
-            Ok := False;
-            Item.State_Bytes := 0;
+            Undo;
             return;
          end if;
 
          Submit_And_Wait (Item, Good, Cancelled, null);
 
          if not Good then
-            Ok := False;
-            Item.State_Bytes := 0;
+            Undo;
             return;
          end if;
       end;
@@ -13045,6 +13147,12 @@ package body Model_Runner.Platform.Device.Products is
         or else Rotary mod 2 /= 0
         or else Rotary > Head_Size
         or else Table = System.Null_Address
+        --  The table's span is what the rotation step checks too: two
+        --  wide numbers a pair a position, and the caller has said how
+        --  many. Refused before the step is held, not after: a step
+        --  stored and then said not added stayed in the sequence, every
+        --  later step a place out.
+        or else Table_Span = 0
         or else (Into_Cache and then Stride < Width)
         or else (V_Step /= 0
                  and then (not Into_Cache
@@ -13071,7 +13179,7 @@ package body Model_Runner.Platform.Device.Products is
          Kept => Kept, Readies => True,
          Heads => Heads, Head_Size => Head_Size,
          Turns => Rotary, Pairs => Pairing,
-         Turn_Table => Table, Epsilon => Epsilon,
+         Turn_Table => Table, Turn_Span => Table_Span, Epsilon => Epsilon,
          Into_Cache => Into_Cache, At_First => At_First, Stride => Stride,
          V_Rows => V_Actual,
          V_At_First => V_At_First, V_Stride => V_Stride,
@@ -13084,10 +13192,7 @@ package body Model_Runner.Platform.Device.Products is
          Rotates => False, Places => False,
          Bias_Width => Bias_Width, V_Bias_At => V_Bias_At,
          others => <>);
-
-      --  The table's span is what the rotation step checks too: two wide
-      --  numbers a pair a position, and the caller has said how many.
-      Added := Table_Span > 0;
+      Added := True;
    end Add_Heads;
 
    procedure Add_Norm
@@ -13708,8 +13813,40 @@ package body Model_Runner.Platform.Device.Products is
             --  the matrix or tiled kernel, which leaves no records. It was
             --  Slice_Limit whatever was cut, and a prompt's batch of 2,048
             --  on ThinkingCap held 812 MB for records nothing wrote.
+            --  A packed step cuts as Packed_Slices does, which the exact
+            --  kernels' count did not bound: a tiled batch reserved no
+            --  records and the packed kernel cut up to Slice_Limit slices
+            --  past its room. Bounded here from the fewest workgroups its
+            --  bundles can give -- the most slices -- and by Merged_Rows
+            --  between the heads, as the dispatch below is.
+            Packed_Most : constant Natural :=
+              (if This.Attends and then This.Packed.K_Bits /= 0
+               then Natural'Min
+                      (Packed_Slices
+                         (Item,
+                          (This.Heads
+                           + Packed_Bundle
+                               (Natural'Max (1, This.Group_Size),
+                                Packed_Queries (Natural'Max (1, Count)),
+                                Natural'Last)
+                           - 1)
+                          / Packed_Bundle
+                              (Natural'Max (1, This.Group_Size),
+                               Packed_Queries (Natural'Max (1, Count)),
+                               Natural'Last)
+                          * ((Natural'Max (1, Count)
+                              + Packed_Queries (Natural'Max (1, Count)) - 1)
+                             / Packed_Queries (Natural'Max (1, Count))),
+                          First    => 0,
+                          Last     => Slice_Limit * Slice_Least,
+                          Rounding => False),
+                       Natural'Max (1, Merged_Rows / Natural'Max (1, This.Heads)))
+               else 1);
+
             Most_Slices : constant Natural :=
-              (if This.Attends and then Few_Line (Index) /= Null_Handle
+              (if This.Attends and then This.Packed.K_Bits /= 0
+               then Packed_Most
+               elsif This.Attends and then Few_Line (Index) /= Null_Handle
                then Few_Most_Slices
                elsif This.Attends and then Item.Merge_Line /= Null_Handle
                then Natural'Min
@@ -14514,6 +14651,7 @@ package body Model_Runner.Platform.Device.Products is
          Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
                Good);
          if not Good then
+            Give_Back_Buffer (Item, Item.Round_Buffer, Item.Round_Memory);
             Release_All;
             return;
          end if;
@@ -14525,8 +14663,11 @@ package body Model_Runner.Platform.Device.Products is
          if Item.Turn_Bytes < Turn_Room then
             Unmap_Standing (Item, Item.Turn_Memory, Item.Turn_At);
             Give_Back_Buffer (Item, Item.Turn_Buffer, Item.Turn_Memory);
+            Item.Turn_Bytes := 0;
             Take (Item, Turn_Room, Item.Turn_Buffer, Item.Turn_Memory, Good);
             if not Good then
+               --  As the Round buffer: none kept that has no memory.
+               Give_Back_Buffer (Item, Item.Turn_Buffer, Item.Turn_Memory);
                Release_All;
                return;
             end if;
@@ -14539,6 +14680,22 @@ package body Model_Runner.Platform.Device.Products is
             Release_All;
             return;
          end if;
+
+         --  Each table holds the angles of every position the batch has,
+         --  or the copy below would read past it: the sequence is refused.
+         for Index in 1 .. Steps.Held loop
+            if (Steps.Items (Index).Rotates or else Steps.Items (Index).Readies)
+              and then Model_Runner.Bytes.Byte_Count
+                         (Interfaces.Unsigned_64 (Steps.Items (Index).Turns / 2)
+                          * Interfaces.Unsigned_64 (Count) * 16)
+                       > (if Steps.Items (Index).Readies
+                          then Steps.Items (Index).Turn_Span
+                          else Steps.Items (Index).Span)
+            then
+               Release_All;
+               return;
+            end if;
+         end loop;
 
          for Index in 1 .. Steps.Held loop
             if Steps.Items (Index).Rotates or else Steps.Items (Index).Readies
@@ -15774,14 +15931,20 @@ package body Model_Runner.Platform.Device.Products is
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position));
 
+                     --  No more than Merged_Rows partial answers between
+                     --  the heads, as the exact kernel's -- and so never
+                     --  past the records Mine gave the step room for.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
-                        else Packed_Slices
-                               (Item,
-                                (This.Heads + Bundle - 1) / Bundle
-                                * ((Count + Queries - 1) / Queries),
-                                This.First, This.Last,
-                                Rounding => False));
+                        else Natural'Min
+                               (Packed_Slices
+                                  (Item,
+                                   (This.Heads + Bundle - 1) / Bundle
+                                   * ((Count + Queries - 1) / Queries),
+                                   This.First, This.Last,
+                                   Rounding => False),
+                                Natural'Max
+                                  (1, Merged_Rows / Natural'Max (1, This.Heads))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);
@@ -17694,6 +17857,13 @@ package body Model_Runner.Platform.Device.Products is
 
    Keep : Keeper_Objects;
 
+   --  A round whose fence did not signal in a minute: what it submitted may
+   --  still be the device's, and the keeper's objects are left where they
+   --  are rather than destroyed under it, as a stalled engine leaves its
+   --  buffers.
+   Keep_Abandoned : Boolean := False
+     with Atomic;
+
    --  When the engine last said it was working, whether there is a keeper
    --  to wake, and whether it is running a round: what the engine, the
    --  keeper and Close_Keeper decide by, under one lock.
@@ -17763,11 +17933,36 @@ package body Model_Runner.Platform.Device.Products is
 
       Request.Buffers := Buffer_Handle'Address;
 
-      if Submit (Keep.Queue, 1, Request'Address, Keep.Fence) /= 0
-        or else Wait (Keep.Logical, 1, Fence_Handle'Address, 1,
-                      1_000_000_000) /= 0
-        or else Reset (Keep.Logical, 1, Fence_Handle'Address) /= 0
-      then
+      if Submit (Keep.Queue, 1, Request'Address, Keep.Fence) /= 0 then
+         return;
+      end if;
+
+      --  Waited for until it signals, a second at a time: a round held up
+      --  behind a long submission of the engine's -- two seconds is within
+      --  what one may take -- was taken for failed after the first, and
+      --  Close_Keeper then destroyed the fence and the pool of a round the
+      --  device was still running. A minute without a signal is a device
+      --  that will not give one, and the objects are abandoned rather than
+      --  destroyed.
+      declare
+         Timeout : constant C.int := 2;
+         Result  : C.int;
+      begin
+         for Second in 1 .. 60 loop
+            Result := Wait (Keep.Logical, 1, Fence_Handle'Address, 1,
+                            1_000_000_000);
+            exit when Result /= Timeout;
+         end loop;
+         if Result = Timeout then
+            Keep_Abandoned := True;
+            return;
+         end if;
+         if Result /= 0 then
+            return;
+         end if;
+      end;
+
+      if Reset (Keep.Logical, 1, Fence_Handle'Address) /= 0 then
          return;
       end if;
 
@@ -17831,6 +18026,14 @@ package body Model_Runner.Platform.Device.Products is
       --  instance it would be asked through may be gone by now.
       if Keep.Logical = Null_Handle then
          Keep := (others => <>);
+         return;
+      end if;
+
+      --  A round abandoned may still be the device's: nothing of it is
+      --  destroyed under it.
+      if Keep_Abandoned then
+         Keep := (others => <>);
+         Keep_Abandoned := False;
          return;
       end if;
 

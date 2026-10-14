@@ -4324,6 +4324,9 @@ private
       --  Reads_Two placed beside them.
       Readies    : Boolean := False;
       Turn_Table : System.Address := System.Null_Address;
+      --  The table's bytes, as the caller said them: Run copies what the
+      --  batch's positions need of it only where they are there.
+      Turn_Span  : Model_Runner.Bytes.Byte_Count := 0;
       Into_Cache : Boolean := False;
       V_Rows     : Natural := 0;
       V_At_First : Model_Runner.Numerics.Element_Count := 0;

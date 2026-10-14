@@ -7305,6 +7305,29 @@ package body Tests.Inference_Cases is
          Assert (Outcome.Shifted > 0,
                  "a drafted run past its context never dropped anything");
 
+         --  And a draft that cannot drop as much as the target -- it holds
+         --  four positions, the target drops six -- is let go, not the run:
+         --  the target had made its room, and the run ended as full.
+         L.Close (Second);
+         L.Close (Live);
+         Gen.Release (Outcome);
+         L.Open (Live, Under.Ready, 16, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open again");
+         L.Open (Second, Under.Ready, 4, Status => Status);
+         Assert (E.Is_Ok (Status), "the small draft session did not open");
+         Gen.Generate
+           (Under.Ready, Live, Prompt, Request, Stop, null, null,
+            null, null, null, null,
+            Draft => Under.Ready'Unchecked_Access,
+            Draft_Session => Second'Unchecked_Access,
+            Outcome => Outcome);
+         Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error)
+                 and then not Gen."=" (Outcome.Reason, Gen.Context_Full)
+                 and then Outcome.Generated_Tokens = 24,
+                 "a draft that could not shift ended the run: "
+                 & Gen.Completion_Reason'Image (Outcome.Reason) & ","
+                 & Natural'Image (Outcome.Generated_Tokens) & " tokens");
+
          Model_Runner.Stops.Close (Stop);
          L.Close (Second);
          L.Close (Live);
@@ -17247,6 +17270,44 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Named_Draft_Length_Is_Kept;
 
+   --  A step the device's sequence refuses is not in it: Add_Heads stored
+   --  its step and only then said a table of no span was not added, and a
+   --  caller that went to the host while still building left a step in
+   --  the sequence that put every later one a place out.
+   procedure A_Refused_Step_Is_Not_Held
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Products renames Model_Runner.Platform.Device.Products;
+      Weights : aliased constant Model_Runner.Bytes.Byte_Array (1 .. 8 * 8 * 4) :=
+        [others => 0];
+      Table   : aliased constant Model_Runner.Numerics.Wide_Real_Array (1 .. 8) :=
+        [others => 0.0];
+      Steps   : Products.Sequence;
+      Added   : Boolean;
+   begin
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Weights'Address, Weights'Length, 0, Products.Values_F32,
+         8, 8, Added);
+      Assert (Added and then Products.Length (Steps) = 1,
+              "the product the heads read was not taken");
+      Products.Add_Heads
+        (Steps, From_Step => 1, Heads => 2, Head_Size => 4, Rotary => 4,
+         Pairing => Products.Interleaved, Table => Table'Address,
+         Table_Span => 0, Epsilon => 1.0E-5, Added => Added);
+      Assert (not Added, "heads with a table of no span were added");
+      Assert (Products.Length (Steps) = 1,
+              "a refused step was left in the sequence:"
+              & Natural'Image (Products.Length (Steps)) & " steps held");
+      Products.Add_Heads
+        (Steps, From_Step => 1, Heads => 2, Head_Size => 4, Rotary => 4,
+         Pairing => Products.Interleaved, Table => Table'Address,
+         Table_Span => Table'Length * 8, Epsilon => 1.0E-5, Added => Added);
+      Assert (Added and then Products.Length (Steps) = 2,
+              "heads with their table were refused");
+   end A_Refused_Step_Is_Not_Held;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -17313,6 +17374,9 @@ package body Tests.Inference_Cases is
         (T, Weights_Are_Aligned_Where_They_Are_Read'Access,
          "a tensor is held to the backend's alignment where it is read: in "
          & "the arena by its place in the data, in a mapping by its address");
+      Register_Routine
+        (T, A_Refused_Step_Is_Not_Held'Access,
+         "a step the device's sequence refuses is not left in it");
       Register_Routine
         (T, A_Named_Draft_Length_Is_Kept'Access,
          "a draft length named is kept whichever draft runs");

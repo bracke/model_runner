@@ -224,6 +224,21 @@ package body Tests.Grammar_Cases is
       Assert (Refusal ("root ::= ""a\q""") = E.Grammar_Syntax_Error,
               "an escape nobody defines was accepted");
 
+      --  A repeat of something that can match nothing: it would enter itself
+      --  again without reading a character, without end -- left recursion,
+      --  which llama.cpp refuses. A repeat whose body reads something is
+      --  what it always was.
+      Assert (Refusal ("root ::= (""a""?)*") = E.Grammar_Syntax_Error,
+              "a repeat of an optional was accepted");
+      Assert (Refusal ("root ::= (ws)*" & ASCII.LF & "ws ::= [ ]*")
+                = E.Grammar_Syntax_Error,
+              "a repeat of a rule that can match nothing was accepted");
+      Assert (Refusal ("root ::= ([^\n]* ""\n""?)+") = E.Grammar_Syntax_Error,
+              "a repeat of a line that may be empty was accepted");
+      Assert (Refusal ("root ::= (""a"" ""b""?)* ""c""{2,}") = E.No_Error
+              and then Completes ("root ::= (""a"" ""b""?)*", "aaba"),
+              "a repeat whose body reads a character was refused");
+
       --  The bounds. Each is a refusal rather than an allocation.
       declare
          Deep : String (1 .. 2 * G.Max_Rules) := [others => ' '];
@@ -656,6 +671,30 @@ package body Tests.Grammar_Cases is
              "{""a"":1}", False,
              "a property left out of a schema that requires nothing by "
              & "saying nothing");
+
+      --  A choice written with JSON's escapes is that text exactly: a quote
+      --  inside it, a backslash and an n, each as JSON writes them.
+      Check ("{""enum"":[""a\""b""]}", """a\""b""", True,
+             "a choice holding an escaped quote");
+      Check ("{""enum"":[""a\nb""]}", """a\nb""", True,
+             "a choice holding an escaped newline, as JSON writes it");
+      Check ("{""enum"":[""a\nb""]}", """a" & Character'Val (10) & "b""", False,
+             "a raw line break where the choice says backslash and n");
+      Check ("{""type"":""object"",""properties"":{""k\""q"":{""type"":""integer""}}}",
+             "{""k\""q"":1}", True, "a property named with an escaped quote");
+
+      --  Numbers as JSON writes them: no leading zero.
+      Check ("{""type"":""integer""}", "007", False, "an integer with leading zeros");
+      Check ("{""type"":""integer""}", "0", True, "zero");
+      Check ("{""type"":""number""}", "-0.25e10", True, "a number with all its parts");
+      Check ("{""type"":""number""}", "01.5", False, "a number with a leading zero");
+
+      --  And whitespace bounded, as llama.cpp's converter bounds it: an
+      --  indent of twenty, not of every token the model has left.
+      Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
+             "[1," & Character'Val (10) & "  2]", True, "a line break and an indent");
+      Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
+             "[1," & [1 .. 40 => ' '] & "2]", False, "forty spaces between items");
 
       --  And what it will not pretend to express.
       Refuses ("{""type"":""object"",""properties"":"

@@ -217,6 +217,53 @@ begin
       end if;
    end loop;
 
+   --  And the block past the stack, which proposes from its own keys and
+   --  values: one layer past the stack in the stack's cache where that is
+   --  exact, in its own where it is not, held a position a cell. Left as
+   --  it was, after a roll it attended over rows numbered for the context
+   --  before it -- the stack checks every proposal, so nothing said was
+   --  wrong, but its proposals were guesses from the wrong text.
+   if Drafts_Next (Item) then
+      declare
+         Layer_Index : constant Natural := Settings.Layers;
+         Own    : constant Boolean := Item.Next_Keys /= null;
+         Keys   : constant Model_Runner.Tensors.Real_Array_Access :=
+           (if Own then Item.Next_Keys else Item.Keys);
+         Values : constant Model_Runner.Tensors.Real_Array_Access :=
+           (if Own then Item.Next_Values else Item.Values);
+         Base   : constant Element_Count :=
+           (if Own then 0 else Keys_At (Item, Layer_Index));
+         V_Base : constant Element_Count :=
+           (if Own then 0 else Values_At (Item, Layer_Index));
+      begin
+         for Step in 0 .. Moved - 1 loop
+            declare
+               From   : constant Element_Count :=
+                 Base + Element_Count (Keep + Drop + Step) * KV_Width;
+               Into   : constant Element_Count :=
+                 Base + Element_Count (Keep + Step) * KV_Width;
+               V_From : constant Element_Count :=
+                 V_Base + Element_Count (Keep + Drop + Step) * V_Width;
+               V_Into : constant Element_Count :=
+                 V_Base + Element_Count (Keep + Step) * V_Width;
+            begin
+               Item.Key_Row.all (0 .. KV_Width - 1) :=
+                 Keys.all (From .. From + KV_Width - 1);
+               K.Apply_Rotary
+                 (Item.Key_Row.all, KV_Heads, Head_Size,
+                  Element_Count (Settings.Rotary), Drop,
+                  Turn_Base (Settings, Layer_Index),
+                  Turn_Scaling (Settings, Layer_Index), Turns (Source, Item),
+                  Settings.Pairing, Backwards => True);
+               Keys.all (Into .. Into + KV_Width - 1) :=
+                 Item.Key_Row.all (0 .. KV_Width - 1);
+               Values.all (V_Into .. V_Into + V_Width - 1) :=
+                 Values.all (V_From .. V_From + V_Width - 1);
+            end;
+         end loop;
+      end;
+   end if;
+
    --  And the device's copy, which every edit above has just made stale.
    --
    --  It always had been. A block is filled once when it is granted and

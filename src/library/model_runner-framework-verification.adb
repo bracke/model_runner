@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Directories;
@@ -635,7 +636,40 @@ package body Model_Runner.Framework.Verification is
       for Path of Gone loop
          Files.Discard (Path);
       end loop;
-      return Natural (Gone.Length);
+
+      --  And past its newest thousand: an entry a tree revision a profile,
+      --  of trees long since moved on from, kept every one. Dropped, an
+      --  entry costs only a reuse -- the checks run again.
+      declare
+         use type Ada.Calendar.Time;
+         type Held is record
+            Path : Unbounded_String;
+            When_Made : Ada.Calendar.Time;
+         end record;
+         package Held_Lists is new Ada.Containers.Vectors (Positive, Held);
+         function Older (A, B : Held) return Boolean is (A.When_Made < B.When_Made);
+         package Held_Sorting is new Held_Lists.Generic_Sorting (Older);
+         Kept_Most : constant := 1_000;
+         All_Held  : Held_Lists.Vector;
+         Dropped   : Natural := 0;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Folder, "", [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            All_Held.Append (Held'(To_Unbounded_String (Ada.Directories.Full_Name (Found)),
+                                   Ada.Directories.Modification_Time (Found)));
+         end loop;
+         Ada.Directories.End_Search (Search);
+         if Natural (All_Held.Length) > Kept_Most then
+            Held_Sorting.Sort (All_Held);
+            for Index in 1 .. Natural (All_Held.Length) - Kept_Most loop
+               Files.Discard (To_String (All_Held (Index).Path));
+               Dropped := Dropped + 1;
+            end loop;
+         end if;
+         return Natural (Gone.Length) + Dropped;
+      end;
    end Prune_Reuse_Index;
 
    procedure Run_Profile
@@ -689,8 +723,29 @@ package body Model_Runner.Framework.Verification is
          function Plain (Value : String) return Boolean
          is (for all C of Value =>
                C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '/' | '-' | ':' | '=' | ',' | '+' | '@');
+         --  A word as {tests} codes it, its %20 and %25 back to a space and a
+         --  percent.
+         function Decoded (Word : String) return String is
+            Result : Unbounded_String;
+            Index  : Natural := Word'First;
+         begin
+            while Index <= Word'Last loop
+               if Word (Index) = '%' and then Index + 2 <= Word'Last
+                 and then Word (Index + 1 .. Index + 2) in "20" | "25"
+               then
+                  Append (Result, (if Word (Index + 1 .. Index + 2) = "20" then ' ' else '%'));
+                  Index := Index + 3;
+               else
+                  Append (Result, Word (Index));
+                  Index := Index + 1;
+               end if;
+            end loop;
+            return To_String (Result);
+         end Decoded;
+
          --  Each word of a value its own argument, as {tests} lists them,
-         --  and a word of more than plain characters quoted whole.
+         --  and a word of more than plain characters quoted whole; one that
+         --  begins with a dash is a path from here (./-x), not an option.
          function Quoted_Words (Value : String) return String is
             Said  : Unbounded_String;
             Start : Natural := Value'First;
@@ -699,7 +754,8 @@ package body Model_Runner.Framework.Verification is
                if Index > Value'Last or else Value (Index) = ' ' then
                   if Index > Start then
                      declare
-                        Word : constant String := Value (Start .. Index - 1);
+                        Raw  : constant String := Decoded (Value (Start .. Index - 1));
+                        Word : constant String := (if Raw (Raw'First) = '-' then "./" & Raw else Raw);
                      begin
                         Append (Said, (if Said = Null_Unbounded_String then "" else " ")
                                 & (if Plain (Word) then Word else "'" & Word & "'"));
@@ -1014,7 +1070,12 @@ package body Model_Runner.Framework.Verification is
                      Same := E.Is_Ok (Read)
                        and then Records.Get (Prior, "workspace") = Workspace
                        and then Records.Get (Prior, "state_changed") = ""
-                       and then Records.Get (Prior, "passed") /= ""
+                       --  Passed: a failure is run again, as what failed may
+                       --  have been the host's -- a tool not installed, a
+                       --  network that came and went, a time limit -- and
+                       --  a failure replayed holds the task to it until a
+                       --  source changes.
+                       and then Records.Get (Prior, "passed") = "true"
                        and then Records.Get (Prior, "profile") = Profile
                        and then Records.Get
                                   (Prior, (if Workspace = "" then "repository_revision" else "workspace_revision"))
@@ -1429,6 +1490,19 @@ package body Model_Runner.Framework.Verification is
       for Said of Repository.Unread_Paths (Files) loop
          Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF])
                          & "unread" & Tab & Said);
+      end loop;
+      --  And the files of bytes by their stamps, as print and path: a
+      --  binary fixture replaced is a tree the evidence was not taken on.
+      for Line of Repository.Binary_Files (Files) loop
+         declare
+            At_Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            if At_Tab > Line'First then
+               Append (Result, (if Result = Null_Unbounded_String then "" else [1 => ASCII.LF])
+                               & "bytes:" & Line (At_Tab + 1 .. Line'Last) & Tab
+                               & Line (Line'First .. At_Tab - 1));
+            end if;
+         end;
       end loop;
       return To_String (Result);
    end File_Lines;
@@ -2078,8 +2152,18 @@ package body Model_Runner.Framework.Verification is
          end if;
       end;
 
+      --  A word each, a space or a percent within one written %20 or %25:
+      --  joined plainly, tests/a -p b.py was three words -- an option among
+      --  them -- to the runner it was handed to.
       for Test of Selected.Tests loop
-         Append (Tests, (if Tests = Null_Unbounded_String then "" else " ") & Test);
+         declare
+            Coded : Unbounded_String;
+         begin
+            for C of Test loop
+               Append (Coded, (case C is when ' ' => "%20", when '%' => "%25", when others => [1 => C]));
+            end loop;
+            Append (Tests, (if Tests = Null_Unbounded_String then "" else " ") & Coded);
+         end;
       end loop;
       Result.Given.Append ("tests=" & To_String (Tests));
       Result.Given.Append ("scope=" & To_String (Result.Scope));

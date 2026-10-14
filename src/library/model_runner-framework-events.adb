@@ -401,4 +401,54 @@ package body Model_Runner.Framework.Events is
       Stores.Put (Change, Runtime_Area, Name, Held);
    end Settle;
 
+   -----------
+   -- Prune --
+   -----------
+
+   procedure Prune
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Keep    : Positive;
+      Removed : out Natural)
+   is
+      Held  : constant Sequence_Lists.Vector := Sequences (Item);
+      Floor : Natural := Natural'Last;
+   begin
+      Removed := 0;
+      if Natural (Held.Length) <= Keep then
+         return;
+      end if;
+      --  Below every consumer's settled mark: an event one has yet to
+      --  settle is one it will read. The harness's own consumers count
+      --  before they have a record -- at nought, nothing let go -- and any
+      --  other that has one, at its mark.
+      for Known of Name_Lists.Vector'(["orchestrator", "task-derivation"]) loop
+         Floor := Natural'Min (Floor, Settled (Item, Known));
+      end loop;
+      for Name of Stores.Names (Item, Runtime_Area) loop
+         if Name'Length > 9 and then Name (Name'First .. Name'First + 8) = "consumed." then
+            Floor := Natural'Min
+              (Floor, Settled (Item, Name (Name'First + 9 .. Name'Last)));
+         end if;
+      end loop;
+      for Index in 1 .. Natural (Held.Length) - Keep loop
+         exit when Held (Index) > Floor;
+         declare
+            Name   : constant String := "event-" & Nine (Held (Index));
+            Value  : Records.Item;
+            Status : E.Error_Info;
+         begin
+            Stores.Read (Item, Events_Area, Name, Value, Status);
+            if E.Is_Ok (Status)
+              and then not (Records.Get (Value, "event_kind") = Kind_Name (Workspace_Created)
+                            and then Stores.Exists (Item, Workspaces_Area,
+                                                    Records.Get (Value, "subject")))
+            then
+               Stores.Remove (Change, Events_Area, Name);
+               Removed := Removed + 1;
+            end if;
+         end;
+      end loop;
+   end Prune;
+
 end Model_Runner.Framework.Events;

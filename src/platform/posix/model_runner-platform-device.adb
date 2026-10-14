@@ -1066,8 +1066,44 @@ package body Model_Runner.Platform.Device is
                  To_Memory
                    (Entry_Point (From.Handle,
                                  "vkGetPhysicalDeviceMemoryProperties2"));
+
+               --  Whether the device has the extension the budget structure
+               --  is: chained to a device without it, the structure is one
+               --  the call is not bound to fill.
+               function Has_Budget return Boolean is
+                  List  : constant Extension_List_Call :=
+                    To_Extension_List
+                      (Entry_Point (From.Handle,
+                                    "vkEnumerateDeviceExtensionProperties"));
+                  Count : aliased C.unsigned := 0;
+                  Room  : aliased Extension_Array;
+               begin
+                  if List = null
+                    or else List (Physical, C.Strings.Null_Ptr, Count'Access,
+                                  System.Null_Address) /= 0
+                    or else Count = 0
+                  then
+                     return False;
+                  end if;
+                  if Natural (Count) > Max_Extensions then
+                     Count := C.unsigned (Max_Extensions);
+                  end if;
+                  if List (Physical, C.Strings.Null_Ptr, Count'Access,
+                           Room'Address) /= 0
+                  then
+                     return False;
+                  end if;
+                  for Index in 1 .. Natural (Count) loop
+                     if C.To_Ada (Room (Index).Name, Trim_Nul => True)
+                        = "VK_EXT_memory_budget"
+                     then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end Has_Budget;
             begin
-               if Query /= null and then Largest > 0 then
+               if Query /= null and then Largest > 0 and then Has_Budget then
                   Asked.Next := Said'Address;
                   Query (Physical, Asked'Address);
                   Item.Budget := Said.Budget (Largest);
@@ -1561,6 +1597,19 @@ package body Model_Runner.Platform.Device is
       Item.Second_Heap := 0;
       Item.Storage := 0;
       Item.Tick := 0.0;
+      --  And the rest of what an open learned of its device: a context
+      --  opened again on another device kept the memory kinds the first
+      --  had -- they are added to, not set -- and its budget where the
+      --  second does not say one.
+      Item.Queues := 0;
+      Item.Budget := 0;
+      Item.Imports := False;
+      Item.Import_To := 0;
+      Item.Matrices := False;
+      Item.Subgroups := False;
+      Item.Sized_Subgroups := False;
+      Item.Integer_Dot := False;
+      Item.Plain_Kinds := 0;
    end Close;
 
    function Is_Open (Item : Context) return Boolean

@@ -1,3 +1,4 @@
+with Ada.Numerics.Long_Elementary_Functions;
 with AUnit.Test_Cases;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Unchecked_Deallocation;
@@ -1728,6 +1729,44 @@ package body Tests.Sampling_Cases is
       Assert (E.Is_Ok (Status) and then Token = 2,
               "without the penalty the favourite was not chosen");
 
+      S.Close (Sampler);
+
+      --  A run exactly the allowed length is penalised already, at the
+      --  base to the nought -- llama.cpp's repeat_len >= allowed: a b
+      --  before c is two, and two are allowed.
+      Config.DRY_Multiplier := 4.0;
+      Config.DRY_Allowed_Length := 2;
+      S.Open (Sampler, Config, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+      for Token_Said of Vocab.Token_Array'(0, 1, 2, 0, 1) loop
+         S.Record_Token (Sampler, Token_Said);
+      end loop;
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token = 3,
+              "a repeat exactly the allowed length went unpenalised; it chose"
+              & Vocab.Token_Id'Image (Token));
+      S.Close (Sampler);
+
+      --  And a long loop at a steep base is penalised hard, not to
+      --  infinity: three to the ninety-odd is past what a float holds,
+      --  and the run ended on a non-finite logit in the loop this is for.
+      Config.DRY_Multiplier := 1.0;
+      Config.DRY_Base := 3.0;
+      Config.DRY_Allowed_Length := 2;
+      Config.Repeat_Window := 128;
+      --  Sampled, where every logit is held to being finite: the greedy
+      --  choice takes a logit of minus infinity as merely the lowest.
+      Config.Temperature := 1.0;
+      S.Open (Sampler, Config, Vocabulary, 1, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+      for Round in 1 .. 60 loop
+         S.Record_Token (Sampler, 2);
+         S.Record_Token (Sampler, 3);
+      end loop;
+      S.Sample (Sampler, Logits, Token, Status);
+      Assert (E.Is_Ok (Status) and then Token /= 2,
+              "a long loop at a steep base ended the run or went on: "
+              & E.Error_Code'Image (Status.Code));
       S.Close (Sampler);
    end Sequence_Penalty_Breaks_A_Loop;
 
@@ -3544,9 +3583,154 @@ package body Tests.Sampling_Cases is
       Free (Logits);
    end Screened_Walks_Choose_As_Full_Ones;
 
+   ---------------------------------------
+   -- The_Chain_Runs_As_Llama_Runs_It --
+   ---------------------------------------
+
+   --  The filters read the step's own probabilities and the temperature
+   --  comes last, as llama.cpp's chain has it; each filter reads shares of
+   --  what the one before left; mirostat's first version keeps the
+   --  likeliest alone where its estimate falls under one; and a residual
+   --  with nothing in it draws from the target rather than failing.
+   procedure The_Chain_Runs_As_Llama_Runs_It
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      function Of_Shares (P0, P1, P2 : Long_Float) return Logit_Vector is
+        [0 => N.Real (Ada.Numerics.Long_Elementary_Functions.Log (P0)),
+         1 => N.Real (Ada.Numerics.Long_Elementary_Functions.Log (P1)),
+         2 => N.Real (Ada.Numerics.Long_Elementary_Functions.Log (P2)),
+         others => -40.0];
+
+      --  Whether every one of a number of draws is the likeliest token.
+      function Only_The_Top (Config : S.Configuration; Logits : Logit_Vector)
+        return Boolean
+      is
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Only    : Boolean := True;
+      begin
+         S.Open (Sampler, Config, Vocabulary, 7, Status);
+         Assert (E.Is_Ok (Status), "the sampler would not open: "
+                 & E.Error_Code'Image (Status.Code));
+         for Draw in 1 .. 200 loop
+            S.Sample (Sampler, Logits, Token, Status);
+            Assert (E.Is_Ok (Status), "a draw failed: "
+                    & E.Error_Code'Image (Status.Code));
+            if Token /= 0 then
+               Only := False;
+            end if;
+         end loop;
+         S.Close (Sampler);
+         return Only;
+      end Only_The_Top;
+
+      Base : constant S.Configuration :=
+        (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.0,
+         Repeat_Penalty => 1.0, Repeat_Window => 0, others => <>);
+   begin
+      --  Top-p at a half over 0.55, 0.3, 0.15 keeps the first alone. At a
+      --  temperature of two applied first the first is 0.43, and the
+      --  second came in too.
+      declare
+         Config : S.Configuration := Base;
+      begin
+         Config.Temperature := 2.0;
+         Config.Top_P := 0.5;
+         Assert (Only_The_Top (Config, Of_Shares (0.55, 0.3, 0.15)),
+                 "top-p read the tempered distribution, not the step's own");
+      end;
+
+      --  Top-p at three quarters over 0.5, 0.3, 0.2 keeps two, 0.625 and
+      --  0.375 of what is left; top-a at one then cuts at the square of the
+      --  first share, 0.39, which the second is under. Read as shares of
+      --  the whole, 0.3 against 0.25, it stayed.
+      declare
+         Config : S.Configuration := Base;
+      begin
+         Config.Top_P := 0.75;
+         Config.Top_A := 1.0;
+         Assert (Only_The_Top (Config, Of_Shares (0.5, 0.3, 0.2)),
+                 "a filter read shares of the whole after another had cut it");
+      end;
+
+      --  Mirostat one over a tail falling as the rank to the minus three
+      --  halves, with a target near nothing: its estimate is under one, and
+      --  the likeliest alone is kept.
+      declare
+         Config : S.Configuration := S.Greedy_Configuration;
+         Logits : Logit_Vector;
+      begin
+         for Index in Logits'Range loop
+            Logits (Index) :=
+              N.Real (-1.5 * Ada.Numerics.Long_Elementary_Functions.Log
+                               (Long_Float (Index) + 1.0));
+         end loop;
+         Config.Temperature := 1.0;
+         Config.Mirostat := 1;
+         Config.Mirostat_Tau := 0.01;
+         Config.Mirostat_Eta := 0.1;
+         Assert (Only_The_Top (Config, Logits),
+                 "mirostat one kept more than the likeliest with its estimate under one");
+      end;
+
+      --  The dynamic band reads the entropy of what the filters left, not
+      --  of the whole vocabulary: top-k two over 1 and 0, the rest at minus
+      --  three. Over the two the band gives about 1.68, and the first is
+      --  drawn about 0.64 of the time; over all eight it gave 0.9, and 0.75.
+      declare
+         Config  : S.Configuration := Base;
+         Logits  : constant Logit_Vector := [0 => 1.0, 1 => 0.0, others => -3.0];
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Firsts  : Natural := 0;
+         Draws   : constant := 4000;
+      begin
+         Config.Top_K := 2;
+         Config.Dynatemp_Range := 1.0;
+         Config.Dynatemp_Exponent := 1.0;
+         S.Open (Sampler, Config, Vocabulary, 11, Status);
+         Assert (E.Is_Ok (Status), "the dynamic sampler would not open");
+         for Draw in 1 .. Draws loop
+            S.Sample (Sampler, Logits, Token, Status);
+            if Token = 0 then
+               Firsts := Firsts + 1;
+            end if;
+         end loop;
+         S.Close (Sampler);
+         Assert (Firsts in 2_440 .. 2_720,
+                 "the dynamic band did not read the survivors' entropy: the first was drawn"
+                 & Natural'Image (Firsts) & " times in" & Natural'Image (Draws));
+      end;
+
+      --  A residual of nothing -- the draft's distribution the target's to
+      --  the bit -- draws from the target.
+      declare
+         Sampler : S.Sampler;
+         Status  : E.Error_Info;
+         Token   : Vocab.Token_Id;
+         Same    : constant N.Real_Array (0 .. Vocabulary - 1) :=
+           [0 => 0.25, 1 => 0.75, others => 0.0];
+      begin
+         S.Open (Sampler, Base, Vocabulary, 3, Status);
+         S.Sample_Residual (Sampler, Same, Same, Token, Status);
+         Assert (E.Is_Ok (Status) and then Token in 0 | 1,
+                 "an empty residual failed the draw: "
+                 & E.Error_Code'Image (Status.Code));
+         S.Close (Sampler);
+      end;
+   end The_Chain_Runs_As_Llama_Runs_It;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Chain_Runs_As_Llama_Runs_It'Access,
+         "the filters read the step's own probabilities, each the shares the "
+         & "one before left, the temperature last, as llama.cpp's chain does");
       Register_Routine
         (T, Selecting_And_Sorting_Agree'Access,
          "selecting the highest few and sorting all of them agree");

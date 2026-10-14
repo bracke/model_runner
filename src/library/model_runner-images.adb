@@ -473,9 +473,13 @@ package body Model_Runner.Images is
 
       declare
          Inflate_Status : Zlib.Status_Code := Zlib.Ok;
-         Rows : Z_Bytes_Access := new Zlib.Byte_Array (0 .. Expected - 1);
-         Unfiltered : Z_Bytes_Access :=
-           new Zlib.Byte_Array (Rows'Range);
+         --  Grown as the stream gives bytes, to the scanlines' size and no
+         --  further: a header alone -- 8192 by 8192 in sixteen-bit RGBA,
+         --  a hundred bytes -- asked a gigabyte before a byte was read.
+         Rows : Z_Bytes_Access :=
+           new Zlib.Byte_Array (0 .. Natural'Min (Expected, 1_048_576) - 1);
+         --  Made once the scanlines are all there.
+         Unfiltered : Z_Bytes_Access := null;
 
          --  Past the scanlines a stream may carry a little -- an encoder's
          --  padding -- which is read and let go; more than this is not a
@@ -485,35 +489,58 @@ package body Model_Runner.Images is
          --  How many of the scanlines' bytes the stream gave.
          Filled : Natural := 0;
 
+         --  Room for one more byte of scanlines: doubled, to the whole.
+         procedure Grow is
+            Larger : constant Z_Bytes_Access :=
+              new Zlib.Byte_Array
+                (0 .. Natural'Min (Expected, 2 * Rows'Length) - 1);
+            Old    : Z_Bytes_Access := Rows;
+         begin
+            Larger (0 .. Filled - 1) := Rows (0 .. Filled - 1);
+            Rows := Larger;
+            Free (Old);
+         end Grow;
+
          procedure Inflate_Bounded is
             Filter   : Zlib.Filter_Type;
-            Input    : Ada.Streams.Stream_Element_Array
-              (0 .. Ada.Streams.Stream_Element_Offset (Deflated_Last));
+            --  The stream fed a window at a time: held whole, the payload
+            --  of a thirty-megabyte photograph sat on the stack.
+            Window   : Ada.Streams.Stream_Element_Array (1 .. 65_536);
             Output   : Ada.Streams.Stream_Element_Array (1 .. 65_536);
-            Next_In  : Ada.Streams.Stream_Element_Offset := 0;
+            Count    : constant Natural := Deflated_Last + 1;
+            Taken    : Natural := 0;
             In_Last  : Ada.Streams.Stream_Element_Offset;
             Out_Last : Ada.Streams.Stream_Element_Offset;
             Extra    : Natural := 0;
          begin
-            for Index in Input'Range loop
-               Input (Index) := Ada.Streams.Stream_Element
-                 (Deflated (Natural (Index)));
-            end loop;
             Zlib.Inflate_Init (Filter, Zlib.Zlib_Header);
             loop
-               if Next_In <= Input'Last then
-                  Zlib.Translate
-                    (Filter, Input (Next_In .. Input'Last), In_Last,
-                     Output, Out_Last, Zlib.Finish);
-                  if In_Last >= Next_In then
-                     Next_In := In_Last + 1;
-                  end if;
+               if Taken < Count then
+                  declare
+                     Length : constant Natural := Natural'Min (Window'Length, Count - Taken);
+                     Last   : constant Ada.Streams.Stream_Element_Offset :=
+                       Ada.Streams.Stream_Element_Offset (Length);
+                  begin
+                     for Index in 1 .. Length loop
+                        Window (Ada.Streams.Stream_Element_Offset (Index)) :=
+                          Ada.Streams.Stream_Element (Deflated (Taken + Index - 1));
+                     end loop;
+                     Zlib.Translate
+                       (Filter, Window (1 .. Last), In_Last, Output, Out_Last,
+                        (if Taken + Length >= Count then Zlib.Finish else Zlib.No_Flush));
+                     if In_Last >= Window'First then
+                        Taken := Taken + Natural (In_Last);
+                     end if;
+                  end;
                else
                   Zlib.Flush (Filter, Output, Out_Last, Zlib.Finish);
                end if;
 
                for Index in Output'First .. Out_Last loop
                   if Filled < Expected then
+                     if Filled = Rows'Length then
+                        Grow;
+                     end if;
                      Rows (Filled) := Zlib.Byte (Output (Index));
                      Filled := Filled + 1;
                   else
@@ -525,7 +552,7 @@ package body Model_Runner.Images is
                   exit;
                end if;
                exit when Zlib.Stream_End (Filter);
-               if Out_Last < Output'First and then Next_In > Input'Last then
+               if Out_Last < Output'First and then Taken >= Count then
                   --  Neither input left nor output given, and not ended.
                   Inflate_Status := Zlib.Unexpected_End_Of_Input;
                   exit;
@@ -707,6 +734,7 @@ package body Model_Runner.Images is
             Refuse ("png scanlines");
             return;
          end if;
+         Unfiltered := new Zlib.Byte_Array (Rows'Range);
 
          Make (Width, Height, Result);
          if Result.Pixels = null then

@@ -444,10 +444,23 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                --  each end and its states are what they are because of them;
                --  a decoder's embedded text is not a finished utterance and
                --  takes none, which is what this did for every model before.
-               Vocab.Encode
-                 (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
-                  not Settings.Causal and then Vocab.Adds_End (Words.all),
-                  Held.all, Count, Condition);
+               --  Grown where the normalizer made more of the text than its
+               --  bytes -- a charsmap writes U+FDFA as eighteen characters --
+               --  as the pair's texts are.
+               for Attempt in 1 .. 6 loop
+                  Vocab.Encode
+                    (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
+                     not Settings.Causal and then Vocab.Adds_End (Words.all),
+                     Held.all, Count, Condition);
+                  exit when not (E.Is_Error (Condition)
+                                 and then E."=" (Condition.Code, E.Tokenizer_Buffer_Too_Small));
+                  declare
+                     Larger : constant Natural := 4 * Held'Length;
+                  begin
+                     Free (Held);
+                     Held := new Vocab.Token_Array (1 .. Larger);
+                  end;
+               end loop;
                if E.Is_Error (Condition) then
                   Fail (Condition);
                   return;

@@ -224,6 +224,23 @@ package Model_Runner.Framework.Events is
       Through  : Natural;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Let go of the oldest events past the newest Keep: only those every
+   --  consumer has settled past, and never a workspace's creation while
+   --  the workspace has a record -- what a take-in reads back. The log
+   --  grew by an event for every change of the project's state, and
+   --  nothing let it go; the revision is a counter of its own and is not
+   --  moved by this.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction the removals are staged in.
+   --  @param Keep How many of the newest are always kept.
+   --  @param Removed How many were let go of.
+   procedure Prune
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Keep    : Positive;
+      Removed : out Natural);
+
 private
 
    package Event_Vectors is new Ada.Containers.Vectors

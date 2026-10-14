@@ -1987,8 +1987,17 @@ package body Model_Runner.Generation is
                      (if Item.Context_Keep > Skip
                       then Item.Context_Keep - Skip else 0),
                      Item.Context_Shift, Moved);
+                  --  A draft that cannot shift -- it holds fewer positions
+                  --  than the target, reading only the prompt's tail, or it
+                  --  keeps states that do not move -- is let go, not the
+                  --  run: the target has made its room already, and ending
+                  --  here called the context full with room in it. Emptied,
+                  --  the draft is behind the target and proposes nothing
+                  --  more.
                   if E.Is_Error (Moved) then
-                     return;
+                     L.Reset (Draft_Session.all);
+                     Skip := 0;
+                     Draft_Full := True;
                   end if;
                end if;
 
@@ -2781,6 +2790,11 @@ package body Model_Runner.Generation is
 
                            Took := Model_Runner.Clocks.Elapsed
                              (Began, Model_Runner.Clocks.Read (Time));
+                           if Sampled_Draft and then Timed
+                             and then L.Position (Session) >= Guard_From
+                           then
+                              Outcome.Seed_Repeats := False;
+                           end if;
                            if L.Position (Session) < Guard_From or else not Timed then
                               null;
                            elsif Untimed > 0 then

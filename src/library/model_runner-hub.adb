@@ -942,37 +942,56 @@ package body Model_Runner.Hub is
    -- Is_Whole --
    --------------
 
+   --  Files read whole in this process and found the hub's, by path and
+   --  digest: where the digest cannot be kept beside the file -- a store on
+   --  a read-only or full disk -- it is not read again for every question.
+   package Verified_Files is new Ada.Containers.Indefinite_Vectors (Positive, String);
+   Verified : Verified_Files.Vector;
+
    function Is_Whole (File : Download_File; Path : String) return Boolean is
       package Stream_IO renames Ada.Streams.Stream_IO;
       Wanted : constant String := Ada.Characters.Handling.To_Lower (File.SHA256);
+      Key    : constant String := Wanted & Path;
+
+      --  The digest kept beside the file, or "" where none can be read.
+      function Kept return String is
+         Note : Stream_IO.File_Type;
+         Held : String (1 .. 64);
+      begin
+         if not Ada.Directories.Exists (Path & ".sha256")
+           or else Ada.Directories."<" (Ada.Directories.Size (Path & ".sha256"), 64)
+         then
+            return "";
+         end if;
+         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".sha256");
+         String'Read (Stream_IO.Stream (Note), Held);
+         Stream_IO.Close (Note);
+         return Held;
+      exception
+         when others =>
+            if Stream_IO.Is_Open (Note) then
+               Stream_IO.Close (Note);
+            end if;
+            return "";
+      end Kept;
    begin
       if not File.Has_Hash then
          return True;
       end if;
-      if Ada.Directories.Exists (Path & ".sha256") then
-         declare
-            Note : Stream_IO.File_Type;
-            Held : String (1 .. 64);
-         begin
-            if Ada.Directories."<" (Ada.Directories.Size (Path & ".sha256"), 64) then
-               return False;
-            end if;
-            Stream_IO.Open (Note, Stream_IO.In_File, Path & ".sha256");
-            String'Read (Stream_IO.Stream (Note), Held);
-            Stream_IO.Close (Note);
-            return Held = Wanted;
-         exception
-            when others =>
-               if Stream_IO.Is_Open (Note) then
-                  Stream_IO.Close (Note);
-               end if;
-               return False;
-         end;
+      if Kept = Wanted then
+         return True;
+      elsif Verified.Contains (Key) then
+         --  Read whole already in this run; the note is put right where it
+         --  can be, and the bytes are not read again.
+         Record_Digest (Path, Wanted);
+         return True;
       end if;
-      --  A file from before digests were kept, or put there by hand: read
-      --  once, and kept as known when it is the hub's.
+      --  No digest kept, or another's -- a file from before digests were
+      --  kept, put there by hand, or a stale note beside the right bytes:
+      --  the bytes are read, and kept as known where they are the hub's.
       if File_Digest (Path) = Wanted then
          Record_Digest (Path, Wanted);
+         Verified.Append (Key);
          return True;
       end if;
       return False;

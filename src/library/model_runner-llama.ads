@@ -2867,9 +2867,10 @@ private
       Rope_Factors : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  LongRoPE's two tables, kept whole where the file carries both:
-      --  which one Rope_Factors holds is the session's to say, by how far
-      --  it is opened -- the long one past the context the model was
-      --  trained on and the short one within it. Null otherwise.
+      --  which one a session turns by is its own to say, by how far it is
+      --  opened -- the long one past the context the model was trained on
+      --  and the short one within it (Turns). Rope_Factors is null then.
+      --  Null otherwise.
       Rope_Long    : Model_Runner.Tensors.Real_Array_Access := null;
       Rope_Short   : Model_Runner.Tensors.Real_Array_Access := null;
       Words       : aliased Model_Runner.Tokenizer.Vocabulary;

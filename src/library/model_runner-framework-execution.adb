@@ -1,7 +1,6 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
-with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
@@ -66,15 +65,50 @@ package body Model_Runner.Framework.Execution is
    --  directory in it is no search: it is passed as written, so a relative
    --  one is found from where the command runs -- the workspace, the
    --  check's directory -- not from where this process does.
+   --
+   --  Searched only along the search path's absolute directories: an empty
+   --  entry or a relative one -- ".", node_modules/.bin -- is the current
+   --  directory's, where the work under check could have put a make or a
+   --  prlimit of its own to run in place of the one allowed.
    function Executable (Name : String) return String is
    begin
       if (for some C of Name => C in '/' | '\') then
          return Name;
       end if;
       declare
-         Located : constant String := Hostkit.Process.Locate (Name);
+         Search : constant String := Model_Runner.Platform.Search_Path;
+         From   : Positive := Search'First;
       begin
-         return (if Located = "" then Name else Located);
+         for Index in Search'First .. Search'Last + 1 loop
+            if Index > Search'Last or else Search (Index) = GNAT.OS_Lib.Path_Separator then
+               declare
+                  Folder : constant String := Search (From .. Index - 1);
+               begin
+                  if Folder /= "" and then GNAT.OS_Lib.Is_Absolute_Path (Folder) then
+                     --  And with the suffix a program has where one is
+                     --  named so -- env.exe -- as the path search adds it.
+                     for Suffix of Name_Lists.Vector'
+                       (if GNAT.OS_Lib.Directory_Separator = '\' then ["", ".exe"] else [""])
+                     loop
+                        declare
+                           Candidate : constant String := Hostkit.Fs.Join (Folder, Name & Suffix);
+                        begin
+                           if GNAT.OS_Lib.Is_Executable_File (Candidate)
+                             and then not GNAT.OS_Lib.Is_Directory (Candidate)
+                           then
+                              return Candidate;
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+               end;
+               From := Index + 1;
+            end if;
+         end loop;
+         --  Not found where it may be: the name as given, which nothing
+         --  passed on will find in a relative place (Passed_Environment
+         --  keeps only the absolute directories).
+         return Name;
       end;
    end Executable;
 
@@ -506,9 +540,9 @@ package body Model_Runner.Framework.Execution is
             Keep (Ada.Directories.Containing_Directory (Real));
          end if;
       end;
-      if Ada.Environment_Variables.Exists ("PATH") then
+      if Model_Runner.Platform.Search_Path /= "" then
          declare
-            Search : constant String := Ada.Environment_Variables.Value ("PATH");
+            Search : constant String := Model_Runner.Platform.Search_Path;
             Start  : Positive := Search'First;
          begin
             for Index in Search'First .. Search'Last + 1 loop
@@ -766,7 +800,7 @@ package body Model_Runner.Framework.Execution is
          Happened  : Hostkit.Process.Process_Outcome;
          Text      : Unbounded_String;
          Read      : E.Error_Info;
-         Program   : constant String := "env";
+         Program   : constant String := Executable ("env");
       begin
          if not Files.Make_Directory (Scratch) then
             Files.Write_Failed (Scratch, Status);
@@ -838,7 +872,7 @@ package body Model_Runner.Framework.Execution is
          if Rules.Memory_MB > 0 or else Rules.CPU_Seconds > 0 or else Rules.Processes > 0
            or else Rules.File_MB > 0
          then
-            Arguments.Append (To_Unbounded_String ("prlimit"));
+            Arguments.Append (To_Unbounded_String (Executable ("prlimit")));
             if Rules.Memory_MB > 0 then
                Arguments.Append (To_Unbounded_String
                  ("--as=" & Trim (Long_Long_Integer'Image (Long_Long_Integer (Rules.Memory_MB) * 1_048_576))));
@@ -863,13 +897,13 @@ package body Model_Runner.Framework.Execution is
             return;
          end if;
          if (Rules.No_Network or else Rules.Prefer_Offline) and then Can_Isolate then
-            Arguments.Append (To_Unbounded_String ("unshare"));
+            Arguments.Append (To_Unbounded_String (Executable ("unshare")));
             Arguments.Append (To_Unbounded_String ("--net"));
             Arguments.Append (To_Unbounded_String ("--map-root-user"));
             Result.Isolated := True;
          end if;
          if Shell then
-            Arguments.Append (To_Unbounded_String ("sh"));
+            Arguments.Append (To_Unbounded_String (Executable ("sh")));
             Arguments.Append (To_Unbounded_String ("-c"));
             Arguments.Append (To_Unbounded_String (Command));
          else
@@ -1082,7 +1116,7 @@ package body Model_Runner.Framework.Execution is
       Current.Group_Unrecorded := False;
       Happened :=
         Hostkit.Process.Run_Captured
-          (Program           => "env",
+          (Program           => Executable ("env"),
            Arguments         => Words,
            Working_Directory => Directory,
            Stdin_Path        => Hostkit.Fs.Null_Device,

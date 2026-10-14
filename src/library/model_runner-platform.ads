@@ -37,6 +37,13 @@ package Model_Runner.Platform is
    --  @return True when the variable exists, even when its value is empty.
    function Environment_Exists (Name : String) return Boolean;
 
+   --  The program search path this process was given (PATH), or "" where
+   --  none was: read here, where the environment is read, for the checks
+   --  that resolve a program by it.
+   --
+   --  @return The path as given.
+   function Search_Path return String;
+
    --  The Hugging Face token from the environment, or an empty string when
    --  none is set. Sent to authorize a gated download. Read here, where the
    --  environment is reached, so the hub -- which is not -- need not.

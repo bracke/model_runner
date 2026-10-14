@@ -266,6 +266,11 @@ package Model_Runner.Generation is
       --  the room set aside for the context beside the weights.
       Context_Size     : Natural := 0;
       Seed             : Seed_Value := 0;
+      --  Whether --seed with Seed repeats this run's text. Not where a
+      --  sampled run drafted past the depth where drafting is timed: the
+      --  clock decided when to draft, which decides how many draws a round
+      --  takes, and a run given the seed drafts untimed throughout.
+      Seed_Repeats     : Boolean := True;
       Prefill_Ns       : Model_Runner.Clocks.Nanoseconds := 0;
       Decode_Ns        : Model_Runner.Clocks.Nanoseconds := 0;
       Prefill_Rate     : Long_Float := 0.0;

@@ -1455,7 +1455,11 @@ package body Model_Runner.Presentation is
         (Item, "statistics.context_size",
          T.Image (Long_Long_Integer (Outcome.Context_Size)), Diagnostic);
       Put_Field
-        (Item, "statistics.seed", T.Image (Outcome.Seed), Diagnostic);
+        (Item, "statistics.seed",
+         T.Image (Outcome.Seed)
+         & (if Outcome.Seed_Repeats then ""
+            else " " & Message_Value (Item, "statistics.seed_unrepeated")),
+         Diagnostic);
       Put_Heading (Item, "statistics.heading.speed", Diagnostic, Gap => True);
       Put_Field (Item, "statistics.prefill_duration", Seconds (Outcome.Prefill_Ns), Diagnostic);
       Put_Field (Item, "statistics.decode_duration", Seconds (Outcome.Decode_Ns), Diagnostic);

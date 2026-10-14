@@ -909,6 +909,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
          if not Ran.Started then
             Outcome.Answer := Tr.Failed;
             Put ("error: tool command not found on the path, or it would not run: " & Self.Command.all);
+         elsif Ran.Overflowed then
+            Outcome.Answer := Tr.Failed;
+            Outcome.Truncated := True;
+            Put ("error: the tool command was stopped for printing more than"
+                 & Natural'Image (Model_Runner.Processes.Most_Said / (1024 * 1024)) & " MiB");
          elsif Ran.Stopped then
             Outcome.Answer :=
               (if Model_Runner.Cancellation.Is_Cancelled (Context.Cancel) then Tr.Cancelled else Tr.Timed_Out);

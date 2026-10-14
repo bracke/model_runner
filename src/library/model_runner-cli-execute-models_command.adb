@@ -4,6 +4,7 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
+with Model_Runner.Hub;
 with Model_Runner.Platform;
 with Model_Runner.Config;
 
@@ -415,12 +416,15 @@ package body Model_Runner.CLI.Execute.Models_Command is
             --  A model of the store by its own name: one file name, a
             --  GGUF's, nothing that climbs out -- `models remove
             --  ../../.bashrc` deleted that file.
+            --  A folder within the store is the store's -- a hub's quants
+            --  are often in one, and models list shows them as folder/name
+            --  -- so a name passes as the hub's own file names do: no
+            --  climb, no root, no drive, no empty or dot segment.
             function Is_Store_Name return Boolean is
               (Name'Length > 5
                and then Ada.Characters.Handling.To_Lower
                           (Name (Name'Last - 4 .. Name'Last)) = ".gguf"
-               and then (for all C of Name => C not in '/' | '\' | ':')
-               and then Ada.Strings.Fixed.Index (Name, "..") = 0);
+               and then Model_Runner.Hub.Is_Safe_File_Name (Name));
          begin
             if not Is_Store_Name or else Path = "" or else not Exists (Path)
               or else Kind (Path) /= Ordinary_File

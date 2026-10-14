@@ -52,6 +52,10 @@ is
    --  prefix it shares with it.
    Prefix_Reused : Boolean := False;
 
+   --  Whether a generation has read past what the file held: positions
+   --  after it are this process's own, its pictures known.
+   Loaded_Prefix_Read : Boolean := False;
+
    --  A second session on the same model, opened only for the agent's
    --  retrieve tool to embed with, so embedding a passage never disturbs
    --  the generation session's committed conversation.

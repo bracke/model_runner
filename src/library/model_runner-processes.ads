@@ -22,6 +22,10 @@ package Model_Runner.Processes is
    --  be left out.
    Stream_Most : constant := 32 * 1024;
 
+   --  The most a program run for a tool may say before it is stopped: what
+   --  it writes goes to temporary files, and is not let fill their disk.
+   Most_Said : constant := 256 * 1024 * 1024;
+
    --  The most Told says: both streams, the sentence and the notes of
    --  what was left out kept within what a tool's answer may hold, so a
    --  long failure is told cut, not refused as too large to tell.
@@ -51,6 +55,12 @@ package Model_Runner.Processes is
       --  Whether it was stopped -- at its limit or by its cancellation --
       --  before it ended of itself.
       Stopped     : Boolean := False;
+
+      --  Whether what stopped it was its saying more than Most_Said on a
+      --  stream -- not its limit, and not a cancellation: told as a
+      --  timeout, a program that ran two seconds and printed a gigabyte
+      --  was said not to have finished in time.
+      Overflowed  : Boolean := False;
 
       Exit_Status : Integer := -1;
       Output      : Ada.Strings.Unbounded.Unbounded_String;

@@ -372,6 +372,16 @@ package Model_Runner.Framework.Repository is
    --  @return The paths.
    function Unread_Paths (From : Graph) return Name_Lists.Vector;
 
+   --  The files the walk found and left out of the graph as bytes rather
+   --  than text -- a NUL among their first -- each as "PATH<TAB>STAMP": its
+   --  size, its time and the file system's change record. Not the
+   --  project's code, and still the project's files: a binary fixture
+   --  replaced is a change, which a snapshot or a revision must see.
+   --
+   --  @param From The graph.
+   --  @return The lines, in path order.
+   function Binary_Files (From : Graph) return Name_Lists.Vector;
+
    --  One file.
    --
    --  @param From The graph.

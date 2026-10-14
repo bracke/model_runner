@@ -68,6 +68,7 @@ with Hostkit.Descriptors;
 with Hostkit.Host;
 with Hostkit.Process;
 with Model_Runner.Platform;
+with Model_Runner.Processes;
 with Model_Runner.Presentation;
 with Model_Runner.Text;
 
@@ -4572,6 +4573,11 @@ package body Tests.Framework_Cases is
             Rules : constant Pm.Permission_Set :=
               Pm.Value ("write_source roots=src/|lib/parser, deny=src/security/");
          begin
+            --  However a refused path is spelled in case or with trailing
+            --  dots, as a file system that ignores them opens it.
+            Assert (not Pm.Allows (Rules, Pm.Write_Source, "src/Security/x.adb")
+                    and then not Pm.Allows (Rules, Pm.Write_Source, "src/security./x.adb"),
+                    "a refused path spelled in other case or with a trailing dot was allowed");
             Assert (not Pm.Allows (Rules, Pm.Write_Source, "./src/security/x.adb")
                     and then not Pm.Allows (Rules, Pm.Write_Source, "src//security/x.adb")
                     and then not Pm.Allows (Rules, Pm.Write_Source, "src/./security/x.adb")
@@ -4844,6 +4850,32 @@ package body Tests.Framework_Cases is
                  "a value with a quote of its own reached a check: " & Code_Of (Status));
       end;
       S.Close (Store);
+
+      --  A test path with a space in it is one argument, as {tests} codes
+      --  it, and one that begins with a dash is a path, not an option:
+      --  ls finds both only where each reaches it whole.
+      if Dirs.Exists ("/bin/ls") or else Dirs.Exists ("/usr/bin/ls") then
+         Task_Project
+           (Store, "given-spaced",
+            "set execution.allowed = ls" & LF
+            & "profile listing = list: ls {tests}" & LF
+            & "scalar verification.default = listing" & LF);
+         Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+         Put_File (Fresh_Root (Store) & "/tests/a b.py", "x" & LF);
+         Put_File (Fresh_Root (Store) & "/-x.py", "x" & LF);
+         declare
+            Given_To : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            Given_To.Append ("tests=tests/a%20b.py -x.py");
+            Model_Runner.Framework.Verification.Run_Profile
+              (Store, Change, "listing", "", Evidence, Passed, Status, Given => Given_To);
+            Assert (E.Is_Ok (Status) and then Passed,
+                    "a test path with a space, or one beginning with a dash, did not reach "
+                    & "its check whole: " & Code_Of (Status));
+            S.Commit (Store, Change, Status);
+         end;
+         S.Close (Store);
+      end if;
    end Requirements_Verified_By_Policy;
 
    --  Bootstrap reads what its policy names, makes only the kinds it lets
@@ -6620,6 +6652,9 @@ package body Tests.Framework_Cases is
          & "scalar work.backend = copy" & LF);
       Dirs.Create_Path (Fresh_Root (Store) & "/src");
       Put_File (Fresh_Root (Store) & "/src/shared.adb", "one");
+      --  A file of bytes the project holds, which the graph leaves out and
+      --  a copy of the project must not.
+      Put_File (Fresh_Root (Store) & "/src/fixture.bin", "ab" & ASCII.NUL & "cd");
       Tk.Create (Store, Change, Fields ("Hello", "analysis"), "user", "", Id, Status);
       Tk.Create (Store, Change, Fields ("Other", "analysis"), "user", "", Other, Status);
       S.Commit (Store, Change, Status);
@@ -6659,6 +6694,20 @@ package body Tests.Framework_Cases is
       Assert (Ws.Changes (Store, To_String (Done.Workspace_Id)).Contains ("src/hello.adb")
               and then Ws.Active_For (Store, To_String (Id)) = To_String (Done.Workspace_Id),
               "the workspace's change was not seen");
+      --  The copy holds the project's files of bytes, and one written in
+      --  it is a change of the workspace's like any other.
+      declare
+         Held : Ws.Workspace;
+         Got  : E.Error_Info;
+      begin
+         Ws.Read (Store, To_String (Done.Workspace_Id), Held, Got);
+         Assert (E.Is_Ok (Got) and then Dirs.Exists (To_String (Held.Path) & "/src/fixture.bin"),
+                 "a copy of the project was made without its files of bytes");
+         Put_File (To_String (Held.Path) & "/src/fixture.bin", "abc" & ASCII.NUL & "de");
+         Assert (Ws.Changes (Store, To_String (Done.Workspace_Id)).Contains ("src/fixture.bin"),
+                 "a file of bytes written in a workspace was not among its changes");
+         Put_File (To_String (Held.Path) & "/src/fixture.bin", "ab" & ASCII.NUL & "cd");
+      end;
       declare
          Judged : constant Vf.Gate_List := Vf.Gates (Store, To_String (Id));
          Blocked_By_Integration : Boolean := False;
@@ -13623,6 +13672,211 @@ package body Tests.Framework_Cases is
    -- Register_Tests --
    ---------------------------------------------------------------------------
 
+   --  Evidence is reused only for a pass, and only on the tree it was
+   --  taken on whole -- its files of bytes too: a failure replayed held a
+   --  task to a tool not yet installed, and a binary fixture replaced left
+   --  the revision where it was.
+   procedure Evidence_Is_Reused_Only_Where_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vf renames Model_Runner.Framework.Verification;
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+      Held     : R.Item;
+      Outcome  : constant String := Dirs.Full_Name ("obj/evidence-outcome.txt");
+
+      procedure Answer (Code : String) is
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Outcome);
+         Ada.Text_IO.Put_Line (F, Code);
+         Ada.Text_IO.Close (F);
+      end Answer;
+
+      function Reused return String is
+      begin
+         S.Read (Store, F.Verification_Area, To_String (Evidence), Held, Status);
+         return R.Get (Held, "reused_from");
+      end Reused;
+   begin
+      if not Dirs.Exists ("/bin/sh") then
+         return;
+      end if;
+      Answer ("1");
+      Task_Project (Store, "evidence-whole",
+                    "set execution.allowed = ./probe.sh" & LF
+                    & "profile probing = probe: ./probe.sh" & LF
+                    & "scalar verification.default = probing" & LF);
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+         Script  : Ada.Text_IO.File_Type;
+         Ignored : Boolean;
+      begin
+         Ada.Text_IO.Create (Script, Ada.Text_IO.Out_File, Project & "/probe.sh");
+         Ada.Text_IO.Put_Line (Script, "#!/bin/sh");
+         Ada.Text_IO.Put_Line (Script, "exit $(cat " & Outcome & ")");
+         Ada.Text_IO.Close (Script);
+         Ignored := Hostkit.Metadata.Set_Permissions (Project & "/probe.sh", 8#755#);
+
+         --  A failure, and the same tree checked again: run again, not
+         --  replayed.
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (not Passed, "the failing probe passed");
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused = "", "a failure was replayed on an unchanged tree: " & Reused);
+
+         --  The host put right: a pass, and that pass reused.
+         Answer ("0");
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Passed and then Reused = "", "the probe put right did not pass, run");
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused /= "", "a pass on an unchanged tree was not reused");
+
+         --  A file of bytes in the tree replaced: a new tree.
+         Put_File (Project & "/fixture.bin", "ab" & ASCII.NUL & "cd");
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused /= "", "the tree with its fixture, unchanged, was not reused");
+         Put_File (Project & "/fixture.bin", "abc" & ASCII.NUL & "cde");
+         Vf.Run_Profile (Store, Change, "probing", "", Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused = "", "a binary fixture replaced, the evidence for the old tree was reused");
+      end;
+      S.Close (Store);
+      Dirs.Delete_File (Outcome);
+   end Evidence_Is_Reused_Only_Where_Whole;
+
+   --  What the harness leaves and keeps: a write's partial is no file of
+   --  the project's; a program that says too much is said to have, not to
+   --  have run out of time; checks are handed only the search path's
+   --  absolute directories; and the event log is let go of past a bound,
+   --  as far as every consumer has read it.
+   procedure Harness_Leaves_And_Keeps_What_It_Should
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ev renames Model_Runner.Framework.Events;
+      package Rp renames Model_Runner.Framework.Repository;
+      package Pr renames Model_Runner.Processes;
+   begin
+      --  A partial beside a file, as a crash leaves one: not scanned.
+      declare
+         Project : constant String := Fresh ("partials");
+         Found   : Rp.Graph;
+      begin
+         Dirs.Create_Path (Project & "/src");
+         Put_File (Project & "/src/a.adb", "procedure A is begin null; end A;" & LF);
+         Put_File (Project & "/src/.a.adb.model_runner-partial.4711.3", "procedure A is" & LF);
+         Put_File (Project & "/src/b.bin", "x" & ASCII.NUL & "y");
+         Found := Rp.Scan (Project);
+         Assert (Rp.File_Count (Found) = 1,
+                 "a write's partial was taken for a file of the project's:"
+                 & Natural'Image (Rp.File_Count (Found)));
+         Assert (Natural (Rp.Binary_Files (Found).Length) = 1,
+                 "a file of bytes was not listed among the project's");
+
+         --  The next whole-file write of it lets go of what an older one
+         --  left, and not of one written a moment ago.
+         Put_File (Project & "/src/.a.adb.model_runner-partial.4712.1", "x" & LF);
+         declare
+            Said    : Model_Runner.Tools.Editing.Said;
+            Ignored : Boolean;
+         begin
+            Ignored := Hostkit.Metadata.Set_File_Times
+              (Project & "/src/.a.adb.model_runner-partial.4711.3", 1_000_000_000, 1_000_000_000);
+            Model_Runner.Tools.Editing.Replace
+              ("src/a.adb", "procedure A is begin null; null; end A;" & LF, Said, Base => Project);
+            Assert (not Dirs.Exists (Project & "/src/.a.adb.model_runner-partial.4711.3")
+                    and then Dirs.Exists (Project & "/src/.a.adb.model_runner-partial.4712.1"),
+                    "a write's old partial was kept, or a fresh one taken");
+         end;
+      end;
+
+      --  Too much said: stopped for that, and said so.
+      if Dirs.Exists ("/usr/bin/head") and then Dirs.Exists ("/dev/zero") then
+         declare
+            Asked : Pr.Request;
+            Ran   : Pr.Result;
+         begin
+            Asked.Program := To_Unbounded_String ("/usr/bin/head");
+            Asked.Arguments.Append (To_Unbounded_String ("-c"));
+            Asked.Arguments.Append (To_Unbounded_String ("300000000"));
+            Asked.Arguments.Append (To_Unbounded_String ("/dev/zero"));
+            Asked.Limit := 60.0;
+            Ran := Pr.Run (Asked);
+            Assert (Ran.Started and then Ran.Stopped and then Ran.Overflowed,
+                    "a program stopped for saying too much was not said to have");
+         end;
+      end if;
+
+      --  The search path handed on: its absolute directories only.
+      declare
+         Was : constant String :=
+           (if Ada.Environment_Variables.Exists ("PATH")
+            then Ada.Environment_Variables.Value ("PATH") else "");
+      begin
+         Ada.Environment_Variables.Set ("PATH", ".:/usr/bin::node_modules/.bin:/bin");
+         declare
+            Passed : constant String := Model_Runner.Platform.Passed_Environment ("");
+         begin
+            Ada.Environment_Variables.Set ("PATH", Was);
+            Assert (Ada.Strings.Fixed.Index (Passed, "PATH=/usr/bin:/bin" & LF) > 0,
+                    "a relative or empty search path entry was handed to checks: " & Passed);
+         end;
+      exception
+         when others =>
+            Ada.Environment_Variables.Set ("PATH", Was);
+            raise;
+      end;
+
+      --  The log past its newest few, once read by every consumer.
+      declare
+         Project : constant String := Fresh ("event-retention");
+         Store   : S.Store;
+         Status  : E.Error_Info;
+         Change  : S.Transaction;
+         Id      : Unbounded_String;
+         Removed : Natural;
+         Before_Prune : Natural := 0;
+      begin
+         S.Create (Store, Project, "Events", Status);
+         for Index in 1 .. 8 loop
+            S.Put (Change, F.Project_Area, "fact." & Character'Val (Character'Pos ('a') + Index),
+                   Task_Record ("FACT-A", Natural'Image (Index)));
+            Ev.Emit (Store, Change, Ev.Requirement_Accepted, "FACT-A", "", Id, Status);
+            S.Commit (Store, Change, Status);
+            Change := S.No_Changes;
+         end loop;
+         --  Unread by the harness's consumers: nothing let go.
+         Ev.Prune (Store, Change, Keep => 3, Removed => Removed);
+         Assert (Removed = 0, "events no consumer had read were let go of");
+         Change := S.No_Changes;
+         Ev.Settle (Store, Change, "orchestrator", Ev.Revision (Store), Status);
+         Ev.Settle (Store, Change, "task-derivation", Ev.Revision (Store), Status);
+         S.Commit (Store, Change, Status);
+         Change := S.No_Changes;
+         Before_Prune := Ev.Count (Store);
+         Ev.Prune (Store, Change, Keep => 3, Removed => Removed);
+         S.Commit (Store, Change, Status);
+         Assert (Removed > 0 and then Ev.Count (Store) = 3
+                 and then Ev.Length (Ev.Latest (Store, 3)) = 3,
+                 "the log was not let go of past its newest:" & Natural'Image (Ev.Count (Store))
+                 & " left," & Natural'Image (Removed) & " removed, before" & Natural'Image (Before_Prune)
+                 & " " & Code_Of (Status));
+         S.Close (Store);
+      end;
+   end Harness_Leaves_And_Keeps_What_It_Should;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -13744,6 +13998,13 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Quiet_Tool_Held_By_Its_File'Access,
          "a tool that will not say its version is held to by its file");
+      Register_Routine
+        (T, Evidence_Is_Reused_Only_Where_Whole'Access,
+         "evidence is reused only for a pass, on the tree it was taken on, its files of bytes too");
+      Register_Routine
+        (T, Harness_Leaves_And_Keeps_What_It_Should'Access,
+         "partials are no project files, overflow is said as overflow, checks get absolute paths, "
+         & "and the event log is bounded");
       Register_Routine
         (T, Strict_Reuse_Follows_The_Toolchain'Access,
          "held strict to its toolchain, evidence is not reused once a tool answers otherwise");

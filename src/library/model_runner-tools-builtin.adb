@@ -985,6 +985,10 @@ package body Model_Runner.Tools.Builtin is
       begin
          if not Ran.Started then
             return Failure ("'" & Program & "' is not installed on this machine, or would not run");
+         elsif Ran.Overflowed then
+            return Failure ("'" & Program & "' was stopped for printing more than"
+                            & Natural'Image (Pr.Most_Said / (1024 * 1024))
+                            & " MiB; what it said first and last is kept" & ASCII.LF & Text);
          elsif Ran.Stopped and then Model_Runner.Cancellation.Is_Cancelled (Context.Cancel) then
             return Halted_By (Tr.Cancelled, "'" & Program & "' was stopped: the run was cancelled");
          elsif Ran.Stopped and then Allowed < Tool_Timeout then

@@ -883,6 +883,13 @@ begin
                         Linear_Record_At =>
                           Linear_Record_At (Item, Natural (Index)),
                         No_Feed   => Half);
+                     --  Refused after a layer carried into it, and its input not
+                     --  brought home: the host's copy is a layer old.
+                     if Model_Runner.Backend.Device.Carry_Lost then
+                        Item.Current := Failed;
+                        Status := E.Make (E.Backend_Device_Refused);
+                        return;
+                     end if;
                      Start_Shared (Current, Half and then Fused);
                      Half_Done := Half and then Fused;
                      Went_Whole := Fused and then not Half;
@@ -1200,6 +1207,13 @@ begin
                      MLA_Up        =>
                        (if Is_MLA (Settings.Kind) then Current.KV_B
                         else T.Empty_View));
+                  --  Refused after a layer carried into it, and its input not
+                  --  brought home: the host's copy is a layer old.
+                  if Model_Runner.Backend.Device.Carry_Lost then
+                     Item.Current := Failed;
+                     Status := E.Make (E.Backend_Device_Refused);
+                     return;
+                  end if;
                   Start_Shared (Current, Half and then Fused);
                   Half_Done := Half and then Fused;
                   Went_Whole := Fused and then not Half;
@@ -1579,7 +1593,8 @@ begin
                                              KV_Width, V_Width),
                      Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index)),
                      Alpha => Settings.Gate_Alpha,
-                     Limit => Settings.Gate_Limit);
+                     Limit => Settings.Gate_Limit,
+                     Cancel => Item.Stopping);
 
                   if Fused then
                      Usable := True;

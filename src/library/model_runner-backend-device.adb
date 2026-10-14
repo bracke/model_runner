@@ -27,6 +27,11 @@ package body Model_Runner.Backend.Device is
    Opened : Devices.Context;
    Engine : Products.Engine;
 
+   --  Whether the last Whole_Layer refused a layer it was carried into and
+   --  could not bring the activation home: the host's copy is a layer old,
+   --  and going on from it answers wrong without a word. See Carry_Lost.
+   Lost_Carry : Boolean := False;
+
    --  A second context on the same part, for the keeper that holds its
    --  clock up while a split mixture's experts run on the processor; see
    --  Products.Open_Keeper. Opened at the first split layer, once.
@@ -501,7 +506,9 @@ package body Model_Runner.Backend.Device is
       end if;
 
       declare
-         Text : constant String := Devices.Name (Held, 1);
+         --  The device opened, not the first listed: with two, the second's
+         --  name was said as the first's.
+         Text : constant String := Devices.Name (Held, Which);
       begin
          Named_Last := Natural'Min (Text'Length, Named'Length);
          Named (1 .. Named_Last) :=
@@ -1689,7 +1696,8 @@ package body Model_Runner.Backend.Device is
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0;
       Pages_At   : Natural := 0;
-      Page_Shift : Natural := 0)
+      Page_Shift : Natural := 0;
+      Cancel     : Model_Runner.Cancellation.Token_Reference := null)
    is
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -1892,7 +1900,7 @@ package body Model_Runner.Backend.Device is
                        .. Fed_Room.all'First + Fed_Span - 1),
          Natural'Max (Positions, 1),
          Landing.all (Landing.all'First .. Landing.all'First + Wanted - 1),
-         Ok, Halted);
+         Ok, Halted, Cancel);
 
       if Ok then
          Note_Timeline (Steps, Natural'Max (Positions, 1));
@@ -4656,7 +4664,11 @@ package body Model_Runner.Backend.Device is
             --  A layer handed back to the host after the one before carried
             --  its answer out starts from that answer, read back from where
             --  the device left it; the host's copy is a layer old.
-            if not Cancelled and then Carry_In then
+            if not Cancelled and then Carry_In and then Into = null then
+               Brought_Home := True;
+               Lost_Carry := True;
+               return;
+            elsif not Cancelled and then Carry_In then
                declare
                   Fetched : Boolean;
                begin
@@ -4667,6 +4679,7 @@ package body Model_Runner.Backend.Device is
                      Fetched);
                   Brought_Home := True;
                   if not Fetched then
+                     Lost_Carry := True;
                      return;
                   end if;
                end;
@@ -4718,6 +4731,7 @@ package body Model_Runner.Backend.Device is
       end Attempt;
    begin
       Front_Routed := False;
+      Lost_Carry := False;
 
       --  What this layer asks for that the device will not do, before the
       --  sequence is built: the packed block's shape, which is the one
@@ -4743,20 +4757,29 @@ package body Model_Runner.Backend.Device is
       --  device left it, and comes home so the host goes on from it. It
       --  did not, and a nibble-cached hybrid whose attention layer the
       --  device would not take went on from the linear layer's input.
-      if not Ok and then Carry_In and then not Brought_Home
-        and then Into /= null
-      then
-         declare
-            Back : Boolean;
-         begin
-            Products.Fetch_Carried
-              (Engine,
-               Into.all (Into.all'First
-                         .. Into.all'First + Slots * Width - 1),
-               Back);
-         end;
+      if not Ok and then Carry_In and then not Brought_Home then
+         if Into = null then
+            Lost_Carry := True;
+         else
+            declare
+               Back : Boolean;
+            begin
+               Products.Fetch_Carried
+                 (Engine,
+                  Into.all (Into.all'First
+                            .. Into.all'First + Slots * Width - 1),
+                  Back);
+               Lost_Carry := not Back;
+            end;
+         end if;
       end if;
    end Whole_Layer;
+
+   ----------------
+   -- Carry_Lost --
+   ----------------
+
+   function Carry_Lost return Boolean is (Lost_Carry);
 
    ---------------
    -- Runs_Rwkv --
@@ -6165,15 +6188,27 @@ package body Model_Runner.Backend.Device is
                  + Where * Model_Runner.Numerics.Element_Count (2 * Used);
                Into : constant Model_Runner.Numerics.Element_Count :=
                  Where * Model_Runner.Numerics.Element_Count (Used) + Slot;
-            begin
-               Choice (Choice'First + Natural (Into)) :=
-                 Natural (Bits (Landing.all (At_Word + Slot)));
-               Shares (Shares'First + Into) :=
+               Which : constant Interfaces.Unsigned_32 :=
+                 Bits (Landing.all (At_Word + Slot));
+               Share : constant Model_Runner.Numerics.Real :=
                  Value
                    (Bits (Landing.all
                             (At_Word
                              + Model_Runner.Numerics.Element_Count (Used)
                              + Slot)));
+            begin
+               --  An expert the mixture has not got, or a share that is no
+               --  number -- a router's scores gone to NaN -- is said as the
+               --  host's routing says it, not handed to the pool to read
+               --  past the experts or spread.
+               if Which >= Interfaces.Unsigned_32 (Experts)
+                 or else not Model_Runner.Numerics.Is_Finite (Share)
+               then
+                  Status := E.Make (E.Tensor_Non_Finite_Value);
+                  return;
+               end if;
+               Choice (Choice'First + Natural (Into)) := Natural (Which);
+               Shares (Shares'First + Into) := Share;
             end;
          end loop;
       end loop;
@@ -6221,15 +6256,27 @@ package body Model_Runner.Backend.Device is
                At_Word : constant Model_Runner.Numerics.Element_Count :=
                  Model_Runner.Numerics.Element_Count (Where * 2 * Used);
                Into    : constant Natural := Where * Used + Slot;
-            begin
-               Choice (Choice'First + Into) :=
-                 Natural (Bits (Front_Words
-                   (At_Word + Model_Runner.Numerics.Element_Count (Slot))));
-               Shares (Shares'First
-                       + Model_Runner.Numerics.Element_Count (Into)) :=
+               Which : constant Interfaces.Unsigned_32 :=
+                 Bits (Front_Words
+                   (At_Word + Model_Runner.Numerics.Element_Count (Slot)));
+               Share : constant Model_Runner.Numerics.Real :=
                  Value (Bits (Front_Words
                    (At_Word
                     + Model_Runner.Numerics.Element_Count (Used + Slot))));
+            begin
+               --  As Dispatch_Route: an expert past the router's or a share
+               --  that is no number is not taken -- the route is not found,
+               --  and the host routes, and says what the scores were.
+               if Which >= Interfaces.Unsigned_32 (Router.Rows)
+                 or else not Model_Runner.Numerics.Is_Finite (Share)
+               then
+                  Choice := [others => 0];
+                  Shares := [others => 0.0];
+                  return;
+               end if;
+               Choice (Choice'First + Into) := Natural (Which);
+               Shares (Shares'First
+                       + Model_Runner.Numerics.Element_Count (Into)) := Share;
             end;
          end loop;
       end loop;

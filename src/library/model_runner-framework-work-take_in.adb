@@ -170,7 +170,34 @@ begin
             --  those completed after this workspace was made, not those
             --  whose change it was made from.
             Whose   : Name_Lists.Vector;
-            History : constant Events.Event_List := Events.Since (Item, 0);
+
+            --  The events from this workspace's making on, read back from
+            --  the newest until it is among them: the whole log, read from
+            --  the first every take-in, grew with the project.
+            function Since_Made return Events.Event_List is
+               Total : constant Natural := Events.Count (Item);
+               Reach : Positive := 256;
+            begin
+               loop
+                  declare
+                     Got : constant Events.Event_List := Events.Latest (Item, Reach);
+                  begin
+                     for Index in 1 .. Events.Length (Got) loop
+                        if Events."=" (Events.Element (Got, Index).Kind, Events.Workspace_Created)
+                          and then To_String (Events.Element (Got, Index).Subject) = Id
+                        then
+                           return Got;
+                        end if;
+                     end loop;
+                     if Reach >= Total then
+                        return Got;
+                     end if;
+                  end;
+                  Reach := (if Reach > Natural'Last / 4 then Natural'Last else Reach * 4);
+               end loop;
+            end Since_Made;
+
+            History : constant Events.Event_List := Since_Made;
             Made_At : Natural := 0;
 
             function Done_Since (Other : String) return Boolean is

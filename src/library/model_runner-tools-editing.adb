@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
@@ -269,6 +270,48 @@ package body Model_Runner.Tools.Editing is
                return;
          end;
       end if;
+
+      --  What a write of this file a crash cut short left beside it: its
+      --  partials an hour old, which no writer still running holds.
+      declare
+         use type Ada.Calendar.Time;
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+         Stale  : U.Unbounded_String;
+         Prefix : constant String :=
+           "." & Ada.Directories.Simple_Name (Disk) & ".model_runner-partial.";
+      begin
+         Ada.Directories.Start_Search
+           (Search, (if Folder = "" then "." else Folder), Prefix & "*",
+            [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            if Ada.Calendar.Clock - Ada.Directories.Modification_Time (Found) > 3_600.0 then
+               U.Append (Stale, Ada.Directories.Full_Name (Found) & ASCII.LF);
+            end if;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         declare
+            Listed : constant String := U.To_String (Stale);
+            From   : Positive := Listed'First;
+         begin
+            for Index in Listed'Range loop
+               if Listed (Index) = ASCII.LF then
+                  begin
+                     Ada.Directories.Delete_File (Listed (From .. Index - 1));
+                  exception
+                     when others =>
+                        null;
+                  end;
+                  From := Index + 1;
+               end if;
+            end loop;
+         end;
+      exception
+         --  Left for the next: the write itself is what was asked.
+         when others =>
+            null;
+      end;
 
       --  Written whole beside itself, made durable, and renamed over it in
       --  one step: a crash, a full disk or an interrupt leaves the file as

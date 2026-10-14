@@ -1,6 +1,7 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Strings.Fixed;
+with GNAT.OS_Lib;
 with Ada.Strings.Unbounded;
 with Ada.Directories;
 with Ada.Environment_Variables;
@@ -64,6 +65,9 @@ package body Model_Runner.Platform is
    --------------------------
    -- Environment_Exists --
    --------------------------
+
+   function Search_Path return String
+   is (if Environment_Exists ("PATH") then Environment_Value ("PATH") else "");
 
    function Environment_Exists (Name : String) return Boolean is
    begin
@@ -224,11 +228,38 @@ package body Model_Runner.Platform is
       Result : Ada.Strings.Unbounded.Unbounded_String;
       Start  : Natural := Names'First;
 
+      --  The search path's absolute directories alone: an empty entry or
+      --  a relative one is wherever the check runs, which is the work's.
+      function Absolute_Only (Search : String) return String is
+         Kept : Ada.Strings.Unbounded.Unbounded_String;
+         From : Positive := Search'First;
+      begin
+         for Index in Search'First .. Search'Last + 1 loop
+            if Index > Search'Last or else Search (Index) = GNAT.OS_Lib.Path_Separator then
+               declare
+                  Folder : constant String := Search (From .. Index - 1);
+               begin
+                  if Folder /= "" and then GNAT.OS_Lib.Is_Absolute_Path (Folder) then
+                     if Ada.Strings.Unbounded.Length (Kept) > 0 then
+                        Ada.Strings.Unbounded.Append (Kept, GNAT.OS_Lib.Path_Separator);
+                     end if;
+                     Ada.Strings.Unbounded.Append (Kept, Folder);
+                  end if;
+               end;
+               From := Index + 1;
+            end if;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (Kept);
+      end Absolute_Only;
+
       procedure Pass (Name : String) is
       begin
          if Name /= "" and then Environment_Exists (Name) then
             Ada.Strings.Unbounded.Append
-              (Result, Name & "=" & Environment_Value (Name) & ASCII.LF);
+              (Result, Name & "="
+                 & (if Name = "PATH" then Absolute_Only (Environment_Value (Name))
+                    else Environment_Value (Name))
+                 & ASCII.LF);
          end if;
       end Pass;
    begin

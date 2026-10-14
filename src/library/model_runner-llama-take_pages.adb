@@ -9,6 +9,20 @@ is
 
    KV_Width : Element_Count;
    V_Width  : Element_Count;
+
+   --  A session paged in for the first time that cannot be finished --
+   --  a reserve, a table or a write refused -- gives back what it was
+   --  dealt: it attends on the host, and pages it held while doing so
+   --  were slots every other session was refused until it closed. A
+   --  session already paged in keeps what it had: its rows are in them.
+   Fresh : constant Boolean := Item /= null and then not Item.Paged_In;
+
+   procedure Give_Up is
+   begin
+      if Fresh then
+         Release_Session_Pages (Item);
+      end if;
+   end Give_Up;
 begin
    Ok := False;
 
@@ -204,9 +218,12 @@ begin
                   end loop;
 
                   if Slot >= High then
-                     --  No slot free: what has been dealt stays, and the
-                     --  layer holds fewer pages than it wanted, which the
-                     --  caller reads as the cache being full.
+                     --  No slot free: what has been dealt stays with a
+                     --  session already paged in, and the layer holds
+                     --  fewer pages than it wanted, which the caller reads
+                     --  as the cache being full; a session paging in for
+                     --  the first time gives them back.
+                     Give_Up;
                      return;
                   end if;
 
@@ -276,6 +293,7 @@ begin
          --  the copy alone. A model with sinks, or a packed cache, reads
          --  the binary32 and keeps it whole.
          if Element_Count (Words) > Page_Front then
+            Give_Up;
             return;
          end if;
 
@@ -287,6 +305,7 @@ begin
               and then Item.Held in Exact | Halved,
             Front => Page_Front);
          if not Ok then
+            Give_Up;
             return;
          end if;
 
@@ -294,6 +313,7 @@ begin
             Model_Runner.Backend.Device.Reserve_Second_Cache
               (Pages_Taken_Second, Ok);
             if not Ok then
+               Give_Up;
                return;
             end if;
          end if;
@@ -334,6 +354,7 @@ begin
 
             Model_Runner.Backend.Device.Put_Table (0, Table, Ok);
             if not Ok then
+               Give_Up;
                return;
             end if;
             Tables_Of := Item;
@@ -356,6 +377,7 @@ begin
             + Sink_Footprint (Item.Owner.Settings),
             Copy_Upto => Pages_Taken, Ok => Ok);
          if not Ok then
+            Give_Up;
             return;
          end if;
       end;
@@ -389,6 +411,7 @@ begin
          end loop;
          if not Written then
             Ok := False;
+            Give_Up;
             return;
          end if;
       end;

@@ -13649,10 +13649,37 @@ package body Tests.CLI_Cases is
             Ada.Text_IO.Put_Line (Note, [1 .. 64 => 'a']);
             Ada.Text_IO.Close (Note);
          end;
-         Assert (not Model_Runner.Hub.Is_Whole (File, Path),
-                 "a file was taken for the hub's by a digest kept for another");
+         --  The bytes are read again and found right, and the note put right.
+         Assert (Model_Runner.Hub.Is_Whole (File, Path),
+                 "a stale digest beside the right bytes made them another file");
+         declare
+            Note : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Open (Note, Ada.Text_IO.In_File, Path & ".sha256");
+            Assert (Ada.Text_IO.Get_Line (Note) = File.SHA256,
+                    "the stale digest beside the file was not put right");
+            Ada.Text_IO.Close (Note);
+         end;
          Ada.Directories.Delete_File (Path & ".sha256");
          Ada.Directories.Delete_File (Path);
+
+         --  And a file this run has not read, beside a note that is wrong:
+         --  the bytes are read, not the note believed.
+         declare
+            Other : constant String := "obj/hub-whole-stale.gguf";
+            Note  : Ada.Text_IO.File_Type;
+         begin
+            Ada.Streams.Stream_IO.Create (F, Ada.Streams.Stream_IO.Out_File, Other);
+            String'Write (Ada.Streams.Stream_IO.Stream (F), "model bytes");
+            Ada.Streams.Stream_IO.Close (F);
+            Ada.Text_IO.Create (Note, Ada.Text_IO.Out_File, Other & ".sha256");
+            Ada.Text_IO.Put_Line (Note, [1 .. 64 => 'b']);
+            Ada.Text_IO.Close (Note);
+            Assert (Model_Runner.Hub.Is_Whole (File, Other),
+                    "a stale note beside the hub's bytes was believed over them");
+            Ada.Directories.Delete_File (Other & ".sha256");
+            Ada.Directories.Delete_File (Other);
+         end;
       end;
    end Hub_Names_Stay_Inside;
 
@@ -13845,6 +13872,15 @@ package body Tests.CLI_Cases is
          Assert (Removing ("kept.gguf") = 0
                  and then not Ada.Directories.Exists (Store & "/kept.gguf"),
                  "models remove did not remove a model of the store");
+         --  A model in a folder of the store, as a hub's quants often are,
+         --  is the store's too.
+         if not Ada.Directories.Exists (Store & "/Q4") then
+            Ada.Directories.Create_Path (Store & "/Q4");
+         end if;
+         Touch (Store & "/Q4/inner.gguf");
+         Assert (Removing ("Q4/inner.gguf") = 0
+                 and then not Ada.Directories.Exists (Store & "/Q4/inner.gguf"),
+                 "models remove refused a model in a folder of the store");
       exception
          when others =>
             if Before = "" then

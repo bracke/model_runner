@@ -102,10 +102,6 @@ package body Model_Runner.Processes is
    type Bound_Access is access Bound;
    package Task_Bounds is new Ada.Task_Attributes (Bound_Access, null);
 
-   --  The most a program run for a tool may say before it is stopped: what
-   --  it writes goes to temporary files, and is not let fill their disk.
-   Most_Said : constant := 256 * 1024 * 1024;
-
    function Bounded_Stop return Boolean is
       Mine : constant Bound_Access := Task_Bounds.Value;
       use type Ada.Directories.File_Size;
@@ -170,6 +166,7 @@ package body Model_Runner.Processes is
       begin
          Result_Of.Started := Happened.Started;
          Result_Of.Stopped := Happened.Timed_Out;
+         Result_Of.Overflowed := Mine /= null and then Mine.Overflowed;
          Result_Of.Exit_Status := Happened.Exit_Status;
          if Happened.Started then
             Read_Bounded (Output.Path.all, Result_Of.Output, Cut_Out);

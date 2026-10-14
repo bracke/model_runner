@@ -904,6 +904,18 @@ package body Model_Runner.Framework.Work is
            (To_String (Repository.File_At (Found, Index).Path),
             To_String (Repository.File_At (Found, Index).Fingerprint));
       end loop;
+      --  And the files of bytes, by their stamps: written by the work,
+      --  they are changes as any file is -- reported, held to what it may
+      --  write, put back.
+      for Line of Repository.Binary_Files (Found) loop
+         declare
+            Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            if Tab > Line'First then
+               Result.Include (Line (Line'First .. Tab - 1), "bytes:" & Line (Tab + 1 .. Line'Last));
+            end if;
+         end;
+      end loop;
       return Result;
    end Snapshot;
 

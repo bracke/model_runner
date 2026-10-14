@@ -7839,9 +7839,13 @@ package body Tests.Backend_Cases is
       --  was a third of a context's room on the device kept for nobody.
       --  Whatever it holds -- a reserve only ever grows, so this is the
       --  largest asked for above.
+      --  The copy in whole words: the device zeroes four bytes at a time.
       Assert (Products.Cached_Bytes (Engine)
-              = Interfaces.Unsigned_64 (Products.Cached_Elements (Engine))
-                * (if Products.Keeps_Copy (Engine) then 6 else 4),
+              = Interfaces.Unsigned_64 (Products.Cached_Elements (Engine)) * 4
+                + (if Products.Keeps_Copy (Engine)
+                   then (Interfaces.Unsigned_64 (Products.Cached_Elements (Engine))
+                         * 2 + 3) / 4 * 4
+                   else 0),
               "a cache of"
               & N.Element_Count'Image (Products.Cached_Elements (Engine))
               & " elements takes"

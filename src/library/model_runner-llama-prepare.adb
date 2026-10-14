@@ -2018,10 +2018,9 @@ begin
       then
          --  LongRoPE: the long table where the model is opened past the
          --  context it was trained on, the short table otherwise, applied
-         --  as any per-dimension factor table is. Which is settled when a
-         --  session opens, by how far it is opened; until then the table
-         --  is the one the file's own context asks for. Both are kept where
-         --  both are there, so that a session can be given either.
+         --  as any per-dimension factor table is. Where both are there both
+         --  are kept, and which one turns a session's positions is settled
+         --  as it opens, by how far it is opened; one alone is the table.
          if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
            and then Containers.Find_Tensor
                       (Source, "rope_factors_short.weight") /= 0
@@ -2042,29 +2041,26 @@ begin
             end if;
          end if;
 
-         declare
-            Long  : constant Boolean :=
-              Item.Settings.Rope_Original > 0
-              and then Item.Settings.Context_Length
-                       > Item.Settings.Rope_Original
-              and then Containers.Find_Tensor
-                         (Source, "rope_factors_long.weight") /= 0;
-            Named : constant String :=
-              (if Long then "rope_factors_long.weight"
-               elsif Containers.Find_Tensor
-                       (Source, "rope_factors_short.weight") /= 0
-               then "rope_factors_short.weight"
-               else "rope_factors_long.weight");
-         begin
-            Resolve_Norm
-              (Item, Source, Named,
-               Element_Count (Item.Settings.Rotary / 2),
-               Item.Rope_Factors, Status);
-            if E.Is_Error (Status) then
-               Fail (Status);
-               return;
-            end if;
-         end;
+         --  The one table a file of one carries; a file of both keeps
+         --  them as above, and a session turns by one of those.
+         if Item.Rope_Long = null or else Item.Rope_Short = null then
+            declare
+               Named : constant String :=
+                 (if Containers.Find_Tensor
+                       (Source, "rope_factors_long.weight") /= 0
+                  then "rope_factors_long.weight"
+                  else "rope_factors_short.weight");
+            begin
+               Resolve_Norm
+                 (Item, Source, Named,
+                  Element_Count (Item.Settings.Rotary / 2),
+                  Item.Rope_Factors, Status);
+               if E.Is_Error (Status) then
+                  Fail (Status);
+                  return;
+               end if;
+            end;
+         end if;
       end if;
 
       --  A model with no output projection ties the output to the embedding

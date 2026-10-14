@@ -50,6 +50,38 @@ package body Model_Runner.Framework.Permissions is
       return R = "" or else P = R or else Starts (P, R & "/");
    end Within;
 
+   --  A path as a file system that ignores case, or the dots and spaces
+   --  ending a name, opens it: Secrets/key and secrets./key are secrets/key
+   --  on Windows and, by default, macOS. Folded for what refuses -- a deny
+   --  rule, the state -- and on every host, so no spelling of a refused
+   --  path passes; never for what grants, where it would widen a root on a
+   --  host that tells the two apart.
+   function Folded (Path : String) return String is
+      Text   : constant String := Normal (Path);
+      Result : Unbounded_String;
+      From   : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = '/' then
+            Append (Result, (if Result = Null_Unbounded_String then "" else "/")
+                            & Ada.Strings.Fixed.Trim
+                                (Ada.Characters.Handling.To_Lower (Text (From .. Index - 1)),
+                                 Ada.Strings.Maps.Null_Set, Ada.Strings.Maps.To_Set (". ")));
+            From := Index + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Folded;
+
+   --  Whether a path lies at or under one a rule refuses, however either
+   --  is spelled in case or with trailing dots.
+   function Within_Refused (Path, Prefix : String) return Boolean is
+      P : constant String := Folded (Path);
+      R : constant String := Folded (Prefix);
+   begin
+      return R = "" or else P = R or else Starts (P, R & "/");
+   end Within_Refused;
+
    ----------
    -- Word --
    ----------
@@ -773,7 +805,7 @@ package body Model_Runner.Framework.Permissions is
          return True;
       end if;
       for Denied of G.Deny loop
-         if Within (Path, Denied) then
+         if Within_Refused (Path, Denied) then
             return False;
          end if;
       end loop;
@@ -1227,7 +1259,9 @@ package body Model_Runner.Framework.Permissions is
          Said := To_Unbounded_String (Outside);
          Verdict := Path_Outside;
          return;
-      elsif not Parts.Is_Empty and then Parts.First_Element = State_Directory then
+      elsif not Parts.Is_Empty
+        and then Folded (Parts.First_Element) = Folded (State_Directory)
+      then
          Said := To_Unbounded_String
            (Path & " is the project's state, which only the harness reads and writes");
          Verdict := Path_Harness_Owned;
