@@ -537,6 +537,12 @@ package body Model_Runner.CLI.Interactive is
       procedure Take_Turn
         (Prompt : String; Sender : Conv.Role := Conv.User_Role);
 
+      --  Whether the last Take_Turn put a reply into the conversation, and
+      --  how many it was asked for: a command that talks to the model --
+      --  /tool -- leaves the model, not the command, to be answered.
+      Turn_Taken : Boolean := False;
+      Turns_Asked : Natural := 0;
+
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
          Asked : constant Parsed_Command := Parse (Line);
@@ -1042,6 +1048,8 @@ package body Model_Runner.CLI.Interactive is
          Outcome  : E.Error_Info;
          Request  : Gen.Request;
       begin
+         Turn_Taken := False;
+         Turns_Asked := Turns_Asked + 1;
          if Sender = Conv.User_Role and then Next_Picture /= null then
             --  The words and the picture named for them, as one turn of
             --  parts, the path quoted as JSON quotes it.
@@ -1136,7 +1144,27 @@ package body Model_Runner.CLI.Interactive is
             Outcome  => Last_Result);
 
          Free_Text (Rendered);
-         Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+
+         --  Nobody reads the answers any more -- the terminal or the pipe
+         --  is gone -- so the session ends, as it ends at end of input,
+         --  rather than reading lines to answer into nowhere.
+         if Last_Result.Reason = Gen.Output_Closed then
+            Conv.Drop_Last (Messages, 1);
+            Model_Runner.CLI.Pictures.Release (Pictures);
+            Leaving := True;
+            return;
+         end if;
+
+         begin
+            Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+         exception
+            --  Closed between the answer and its line end: as above.
+            when others =>
+               Conv.Drop_Last (Messages, 1);
+               Model_Runner.CLI.Pictures.Release (Pictures);
+               Leaving := True;
+               return;
+         end;
 
          if Last_Result.Reason = Gen.Runtime_Error then
             Pres.Report (Screen, Last_Result.Error);
@@ -1157,7 +1185,16 @@ package body Model_Runner.CLI.Interactive is
             --  And the pictures it gave, so the next turn does not take them
             --  for its own: a picture set counts what it holds, not which.
             Model_Runner.CLI.Pictures.Release (Pictures);
-            L.Reset (Session);
+            --  A cancelled evaluation commits no position, so a session
+            --  that keeps every position still holds exactly what it
+            --  committed, and the next turn rewinds to where it and the
+            --  conversation agree: a stopped answer cost the whole
+            --  conversation read again. A session with recurrent states
+            --  may have had some layers' states moved by the stopped
+            --  batch, and is read again.
+            if L.States_Kept (Session) /= Natural'Last then
+               L.Reset (Session);
+            end if;
             Have_Stats := False;
             return;
          end if;
@@ -1172,9 +1209,13 @@ package body Model_Runner.CLI.Interactive is
             declare
                Reading : E.Error_Info;
             begin
+               --  Read in the shape the model's own format writes calls,
+               --  against the tools it was offered, as the agent reads them.
                Conv.Append_Reply
                  (Messages, Gen.Generated_Text (Last_Result), Outcome,
-                  Reading);
+                  Reading,
+                  Syntax  => Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
+                  Offered => Tools);
                if E.Is_Error (Reading) then
                   Pres.Report (Screen, Reading);
                end if;
@@ -1225,6 +1266,7 @@ package body Model_Runner.CLI.Interactive is
             end loop;
          end if;
 
+         Turn_Taken := True;
          Have_Stats := True;
          if Item.Show_Stats then
             Pres.Put_Statistics (Screen, Last_Result);
@@ -1260,7 +1302,18 @@ package body Model_Runner.CLI.Interactive is
                --  What changed in the project since the model last spoke,
                --  said before the turn: its earlier talk of the project
                --  may no longer hold.
-               Take_Turn (Model_Runner.CLI.Project_Commands.Changes_Since (Project_Seen) & Prompt);
+               --  Seen once the turn that was told is in the conversation: a
+               --  turn stopped or refused told the model nothing, and the
+               --  next one says it again.
+               declare
+                  Seen : Natural := Project_Seen;
+                  Told : constant String := Model_Runner.CLI.Project_Commands.Changes_Since (Seen);
+               begin
+                  Take_Turn (Told & Prompt);
+                  if Turn_Taken then
+                     Project_Seen := Seen;
+                  end if;
+               end;
             else
                Pres.Report (Screen, E.Make (E.IO_Invalid_UTF8));
             end if;
@@ -1641,12 +1694,20 @@ package body Model_Runner.CLI.Interactive is
                         --  Offer says so only for a line Parse reads as one,
                         --  so the answer here is always True and is not
                         --  consulted.
-                        Handled := Handle_Command (T.Trim (Line));
-                        After_Command := True;
+                        declare
+                           Before : constant Natural := Turns_Asked;
+                        begin
+                           Handled := Handle_Command (T.Trim (Line));
+                           After_Command := Turns_Asked = Before;
+                        end;
 
                      when Command_Mid_Message =>
-                        Handled := Handle_Command (T.Trim (Line));
-                        After_Command := True;
+                        declare
+                           Before : constant Natural := Turns_Asked;
+                        begin
+                           Handled := Handle_Command (T.Trim (Line));
+                           After_Command := Turns_Asked = Before;
+                        end;
                         Pres.Put_Note (Screen, "cli.interactive.message_kept");
 
                      when Submits =>

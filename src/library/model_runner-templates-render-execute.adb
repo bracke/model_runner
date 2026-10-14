@@ -161,25 +161,42 @@ begin
                Asked : constant Natural := Asked_Count;
             begin
                --  A message bound as a mapping -- a loop over a filtered
-               --  list of them -- is no turn to count the calls of: read
-               --  as the loop's turn, its calls were another turn's, or
-               --  none. Refused, as a loop over such a list is, rather
-               --  than written without them.
+               --  list of them -- is no turn of the conversation to count
+               --  the calls of: read as the loop's turn, its calls were
+               --  another turn's, or none. Its own "tool_calls" are
+               --  walked, each call bound as the mapping it is there.
                if Message_As_Data then
-                  Refuse (Item.Names (Step.Offset).Offset,
-                          Item.Names (Step.Offset).Length,
-                          E.Template_Unsupported_Construct);
-                  Position := Step.Target;
+                  declare
+                     Calls : constant Held :=
+                       Field_Of (Held_Of (Item.Message_Slot), "tool_calls");
+                  begin
+                     if Calls.Kind /= Value_Data
+                       or else not Is_JSON_List (JSON_Text (Calls))
+                       or else JSON_Length (JSON_Text (Calls)) = 0
+                     then
+                        Position := Step.Target;
+                     else
+                        Push_Loop ((Kind => Legacy_Calls, others => <>));
+                        Data_Calls := Calls;
+                        Call_Message := 0;
+                        Call_At := 1;
+                        In_Calls := True;
+                        Store (Step.Offset, Element_At (Calls, 0));
+                        Position := Position + 1;
+                     end if;
+                  end;
                elsif Asked = 0 then
                   Position := Step.Target;
                else
+                  --  Pushed before the name is bound, so the name the loop
+                  --  gives back as it ends is what it was before.
+                  Push_Loop ((Kind => Legacy_Calls, others => <>));
                   Call_Message := Bound_Message;
                   Call_At := 1;
                   In_Calls := True;
                   Slots (Step.Offset) :=
                     (Kind => Value_Call, Offset => Call_Message,
                      Length => 0, Start => 1);
-                  Push_Loop ((Kind => Legacy_Calls, others => <>));
                   Position := Position + 1;
                end if;
             end;
@@ -195,14 +212,19 @@ begin
             begin
                if Call_At < Asked and then not Breaking then
                   Call_At := Call_At + 1;
-                  Slots (Named) :=
-                    (Kind => Value_Call, Offset => Call_Message,
-                     Length => 0, Start => Call_At);
+                  if Data_Calls.Kind = Value_Data then
+                     Store (Named, Element_At (Data_Calls, Long_Long_Integer (Call_At - 1)));
+                  else
+                     Slots (Named) :=
+                       (Kind => Value_Call, Offset => Call_Message,
+                        Length => 0, Start => Call_At);
+                  end if;
                   Position := Step.Target + 1;
                else
                   Call_At := 0;
                   Call_Message := 0;
                   In_Calls := False;
+                  Data_Calls := Nothing;
                   Slots (Named) := (Kind => Value_Undefined,
                                     others => <>);
                   Pop_Loop;
@@ -241,10 +263,14 @@ begin
                   Range_Step := Outer.Outer_Step;
                   Position := Step.Target;
                else
+                  --  Pushed before the first value is set: the names the
+                  --  loop gives back as it ends are those from before it,
+                  --  not its own first value -- an outer loop's `i` came
+                  --  back as an inner one's first.
+                  Push_Loop (Outer);
                   Assign_Text
                     (Range_Slot, Model_Runner.Text.Image (Range_At),
                      Value_Number);
-                  Push_Loop (Outer);
                   Position := Position + 1;
                end if;
             end;

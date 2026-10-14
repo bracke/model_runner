@@ -67,7 +67,8 @@ is
        and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
        and then Settings.Experts_Used
                 <= Model_Runner.Backend.Device.Max_Members
-         and then not Settings.Sigmoid_Gate);
+         and then not Settings.Sigmoid_Gate
+         and then L.Select_Bias = null);
 
    --  A hybrid's linear layer goes whole where the device has the
    --  rule and the convolution, the session a ring that is over, and

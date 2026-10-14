@@ -2593,6 +2593,18 @@ package body Reference_Transformer is
       return DB * Long_Float (Magnitude) * Sign;
    end Decode_IQ3_S;
 
+   --  Whether a layer of a patterned model slides its window: the file's
+   --  mark where it lists them, else all but the last of each period, and
+   --  every layer for a period of nought.
+   function Windowed (Item : Model; Layer : Natural) return Boolean
+   is (Item.Patterned
+       and then (if Item.Window_Listed
+                 then Layer <= Item.Window_List'Last
+                      and then Item.Window_List (Layer)
+                 else Item.Window_Every = 0
+                      or else Layer mod Item.Window_Every
+                              < Item.Window_Every - 1));
+
    --  Read a metadata integer, or a default.
    function Metadata
      (Source  : Containers.Container;
@@ -2668,7 +2680,8 @@ package body Reference_Transformer is
       Source : Containers.Container;
       Image  : B.Byte_Array;
       Ok     : out Boolean;
-      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null)
+      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null;
+      Opened : Natural := 0)
    is
       use type Model_Runner.GGUF.Tensor_Type;
 
@@ -3316,17 +3329,23 @@ package body Reference_Transformer is
       Item.Window :=
         Metadata (Source, Prefix (Item) & "attention.sliding_window", 0);
 
+      --  Gemma2 windows four thousand and ninety-six positions back where
+      --  its file says nothing, as the reference runtime has it.
+      if Item.Kind = Gemma2 and then Item.Window = 0 then
+         Item.Window := 4_096;
+      end if;
+
       --  Read as floats, because that is what they are: a bound on a score
       --  rather than a count of anything.
       declare
          Value  : Model_Runner.Numerics.Wide_Real;
          Status : Model_Runner.Errors.Error_Info;
       begin
-         Containers.Get_Float
-           (Source, Prefix (Item) & "rope.local_freq_base",
-            1.0, 1.0E12, Value, Status);
-         if Model_Runner.Errors.Is_Ok (Status) then
-            Item.Local_Base := Long_Float (Value);
+         --  Gemma2's bounds are fifty and thirty where the file says
+         --  nothing.
+         if Item.Kind = Gemma2 then
+            Item.Attention_Cap := 50.0;
+            Item.Logit_Cap := 30.0;
          end if;
 
          Containers.Get_Float
@@ -3379,19 +3398,45 @@ package body Reference_Transformer is
          end if;
       end;
 
-      --  The period of the window pattern, which the architecture states by
-      --  being what it is rather than by a key: two for Gemma2 and six for
-      --  Gemma3.
-      Item.Window_Every :=
-        (case Item.Kind is
-            when Gemma2 | GPT_OSS => 2,
-            when Gemma3 => 6,
-            when others => 0);
+      --  The window pattern. Gemma2 and GPT_OSS always have one, every
+      --  second layer seeing everything; Gemma3 (every sixth) and OLMo2
+      --  (every fourth) only where the file states a window at all. A
+      --  period the file states replaces the architecture's, and a list of
+      --  one mark a layer replaces both.
+      Item.Patterned :=
+        Item.Kind in Gemma2 | GPT_OSS
+        or else (Item.Kind in Gemma3 | Olmo2 and then Item.Window > 0);
+      if Item.Patterned then
+         Item.Window_Every :=
+           (case Item.Kind is
+               when Gemma3 => 6,
+               when Olmo2 => 4,
+               when others => 2);
 
-      --  GPT_OSS turns its windowed layers on a base of its own, stated
-      --  under a name of its own: Gemma3 calls it rope.local_freq_base and
-      --  this calls it rope.freq_base_swa, and they mean the same thing.
-      if Item.Kind = GPT_OSS then
+         declare
+            Key    : constant String :=
+              Prefix (Item) & "attention.sliding_window_pattern";
+            Length : Natural;
+            Mark   : Boolean;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Array_Length
+              (Source, Key, Model_Runner.GGUF.Value_Bool, Length, Status);
+            if Model_Runner.Errors.Is_Ok (Status) then
+               Item.Window_Listed := True;
+               for Index in 1 .. Length loop
+                  Containers.Get_Boolean_Element
+                    (Source, Key, Index, Mark, Status);
+                  Item.Window_List (Index - 1) := Mark;
+               end loop;
+            else
+               Item.Window_Every := Metadata (Source, Key, Item.Window_Every);
+            end if;
+         end;
+
+         --  The base the windowed layers turn on: rope.freq_base_swa
+         --  where the file states it; else Gemma3's own ten thousand, and
+         --  the model's base for the rest.
          declare
             Value  : Model_Runner.Numerics.Wide_Real;
             Status : Model_Runner.Errors.Error_Info;
@@ -3401,6 +3446,8 @@ package body Reference_Transformer is
                1.0, 1.0E12, Value, Status);
             if Model_Runner.Errors.Is_Ok (Status) then
                Item.Local_Base := Long_Float (Value);
+            elsif Item.Kind = Gemma3 then
+               Item.Local_Base := 10_000.0;
             end if;
          end;
       end if;
@@ -3434,6 +3481,23 @@ package body Reference_Transformer is
          if Model_Runner.Errors.Is_Ok (Status) then
             Item.Expert_Scale := Long_Float (Value);
          end if;
+      end;
+
+      --  The gate, and whether the few are put back on a scale of one:
+      --  as the file says, else every mixture but Jamba's and DeepSeek-V2's.
+      --  Jamba takes its few as they are whatever the file says.
+      Item.Sigmoid_Gate :=
+        Metadata (Source, Prefix (Item) & "expert_gating_func", 1) = 2;
+      declare
+         Stated : Boolean;
+         Status : Model_Runner.Errors.Error_Info;
+      begin
+         Containers.Get_Boolean
+           (Source, Prefix (Item) & "expert_weights_norm", Stated, Status);
+         Item.Renormalize :=
+           (if Item.Kind = Jamba then False
+            elsif Model_Runner.Errors.Is_Ok (Status) then Stated
+            else Item.Kind /= Deepseek2);
       end;
 
       --  GPT-NeoX's parallel residual, on by default where the file says
@@ -3530,7 +3594,7 @@ package body Reference_Transformer is
       --  trap bert's absent key was and is why the fixture states nothing
       --  here either.
       Item.Rotary :=
-        (if Item.Kind in Jina_Bert_V2 | Mpt | Jamba
+        (if Item.Kind in GPT2 | Jina_Bert_V2 | Mpt | Jamba
             or else (Item.Kind = Baichuan and then Item.Layers = 40)
           then 0
          else Metadata
@@ -3563,7 +3627,7 @@ package body Reference_Transformer is
            (Source,
             Prefix (Item)
             & (if Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt
-               | Command_R
+               | Command_R | Falcon | Phi2 | GPT2 | Rwkv6
                then "attention.layer_norm_epsilon"
                else "attention.layer_norm_rms_epsilon"),
             0.0, 1.0, Value, Status);
@@ -3744,6 +3808,30 @@ package body Reference_Transformer is
       begin
          Item.Rope_Factors := Read_Vector ("rope_freqs.weight", Ignored);
       end;
+
+      --  Or LongRoPE's pair, of which the model opened past the context
+      --  it was trained on reads the long one and the model opened within
+      --  it the short.
+      if Item.Rope_Factors = null
+        and then Containers.Find_Tensor (Source, "rope_factors_long.weight")
+                 /= 0
+      then
+         declare
+            Trained : constant Natural :=
+              Metadata
+                (Source, Prefix (Item) & "rope.scaling.original_context_length",
+                 Item.Context);
+            Reach   : constant Natural :=
+              (if Opened = 0 then Item.Context else Opened);
+            Ignored : Boolean;
+         begin
+            Item.Rope_Factors :=
+              Read_Vector
+                ((if Reach > Trained then "rope_factors_long.weight"
+                  else "rope_factors_short.weight"),
+                 Ignored);
+         end;
+      end if;
 
       Item.Output := Read_Matrix ("output.weight", Present);
       if not Present and then Item.Kind in Bert | Nomic_Bert | Jina_Bert_V2 then
@@ -4434,6 +4522,14 @@ package body Reference_Transformer is
                   return;
                end if;
 
+               declare
+                  Ignored : Boolean;
+               begin
+                  Current.Select_Bias :=
+                    Read_Vector (Layer_Name (Index, "exp_probs_b.bias"),
+                                 Ignored);
+               end;
+
                if Item.Kind = GPT_OSS then
                   Current.Router_Bias :=
                     Read_Vector (Layer_Name (Index, "ffn_gate_inp.bias"),
@@ -5107,10 +5203,7 @@ package body Reference_Transformer is
                   --  layer that looks a few positions back -- and the layer
                   --  that sees everything turns on the model's.
                   Base : constant Long_Float :=
-                    (if Item.Local_Base > 0.0
-                       and then Item.Window_Every > 0
-                       and then Layer mod Item.Window_Every
-                                /= Item.Window_Every - 1
+                    (if Item.Local_Base > 0.0 and then Windowed (Item, Layer)
                      then Item.Local_Base
                      else Item.Rope_Base);
 
@@ -5128,10 +5221,8 @@ package body Reference_Transformer is
                   --  The other family that windows on a base of its own,
                   --  GPT-OSS, stretches every layer.
                   Unstretched : constant Boolean :=
-                    Item.Kind = Gemma3
-                    and then Item.Window_Every > 0
-                    and then Layer mod Item.Window_Every
-                             /= Item.Window_Every - 1;
+                    Item.Kind in Gemma3 | Olmo2
+                    and then Windowed (Item, Layer);
 
                   --  The angle as trained, and the angle the model's factor
                   --  stretches it to.
@@ -5160,13 +5251,16 @@ package body Reference_Transformer is
                   --  angles brings the scores they produce together.
                   --  DeepSeek2 keeps the file's attenuation as it is and
                   --  puts its YaRN factor on the scores instead.
+                  --  Any other stretch, or none, still takes the file's
+                  --  own multiplier: LongRoPE states one.
                   Size : constant Long_Float :=
-                    (if Item.Stretch = Yarn and then not Unstretched
+                    (if Unstretched then 1.0
+                     elsif Item.Stretch = Yarn
                      then (if Item.Kind = Deepseek2 then Item.Attenuation
                            else Item.Attenuation
                                 * (1.0 + 0.1 * Functions.Log
                                                  (1.0 / Item.Frequency)))
-                     else 1.0);
+                     else Item.Attenuation);
                   --  Llama pairs an element with its neighbour; Qwen2
                   --  pairs it with the one half a rotation later. Written
                   --  out here rather than shared with the engine: the point
@@ -5239,35 +5333,49 @@ package body Reference_Transformer is
                   end loop;
                end if;
 
-               Largest := Scores (0);
-               for Index in Scores'Range loop
-                  if Scores (Index) > Largest then
-                     Largest := Scores (Index);
-                  end if;
-               end loop;
+               --  The logistic of each score where the file names that gate,
+               --  and a softmax over every expert otherwise.
+               if Item.Sigmoid_Gate then
+                  for Index in Scores'Range loop
+                     Scores (Index) := Logistic (Scores (Index));
+                  end loop;
+               else
+                  Largest := Scores (0);
+                  for Index in Scores'Range loop
+                     if Scores (Index) > Largest then
+                        Largest := Scores (Index);
+                     end if;
+                  end loop;
 
-               Total := 0.0;
-               for Index in Scores'Range loop
-                  Scores (Index) := Functions.Exp (Scores (Index)
-                                                   - Largest);
-                  Total := Total + Scores (Index);
-               end loop;
-               for Index in Scores'Range loop
-                  Scores (Index) := Scores (Index) / Total;
-               end loop;
+                  Total := 0.0;
+                  for Index in Scores'Range loop
+                     Scores (Index) := Functions.Exp (Scores (Index)
+                                                      - Largest);
+                     Total := Total + Scores (Index);
+                  end loop;
+                  for Index in Scores'Range loop
+                     Scores (Index) := Scores (Index) / Total;
+                  end loop;
+               end if;
 
                --  The highest few, ties going to the lower-numbered
-               --  expert.
+               --  expert; chosen with the selection bias where the layer
+               --  carries one, and weighted without it.
                Total := 0.0;
                for Slot in Picked'Range loop
                   declare
                      Best : Integer := -1;
+
+                     function Chosen_By (Index : Natural) return Long_Float
+                     is (Scores (Index)
+                         + (if Current.Select_Bias = null then 0.0
+                            else Current.Select_Bias.all (Index)));
                   begin
                      for Index in Scores'Range loop
                         if not Taken (Index)
                           and then (Best < 0
-                                    or else Scores (Index)
-                                            > Scores (Best))
+                                    or else Chosen_By (Index)
+                                            > Chosen_By (Best))
                         then
                            Best := Index;
                         end if;
@@ -5286,7 +5394,7 @@ package body Reference_Transformer is
                --  without renormalizing them over the few.
                for Slot in Share'Range loop
                   Share (Slot) :=
-                    (if Item.Kind in Jamba | Deepseek2 then Share (Slot)
+                    (if not Item.Renormalize then Share (Slot)
                      else Share (Slot) / Total) * Item.Expert_Scale;
                end loop;
 
@@ -6658,13 +6766,15 @@ package body Reference_Transformer is
                   --  the width its embedding implies -- 168 to its heads'
                   --  128, the reference's query_pre_attn_scalar. No key in
                   --  the file says which; the depth does, sixty-two layers.
+                  --  Gemma 2's 27B the same, at forty-six.
                   declare
                      Group : constant Natural := Item.Heads / Item.KV_Heads;
                      Scale : constant Long_Float :=
                        (if Item.Kind in Granite | Granite_MoE
                           and then Item.Attention_Mul /= 0.0
                         then Item.Attention_Mul
-                        elsif Item.Kind = Gemma3 and then Item.Layers = 62
+                        elsif (Item.Kind = Gemma3 and then Item.Layers = 62)
+                          or else (Item.Kind = Gemma2 and then Item.Layers = 46)
                         then 1.0 / Functions.Sqrt
                                      (Long_Float (Item.Embedding / Item.Heads))
                         else Item.Score_Gain
@@ -6716,9 +6826,9 @@ package body Reference_Transformer is
                            --  Gemma3.
                            Windowed : constant Boolean :=
                              Item.Window /= 0
-                             and then (Item.Window_Every = 0
-                                       or else Block mod Item.Window_Every
-                                               /= Item.Window_Every - 1);
+                             and then (not Item.Patterned
+                                       or else Reference_Transformer.Windowed
+                                                 (Item, Block));
 
                            --  The last position this query may read: its
                            --  own where the model generates, and the end of

@@ -343,6 +343,15 @@ package Model_Runner.GGUF.Containers is
    --  @return The count, which is at least one.
    function Shard_Count (Item : Container) return Natural;
 
+   --  Whether the split keys a container carries read as counts: a key
+   --  present and of another type, negative or past a count's range is
+   --  said, rather than read as no split at all -- a shard of three with
+   --  split.count written -1 loaded as a model in one file.
+   --
+   --  @param Item Container to inspect.
+   --  @return Success where each key is absent or a count, else why not.
+   function Split_Problem (Item : Container) return Model_Runner.Errors.Error_Info;
+
    --  Which of them this container is, counting from zero as the format
    --  writes it.
    --

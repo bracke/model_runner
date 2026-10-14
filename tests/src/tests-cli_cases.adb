@@ -39,6 +39,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Errors;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.UTF8;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Presentation;
@@ -11662,6 +11663,13 @@ package body Tests.CLI_Cases is
             Model_Runner.Presentation.Put_Tool_Call
               (Screen, "calculator", "{""a"": 47, ""op"": ""*"", ""b"": 89}");
             Model_Runner.Presentation.Put_Tool_Result (Screen, "4183");
+            --  A call and a result carrying a terminal's own sequences --
+            --  a window title, a cursor move -- as a model or a page can.
+            Model_Runner.Presentation.Put_Tool_Call
+              (Screen, "fetch" & ASCII.ESC & "[2J",
+               "{""url"": ""x" & ASCII.ESC & "]0;owned" & ASCII.BEL & """}");
+            Model_Runner.Presentation.Put_Tool_Result
+              (Screen, "page" & ASCII.ESC & "[1A" & ASCII.LF & "second");
             Model_Runner.Presentation.Put_Agent_Outcome
               (Screen, "ANSWERED", 2, 1,
                Model_Runner.Presentation.Answered_Well);
@@ -11718,6 +11726,11 @@ package body Tests.CLI_Cases is
                  "the stop short did not read as a mark: " & Plain);
          Assert (not Coloured (Plain),
                  "a redirected trace carried escape sequences");
+         --  Shown, not obeyed: each escape written out, a line kept a line.
+         Assert (Has (Plain, "-> fetch\x1B[2J ")
+                 and then Has (Plain, "x\x1B]0;owned\x07")
+                 and then Has (Plain, "<- page\x1B[1A" & ASCII.LF & "second"),
+                 "a call or result's control characters were not shown: " & Plain);
       end;
 
       Traced (On_Terminal => True);
@@ -13593,9 +13606,100 @@ package body Tests.CLI_Cases is
               "forgetting the last line typed disturbed what Tab offers");
    end Tab_Completes_Commands;
 
+   --  What a model writes reaches a terminal shown, not obeyed; a line
+   --  is measured in the columns it takes; and a cache trimmed of what a
+   --  killed write left keeps what another run is writing now.
+   procedure Terminal_Text_Is_Shown_And_Measured
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package UT renames Model_Runner.Text;
+      package U8 renames Model_Runner.UTF8;
+      ESC : constant Character := ASCII.ESC;
+      C2  : constant Character := Character'Val (16#C2#);
+      CSI : constant Character := Character'Val (16#9B#);
+      Lead : Boolean := False;
+
+      function Bytes (Codes : String) return String is (Codes);
+      function B (Code : Natural) return Character is (Character'Val (Code));
+      --  Spelled as bytes: the suite is compiled with UTF-8 sources.
+      Ni    : constant String := [B (16#E6#), B (16#97#), B (16#A5#)];
+      Hon   : constant String := [B (16#E6#), B (16#9C#), B (16#AC#)];
+      Go    : constant String := [B (16#E8#), B (16#AA#), B (16#9E#)];
+      Acute : constant String := [B (16#C3#), B (16#A9#)];
+      Smile : constant String := [B (16#F0#), B (16#9F#), B (16#98#), B (16#80#)];
+   begin
+      --  1. Line feed, tab and carriage return pass; an escape, DEL and a
+      --  C1 control are written out; UTF-8 text passes byte for byte.
+      Assert (UT.Show_Controls ("a" & ASCII.LF & ASCII.HT & ASCII.CR & "b", Lead)
+                = "a" & ASCII.LF & ASCII.HT & ASCII.CR & "b"
+              and then not Lead,
+              "a line break, tab or return was escaped");
+      Assert (UT.Show_Controls (ESC & "]52;c;aGk=" & ASCII.BEL & ASCII.DEL, Lead)
+                = "\x1B]52;c;aGk=\x07\x7F",
+              "an escape, bell or DEL from the model reached the terminal: "
+              & UT.Show_Controls (ESC & "]52;c;aGk=" & ASCII.BEL & ASCII.DEL, Lead));
+      Assert (UT.Show_Controls ("caf" & C2 & Character'Val (16#A0#) & C2 & CSI & "2J", Lead)
+                = "caf" & C2 & Character'Val (16#A0#) & "\xC2\x9B2J",
+              "a C1 control was obeyed, or a no-break space escaped");
+
+      --  2. A C1 control cut between two pieces is still seen: the C2 is
+      --  held, and the next piece starts from it.
+      Lead := False;
+      Assert (UT.Show_Controls ("x" & C2, Lead) = "x" and then Lead,
+              "a trailing C2 was not held back");
+      Assert (UT.Show_Controls (CSI & "1A", Lead) = "\xC2\x9B1A" and then not Lead,
+              "a C1 control cut between pieces was obeyed");
+      Assert (UT.Show_Controls ("" & C2, Lead) = "" and then Lead
+              and then UT.Show_Controls ("" & Character'Val (16#A9#), Lead)
+                         = C2 & Character'Val (16#A9#),
+              "a held C2 was lost before an ordinary character");
+
+      --  3. Columns: a wide character two, a combining mark none, a colour
+      --  sequence none; a cut never splits a code point and fits.
+      Assert (U8.Columns ("ab") = 2
+              and then U8.Columns (Bytes (Ni & Hon)) = 4
+              and then U8.Columns ("e" & Character'Val (16#CC#) & Character'Val (16#81#)) = 1
+              and then U8.Columns (ESC & "[1;32m> " & ESC & "[0m") = 2
+              and then U8.Columns (Smile) = 2
+              and then U8.Columns ("> ab" & ASCII.HT & "c") = 9,
+              "a line's columns were miscounted:" & Natural'Image (U8.Columns (Bytes (Ni & Hon))));
+      Assert (U8.Fitting (Bytes (Ni & Hon & Go), 5) = 6
+              and then U8.Fitting (Bytes (Ni & Hon & Go), 6) = 9
+              and then U8.Fitting ("abc", 2) = 2
+              and then U8.Fitting (Acute, 0) = 0,
+              "a cut by columns split a character or overran:"
+              & Natural'Image (U8.Fitting (Bytes (Ni & Hon & Go), 5)));
+
+      --  4. Trimming leftovers keeps a file written a moment ago.
+      declare
+         Folder : constant String := "obj/trim-settled";
+         Fresh  : constant String := Folder & "/other.kv.partial";
+         F      : Ada.Text_IO.File_Type;
+      begin
+         if not Ada.Directories.Exists (Folder) then
+            Ada.Directories.Create_Path (Folder);
+         end if;
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Fresh);
+         Ada.Text_IO.Put_Line (F, "being written");
+         Ada.Text_IO.Close (F);
+         Model_Runner.Platform.Trim_Directory
+           (Folder, "*.kv.partial", 0, Settled => 600.0);
+         Assert (Ada.Directories.Exists (Fresh),
+                 "a partial another run is writing now was deleted");
+         Model_Runner.Platform.Trim_Directory (Folder, "*.kv.partial", 0);
+         Assert (not Ada.Directories.Exists (Fresh),
+                 "a leftover partial was kept where nothing asked it kept");
+      end;
+   end Terminal_Text_Is_Shown_And_Measured;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Terminal_Text_Is_Shown_And_Measured'Access,
+         "what a model writes is shown on a terminal, not obeyed, and a "
+         & "line is measured in the columns it takes");
       Register_Routine
         (T, Run_Command_Parses'Access,
          "a well-formed run command parses into the values it named");

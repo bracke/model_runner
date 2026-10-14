@@ -5,7 +5,6 @@ with Ada.Real_Time.Timing_Events;
 
 with Hostkit.Descriptors;
 with Hostkit.Signals;
-with Hostkit.Terminal_Control;
 
 with Model_Runner.Text;
 
@@ -67,6 +66,8 @@ package body Model_Runner.Platform.Signals is
       procedure Overdue (Event : in out Ada.Real_Time.Timing_Events.Timing_Event);
 
       procedure Set_Waiting (Value : Boolean; Note : String);
+      procedure Hold (Saved : Hostkit.Terminal_Control.Mode);
+      procedure Release;
       function Ended return Boolean;
       function Noted return Boolean;
 
@@ -86,6 +87,13 @@ package body Model_Runner.Platform.Signals is
       Said_Text : String (1 .. 240) := [others => ' '];
       Said_Last : Natural := 0;
       Said      : Boolean := False;
+
+      --  The terminal's own mode while it is held raw, put back before
+      --  ending at once.
+      Mode_Held : Boolean := False;
+      Held_Mode : Hostkit.Terminal_Control.Mode;
+
+      procedure Put_Mode_Back;
    end Handler;
 
    protected body Handler is
@@ -128,11 +136,37 @@ package body Model_Runner.Platform.Signals is
 
       function Count return Natural is (Seen);
 
+      procedure Put_Mode_Back is
+      begin
+         if Mode_Held then
+            declare
+               Ignored : constant Boolean :=
+                 Hostkit.Terminal_Control.Restore_Mode
+                   (Hostkit.Descriptors.Standard_Input, Held_Mode);
+               pragma Unreferenced (Ignored);
+            begin
+               Mode_Held := False;
+            end;
+         end if;
+      end Put_Mode_Back;
+
+      procedure Hold (Saved : Hostkit.Terminal_Control.Mode) is
+      begin
+         Held_Mode := Saved;
+         Mode_Held := True;
+      end Hold;
+
+      procedure Release is
+      begin
+         Mode_Held := False;
+      end Release;
+
       procedure Overdue (Event : in out Ada.Real_Time.Timing_Events.Timing_Event) is
          pragma Unreferenced (Event);
          Ignored : constant Integer := Write_Error (2, Forced_Line, Forced_Line'Length);
          pragma Unreferenced (Ignored);
       begin
+         Put_Mode_Back;
          Quick_Exit (7);
       end Overdue;
 
@@ -158,6 +192,7 @@ package body Model_Runner.Platform.Signals is
             begin
                null;
             end;
+            Put_Mode_Back;
             Quick_Exit (7);
          end if;
       end Ending;
@@ -190,6 +225,16 @@ package body Model_Runner.Platform.Signals is
    Recording : Boolean := False
      with Atomic;
 
+   --  And SIGTERM and SIGHUP, always. Attached through the runtime, they
+   --  were waited for by its server task, while every thread the runtime
+   --  had not made -- the main one among them, the runtime started early
+   --  by that same constructor -- left them unblocked at their default:
+   --  being told to end killed the process where it stood, the terminal
+   --  left raw at the prompt, a run's caches unsaved. Recorded by the
+   --  host's handler, which any thread runs, and handed to Handler.Ending.
+   Recording_Ends : Boolean := False
+     with Atomic;
+
    task Interrupt_Watch is
       entry Start;
    end Interrupt_Watch;
@@ -202,10 +247,20 @@ package body Model_Runner.Platform.Signals is
          or
             terminate;
          end select;
-         while Recording loop
-            if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Interrupt) then
+         while Recording or else Recording_Ends loop
+            if Recording and then Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Interrupt) then
                Hostkit.Signals.Clear (Hostkit.Signals.Signal_Interrupt);
                Handler.Interrupt;
+            end if;
+            if Recording_Ends then
+               if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Terminate) then
+                  Hostkit.Signals.Clear (Hostkit.Signals.Signal_Terminate);
+                  Handler.Ending;
+               end if;
+               if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Hangup) then
+                  Hostkit.Signals.Clear (Hostkit.Signals.Signal_Hangup);
+                  Handler.Ending;
+               end if;
             end if;
             --  Started again while it still watches -- removed and installed
             --  within one look -- it watches on.
@@ -254,10 +309,20 @@ package body Model_Runner.Platform.Signals is
          else
             raise Program_Error with "interrupt 2 is reserved, and the host would not record it";
          end if;
-         Ada.Interrupts.Attach_Handler
-           (Handler.Ending'Access, Ada.Interrupts.Names.SIGTERM);
-         Ada.Interrupts.Attach_Handler
-           (Handler.Ending'Access, Ada.Interrupts.Names.SIGHUP);
+         if Hostkit.Signals.Set_Disposition
+                 (Hostkit.Signals.Signal_Terminate, Hostkit.Signals.Disposition_Record)
+           and then Hostkit.Signals.Set_Disposition
+                      (Hostkit.Signals.Signal_Hangup, Hostkit.Signals.Disposition_Record)
+         then
+            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Terminate);
+            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Hangup);
+            Recording_Ends := True;
+            if not Recording then
+               Interrupt_Watch.Start;
+            end if;
+         else
+            raise Program_Error with "the ending signals are reserved, and the host would not record them";
+         end if;
          Attached := True;
       end if;
 
@@ -292,8 +357,11 @@ package body Model_Runner.Platform.Signals is
          else
             Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGINT);
          end if;
-         Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGTERM);
-         Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGHUP);
+         Recording_Ends := False;
+         Ignored := Hostkit.Signals.Set_Disposition
+           (Hostkit.Signals.Signal_Terminate, Hostkit.Signals.Disposition_Default);
+         Ignored := Hostkit.Signals.Set_Disposition
+           (Hostkit.Signals.Signal_Hangup, Hostkit.Signals.Disposition_Default);
          Attached := False;
       end if;
    exception
@@ -306,6 +374,16 @@ package body Model_Runner.Platform.Signals is
    ----------------
 
    function Interrupts return Natural is (Handler.Count);
+
+   procedure Hold_Terminal_Mode (Saved : Hostkit.Terminal_Control.Mode) is
+   begin
+      Handler.Hold (Saved);
+   end Hold_Terminal_Mode;
+
+   procedure Release_Terminal_Mode is
+   begin
+      Handler.Release;
+   end Release_Terminal_Mode;
 
    procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "") is
    begin

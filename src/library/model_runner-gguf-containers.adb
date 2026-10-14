@@ -296,6 +296,17 @@ package body Model_Runner.GGUF.Containers is
             return;
          end if;
 
+         --  A uint64 past the signed range is held clamped to its top, which
+         --  a caller asking for anything up to that top would otherwise take.
+         if Found.Kind = Value_UInt64
+           and then Found.Unsigned > Interfaces.Unsigned_64 (Long_Long_Integer'Last)
+         then
+            Status := Out_Of_Range (Key);
+            E.Add_Integer (Status, "minimum", Minimum);
+            E.Add_Integer (Status, "maximum", Maximum);
+            return;
+         end if;
+
          if Found.Signed < Minimum or else Found.Signed > Maximum then
             Status := Out_Of_Range (Key);
             E.Add_Integer (Status, "value", Found.Signed);
@@ -814,6 +825,23 @@ package body Model_Runner.GGUF.Containers is
 
    function Shard_Count (Item : Container) return Natural
    is (Natural'Max (Small_Key (Item, Model_Runner.GGUF.Split_Count_Key), 1));
+
+   function Split_Problem (Item : Container) return Model_Runner.Errors.Error_Info is
+      Status : Model_Runner.Errors.Error_Info := Model_Runner.Errors.Success;
+
+      procedure Check (Key : String) is
+         Value : Long_Long_Integer;
+      begin
+         if not Model_Runner.Errors.Is_Error (Status) and then Find (Item, Key) /= 0 then
+            Get_Integer (Item, Key, 0, Long_Long_Integer (Natural'Last), Value, Status);
+         end if;
+      end Check;
+   begin
+      Check (Model_Runner.GGUF.Split_Count_Key);
+      Check (Model_Runner.GGUF.Split_Index_Key);
+      Check (Model_Runner.GGUF.Split_Tensors_Key);
+      return Status;
+   end Split_Problem;
 
    function Shard_Index (Item : Container) return Natural
    is (Small_Key (Item, Model_Runner.GGUF.Split_Index_Key));

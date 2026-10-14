@@ -6,6 +6,7 @@ with Ada.Text_IO.Text_Streams;
 
 with Terminal_Styles;
 
+with Model_Runner.Platform;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Presentation is
@@ -985,6 +986,10 @@ package body Model_Runner.Presentation is
      (Item : in out Console; Named : String; Arguments : String)
    is
       Styled : constant Boolean := Styles_Diagnostics (Item);
+      --  Both are the model's words, and go to a terminal: shown, not obeyed.
+      Name : constant String := T.Escape_Controls (Named);
+      Said : constant String :=
+        T.Escape_Controls (Arguments, Keep_Line_Breaks => True, Indent => False);
    begin
       if Item.Level = Opt.Quiet then
          return;
@@ -993,15 +998,15 @@ package body Model_Runner.Presentation is
         (Item,
          (if Styled then Glyph_Call & " " else "-> ")
          & (if Styled
-            then Terminal_Styles.Decorate (Named, Terminal_Styles.Role_Header)
-            else Named)
+            then Terminal_Styles.Decorate (Name, Terminal_Styles.Role_Header)
+            else Name)
          & " "
          --  Its arguments as JSON is read, where they are JSON.
-         & (if Styled and then Looks_Like_JSON (Arguments) then JSON_Coloured (Arguments)
+         & (if Styled and then Looks_Like_JSON (Said) then JSON_Coloured (Said)
             elsif Styled
             then Terminal_Styles.Decorate
-                   (Arguments, Terminal_Styles.Role_Muted)
-            else Arguments));
+                   (Said, Terminal_Styles.Role_Muted)
+            else Said));
    end Put_Tool_Call;
 
    ---------------------
@@ -1010,6 +1015,9 @@ package body Model_Runner.Presentation is
 
    procedure Put_Tool_Result (Item : in out Console; Result : String) is
       Styled : constant Boolean := Styles_Diagnostics (Item);
+      --  What a tool read -- a file, a page -- shown, not obeyed.
+      Shown : constant String :=
+        T.Escape_Controls (Result, Keep_Line_Breaks => True, Indent => False);
    begin
       if Item.Level = Opt.Quiet then
          return;
@@ -1018,10 +1026,10 @@ package body Model_Runner.Presentation is
         (Item,
          (if Styled then Glyph_Result & " " else "<- ")
          --  A result that is JSON coloured as JSON; any other muted.
-         & (if Styled and then Looks_Like_JSON (Result) then JSON_Coloured (Result)
+         & (if Styled and then Looks_Like_JSON (Shown) then JSON_Coloured (Shown)
             elsif Styled
-            then Terminal_Styles.Decorate (Result, Terminal_Styles.Role_Muted)
-            else Result));
+            then Terminal_Styles.Decorate (Shown, Terminal_Styles.Role_Muted)
+            else Shown));
    end Put_Tool_Result;
 
    -----------------------
@@ -1709,8 +1717,27 @@ package body Model_Runner.Presentation is
       --  and sending it through Current_Output puts it in the middle of
       --  whatever else a test was capturing there, which is how a layout
       --  check came to read " a Statistics" as a line.
-      String'Write
-        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
+      --
+      --  But for a terminal. There what a model writes is shown, not
+      --  obeyed: an escape sequence in an answer would otherwise move the
+      --  cursor, retitle the window or write to the clipboard. What is
+      --  kept of the answer is untouched; this is only the screen.
+      if not Self.Asked then
+         Self.Terminal := Model_Runner.Platform.Is_Terminal (1);
+         Self.Asked := True;
+      end if;
+
+      if Self.Terminal then
+         declare
+            Shown : constant String := T.Show_Controls (Item, Self.Lead);
+         begin
+            String'Write
+              (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Shown);
+         end;
+      else
+         String'Write
+           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
+      end if;
       Closed := False;
    exception
       --  A broken pipe is an ordinary end, not a failure to report with a

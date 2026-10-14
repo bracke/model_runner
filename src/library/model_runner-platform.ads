@@ -127,11 +127,14 @@ package Model_Runner.Platform is
    --  @param Pattern The cache files' names, as Ada.Directories reads one.
    --  @param Most Bytes those files may keep.
    --  @param Keep A file kept whatever its age, or empty.
+   --  @param Settled Only files last written at least this long ago go: a
+   --    file another run is writing now is no leftover.
    procedure Trim_Directory
      (Folder  : String;
       Pattern : String;
       Most    : Long_Long_Integer;
-      Keep    : String := "");
+      Keep    : String := "";
+      Settled : Duration := 0.0);
 
    --  Directory searched for a model named without a path.
    --

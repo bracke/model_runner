@@ -495,6 +495,10 @@ private
       Pool_Used     : Natural := 0;
       Entries       : Token_Vectors.Vector;
       Lookup        : Token_Maps.Map;
+      --  The control and hand-written pieces alone, by text: a marker is
+      --  found here, so a later ordinary piece spelled the same -- which
+      --  Lookup gives, last id winning -- does not hide it.
+      Markers       : Token_Maps.Map;
       Beginning     : Token_Id := No_Token;
       Ending        : Token_Id := No_Token;
       Unknown       : Token_Id := No_Token;

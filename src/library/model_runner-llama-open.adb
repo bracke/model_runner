@@ -696,6 +696,29 @@ begin
    Item.Owner := Source'Unchecked_Access;
    Item.Team := Workers;
 
+   --  LongRoPE's table, chosen by how far this session is opened rather
+   --  than by how far the file says the model reaches: the short one for a
+   --  session within the context the model was trained on, the long one
+   --  past it, as the reference runtime chooses. Chosen by the file's
+   --  reach, a four-thousand-token session of a Phi-3.5 turned every
+   --  position by the long table its 128k context asks for.
+   if Source.Rope_Long /= null
+     and then Source.Rope_Short /= null
+     and then Source.Rope_Factors /= null
+     and then Source.Rope_Factors'Length = Source.Rope_Long'Length
+     and then Source.Rope_Factors'Length = Source.Rope_Short'Length
+   then
+      declare
+         Trained : constant Natural :=
+           (if Settings.Rope_Original > 0 then Settings.Rope_Original
+            else Settings.Context_Length);
+      begin
+         Source.Rope_Factors.all :=
+           (if Capacity > Trained then Source.Rope_Long.all
+            else Source.Rope_Short.all);
+      end;
+   end if;
+
    --  The arithmetic, fixed for the session's life: the backend's
    --  default as it stands now, read once here and never again while
    --  the session runs.

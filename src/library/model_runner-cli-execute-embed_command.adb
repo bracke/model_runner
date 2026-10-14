@@ -165,10 +165,13 @@ package body Model_Runner.CLI.Execute.Embed_Command is
               new Ada.Unchecked_Deallocation (Vocab.Token_Array, Token_Room);
             --  Room for the query beside the text where a reranker joins the
             --  two: sized by the text alone, a pair whose document was short
-            --  had its document cut off, and its score was the query's.
+            --  had its document cut off, and its score was the query's. A
+            --  pair is two texts' tokens and as many as six markers -- a
+            --  beginning, two ends, a separator and the lead a SentencePiece
+            --  model puts before each text -- with room to spare.
             Held   : Token_Room :=
               new Vocab.Token_Array
-                (1 .. Prompt.all'Length + 4
+                (1 .. Prompt.all'Length + 8
                       + (if Item.Query_Text = null then 0 else Item.Query_Text.all'Length));
             Tokens : Vocab.Token_Array renames Held.all;
             Count  : Natural;
@@ -200,13 +203,12 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             --  has one. Sets Condition; leaves the pair for the caller to run.
             procedure Encode_Pair (Document : String) is
                use type Vocab.Token_Id;
+               use type E.Error_Code;
                --  Each as long as its own text can make, and on the heap: a
                --  document list of megabytes gave two stack arrays its size
                --  for every document.
-               Q_Room   : Token_Room := new Vocab.Token_Array (1 .. Item.Query_Text.all'Length + 2);
-               D_Room   : Token_Room := new Vocab.Token_Array (1 .. Document'Length + 2);
-               Q_Tokens : Vocab.Token_Array renames Q_Room.all;
-               D_Tokens : Vocab.Token_Array renames D_Room.all;
+               Q_Room   : Token_Room;
+               D_Room   : Token_Room;
                Q_Count, D_Count : Natural;
                Beginning : constant Vocab.Token_Id :=
                  Vocab.Beginning_Token (Words.all);
@@ -217,23 +219,47 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   then Vocab.Find (Words.all, "[SEP]") else Ending);
                K : Natural := 0;
 
+               --  A token past the room is refused, not dropped: dropped, it
+               --  was the pair's last end marker, and the score was of a
+               --  pair the model was not shown.
                procedure Put (Tok : Vocab.Token_Id) is
                begin
-                  if Tok /= Vocab.No_Token and then K < Tokens'Length then
+                  if Tok = Vocab.No_Token or else E.Is_Error (Condition) then
+                     return;
+                  elsif K < Tokens'Length then
                      K := K + 1;
                      Tokens (Tokens'First + K - 1) := Tok;
+                  else
+                     Condition := E.Make (E.Tokenizer_Buffer_Too_Small);
                   end if;
                end Put;
+
+               --  A text's tokens into room of its own, grown where the
+               --  normalizer made more of it than it was -- a charsmap
+               --  writes U+FDFA as eighteen characters.
+               procedure Encode_Text
+                 (Text : String; Room : in out Token_Room; Count : out Natural)
+               is
+                  Size : Positive := Text'Length + 2;
+               begin
+                  Count := 0;
+                  for Attempt in 1 .. 6 loop
+                     Free (Room);
+                     Room := new Vocab.Token_Array (1 .. Size);
+                     Vocab.Encode (Words.all, Text, False, False,
+                                   Room.all, Count, Condition);
+                     exit when not (E.Is_Error (Condition)
+                                    and then Condition.Code = E.Tokenizer_Buffer_Too_Small);
+                     Size := Size * 4;
+                  end loop;
+               end Encode_Text;
             begin
-               Vocab.Encode (Words.all, Item.Query_Text.all, False, False,
-                             Q_Tokens, Q_Count, Condition);
+               Encode_Text (Item.Query_Text.all, Q_Room, Q_Count);
                if E.Is_Error (Condition) then
                   Free (Q_Room);
-                  Free (D_Room);
                   return;
                end if;
-               Vocab.Encode (Words.all, Document, False, False,
-                             D_Tokens, D_Count, Condition);
+               Encode_Text (Document, D_Room, D_Count);
                if E.Is_Error (Condition) then
                   Free (Q_Room);
                   Free (D_Room);
@@ -244,12 +270,12 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   Put (Beginning);
                end if;
                for I in 1 .. Q_Count loop
-                  Put (Q_Tokens (Q_Tokens'First + I - 1));
+                  Put (Q_Room (I));
                end loop;
                Put (Ending);
                Put (Sep);
                for I in 1 .. D_Count loop
-                  Put (D_Tokens (D_Tokens'First + I - 1));
+                  Put (D_Room (I));
                end loop;
                Put (Ending);
                Count := K;

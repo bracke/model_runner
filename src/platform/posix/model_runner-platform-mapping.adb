@@ -125,6 +125,16 @@ package body Model_Runner.Platform.Mapping is
             return;
          end if;
 
+         --  Held at once, so whatever follows -- a refused mapping or an
+         --  exception out of the bookkeeping -- closes it through Close.
+         Item.Handle := Long_Long_Integer (Handle);
+
+         --  The mapping is of the file as it is. A model rewritten in place
+         --  while mapped -- truncated, or copied over -- takes the pages
+         --  under the reader away and the next touch is SIGBUS, which no
+         --  status can report. Models are replaced by writing a new file
+         --  and renaming it over the old one, as the downloader does: the
+         --  mapped inode stays whole until it is closed.
          Base_Address :=
            C_Mmap
              (Address => System.Null_Address,
@@ -136,15 +146,12 @@ package body Model_Runner.Platform.Mapping is
 
          if Base_Address = Map_Failed or else Base_Address = System.Null_Address
          then
-            if C_Close (Handle) /= 0 then
-               null;
-            end if;
+            Close (Item);
             return;
          end if;
 
          Item.Address := Base_Address;
          Item.Size := File_Size;
-         Item.Handle := Long_Long_Integer (Handle);
          Model_Runner.Platform.Mapped_Ranges.Note
            (Base_Address, File_Size, Long_Long_Integer (Handle));
          Available := True;

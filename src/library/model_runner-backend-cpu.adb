@@ -24,6 +24,12 @@ package body Model_Runner.Backend.CPU is
 
    use type Model_Runner.Shares.Work_Access;
 
+   --  __atomic_thread_fence: reads before it are done before reads after
+   --  it. On x86 no instruction, only an order the compiler keeps.
+   procedure Acquire_Fence (Order : Integer)
+     with Import, Convention => Intrinsic, External_Name => "__atomic_thread_fence";
+   Acquire_Order : constant Integer := 2;
+
    --  How long a task looks before it blocks.
    --
    --  Long enough to cover the gap between one product and the next, which
@@ -1237,6 +1243,10 @@ package body Model_Runner.Backend.CPU is
             Crew := Waking.Crew;
             Current := Waking.Held;
             For_Job := Waking.Held_For;
+            --  The plain reads above ordered before the second read of the
+            --  count: the language orders atomic reads among themselves and
+            --  nothing else, so Held could be read after it.
+            Acquire_Fence (Acquire_Order);
             After := Waking.Writing;
             if Before /= After
               or else Interfaces."/=" (Interfaces."and" (Interfaces.Unsigned_32 (Before), 1), 0)

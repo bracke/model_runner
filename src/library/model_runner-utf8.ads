@@ -81,4 +81,30 @@ package Model_Runner.UTF8 is
       Code_Point : out Natural;
       Length     : out Natural);
 
+   --  Columns a terminal gives a code point: none for a combining mark,
+   --  a zero-width joiner or a variation selector, two for an East Asian
+   --  wide or full-width character or an emoji, one otherwise.
+   --
+   --  @param Code_Point Scalar value.
+   --  @return 0, 1 or 2.
+   function Code_Point_Columns (Code_Point : Natural) return Natural;
+
+   --  Columns text takes on a terminal, as a line editor counts where its
+   --  cursor is: by Code_Point_Columns, with an escape sequence (ESC [ ...
+   --  final) and a control character taking none -- but a tab, which goes
+   --  on to the next stop of eight from the text's start -- and a byte that
+   --  is not well-formed taking one, as the terminal shows it.
+   --
+   --  @param Item Text as drawn.
+   --  @return Columns taken.
+   function Columns (Item : String) return Natural;
+
+   --  Bytes of the longest leading run of whole code points that fits in
+   --  so many columns: where to cut text that must fit a window.
+   --
+   --  @param Item Text to cut.
+   --  @param Room Columns available.
+   --  @return Byte count, a code point never cut.
+   function Fitting (Item : String; Room : Natural) return Natural;
+
 end Model_Runner.UTF8;

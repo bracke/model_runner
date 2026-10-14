@@ -51,12 +51,15 @@ package Reference_Transformer is
    --    set an architecture carries: whether a tensor is read is one
    --    question and whether the right tensors are there is another, and
    --    only this side knows what it asked for.
+   --  @param Opened How many positions the model is opened for, which picks
+   --    LongRoPE's table: nought for the context the file states.
    procedure Load
      (Item   : in out Model;
       Source : Model_Runner.GGUF.Containers.Container;
       Image  : Model_Runner.Bytes.Byte_Array;
       Ok     : out Boolean;
-      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null);
+      Asked  : access Ada.Strings.Unbounded.Unbounded_String := null;
+      Opened : Natural := 0);
 
    --  Release a model. Idempotent.
    --
@@ -281,6 +284,9 @@ private
       --  each of an expert's three projections.
       Sinks             : Vector_Access := null;
       Router_Bias       : Vector_Access := null;
+
+      --  What a sigmoid-gated mixture chooses by and does not weight by.
+      Select_Bias       : Vector_Access := null;
       Gate_Expert_Bias  : Vector_Access := null;
       Up_Expert_Bias    : Vector_Access := null;
       Down_Expert_Bias  : Vector_Access := null;
@@ -355,6 +361,9 @@ private
    type Layer_Array is array (Natural range <>) of Layer;
    type Layer_Array_Access is access Layer_Array;
 
+   --  One mark a layer, for the file that lists which layers slide.
+   type Layer_Marks is array (0 .. 511) of Boolean;
+
    type Model is limited record
       Loaded       : Boolean := False;
       Kind         : Architecture := Llama;
@@ -423,11 +432,15 @@ private
       Logit_Mul     : Long_Float := 0.0;
       Logit_Scale   : Long_Float := 0.0;
 
-      --  How many layers in a row slide a window before one sees
-      --  everything, and the base the windowed ones turn on. Gemma3 states
-      --  both; every other architecture here turns every layer on one base
-      --  and windows all of them or none.
+      --  Whether some layers slide a window and others see everything;
+      --  then how many layers in a row slide one before one sees
+      --  everything (zero: all of them), or, where the file lists them,
+      --  which; and the base the windowed ones turn on, zero for the
+      --  model's own.
+      Patterned     : Boolean := False;
       Window_Every  : Natural := 0;
+      Window_Listed : Boolean := False;
+      Window_List   : Layer_Marks := [others => False];
       Local_Base    : Long_Float := 0.0;
 
       --  How many experts a layer holds, how many of them run for one
@@ -441,6 +454,11 @@ private
       --  The scalar GraniteMoE multiplies its renormalized expert weights by;
       --  one for every other mixture.
       Expert_Scale : Long_Float := 1.0;
+
+      --  Whether the experts are gated by the logistic rather than a
+      --  softmax, and whether the chosen few are put back on a scale of one.
+      Sigmoid_Gate : Boolean := False;
+      Renormalize  : Boolean := True;
 
       --  Whether the two halves of the block run side by side from the
       --  layer's input, each with its own normalization. GPT-NeoX does;

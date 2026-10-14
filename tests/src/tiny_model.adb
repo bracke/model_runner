@@ -75,7 +75,12 @@ package body Tiny_Model is
       Ranking      : Boolean := False;
       Padding      : Natural := 0;
       Wide_State   : Boolean := False;
-      Expert_Width : Natural := 0)
+      Expert_Width : Natural := 0;
+      Long_Rope    : Boolean := False;
+      Sigmoid_Routing : Boolean := False;
+      Expert_Groups   : Natural := 0;
+      Split_Latent    : Boolean := False;
+      Caps            : Boolean := True)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -568,11 +573,15 @@ package body Tiny_Model is
       --  one. A fixture that wrote the other key would be a file the
       --  engine reads by falling back rather than by reading what bert
       --  files actually say.
+      --  Written off the default for every architecture that centres, so
+      --  that a reader which took the default -- or read the key and then
+      --  let the other key's absence overwrite it -- reads a different
+      --  number than the file states.
       if Kind in Bert | Nomic_Bert | Jina_Bert_V2 | Starcoder2 | Stablelm | Gptneox | Mpt
-        | Command_R
+        | Command_R | Falcon | Phi2 | GPT2
       then
          Fixtures.Add_F32
-           (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0E-5);
+           (Builder, Prefix & ".attention.layer_norm_epsilon", Centring_Epsilon);
       else
          Fixtures.Add_F32
            (Builder, Prefix & ".attention.layer_norm_rms_epsilon", 1.0E-5);
@@ -589,11 +598,12 @@ package body Tiny_Model is
       --  do not: it is told where a token is by a fall-off in the scores.
       --  Writing a zero here would be this fixture answering a question the
       --  file leaves open, which is what let bert's absent key be read as a
-      --  head-wide rotation.
-      if Kind not in Jina_Bert_V2 | Mpt then
+      --  head-wide rotation. GPT2's converter writes none either, and the
+      --  zero this fixture wrote for it hid the same trap a third time.
+      if Kind not in Jina_Bert_V2 | Mpt | GPT2 then
          Fixtures.Add_U32
            (Builder, Prefix & ".rope.dimension_count",
-            (if Kind in GPT2 | Bert
+            (if Kind = Bert
              then 0
              --  StableLM rotates only part of each head -- the leading half
              --  here -- where every other rotating architecture turns the
@@ -707,7 +717,7 @@ package body Tiny_Model is
          Fixtures.Add_U32 (Builder, Prefix & ".rescale_every_n_layers", 2);
          Fixtures.Add_U32 (Builder, Prefix & ".token_shift_count", 2);
          Fixtures.Add_F32
-           (Builder, Prefix & ".attention.layer_norm_epsilon", 1.0e-5);
+           (Builder, Prefix & ".attention.layer_norm_epsilon", Centring_Epsilon);
       end if;
 
       --  Jamba's Mamba layers read the same widths under the same keys plain
@@ -750,7 +760,22 @@ package body Tiny_Model is
       --  states them: its key head is the whole key_length and its value
       --  head the part that is not rotated, neither the embedding over the
       --  head count.
-      if Apart_Widths or else Head_Factor > 1 or else Kind = Deepseek2 then
+      if Kind = Deepseek2 and then Split_Latent then
+         --  As the current converter states them: the latent's widths
+         --  under the plain keys, the heads' under their own.
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.key_length",
+            Interfaces.Unsigned_32 (DS_KV_Lora + DS_Rotary));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.value_length",
+            Interfaces.Unsigned_32 (DS_KV_Lora));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.key_length_mla",
+            Interfaces.Unsigned_32 (Key_Size));
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.value_length_mla",
+            Interfaces.Unsigned_32 (Value_Size));
+      elsif Apart_Widths or else Head_Factor > 1 or else Kind = Deepseek2 then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.key_length",
             Interfaces.Unsigned_32 (Key_Size));
@@ -820,6 +845,18 @@ package body Tiny_Model is
       --  A mixture of experts, when one is asked for. Absent otherwise,
       --  which is what a dense model looks like. Jamba carries a count of
       --  its own, being a mixture on some of its layers whatever was asked.
+      if Eff_Experts > 0 and then Expert_Groups > 0 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".expert_group_count",
+            Interfaces.Unsigned_32 (Expert_Groups));
+         Fixtures.Add_U32 (Builder, Prefix & ".expert_group_used_count", 1);
+      end if;
+
+      if Eff_Experts > 0 and then Sigmoid_Routing then
+         Fixtures.Add_U32 (Builder, Prefix & ".expert_gating_func", 2);
+         Fixtures.Add_Bool (Builder, Prefix & ".expert_weights_norm", True);
+      end if;
+
       if Eff_Experts > 0 then
          Fixtures.Add_U32
            (Builder, Prefix & ".expert_count",
@@ -858,13 +895,34 @@ package body Tiny_Model is
             Interfaces.Unsigned_32 (Window));
       end if;
 
+      --  OLMo-3 lists which layers slide, one mark a layer, as its
+      --  converter writes it. Every other layer here, where the
+      --  architecture's own period is four: a reader that took the period
+      --  and not the list windows the second layer, which this says sees
+      --  everything.
+      if Window > 0 and then Kind = Olmo2 then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".attention.sliding_window_pattern",
+            Model_Runner.GGUF.Value_Bool, Blocks);
+         for Block in 0 .. Blocks - 1 loop
+            Fixtures.Bool_Element (Builder, Block mod 2 = 0);
+         end loop;
+         Fixtures.End_Array (Builder);
+      end if;
+
       --  Gemma2's two bounds. Small numbers rather than the fifty and
       --  thirty a real one carries, so that the fixture's own scores and
       --  logits actually reach them: a bound nothing reaches is a bound
       --  neither implementation can be shown to apply.
-      if Kind = Gemma2 then
+      if Kind = Gemma2 and then Caps then
          Fixtures.Add_F32
            (Builder, Prefix & ".attn_logit_softcapping", 4.0);
+         Fixtures.Add_F32
+           (Builder, Prefix & ".final_logit_softcapping", 2.0);
+      end if;
+
+      --  Gemma3 bounds its logits where its file says so, as some do.
+      if Kind = Gemma3 then
          Fixtures.Add_F32
            (Builder, Prefix & ".final_logit_softcapping", 2.0);
       end if;
@@ -891,9 +949,13 @@ package body Tiny_Model is
 
       --  Gemma3 turns its windowed layers on a base of their own. Far from
       --  the model's, so that a reader which used one base for every layer
-      --  answers visibly differently rather than nearly the same.
+      --  answers visibly differently rather than nearly the same. Under the
+      --  name the converter writes: the one this fixture wrote before,
+      --  rope.local_freq_base, no published file carries, so the engine and
+      --  the reference agreed on a key while every real Gemma 3 took the
+      --  default.
       if Kind = Gemma3 then
-         Fixtures.Add_F32 (Builder, Prefix & ".rope.local_freq_base", 500.0);
+         Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base_swa", 500.0);
       end if;
 
       --  A bert file carries a WordPiece vocabulary, and the architecture
@@ -1142,6 +1204,31 @@ package body Tiny_Model is
          Fixtures.Add_Bool
            (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
          Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+      end if;
+
+      --  LongRoPE's two tables, as far apart as the per-dimension divisors
+      --  below so that a session given the wrong one answers differently,
+      --  with the trained context of half the room that decides between
+      --  them and the multiplier the converter works out from the stretch.
+      if Long_Rope then
+         declare
+            Long, Short : N.Real_Array (0 .. N.Element_Count (Head_Size / 2) - 1);
+         begin
+            for Index in Long'Range loop
+               Long (Index) := 1.0 + N.Real (Index) * 0.5;
+               Short (Index) := 1.0 + N.Real (Index) * 0.05;
+            end loop;
+            Fixtures.Add_Tensor
+              (Builder, "rope_factors_long.weight", [G.U64 (Head_Size / 2)],
+               G.Type_F32, Fixtures.Encode_F32 (Long));
+            Fixtures.Add_Tensor
+              (Builder, "rope_factors_short.weight", [G.U64 (Head_Size / 2)],
+               G.Type_F32, Fixtures.Encode_F32 (Short));
+         end;
+         Fixtures.Add_U32
+           (Builder, Prefix & ".rope.scaling.original_context_length",
+            Interfaces.Unsigned_32 (Positive'Max (1, Room / 2)));
+         Fixtures.Add_F32 (Builder, Prefix & ".rope.scaling.attn_factor", 1.3);
       end if;
 
       --  The per-dimension divisors, when the file carries them. Written
@@ -1486,9 +1573,57 @@ package body Tiny_Model is
             Weight (Layer_Name (Index, "attn_kv_a_mqa.weight"),
                     [G.U64 (Embedding), G.U64 (DS_KV_Lora + DS_Rotary)]);
             Gain_Of (Layer_Name (Index, "attn_kv_a_norm.weight"), DS_KV_Lora);
-            Weight (Layer_Name (Index, "attn_kv_b.weight"),
-                    [G.U64 (DS_KV_Lora),
-                     G.U64 (Heads * (DS_Nope + Value_Size))]);
+            if Split_Latent then
+               --  The same values the whole tensor holds, drawn as it
+               --  draws them and written in the converter's two halves:
+               --  each head's key part transposed, a row a latent
+               --  dimension, and its value part as it is.
+               declare
+                  Each  : constant Natural := DS_Nope + Value_Size;
+                  Whole : constant N.Real_Array :=
+                    Next (N.Element_Count (DS_KV_Lora * Heads * Each));
+                  Keys  : N.Real_Array
+                    (0 .. N.Element_Count (Heads * DS_KV_Lora * DS_Nope) - 1);
+                  Vals  : N.Real_Array
+                    (0 .. N.Element_Count (Heads * Value_Size * DS_KV_Lora)
+                          - 1);
+
+                  function At_Whole (Row, Column : Natural) return N.Real
+                  is (Whole (Whole'First
+                             + N.Element_Count (Row * DS_KV_Lora + Column)));
+               begin
+                  for Head in 0 .. Heads - 1 loop
+                     for R in 0 .. DS_KV_Lora - 1 loop
+                        for D in 0 .. DS_Nope - 1 loop
+                           Keys (N.Element_Count
+                                   ((Head * DS_KV_Lora + R) * DS_Nope + D)) :=
+                             At_Whole (Head * Each + D, R);
+                        end loop;
+                     end loop;
+                     for J in 0 .. Value_Size - 1 loop
+                        for R in 0 .. DS_KV_Lora - 1 loop
+                           Vals (N.Element_Count
+                                   ((Head * Value_Size + J) * DS_KV_Lora
+                                    + R)) :=
+                             At_Whole (Head * Each + DS_Nope + J, R);
+                        end loop;
+                     end loop;
+                  end loop;
+
+                  Weight_Of (Layer_Name (Index, "attn_k_b.weight"),
+                             [G.U64 (DS_Nope), G.U64 (DS_KV_Lora),
+                              G.U64 (Heads)],
+                             Keys);
+                  Weight_Of (Layer_Name (Index, "attn_v_b.weight"),
+                             [G.U64 (DS_KV_Lora), G.U64 (Value_Size),
+                              G.U64 (Heads)],
+                             Vals);
+               end;
+            else
+               Weight (Layer_Name (Index, "attn_kv_b.weight"),
+                       [G.U64 (DS_KV_Lora),
+                        G.U64 (Heads * (DS_Nope + Value_Size))]);
+            end if;
          else
             Weight (Layer_Name (Index, "attn_q.weight"),
                     [G.U64 (Embedding), G.U64 (Heads * Key_Size)]);
@@ -1698,6 +1833,27 @@ package body Tiny_Model is
                     [G.U64 (Embedding), G.U64 (Expert_Feed), G.U64 (Eff_Experts)]);
             Weight (Layer_Name (Index, "ffn_down_exps.weight"),
                     [G.U64 (Expert_Feed), G.U64 (Embedding), G.U64 (Eff_Experts)]);
+
+            --  The bias a sigmoid-gated mixture chooses by and does not
+            --  weight by: half a unit on every other expert, which is more
+            --  than the logistic's scores differ by here, so a reader that
+            --  ignored it chooses other experts and one that weighted by it
+            --  weights them otherwise.
+            if Sigmoid_Routing then
+               declare
+                  Values : N.Real_Array
+                    (0 .. N.Element_Count (Eff_Experts) - 1);
+               begin
+                  for Which in Values'Range loop
+                     Values (Which) :=
+                       (if Which mod 2 = 1 then 0.5 else 0.0);
+                  end loop;
+                  Fixtures.Add_Tensor
+                    (Builder, Layer_Name (Index, "exp_probs_b.bias"),
+                     [G.U64 (Eff_Experts)], G.Type_F32,
+                     Fixtures.Encode_F32 (Values));
+               end;
+            end if;
 
             --  And the biases GPT_OSS carries on all of them, laid out the
             --  way the weights are: every expert's in one tensor.

@@ -526,19 +526,22 @@ package Model_Runner.Llama is
       --  is no clamp.
       Clip_QKV        : Model_Runner.Numerics.Real := 0.0;
 
-      --  Whether the sliding window applies to every other layer rather
-      --  than to all of them. Gemma2 alternates, starting with the window
-      --  on layer zero.
+      --  Whether the sliding window applies to some layers rather than to
+      --  all of them: those Window_Layers names. Gemma2 and GPT-OSS
+      --  alternate, Gemma3 windows five in six and OLMo-3 three in four,
+      --  each with the last layer of a period seeing everything.
       Alternating     : Boolean := False;
 
-      --  How many layers in a row slide a window before one attends to
-      --  everything. Zero for an architecture with no pattern, two for one
-      --  that alternates, six for Gemma3's five-in-six.
-      Window_Every    : Natural := 0;
+      --  Which layers slide a window, where Alternating says some do and
+      --  some do not. Filled from the period the file states, or the
+      --  architecture's own where it states none, or from the layer-by-layer
+      --  list a file states instead -- written once here, so that the
+      --  window, the base a layer turns on and its stretch cannot follow
+      --  two different patterns.
+      Window_Layers   : Layer_Flags := [others => False];
 
       --  The base the windowed layers turn on, where it differs from the
-      --  model's. Zero when every layer turns on the same one, which is
-      --  every architecture here but Gemma3.
+      --  model's. Zero when every layer turns on the same one.
       Local_Base      : Wide_Real := 0.0;
 
       --  How many experts each layer holds and how many of them run for one
@@ -2477,6 +2480,12 @@ private
       KV_A_Lat  : aliased Model_Runner.Tensors.View;
       KV_A_Rope : aliased Model_Runner.Tensors.View;
       KV_B      : aliased Model_Runner.Tensors.View;
+
+      --  The bytes KV_B views where the file splits it in two -- the keys'
+      --  part transposed, as attn_k_b, and the values', as attn_v_b, which
+      --  the current converter writes -- put back together as one matrix
+      --  here at load. Null where KV_B views the file's own attn_kv_b.
+      KV_B_Built : Model_Runner.Bytes.Byte_Array_Access := null;
       Q_A_Norm  : Model_Runner.Tensors.Real_Array_Access;
       KV_A_Norm : Model_Runner.Tensors.Real_Array_Access;
 
@@ -2548,6 +2557,13 @@ private
       --  What the router adds before it chooses, where an architecture
       --  states one.
       Router_Bias : Model_Runner.Tensors.Real_Array_Access;
+
+      --  What is added to the gate's scores to choose the experts and not
+      --  to weight them: DeepSeek-V3's exp_probs_b, which a sigmoid-gated
+      --  mixture carries to keep its experts evenly loaded. The chosen few
+      --  are weighted by their own scores as the gate left them. Null for
+      --  every mixture that states none.
+      Select_Bias : Model_Runner.Tensors.Real_Array_Access;
 
       --  The experts' biases, held whole rather than a slice an expert.
       --  One expert's are the run of Expert_Feed at its own index, which
@@ -2841,6 +2857,13 @@ private
       --  rather than read per token: it is a few dozen numbers and the
       --  rotation reads all of them for every head of every layer.
       Rope_Factors : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  LongRoPE's two tables, kept whole where the file carries both:
+      --  which one Rope_Factors holds is the session's to say, by how far
+      --  it is opened -- the long one past the context the model was
+      --  trained on and the short one within it. Null otherwise.
+      Rope_Long    : Model_Runner.Tensors.Real_Array_Access := null;
+      Rope_Short   : Model_Runner.Tensors.Real_Array_Access := null;
       Words       : aliased Model_Runner.Tokenizer.Vocabulary;
       Chat        : aliased Model_Runner.Templates.Compiled;
       Chat_Present : Boolean := False;

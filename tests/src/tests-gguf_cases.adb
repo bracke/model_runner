@@ -6472,6 +6472,10 @@ package body Tests.GGUF_Cases is
             Fixtures.Add_U32 (Builder, "fixture.word", Word);
             Fixtures.Add_I32 (Builder, "fixture.signed", Signed);
             Fixtures.Add_U64 (Builder, "fixture.wide", Wide);
+            Fixtures.Add_U64
+              (Builder, "fixture.past_signed",
+               Interfaces.Unsigned_64 (Long_Long_Integer'Last) + 1
+               + Interfaces.Unsigned_64 (Draw (1_000_000)));
             Fixtures.Add_Bool (Builder, "fixture.flag", Flag);
 
             Fixtures.Begin_Array
@@ -6516,6 +6520,16 @@ package body Tests.GGUF_Cases is
                     "case" & Natural'Image (Case_Number)
                     & " read a wide value back as"
                     & Long_Long_Integer'Image (Number));
+
+            --  A uint64 past what a signed read can hold is out of range
+            --  even for a caller who allows up to the signed top.
+            Containers.Get_Integer
+              (Item, "fixture.past_signed", 0, Long_Long_Integer'Last,
+               Number, Status);
+            Assert (Status.Code = E.GGUF_Metadata_Out_Of_Range,
+                    "case" & Natural'Image (Case_Number)
+                    & " read a uint64 past 2**63 with "
+                    & E.Error_Code'Image (Status.Code));
 
             Containers.Get_Boolean (Item, "fixture.flag", Read_Flag, Status);
             Assert (E.Is_Ok (Status) and then Read_Flag = Flag,
@@ -7977,8 +7991,41 @@ package body Tests.GGUF_Cases is
          Shards.Close (Set);
       end;
 
+      --  And a first shard whose count is not a count. Read as no split at
+      --  all, a shard of two with `split.count` written as text loaded as
+      --  a model in one file and refused over a tensor in the other.
+      declare
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Output  : Ada.Streams.Stream_IO.File_Type;
+         Set     : Shards.Shard_Set;
+         Held    : Model_Runner.GGUF.Containers.Container;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_U32 (Builder, Model_Runner.GGUF.Split_Index_Key, 0);
+         Fixtures.Add_String (Builder, Model_Runner.GGUF.Split_Count_Key, "two");
+         Fixtures.Add_Tensor
+           (Builder, "token_embd.weight", [4, 3], G.Type_F32,
+            Fixtures.Encode_F32 (Front));
+         Fixtures.Build (Builder, Image);
+         Ada.Streams.Stream_IO.Create
+           (Output, Ada.Streams.Stream_IO.Out_File, One);
+         B.Byte_Array'Write
+           (Ada.Streams.Stream_IO.Stream (Output), Image.all);
+         Ada.Streams.Stream_IO.Close (Output);
+         B.Free (Image);
+
+         Shards.Open_Model (Set, Held, One, Status => Status);
+         Assert (Status.Code = E.GGUF_Metadata_Type_Mismatch,
+                 "a split count written as text was taken with "
+                 & E.Error_Code'Image (Status.Code));
+         Shards.Close (Set);
+      end;
+
       --  And a set whose second file is not there says so rather than
       --  reporting whatever the first tensor it cannot find is called.
+      Put_Shard (One, 0, 2, 2, True);
       Ada.Directories.Delete_File (Two);
 
       declare
@@ -8023,12 +8070,252 @@ package body Tests.GGUF_Cases is
       end;
    end A_Model_In_Several_Files_Reads_As_One;
 
+   --  Three readings llama.cpp makes and this did not: a marker spelled
+   --  again by a later ordinary piece is still the marker; a merged
+   --  symbol the vocabulary lacks is spelled by its characters before it
+   --  is called unknown; and a first piece that decodes to nothing still
+   --  takes the one leading space the vocabulary added, not the next
+   --  piece's.
+   procedure Tokenizer_Reads_Markers_And_Leads_As_Llama_Does
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Array;
+
+      Marker : constant String := [Character'Val (16#E2#), Character'Val (16#96#),
+                                   Character'Val (16#81#)];
+
+      procedure Load_Built
+        (Builder : in out Fixtures.Builder;
+         Words   : in out Vocab.Vocabulary)
+      is
+         Image : B.Byte_Array_Access;
+         Item  : Containers.Container;
+         Parse : E.Error_Info;
+         Status : E.Error_Info;
+      begin
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Parse);
+         Assert (E.Is_Ok (Parse), "the fixture container did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture vocabulary did not load: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         B.Free (Image);
+      end Load_Built;
+
+      Builder : Fixtures.Builder;
+      Status  : E.Error_Info;
+   begin
+      --  A byte-pair vocabulary: a marker at 3 and the same spelling as an
+      --  ordinary piece at 4; "a b" merges to "ab", which it does not hold.
+      declare
+         Words  : Vocab.Vocabulary;
+         Tokens : Vocab.Token_Array (1 .. 16);
+         Last   : Natural;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "gpt2");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.pre", "gpt-2");
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.tokens", G.Value_String, 5);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "a");
+         Fixtures.String_Element (Builder, "b");
+         Fixtures.String_Element (Builder, "<|m|>");
+         Fixtures.String_Element (Builder, "<|m|>");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.merges", G.Value_String, 1);
+         Fixtures.String_Element (Builder, "a b");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 5);
+         Fixtures.Int32_Element (Builder, 2);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_bos_token", False);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+         Load_Built (Builder, Words);
+
+         Vocab.Encode (Words, "<|m|>", False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status) and then Tokens (1 .. Last) = [Vocab.Token_Id (3)],
+                 "a marker spelled again by an ordinary piece was not the marker:"
+                 & Natural'Image (Last));
+
+         Vocab.Encode (Words, "ab", False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Tokens (1 .. Last) = [Vocab.Token_Id (1), Vocab.Token_Id (2)],
+                 "a merged symbol the vocabulary lacks was called unknown before "
+                 & "its characters were tried:" & Natural'Image (Last));
+         Vocab.Close (Words);
+      end;
+
+      --  A SentencePiece vocabulary that adds a leading space: " def" is
+      --  a lone marker and then "▁def".
+      declare
+         Words  : Vocab.Vocabulary;
+         Stream : Vocab.Decoder;
+         Built  : String (1 .. 64);
+         Used   : Natural := 0;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.tokens", G.Value_String, 5);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "<s>");
+         Fixtures.String_Element (Builder, "</s>");
+         Fixtures.String_Element (Builder, Marker);
+         Fixtures.String_Element (Builder, Marker & "def");
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 5);
+         Fixtures.Int32_Element (Builder, 2);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.Int32_Element (Builder, 3);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.End_Array (Builder);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 1);
+         Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 2);
+         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_space_prefix", True);
+         Load_Built (Builder, Words);
+
+         Vocab.Reset (Stream);
+         for Token of Vocab.Token_Array'([1, 3, 4]) loop
+            declare
+               Piece : constant String := Vocab.Push (Stream, Words, Token);
+            begin
+               Built (Used + 1 .. Used + Piece'Length) := Piece;
+               Used := Used + Piece'Length;
+            end;
+         end loop;
+         Assert (Built (1 .. Used) = " def",
+                 "a first piece that decoded to nothing passed its lead to the next: """
+                 & Built (1 .. Used) & """");
+         Vocab.Close (Words);
+      end;
+   end Tokenizer_Reads_Markers_And_Leads_As_Llama_Does;
+
+   --  Tensors placed in the reverse of the order they are described are
+   --  read where they are, and two among them over the same bytes are
+   --  still found; a string array's slices count against the metadata
+   --  pool, so a file of empty strings cannot ask for more than the bound.
+   procedure Placement_And_Slices_Are_Bounded
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Count : constant := 9;
+
+      procedure Written (Image : out B.Byte_Array_Access) is
+         Builder : Fixtures.Builder;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         for Index in 1 .. Count loop
+            Fixtures.Add_Tensor
+              (Builder, "t" & Character'Val (Character'Pos ('0') + Index) & ".weight",
+               [4], G.Type_F32, Fixtures.Encode_F32 (Fixtures.Sequence (4, Interfaces.Unsigned_64 (Index))));
+         end loop;
+         Fixtures.Build (Builder, Image);
+
+         --  Each descriptor given the place of the one at the other end.
+         for Index in 1 .. Count loop
+            Fixtures.Poke_U64
+              (Image.all,
+               Fixtures.Field_Position (Builder, Fixtures.Tensor_Offset, Owner => Index),
+               Interfaces.Unsigned_64 ((Count - Index) * 32));
+         end loop;
+      end Written;
+
+      Image  : B.Byte_Array_Access;
+      Item   : Containers.Container;
+      Status : E.Error_Info;
+   begin
+      Written (Image);
+      Parse_Image (Image.all, Item, Status);
+      Assert (E.Is_Ok (Status),
+              "tensors described in the reverse of their order were refused: "
+              & E.Error_Code'Image (Status.Code));
+      Containers.Close (Item);
+      B.Free (Image);
+
+      --  The fourth and the sixth over the same bytes, far apart in the
+      --  description and next to each other only once sorted.
+      Written (Image);
+      declare
+         Builder : Fixtures.Builder;
+      begin
+         --  The positions are the builder's, the same for the same calls.
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         for Index in 1 .. Count loop
+            Fixtures.Add_Tensor
+              (Builder, "t" & Character'Val (Character'Pos ('0') + Index) & ".weight",
+               [4], G.Type_F32, Fixtures.Encode_F32 (Fixtures.Sequence (4, Interfaces.Unsigned_64 (Index))));
+         end loop;
+         declare
+            Scratch : B.Byte_Array_Access;
+         begin
+            Fixtures.Build (Builder, Scratch);
+            B.Free (Scratch);
+         end;
+         Fixtures.Poke_U64
+           (Image.all, Fixtures.Field_Position (Builder, Fixtures.Tensor_Offset, Owner => 4),
+            Interfaces.Unsigned_64 ((Count - 6) * 32));
+      end;
+      Parse_Image (Image.all, Item, Status);
+      Assert (Status.Code = E.GGUF_Tensor_Overlap,
+              "two tensors over the same bytes, apart in the description, were taken with "
+              & E.Error_Code'Image (Status.Code));
+      Containers.Close (Item);
+      B.Free (Image);
+
+      --  Two thousand empty strings: sixteen bytes held for each, against
+      --  a pool of eight thousand.
+      declare
+         Builder : Fixtures.Builder;
+         Bounds  : Model_Runner.Limits.Model_Limits := Model_Runner.Limits.Default_Model_Limits;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Begin_Array (Builder, "fixture.empty", G.Value_String, 2_000);
+         for Index in 1 .. 2_000 loop
+            Fixtures.String_Element (Builder, "");
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Build (Builder, Image);
+         Bounds.Max_Metadata_Pool_Bytes := 8_192;
+         Parse_Image (Image.all, Item, Status, Bounds);
+         Assert (Status.Code = E.Memory_Limit_Exceeded,
+                 "a file of empty strings held their slices past the pool's bound: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "the same strings under the default bound were refused");
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+   end Placement_And_Slices_Are_Bounded;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
         (T, Typed_Readers_Decode_What_The_Bytes_Say'Access,
          "every typed reader decodes what the bytes say, at every edge");
+      Register_Routine
+        (T, Placement_And_Slices_Are_Bounded'Access,
+         "tensors placed in reverse are read where they are, an overlap among "
+         & "them is found, and string slices count against the pool");
+      Register_Routine
+        (T, Tokenizer_Reads_Markers_And_Leads_As_Llama_Does'Access,
+         "a marker spelled again, a merge the vocabulary lacks and an empty "
+         & "first piece are read as llama.cpp reads them");
       Register_Routine
         (T, Byte_Pair_Decoding_Undoes_Encoding'Access,
          "byte-pair decoding undoes byte-pair encoding");

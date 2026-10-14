@@ -407,6 +407,90 @@ begin
         Element_Count (Item.Settings.KV_Heads * Item.Settings.Value_Size);
       Blend  : constant Element_Count :=
         Element_Count (Item.Settings.Heads * Item.Settings.Value_Size);
+      --  DeepSeek's key-value up-projection, put back together from the two
+      --  halves the current converter splits it into: attn_k_b, each
+      --  head's key part transposed to a row a latent dimension, and
+      --  attn_v_b, each head's value part as it was. The whole is what the
+      --  attention reads -- a head's key rows, then its value rows, a row
+      --  the width of the latent -- decoded into one matrix of binary32
+      --  the layer holds. Exact, whatever the halves' format: a decoded
+      --  weight is the weight.
+      procedure Build_KV_B
+        (Index   : Natural;
+         Current : in out Layer;
+         Status  : out E.Error_Info)
+      is
+         Heads : constant Element_Count :=
+           Element_Count (Item.Settings.Heads);
+         Rank  : constant Element_Count :=
+           Element_Count (Item.Settings.KV_Lora_Rank);
+         Plain : constant Element_Count :=
+           Element_Count (Item.Settings.Head_Size - Item.Settings.Rotary);
+         Wide  : constant Element_Count :=
+           Element_Count (Item.Settings.Value_Size);
+         Each  : constant Element_Count := Plain + Wide;
+
+         Keys, Values : T.View;
+      begin
+         Resolve
+           (Item, Source, Layer_Key (Index, "attn_k_b.weight"),
+            Heads * Rank, Plain, Keys, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Resolve
+           (Item, Source, Layer_Key (Index, "attn_v_b.weight"),
+            Heads * Wide, Rank, Values, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         Current.KV_B_Built :=
+           new B.Byte_Array (1 .. B.Byte_Count (Heads * Each * Rank) * 4);
+
+         declare
+            Whole : T.Real_Array (0 .. Heads * Each * Rank - 1)
+              with Import, Address => Current.KV_B_Built.all'Address;
+            Key_Row   : T.Real_Array (0 .. Plain - 1);
+            Value_Row : T.Real_Array (0 .. Rank - 1);
+         begin
+            for Head in 0 .. Heads - 1 loop
+               --  The key rows: a head's attn_k_b row for latent
+               --  dimension R holds that column of each of its key rows.
+               for R in 0 .. Rank - 1 loop
+                  T.Dequantize_Row (Keys, Head * Rank + R, Key_Row, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  for D in 0 .. Plain - 1 loop
+                     Whole ((Head * Each + D) * Rank + R) := Key_Row (D);
+                  end loop;
+               end loop;
+
+               --  And its value rows, as they are.
+               for J in 0 .. Wide - 1 loop
+                  T.Dequantize_Row
+                    (Values, Head * Wide + J, Value_Row, Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Whole ((Head * Each + Plain + J) * Rank
+                         .. (Head * Each + Plain + J) * Rank + Rank - 1) :=
+                    Value_Row;
+               end loop;
+            end loop;
+         end;
+
+         T.Make
+           (Format  => Model_Runner.GGUF.Type_F32,
+            Rows    => Heads * Each,
+            Columns => Rank,
+            Data    => Current.KV_B_Built,
+            Offset  => 0,
+            Result  => Current.KV_B,
+            Status  => Status);
+      end Build_KV_B;
+
       --  One block resolved, of the stack or past it. A procedure
       --  rather than the loop's body so that the blocks past the stack
       --  are resolved by the same words: they are full attention layers
@@ -1149,14 +1233,22 @@ begin
                return;
             end if;
 
-            Resolve
-              (Item, Source, Layer_Key (Index, "attn_kv_b.weight"),
-               Element_Count
-                 (Item.Settings.Heads
-                  * (Item.Settings.Head_Size - Item.Settings.Rotary
-                     + Item.Settings.Value_Size)),
-               Element_Count (Item.Settings.KV_Lora_Rank),
-               Current.KV_B, Status, Repack);
+            if Containers.Find_Tensor
+                 (Source, Layer_Key (Index, "attn_kv_b.weight")) = 0
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_k_b.weight")) /= 0
+            then
+               Build_KV_B (Index, Current, Status);
+            else
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_kv_b.weight"),
+                  Element_Count
+                    (Item.Settings.Heads
+                     * (Item.Settings.Head_Size - Item.Settings.Rotary
+                        + Item.Settings.Value_Size)),
+                  Element_Count (Item.Settings.KV_Lora_Rank),
+                  Current.KV_B, Status, Repack);
+            end if;
             if E.Is_Error (Status) then
                return;
             end if;
@@ -1926,7 +2018,30 @@ begin
       then
          --  LongRoPE: the long table where the model is opened past the
          --  context it was trained on, the short table otherwise, applied
-         --  as any per-dimension factor table is.
+         --  as any per-dimension factor table is. Which is settled when a
+         --  session opens, by how far it is opened; until then the table
+         --  is the one the file's own context asks for. Both are kept where
+         --  both are there, so that a session can be given either.
+         if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
+           and then Containers.Find_Tensor
+                      (Source, "rope_factors_short.weight") /= 0
+         then
+            Resolve_Norm
+              (Item, Source, "rope_factors_long.weight",
+               Element_Count (Item.Settings.Rotary / 2),
+               Item.Rope_Long, Status);
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, "rope_factors_short.weight",
+                  Element_Count (Item.Settings.Rotary / 2),
+                  Item.Rope_Short, Status);
+            end if;
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+         end if;
+
          declare
             Long  : constant Boolean :=
               Item.Settings.Rope_Original > 0

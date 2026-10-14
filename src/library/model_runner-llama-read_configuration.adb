@@ -13,6 +13,13 @@ is
    Shared_Count : Natural := 0;
    Local  : E.Error_Info;
 
+   --  Whether the file states a sliding window of its own, before a window
+   --  as wide as the context is folded into none: an architecture that
+   --  windows some layers turns those on a base and stretch of their own
+   --  however wide the window is, and one that states no window at all
+   --  windows none of them.
+   Window_Stated : Boolean := False;
+
    --  Read a required positive integer key.
    procedure Required
      (Key     : String;
@@ -295,30 +302,40 @@ begin
    --  same units, named for the normalization it belongs to. Bert is
    --  asked for its own key and falls back to the other, so a file that
    --  states either is read and a file that states neither takes the
-   --  default both would.
-   if Normalizes_After (Settings.Kind)
-     or else Settings.Kind
-               in Starcoder2 | Stablelm | Gptneox | Mpt | Command_R | Rwkv6
-   then
-      Containers.Get_Float
-        (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
-         0.0, 1.0, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+   --  default both would. Every architecture that centres is asked for
+   --  the centring key first -- Falcon, Phi2 and GPT2 were not, and took
+   --  the default whatever their files said -- and the other key is asked
+   --  only where the first is absent: asked after it regardless, its
+   --  absence overwrote what the first had read, and a StarCoder2 stating
+   --  1e-6 normalized with 1e-5.
+   declare
+      Centring : constant Boolean :=
+        Normalizes_After (Settings.Kind)
+        or else Settings.Kind
+                  in Falcon | Phi2 | GPT2 | Starcoder2 | Stablelm | Gptneox
+                   | Mpt | Command_R | Rwkv6;
+   begin
+      if Centring then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attention.layer_norm_epsilon"),
+            0.0, 1.0, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
       end if;
-   end if;
 
-   if not Normalizes_After (Settings.Kind) or else E.Is_Error (Local) then
-      Containers.Get_Float
-        (Source,
-         Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
-         0.0, 1.0, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+      if not Centring or else E.Is_Error (Local) then
+         Containers.Get_Float
+           (Source,
+            Model_Key (Settings.Kind, "attention.layer_norm_rms_epsilon"),
+            0.0, 1.0, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
       end if;
-   end if;
+   end;
    Settings.Epsilon :=
      (if E.Is_Ok (Local) then N.Real (Value) else 1.0E-5);
 
@@ -519,6 +536,22 @@ begin
       end if;
    end if;
 
+   --  The file's multiplier on the whole rotation, read whatever the
+   --  stretch: the reference runtime applies it under every one, and
+   --  LongRoPE's converter writes one -- about 1.19 for Phi-3.5-mini and
+   --  Phi-4-mini -- that was read only under YaRN, so those models ran
+   --  with flatter attention at every length.
+   Containers.Get_Float
+     (Source, Model_Key (Settings.Kind, "rope.scaling.attn_factor"),
+      0.0, 1.0E3, Value, Local);
+   if Present_And_Wrong (Local) then
+      Status := Local;
+      return;
+   end if;
+   if E.Is_Ok (Local) then
+      Settings.Scaling.Attenuation := Value;
+   end if;
+
    --  A model carrying LongRoPE's factor tables lets the tables do the
    --  whole stretch, so no scalar factor is applied beside them.
    if Containers.Find_Tensor (Source, "rope_factors_long.weight") /= 0
@@ -545,17 +578,6 @@ begin
         (if E.Is_Ok (Local)
          then Natural (Number)
          else Settings.Context_Length);
-
-      Containers.Get_Float
-        (Source, Model_Key (Settings.Kind, "rope.scaling.attn_factor"),
-         0.0, 1.0E3, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
-      end if;
-      if E.Is_Ok (Local) then
-         Settings.Scaling.Attenuation := Value;
-      end if;
 
       Containers.Get_Float
         (Source, Model_Key (Settings.Kind, "rope.scaling.beta_fast"),
@@ -917,6 +939,67 @@ begin
       end if;
       Settings.Sigmoid_Gate := E.Is_Ok (Local) and then Number = 2;
 
+      --  A deepseek2 file that names no gate is softmax-gated, as V2 and
+      --  V2.5 are -- except GLM-4.7-Lite, converted before the key was
+      --  written, which is sigmoid-gated and which the reference runtime
+      --  knows by its depth and vocabulary. Read as softmax, it routed to
+      --  the wrong experts with the wrong shares.
+      if E.Is_Error (Local) and then Settings.Kind = Deepseek2
+        and then Settings.Layers in 47 | 48
+      then
+         declare
+            Words : Natural;
+         begin
+            Containers.Get_Array_Length
+              (Source, "tokenizer.ggml.tokens", Model_Runner.GGUF.Value_String,
+               Words, Local);
+            if E.Is_Error (Local) then
+               Containers.Get_Integer
+                 (Source, Model_Key (Settings.Kind, "vocab_size"), 0,
+                  Long_Long_Integer (Natural'Last), Number, Local);
+               Words := (if E.Is_Ok (Local) then Natural (Number) else 0);
+            end if;
+            Settings.Sigmoid_Gate := Words = 154_880;
+         end;
+      end if;
+
+      --  Experts chosen within groups -- the best few groups of experts
+      --  first, by their two best scores, then the best experts of those
+      --  -- which DeepSeek-V3 states and this build does not compute. A
+      --  file that states groups and uses fewer than all of them is
+      --  refused rather than routed as though the groups were not there;
+      --  one that uses all of them chooses exactly as without.
+      declare
+         Groups, Groups_Used : Long_Long_Integer;
+      begin
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_group_count"),
+            0, Long_Long_Integer (Bounds.Max_Experts), Groups, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Error (Local) then
+            Groups := 0;
+         end if;
+
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "expert_group_used_count"),
+            0, Long_Long_Integer (Bounds.Max_Experts), Groups_Used, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Error (Local) then
+            Groups_Used := Groups;
+         end if;
+
+         if Groups > 1 and then Groups_Used < Groups then
+            Reject_Feature ("expert_group_count");
+            return;
+         end if;
+      end;
+
       declare
          Normalized : Boolean;
       begin
@@ -1026,10 +1109,20 @@ begin
             return;
          end if;
 
+         Window_Stated := True;
          if Natural (Value) < Settings.Context_Length then
             Settings.Window := Natural (Value);
          end if;
       end;
+
+   --  Gemma2 windows whether or not its file says how widely: four
+   --  thousand and ninety-six positions is the architecture's, as the
+   --  reference runtime carries it, and an early gemma2 file states none.
+   elsif Settings.Kind = Gemma2 then
+      Window_Stated := True;
+      if 4_096 < Settings.Context_Length then
+         Settings.Window := 4_096;
+      end if;
    end if;
 
    --  Whether a position may see what follows it, where the file says so.
@@ -1069,35 +1162,92 @@ begin
       return;
    end if;
 
-   --  The two bounds Gemma2 states, and the window it alternates. Read
-   --  where the architecture says so rather than taken if present: a
-   --  gemma2 file without them is a file this build cannot compute, and
-   --  a file that states them under another architecture's prefix is a
-   --  file that means something else by them.
-   if Settings.Kind = Gemma3 then
-      --  Five layers in six slide a window; the sixth sees everything.
-      Settings.Alternating := True;
-      Settings.Window_Every := 6;
+   --  Which layers slide the window, for the architectures that window
+   --  some layers and not others: the last of each period sees everything
+   --  -- two for Gemma2 and GPT-OSS, six for Gemma3, four for OLMo-3 --
+   --  unless the file states a period of its own or a list of which layers
+   --  slide. Gemma3 and OLMo2 window only where the file states a window
+   --  at all: Rnj-1 is a gemma3 without one, OLMo-2 an olmo2 without one,
+   --  and both attend to everything on every layer and turn every layer on
+   --  the model's own base and stretch.
+   --
+   --  The list is read as the file states it, layer by layer, where the
+   --  reference runtime reads a period only and falls back to its default
+   --  when it finds a list: OLMo-3's converter writes the list, and what
+   --  it lists is what the model was trained with.
+   declare
+      Period : Natural :=
+        (case Settings.Kind is
+            when Gemma2 | GPT_OSS => 2,
+            when Gemma3 => 6,
+            when Olmo2 => 4,
+            when others => 0);
+      Key    : constant String :=
+        Model_Key (Settings.Kind, "attention.sliding_window_pattern");
+      Length : Natural;
+      Flag   : Boolean;
+      Listed : Boolean := False;
+   begin
+      if Period > 0
+        and then (Settings.Kind in Gemma2 | GPT_OSS or else Window_Stated)
+      then
+         Settings.Alternating := True;
 
-      Containers.Get_Float
-        (Source, Model_Key (Settings.Kind, "rope.local_freq_base"),
-         1.0, 1.0E12, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+         if Containers.Has (Source, Key) then
+            Containers.Get_Array_Length
+              (Source, Key, Model_Runner.GGUF.Value_Bool, Length, Local);
+            if E.Is_Ok (Local) then
+               if Length /= Settings.Layers then
+                  Status := E.Make (E.GGUF_Metadata_Out_Of_Range);
+                  E.Add_Text (Status, "key", Key, E.Param_Identifier);
+                  E.Add_Integer (Status, "value", Long_Long_Integer (Length));
+                  E.Add_Integer
+                    (Status, "minimum", Long_Long_Integer (Settings.Layers));
+                  E.Add_Integer
+                    (Status, "maximum", Long_Long_Integer (Settings.Layers));
+                  return;
+               end if;
+
+               for Layer in 0 .. Settings.Layers - 1 loop
+                  Containers.Get_Boolean_Element
+                    (Source, Key, Layer + 1, Flag, Local);
+                  if E.Is_Error (Local) then
+                     Status := Local;
+                     return;
+                  end if;
+                  Settings.Window_Layers (Layer) := Flag;
+               end loop;
+               Listed := True;
+            else
+               --  A period, then: zero is every layer, as the reference
+               --  runtime reads it.
+               Containers.Get_Integer
+                 (Source, Key, 0, Long_Long_Integer (Max_Block_Count), Number,
+                  Local);
+               if E.Is_Error (Local) then
+                  Status := Local;
+                  return;
+               end if;
+               Period := Natural (Number);
+            end if;
+         end if;
+
+         if not Listed then
+            for Layer in Layer_Flags'Range loop
+               Settings.Window_Layers (Layer) :=
+                 Period = 0 or else Layer mod Period < Period - 1;
+            end loop;
+         end if;
       end if;
-      Settings.Local_Base :=
-        (if E.Is_Ok (Local) then Value else 10_000.0);
-   end if;
+   end;
 
-   --  GPT_OSS alternates a window the same way Gemma2 does and turns
-   --  the windowed layers on a base of their own, the way Gemma3 does.
-   --  It is the first architecture here to want both, which is why
-   --  neither of those two blocks could be reused for it.
-   if Settings.Kind = GPT_OSS then
-      Settings.Alternating := True;
-      Settings.Window_Every := 2;
-
+   --  The base the windowed layers turn on. Read under the name the
+   --  converters write, rope.freq_base_swa; Gemma3 is also read under
+   --  rope.local_freq_base, which nothing writes but this build once read,
+   --  and turns on ten thousand where neither is stated, as its reference
+   --  does. The others turn on the model's own base where the file names
+   --  none.
+   if Settings.Alternating then
       Containers.Get_Float
         (Source, Model_Key (Settings.Kind, "rope.freq_base_swa"),
          1.0, 1.0E12, Value, Local);
@@ -1105,31 +1255,52 @@ begin
          Status := Local;
          return;
       end if;
+
+      if E.Is_Error (Local) and then Settings.Kind = Gemma3 then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.local_freq_base"),
+            1.0, 1.0E12, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         if E.Is_Error (Local) then
+            Value := 10_000.0;
+            Local := E.Success;
+         end if;
+      end if;
+
       Settings.Local_Base :=
         (if E.Is_Ok (Local) then Value else Settings.Rope_Base);
+   end if;
 
-      --  The gate's two bounds, which this architecture states nowhere:
-      --  they are constants of the model rather than of the file, and
-      --  llama.cpp writes them out in its graph for the same reason.
-      --  1.702 is the slope that makes the logistic agree with the
-      --  Gaussian error function this model was trained against.
+   --  GPT_OSS's gate bounds, which this architecture states nowhere:
+   --  they are constants of the model rather than of the file, and
+   --  llama.cpp writes them out in its graph for the same reason.
+   --  1.702 is the slope that makes the logistic agree with the
+   --  Gaussian error function this model was trained against.
+   if Settings.Kind = GPT_OSS then
       Settings.Gate_Alpha := 1.702;
       Settings.Gate_Limit := 7.0;
    end if;
 
-   if Settings.Kind = Gemma2 then
-      Settings.Alternating := True;
-      Settings.Window_Every := 2;
-
-      Containers.Get_Float
-        (Source, Model_Key (Settings.Kind, "attn_logit_softcapping"),
-         1.0, 1.0E6, Value, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
+   --  The bounds on scores and logits. Gemma2 bounds both, at fifty and
+   --  thirty where its file states neither -- the architecture's, as the
+   --  reference runtime carries them; an early gemma2 file states none and
+   --  ran unbounded here. Gemma3 bounds its logits only where the file
+   --  says so.
+   if Settings.Kind in Gemma2 | Gemma3 then
+      if Settings.Kind = Gemma2 then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "attn_logit_softcapping"),
+            1.0, 1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         Settings.Attention_Cap :=
+           (if E.Is_Ok (Local) then N.Real (Value) else 50.0);
       end if;
-      Settings.Attention_Cap :=
-        (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
 
       Containers.Get_Float
         (Source, Model_Key (Settings.Kind, "final_logit_softcapping"),
@@ -1139,7 +1310,9 @@ begin
          return;
       end if;
       Settings.Logit_Cap :=
-        (if E.Is_Ok (Local) then N.Real (Value) else 0.0);
+        (if E.Is_Ok (Local) then N.Real (Value)
+         elsif Settings.Kind = Gemma2 then 30.0
+         else 0.0);
    end if;
 
    if Settings.Kind in Granite | Granite_MoE then
@@ -1297,6 +1470,36 @@ begin
    Settings.Value_Size :=
      (if E.Is_Ok (Local) then Natural (Number) else Settings.Head_Size);
 
+   --  DeepSeek's widths as its current converter states them: key_length
+   --  and value_length are the latent's -- the rank and the rotated slice,
+   --  as the model is read when its attention is absorbed -- and the head
+   --  widths this reads are under key_length_mla and value_length_mla.
+   --  Taken from key_length, a current DeepSeek-V2-Lite read its heads as
+   --  576 wide and every matrix of its attention was refused by its shape.
+   if Is_MLA (Settings.Kind) then
+      Containers.Get_Integer
+        (Source, Model_Key (Settings.Kind, "attention.key_length_mla"),
+         1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      if E.Is_Ok (Local) then
+         Settings.Head_Size := Natural (Number);
+      end if;
+
+      Containers.Get_Integer
+        (Source, Model_Key (Settings.Kind, "attention.value_length_mla"),
+         1, Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      if E.Is_Ok (Local) then
+         Settings.Value_Size := Natural (Number);
+      end if;
+   end if;
+
    --  A hybrid's full attention carries a gate beside each head, of the
    --  head's own width, and scales the head's blend by it -- so its
    --  value width is its head size, and a file stating another is a
@@ -1336,9 +1539,12 @@ begin
    --  which the sweep could not have caught, because the fixture wrote
    --  the key as zero and so agreed with itself about a model nobody
    --  ships. That is the same trap gpt2's output bias fell into, found
-   --  the same way: by reading a file somebody else published.
+   --  the same way: by reading a file somebody else published. GPT2 is
+   --  the third time: its converter writes no rotary width either, and the
+   --  fixture's zero hid a published gpt2 file turning every query and key
+   --  on top of its learned table of positions.
    Settings.Rotary :=
-     (if Settings.Kind in Bert | Jina_Bert_V2 | Mpt | Jamba
+     (if Settings.Kind in GPT2 | Bert | Jina_Bert_V2 | Mpt | Jamba
          or else (Settings.Kind = Baichuan and then Settings.Layers = 40)
        then 0
       elsif E.Is_Ok (Local) then Natural (Number)

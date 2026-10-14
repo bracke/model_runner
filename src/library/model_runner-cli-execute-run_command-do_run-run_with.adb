@@ -1377,8 +1377,14 @@ begin
                              (Messages, Conv.Assistant_Role, Spoken.all,
                               Condition);
                         elsif Tools_Ready then
+                           --  Read in the shape the model's own format writes
+                           --  calls, against the tools it was offered, as the
+                           --  agent reads them.
                            Conv.Append_Reply
-                             (Messages, Spoken.all, Condition, Reading);
+                             (Messages, Spoken.all, Condition, Reading,
+                              Syntax  => Model_Runner.Templates.Syntax_Of
+                                           (L.Template_Format (Prepared)),
+                              Offered => Offered'Unchecked_Access);
                            if E.Is_Error (Reading) then
                               Pres.Report (Screen, Reading);
                            end if;
@@ -1745,10 +1751,12 @@ begin
                     (Model_Runner.Platform.Cache_Directory, "*.kv",
                      Model_Runner.Platform.Prefill_Cache_Most,
                      Keep => Save_Path);
-                  --  And what a write killed part way left beside one.
+                  --  And what a write killed part way left beside one --
+                  --  not one another run is writing now, which is a
+                  --  partial too: only those left a while.
                   Model_Runner.Platform.Trim_Directory
                     (Model_Runner.Platform.Cache_Directory, "*.kv.partial", 0,
-                     Keep => Save_Path & ".partial");
+                     Keep => Save_Path & ".partial", Settled => 600.0);
                end if;
 
                if E.Is_Error (Condition) and then not Auto then

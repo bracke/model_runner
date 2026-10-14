@@ -65,6 +65,21 @@ begin
             At_Message : Natural := Call_Message;
             At_Call    : Natural := Call_At;
          begin
+            --  A call bound as a mapping, from a turn bound as one: its
+            --  own fields.
+            if Item.Call_Slot /= 0
+              and then Slots (Item.Call_Slot).Kind = Value_Data
+            then
+               declare
+                  Called : constant Held :=
+                    Field_Of (Held_Of (Item.Call_Slot), "function");
+               begin
+                  return (if Value.Kind = Term_Call_Name
+                          then Text_Of (Field_Of (Called, "name"))
+                          else JSON_Text (Field_Of (Called, "arguments")));
+               end;
+            end if;
+
             if Item.Call_Slot /= 0
               and then Slots (Item.Call_Slot).Kind = Value_Call
             then

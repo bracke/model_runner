@@ -154,12 +154,17 @@ is
    --  The base the table in Angles was tabulated for, and a value no
    --  base takes so that the first layer of a batch always tabulates.
    --
-   --  Everything the table depends on but the base is fixed for the
-   --  whole of one call: the rotary width, the positions -- which start
-   --  at Item.Committed and run to Count -- the scaling and the turns.
-   --  So a batch tabulates once a base and not once a layer, and an
-   --  architecture that states no local base states one base.
+   --  Everything the table depends on but the base and the stretch is
+   --  fixed for the whole of one call: the rotary width, the positions --
+   --  which start at Item.Committed and run to Count -- and the turns.
+   --  So a batch tabulates once a base and stretch and not once a layer,
+   --  and an architecture that states no local base states one of each.
    Angles_Base : N.Wide_Real := -1.0;
+
+   --  And the stretch they were worked out with: OLMo-3 turns its windowed
+   --  layers on the model's own base and unstretched, so a table kept by
+   --  base alone handed a full layer the windowed layers' angles.
+   Angles_Scaling : K.Rotary_Scaling;
 
    --  Whether the layer before this one left its answer on the device.
    --  False at the start of every batch: the first layer reads the
@@ -223,7 +228,8 @@ is
        and then (L.Expert_Gate_Bias = null) = (L.Expert_Up_Bias = null)
        and then Settings.Experts_Used
                 <= Model_Runner.Backend.Device.Max_Route
-         and then not Settings.Sigmoid_Gate);
+         and then not Settings.Sigmoid_Gate
+         and then L.Select_Bias = null);
 
    --  The next layer's expert stacks, copied to the device in the
    --  background while this layer runs, where the device streams them.
@@ -1471,8 +1477,12 @@ begin
 
                   if Angles_Base
                      /= Turn_Base (Settings, Natural (Index))
+                    or else K."/="
+                              (Angles_Scaling,
+                               Turn_Scaling (Settings, Natural (Index)))
                   then
                      Angles_Base := Turn_Base (Settings, Natural (Index));
+                     Angles_Scaling := Turn_Scaling (Settings, Natural (Index));
 
                      for Which in 0 .. Count - 1 loop
                         declare

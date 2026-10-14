@@ -12809,6 +12809,9 @@ package body Tests.Inference_Cases is
    --  has to pick the former and agree with the independent
    --  implementation, which picks it on its own. The six-block fixture
    --  beside it says the depth is what decides, and not the head factor.
+   --
+   --  Gemma 2's 27B does the same at forty-six layers, which only Gemma 3's
+   --  was asked about until a review read the reference's Gemma 2.
    procedure Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -12819,14 +12822,14 @@ package body Tests.Inference_Cases is
       --  Run the engine and the reference over one fixture; the engine's
       --  factor, and how far the two are apart.
       procedure Cross
-        (Depth : Natural; Scale : out L.Real; Worst : out Long_Float)
+        (Kind  : Tiny_Model.Fixture_Architecture;
+         Depth : Natural; Scale : out L.Real; Worst : out Long_Float)
       is
          Image  : B.Byte_Array_Access;
          Result : Logit_Vector;
       begin
          Tiny_Model.Build
-           (Image, Kind => Tiny_Model.Gemma3, Head_Factor => 2,
-            Depth => Depth);
+           (Image, Kind => Kind, Head_Factor => 2, Depth => Depth);
 
          declare
             Held   : aliased constant B.Byte_Array := Image.all;
@@ -12839,7 +12842,9 @@ package body Tests.Inference_Cases is
             declare
                Read : constant L.Configuration := L.Config (Under.Ready);
             begin
-               Assert (L."=" (Read.Kind, L.Gemma3),
+               Assert (L."=" (Read.Kind,
+                              (if Tiny_Model."=" (Kind, Tiny_Model.Gemma3)
+                               then L.Gemma3 else L.Gemma2)),
                        "the architecture was not read from the file");
                Assert (Read.Layers = Depth,
                        "the depth was not read from the file:"
@@ -12913,7 +12918,7 @@ package body Tests.Inference_Cases is
       By_Head, By_Embedding : L.Real;
       Worst : Long_Float;
    begin
-      Cross (6, By_Head, Worst);
+      Cross (Tiny_Model.Gemma3, 6, By_Head, Worst);
       Assert (abs (By_Head - Root (2 * Tiny_Model.Head_Size)) < 1.0E-6,
               "a Gemma 3 of six layers does not scale by its head's width:"
               & L.Real'Image (By_Head));
@@ -12922,7 +12927,7 @@ package body Tests.Inference_Cases is
               & "about a gemma3 model of six layers by"
               & Long_Float'Image (Worst));
 
-      Cross (62, By_Embedding, Worst);
+      Cross (Tiny_Model.Gemma3, 62, By_Embedding, Worst);
       Assert (abs (By_Embedding
                    - Root (Tiny_Model.Embedding / Tiny_Model.Heads)) < 1.0E-6,
               "a Gemma 3 of sixty-two layers does not scale by the width "
@@ -12931,7 +12936,700 @@ package body Tests.Inference_Cases is
               "the engine and the independent implementation disagree "
               & "about a gemma3 model of sixty-two layers by"
               & Long_Float'Image (Worst));
+
+      Cross (Tiny_Model.Gemma2, 6, By_Head, Worst);
+      Assert (abs (By_Head - Root (2 * Tiny_Model.Head_Size)) < 1.0E-6,
+              "a Gemma 2 of six layers does not scale by its head's width:"
+              & L.Real'Image (By_Head));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about a gemma2 model of six layers by"
+              & Long_Float'Image (Worst));
+
+      Cross (Tiny_Model.Gemma2, 46, By_Embedding, Worst);
+      Assert (abs (By_Embedding
+                   - Root (Tiny_Model.Embedding / Tiny_Model.Heads)) < 1.0E-6,
+              "a Gemma 2 of forty-six layers does not scale by the width "
+              & "its embedding implies:" & L.Real'Image (By_Embedding));
+      Assert (Worst < 1.0E-3,
+              "the engine and the independent implementation disagree "
+              & "about a gemma2 model of forty-six layers by"
+              & Long_Float'Image (Worst));
    end Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding;
+
+   --  LongRoPE turns by the table the session's reach asks for, and by the
+   --  multiplier the file states.
+   --
+   --  A Phi-3.5 carries two tables -- one for a session within the
+   --  context the model was trained on and one past it -- and a multiplier
+   --  on the whole rotation the converter works out from the stretch. The
+   --  table was chosen by the file's own reach, so every session took the
+   --  long one, and the multiplier was read only under YaRN, so none took
+   --  it. Two sessions of one fixture, one within its trained context and
+   --  one past it, each crossed against the independent implementation
+   --  opened as far: the two must disagree with each other, or the tables
+   --  were never told apart, and each must agree with its reference.
+   procedure Long_Rope_Follows_The_Session
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      Image : B.Byte_Array_Access;
+
+      --  The engine opened to Reach, its last logits, and how far they are
+      --  from the reference's opened as far.
+      procedure Cross
+        (Reach : Positive; Last : out Logit_Vector; Worst : out Long_Float)
+      is
+      begin
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            Assert
+              (abs (L.Config (Under.Ready).Scaling.Attenuation - 1.3) < 1.0E-6,
+               "the multiplier LongRoPE states was not read:"
+               & Model_Runner.Numerics.Wide_Real'Image
+                   (L.Config (Under.Ready).Scaling.Attenuation));
+
+            L.Open (Live, Under.Ready, Context => Reach, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+
+            L.Close (Live);
+         end;
+
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+
+            Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+            Expected : Reference_Transformer.Real_Vector
+              (0 .. Tiny_Model.Vocabulary - 1);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+            Reference_Transformer.Load
+              (Second, Parsed, Held, Loaded, Opened => Reach);
+            Assert (Loaded, "the reference did not read the model");
+
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+
+            Reference_Transformer.Run (Second, Tokens, Expected, Made);
+            Assert (Made, "the reference produced no logits");
+
+            Worst := 0.0;
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Last
+                         (Model_Runner.Numerics.Element_Count (Index)))
+                       - Expected (Index)));
+            end loop;
+
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+      end Cross;
+
+      Within, Past : Logit_Vector;
+      Worst : Long_Float;
+      Apart : Long_Float := 0.0;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Phi3, Long_Rope => True);
+
+      Cross (Tiny_Model.Context / 2, Within, Worst);
+      Assert (Worst < 1.0E-3,
+              "a LongRoPE session within its trained context disagrees "
+              & "with the independent implementation by"
+              & Long_Float'Image (Worst));
+
+      Cross (Tiny_Model.Context, Past, Worst);
+      Assert (Worst < 1.0E-3,
+              "a LongRoPE session past its trained context disagrees "
+              & "with the independent implementation by"
+              & Long_Float'Image (Worst));
+
+      for Index in Within'Range loop
+         Apart := Long_Float'Max
+           (Apart, abs (Long_Float (Within (Index)) - Long_Float (Past (Index))));
+      end loop;
+      Assert (Apart > 1.0E-3,
+              "sessions within and past the trained context answered alike, "
+              & "so the two tables were never told apart");
+
+      B.Free (Image);
+   end Long_Rope_Follows_The_Session;
+
+   --  What a file states about which layers window, how wide, on what base
+   --  and with what floor is read as the file states it, and the engine
+   --  agrees with the independent implementation over every shape it moved.
+   --
+   --  An architecture review read the reference runtime's architectures
+   --  one by one and found the engine and this suite's reference agreeing
+   --  on things no published file says: GPT2 rotated because the fixture
+   --  wrote a rotary width of nought its converter never writes; Gemma 3
+   --  without a window still turned five layers in six on a local base;
+   --  OLMo-3 windowed every layer and stretched the windowed ones; Gemma 2
+   --  without its keys ran unbounded and unwindowed; and the centring
+   --  architectures' floor was overwritten by the other key's absence. The
+   --  fixture now states what the converters write, and this crosses each
+   --  shape it changed, a token at a time and as one batch.
+   procedure Window_Patterns_Are_Read_As_Stated
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      --  The engine over Prompt, a token at a time and as one batch, and
+      --  the reference over the same; the larger of the two distances.
+      function Worst_Of (Image : B.Byte_Array_Access) return Long_Float is
+         Held     : aliased constant B.Byte_Array := Image.all;
+         Expected : Reference_Transformer.Real_Vector
+           (0 .. Tiny_Model.Vocabulary - 1);
+         Worst    : Long_Float := 0.0;
+      begin
+         declare
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Status : E.Error_Info;
+            Second : Reference_Transformer.Model;
+            Loaded, Made : Boolean;
+            Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+            Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+            Assert (Loaded, "the reference did not read the model");
+            for Index in Prompt'Range loop
+               Tokens (Index) := Integer (Prompt (Index));
+            end loop;
+            Reference_Transformer.Run (Second, Tokens, Expected, Made);
+            Assert (Made, "the reference produced no logits");
+            Reference_Transformer.Close (Second);
+            Containers.Close (Parsed);
+         end;
+
+         declare
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Last   : Logit_Vector;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Last (Model_Runner.Numerics.Element_Count
+                                           (Index)))
+                       - Expected (Index)));
+            end loop;
+            L.Close (Live);
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the second session did not open");
+            L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the batch failed: " & E.Error_Code'Image (Status.Code));
+            for Index in Expected'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Last (Model_Runner.Numerics.Element_Count
+                                           (Index)))
+                       - Expected (Index)));
+            end loop;
+            L.Close (Live);
+         end;
+
+         return Worst;
+      end Worst_Of;
+
+      --  The configuration the engine reads from one fixture.
+      function Read_Of
+        (Kind  : Tiny_Model.Fixture_Architecture;
+         Shape : Tiny_Model.Fixture_Shape) return L.Configuration
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build_Shaped (Image, Tiny_Model.F32, Kind, Shape);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+         begin
+            Start (Under);
+            return Result : constant L.Configuration := L.Config (Under.Ready)
+            do
+               B.Free (Image);
+            end return;
+         end;
+      end Read_Of;
+
+      type Case_Entry is record
+         Kind  : Tiny_Model.Fixture_Architecture;
+         Shape : Tiny_Model.Fixture_Shape;
+      end record;
+
+      Crossed : constant array (Positive range <>) of Case_Entry :=
+        [(Tiny_Model.GPT2, Tiny_Model.Plain),
+         (Tiny_Model.Gemma2, Tiny_Model.Plain),
+         (Tiny_Model.Gemma2, Tiny_Model.Windowed),
+         (Tiny_Model.Gemma3, Tiny_Model.Plain),
+         (Tiny_Model.Gemma3, Tiny_Model.Windowed),
+         (Tiny_Model.Gemma3, Tiny_Model.Reaching),
+         (Tiny_Model.Olmo2, Tiny_Model.Windowed),
+         (Tiny_Model.Olmo2, Tiny_Model.Reaching),
+         (Tiny_Model.GPT_OSS, Tiny_Model.Windowed),
+         (Tiny_Model.Falcon, Tiny_Model.Plain),
+         (Tiny_Model.Starcoder2, Tiny_Model.Plain)];
+   begin
+      --  GPT2 rotates nothing, its file stating no width.
+      Assert (Read_Of (Tiny_Model.GPT2, Tiny_Model.Plain).Rotary = 0,
+              "a gpt2 file that states no rotary width was turned by"
+              & Natural'Image
+                  (Read_Of (Tiny_Model.GPT2, Tiny_Model.Plain).Rotary));
+
+      --  Gemma 3 without a window windows no layer, so no layer turns on
+      --  the local base; with one it alternates on the base the file names
+      --  under the key its converter writes.
+      declare
+         Plain : constant L.Configuration :=
+           Read_Of (Tiny_Model.Gemma3, Tiny_Model.Plain);
+         Slid  : constant L.Configuration :=
+           Read_Of (Tiny_Model.Gemma3, Tiny_Model.Windowed);
+      begin
+         Assert (not Plain.Alternating,
+                 "a gemma3 that states no window alternates one");
+         Assert (Slid.Alternating and then abs (Slid.Local_Base - 500.0) < 1.0E-6,
+                 "a windowed gemma3 did not take rope.freq_base_swa:"
+                 & Model_Runner.Numerics.Wide_Real'Image (Slid.Local_Base));
+      end;
+
+      --  OLMo-3 windows the layers its list marks, and not by its period.
+      declare
+         Slid : constant L.Configuration :=
+           Read_Of (Tiny_Model.Olmo2, Tiny_Model.Windowed);
+      begin
+         Assert (Slid.Alternating
+                 and then Slid.Window_Layers (0)
+                 and then not Slid.Window_Layers (1),
+                 "an olmo2 file listing which layers slide was not read "
+                 & "layer by layer");
+      end;
+
+      --  What a gemma2 does not state is its window, which is the
+      --  architecture's 4096 and folds into none at sixteen positions; it
+      --  alternates all the same.
+      declare
+         Plain : constant L.Configuration :=
+           Read_Of (Tiny_Model.Gemma2, Tiny_Model.Plain);
+      begin
+         Assert (Plain.Alternating and then Plain.Window = 0,
+                 "a gemma2 stating no window did not take the "
+                 & "architecture's, folded against its context:"
+                 & Natural'Image (Plain.Window));
+      end;
+
+      --  And past its window, it keeps it: opened wider than 4096 the
+      --  architecture's window is there to slide.
+      declare
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Gemma2, Room => 8_192);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+         begin
+            Start (Under);
+            Assert (L.Config (Under.Ready).Window = 4_096,
+                    "a gemma2 stating no window took"
+                    & Natural'Image (L.Config (Under.Ready).Window)
+                    & " rather than the architecture's 4096");
+         end;
+         B.Free (Image);
+      end;
+
+      --  An early gemma2 states no bounds and is bounded by the
+      --  architecture's fifty and thirty, crossed against the reference
+      --  below; a gemma3 bounds its logits where it says so.
+      declare
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Gemma2, Caps => False);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+         begin
+            Start (Under);
+            Assert (L.Config (Under.Ready).Attention_Cap = 50.0
+                    and then L.Config (Under.Ready).Logit_Cap = 30.0,
+                    "a gemma2 stating no bounds was bounded at"
+                    & L.Real'Image (L.Config (Under.Ready).Attention_Cap)
+                    & " and" & L.Real'Image (L.Config (Under.Ready).Logit_Cap));
+         end;
+         declare
+            Worst : constant Long_Float := Worst_Of (Image);
+         begin
+            Assert (Worst < 1.0E-3,
+                    "a gemma2 stating no bounds disagrees with the "
+                    & "independent implementation by"
+                    & Long_Float'Image (Worst));
+         end;
+         B.Free (Image);
+      end;
+      Assert (Read_Of (Tiny_Model.Gemma3, Tiny_Model.Plain).Logit_Cap = 2.0,
+              "a gemma3 stating a bound on its logits was not bounded");
+
+      --  Every centring architecture reads its floor from its own key.
+      for Kind in Tiny_Model.Fixture_Architecture loop
+         if Kind in Tiny_Model.Bert | Tiny_Model.Nomic_Bert
+                  | Tiny_Model.Jina_Bert_V2 | Tiny_Model.Starcoder2
+                  | Tiny_Model.Stablelm | Tiny_Model.Gptneox | Tiny_Model.Mpt
+                  | Tiny_Model.Command_R | Tiny_Model.Falcon | Tiny_Model.Phi2
+                  | Tiny_Model.GPT2 | Tiny_Model.Rwkv6
+         then
+            declare
+               Floor : constant L.Real :=
+                 Read_Of (Kind, Tiny_Model.Plain).Epsilon;
+            begin
+               Assert (abs (Long_Float (Floor) - Tiny_Model.Centring_Epsilon)
+                         < 1.0E-9,
+                       Tiny_Model.Fixture_Architecture'Image (Kind)
+                       & " read its normalization floor as"
+                       & L.Real'Image (Floor));
+            end;
+         end if;
+      end loop;
+
+      --  And as a batch on the device, where the windowed and the full
+      --  layers turn by angles the host tabulates for the device's whole
+      --  layer and the step-by-step road turns by its own. Said and passed
+      --  where no device opens -- another program may hold it -- since the
+      --  processor's crossing above does not change.
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if not Awake then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device to cross a window pattern on");
+         else
+            for Kind in Tiny_Model.Fixture_Architecture loop
+               if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 then
+                  declare
+                     Image    : B.Byte_Array_Access;
+                     Expected : Reference_Transformer.Real_Vector
+                       (0 .. Tiny_Model.Vocabulary - 1);
+                     Worst    : Long_Float := 0.0;
+                  begin
+                     Tiny_Model.Build_Shaped
+                       (Image, Tiny_Model.F32, Kind, Tiny_Model.Reaching);
+                     declare
+                        Held   : aliased constant B.Byte_Array := Image.all;
+                        Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                          (Held'Access);
+                        Parsed : Containers.Container;
+                        Status : E.Error_Info;
+                        Second : Reference_Transformer.Model;
+                        Loaded, Made : Boolean;
+                        Tokens : Reference_Transformer.Token_Vector
+                          (Prompt'Range);
+                        Under  : Harness (Held'Access);
+                        Able   : Boolean;
+                        Live   : L.Session;
+                        Last   : Logit_Vector;
+                     begin
+                        Containers.Reader.Parse
+                          (Parsed, Source, Status => Status);
+                        Reference_Transformer.Load
+                          (Second, Parsed, Held, Loaded);
+                        Assert (Loaded, "the reference did not read the model");
+                        for Index in Prompt'Range loop
+                           Tokens (Index) := Integer (Prompt (Index));
+                        end loop;
+                        Reference_Transformer.Run
+                          (Second, Tokens, Expected, Made);
+                        Assert (Made, "the reference produced no logits");
+                        Reference_Transformer.Close (Second);
+                        Containers.Close (Parsed);
+
+                        Start (Under, Model_Runner.Backend.Backend_Device, Able);
+                        if Able then
+                           L.Open (Live, Under.Ready, Status => Status);
+                           Assert (E.Is_Ok (Status),
+                                   "the device session did not open");
+                           L.Evaluate_Batch
+                             (Live, Under.Ready, Prompt, Last,
+                              Status => Status);
+                           Assert (E.Is_Ok (Status),
+                                   "the device batch failed: "
+                                   & E.Error_Code'Image (Status.Code));
+                           for Index in Expected'Range loop
+                              Worst := Long_Float'Max
+                                (Worst,
+                                 abs (Long_Float
+                                        (Last (Model_Runner.Numerics
+                                                 .Element_Count (Index)))
+                                      - Expected (Index)));
+                           end loop;
+                           L.Close (Live);
+                        end if;
+                     end;
+                     B.Free (Image);
+                     Assert (Worst < 1.0E-3,
+                             Tiny_Model.Fixture_Architecture'Image (Kind)
+                             & " REACHING as a device batch disagrees with "
+                             & "the independent implementation by"
+                             & Long_Float'Image (Worst));
+                  end;
+               end if;
+            end loop;
+            Model_Runner.Backend.Device.Close;
+         end if;
+      end;
+
+      for Each of Crossed loop
+         declare
+            Image : B.Byte_Array_Access;
+            Worst : Long_Float;
+         begin
+            Tiny_Model.Build_Shaped
+              (Image, Tiny_Model.F32, Each.Kind, Each.Shape);
+            Worst := Worst_Of (Image);
+            B.Free (Image);
+            Assert (Worst < 1.0E-3,
+                    Tiny_Model.Fixture_Architecture'Image (Each.Kind) & " "
+                    & Tiny_Model.Fixture_Shape'Image (Each.Shape)
+                    & " disagrees with the independent implementation by"
+                    & Long_Float'Image (Worst));
+         end;
+      end loop;
+   end Window_Patterns_Are_Read_As_Stated;
+
+   --  A sigmoid-gated mixture chooses by the bias it carries and weights
+   --  without it; and grouped choosing, which this build does not compute,
+   --  is refused.
+   --
+   --  DeepSeek-V3's files gate by the logistic, renormalize the chosen few
+   --  and carry exp_probs_b, a bias added to the scores to choose the
+   --  experts and not to weight them. It was never read, so such a file
+   --  chose by the gate alone. Crossed here against the independent
+   --  implementation, a token at a time and as one batch, on a fixture
+   --  whose bias is larger than the logistic's scores differ by, so a
+   --  reader that ignored it -- or weighted by it -- answers otherwise.
+   procedure Sigmoid_Mixture_Chooses_By_Its_Bias
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      Image    : B.Byte_Array_Access;
+      Expected : Reference_Transformer.Real_Vector
+        (0 .. Tiny_Model.Vocabulary - 1);
+      Worst    : Long_Float := 0.0;
+
+      procedure Measure (Last : Logit_Vector) is
+      begin
+         for Index in Expected'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Last (Model_Runner.Numerics.Element_Count
+                                        (Index)))
+                    - Expected (Index)));
+         end loop;
+      end Measure;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Deepseek2, Sigmoid_Routing => True);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Status : E.Error_Info;
+         Second : Reference_Transformer.Model;
+         Loaded, Made : Boolean;
+         Tokens : Reference_Transformer.Token_Vector (Prompt'Range);
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not parse");
+         Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+         Assert (Loaded, "the reference did not read the model");
+         for Index in Prompt'Range loop
+            Tokens (Index) := Integer (Prompt (Index));
+         end loop;
+         Reference_Transformer.Run (Second, Tokens, Expected, Made);
+         Assert (Made, "the reference produced no logits");
+         Reference_Transformer.Close (Second);
+         Containers.Close (Parsed);
+      end;
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Last   : Logit_Vector;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         Assert (L.Config (Under.Ready).Sigmoid_Gate,
+                 "the gate the file names was not read");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "evaluation failed: " & E.Error_Code'Image (Status.Code));
+         end loop;
+         Measure (Last);
+         L.Close (Live);
+
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the second session did not open");
+         L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the batch failed: " & E.Error_Code'Image (Status.Code));
+         Measure (Last);
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+      Assert (Worst < 1.0E-3,
+              "a sigmoid-gated mixture with a selection bias disagrees with "
+              & "the independent implementation by" & Long_Float'Image (Worst));
+
+      --  Two groups, one used: a choice this build does not make.
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Deepseek2, Expert_Groups => 2);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Parsed : Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the grouped fixture did not parse");
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (Status.Code = E.Arch_Unsupported_Feature,
+                 "a mixture choosing within groups was taken with "
+                 & E.Error_Code'Image (Status.Code));
+         L.Close (Ready, Status);
+         Containers.Close (Parsed);
+      end;
+      B.Free (Image);
+   end Sigmoid_Mixture_Chooses_By_Its_Bias;
+
+   --  A DeepSeek file written as the current converter writes it answers
+   --  as the same model written whole.
+   --
+   --  The converter now states the latent's widths under key_length and
+   --  value_length, the heads' under key_length_mla and value_length_mla,
+   --  and splits the key-value up projection into attn_k_b -- each head's
+   --  key part transposed -- and attn_v_b. Read by the plain keys, every
+   --  recent DeepSeek-V2-Lite or GLM-4.7-Flash conversion was refused by
+   --  its shapes. The two fixtures here hold the same values, one whole
+   --  and one split, so the engine's two answers are the same answer or
+   --  the halves were put back together wrong.
+   procedure A_Split_Latent_Reads_As_The_Whole
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      --  The engine's last logits over Prompt, a token at a time and then
+      --  as one batch.
+      procedure Answer
+        (Split : Boolean; One, Batch : out Logit_Vector)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Deepseek2, Split_Latent => Split);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, One, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+            L.Close (Live);
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the second session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Batch, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the batch failed: " & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+         B.Free (Image);
+      end Answer;
+
+      Whole_One, Whole_Batch, Split_One, Split_Batch : Logit_Vector;
+      Worst : Long_Float := 0.0;
+   begin
+      Answer (False, Whole_One, Whole_Batch);
+      Answer (True, Split_One, Split_Batch);
+
+      for Index in Whole_One'Range loop
+         Worst := Long_Float'Max
+           (Worst,
+            Long_Float'Max
+              (abs (Long_Float (Whole_One (Index))
+                    - Long_Float (Split_One (Index))),
+               abs (Long_Float (Whole_Batch (Index))
+                    - Long_Float (Split_Batch (Index)))));
+      end loop;
+      Assert (Worst < 1.0E-5,
+              "a deepseek2 written split answers otherwise than written "
+              & "whole, by" & Long_Float'Image (Worst));
+   end A_Split_Latent_Reads_As_The_Whole;
 
    procedure Baichuan_At_Forty_Layers_Turns_To_Alibi
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -16251,9 +16949,35 @@ package body Tests.Inference_Cases is
          "a mixture under the qwen3moe keys is read as one");
       Register_Routine
         (T, Gemma3_At_Sixty_Two_Layers_Scales_By_The_Embedding'Access,
-         "a gemma3 of sixty-two layers scales its scores by the width the "
-         & "embedding implies, as the 27B does, and one of six by the "
-         & "head's, each agreeing with the independent implementation");
+         "a gemma3 of sixty-two layers and a gemma2 of forty-six scale their "
+         & "scores by the width the embedding implies, as each 27B does, and "
+         & "ones of six by the head's, each agreeing with the independent "
+         & "implementation");
+      Register_Routine
+        (T, A_Split_Latent_Reads_As_The_Whole'Access,
+         "a deepseek2 file written as the current converter writes it -- "
+         & "the head widths under the _mla keys and the key-value up "
+         & "projection split in two -- answers as the same model written "
+         & "whole, a token at a time and as a batch");
+      Register_Routine
+        (T, Sigmoid_Mixture_Chooses_By_Its_Bias'Access,
+         "a sigmoid-gated mixture chooses its experts by the selection bias "
+         & "it carries and weights them without it, as the independent "
+         & "implementation does, a token at a time and as a batch; and a "
+         & "file choosing within groups of experts is refused");
+      Register_Routine
+        (T, Window_Patterns_Are_Read_As_Stated'Access,
+         "which layers window, how wide, on what base and with what floor "
+         & "are read as the converters write them -- no rotation for gpt2, "
+         & "no alternation for a gemma3 without a window, olmo-3's list, "
+         & "gemma2's own window, each centring floor -- and every shape "
+         & "that moved agrees with the independent implementation");
+      Register_Routine
+        (T, Long_Rope_Follows_The_Session'Access,
+         "LongRoPE turns a session within the trained context by the short "
+         & "table and one past it by the long, and the whole rotation by the "
+         & "multiplier the file states, each as the independent "
+         & "implementation does");
       Register_Routine
         (T, Baichuan_At_Forty_Layers_Turns_To_Alibi'Access,
          "a Baichuan of forty layers is the 13B -- the depth alone tells it "

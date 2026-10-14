@@ -31,6 +31,7 @@ is
      --  chosen or leaves them as the model asks (Keep_Route_Shares); a
      --  sigmoid-gated mixture is routed on the host instead.
      and then not Settings.Sigmoid_Gate
+     and then Current.Select_Bias = null
      and then T.Is_Present (Current.Gate_Stack)
      and then T.Is_Present (Current.Up_Stack)
      and then T.Is_Present (Current.Down_Stack);
@@ -127,13 +128,18 @@ begin
    for Slot in Chosen'Range loop
       declare
          Best : Integer := -1;
+
+         --  What an expert is chosen by: its score, and the selection
+         --  bias beside it where the layer carries one.
+         function Pick (Which : Natural) return Real
+         is (Item.Routing (Element_Count (Which))
+             + (if Current.Select_Bias = null then 0.0
+                else Current.Select_Bias
+                       (Current.Select_Bias'First + Element_Count (Which))));
       begin
          for Which in Taken'Range loop
             if not Taken (Which)
-              and then
-                (Best < 0
-                 or else Item.Routing (Element_Count (Which))
-                         > Item.Routing (Element_Count (Best)))
+              and then (Best < 0 or else Pick (Which) > Pick (Best))
             then
                Best := Which;
             end if;

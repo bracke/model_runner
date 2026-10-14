@@ -614,6 +614,25 @@ package body Model_Runner.GGUF.Containers.Reader is
       Target.Length := Natural (Count);
 
       if Target.Element_Kind = Value_String then
+         --  Each element is a slice kept beside the pool -- sixteen bytes a
+         --  string, an empty one too -- and held to the same budget: eight
+         --  bytes of file a string bought sixteen of memory uncounted, and a
+         --  file of empty strings asked for more than the machine has.
+         declare
+            Slice_Bytes : constant := 16;
+            Held : constant Interfaces.Unsigned_64 :=
+              (Interfaces.Unsigned_64 (Item.Slices.Length) + Interfaces.Unsigned_64 (Target.Length))
+              * Slice_Bytes;
+         begin
+            if Held > Item.Bounds.Max_Metadata_Pool_Bytes then
+               Status := E.Make (E.Memory_Limit_Exceeded);
+               E.Add_Text (Status, "category", "metadata_storage", E.Param_Identifier);
+               E.Add_Integer (Status, "requested", Reportable (Held), E.Param_Bytes);
+               E.Add_Integer
+                 (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Metadata_Pool_Bytes), E.Param_Bytes);
+               return;
+            end if;
+         end;
          Target.First_Slice := Natural (Item.Slices.Length) + 1;
 
          for Index in 1 .. Target.Length loop
@@ -1002,29 +1021,51 @@ package body Model_Runner.GGUF.Containers.Reader is
          end;
       end loop;
 
-      --  Sort descriptor positions by absolute offset with an insertion sort.
-      --  Tensor counts are bounded by Max_Tensors and descriptors are already
-      --  nearly ordered in practice, so the quadratic worst case is bounded
-      --  and never reached for a well-formed file.
+      --  Sort descriptor positions by absolute offset: a heap sort, its
+      --  worst case n log n. An insertion sort's was a crafted file of
+      --  sixty-five thousand descriptors in falling order, two billion
+      --  comparisons a parse. Ties keep their order of the descriptors, so
+      --  the overlap below names the same pair.
       for Index in 1 .. Count loop
          Order (Index) := Index;
       end loop;
 
-      for Index in 2 .. Count loop
-         declare
-            Current : constant Natural := Order (Index);
-            Probe   : Natural := Index - 1;
+      declare
+         function Before (A, B : Natural) return Boolean is
+           (Item.Tensors (A).Absolute < Item.Tensors (B).Absolute
+            or else (Item.Tensors (A).Absolute = Item.Tensors (B).Absolute and then A < B));
+
+         procedure Sift (Root, Last : Natural) is
+            Parent : Natural := Root;
+            Child  : Natural;
+            Held   : Natural;
          begin
-            while Probe >= 1
-              and then Item.Tensors (Order (Probe)).Absolute
-                       > Item.Tensors (Current).Absolute
             loop
-               Order (Probe + 1) := Order (Probe);
-               Probe := Probe - 1;
+               Child := 2 * Parent;
+               exit when Child > Last;
+               if Child < Last and then Before (Order (Child), Order (Child + 1)) then
+                  Child := Child + 1;
+               end if;
+               exit when not Before (Order (Parent), Order (Child));
+               Held := Order (Parent);
+               Order (Parent) := Order (Child);
+               Order (Child) := Held;
+               Parent := Child;
             end loop;
-            Order (Probe + 1) := Current;
-         end;
-      end loop;
+         end Sift;
+
+         Held : Natural;
+      begin
+         for Root in reverse 1 .. Count / 2 loop
+            Sift (Root, Count);
+         end loop;
+         for Last in reverse 2 .. Count loop
+            Held := Order (1);
+            Order (1) := Order (Last);
+            Order (Last) := Held;
+            Sift (1, Last - 1);
+         end loop;
+      end;
 
       for Index in 2 .. Count loop
          declare

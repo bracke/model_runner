@@ -212,8 +212,10 @@ begin
 
      --  The route kernel softmaxes, and renormalizes or not as the model
      --  asks; a sigmoid-gated mixture is routed on the host, as one
-     --  position's is.
+     --  position's is, and so is one that chooses by a bias it does not
+     --  weight by.
      and then not Settings.Sigmoid_Gate
+     and then Current.Select_Bias = null
    then
       declare
          Choice : Model_Runner.Backend.Device.Choice_Array
@@ -257,7 +259,14 @@ begin
    --  A token or a short batch whose front half the device ran chose
    --  there too, where it was handed the router: taken rather than
    --  routed again.
+   --
+   --  Not for a sigmoid-gated mixture, nor one with a selection bias: the
+   --  front half routes by the softmax and its own choosing, and taken, a
+   --  sigmoid-gated model under split feed was weighted by shares it does
+   --  not compute.
    if Count <= Model_Runner.Backend.Device.Front_Route_Most
+     and then not Settings.Sigmoid_Gate
+     and then Current.Select_Bias = null
      and then Item.Owner.all.Split_Feed
      and then Model_Runner.Backend."="
                 (Item.Owner.Able.Kind,
@@ -324,14 +333,19 @@ begin
          for Slot in 0 .. Used - 1 loop
             declare
                Best : Integer := -1;
+
+               --  What an expert is chosen by: its score, and the
+               --  selection bias where the layer carries one.
+               function Pick (Which : Natural) return Real
+               is (Scores (Scores'First + Element_Count (Which))
+                   + (if Current.Select_Bias = null then 0.0
+                      else Current.Select_Bias
+                             (Current.Select_Bias'First
+                              + Element_Count (Which))));
             begin
                for Which in Taken'Range loop
                   if not Taken (Which)
-                    and then
-                      (Best < 0
-                       or else Scores (Scores'First + Element_Count (Which))
-                               > Scores
-                                   (Scores'First + Element_Count (Best)))
+                    and then (Best < 0 or else Pick (Which) > Pick (Best))
                   then
                      Best := Which;
                   end if;

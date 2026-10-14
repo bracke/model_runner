@@ -1597,10 +1597,15 @@ package body Model_Runner.Generation is
                                    .. Aside.all'First + Draft_Words - 1),
                         Cancel => Cancel, Status => Local);
                      --  A draft with less room than the target stops
-                     --  reading, and proposes from what it holds, rather
-                     --  than stopping the run.
-                     exit when E.Is_Error (Local)
-                       and then Local.Code = E.Generation_Context_Exhausted;
+                     --  reading rather than stopping the run -- and is fed
+                     --  nothing more: the prompt fed it after this would
+                     --  sit past a gap, a context it never proposes from.
+                     if E.Is_Error (Local)
+                       and then Local.Code = E.Generation_Context_Exhausted
+                     then
+                        Draft_Full := True;
+                        exit;
+                     end if;
                      if E.Is_Error (Local) then
                         Conclude (Runtime_Error, Local);
                         Index := Prompt_Count + 1;

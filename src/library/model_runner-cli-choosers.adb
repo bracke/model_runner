@@ -13,6 +13,7 @@ with Hostkit.Terminal_Control;
 
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.UTF8;
 with Model_Runner.Platform.Signals;
 
 package body Model_Runner.CLI.Choosers is
@@ -460,6 +461,9 @@ package body Model_Runner.CLI.Choosers is
 
       --  Drawing on the alternate screen, to be left however it ends.
       Alternate : Boolean := False;
+
+      --  Pasted text marked, to be unmarked however it ends.
+      Bracketed : Boolean := False;
    end record;
 
    overriding procedure Finalize (Guard : in out Raw_Guard);
@@ -473,8 +477,14 @@ package body Model_Runner.CLI.Choosers is
             Ignored := Term.Control (Output, Term.Leave_Alternate_Screen);
             Guard.Alternate := False;
          end if;
+         if Guard.Bracketed then
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l");
+            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+            Guard.Bracketed := False;
+         end if;
          Ignored := Term.Control (Output, Term.Show_Cursor);
          Ignored := Term.Restore_Mode (Input, Guard.Saved);
+         Model_Runner.Platform.Signals.Release_Terminal_Mode;
          Guard.Held := False;
       end if;
    end Finalize;
@@ -579,6 +589,7 @@ package body Model_Runner.CLI.Choosers is
          return 0;
       end if;
       Guard.Held := True;
+      Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return 0;
       end if;
@@ -738,6 +749,7 @@ package body Model_Runner.CLI.Choosers is
             return "";
          end if;
          Guard.Held := True;
+         Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
          if not Term.Set_Raw (Input) then
             Gave_Up := True;
             return "";
@@ -899,6 +911,7 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       Guard.Held := True;
+      Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return "";
       end if;
@@ -961,6 +974,11 @@ package body Model_Runner.CLI.Choosers is
    --  The lines typed at the prompt, oldest first: this session's, after
    --  those kept in the project from the sessions before.
    History : Model_Runner.Framework.Name_Lists.Vector;
+
+   --  Whether the line read last was added to History: a line the same as
+   --  the one before it is not, and forgetting it then would take away an
+   --  older one -- a line from another session, perhaps.
+   Last_Read_Kept : Boolean := False;
    History_Read : Boolean := False;
 
    --  Where the project here keeps them; "" outside a project.
@@ -1009,10 +1027,11 @@ package body Model_Runner.CLI.Choosers is
    procedure Forget_Last_Line is
       File : Ada.Text_IO.File_Type;
    begin
-      if History.Is_Empty then
+      if History.Is_Empty or else not Last_Read_Kept then
          return;
       end if;
       History.Delete_Last;
+      Last_Read_Kept := False;
       if History_File = "" then
          return;
       end if;
@@ -1086,17 +1105,9 @@ package body Model_Runner.CLI.Choosers is
       function Image (N : Natural) return String
       is (Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Both));
 
-      --  Characters, not bytes: a UTF-8 continuation byte is no column.
-      function Width (Item : String) return Natural is
-         Count : Natural := 0;
-      begin
-         for C of Item loop
-            if Character'Pos (C) not in 16#80# .. 16#BF# then
-               Count := Count + 1;
-            end if;
-         end loop;
-         return Count;
-      end Width;
+      --  Columns, not bytes nor characters: a wide character takes two, a
+      --  combining mark none, a colour sequence in the prompt none.
+      function Width (Item : String) return Natural renames Model_Runner.UTF8.Columns;
 
       function Columns return Positive is
          Size : Term.Window_Size;
@@ -1107,6 +1118,13 @@ package body Model_Runner.CLI.Choosers is
          return 80;
       end Columns;
 
+      --  A line cut to the window, at a code point and by columns.
+      function Cut_To_Window (Said : String) return String is
+        (if Width (Said) > Columns - 1
+         then Said (Said'First .. Said'First - 1
+                    + Model_Runner.UTF8.Fitting (Said, Integer'Max (Columns - 5, 0))) & "..."
+         else Said);
+
       --  A command's line of help, cut to the window: "" where it has none.
       function Described (Command : String) return String is
          Key  : constant String := "cli.interactive.help." & Command (Command'First + 1 .. Command'Last);
@@ -1115,7 +1133,7 @@ package body Model_Runner.CLI.Choosers is
          if Said = "" or else Ada.Strings.Fixed.Index (Said, "cli.interactive.help.") > 0 then
             return "";
          end if;
-         return (if Said'Length > Columns - 1 then Said (Said'First .. Said'First + Columns - 5) & "..." else Said);
+         return Cut_To_Window (Said);
       end Described;
 
       --  What the word at the end would be completed to, shown dimmed after
@@ -1254,10 +1272,10 @@ package body Model_Runner.CLI.Choosers is
       procedure Redraw is
          W        : constant Positive := Columns;
          Line     : constant String := To_String (Text);
-         Before   : constant Natural := Width (Prompt);
-         Total    : constant Natural := Before + Width (Line);
-         Shown_Total : constant Natural := Total + Length (Ghost);
-         At_Cursor : constant Natural := Before + Width (Line (Line'First .. Line'First + Cursor - 1));
+         --  Measured from the prompt on, as one text: a tab in the line
+         --  goes to a stop counted from the row's start.
+         Shown_Total : constant Natural := Width (Prompt & Line & To_String (Ghost));
+         At_Cursor : constant Natural := Width (Prompt & Line (Line'First .. Line'First + Cursor - 1));
          Wrapped  : Boolean := False;
          End_Row  : Natural;
       begin
@@ -1455,9 +1473,7 @@ package body Model_Runner.CLI.Choosers is
                            if Said = "" then
                               Append (Words_Beside, (if Words_Beside = Null_Unbounded_String then "" else "  ") & One);
                            else
-                              Put ((if Said'Length > Columns - 1
-                                    then Said (Said'First .. Said'First + Columns - 5) & "..."
-                                    else Said) & ASCII.CR & ASCII.LF);
+                              Put (Cut_To_Window (Said) & ASCII.CR & ASCII.LF);
                            end if;
                         end;
                      end loop;
@@ -1499,15 +1515,22 @@ package body Model_Runner.CLI.Choosers is
       end Complete_Word;
 
       Key : Character;
+
+      --  Between the terminal's marks around pasted text (bracketed paste,
+      --  asked for here and put back by the guard).
+      Pasting : Boolean := False;
    begin
       Outcome := Unavailable;
       if not Is_Available (Screen) or else not Term.Save_Mode (Input, Guard.Saved) then
          return "";
       end if;
       Guard.Held := True;
+      Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return "";
       end if;
+      Put (ASCII.ESC & "[?2004h");
+      Guard.Bracketed := True;
       Redraw;
       loop
          if not Next (Into => Key) then
@@ -1597,7 +1620,11 @@ package body Model_Runner.CLI.Choosers is
                      begin
                         while Next (30, Part) loop
                            if Part in '0' .. '9' then
-                              Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                              --  Held, not grown past: a pasted run of digits
+                              --  is no key, and overflowed out of the editor.
+                              if Number <= 9_999 then
+                                 Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                              end if;
                            elsif Part /= ';' then
                               Final := Part;
                               exit;
@@ -1658,6 +1685,10 @@ package body Model_Runner.CLI.Choosers is
                                  Cursor := Length (Text);
                               elsif Number = 3 then
                                  Take (Cursor, On (Cursor));
+                              elsif Number = 200 then
+                                 Pasting := True;
+                              elsif Number = 201 then
+                                 Pasting := False;
                               end if;
                            when others =>
                               null;
@@ -1680,7 +1711,12 @@ package body Model_Runner.CLI.Choosers is
                   end if;
                end;
             when ASCII.HT =>
-               if Complete /= null then
+               --  A tab in pasted text is the text's, not a key asking for
+               --  completion -- a pasted block of code completed itself.
+               if Pasting then
+                  Insert (Text, Cursor + 1, [1 => Key]);
+                  Cursor := Cursor + 1;
+               elsif Complete /= null then
                   Complete_Word;
                end if;
             when others =>
@@ -1707,13 +1743,22 @@ package body Model_Runner.CLI.Choosers is
       Put (ASCII.CR & ASCII.LF);
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       Finalize (Guard);
+      Last_Read_Kept := False;
       if Outcome = Entered and then Length (Text) > 0
         and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
       then
          History.Append (To_String (Text));
          Keep_In_History (To_String (Text));
+         Last_Read_Kept := True;
       end if;
       return To_String (Text);
+   exception
+      --  Whatever a key did to the editor, the session is not ended for it:
+      --  the line is dropped, as Escape drops it, the guard puts the
+      --  terminal back, and the prompt comes again.
+      when others =>
+         Outcome := Escaped;
+         return "";
    end Edited_Line;
 
    ------------------

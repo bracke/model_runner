@@ -716,7 +716,9 @@ package Model_Runner.Presentation is
 
    --  A sink that writes generated text to standard output.
    --
-   --  Text is written exactly as received. Closure of the destination -- a
+   --  Text is written exactly as received, but where standard output is a
+   --  terminal: there its control characters are shown, not obeyed (see
+   --  Model_Runner.Text.Show_Controls). Closure of the destination -- a
    --  broken pipe -- is reported through the Closed flag rather than raised,
    --  so it becomes the completion reason Output_Closed.
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink
@@ -779,7 +781,13 @@ private
    end record;
 
    type Standard_Output_Sink is limited new Model_Runner.Output.Sink with record
-      Closed : Boolean := False;
+      Closed   : Boolean := False;
+      --  Whether standard output was asked about yet, and is a terminal:
+      --  there what the model writes is shown through Show_Controls.
+      Asked    : Boolean := False;
+      Terminal : Boolean := False;
+      --  A C2 held back from the last piece, a C1 control perhaps cut.
+      Lead     : Boolean := False;
    end record;
 
    type Progress_Reporter (Owner : access Console)

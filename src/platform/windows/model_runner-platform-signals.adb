@@ -211,6 +211,14 @@ package body Model_Runner.Platform.Signals is
       null;
    end Set_Waiting_For_Input;
 
+   procedure Hold_Terminal_Mode (Saved : Hostkit.Terminal_Control.Mode) is
+      pragma Unreferenced (Saved);
+   begin
+      null;
+   end Hold_Terminal_Mode;
+
+   procedure Release_Terminal_Mode is null;
+
    function Interrupt_Noted return Boolean is (False);
 
    function Ending_Asked return Boolean is (False);

@@ -150,6 +150,11 @@ package body Model_Runner.GGUF.Shards is
          return;
       end if;
 
+      Status := Containers.Split_Problem (Held);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
       if Containers.Shard_Count (Held) <= 1 then
          return;
       end if;

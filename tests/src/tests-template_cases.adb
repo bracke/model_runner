@@ -1162,6 +1162,23 @@ package body Tests.Template_Cases is
       --  One inside another counts as two, the outer on from where it was.
       Same ("{% for i in range(2) %}{% for j in range(3) %}{{ i }}{{ j }} {% endfor %}{% endfor %}",
             "00 01 02 10 11 12 ", "a counting loop inside another ran the outer one on from the inner");
+      --  And each name the loops bind is given back as each ends: an
+      --  inner loop by the outer's name left the outer's at the inner's
+      --  first, and an inner name stayed bound after its loop.
+      Same ("{% for i in range(2) %}{% for i in range(3) %}{% endfor %}{{ i }}{% endfor %}",
+            "01", "an inner loop by the same name left the outer's name at its own first");
+      Same ("{% for i in range(2) %}{% for j in range(3) %}{% endfor %}{{ j is defined }}{% endfor %}",
+            "FalseFalse", "a loop's name stayed bound after it ended");
+      --  A turn's calls walked from a message bound as a mapping -- a loop
+      --  over a filtered list -- as from the conversation: refused once,
+      --  and written as they are now.
+      Same ("{% for message in messages if message.role == 'assistant' %}"
+            & "{% for tool_call in message.tool_calls %}{{ loop.index }}"
+            & "{{ tool_call.function.name }}{{ tool_call.function.arguments.a }}"
+            & "{{ tool_call.name }}"
+            & "{{ loop.last }}{% endfor %}{{ tool_call is defined }}{% endfor %}",
+            "1calc2calcTrueFalse",
+            "a filtered turn's calls were not walked as the turn's own");
       --  A marker written as escapes in a part's text, or in a call's
       --  arguments, is seen by the content filter as the marker it reads
       --  as: \u003c|x|> passed the filter and was <|x|> once decoded.

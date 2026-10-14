@@ -1067,7 +1067,7 @@ package body Model_Runner.Tokenizer.Cutting is
 
       --  The run the last line-end search was made over, and what it found:
       --  nought for none.
-      Line_Run_Stop, Line_Run_Last : Natural := 0;
+      Line_Run_Stop, Line_Run_Last, Line_Run_From : Natural := 0;
 
       --  Where a run of whitespace beginning at From ends under Kind, or
       --  0. "\s+(?!\S)" takes the whole run when nothing follows it and
@@ -1089,7 +1089,11 @@ package body Model_Runner.Tokenizer.Cutting is
          if Kind in Later | Cascade then
             if Line_Run_Stop = Stop and then Line_Run_Last >= From then
                Last_Line_End := Line_Run_Last;
-            elsif Line_Run_Stop = Stop and then Line_Run_Last = 0 then
+            elsif Line_Run_Stop = Stop and then Line_Run_Last = 0
+              --  None from where it was looked for, so none from here only
+              --  where here is no earlier.
+              and then From >= Line_Run_From
+            then
                Last_Line_End := 0;
             else
                for Index in reverse From .. Stop loop
@@ -1100,6 +1104,7 @@ package body Model_Runner.Tokenizer.Cutting is
                end loop;
                Line_Run_Stop := Stop;
                Line_Run_Last := Last_Line_End;
+               Line_Run_From := From;
             end if;
             if Last_Line_End > 0 then
                return Last_Line_End;

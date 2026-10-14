@@ -86,9 +86,10 @@ package body Model_Runner.Byte_Sources.Files is
          Stream_IO.Open
            (Item.File, Stream_IO.In_File, Path, Form => "shared=yes");
       exception
-         when Ada.IO_Exceptions.Name_Error
-            | Ada.IO_Exceptions.Use_Error
-            | Ada.IO_Exceptions.Status_Error =>
+         --  Whatever the runtime raises opening a file -- a device error,
+         --  a name the library will not take -- is a file that would not
+         --  open, said as one, and not an exception out of a load.
+         when others =>
             Status := E.Make (E.IO_Open_Failed);
             E.Add_Text (Status, "path", Path, E.Param_Path);
             Item.Length := 0;

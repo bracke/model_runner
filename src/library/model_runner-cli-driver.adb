@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Hostkit.Parent_Watch;
+with Hostkit.Signals;
 with Model_Runner.CLI.Execute;
 with Model_Runner.Config;
 with Model_Runner.Errors;
@@ -370,6 +371,18 @@ package body Model_Runner.CLI.Driver is
             null;
          end;
       end if;
+      --  A reader gone -- `| head` -- is told by EPIPE, which the output
+      --  sink turns into an ordinary end (Output_Closed), and not by a
+      --  signal that ends the process mid-token with caches unsaved.
+      --  Children get the default back as they start (Hostkit.Native).
+      declare
+         Ignored : constant Boolean :=
+           Hostkit.Signals.Set_Disposition
+             (Hostkit.Signals.Signal_Pipe, Hostkit.Signals.Disposition_Ignore);
+         pragma Unreferenced (Ignored);
+      begin
+         null;
+      end;
       Run (Source, Status);
    end Run_Process;
 

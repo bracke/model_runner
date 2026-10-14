@@ -27,6 +27,10 @@ package Tiny_Model is
    Head_Size    : constant := 4;
    Context      : constant := 16;
 
+   --  The floor every centring architecture's normalization states, off
+   --  the 1e-5 a reader takes where a file states none.
+   Centring_Epsilon : constant := 1.0E-4;
+
    --  Write the fixture where the suite reads it, at fixtures/tiny-model.gguf
    --  relative to the tests crate.
    --
@@ -382,6 +386,21 @@ package Tiny_Model is
    --    nought: the deep fixture's 256 is a single super-block a row, and a
    --    test of the device's integer walks over a mixture asks for 512 to
    --    walk rows as wide as the real models' narrowest.
+   --  @param Long_Rope Whether the file carries LongRoPE's two factor
+   --    tables, a trained context of half the room, and a multiplier on the
+   --    whole rotation, as Phi-3.5's converter writes them.
+   --  @param Sigmoid_Routing Whether a mixture is gated by the logistic,
+   --    renormalizes its chosen few, and chooses them by a bias it does not
+   --    weight by, as DeepSeek-V3's files state.
+   --  @param Expert_Groups How many groups the experts are chosen within,
+   --    one of which is used; nought states none.
+   --  @param Caps Whether a Gemma2 fixture states its two bounds; one that
+   --    does not is an early gemma2 file, bounded by the architecture's.
+   --  @param Split_Latent Whether a DeepSeek fixture is written as the
+   --    current converter writes one: the key-value up projection split
+   --    into attn_k_b and attn_v_b, and the head widths under the _mla
+   --    keys beside the latent's under the plain ones. The same values as
+   --    the fixture written whole.
    --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
    --    twenty-eight wide, as the real models' are, rather than four: the
    --    one width the device keeps a state in registers for.
@@ -408,6 +427,11 @@ package Tiny_Model is
       Ranking        : Boolean := False;
       Padding        : Natural := 0;
       Wide_State     : Boolean := False;
-      Expert_Width   : Natural := 0);
+      Expert_Width   : Natural := 0;
+      Long_Rope      : Boolean := False;
+      Sigmoid_Routing : Boolean := False;
+      Expert_Groups   : Natural := 0;
+      Split_Latent    : Boolean := False;
+      Caps            : Boolean := True);
 
 end Tiny_Model;

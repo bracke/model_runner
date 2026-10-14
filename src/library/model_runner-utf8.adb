@@ -287,4 +287,101 @@ package body Model_Runner.UTF8 is
       end if;
    end Encode;
 
+   ------------------------
+   -- Code_Point_Columns --
+   ------------------------
+
+   function Code_Point_Columns (Code_Point : Natural) return Natural is
+   begin
+      case Code_Point is
+         when 16#0300# .. 16#036F# | 16#0483# .. 16#0489# | 16#0591# .. 16#05BD#
+            | 16#0610# .. 16#061A# | 16#064B# .. 16#065F# | 16#0E31# | 16#0E34# .. 16#0E3A#
+            | 16#1AB0# .. 16#1AFF# | 16#1DC0# .. 16#1DFF# | 16#200B# .. 16#200F#
+            | 16#20D0# .. 16#20FF# | 16#FE00# .. 16#FE0F# | 16#FE20# .. 16#FE2F#
+            | 16#E0100# .. 16#E01EF# =>
+            return 0;
+         when 16#1100# .. 16#115F# | 16#231A# .. 16#231B# | 16#2329# .. 16#232A#
+            | 16#2E80# .. 16#303E# | 16#3041# .. 16#33FF# | 16#3400# .. 16#4DBF#
+            | 16#4E00# .. 16#9FFF# | 16#A000# .. 16#A4CF# | 16#A960# .. 16#A97F#
+            | 16#AC00# .. 16#D7A3# | 16#F900# .. 16#FAFF# | 16#FE10# .. 16#FE19#
+            | 16#FE30# .. 16#FE6F# | 16#FF00# .. 16#FF60# | 16#FFE0# .. 16#FFE6#
+            | 16#1F300# .. 16#1F64F# | 16#1F900# .. 16#1F9FF# | 16#20000# .. 16#3FFFD# =>
+            return 2;
+         when others =>
+            return 1;
+      end case;
+   end Code_Point_Columns;
+
+   --  One step of Columns and Fitting: the bytes the thing at From takes
+   --  and the columns it is drawn in.
+   procedure Step (Item : String; From : Positive; Bytes, Width : out Natural) is
+      Point : Natural;
+   begin
+      if Item (From) = ASCII.ESC
+        and then From < Item'Last
+        and then Item (From + 1) = '['
+      then
+         Bytes := 2;
+         while From + Bytes <= Item'Last
+           and then Character'Pos (Item (From + Bytes)) in 16#20# .. 16#3F#
+         loop
+            Bytes := Bytes + 1;
+         end loop;
+         if From + Bytes <= Item'Last then
+            Bytes := Bytes + 1;
+         end if;
+         Width := 0;
+      elsif Character'Pos (Item (From)) < 16#20# or else Character'Pos (Item (From)) = 16#7F# then
+         Bytes := 1;
+         Width := 0;
+      else
+         Decode_First (Item (From .. Item'Last), Point, Bytes);
+         if Bytes = 0 then
+            Bytes := 1;
+            Width := 1;
+         else
+            Width := Code_Point_Columns (Point);
+         end if;
+      end if;
+   end Step;
+
+   -------------
+   -- Columns --
+   -------------
+
+   function Columns (Item : String) return Natural is
+      Index : Natural := Item'First;
+      Total : Natural := 0;
+      Bytes, Width : Natural;
+   begin
+      while Index <= Item'Last loop
+         Step (Item, Index, Bytes, Width);
+         --  A tab to the next stop of eight, as the terminal moves it.
+         Total := (if Item (Index) = ASCII.HT then (Total / 8 + 1) * 8 else Total + Width);
+         Index := Index + Bytes;
+      end loop;
+      return Total;
+   end Columns;
+
+   -------------
+   -- Fitting --
+   -------------
+
+   function Fitting (Item : String; Room : Natural) return Natural is
+      Index : Natural := Item'First;
+      Total : Natural := 0;
+      Bytes, Width : Natural;
+   begin
+      while Index <= Item'Last loop
+         Step (Item, Index, Bytes, Width);
+         if Item (Index) = ASCII.HT then
+            Width := (Total / 8 + 1) * 8 - Total;
+         end if;
+         exit when Total + Width > Room;
+         Total := Total + Width;
+         Index := Index + Bytes;
+      end loop;
+      return Index - Item'First;
+   end Fitting;
+
 end Model_Runner.UTF8;

@@ -78,6 +78,16 @@ package body Model_Runner.Llama is
    procedure Free_Cells is
      new Ada.Unchecked_Deallocation (Cell_Counts, Cell_Counts_Access);
 
+   --  Whether a layer is one of the windowed ones of an architecture that
+   --  windows some layers and not others. Asked whether or not the window
+   --  survived being folded away against the context: the base a windowed
+   --  layer turns on and its stretch are the layer's, not the window's.
+   function Windowed_Layer
+     (Settings : Configuration; Layer : Natural) return Boolean
+   is (Settings.Alternating
+       and then Layer <= Layer_Flags'Last
+       and then Settings.Window_Layers (Layer));
+
    --  Whether a layer slides a window.
    --
    --  The same rule Earliest applies, written once so that the two cannot
@@ -85,10 +95,8 @@ package body Model_Runner.Llama is
    --  architectures leave attending to everything.
    function Slides (Settings : Configuration; Layer : Natural) return Boolean
    is (Settings.Window > 0
-       and then not (Settings.Alternating
-                     and then Settings.Window_Every > 0
-                     and then Layer mod Settings.Window_Every
-                              = Settings.Window_Every - 1));
+       and then (not Settings.Alternating
+                 or else Windowed_Layer (Settings, Layer)));
 
    --  Where a layer's keys, values and row scales begin.
    --
@@ -151,8 +159,12 @@ package body Model_Runner.Llama is
          (1.0
           / Model_Runner.Numerics.Sqrt
               (Model_Runner.Numerics.Wide_Real
-                 (if Settings.Kind = Gemma3
-                     and then Settings.Layers = 62
+                 --  The 27B of each Gemma divides by the embedding over
+                 --  the heads rather than by the head width -- 144 rather
+                 --  than 128 -- as the reference does for the 27B by its
+                 --  layer count: 46 for Gemma2, 62 for Gemma3.
+                 (if ((Settings.Kind = Gemma3 and then Settings.Layers = 62)
+                      or else (Settings.Kind = Gemma2 and then Settings.Layers = 46))
                      and then Settings.Heads > 0
                   then Settings.Embedding / Settings.Heads
                   else Settings.Head_Size)))
@@ -790,8 +802,12 @@ package body Model_Runner.Llama is
 
       --  And where it sits. A backend states the alignment it needs from
       --  tensor storage; a file is free to place a tensor anywhere its own
-      --  alignment allows, and the two are not the same number.
-      if Containers.Tensor_Offset (Source, Index)
+      --  alignment allows, and the two are not the same number. Where it
+      --  sits in the storage the view is made over -- the arena, which
+      --  begins where the file's data does -- not in the file: a file of
+      --  alignment two whose data began on an odd pair placed a tensor that
+      --  passed in the file and was not aligned where it was read.
+      if (Containers.Tensor_Offset (Source, Index) - Interfaces.Unsigned_64 (Item.Arena_Base))
          mod Interfaces.Unsigned_64 (Item.Able.Alignment) /= 0
       then
          Status := E.Make (E.Backend_Capability_Missing);
@@ -1183,6 +1199,22 @@ package body Model_Runner.Llama is
          end if;
       end if;
 
+      --  The bias a mixture chooses by and does not weight by, where the
+      --  file carries one -- as the reference runtime reads it, for any
+      --  gate. Left unread, a DeepSeek-V3-style file chose its experts by
+      --  the gate alone and routed to the wrong ones.
+      if Containers.Find_Tensor
+           (Source, Layer_Key (Index, "exp_probs_b.bias")) /= 0
+      then
+         Resolve_Norm
+           (Item, Source, Layer_Key (Index, "exp_probs_b.bias"),
+            Element_Count (Item.Settings.Experts), Current.Select_Bias,
+            Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
       Current.Gate_Stack := Gates;
       Current.Up_Stack := Ups;
@@ -1295,9 +1327,7 @@ package body Model_Runner.Llama is
    --  supposed to follow.
    function Turn_Base
      (Settings : Configuration; Layer : Natural) return N.Wide_Real
-   is (if Settings.Local_Base > 0.0
-         and then Settings.Window_Every > 0
-         and then Layer mod Settings.Window_Every /= Settings.Window_Every - 1
+   is (if Settings.Local_Base > 0.0 and then Windowed_Layer (Settings, Layer)
        then Settings.Local_Base
        else Settings.Rope_Base);
 
@@ -1313,12 +1343,14 @@ package body Model_Runner.Llama is
    --  positions: a six-token prompt answered, a four-hundred-token one
    --  came apart into a word repeated. GPT-OSS, the other family here that
    --  windows on a base of its own, stretches its windowed layers as the
-   --  rest, which the reference does too.
+   --  rest, which the reference does too. OLMo-3 is Gemma3's way round:
+   --  the reference turns its windowed layers with a scale of one and no
+   --  magnitude, so a file stating YaRN stretched three layers in four
+   --  that were trained unstretched.
    function Turn_Scaling
      (Settings : Configuration; Layer : Natural) return K.Rotary_Scaling
-   is (if Settings.Kind = Gemma3
-         and then Settings.Window_Every > 0
-         and then Layer mod Settings.Window_Every /= Settings.Window_Every - 1
+   is (if Settings.Kind in Gemma3 | Olmo2
+         and then Windowed_Layer (Settings, Layer)
        then K.Rotary_Scaling'(others => <>)
        else Settings.Scaling);
 
@@ -7138,6 +7170,14 @@ package body Model_Runner.Llama is
             T.Free (Which.Ssm_B_Norm);
             T.Free (Which.Ssm_C_Norm);
             T.Free (Which.Shared_Router);
+            T.Free (Which.Select_Bias);
+            --  GPT-OSS's router and expert biases, which went with nothing:
+            --  four vectors a layer held past the model's closing.
+            T.Free (Which.Router_Bias);
+            T.Free (Which.Expert_Gate_Bias);
+            T.Free (Which.Expert_Up_Bias);
+            T.Free (Which.Expert_Down_Bias);
+            B.Free (Which.KV_B_Built);
             T.Free (Which.Next_ENorm);
             T.Free (Which.Next_HNorm);
             T.Free (Which.Next_Head_Norm);
@@ -7166,6 +7206,8 @@ package body Model_Runner.Llama is
       T.Free (Item.Output_Norm_Bias);
       T.Free (Item.Output_Bias);
       T.Free (Item.Rope_Factors);
+      T.Free (Item.Rope_Long);
+      T.Free (Item.Rope_Short);
 
       --  The repacked arena goes with it, and after it: by then the device
       --  has been told to give everything back, so there is no address left
@@ -8634,10 +8676,7 @@ package body Model_Runner.Llama is
       --  does. Written as one rule with the period the architecture states,
       --  because two rules that mean the same thing are two rules to get
       --  wrong.
-      if Settings.Alternating
-        and then Settings.Window_Every > 0
-        and then Layer mod Settings.Window_Every = Settings.Window_Every - 1
-      then
+      if Settings.Alternating and then not Windowed_Layer (Settings, Layer) then
          return 0;
       end if;
 

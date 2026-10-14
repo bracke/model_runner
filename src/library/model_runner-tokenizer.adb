@@ -74,6 +74,7 @@ package body Model_Runner.Tokenizer is
       Item.Pool_Used := 0;
       Item.Entries.Clear;
       Item.Lookup.Clear;
+      Item.Markers.Clear;
       Item.Loaded := False;
       Item.Model := Kind_Unsupported;
       Item.Beginning := No_Token;
@@ -781,6 +782,9 @@ package body Model_Runner.Tokenizer is
                      if not Inserted then
                         Token_Maps.Replace_Element (Item.Lookup, Where, Token_Id (Index - 1));
                      end if;
+                     if Entry_Value.Class in Class_Control | Class_User_Defined then
+                        Item.Markers.Include (Text, Token_Id (Index - 1));
+                     end if;
                   end;
                end if;
             end;
@@ -1474,6 +1478,14 @@ package body Model_Runner.Tokenizer is
    --  Only positions whose byte some piece begins with are tried, so
    --  ordinary text costs one array read a position, and the longest match
    --  wins, so a marker that is a prefix of another cannot take its place.
+   --  The control or hand-written piece spelled so, or No_Token.
+   function Find_Marker (Item : Vocabulary; Text : String) return Token_Id is
+      Position : constant Token_Maps.Cursor := Item.Markers.Find (Text);
+   begin
+      return (if Token_Maps.Has_Element (Position)
+              then Token_Maps.Element (Position) else No_Token);
+   end Find_Marker;
+
    procedure Marker_At
      (Item   : Vocabulary;
       Text   : String;
@@ -1499,7 +1511,7 @@ package body Model_Runner.Tokenizer is
       loop
          declare
             Candidate : constant Token_Id :=
-              Find (Item, Text (From .. From + Reach - 1));
+              Find_Marker (Item, Text (From .. From + Reach - 1));
          begin
             if Candidate /= No_Token
               and then Class_Of (Item, Candidate) in
@@ -1682,7 +1694,7 @@ package body Model_Runner.Tokenizer is
          for Span in reverse 1 .. Reach loop
             declare
                Piece : constant Token_Id :=
-                 Find (Item, Text (From .. From + Span - 1));
+                 Find_Marker (Item, Text (From .. From + Span - 1));
             begin
                if Piece /= No_Token
                  and then Class_Of (Item, Piece) = Class_User_Defined
@@ -2482,8 +2494,6 @@ package body Model_Runner.Tokenizer is
                      begin
                         if Token /= No_Token then
                            Put (Token);
-                        elsif Item.Unknown /= No_Token then
-                           Put (Item.Unknown);
                         elsif Each_Carried then
                            declare
                               At_Byte : Natural := Symbol'First;
@@ -2495,6 +2505,11 @@ package body Model_Runner.Tokenizer is
                                  At_Byte := At_Byte + Width;
                               end loop;
                            end;
+                        --  The pieces before the unknown token, as llama.cpp
+                        --  tries them: with an unknown token there the
+                        --  pieces were never reached.
+                        elsif Item.Unknown /= No_Token then
+                           Put (Item.Unknown);
                         elsif not Refused then
                            Status := E.Make (E.Tokenizer_Missing_Byte_Fallback);
                            E.Add_Text
@@ -3444,7 +3459,13 @@ package body Model_Runner.Tokenizer is
       --  The dummy prefix belongs to the first piece that actually carries
       --  text. A leading control token such as the beginning-of-sequence
       --  marker contributes nothing, so it must not consume the suppression.
-      if Fragment /= "" then
+      --  A text piece does, even one that came out empty: a lone "▁" lost
+      --  its marker as the first, and the next piece's was taken too --
+      --  " def" read back as "def".
+      if Fragment /= ""
+        or else (Is_Valid (Source, Token)
+                 and then Class_Of (Source, Token) /= Class_Control)
+      then
          Item.Started := True;
       end if;
 

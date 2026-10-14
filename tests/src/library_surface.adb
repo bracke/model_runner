@@ -129,13 +129,6 @@ package body Library_Surface is
       --  own asks the same.
       new String'("Head_Format"),
 
-      --  How far back a hybrid session may be rewound. The round that
-      --  needs the answer asks for the count itself and knows it; a
-      --  caller handed a session by somebody else does not, and a rewind
-      --  refused after the fact is a poorer answer than a count asked
-      --  first.
-      new String'("States_Kept"),
-
       --  What a session holds its values in, where --kv-values stored them
       --  otherwise than its keys. The command chose and has no reason to
       --  ask back; a caller handed a session, or a test holding one to

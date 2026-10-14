@@ -3276,7 +3276,11 @@ package body Model_Runner.Kernels is
            Scaling.Attenuation
            * (1.0 + 0.1 * N.Log (1.0 / Scaling.Frequency));
       else
-         Magnitude := 1.0;
+         --  The file's own multiplier, whatever the stretch: LongRoPE
+         --  states one -- the root of one plus the log of the stretch over
+         --  the log of the trained context, 1.19 for Phi-3.5 -- and turns
+         --  by its tables with no ramp at all, which left it at one here.
+         Magnitude := Scaling.Attenuation;
       end if;
 
       for Index in 0 .. Element_Count (Cosines'Length) - 1 loop

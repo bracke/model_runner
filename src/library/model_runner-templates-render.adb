@@ -1424,6 +1424,11 @@ is
    Call_Message : Natural := 0;
    In_Calls     : Boolean := False;
 
+   --  The calls such a loop walks where the turn is bound as a mapping --
+   --  a loop over a filtered list of messages -- read from its own
+   --  "tool_calls" rather than from the conversation; Nothing otherwise.
+   Data_Calls   : Held := Nothing;
+
    --  How many calls the bound turn asked for.
    function Asked_Count return Natural is
       Where : constant Natural := Bound_Message;
@@ -1437,7 +1442,8 @@ is
    --  template that rebinds that name inside the loop must not change
    --  what loop.last answers about it.
    function Walking_Count return Natural
-   is (if Call_Message = 0 or else Call_Message > Count then 0
+   is (if Data_Calls.Kind = Value_Data then JSON_Length (JSON_Text (Data_Calls))
+       elsif Call_Message = 0 or else Call_Message > Count then 0
        else Conv.Call_Count (Messages, Call_Message));
 
    --  Whether the count has passed its stop, which depends on which way

@@ -73,6 +73,53 @@ package body Model_Runner.Text is
       return Result (1 .. Last);
    end Escape_Controls;
 
+   -------------------
+   -- Show_Controls --
+   -------------------
+
+   function Show_Controls (Item : String; Lead : in out Boolean) return String is
+      Lead_Byte : constant Character := Character'Val (16#C2#);
+      Whole     : constant String := (if Lead then Lead_Byte & Item else Item);
+      Result    : String (1 .. Whole'Length * 8);
+      Last      : Natural := 0;
+      Index     : Natural := Whole'First;
+
+      procedure Put_Escaped (Char : Character) is
+         Code : constant Natural := Character'Pos (Char);
+      begin
+         Result (Last + 1 .. Last + 2) := "\x";
+         Result (Last + 3) := Hex_Digits (Code / 16 + 1);
+         Result (Last + 4) := Hex_Digits (Code mod 16 + 1);
+         Last := Last + 4;
+      end Put_Escaped;
+   begin
+      Lead := False;
+      while Index <= Whole'Last loop
+         declare
+            Char : constant Character := Whole (Index);
+         begin
+            if Char = Lead_Byte and then Index = Whole'Last then
+               Lead := True;
+            elsif Char = Lead_Byte
+              and then Character'Pos (Whole (Index + 1)) in 16#80# .. 16#9F#
+            then
+               Put_Escaped (Char);
+               Put_Escaped (Whole (Index + 1));
+               Index := Index + 1;
+            elsif Is_Control (Char)
+              and then Char not in ASCII.LF | ASCII.HT | ASCII.CR
+            then
+               Put_Escaped (Char);
+            else
+               Last := Last + 1;
+               Result (Last) := Char;
+            end if;
+         end;
+         Index := Index + 1;
+      end loop;
+      return Result (1 .. Last);
+   end Show_Controls;
+
    -----------
    -- Image --
    -----------

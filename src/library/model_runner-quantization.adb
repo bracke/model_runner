@@ -387,7 +387,13 @@ package body Model_Runner.Quantization is
       --  same to the bit. Mamba keeps its time-step and B-C projections in
       --  binary32, 460 MB a token on Mamba-2.8B, and the copy was a fifth of
       --  a token's processor time.
-      if Format = G.Type_F32 then
+      --  Read in place only where the bytes are a float's alignment, as the
+      --  decoder's own direct read asks; the buffer below takes any other.
+      if Format = G.Type_F32
+        and then System.Default_Bit_Order = System.Low_Order_First
+        and then Storage.To_Integer (Data (Data'First + Offset)'Address)
+                 mod Storage.Integer_Address (4) = 0
+      then
          declare
             pragma Suppress (Index_Check);
             pragma Suppress (Range_Check);

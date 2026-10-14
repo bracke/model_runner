@@ -83,6 +83,21 @@ package Model_Runner.Text is
       Keep_Line_Breaks : Boolean := False;
       Indent           : Boolean := True) return String;
 
+   --  Generated text as a terminal is to show it: the C0 controls but line
+   --  feed, tab and carriage return, DEL and the C1 controls (U+0080 to
+   --  U+009F, written C2 80 to C2 9F) are written \xNN, so what a model
+   --  says cannot move the cursor, retitle the window or write to the
+   --  clipboard. Everything else passes byte for byte.
+   --
+   --  Text arrives a token at a time and a C1 control can be cut between
+   --  two pieces, so a trailing C2 is held back and Lead says one is: the
+   --  next call starts from it.
+   --
+   --  @param Item Next piece of generated text.
+   --  @param Lead In: a C2 is held from the last piece. Out: one is now.
+   --  @return The piece, controls shown.
+   function Show_Controls (Item : String; Lead : in out Boolean) return String;
+
    --  Report whether Item contains a C0 or C7F control character.
    --
    --  @param Item Text to test.

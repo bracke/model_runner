@@ -1,3 +1,5 @@
+with Hostkit.Terminal_Control;
+
 with Model_Runner.Cancellation;
 
 --  Interrupt-driven cancellation.
@@ -66,6 +68,17 @@ package Model_Runner.Platform.Signals is
    --    far. It ends as the caller wants the line after it to begin -- with
    --    the prompt again, say.
    procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "");
+
+   --  Say what the terminal's own mode was while the program holds it raw:
+   --  told to end there, it ends at once, and puts that mode back first --
+   --  a terminal left raw does not echo, and the remedy is `reset` typed
+   --  blind.
+   --
+   --  @param Saved The mode Save_Mode read before raw mode was set.
+   procedure Hold_Terminal_Mode (Saved : Hostkit.Terminal_Control.Mode);
+
+   --  The terminal has its own mode back; nothing to put back on ending.
+   procedure Release_Terminal_Mode;
 
    --  Whether the note was said for an interrupt since the program last
    --  began to wait: what it says need not be said again.

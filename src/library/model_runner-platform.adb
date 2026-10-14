@@ -415,9 +415,11 @@ package body Model_Runner.Platform is
      (Folder  : String;
       Pattern : String;
       Most    : Long_Long_Integer;
-      Keep    : String := "")
+      Keep    : String := "";
+      Settled : Duration := 0.0)
    is
       use Ada.Directories;
+      Now : constant Ada.Calendar.Time := Ada.Calendar.Clock;
       use type Ada.Calendar.Time;
 
       type Found is record
@@ -477,7 +479,11 @@ package body Model_Runner.Platform is
             Name : constant String :=
               Ada.Strings.Unbounded.To_String (List (I).Name);
          begin
-            if Name /= Keep then
+            --  Aged only where an age was asked: Mark_Used stamps a whole
+            --  second, which can be half of one ahead of the clock.
+            if Name /= Keep
+              and then (Settled = 0.0 or else Now - List (I).Used >= Settled)
+            then
                Delete_File (Name);
                Total := Total - List (I).Size;
             end if;
