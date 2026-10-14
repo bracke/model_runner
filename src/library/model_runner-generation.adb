@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Kernels;
+with Model_Runner.UTF8;
 with Model_Runner.Lookup;
 with Model_Runner.Shares;
 with Model_Runner.Backend.CPU;
@@ -636,6 +637,12 @@ package body Model_Runner.Generation is
       --  hundred.
       Guard_From : constant := 4_096;
 
+      --  A sampled run with a seed given is asked to come out the same
+      --  again: drafted rounds draw from the seed's stream, and how many
+      --  they draw must not hang on a clock. Such a run drafts throughout,
+      --  untimed; a greedy one says the same tokens either way and is timed.
+      Timed : constant Boolean := not (Sampled_Draft and then Item.Has_Seed);
+
       --  The share of proposals kept so far, in per cent, below which a
       --  rejected round shortens past the length asked for.
       Shrink_Below : constant := 55;
@@ -865,8 +872,15 @@ package body Model_Runner.Generation is
          declare
             Room : constant Natural :=
               Natural (Outcome.Text.all'Length) - Outcome.Text_Length;
-            Take : constant Natural := Natural'Min (Room, Fragment'Length);
+            Take : Natural := Natural'Min (Room, Fragment'Length);
          begin
+            --  Cut at a character, not inside one: the kept text is read
+            --  again as text.
+            while Take > 0 and then Take < Fragment'Length
+              and then Character'Pos (Fragment (Fragment'First + Take)) in 16#80# .. 16#BF#
+            loop
+               Take := Take - 1;
+            end loop;
             if Take > 0 then
                Outcome.Text.all
                  (B.Byte_Count (Outcome.Text_Length) + 1
@@ -880,13 +894,20 @@ package body Model_Runner.Generation is
 
       --  Write a fragment to the sink. Generated text is passed through
       --  unchanged: nothing is styled, localized, trimmed or wrapped.
+      --  Bytes no character takes -- a model's byte tokens that never made
+      --  one, a tail cut short at the end -- are the replacement character,
+      --  so what is shown, kept and put back into the conversation is text.
       procedure Emit (Fragment : String) is
       begin
          if Fragment'Length = 0 or else Closed then
             return;
          end if;
-         Retain (Fragment);
-         Model_Runner.Output.Emit (Sink, Fragment, Closed);
+         declare
+            Text : constant String := Model_Runner.UTF8.Repaired (Fragment);
+         begin
+            Retain (Text);
+            Model_Runner.Output.Emit (Sink, Text, Closed);
+         end;
       end Emit;
 
       --  Current pending text.
@@ -1271,7 +1292,11 @@ package body Model_Runner.Generation is
             end loop;
          end if;
 
-         if Shared = Committed and then Committed > 0 then
+         --  All of it read already, and more to read: on from there. A
+         --  prompt the session holds whole -- the same request asked again
+         --  -- still reads its last token, below, for the distribution its
+         --  first draw is from; with nothing read there was none.
+         if Shared = Committed and then Committed > 0 and then Committed < Prompt_Count then
             First_Token := Committed + 1;
          else
             --  At least one token left to read, so the last position's
@@ -2578,19 +2603,25 @@ package body Model_Runner.Generation is
                   --  draw from the filtered distribution otherwise, is a
                   --  draw from the filtered distribution -- the two branches
                   --  add up to exactly that -- so nothing about what is
-                  --  produced changes, only what it costs.
+                  --  produced changes, only what it costs. Not where a
+                  --  filter shapes the distribution by what is in it --
+                  --  top-k, top-p, min-p and their kind, mirostat, a
+                  --  temperature that follows the entropy: the forty best
+                  --  of every token are not the forty best of those the
+                  --  grammar allows. There the filter comes first, always.
                   if Rules /= null and then not Drafting then
                      S.Release_Step_Mask (Sampler);
-                     S.Sample (Sampler, Logits.all, Token, Status, Sharing);
-                     if E.Is_Error (Status) then
-                        Conclude (Runtime_Error, Status);
-                        exit Decode_Loop;
+                     Chosen := False;
+                     if S.Masking_Commutes (Item.Sampling) then
+                        S.Sample (Sampler, Logits.all, Token, Status, Sharing);
+                        if E.Is_Error (Status) then
+                           Conclude (Runtime_Error, Status);
+                           exit Decode_Loop;
+                        end if;
+                        Chosen := Grammar_Takes (Token);
                      end if;
 
-                     if Grammar_Takes (Token) then
-                        Chosen := True;
-                     else
-                        Chosen := False;
+                     if not Chosen then
                         declare
                            Allowed : Natural := 0;
                         begin
@@ -2639,7 +2670,7 @@ package body Model_Runner.Generation is
 
                            Took := Model_Runner.Clocks.Elapsed
                              (Began, Model_Runner.Clocks.Read (Time));
-                           if L.Position (Session) < Guard_From then
+                           if L.Position (Session) < Guard_From or else not Timed then
                               null;
                            elsif Untimed > 0 then
                               Untimed :=
@@ -2655,7 +2686,7 @@ package body Model_Runner.Generation is
                              Phase_Left - Natural'Min (Phase_Left, Verified_Count);
 
                            --  What comes next, once this stretch is spent.
-                           if L.Position (Session) < Guard_From then
+                           if L.Position (Session) < Guard_From or else not Timed then
                               null;
                            elsif Phase_Left = 0 then
                               if not Paused and then not Probing then
@@ -2891,8 +2922,17 @@ package body Model_Runner.Generation is
                   declare
                      Held : constant Natural :=
                        Natural'Min (Pending_Used, Natural'Max (Longest - 1, 0));
-                     Free : constant Natural := Pending_Used - Held;
+                     Free : Natural := Pending_Used - Held;
                   begin
+                     --  At a character: the bytes held back begin one, so a
+                     --  character is not shown in two halves. Three back at
+                     --  most -- a character has no more continuation bytes,
+                     --  and a run of strays is released, not held for ever.
+                     for Back in 1 .. 3 loop
+                        exit when Free = 0 or else Free = Pending_Used
+                          or else B.Byte'Pos (Pending.all (B.Byte_Count (Free) + 1)) not in 16#80# .. 16#BF#;
+                        Free := Free - 1;
+                     end loop;
                      if Free > 0 then
                         Emit (Pending_Text (1 .. Free));
                         Consume (Free);

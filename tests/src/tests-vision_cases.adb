@@ -4066,7 +4066,8 @@ package body Tests.Vision_Cases is
    end Fresh_Minicpm46_Weights;
 
    procedure Write_Minicpm46_Projector
-     (Path : String; W : Minicpm46_Weights; Kind : String := "minicpmv4_6")
+     (Path : String; W : Minicpm46_Weights; Kind : String := "minicpmv4_6";
+      Insert : Integer := Insert46; Says_Insert : Boolean := True)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -4094,10 +4095,12 @@ package body Tests.Vision_Cases is
       Fixtures.Add_U32 (Builder, "clip.vision.projector.scale_factor", 4);
       Fixtures.Add_F32
         (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
-      Fixtures.Begin_Array
-        (Builder, "clip.vision.wa_layer_indexes", G.Value_Int32, 1);
-      Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (Insert46));
-      Fixtures.End_Array (Builder);
+      if Says_Insert then
+         Fixtures.Begin_Array
+           (Builder, "clip.vision.wa_layer_indexes", G.Value_Int32, 1);
+         Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (Insert));
+         Fixtures.End_Array (Builder);
+      end if;
       Fixtures.Begin_Array
         (Builder, "clip.vision.image_mean", G.Value_Float32, 3);
       for Channel in 1 .. 3 loop
@@ -4770,6 +4773,31 @@ package body Tests.Vision_Cases is
               & GR'Image & ", slices" & Count'Image);
 
       Vision.Close (Eyes);
+
+      --  Where the merger goes is the file's to say, and a layer the
+      --  encoder has: one past its last, one before its first, or none
+      --  said is refused at open, not run into at encode.
+      Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Insert => Blocks_M);
+      Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
+      Assert (Status.Code = E.Arch_Invalid_Dimensions,
+              "a merger after a layer past the last was taken: " & E.Error_Code'Image (Status.Code));
+      Vision.Close (Eyes);
+      Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Insert => -1);
+      Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
+      Assert (Status.Code = E.Arch_Invalid_Dimensions,
+              "a merger before the first layer was taken: " & E.Error_Code'Image (Status.Code));
+      Vision.Close (Eyes);
+      Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Says_Insert => False);
+      Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
+      Assert (Status.Code = E.GGUF_Missing_Metadata_Key,
+              "a merger placed nowhere was taken: " & E.Error_Code'Image (Status.Code));
+      Vision.Close (Eyes);
+      Write_Minicpm46_Projector ("obj/vision-minicpm46-bad.gguf", W.all, Insert => Blocks_M - 1);
+      Vision.Open (Eyes, "obj/vision-minicpm46-bad.gguf", Status);
+      Assert (E.Is_Ok (Status),
+              "a merger after the last layer was refused: " & E.Error_Code'Image (Status.Code));
+      Vision.Close (Eyes);
+
       Images.Free (Picture);
       Free (W);
    end A_Minicpmv46_Picture_Keeps_Its_Shape;

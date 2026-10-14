@@ -1776,6 +1776,10 @@ package body Model_Runner.Framework.Repository is
                      end;
                   end if;
                end;
+            elsif Kept_Index (Path) = 0 then
+               --  Bytes left out last time and not touched since: left out
+               --  again (Result.Skipped has it), with nothing to carry.
+               null;
             else
                Add_File (Result, Kept.Files (Kept_Index (Path)));
                if Symbols_Of.Contains (Path) then

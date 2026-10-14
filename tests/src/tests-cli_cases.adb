@@ -23,6 +23,7 @@ with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.Framework;
+with Model_Runner.Hub;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Work;
@@ -13473,6 +13474,28 @@ package body Tests.CLI_Cases is
    end A_Large_Write_Is_Not_Bounded_By_The_Stack;
 
    --  Tab at the prompt completes a command, its action and a path.
+   --  A file name the hub lists is written under the models directory
+   --  only when it stays there: a shard in a folder does, a name that
+   --  climbs out, starts at the root or names a drive does not.
+   procedure Hub_Names_Stay_Inside (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      function Safe (Name : String) return Boolean renames Model_Runner.Hub.Is_Safe_File_Name;
+   begin
+      Assert (Safe ("model-q4_k_m.gguf"), "a plain name is refused");
+      Assert (Safe ("Q4_K_M/model-00001-of-00002.gguf"), "a shard in a folder is refused");
+      Assert (Safe ("a..b.gguf"), "two dots inside a name are taken for a climb");
+      Assert (not Safe ("../evil.gguf"), "a name climbing out is taken");
+      Assert (not Safe ("Q4/../../evil.gguf"), "a climb part way down is taken");
+      Assert (not Safe ("Q4/.."), "a climb at the end is taken");
+      Assert (not Safe ("/etc/evil.gguf"), "a name from the root is taken");
+      Assert (not Safe ("C:evil.gguf"), "a drive is taken");
+      Assert (not Safe ("Q4\..\evil.gguf"), "a backslash is taken");
+      Assert (not Safe ("Q4//evil.gguf"), "an empty segment is taken");
+      Assert (not Safe ("./evil.gguf"), "a dot segment is taken");
+      Assert (not Safe ("evil" & ASCII.LF & ".gguf"), "a control character is taken");
+      Assert (not Safe (""), "an empty name is taken");
+   end Hub_Names_Stay_Inside;
+
    procedure Tab_Completes_Commands (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
@@ -13792,6 +13815,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Tab_Completes_Commands'Access,
          "Tab at the prompt completes a command, its action and its arguments");
+      Register_Routine
+        (T, Hub_Names_Stay_Inside'Access,
+         "a file the hub lists is written only where its name stays inside the models directory");
    end Register_Tests;
 
 end Tests.CLI_Cases;

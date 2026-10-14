@@ -21,9 +21,11 @@ package body Model_Runner.CLI.Execute.Acquisition is
 
    --  Load and validate a container, and prepare a model when asked.
    --  Whether a downloaded file is whole: it is there, and its size is the
-   --  one the hub gave, so a part left by an interrupted download is not
-   --  taken for the file. An unknown size (zero) falls back to its being
-   --  there at all.
+   --  one the hub gave. The hub writes a download to a part beside it and
+   --  gives it the file's name only once its digest is checked, so a file
+   --  at the name arrived whole; the size still turns away one put there
+   --  some other way at the wrong length. An unknown size (zero) falls back
+   --  to its being there at all.
    function Model_Complete
      (File : Model_Runner.Hub.Download_File; Path : String) return Boolean
    is

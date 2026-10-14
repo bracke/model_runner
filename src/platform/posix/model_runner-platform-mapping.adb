@@ -1,5 +1,6 @@
 with Model_Runner.Platform.Mapped_Ranges;
 with Ada.Directories;
+with Hostkit.Durability;
 
 with Interfaces.C.Strings;
 with System.Storage_Elements;
@@ -7,6 +8,7 @@ with System.Storage_Elements;
 package body Model_Runner.Platform.Mapping is
 
    use type Ada.Directories.File_Kind;
+   use type Hostkit.Durability.Outcome;
    use type Interfaces.C.int;
    use type System.Address;
 
@@ -264,7 +266,15 @@ package body Model_Runner.Platform.Mapping is
             return;
          end if;
 
-         if C_Ftruncate (Handle, Interfaces.C.long (Size)) /= 0 then
+         --  The whole length given blocks now, not as the panels are
+         --  written: a sparse file on a disk that fills part way faults
+         --  the writer with SIGBUS in the middle of a store, where no
+         --  check can see it; a refusal here is a build that is not made.
+         --  A host that cannot reserve maps the file sparse, as before.
+         if C_Ftruncate (Handle, Interfaces.C.long (Size)) /= 0
+           or else Hostkit.Durability.Reserve_Space (Path, Long_Long_Integer (Size))
+                     = Hostkit.Durability.Failed
+         then
             if C_Close (Handle) /= 0 then
                null;
             end if;

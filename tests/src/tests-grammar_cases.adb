@@ -151,9 +151,34 @@ package body Tests.Grammar_Cases is
                          String'(1 => Character'Val (16#C3#),
                                  2 => Character'Val (16#A6#))),
               "a code point escape did not match its UTF-8");
-      Assert (not Allows ("root ::= [\u00E6]",
-                          String'(1 => Character'Val (16#C3#))),
-              "half of a code point's bytes was matched");
+      --  Half of its bytes -- a byte token -- is no match yet and no
+      --  refusal: carried, it is not the whole text, and the other half
+      --  finishes it; a half that becomes another character is refused.
+      Assert (Allows ("root ::= [\u00E6]", String'(1 => Character'Val (16#C3#)))
+              and then not Completes ("root ::= [\u00E6]", String'(1 => Character'Val (16#C3#))),
+              "half of a code point's bytes was refused, or taken for the whole");
+      --  Nor does a grammar that could end before it end with it begun.
+      Assert (Completes ("root ::= ""a"" [\u00E6]?", "a")
+              and then not Completes ("root ::= ""a"" [\u00E6]?",
+                                      "a" & String'(1 => Character'Val (16#C3#))),
+              "a grammar ended with a character begun and not finished");
+      declare
+         Item   : G.Compiled;
+         State  : G.Matcher;
+         Status : E.Error_Info;
+      begin
+         G.Compile (Item, "root ::= [\u00E6]", Status);
+         G.Start (Item, State, Status);
+         G.Advance (Item, State, String'(1 => Character'Val (16#C3#)), Status);
+         Assert (E.Is_Ok (Status)
+                 and then G.Accepts (Item, State, String'(1 => Character'Val (16#A6#)))
+                 and then not G.Accepts (Item, State, String'(1 => Character'Val (16#A7#))),
+                 "a carried half was not finished by its other half, or by another");
+         G.Advance (Item, State, String'(1 => Character'Val (16#A6#)), Status);
+         Assert (E.Is_Ok (Status) and then G.Is_Complete (Item, State),
+                 "a character given a byte at a time did not complete the grammar");
+         G.Close (Item);
+      end;
       Assert (not Allows ("root ::= [a-z]",
                           String'(1 => Character'Val (16#FF#))),
               "a byte that is not UTF-8 was matched against a set");

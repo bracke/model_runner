@@ -375,6 +375,27 @@ package body Tests.Sampling_Cases is
 
       S.Close (First);
       S.Close (Second);
+
+      --  A grammar's shortcut -- draw unmasked, redraw masked on a refusal
+      --  -- is only the masked draw where no filter reads what is in the
+      --  distribution: greedily, or with every such filter off.
+      declare
+         Plain : S.Configuration := S.Greedy_Configuration;
+      begin
+         Assert (S.Masking_Commutes (S.Greedy_Configuration), "greedy was said not to commute with a mask");
+         Plain.Temperature := 0.8;
+         Assert (S.Masking_Commutes (Plain), "a filterless sampled draw was said not to commute with a mask");
+         Assert (not S.Masking_Commutes (S.Configuration'(others => <>)),
+                 "the default filters were said to commute with a mask");
+         Plain.Top_K := 40;
+         Assert (not S.Masking_Commutes (Plain), "top-k was said to commute with a mask");
+         Plain.Top_K := 0;
+         Plain.Min_P := 0.05;
+         Assert (not S.Masking_Commutes (Plain), "min-p was said to commute with a mask");
+         Plain.Min_P := 0.0;
+         Plain.Dynatemp_Range := 0.5;
+         Assert (not S.Masking_Commutes (Plain), "a dynamic temperature was said to commute with a mask");
+      end;
    end Greedy_Ignores_Entropy;
 
    --  A fixed seed reproduces the same token sequence exactly.

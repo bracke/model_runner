@@ -927,8 +927,22 @@ package body Model_Runner.Vision is
          --  the first window-attention layer index, as llama.cpp borrows it.
          Containers.Get_Integer_Element
            (Item.Container, "clip.vision.wa_layer_indexes", 1, Number, Local);
-         Item.Insert_Layer :=
-           (if E.Is_Ok (Local) then Natural (Number) else 0);
+         if E.Is_Error (Local) then
+            Status := E.Make (E.GGUF_Missing_Metadata_Key);
+            E.Add_Text (Status, "key", "clip.vision.wa_layer_indexes", E.Param_Identifier);
+            Fail (Status);
+            return;
+         end if;
+         --  A layer the encoder has: the merger runs after it, and the
+         --  layers past it, if any, after the merger.
+         if Number < 0 or else Number >= Long_Long_Integer (Item.Blocks) then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer (Status, "wa_layer_index", Number);
+            E.Add_Integer (Status, "block_count", Long_Long_Integer (Item.Blocks));
+            Fail (Status);
+            return;
+         end if;
+         Item.Insert_Layer := Natural (Number);
       end if;
 
       if Item.Size mod Item.Patch /= 0

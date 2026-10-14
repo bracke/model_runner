@@ -848,7 +848,8 @@ package body Model_Runner.Templates is
       Tools                 : access constant Offered_Tools.Definitions
         := null;
       Image_Marker          : String := "";
-      Video_Marker          : String := "")
+      Video_Marker          : String := "";
+      Literal               : access function (Text : String) return String := null)
    is separate;
 
    -------------
@@ -864,7 +865,8 @@ package body Model_Runner.Templates is
       Thinking        : Thinking_Choice := Thinking_Unstated;
       Tools           : access constant Offered_Tools.Definitions := null;
       Image_Marker    : String := "";
-      Video_Marker    : String := "") return Natural
+      Video_Marker    : String := "";
+      Literal         : access function (Text : String) return String := null) return Natural
    is
       --  Room for the rendering without the prompt, which is no longer
       --  than the one with it where the template is the usual shape, and
@@ -881,7 +883,7 @@ package body Model_Runner.Templates is
    begin
       Render
         (Item, Messages, Beginning_Token, End_Token, False, Buffer.all,
-         Last, Status, Thinking, Tools, Image_Marker, Video_Marker);
+         Last, Status, Thinking, Tools, Image_Marker, Video_Marker, Literal);
       if E.Is_Error (Status) then
          Free_Text (Buffer);
          return 0;

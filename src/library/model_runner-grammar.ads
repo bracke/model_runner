@@ -123,7 +123,9 @@ package Model_Runner.Grammar is
    --  the distribution rather than sampled and regretted.
    --
    --  Invalid UTF-8 is not accepted: a byte sequence that is not a code
-   --  point cannot match a rule written in code points.
+   --  point cannot match a rule written in code points. A text that ends
+   --  in the start of a character -- a byte token -- is accepted for what
+   --  comes before it, and the start carried for the next token to finish.
    --
    --  @param Item Compiled grammar.
    --  @param State State to test from.
@@ -150,7 +152,8 @@ package Model_Runner.Grammar is
    --  Report whether the grammar may end here.
    --
    --  A generation that stops where this is False stops in the middle of
-   --  something the grammar was still expecting.
+   --  something the grammar was still expecting -- a character begun and
+   --  not finished among it.
    --
    --  @param Item Compiled grammar.
    --  @param State State to inspect.
@@ -241,6 +244,11 @@ private
    type Matcher is record
       Count  : Natural := 0;
       Stacks : Stack_Array;
+      --  The start of a character a token gave and the next is to finish
+      --  -- a model's byte tokens spell one a byte at a time -- carried
+      --  until it is whole and can be matched.
+      Partial        : String (1 .. 3) := [others => ' '];
+      Partial_Length : Natural := 0;
    end record;
 
 end Model_Runner.Grammar;

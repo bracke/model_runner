@@ -227,6 +227,10 @@ private
       --  Why each excluded item was left out, in the same order.
       Reasons    : Name_Lists.Vector;
 
+      --  How many of those the room's list names, the rest counted; none
+      --  named, and the list not given, where even its count has no room.
+      Left_Most  : Integer := 20;
+
       --  The requirement and decision revisions that apply, as ID@N.
       Revisions  : Name_Lists.Vector;
 

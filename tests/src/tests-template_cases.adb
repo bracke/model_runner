@@ -2025,6 +2025,56 @@ package body Tests.Template_Cases is
          Assert (Conv.Parts_At (Talk, 2) = "",
                  "a turn given as words has parts");
 
+         --  A system message set after a turn of parts keeps its parts; one
+         --  past the room leaves the history as it was, not emptied.
+         declare
+            Small : Conv.History;
+            Room  : Model_Runner.Limits.Session_Limits := Model_Runner.Limits.Default_Session_Limits;
+         begin
+            Room.Max_Rendered_Bytes := 4 * Parts'Length;
+            Conv.Open (Small, Room, Status);
+            Conv.Append_Parts (Small, Conv.User_Role, Parts, Status);
+            Conv.Append (Small, Conv.Assistant_Role, "a cat", Status);
+            Conv.Set_System (Small, "Be brief.", Status);
+            Assert (E.Is_Ok (Status) and then Conv.Length (Small) = 3
+                    and then Conv.Parts_At (Small, 2) = Parts
+                    and then Conv.Content_At (Small, 3) = "a cat",
+                    "a system message set dropped a turn's parts");
+            --  Too large by itself, and too large only with the turns.
+            Conv.Set_System (Small, [1 .. 5 * Parts'Length => 'x'], Status);
+            Assert (Status.Code = E.Conversation_Too_Long
+                    and then Conv.Length (Small) = 3
+                    and then Conv.Content_At (Small, 1) = "Be brief."
+                    and then Conv.Parts_At (Small, 2) = Parts,
+                    "a system message past the room by itself emptied the history");
+            Conv.Set_System (Small, [1 .. 4 * Parts'Length => 'x'], Status);
+            Assert (Status.Code = E.Conversation_Too_Long
+                    and then Conv.Length (Small) = 3
+                    and then Conv.Content_At (Small, 1) = "Be brief."
+                    and then Conv.Parts_At (Small, 2) = Parts
+                    and then Conv.Content_At (Small, 3) = "a cat",
+                    "a system message past the room left the history otherwise than it was");
+            Conv.Close (Small);
+         end;
+
+         --  Compacted, the first turn carries the digest and its parts.
+         declare
+            Long    : Conv.History;
+            Dropped : Natural;
+         begin
+            Conv.Open (Long, Status => Status);
+            Conv.Append_Parts (Long, Conv.User_Role, Parts, Status);
+            Conv.Append (Long, Conv.Assistant_Role, "a cat", Status);
+            Conv.Append (Long, Conv.User_Role, "and this?", Status);
+            Conv.Append (Long, Conv.Assistant_Role, "a dog", Status);
+            Conv.Append (Long, Conv.User_Role, "and now?", Status);
+            Conv.Compact (Long, Keep_Recent => 1, Dropped => Dropped);
+            Assert (Dropped > 0 and then Conv."=" (Conv.Sender_At (Long, 1), Conv.User_Role)
+                    and then Conv.Parts_At (Long, 1) = Parts,
+                    "compaction dropped the parts of the turn that carries its digest:" & Dropped'Image);
+            Conv.Close (Long);
+         end;
+
          --  One that cannot be written is said not written.
          Model_Runner.CLI.Checkpoint.Save ("/nonexistent-directory/x.chk", Talk, Status);
          Assert (Status.Code = E.IO_Write_Failed, "a conversation that could not be saved was said saved");

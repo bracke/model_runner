@@ -1250,6 +1250,11 @@ begin
                Last     : Natural;
                Words    : constant access constant Vocab.Vocabulary :=
                  L.Vocabulary (Prepared);
+
+               --  A message's content as the template is to see it: a control
+               --  marker someone wrote in it is text, not a turn.
+               function Content_Text (Text : String) return String
+               is (Vocab.Defused (Words.all, Text));
             begin
                Conv.Open (Messages, Status => Condition);
                if E.Is_Error (Condition) then
@@ -1403,7 +1408,8 @@ begin
                   Image_Marker =>
                     Model_Runner.CLI.Pictures.Picture_Marker (Seer),
                   Video_Marker =>
-                    Model_Runner.CLI.Pictures.Video_Marker (Seer));
+                    Model_Runner.CLI.Pictures.Video_Marker (Seer),
+                  Literal => Content_Text'Access);
 
                if E.Is_Error (Condition) then
                   Conv.Close (Messages);
@@ -1430,7 +1436,8 @@ begin
                     Image_Marker =>
                       Model_Runner.CLI.Pictures.Picture_Marker (Seer),
                     Video_Marker =>
-                      Model_Runner.CLI.Pictures.Video_Marker (Seer));
+                      Model_Runner.CLI.Pictures.Video_Marker (Seer),
+                    Literal => Content_Text'Access);
                Conv.Close (Messages);
 
                --  Said here because here is where it happens. Generation is

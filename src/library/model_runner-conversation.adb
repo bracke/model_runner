@@ -699,6 +699,20 @@ package body Model_Runner.Conversation is
       declare
          Scratch : constant String := Item.Storage.all (1 .. Item.Filled);
          First   : constant Positive := (if Had_System then 2 else 1);
+         Calls_Before : constant Natural := Item.Call_Used;
+
+         --  A rebuild that cannot finish -- the new text, or what it moves
+         --  along, past the room -- leaves the history as it was, not
+         --  emptied part way.
+         procedure Put_Back is
+         begin
+            Item.Storage.all (1 .. Scratch'Length) := Scratch;
+            Item.Filled := Scratch'Length;
+            Item.Used := Count;
+            Item.Messages := Saved;
+            Item.Calls := Asked;
+            Item.Call_Used := Calls_Before;
+         end Put_Back;
       begin
          Item.Used := 0;
          Item.Filled := 0;
@@ -707,6 +721,7 @@ package body Model_Runner.Conversation is
          if Content'Length > 0 then
             Append (Item, System_Role, Content, Status);
             if E.Is_Error (Status) then
+               Put_Back;
                return;
             end if;
          end if;
@@ -722,7 +737,28 @@ package body Model_Runner.Conversation is
                     Scratch (Row.Offset + 1 .. Row.Offset + Row.Length),
                     Allow_Empty => Row.Calls > 0, Status => Status);
                if E.Is_Error (Status) then
+                  Put_Back;
                   return;
+               end if;
+
+               --  Its parts -- a picture -- move with it.
+               if Row.Parts_Length > 0 then
+                  declare
+                     Parts_At : Natural;
+                     Ok       : Boolean;
+                  begin
+                     Store (Item, Scratch (Row.Parts_Offset + 1 .. Row.Parts_Offset + Row.Parts_Length),
+                            Parts_At, Ok);
+                     if not Ok then
+                        Put_Back;
+                        Status := E.Make (E.Conversation_Too_Long);
+                        E.Add_Integer
+                          (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes), E.Param_Bytes);
+                        return;
+                     end if;
+                     Item.Messages (Item.Used).Parts_Offset := Parts_At;
+                     Item.Messages (Item.Used).Parts_Length := Row.Parts_Length;
+                  end;
                end if;
 
                for Which in 0 .. Row.Calls - 1 loop
@@ -737,6 +773,7 @@ package body Model_Runner.Conversation is
                                  .. From.Args_Offset + From.Args_Length),
                         Status);
                      if E.Is_Error (Status) then
+                        Put_Back;
                         return;
                      end if;
                   end;
@@ -999,7 +1036,7 @@ package body Model_Runner.Conversation is
                               else Record_Marker & Work_Record);
                            Room_Left : constant Integer :=
                              New_Storage.all'Last - Fill - (Base_Last - Old'First + 1)
-                             - Marker'Length - Kept'Length;
+                             - Marker'Length - Kept'Length - Src.Parts_Length;
                            Synopsis  : constant String :=
                              Kept & (if Recorded'Length <= Room_Left then Recorded else "");
                         begin
@@ -1024,6 +1061,15 @@ package body Model_Runner.Conversation is
                         Parts_Length => 0,
                         First_Call => 0,
                         Calls      => 0);
+                     --  Its parts -- a picture the task was asked about --
+                     --  go along with it, as any kept turn's do.
+                     if Src.Parts_Length > 0 and then Fill + Src.Parts_Length <= New_Storage.all'Last then
+                        New_Storage.all (Fill + 1 .. Fill + Src.Parts_Length) :=
+                          Item.Storage.all (Src.Parts_Offset + 1 .. Src.Parts_Offset + Src.Parts_Length);
+                        New_Messages (M).Parts_Offset := Fill;
+                        New_Messages (M).Parts_Length := Src.Parts_Length;
+                        Fill := Fill + Src.Parts_Length;
+                     end if;
                      goto Next_Message;
                   end if;
 

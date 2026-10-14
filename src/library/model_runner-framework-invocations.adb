@@ -327,13 +327,19 @@ package body Model_Runner.Framework.Invocations is
       --  Inside a fence: quoted -- a file, a log -- and none of the
       --  answer's own fields, whatever it holds.
       In_Fence : Boolean := False;
+      --  Whether the answer says anything outside its fences: then what
+      --  is fenced is quoted, and never its report.
+      Outside  : Boolean := False;
    begin
       Result := (others => <>);
       Status := E.Success;
 
       --  Read first with what is fenced left out; where that finds no
-      --  report at all, the report is what is fenced -- a model that
-      --  wraps its whole answer in a fence -- and it is read again whole.
+      --  report and nothing stands outside the fences, the report is what
+      --  is fenced -- a model that wraps its whole answer in a fence -- and
+      --  it is read again whole. An answer with words of its own beside a
+      --  fence did not fence its report: a status in a file it quotes is
+      --  the file's.
       for Pass in 1 .. 2 loop
          In_Fence := False;
          Current := Null_Unbounded_String;
@@ -343,6 +349,8 @@ package body Model_Runner.Framework.Invocations is
                In_Fence := not In_Fence;
             elsif In_Fence and then Pass = 1 then
                goto Next_Line;
+            elsif Trim (Line) /= "" then
+               Outside := True;
             end if;
             declare
                Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ":");
@@ -372,8 +380,14 @@ package body Model_Runner.Framework.Invocations is
                   Current := Null_Unbounded_String;
                elsif Frame then
                   Current := Null_Unbounded_String;
+               elsif Name in "status" | "summary" | "verify" and then Result.Values.Contains (Name)
+                 and then Lower (Result.Values (Name)) = Lower (Item_Of (Line (Colon + 1 .. Line'Last)))
+               then
+                  --  Said again the same, as a closing recap says it: one
+                  --  thing meant, and nothing more to read into it.
+                  Current := Null_Unbounded_String;
                elsif Name in "status" | "summary" | "verify" and then Result.Values.Contains (Name) then
-                  --  Said twice, which is meant cannot be told.
+                  --  Said twice, differently: which is meant cannot be told.
                   Refuse (Name, "the answer has " & Name & ": twice; give it once");
                   return;
                elsif Name /= "" and then Rules.Fields.Contains (Name) then
@@ -399,7 +413,7 @@ package body Model_Runner.Framework.Invocations is
             <<Next_Line>>
          end loop;
          exit when E.Is_Error (Status) or else Result.Values.Contains ("status")
-           or else Ada.Strings.Fixed.Index (Read_As, "```") = 0;
+           or else Outside or else Ada.Strings.Fixed.Index (Read_As, "```") = 0;
       end loop;
 
       for Field of Rules.Order loop

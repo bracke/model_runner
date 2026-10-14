@@ -1,13 +1,18 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Task_Attributes;
 
 with CryptoLib.Hashes;
 
+with Http_Client.Auth.Bearer;
 with Http_Client.Clients;
 with Http_Client.Errors;
 with Http_Client.Headers;
+with Http_Client.Requests;
+with Http_Client.Types;
+with Http_Client.URI;
 
 with Model_Runner.Config;
 with Model_Runner.GGUF.Shards;
@@ -157,9 +162,35 @@ package body Model_Runner.Hub is
       end loop;
    end Hash_After;
 
-   -------------------
+   -----------------------
+   -- Is_Safe_File_Name --
+   -----------------------
+
+   function Is_Safe_File_Name (Name : String) return Boolean is
+      Start : Positive := Name'First;
+   begin
+      if Name = "" then
+         return False;
+      end if;
+      for C of Name loop
+         if C in '\' | ':' or else Character'Pos (C) < 32 or else Character'Pos (C) = 127 then
+            return False;
+         end if;
+      end loop;
+      for I in Name'First .. Name'Last + 1 loop
+         if I > Name'Last or else Name (I) = '/' then
+            if Name (Start .. I - 1) in "" | "." | ".." then
+               return False;
+            end if;
+            Start := I + 1;
+         end if;
+      end loop;
+      return True;
+   end Is_Safe_File_Name;
+
+   ------------------
    -- Is_Reference --
-   -------------------
+   ------------------
 
    function Is_Reference (Named : String) return Boolean is
       Colon : Natural := 0;
@@ -223,25 +254,80 @@ package body Model_Runner.Hub is
    -- Client_For --
    ----------------
 
-   --  A client configured to carry the hub token where the environment has
-   --  one, so a gated repository is reached. A token that is not a valid
-   --  header value is left off rather than raised on.
-   function Client_For return HC.Client_Configuration is
-      Config : HC.Client_Configuration := HC.Default_Client_Configuration;
+   --  The client's configuration. The hub token is not in it: it goes on
+   --  each request (Request_For), so a gated repository is reached.
+   function Client_For return HC.Client_Configuration is (HC.Default_Client_Configuration);
+
+   --  The hub token, where the environment or the settings have one.
+   function Token return String is
       Env_Token : constant String := Model_Runner.Platform.Hub_Token;
-      Token  : constant String :=
-        (if Env_Token /= "" then Env_Token
-         else Model_Runner.Config.Value ("hf-token"));
-      Value  : constant String := "Bearer " & Token;
    begin
-      if Token /= ""
-        and then Http_Client.Headers.Is_Valid_Value (Value)
-      then
-         Http_Client.Headers.Append
-           (Config.Default_Headers, "Authorization", Value);
+      return (if Env_Token /= "" then Env_Token else Model_Runner.Config.Value ("hf-token"));
+   end Token;
+
+   --  A request for a URL, carrying the hub token where there is one: on
+   --  the request, where the client keeps it to the origin it is for -- a
+   --  default header would follow a redirect anywhere, and the client
+   --  refuses one. A token that is no valid one is left off.
+   function Request_For
+     (URL     : String;
+      Extra   : Http_Client.Headers.Header_List;
+      Made    : out Http_Client.Requests.Request) return HE.Result_Status
+   is
+      Where  : Http_Client.URI.URI_Reference;
+      Bare   : Http_Client.Requests.Request;
+      Status : HE.Result_Status := Http_Client.URI.Parse (URL, Where);
+   begin
+      if not HE.Is_Success (Status) then
+         return Status;
       end if;
-      return Config;
-   end Client_For;
+      Status := Http_Client.Requests.Create (Http_Client.Types.GET, Where, Bare, Headers => Extra);
+      if not HE.Is_Success (Status) then
+         return Status;
+      end if;
+      if Token /= "" and then Http_Client.Auth.Bearer.Is_Valid_Token (Token) then
+         return Http_Client.Auth.Bearer.Set_Bearer_Authorization (Bare, Token, Made);
+      end if;
+      Made := Bare;
+      return Status;
+   end Request_For;
+
+   --  A GET of the hub, as HC.Get makes one, with its token.
+   function Get (URL : String; Result : out HC.Client_Result) return HE.Result_Status is
+      Item    : HC.Client;
+      Request : Http_Client.Requests.Request;
+      Status  : HE.Result_Status := HC.Initialize (Item, Client_For);
+   begin
+      if HE.Is_Success (Status) then
+         Status := Request_For (URL, Http_Client.Headers.Empty, Request);
+      end if;
+      if HE.Is_Success (Status) then
+         Status := HC.Execute (Item, Request, Result);
+      end if;
+      return Status;
+   end Get;
+
+   --  A download from the hub to a file, as HC.Download_To_File makes one,
+   --  with its token and the headers given -- a range.
+   function Download
+     (URL     : String;
+      Path    : String;
+      Result  : out HC.Download_Result;
+      Options : HC.Download_Options;
+      Extra   : Http_Client.Headers.Header_List := Http_Client.Headers.Empty) return HE.Result_Status
+   is
+      Item    : HC.Client;
+      Request : Http_Client.Requests.Request;
+      Status  : HE.Result_Status := HC.Initialize (Item, Client_For);
+   begin
+      if HE.Is_Success (Status) then
+         Status := Request_For (URL, Extra, Request);
+      end if;
+      if HE.Is_Success (Status) then
+         Status := HC.Execute_To_File (Item, Request, Path, Result, Options);
+      end if;
+      return Status;
+   end Download;
 
    -------------
    -- Resolve --
@@ -324,11 +410,10 @@ package body Model_Runner.Hub is
 
       Split (Reference, Repo, Quant);
 
-      Status := HC.Get
+      Status := Get
         (URL           => Host & "/api/models/" & T.To_String (Repo)
                           & "?blobs=true",
-         Result        => Result,
-         Configuration => Client_For);
+         Result        => Result);
 
       if not HE.Is_Success (Status) then
          Reason := T.To_Bounded
@@ -367,6 +452,7 @@ package body Model_Runner.Hub is
                              Body_Text (Start .. Scan - 1);
                         begin
                            if Ends_With (Name, ".gguf")
+                             and then Is_Safe_File_Name (Name)
                              and then Contains (Name, T.To_String (Quant))
                            then
                               declare
@@ -532,10 +618,9 @@ package body Model_Runner.Hub is
          return;
       end if;
 
-      Status := HC.Get
+      Status := Get
         (URL           => Host & "/api/models/" & Reference & "?blobs=true",
-         Result        => Result,
-         Configuration => Client_For);
+         Result        => Result);
 
       if not HE.Is_Success (Status) then
          Reason := T.To_Bounded
@@ -575,6 +660,7 @@ package body Model_Runner.Hub is
                            Have   : Boolean;
                         begin
                            if Ends_With (Name, ".gguf")
+                             and then Is_Safe_File_Name (Name)
                              and then All_N < Max_All
                            then
                               Hash_After (Body_Text, Scan, Digest, Have);
@@ -736,6 +822,47 @@ package body Model_Runner.Hub is
 
    type Chunk_Bytes_Array is array (Positive range <>) of Interfaces.Unsigned_64;
 
+   --  Chunk files beside Path that a fetch starting at Have, in Chunks
+   --  chunks, would not take -- left by a fetch that began elsewhere, or
+   --  by one whose part was since removed -- are removed: nothing else
+   --  ever would, and each can be 64 MB.
+   procedure Remove_Stray_Chunks (Path : String; Have : Interfaces.Unsigned_64; Chunks : Natural) is
+      Prefix : constant String := Ada.Directories.Simple_Name (Path) & ".range-";
+      Folder : constant String := Ada.Directories.Containing_Directory (Path);
+      Search : Ada.Directories.Search_Type;
+      Item   : Ada.Directories.Directory_Entry_Type;
+      package Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
+      Stray  : Names.Vector;
+
+      function Taken (Name : String) return Boolean is
+      begin
+         for K in 1 .. Chunks loop
+            if Name = Prefix & Model_Runner.Text.Trim
+                 (Interfaces.Unsigned_64'Image (Have + Interfaces.Unsigned_64 (K - 1) * Chunk_Bytes))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Taken;
+   begin
+      if not Ada.Directories.Exists (Folder) then
+         return;
+      end if;
+      Ada.Directories.Start_Search
+        (Search, Folder, Prefix & "*", [Ada.Directories.Ordinary_File => True, others => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+         if not Taken (Ada.Directories.Simple_Name (Item)) then
+            Stray.Append (Ada.Directories.Full_Name (Item));
+         end if;
+      end loop;
+      Ada.Directories.End_Search (Search);
+      for Name of Stray loop
+         Ada.Directories.Delete_File (Name);
+      end loop;
+   end Remove_Stray_Chunks;
+
    procedure Fetch_Ranges
      (Repo      : String;
       File      : Download_File;
@@ -848,7 +975,7 @@ package body Model_Runner.Hub is
             declare
                Path    : constant String := Chunk_Path (K);
                Length  : constant Interfaces.Unsigned_64 := Length_Of (K);
-               Config  : HC.Client_Configuration := Client_For;
+               Ranged  : Http_Client.Headers.Header_List := Http_Client.Headers.Empty;
                Options : HC.Download_Options := HC.Default_Download_Options;
                Outcome : HC.Download_Result;
                Status  : HE.Result_Status;
@@ -860,7 +987,7 @@ package body Model_Runner.Hub is
                   Board.Wrote (K, Length);
                else
                   Http_Client.Headers.Append
-                    (Config.Default_Headers, "Range",
+                    (Ranged, "Range",
                      "bytes=" & Model_Runner.Text.Trim (Interfaces.Unsigned_64'Image (Start_Of (K))) & "-"
                      & Model_Runner.Text.Trim (Interfaces.Unsigned_64'Image (Start_Of (K) + Length - 1)));
                   Options.Max_Download_Size := 0;
@@ -870,8 +997,8 @@ package body Model_Runner.Hub is
                   Options.Progress_Callback := Chunk_Progress'Unrestricted_Access;
                   Options.Progress_Interval_Bytes := 1024 * 1024;
                   Worker_Chunk.Set_Value (K);
-                  Status := HC.Download_To_File
-                    (URL => URL, Path => Path, Result => Outcome, Options => Options, Configuration => Config);
+                  Status := Download (URL => URL, Path => Path, Result => Outcome, Options => Options,
+                                      Extra => Ranged);
                   Worker_Chunk.Set_Value (0);
                   if HE.Is_Success (Status) and then Outcome.HTTP_Status_Code = 206
                     and then Outcome.Bytes_Written = Length
@@ -898,6 +1025,7 @@ package body Model_Runner.Hub is
       Served := True;
       Ok := False;
       Reason := T.Empty;
+      Remove_Stray_Chunks (Dest_Path, Have, Chunks);
       declare
          Crew : array (1 .. Range_Workers) of Worker;
          pragma Unreferenced (Crew);
@@ -1018,12 +1146,47 @@ package body Model_Runner.Hub is
       Reason    : out Model_Runner.Text.Bounded;
       Report    : Progress_Reporter := null)
    is
+      Part    : constant String := Dest_Path & ".part";
       Outcome : HC.Download_Result;
       Options : HC.Download_Options := HC.Default_Download_Options;
       Status  : HE.Result_Status;
+
+      --  The checked part takes the file's name: only now is there a file
+      --  at Dest_Path to open or take for done.
+      procedure Settle is
+      begin
+         if Ada.Directories.Exists (Dest_Path) then
+            Ada.Directories.Delete_File (Dest_Path);
+         end if;
+         Ada.Directories.Rename (Part, Dest_Path);
+      exception
+         when others =>
+            Ok := False;
+            Reason := T.To_Bounded ("the checked download could not be moved to " & Dest_Path);
+      end Settle;
    begin
       Ok := False;
       Reason := T.Empty;
+
+      --  The directory the file goes in, for the ranges as for one stream;
+      --  a part longer than the file is no part of it -- what it holds past
+      --  the end would never be checked away -- and is begun again; chunks
+      --  a fetch before parts left beside the file itself are dropped.
+      begin
+         Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Dest_Path));
+         if File.Size > 0 and then Ada.Directories.Exists (Part)
+           and then Interfaces.Unsigned_64 (Ada.Directories.Size (Part)) > File.Size
+         then
+            Ada.Directories.Delete_File (Part);
+         end if;
+         Remove_Stray_Chunks (Dest_Path, 0, 0);
+      exception
+         when others =>
+            Reason := T.To_Bounded
+              ("could not make room for " & Dest_Path
+               & " -- the directory may not be writable");
+            return;
+      end;
 
       --  A large file whose digest the hub gives: in ranges at once, where
       --  the server serves them; in one stream where it does not.
@@ -1031,8 +1194,11 @@ package body Model_Runner.Hub is
          declare
             Served : Boolean;
          begin
-            Fetch_Ranges (Repo, File, Dest_Path, Served, Ok, Reason, Report);
-            if Ok or else Served then
+            Fetch_Ranges (Repo, File, Part, Served, Ok, Reason, Report);
+            if Ok then
+               Settle;
+               return;
+            elsif Served then
                return;
             end if;
             Reason := T.Empty;
@@ -1072,18 +1238,17 @@ package body Model_Runner.Hub is
       Options.Progress_Callback := Show_Progress'Access;
       Options.Progress_Interval_Bytes := 4 * 1024 * 1024;
 
-      Status := HC.Download_To_File
-        (URL           => Host & "/" & Repo & "/resolve/main/"
-                          & T.To_String (File.Name),
-         Path          => Dest_Path,
-         Result        => Outcome,
-         Options       => Options,
-         Configuration => Client_For);
+      Status := Download
+        (URL     => Host & "/" & Repo & "/resolve/main/" & T.To_String (File.Name),
+         Path    => Part,
+         Result  => Outcome,
+         Options => Options);
 
       Active_Report := null;
 
       if HE.Is_Success (Status) then
          Ok := True;
+         Settle;
          return;
       end if;
 
@@ -1092,12 +1257,12 @@ package body Model_Runner.Hub is
       --  down; it is removed, so a run does not open it or a later fetch
       --  take it for done. A shorter part is left where it is to resume.
       if File.Size > 0
-        and then Ada.Directories.Exists (Dest_Path)
-        and then Interfaces.Unsigned_64 (Ada.Directories.Size (Dest_Path))
+        and then Ada.Directories.Exists (Part)
+        and then Interfaces.Unsigned_64 (Ada.Directories.Size (Part))
                  >= File.Size
       then
          begin
-            Ada.Directories.Delete_File (Dest_Path);
+            Ada.Directories.Delete_File (Part);
          exception
             when others =>
                null;

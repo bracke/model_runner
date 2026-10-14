@@ -1070,6 +1070,7 @@ package body Model_Runner.Grammar is
       Ok    : Boolean;
    begin
       State.Count := 0;
+      State.Partial_Length := 0;
       Status := E.Success;
 
       if not Item.Ready then
@@ -1179,16 +1180,36 @@ package body Model_Runner.Grammar is
       return False;
    end Could_Begin;
 
+   function Accepts_Whole
+     (Item  : Compiled;
+      State : Matcher;
+      Text  : String) return Boolean;
+
    function Accepts
+     (Item  : Compiled;
+      State : Matcher;
+      Text  : String) return Boolean
+   is
+      Full : constant String := State.Partial (1 .. State.Partial_Length) & Text;
+      Keep : constant Natural := Model_Runner.UTF8.Safe_Prefix_Length (Full);
+   begin
+      if not Item.Ready then
+         return False;
+      elsif Full = "" then
+         return State.Count > 0;
+      end if;
+      --  The characters it finishes, matched; a start of one after them,
+      --  carried. Only a start: a byte that can begin nothing is not one.
+      return Accepts_Whole (Item, State, Full (Full'First .. Full'First + Keep - 1));
+   end Accepts;
+
+   function Accepts_Whole
      (Item  : Compiled;
       State : Matcher;
       Text  : String) return Boolean
    is
       At_Byte : Natural := Text'First;
    begin
-      if not Item.Ready then
-         return False;
-      end if;
 
       --  The cheap answer first, and for most tokens it is the answer.
       if Text'Length > 0 then
@@ -1248,7 +1269,7 @@ package body Model_Runner.Grammar is
 
          return Here.Count > 0;
       end;
-   end Accepts;
+   end Accepts_Whole;
 
    -------------
    -- Advance --
@@ -1260,9 +1281,13 @@ package body Model_Runner.Grammar is
       Text   : String;
       Status : out Model_Runner.Errors.Error_Info)
    is
-      Next : Matcher;
-      At_Byte : Natural := Text'First;
-      Ok   : Boolean;
+      --  What was carried, and what it gives; a start of a character at
+      --  its end is carried on.
+      Full    : constant String := State.Partial (1 .. State.Partial_Length) & Text;
+      Keep    : constant Natural := Model_Runner.UTF8.Safe_Prefix_Length (Full);
+      Next    : Matcher;
+      At_Byte : Natural := Full'First;
+      Ok      : Boolean;
    begin
       Status := E.Success;
 
@@ -1271,13 +1296,16 @@ package body Model_Runner.Grammar is
          return;
       end if;
 
-      while At_Byte <= Text'Last loop
+      State.Partial_Length := Full'Length - Keep;
+      State.Partial (1 .. State.Partial_Length) := Full (Full'First + Keep .. Full'Last);
+
+      while At_Byte <= Full'First + Keep - 1 loop
          declare
             Value  : Natural;
             Length : Natural;
          begin
             Model_Runner.UTF8.Decode_First
-              (Text (At_Byte .. Text'Last), Value, Length);
+              (Full (At_Byte .. Full'First + Keep - 1), Value, Length);
             if Length = 0 then
                Status := E.Make (E.Grammar_Syntax_Error);
                return;
@@ -1312,6 +1340,9 @@ package body Model_Runner.Grammar is
    is
       pragma Unreferenced (Item);
    begin
+      if State.Partial_Length > 0 then
+         return False;
+      end if;
       for Index in 1 .. State.Count loop
          if State.Stacks (Index).Depth = 0 then
             return True;

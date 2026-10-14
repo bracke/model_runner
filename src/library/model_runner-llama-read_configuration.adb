@@ -244,6 +244,16 @@ begin
                      E.Param_Identifier);
                   return;
                end if;
+               --  A count is one the heads can share: none to all of them,
+               --  and the file's word is not taken for one past that.
+               if Number < 0 or else Number > Long_Long_Integer (Settings.Heads)
+                 or else (Number > 0 and then Long_Long_Integer (Settings.Heads) mod Number /= 0)
+               then
+                  Status := E.Make (E.Arch_Invalid_Head_Counts);
+                  E.Add_Integer (Status, "head_count_kv", Number);
+                  E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
+                  return;
+               end if;
                Settings.Mamba_Layer (Layer) := Number = 0;
                if Number /= 0 then
                   Settings.KV_Heads := Natural (Number);

@@ -65,6 +65,82 @@ package body Model_Runner.Framework.Context is
    --  quoted one, the blank line after it.
    Section_Overhead : constant := 16;
 
+   --  A heading a reader, or a model, takes for what it is rather than
+   --  for an identifier to call.
+   function Heading (Next : Item) return String is
+      Kind : constant String := To_String (Next.Kind);
+      Id   : constant String := To_String (Next.Id);
+   begin
+      if Kind = "rules" then
+         return "Rules";
+      elsif Kind = "task" then
+         return "The task, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+      elsif Kind = "runtime" then
+         return "Where the task stands";
+      elsif Kind = "configuration" then
+         return "The project's configuration";
+      elsif Kind = "authority" then
+         return "What governs the work";
+      elsif Kind = "symbols" then
+         return "What its files declare";
+      elsif Kind = "tests" then
+         return "The tests that bear on it";
+      elsif Kind = "test" then
+         return "The test " & Id (Id'First + 5 .. Id'Last);
+      elsif Kind = "results" then
+         return "What the last attempt left";
+      elsif Kind = "parent" then
+         return "The task this is a part of, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+      elsif Kind = "helped" then
+         return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+      elsif Kind = "brief" then
+         return "What you are asked";
+      elsif Kind = "source" then
+         return "The file " & Id (Id'First + 5 .. Id'Last);
+      else
+         return "The " & Kind & " " & Id;
+      end if;
+   end Heading;
+
+   --  The section naming what the room left out -- one the same as another
+   --  given is given -- Most at most and how many more, so a component of
+   --  a thousand files does not fill the room its list was to save; none
+   --  at all where Most is below nought.
+   function Left_Out
+     (Excluded : Item_Vectors.Vector; Reasons : Name_Lists.Vector; Most : Integer) return String
+   is
+      Left  : Unbounded_String;
+      Named : Natural := 0;
+      More  : Natural := 0;
+   begin
+      if Most < 0 then
+         return "";
+      end if;
+      for Index in 1 .. Natural (Excluded.Length) loop
+         if Ada.Strings.Fixed.Index (Reasons (Index), "over budget") /= 1
+           or else To_String (Excluded (Index).Kind) in "rules" | "task"
+         then
+            null;
+         elsif Named = Most then
+            More := More + 1;
+         else
+            Named := Named + 1;
+            if To_String (Excluded (Index).Kind) in "source" | "test" then
+               Append (Left, "- " & Slice (Excluded (Index).Id, 6, Length (Excluded (Index).Id)) & ASCII.LF);
+            else
+               Append (Left, "- " & Heading (Excluded (Index)) & ASCII.LF);
+            end if;
+         end if;
+      end loop;
+      if More > 0 then
+         Append (Left, "- and" & Natural'Image (More) & " more" & ASCII.LF);
+      end if;
+      return (if Left = Null_Unbounded_String then ""
+              else "## Left out for room" & ASCII.LF
+                   & "These were not given here, as the room ran out; read a file with read_file if you need it:"
+                   & ASCII.LF & To_String (Left) & ASCII.LF);
+   end Left_Out;
+
    -------------
    -- Profile --
    -------------
@@ -233,6 +309,46 @@ package body Model_Runner.Framework.Context is
                   & " profile=NAME plans it with another");
                return;
             end if;
+         end loop;
+
+         --  The list of what was left out takes room too: while it does
+         --  not fit, the last of the least wanted given is left out in its
+         --  turn -- a line in the list for a section in the room.
+         loop
+            declare
+               Listed : constant String := Left_Out (Result.Excluded, Result.Reasons, Result.Left_Most);
+               Extra  : constant Natural := (if Listed = "" then 0 else Estimate (Listed));
+               Drop   : Natural := 0;
+            begin
+               if Result.Cost + Extra <= Result.Budget then
+                  Result.Cost := Result.Cost + Extra;
+                  exit;
+               end if;
+               for Index in 1 .. Natural (Candidates.Length) loop
+                  if Chosen (Index) and then Candidates (Index).Rank /= Mandatory
+                    and then (Drop = 0 or else Candidates (Index).Rank >= Candidates (Drop).Rank)
+                  then
+                     Drop := Index;
+                  end if;
+               end loop;
+               if Drop = 0 and then Result.Left_Most >= 0 then
+                  --  Only what must be given is given: the list names fewer,
+                  --  down to none and then not even its count.
+                  Result.Left_Most := Result.Left_Most - 1;
+                  goto Again;
+               elsif Drop = 0 then
+                  exit;
+               end if;
+               declare
+                  Cost : constant Natural := Estimate (To_String (Candidates (Drop).Text)) + Section_Overhead;
+               begin
+                  Chosen (Drop) := False;
+                  Result.Cost := Result.Cost - Cost;
+                  Result.Excluded.Append (Candidates (Drop));
+                  Result.Reasons.Append ("over budget by" & Natural'Image (Result.Cost + Cost + Extra - Result.Budget));
+               end;
+            end;
+            <<Again>>
          end loop;
 
          --  In the order offered, which is the order they are rendered.
@@ -1101,42 +1217,6 @@ package body Model_Runner.Framework.Context is
    function Rendered (From : Built) return String is
       Text : Unbounded_String;
 
-      --  A heading a reader, or a model, takes for what it is rather than
-      --  for an identifier to call.
-      function Heading (Next : Item) return String is
-         Kind : constant String := To_String (Next.Kind);
-         Id   : constant String := To_String (Next.Id);
-      begin
-         if Kind = "rules" then
-            return "Rules";
-         elsif Kind = "task" then
-            return "The task, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
-         elsif Kind = "runtime" then
-            return "Where the task stands";
-         elsif Kind = "configuration" then
-            return "The project's configuration";
-         elsif Kind = "authority" then
-            return "What governs the work";
-         elsif Kind = "symbols" then
-            return "What its files declare";
-         elsif Kind = "tests" then
-            return "The tests that bear on it";
-         elsif Kind = "test" then
-            return "The test " & Id (Id'First + 5 .. Id'Last);
-         elsif Kind = "results" then
-            return "What the last attempt left";
-         elsif Kind = "parent" then
-            return "The task this is a part of, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
-         elsif Kind = "helped" then
-            return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
-         elsif Kind = "brief" then
-            return "What you are asked";
-         elsif Kind = "source" then
-            return "The file " & Id (Id'First + 5 .. Id'Last);
-         else
-            return "The " & Kind & " " & Id;
-         end if;
-      end Heading;
       --  The files given whole: their symbols are there to read already.
       Quoted : Name_Lists.Vector;
 
@@ -1199,27 +1279,7 @@ package body Model_Runner.Framework.Context is
       end loop;
       --  What was left out for room, named: a file it does not see is one
       --  it may read, not one that is not there.
-      declare
-         Left : Unbounded_String;
-      begin
-         for Index in 1 .. Natural (From.Excluded.Length) loop
-            --  Only what the room left out: one the same as another given is
-            --  given.
-            if Ada.Strings.Fixed.Index (From.Reasons (Index), "over budget") /= 1 then
-               null;
-            elsif To_String (From.Excluded (Index).Kind) in "source" | "test" then
-               Append (Left, "- " & Slice (From.Excluded (Index).Id, 6, Length (From.Excluded (Index).Id))
-                       & ASCII.LF);
-            elsif To_String (From.Excluded (Index).Kind) not in "rules" | "task" then
-               Append (Left, "- " & Heading (From.Excluded (Index)) & ASCII.LF);
-            end if;
-         end loop;
-         if Left /= Null_Unbounded_String then
-            Append (Text, "## Left out for room" & ASCII.LF
-                    & "These were not given here, as the room ran out; read a file with read_file if you need it:"
-                    & ASCII.LF & Left & ASCII.LF);
-         end if;
-      end;
+      Append (Text, Left_Out (From.Excluded, From.Reasons, From.Left_Most));
       return To_String (Text & From.Instructions);
    end Rendered;
 

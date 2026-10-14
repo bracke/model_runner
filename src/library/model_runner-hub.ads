@@ -43,6 +43,17 @@ package Model_Runner.Hub is
    --  @return True when Named has the shape of a hub reference.
    function Is_Reference (Named : String) return Boolean;
 
+   --  Whether a file name the hub lists may be written under the models
+   --  directory as it is: relative, in forward-slash segments none of which
+   --  is "." or "..", with no backslash, colon or control character. The
+   --  listing is the server's word, and a name that climbed out of the
+   --  directory -- or named a drive -- would write wherever it pointed; a
+   --  file so named is left out of the listing.
+   --
+   --  @param Name The rfilename as the hub gave it.
+   --  @return True when Name stays inside the directory it is joined to.
+   function Is_Safe_File_Name (Name : String) return Boolean;
+
    --  Whether a name is a repository without a quant -- owner/repo, a slash
    --  in it and no colon, and not a .gguf path -- for which Pick chooses
    --  the quant rather than the caller naming one.
@@ -115,7 +126,9 @@ package Model_Runner.Hub is
    --  The file arrived whole only when its bytes match the hub's SHA-256,
    --  where the hub gave one: a truncated or corrupt download is a failure,
    --  not a model, and the file it left is removed so a run does not open
-   --  it or take it for done.
+   --  it or take it for done. The bytes gather in Dest_Path & ".part" and
+   --  take the file's name only once they are checked, so a file at
+   --  Dest_Path is one that arrived whole; the part is what is resumed.
    --
    --  Told how a download is going, so a caller can paint a progress line:
    --  the bytes fetched so far and the whole size where it is known, zero

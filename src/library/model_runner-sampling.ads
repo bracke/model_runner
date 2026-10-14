@@ -225,6 +225,22 @@ package Model_Runner.Sampling is
    function Is_Greedy (Item : Configuration) return Boolean
    is (Item.Temperature = 0.0);
 
+   --  Whether a draw from the whole distribution, kept where a mask allows
+   --  it and drawn again from the masked one where it does not, is a draw
+   --  from the masked distribution: true greedily, and where nothing reads
+   --  the distribution to decide what stays -- no top-k, top-p, min-p,
+   --  top-a, typical or tail-free filter, no XTC, no mirostat, no dynamic
+   --  temperature. Penalties change the logits alike either way.
+   --
+   --  @param Item Configuration to inspect.
+   --  @return True when the shortcut leaves the draw's distribution alone.
+   function Masking_Commutes (Item : Configuration) return Boolean
+   is (Is_Greedy (Item)
+       or else (Item.Top_K = 0 and then Item.Top_P >= 1.0 and then Item.Min_P <= 0.0
+                and then Item.Top_A <= 0.0 and then Item.Typical_P >= 1.0
+                and then Item.Tail_Free >= 1.0 and then Item.XTC_Probability <= 0.0
+                and then Item.Mirostat = 0 and then Item.Dynatemp_Range <= 0.0));
+
    --  Check a configuration.
    --
    --  @param Item Configuration to check.

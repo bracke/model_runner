@@ -1,12 +1,15 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Task_Attributes;
 with Ada.Task_Identification;
+
+with GNAT.OS_Lib;
 
 with Hostkit.Fs;
 with Hostkit.Host;
@@ -59,11 +62,20 @@ package body Model_Runner.Framework.Execution is
 
    --  Resolve the command before env clears PATH. This matters especially on
    --  Windows, where the native PATH uses semicolons but the MSYS env utility
-   --  interprets the replacement PATH as a POSIX search path.
+   --  interprets the replacement PATH as a POSIX search path. A name with a
+   --  directory in it is no search: it is passed as written, so a relative
+   --  one is found from where the command runs -- the workspace, the
+   --  check's directory -- not from where this process does.
    function Executable (Name : String) return String is
-      Located : constant String := Hostkit.Process.Locate (Name);
    begin
-      return (if Located = "" then Name else Located);
+      if (for some C of Name => C in '/' | '\') then
+         return Name;
+      end if;
+      declare
+         Located : constant String := Hostkit.Process.Locate (Name);
+      begin
+         return (if Located = "" then Name else Located);
+      end;
    end Executable;
 
    ---------------
@@ -469,6 +481,46 @@ package body Model_Runner.Framework.Execution is
       return Isolation = Yes;
    end Can_Isolate;
 
+   --  The places under /run a confined check reads and the empty /run
+   --  over it would hide: the directory the resolver's file really is in,
+   --  where that is under /run, and the search path's entries there.
+   function Run_Readable return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      function Under_Run (Path : String) return Boolean is
+        (Path'Length > 5 and then Path (Path'First .. Path'First + 4) = "/run/");
+      procedure Keep (Path : String) is
+      begin
+         if Under_Run (Path) and then not Result.Contains (Path) and then Path /= "/run/systemd/resolve" then
+            Result.Append (Path);
+         end if;
+      end Keep;
+   begin
+      declare
+         Real : constant String := GNAT.OS_Lib.Normalize_Pathname ("/etc/resolv.conf", Resolve_Links => True);
+      begin
+         if Under_Run (Real) then
+            Keep (Ada.Directories.Containing_Directory (Real));
+         end if;
+      end;
+      if Ada.Environment_Variables.Exists ("PATH") then
+         declare
+            Search : constant String := Ada.Environment_Variables.Value ("PATH");
+            Start  : Positive := Search'First;
+         begin
+            for Index in Search'First .. Search'Last + 1 loop
+               if Index > Search'Last or else Search (Index) = ':' then
+                  Keep (Search (Start .. Index - 1));
+                  Start := Index + 1;
+               end if;
+            end loop;
+         end;
+      end if;
+      return Result;
+   exception
+      when others =>
+         return Result;
+   end Run_Readable;
+
    --  Take one of the project's process slots: a file of its own, made by
    --  a move that never replaces, holding this process's number, so that a
    --  slot a process that is gone left behind can be taken back.
@@ -499,18 +551,29 @@ package body Model_Runner.Framework.Execution is
                elsif Pass = 2 then
                   --  Held by a process that is gone: let go, and try again.
                   declare
-                     Held  : Unbounded_String;
-                     Read  : E.Error_Info;
+                     Seen    : Unbounded_String;
+                     Held    : Unbounded_String;
+                     Looked  : E.Error_Info;
+                     Read    : E.Error_Info;
                      Claimed : constant String := Draft & ".claimed";
                   begin
-                     --  Taken aside first, by one only: two that both found
-                     --  it stale do not both free it, nor free one taken
-                     --  afresh between the look and the taking.
-                     if Hostkit.Fs.Move_No_Replace (Path, Claimed) then
+                     --  Looked at where it is first: a slot whose holder
+                     --  lives is never moved, so its holder always finds it
+                     --  to let go. Only one that looks stale is taken
+                     --  aside -- by one only: two that both found it stale
+                     --  do not both free it -- and freed only if what was
+                     --  taken is what was looked at, not one taken afresh
+                     --  between the look and the taking.
+                     Files.Read_Text (Path, Seen, Looked);
+                     if E.Is_Ok (Looked) and then Standing_Of (To_String (Seen)) = Other_Process
+                       and then Hostkit.Fs.Move_No_Replace (Path, Claimed)
+                     then
                         Files.Read_Text (Claimed, Held, Read);
                         --  Gone, or another process given its id since: the
                         --  slot is free.
-                        if E.Is_Ok (Read) and then Standing_Of (To_String (Held)) = Other_Process then
+                        if E.Is_Ok (Read) and then Held = Seen
+                          and then Standing_Of (To_String (Held)) = Other_Process
+                        then
                            Files.Discard (Claimed);
                            if Hostkit.Fs.Move_No_Replace (Draft, Path) then
                               return Path;
@@ -705,8 +768,19 @@ package body Model_Runner.Framework.Execution is
             --  messages and session, none of the caller's to reach.
             for Word of Name_Lists.Vector'(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
                                            "--tmpfs", "/tmp", "--tmpfs", "/run",
-                                           "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
-                                           "--unshare-pid", "--unshare-ipc", "--new-session",
+                                           "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"])
+            loop
+               Arguments.Append (To_Unbounded_String (Word));
+            end loop;
+            --  And what else under /run is no socket but a place it reads:
+            --  the resolver's file where another keeper puts it, and the
+            --  program directories its search path names there (NixOS).
+            for Kept of Run_Readable loop
+               Arguments.Append (To_Unbounded_String ("--ro-bind-try"));
+               Arguments.Append (To_Unbounded_String (Kept));
+               Arguments.Append (To_Unbounded_String (Kept));
+            end loop;
+            for Word of Name_Lists.Vector'(["--unshare-pid", "--unshare-ipc", "--new-session",
                                            "--bind", Ada.Directories.Full_Name (Project),
                                            Ada.Directories.Full_Name (Project)])
             loop

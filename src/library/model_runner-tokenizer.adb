@@ -1,4 +1,5 @@
 with Ada.Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with Ada.Wide_Wide_Characters.Handling;
@@ -1476,6 +1477,65 @@ package body Model_Runner.Tokenizer is
       end loop;
    end Marker_At;
 
+   --  The noncharacter Defused puts inside a control marker, and Encode
+   --  takes out of what it encodes as text.
+   Guard_Mark : constant String :=
+     Character'Val (16#EF#) & Character'Val (16#B7#) & Character'Val (16#90#);
+
+   function Without_Guard (Text : String) return String is
+      Result : String (1 .. Text'Length);
+      Last   : Natural := 0;
+      Index  : Natural := Text'First;
+   begin
+      if Ada.Strings.Fixed.Index (Text, Guard_Mark) = 0 then
+         return Text;
+      end if;
+      while Index <= Text'Last loop
+         if Index + 2 <= Text'Last and then Text (Index .. Index + 2) = Guard_Mark then
+            Index := Index + 3;
+         else
+            Last := Last + 1;
+            Result (Last) := Text (Index);
+            Index := Index + 1;
+         end if;
+      end loop;
+      return Result (1 .. Last);
+   end Without_Guard;
+
+   function Defused (Item : Vocabulary; Text : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Index  : Natural := Text'First;
+      Token  : Token_Id;
+      Span   : Natural;
+   begin
+      if Item.Longest_Marker = 0 then
+         return Text;
+      end if;
+      while Index <= Text'Last loop
+         Marker_At (Item, Text, Index, Token, Span);
+         if Token /= No_Token and then Class_Of (Item, Token) = Class_Control then
+            declare
+               --  Its first character whole, so the mark falls between
+               --  characters.
+               First : Natural := 1;
+            begin
+               while Index + First <= Index + Span - 1
+                 and then Character'Pos (Text (Index + First)) in 16#80# .. 16#BF#
+               loop
+                  First := First + 1;
+               end loop;
+               Ada.Strings.Unbounded.Append (Result, Text (Index .. Index + First - 1) & Guard_Mark
+                                                     & Text (Index + First .. Index + Span - 1));
+               Index := Index + Span;
+            end;
+         else
+            Ada.Strings.Unbounded.Append (Result, Text (Index));
+            Index := Index + 1;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Defused;
+
    --  What the unigram road tokenizes: the caller's text with the file's own
    --  normalization table applied to it and its spaces written as the marker.
    --
@@ -2847,10 +2907,16 @@ package body Model_Runner.Tokenizer is
 
       --  Encode one stretch of ordinary text into what is left of Target.
       procedure Part (Text : String; Lead : Boolean; Ok : out Boolean) is
-         Made : Natural;
+         Made  : Natural;
+         --  A defused marker read as its characters: the mark out.
+         Plain : constant String := Without_Guard (Text);
       begin
+         if Plain = "" and then Text /= "" then
+            Ok := True;
+            return;
+         end if;
          Encode_Plain
-           (Item, Text, Lead,
+           (Item, Plain, Lead,
             Target (Target'First + Produced .. Target'Last), Made, Status);
          Ok := E.Is_Ok (Status);
          if Ok then

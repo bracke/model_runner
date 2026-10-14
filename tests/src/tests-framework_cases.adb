@@ -3466,6 +3466,26 @@ package body Tests.Framework_Cases is
          end;
          Assert (Read >= 1 and then Read < Rp.File_Count (Again),
                  "the refresh read more than changed:" & Natural'Image (Read));
+         --  Bytes among the sources, left out by the scan, are left out
+         --  again by a refresh from that graph when a source beside them
+         --  changes -- the refresh looked for their record and raised.
+         declare
+            Blob     : constant String := Project & "/src/blob.c";
+            Long_Ago : constant Long_Long_Integer := 1_700_000_000;
+            Ignored  : Boolean;
+            Before   : Rp.Graph;
+         begin
+            Put_File (Blob, "ELF" & ASCII.NUL & "bytes" & LF);
+            Ignored := Hostkit.Metadata.Set_File_Times (Blob, Long_Ago, Long_Ago);
+            Before := Rp.Scan (Project);
+            Put_File (Project & "/src/extra.ads", "package Extra is" & LF & "   X : constant := 9;" & LF
+                      & "end Extra;" & LF);
+            Refreshed := Rp.Refresh (Project, Before, Read);
+            Assert (Rp.Graph_Fingerprint (Refreshed) = Rp.Graph_Fingerprint (Rp.Scan (Project))
+                    and then Rp.File_Count (Refreshed) = Rp.File_Count (Before),
+                    "a refresh beside bytes the scan left out did not make the scan's graph");
+            Dirs.Delete_File (Blob);
+         end;
       end;
       Assert (Rp.Language_Of ("x.rs") = "Rust"
               and then Rp.Role_Of ("Makefile") = Rp.Build
@@ -5374,21 +5394,27 @@ package body Tests.Framework_Cases is
          --  What the room leaves out is named, so a file not given is one
          --  to read, not one that is not there.
          declare
-            Left_Out : Boolean := False;
+            Named : Boolean := False;
          begin
             for Size in reverse 1 .. 40 loop
                Cx.Build (Store, To_String (Id), Profile, Told, Status,
                          Instructions => [1 .. Size * 50 => 'y']);
                if E.Is_Ok (Status) then
                   for Index in 1 .. Cx.Excluded_Count (Told) loop
-                     Left_Out := Left_Out
-                       or else Ada.Strings.Fixed.Index (Cx.Excluded_Why (Told, Index), "over budget") = 1;
+                     Named := Named
+                       or else (Ada.Strings.Fixed.Index (Cx.Excluded_Why (Told, Index), "over budget") = 1
+                                and then Ada.Strings.Fixed.Index (Cx.Rendered (Told), "## Left out for room") > 0);
                   end loop;
+                  --  And the naming is within the room, not past it --
+                  --  whatever else is given.
+                  Assert (Cx.Cost (Told) <= Cx.Budget (Told)
+                          and then Cx.Estimate (Cx.Rendered (Told)) <= Cx.Budget (Told),
+                          "what the room left out was named past the room:" & Natural'Image (Cx.Cost (Told))
+                          & Natural'Image (Cx.Estimate (Cx.Rendered (Told))) & " of"
+                          & Natural'Image (Cx.Budget (Told)));
                end if;
-               exit when Left_Out;
             end loop;
-            Assert (Left_Out and then Ada.Strings.Fixed.Index (Cx.Rendered (Told), "## Left out for room") > 0,
-                    "what the room left out was not named");
+            Assert (Named, "what the room left out was not named");
          end;
          Status := E.Success;
       end;
@@ -5584,6 +5610,19 @@ package body Tests.Framework_Cases is
               "a status quoted in a fence was taken for the answer's: " & Iv.Claim (Said, "status"));
       Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & "status: failed", Said, Status);
       Assert (Status.Code = E.Framework_Contract_Violation, "an answer saying status twice was taken");
+      --  The same said again, as a recap closes, is one status.
+      Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & LF & "Status: Done", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
+              "a status said again the same was refused: " & Code_Of (Status));
+      --  Words beside a fence: what it fences is quoted, not the report,
+      --  however much it looks like one.
+      Iv.Hold (Iv.Work_Claim, "I edited the settings:" & LF & "```" & LF & "status: done" & LF
+               & "summary: kept" & LF & "```", Said, Status);
+      Assert (Status.Code = E.Framework_Contract_Violation,
+              "a status in a quoted file was taken for the answer's: " & Iv.Claim (Said, "status"));
+      Iv.Hold (Iv.Work_Claim, "```" & LF & "status: done" & LF & "summary: kept" & LF & "```", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
+              "a report fenced whole was not read: " & Code_Of (Status));
       Iv.Hold (Iv.Work_Claim,
                "{""status"": ""done"", ""summary"": ""finished""}" & LF & "and more besides",
                Said, Status);
@@ -5758,6 +5797,28 @@ package body Tests.Framework_Cases is
       --  raised.
       Assert (Ex.Refusal (Rules, "./echo planted") /= "" and then Ex.Refusal (Rules, "'' x") /= "",
               "a program given as a path was let past the list by its name, or nothing was run");
+
+      --  One allowed as a path is found from where the command runs, not
+      --  from where this program does.
+      declare
+         Project : constant String := Dirs.Containing_Directory (S.Root (Store));
+      begin
+         Dirs.Create_Path (Project & "/sub");
+         Put_File (Project & "/sub/say.sh", "#!/bin/sh" & LF & "echo from-sub" & LF);
+         GNAT.OS_Lib.Set_Executable (Project & "/sub/say.sh");
+         --  And one of the same name where this program runs, which the
+         --  search found first.
+         Put_File (Dirs.Current_Directory & "/say.sh", "#!/bin/sh" & LF & "echo from-here" & LF);
+         GNAT.OS_Lib.Set_Executable (Dirs.Current_Directory & "/say.sh");
+         Rules.Allowed.Append ("./say.sh");
+         Ex.Run (Store, Change, Rules, "./say.sh", "sub", Ran, Status);
+         Dirs.Delete_File (Dirs.Current_Directory & "/say.sh");
+         Assert (E.Is_Ok (Status) and then Ran.Exit_Status = 0 and then Index (Ran.Output, "from-sub") > 0,
+                 "a program allowed as a relative path was not found where the command runs: " & Code_Of (Status)
+                 & Integer'Image (Ran.Exit_Status) & " " & To_String (Ran.Output));
+         Dirs.Delete_Tree (Project & "/sub");
+         Change := S.No_Changes;
+      end;
 
       --  No network where the policy denies it: taken away where the host
       --  can, and refused where it cannot -- not run with it. Where a
@@ -7245,6 +7306,16 @@ package body Tests.Framework_Cases is
          Assert (not Pm.Effective (Empty_Store, "analysis", "") (Pm.Write_Source).Granted,
                  "a grant of roots= naming nothing was taken for one with no limit");
          S.Close (Empty_Store);
+         --  Nor does one whose list is only separators, or one whose empty
+         --  list a slip before it hid.
+         for Text of Model_Runner.Framework.Name_Lists.Vector'(["roots=|", "roots=src/ deny=| ", "deny=x foo roots="])
+         loop
+            Task_Project (Empty_Store, "permission-empty", "map permission.kind.analysis.write_source = "
+                          & Text & LF);
+            Assert (not Pm.Effective (Empty_Store, "analysis", "") (Pm.Write_Source).Granted,
+                    "a grant of " & Text & " was taken for one with no limit");
+            S.Close (Empty_Store);
+         end loop;
       end;
 
       --  A grant written on, as a template may write it, is granted whole.
@@ -9286,6 +9357,23 @@ package body Tests.Framework_Cases is
                  and then Natural (Done.Requirements.Length) = 1,
                  "work that completed did not verify the requirement it served: "
                  & To_String (Held.State));
+
+         --  A name with what looks like a note in it is that name, marked
+         --  or not: a cut at " (" made it a file that is not there.
+         Tk.Create (Store, Change, Fields ("Noted", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/notes (draft).txt"),
+                                     Answer => To_Unbounded_String
+                                       ("status: done" & LF & "summary: x" & LF
+                                        & "changed_files: `src/notes (draft).txt`"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete",
+                 "a changed file with a bracket in its name was taken for one not there: "
+                 & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       end;
       S.Close (Store);
 

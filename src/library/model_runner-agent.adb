@@ -124,6 +124,11 @@ package body Model_Runner.Agent is
       Words : constant access constant Vocab.Vocabulary :=
         L.Vocabulary (Source);
 
+      --  A message's content as the template is to see it: a control
+      --  marker someone wrote in it is text, not a turn.
+      function Content_Text (Text : String) return String
+      is (Vocab.Defused (Words.all, Text));
+
       Have_Tools : constant Boolean :=
         Model_Runner.Tools.Count (Offered) > 0;
 
@@ -283,7 +288,8 @@ package body Model_Runner.Agent is
             True, Buffer.all, Last, Status,
             Thinking => Thinking,
             Tools    => (if Have_Tools then Offered'Unrestricted_Access
-                         else null));
+                         else null),
+            Literal => Content_Text'Access);
          if E.Is_Ok (Status) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
@@ -367,7 +373,8 @@ package body Model_Runner.Agent is
                  Rendered.all,
                  Thinking => Thinking,
                  Tools    => (if Have_Tools then Offered'Unrestricted_Access
-                              else null));
+                              else null),
+                 Literal => Content_Text'Access);
 
             --  No more asked of a generation than the run has left.
             if Max_Total_Tokens > 0 then

@@ -12,9 +12,20 @@ procedure Render
    Tools                 : access constant Offered_Tools.Definitions
      := null;
    Image_Marker          : String := "";
-   Video_Marker          : String := "")
+   Video_Marker          : String := "";
+   Literal               : access function (Text : String) return String := null)
 is
    Count      : constant Natural := Conv.Length (Messages);
+
+   --  A message's content as the template is to see it: through Literal,
+   --  where the caller gave one.
+   function Content_Text (At_Message : Positive) return String is
+     (if Literal = null then Conv.Content_At (Messages, At_Message)
+      else Literal (Conv.Content_At (Messages, At_Message)));
+   function Parts_Text (At_Message : Positive) return String is
+     (if Literal = null or else Conv.Parts_At (Messages, At_Message) = ""
+      then Conv.Parts_At (Messages, At_Message)
+      else Literal (Conv.Parts_At (Messages, At_Message)));
 
    --  How many tools the caller offered. None and none offered are the
    --  same thing to a template: "if tools" is false either way, and a
@@ -765,12 +776,12 @@ is
          return Nothing;
       end if;
       declare
-         Parts : constant String := Conv.Parts_At (Messages, At_Message);
+         Parts : constant String := Parts_Text (At_Message);
       begin
          if Parts'Length > 0 then
             return As_Parts (Parts);
          end if;
-         return As_Text (Conv.Content_At (Messages, At_Message));
+         return As_Text (Content_Text (At_Message));
       end;
    end Content_Of;
 
@@ -2016,8 +2027,8 @@ is
                                 (Conv.Sender_At (Messages, At_Message)))
                     & ", ""content"": "
                     & (if Conv.Parts_At (Messages, At_Message) /= ""
-                       then Conv.Parts_At (Messages, At_Message)
-                       else Quoted (Conv.Content_At (Messages, At_Message))));
+                       then Parts_Text (At_Message)
+                       else Quoted (Content_Text (At_Message))));
                if Conv.Call_Count (Messages, At_Message) > 0 then
                   Add (", ""tool_calls"": [");
                   for Which in 1 .. Conv.Call_Count (Messages, At_Message)

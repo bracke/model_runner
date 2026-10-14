@@ -29,7 +29,7 @@ begin
                return Conv.Role_Name
                  (Conv.Sender_At (Messages, At_Message));
             else
-               return Conv.Content_At (Messages, At_Message);
+               return Content_Text (At_Message);
             end if;
          end;
 
@@ -113,7 +113,7 @@ begin
                return Conv.Role_Name
                  (Conv.Sender_At (Messages, At_Message));
             else
-               return Conv.Content_At (Messages, At_Message);
+               return Content_Text (At_Message);
             end if;
          end;
       when Term_Generation_Prompt =>

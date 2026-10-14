@@ -266,6 +266,21 @@ package Model_Runner.Tokenizer is
       Count  : out Natural;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Text with every control marker in it -- <|im_end|>, <start_of_turn>,
+   --  [INST] as the vocabulary has them -- made text: a noncharacter,
+   --  U+FDD0, put after its first character, so Encode does not take it
+   --  for the marker, and taken out again by Encode, so the model reads
+   --  the marker's characters as any other text, as llama.cpp reads a
+   --  message's content without parse_special. For what a user, a file
+   --  or a tool wrote, which is not to open or close a turn. A marker the
+   --  vocabulary's author added as a word of its own -- <think> -- is
+   --  left as it is: it is no turn of the template's.
+   --
+   --  @param Item Vocabulary whose markers are meant.
+   --  @param Text Message content.
+   --  @return Text, each control marker in it defused.
+   function Defused (Item : Vocabulary; Text : String) return String;
+
    --  Encode text into tokens.
    --
    --  @param Item Loaded vocabulary.

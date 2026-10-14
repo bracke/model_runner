@@ -1,13 +1,16 @@
 with Ada.Calendar;
 with Ada.Directories;
+with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with System.Storage_Elements;
+with Hostkit.Durability;
 with Model_Runner.Platform;
 
 package body Model_Runner.Panel_Cache is
 
    package B renames Model_Runner.Bytes;
    use type B.Byte_Count;
+   use type Hostkit.Durability.Outcome;
    use type System.Storage_Elements.Integer_Address;
 
    --------------
@@ -86,6 +89,15 @@ package body Model_Runner.Panel_Cache is
 
    Header_Size : constant := 4096;
 
+   --  The rename into Path on the device too, so the name and the bytes
+   --  it names arrive together. Best effort: the bytes are already there.
+   procedure Settle_Name (Path : String) is
+      Outcome : constant Hostkit.Durability.Outcome :=
+        Hostkit.Durability.Sync_Directory (Ada.Directories.Containing_Directory (Path));
+   begin
+      pragma Unreferenced (Outcome);
+   end Settle_Name;
+
    -----------------
    -- Begin_Build --
    -----------------
@@ -151,10 +163,18 @@ package body Model_Runner.Panel_Cache is
       Path : constant String := Ada.Strings.Unbounded.To_String (Item.Path);
    begin
       Ok := False;
+      --  The panels on the device before the name says they are whole: a
+      --  crash after a rename that outran the data would leave a file
+      --  whose first panel verifies over zeros past it.
+      if Hostkit.Durability.Sync_File (Path & ".part") = Hostkit.Durability.Failed then
+         Abandon (Item);
+         return;
+      end if;
       if Ada.Directories.Exists (Path) then
          Ada.Directories.Delete_File (Path);
       end if;
       Ada.Directories.Rename (Path & ".part", Path);
+      Settle_Name (Path);
       Ok := True;
 
       Model_Runner.Platform.Trim_Directory
@@ -265,10 +285,14 @@ package body Model_Runner.Panel_Cache is
          end;
 
          Close (Out_F);
+         if Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed then
+            raise Ada.IO_Exceptions.Use_Error;
+         end if;
          if Ada.Directories.Exists (Path) then
             Ada.Directories.Delete_File (Path);
          end if;
          Ada.Directories.Rename (Part, Path);
+         Settle_Name (Path);
 
          --  The cache kept to its bound, these panels whatever their size.
          Model_Runner.Platform.Trim_Directory

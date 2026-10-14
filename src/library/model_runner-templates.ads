@@ -364,6 +364,10 @@ package Model_Runner.Templates is
    --    a picture's parts are then refused rather than rendered inline.
    --  @param Video_Marker What a video stands as, as Image_Marker is for a
    --    picture.
+   --  @param Literal What each message's content -- its text, its parts --
+   --    is passed through before the template sees it, or null for as it
+   --    is: the vocabulary's Defused, so a control marker a user, a file or
+   --    a tool wrote is text to the model, not a turn of its own.
    procedure Render
      (Item                  : Compiled;
       Messages              : Model_Runner.Conversation.History;
@@ -377,7 +381,8 @@ package Model_Runner.Templates is
       Tools                 : access constant Model_Runner.Tools.Definitions
         := null;
       Image_Marker          : String := "";
-      Video_Marker          : String := "");
+      Video_Marker          : String := "";
+      Literal               : access function (Text : String) return String := null);
 
    --  How many bytes at the end of a rendering with the generation prompt
    --  the same conversation rendered without it does not share: the
@@ -395,6 +400,7 @@ package Model_Runner.Templates is
    --  @param Tools As Render was given.
    --  @param Image_Marker As Render was given.
    --  @param Video_Marker As Render was given.
+   --  @param Literal As Render was given.
    --  @return Bytes from the end of Rendered.
    function Opening
      (Item            : Compiled;
@@ -406,7 +412,8 @@ package Model_Runner.Templates is
       Tools           : access constant Model_Runner.Tools.Definitions
         := null;
       Image_Marker    : String := "";
-      Video_Marker    : String := "") return Natural;
+      Video_Marker    : String := "";
+      Literal         : access function (Text : String) return String := null) return Natural;
 
    --  Report whether a template reads the tools a caller may offer.
    --

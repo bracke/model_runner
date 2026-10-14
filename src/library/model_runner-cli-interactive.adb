@@ -365,6 +365,11 @@ package body Model_Runner.CLI.Interactive is
       Words  : constant access constant Vocab.Vocabulary :=
         L.Vocabulary (Prepared);
 
+      --  A message's content as the template is to see it: a control
+      --  marker someone wrote in it is text, not a turn.
+      function Content_Text (Text : String) return String
+      is (Vocab.Defused (Words.all, Text));
+
       Messages : Conv.History;
 
       --  The project's revision the conversation last saw: what it moved by
@@ -469,7 +474,8 @@ package body Model_Runner.CLI.Interactive is
             True, Buffer.all, Last, Outcome,
             Thinking => Item.Thinking, Tools => Tools,
             Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
-            Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer));
+            Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer),
+            Literal => Content_Text'Access);
          if E.Is_Ok (Outcome) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
@@ -1104,7 +1110,8 @@ package body Model_Runner.CLI.Interactive is
               Rendered.all,
               Thinking => Item.Thinking, Tools => Tools,
               Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
-              Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer));
+              Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer),
+              Literal => Content_Text'Access);
 
          Gen.Release (Last_Result);
          Gen.Generate

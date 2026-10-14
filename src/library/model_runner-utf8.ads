@@ -49,6 +49,15 @@ package Model_Runner.UTF8 is
    --  @return Number of leading bytes that are safe to emit.
    function Safe_Prefix_Length (Item : String) return Natural;
 
+   --  Item with every byte that is no part of a well-formed sequence -- a
+   --  stray continuation, a sequence cut short, an overlong form -- taken
+   --  for U+FFFD, the replacement character, as a reader of UTF-8 shows
+   --  it: text that will be read again, kept or compared is then text.
+   --
+   --  @param Item Bytes, perhaps not all UTF-8.
+   --  @return Valid UTF-8, the same as Item where Item already was.
+   function Repaired (Item : String) return String;
+
    --  Number of code points in a well-formed string.
    --
    --  @param Item Well-formed UTF-8 text.

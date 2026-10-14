@@ -140,8 +140,9 @@ package body Model_Runner.UTF8 is
             begin
                --  A truncated but so-far-consistent sequence at the end is
                --  withheld: more bytes may complete it. Anything else is
-               --  malformed no matter what follows, so release it and let the
-               --  caller observe the error.
+               --  malformed no matter what follows: that byte is released
+               --  for the caller to observe, and the scan goes on past it,
+               --  so a truncated sequence after it is still withheld.
                if Needed > 1 and then Available < Needed then
                   for Offset in 1 .. Available - 1 loop
                      if not Is_Continuation (Item (Index + Offset)) then
@@ -155,13 +156,43 @@ package body Model_Runner.UTF8 is
                   end if;
                end if;
 
-               return Item'Length;
+               Index := Index + 1;
             end;
          end if;
       end loop;
 
       return Item'Length;
    end Safe_Prefix_Length;
+
+   --------------
+   -- Repaired --
+   --------------
+
+   function Repaired (Item : String) return String is
+      Replacement : constant String :=
+        Character'Val (16#EF#) & Character'Val (16#BF#) & Character'Val (16#BD#);
+      Result : String (1 .. 3 * Item'Length);
+      Last   : Natural := 0;
+      Index  : Natural := Item'First;
+      Length : Natural;
+   begin
+      if Is_Valid (Item) then
+         return Item;
+      end if;
+      while Index <= Item'Last loop
+         Scan_Sequence (Item, Index, Length);
+         if Length > 0 then
+            Result (Last + 1 .. Last + Length) := Item (Index .. Index + Length - 1);
+            Last := Last + Length;
+            Index := Index + Length;
+         else
+            Result (Last + 1 .. Last + 3) := Replacement;
+            Last := Last + 3;
+            Index := Index + 1;
+         end if;
+      end loop;
+      return Result (1 .. Last);
+   end Repaired;
 
    ----------------------
    -- Code_Point_Count --

@@ -47,8 +47,10 @@ package Model_Runner.Platform.Mapping is
    --  Map a file that exists, grown or cut to Size first, for reading and
    --  writing, shared: what is written into the mapping is the file's,
    --  and goes to the disk when the host writes it back rather than when
-   --  the writer does. Released by Close as a read-only one is. A host
-   --  that does not offer it says so and maps nothing.
+   --  the writer does. Its blocks are reserved before it is mapped where
+   --  the host can, so a disk without the room refuses it here rather
+   --  than faulting the writer later. Released by Close as a read-only one
+   --  is. A host that does not offer it says so and maps nothing.
    --
    --  @param Item Region to fill in.
    --  @param Path File to map; it must exist.

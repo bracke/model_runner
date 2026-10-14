@@ -3723,11 +3723,22 @@ package body Tests.Inference_Cases is
                  & (if Row.Heads > 1 then " with heads as wide as Gemma's" else "")
                  & (if Row.Experts > 0 then " as a mixture" else "");
             begin
-               Tiny_Model.Build
-                 (Image, Row.Format, Room => Room, Kind => Row.Kind,
-                  Window => Row.Window, Head_Factor => Row.Heads,
-                  Experts => Row.Experts, Experts_Used => Row.Used,
-                  Expert_Width => Row.Expert_Width);
+               --  Built on a stack of its own: a mixture of sixty-four
+               --  experts at the deep widths draws each expert tensor whole,
+               --  tens of megabytes, past the eight a process is given.
+               declare
+                  task Builder with Storage_Size => 512 * 1024 * 1024;
+                  task body Builder is
+                  begin
+                     Tiny_Model.Build
+                       (Image, Row.Format, Room => Room, Kind => Row.Kind,
+                        Window => Row.Window, Head_Factor => Row.Heads,
+                        Experts => Row.Experts, Experts_Used => Row.Used,
+                        Expert_Width => Row.Expert_Width);
+                  end Builder;
+               begin
+                  null;
+               end;
                Logits_On
                  (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why);
                Assert (Why = E.No_Error,
@@ -7285,6 +7296,70 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Draft_Catches_Up_With_A_Reused_Prefix;
 
+   --  A prompt the session holds whole -- read before, nothing generated
+   --  past it -- is asked again: its last token is read again for the
+   --  distribution the first draw is from, and the run says what a fresh
+   --  session says. Taken as read, there was no distribution at all.
+   procedure A_Prompt_Held_Whole_Is_Read_For_Its_Draw
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Room => 64);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         Live, Alone : L.Session;
+         Request : Gen.Request;
+         Stop    : Model_Runner.Stops.Set;
+         Read, Again, Fresh : Gen.Result;
+         Status  : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+         L.Open (Alone, Under.Ready, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the fresh session did not open");
+
+         Model_Runner.Stops.Open (Stop);
+         Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+         Request.Seed := 1;
+         Request.Has_Seed := True;
+         Request.Add_Beginning := True;
+         Request.Retain_Text := True;
+
+         Request.Max_Tokens := 0;
+         Gen.Generate (Under.Ready, Live, "abbaabba", Request, Stop, null, null,
+                       null, null, null, null, Outcome => Read);
+         Request.Max_Tokens := 6;
+         Request.Reuse_Committed_Prefix := True;
+         Gen.Generate (Under.Ready, Live, "abbaabba", Request, Stop, null, null,
+                       null, null, null, null, Outcome => Again);
+         Request.Reuse_Committed_Prefix := False;
+         Gen.Generate (Under.Ready, Alone, "abbaabba", Request, Stop, null, null,
+                       null, null, null, null, Outcome => Fresh);
+         Assert (Again.Generated_Tokens > 0
+                 and then Gen.Generated_Text (Again) = Gen.Generated_Text (Fresh),
+                 "a prompt the session held whole said " & Gen.Generated_Text (Again)
+                 & " where a fresh session said " & Gen.Generated_Text (Fresh));
+
+         Gen.Release (Read);
+         Gen.Release (Again);
+         Gen.Release (Fresh);
+         Model_Runner.Stops.Close (Stop);
+         L.Close (Alone);
+         L.Close (Live);
+      end;
+
+      B.Free (Image);
+   end A_Prompt_Held_Whole_Is_Read_For_Its_Draw;
+
    ------------------------------------------------
    -- A_Draft_With_Fewer_Tokens_Keeps_The_Target --
    ------------------------------------------------
@@ -10413,6 +10488,21 @@ package body Tests.Inference_Cases is
                     & E.Error_Code'Image (Status.Code));
             Assert (Last >= 3, "the prompt made too few tokens");
             Assert (Tokens (1) = 1, "the beginning token was not prepended");
+
+            --  The mark that defuses a marker in a message is no text to a
+            --  byte-pair vocabulary either: the prompt with it is the
+            --  prompt without it.
+            declare
+               use type Vocab.Token_Array;
+               Marked : Vocab.Token_Array (1 .. 64);
+               Count  : Natural;
+            begin
+               Vocab.Encode
+                 (Words.all, "ab" & Character'Val (16#EF#) & Character'Val (16#B7#) & Character'Val (16#90#)
+                  & "c ab", True, False, Marked, Count, Status);
+               Assert (E.Is_Ok (Status) and then Count = Last and then Marked (1 .. Count) = Tokens (1 .. Last),
+                       "the mark that defuses a marker was encoded as text");
+            end;
 
             for Index in 1 .. Last loop
                Assert (Vocab.Is_Valid (Words.all, Tokens (Index)),
@@ -16177,6 +16267,9 @@ package body Tests.Inference_Cases is
         (T, A_Draft_Catches_Up_With_A_Reused_Prefix'Access,
          "a drafted run on a reused prefix brings its draft up to it and "
          & "says what the target says alone");
+      Register_Routine
+        (T, A_Prompt_Held_Whole_Is_Read_For_Its_Draw'Access,
+         "a prompt the session already holds whole is read again for its first draw");
       Register_Routine
         (T, Drafting_Runs_On_A_Device'Access,
          "a drafted run on the device backend says what the device says "

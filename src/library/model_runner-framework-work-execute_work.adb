@@ -257,7 +257,8 @@ is
    --  no-break spaces about it, a mark of code or emphasis round it, a
    --  note after it -- `src/a.adb`, **src/a.adb**, src/a.adb (new) -- and
    --  ./ before it taken off; the words for none read as none, however
-   --  written.
+   --  written. A note is only cut where the whole is no file changed or
+   --  there: docs/Notes (draft).md is a name, not docs/Notes and a note.
    function Claimed_Path (Line : String) return String is
       No_Break : constant String := Character'Val (16#C2#) & Character'Val (16#A0#);
       function Trimmed (Text : String) return String is
@@ -291,22 +292,33 @@ is
          end loop;
          return Text;
       end Unwrapped;
-      Bare  : constant String := Trimmed (Line);
+      function Without_Dot (Path : String) return String is
+        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
+         then Path (Path'First + 2 .. Path'Last) else Path);
+      Whole : constant String := Without_Dot (Unwrapped (Trimmed (Line)));
+      Bare  : constant String := Unwrapped (Trimmed (Line));
       Note  : constant Natural := Ada.Strings.Fixed.Index (Bare, " (");
       Dash  : constant Natural := Ada.Strings.Fixed.Index (Bare, " " & Character'Val (16#E2#) & Character'Val (16#80#)
                                                                 & Character'Val (16#94#) & " ");
       Cut   : constant Natural :=
         (if Note > 0 and then (Dash = 0 or else Note < Dash) then Note else Dash);
       Path  : constant String := Unwrapped (Trimmed (if Cut > 0 then Bare (Bare'First .. Cut - 1) else Bare));
-      Plain : constant String :=
-        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
-         then Path (Path'First + 2 .. Path'Last) else Path);
+      Plain : constant String := Without_Dot (Path);
       Lower : constant String := Ada.Characters.Handling.To_Lower (Plain);
    begin
       if Lower in "" | "-" | "none" | "none." | "nothing" | "nothing." | "n/a" | "(none)" then
          return "";
+      elsif Cut > 0 and then Whole /= ""
+        and then (for all C of Whole => C >= ' ')
+        and then (Result.Changed_Files.Contains (Whole)
+                  or else Ada.Directories.Exists (Hostkit.Fs.Join (To_String (Place), Whole)))
+      then
+         return Whole;
       end if;
       return Plain;
+   exception
+      when others =>
+         return Plain;
    end Claimed_Path;
 
    function Unreported_Note return String is

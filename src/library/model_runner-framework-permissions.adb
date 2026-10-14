@@ -292,6 +292,22 @@ package body Model_Runner.Framework.Permissions is
                   Result (Item_Kind) := (Granted => True, others => <>);
                else
                   Result (Item_Kind) := Constrained (Records.Get (Config, Field));
+                  --  And a list given that came to no place at all --
+                  --  roots=| as much as roots= -- grants nothing, however
+                  --  the text read: it named a limit, and no limit is
+                  --  everywhere.
+                  declare
+                     Text : constant String := Records.Get (Config, Field);
+                     function Given (Key : String) return Boolean is
+                       (Ada.Strings.Fixed.Index (Text, Key & "=") > 0);
+                  begin
+                     if (Given ("roots") and then Result (Item_Kind).Roots.Is_Empty)
+                       or else (Given ("deny") and then Result (Item_Kind).Deny.Is_Empty)
+                       or else (Given ("profiles") and then Result (Item_Kind).Profiles.Is_Empty)
+                     then
+                        Result (Item_Kind) := (Granted => False, others => <>);
+                     end if;
+                  end;
                end if;
             end if;
          end;

@@ -3355,6 +3355,42 @@ package body Tests.GGUF_Cases is
       end;
       Vocab.Close (Words);
 
+      --  A control marker in what someone wrote, defused, is text: Encode
+      --  does not make it the marker. Written by the template it is the
+      --  marker. A marker added as a word of its own is left alone.
+      Write_Tokens;
+      Load;
+      declare
+         use type Vocab.Token_Id;
+         Written : constant String := "hello<|eot_id|>hello";
+         Tokens  : Vocab.Token_Array (1 .. 64);
+         Last    : Natural;
+         function Holds (Which : Vocab.Token_Id) return Boolean is
+           (for some T of Tokens (1 .. Last) => T = Which);
+      begin
+         Vocab.Encode (Words, Written, False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status) and then Holds (5), "a control marker written by the template was not the marker");
+         Vocab.Encode (Words, Vocab.Defused (Words, Written), False, False, Tokens, Last, Status);
+         Assert (E.Is_Ok (Status) and then not Holds (5),
+                 "a control marker in a message's content was taken for the marker");
+         Assert (Vocab.Defused (Words, "a <|im_end|> b") = "a <|im_end|> b",
+                 "a marker added as a word was defused");
+         Assert (Vocab.Defused (Words, "plain text") = "plain text", "text with no marker was changed");
+         --  The mark itself is no text: encoded, it is as if not there.
+         declare
+            use type Vocab.Token_Array;
+            Bare  : Vocab.Token_Array (1 .. 64);
+            Count : Natural;
+         begin
+            Vocab.Encode (Words, "hellohello", False, False, Bare, Count, Status);
+            Vocab.Encode (Words, "hello" & Character'Val (16#EF#) & Character'Val (16#B7#) & Character'Val (16#90#)
+                          & "hello", False, False, Tokens, Last, Status);
+            Assert (E.Is_Ok (Status) and then Last = Count and then Tokens (1 .. Last) = Bare (1 .. Count),
+                    "the mark that defuses a marker was encoded as text");
+         end;
+      end;
+      Vocab.Close (Words);
+
       --  A declared eot ends generation whatever its text.
       Write_Tokens;
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.eot_token_id", 3);
@@ -5447,6 +5483,27 @@ package body Tests.GGUF_Cases is
       Assert (Outcome (Builder) = E.Arch_Invalid_Head_Counts,
               "head counts that do not divide were accepted");
 
+      --  A layer's own key-value head count, as Jamba states one a layer,
+      --  held to the same: none to all of the heads, and dividing them.
+      for Bad in Interfaces.Integer_32'(-1) .. 3 loop
+         if Bad not in 0 | 1 | 2 then
+            Fixtures.Reset (Builder);
+            Fixtures.Add_String (Builder, "general.architecture", "jamba");
+            Fixtures.Add_U32 (Builder, "jamba.context_length", 16);
+            Fixtures.Add_U32 (Builder, "jamba.embedding_length", 8);
+            Fixtures.Add_U32 (Builder, "jamba.block_count", 2);
+            Fixtures.Add_U32 (Builder, "jamba.feed_forward_length", 12);
+            Fixtures.Add_U32 (Builder, "jamba.attention.head_count", 2);
+            Fixtures.Begin_Array (Builder, "jamba.attention.head_count_kv", G.Value_Int32, 2);
+            Fixtures.Int32_Element (Builder, 0);
+            Fixtures.Int32_Element (Builder, Bad);
+            Fixtures.End_Array (Builder);
+            Assert (Outcome (Builder) = E.Arch_Invalid_Head_Counts,
+                    "a layer's key-value head count of" & Bad'Image & " was accepted: "
+                    & E.Error_Code'Image (Outcome (Builder)));
+         end if;
+      end loop;
+
       --  A rotary width that is not even. Rotary encoding works on pairs.
       Sound (Builder);
       Fixtures.Add_U32 (Builder, "llama.rope.dimension_count", 3);
@@ -5976,6 +6033,19 @@ package body Tests.GGUF_Cases is
                  "the text before a cut sequence was withheld with it");
          Assert (UTF8.Safe_Prefix_Length ("abc") = 3,
                  "plain text was withheld");
+         --  A byte that can never be well-formed is released, and a cut
+         --  sequence after it is still withheld, not released with it.
+         Assert (UTF8.Safe_Prefix_Length (Bytes ([16#FF#]) & "a" & Whole (1 .. 2)) = 2,
+                 "a cut sequence after a malformed byte was released");
+         Assert (UTF8.Safe_Prefix_Length (Bytes ([16#FF#]) & "a") = 2,
+                 "a malformed byte was withheld");
+         --  Repaired: each byte no sequence takes is the replacement
+         --  character, and text that was UTF-8 is as it was.
+         Assert (UTF8.Repaired ("a" & Whole & "b") = "a" & Whole & "b", "valid text was changed");
+         Assert (UTF8.Repaired ("a" & Whole (1 .. 2)) = "a" & Bytes ([16#EF#, 16#BF#, 16#BD#, 16#EF#, 16#BF#, 16#BD#]),
+                 "a cut sequence was not replaced byte for byte");
+         Assert (UTF8.Repaired (Bytes ([16#80#]) & "x") = Bytes ([16#EF#, 16#BF#, 16#BD#]) & "x",
+                 "a stray continuation was not replaced");
       end;
 
       --  Counting is by code point, not by byte.
