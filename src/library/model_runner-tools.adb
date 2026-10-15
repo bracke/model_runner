@@ -437,6 +437,50 @@ package body Model_Runner.Tools is
          return;
       end if;
 
+      if Syntax in Function_XML | Qwen_XML | Mistral_Call
+                  | DeepSeek_Fenced | DeepSeek_Plain
+      then
+         --  The prose before the first call as this syntax opens one: the
+         --  <tool_call> envelope, or -- where a model writes its element
+         --  bare, as MiniCPM always does and Qwen3-Coder now and then --
+         --  the <function element itself; Mistral's [TOOL_CALLS]; the
+         --  DeepSeek envelope or a call's own marker. Cut at the envelope
+         --  alone, a MiniCPM reply was kept whole as its content and its
+         --  calls attached as well, and the next prompt held each twice.
+         First := Reply'First;
+         Last  := Reply'First + Spoken_Length (Reply) - 1;
+         declare
+            function Marks_At (Position : Natural; Mark : String)
+              return Boolean
+            is (Position + Mark'Length - 1 <= Reply'Last
+                and then Reply (Position .. Position + Mark'Length - 1)
+                         = Mark);
+         begin
+            for Start in Reply'First .. Last loop
+               if (Syntax = Qwen_XML and then Marks_At (Start, "<function="))
+                 or else (Syntax = Function_XML
+                          and then Marks_At (Start, "<function name="))
+                 or else (Syntax = Mistral_Call
+                          and then Marks_At (Start, Mistral_Calls))
+                 or else (Syntax in DeepSeek_Fenced | DeepSeek_Plain
+                          and then (Marks_At (Start, DeepSeek_Calls_Begin)
+                                    or else Marks_At
+                                              (Start, DeepSeek_Call_Begin)))
+               then
+                  Last := Start - 1;
+                  while Last >= Reply'First
+                    and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF
+                                           | ASCII.CR
+                  loop
+                     Last := Last - 1;
+                  end loop;
+                  return;
+               end if;
+            end loop;
+         end;
+         return;
+      end if;
+
       if Syntax /= Recipient_JSON then
          --  The prose before the first block, as a span from the start.
          First := Reply'First;
@@ -486,7 +530,7 @@ package body Model_Runner.Tools is
                      Body_Last := Reply'Last;
                   end if;
 
-                  if Name = "all" then
+                  if Name = "all" or else Name = "all" & ASCII.CR then
                      First := Body_First;
                      Last  := Body_Last;
 
@@ -780,11 +824,24 @@ package body Model_Runner.Tools is
          declare
             Object    : constant String := Room (1 .. Written);
             Called    : constant String := Named_Function (Object);
-            Given     : constant String := Member (Object, "arguments");
+            --  The arguments under "arguments", or -- as Llama 3.1 and 3.2's
+            --  own templates ask for them, and llama.cpp reads them -- under
+            --  "parameters". Every call such a model wrote was printed as
+            --  its answer and none ran.
+            Named_Args : constant String := Member (Object, "arguments");
+            Given      : constant String :=
+              (if Named_Args /= "" then Named_Args
+               else Member (Object, "parameters"));
             Name_At   : Span;
             Where     : Span;
          begin
-            if Called = "" or else (not Announced and then Given = "") then
+            --  An object standing open is a call only where it names a tool
+            --  on offer, when the caller said what was offered: one that a
+            --  JSON answer holds, naming anything, is the answer's text.
+            if Called = "" or else (not Announced and then Given = "")
+              or else (not Announced and then Offered /= null
+                       and then not Offers (Offered.all, Called))
+            then
                if Announced then
                   Status := E.Make (E.Tools_Call_Malformed);
                   E.Add_Integer
@@ -893,6 +950,62 @@ package body Model_Runner.Tools is
          Item.Rows (Item.Used) := (Name => Name_At, Arguments => Args_At);
       end Store;
 
+      --  The next call's number on a malformed one.
+      procedure Malformed is
+      begin
+         Status := E.Make (E.Tools_Call_Malformed);
+         E.Add_Integer (Status, "index", Long_Long_Integer (Item.Used + 1));
+      end Malformed;
+
+      --  Store one call whose arguments are an object as the model wrote
+      --  it: read as JSON and written the one way, or malformed.
+      procedure Store_Object (Name : String; Object : String) is
+         Room    : String (1 .. Max_Call_Bytes);
+         Written : Natural;
+         Reading : E.Error_Info;
+      begin
+         Rewrite (Controls_Escaped (Object), Room, Written, Reading);
+         if E.Is_Error (Reading) then
+            Malformed;
+            return;
+         end if;
+         Store (Name, Room (1 .. Written));
+      end Store_Object;
+
+      --  Text without the space either side of it.
+      function Trimmed (Text : String) return String is
+         First : Natural := Text'First;
+         Last  : Natural := Text'Last;
+      begin
+         while First <= Last
+           and then Text (First) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+         loop
+            First := First + 1;
+         end loop;
+         while Last >= First
+           and then Text (Last) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+         loop
+            Last := Last - 1;
+         end loop;
+         return Text (First .. Last);
+      end Trimmed;
+
+      --  Whether a recipient reads as a function's name: letters, digits
+      --  and the few marks names carry, nothing else.
+      function Is_Name (Text : String) return Boolean is
+      begin
+         if Text = "" then
+            return False;
+         end if;
+         for C of Text loop
+            if C not in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '-' | '.'
+            then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Is_Name;
+
       --  The value of the name="..." attribute at or after From, or "" when
       --  there is none before End_At.
       function Attribute_Name (From, End_At : Natural) return String is
@@ -978,6 +1091,12 @@ package body Model_Runner.Tools is
          if I > S'Last or else S (I) not in '0' .. '9' then
             return False;
          end if;
+         --  A leading nought stands alone, as JSON has it: 0123 is no
+         --  number, and written bare it made the arguments no JSON at all.
+         if S (I) = '0' and then I < S'Last and then S (I + 1) in '0' .. '9'
+         then
+            return False;
+         end if;
          while I <= S'Last and then S (I) in '0' .. '9' loop
             I := I + 1;
          end loop;
@@ -1019,31 +1138,58 @@ package body Model_Runner.Tools is
          end if;
       end As_JSON_Value;
 
-      --  A tag's value as the parameter's schema has it: where the tool
-      --  offered says the parameter is an array or an object, the JSON the
-      --  model wrote for it -- as the family's own template writes one --
-      --  and otherwise as above. A list a Qwen wrote in a tag was taken for
-      --  a string holding one, and refused.
-      function As_Typed_Value (Tool, Key, Raw : String) return String is
+      --  The type the offered tool's schema gives a parameter: "string",
+      --  "integer", "number", "boolean", "array", "object" or "null"; or
+      --  empty where the tool is not offered, the parameter not described,
+      --  or its type not one word.
+      function Schema_Type (Tool, Key : String) return String is
       begin
-         if Offered /= null and then Raw /= "" and then Raw (Raw'First) in '[' | '{' then
+         if Offered /= null then
             for Index in 1 .. Count (Offered.all) loop
-               if Tool_Name (Offered.all, Index) = Tool
-                 and then Python_Calls.Parameter_Type (Definition (Offered.all, Index), Key)
-                          in "array" | "object"
-               then
-                  declare
-                     Room    : String (1 .. Max_Call_Bytes);
-                     Written : Natural;
-                     Reading : E.Error_Info;
-                  begin
-                     Rewrite (Controls_Escaped (Raw), Room, Written, Reading);
-                     if E.Is_Ok (Reading) then
-                        return Room (1 .. Written);
-                     end if;
-                  end;
+               if Tool_Name (Offered.all, Index) = Tool then
+                  return Python_Calls.Parameter_Type
+                           (Definition (Offered.all, Index), Key);
                end if;
             end loop;
+         end if;
+         return "";
+      end Schema_Type;
+
+      --  A tag's value as the parameter's schema has it, as llama.cpp reads
+      --  the same tags: a string parameter's text is a string whatever it
+      --  looks like -- a version "3.10", a file holding "42", a flag named
+      --  "true" -- and a number, a boolean, a list or an object the JSON the
+      --  model wrote for it, where it is that. Where the schema says
+      --  nothing, the text's own look decides, as before: a number, true,
+      --  false or null bare, anything else a string. A list a Qwen wrote in
+      --  a tag was taken for a string holding one, and refused; a string
+      --  that looked like a number reached the tool as a number.
+      function As_Typed_Value (Tool, Key, Raw : String) return String is
+         Kind : constant String := Schema_Type (Tool, Key);
+      begin
+         if Kind = "string" then
+            return As_JSON_String (Raw);
+         elsif Kind in "array" | "object" then
+            if Raw /= "" and then Raw (Raw'First) in '[' | '{' then
+               declare
+                  Room    : String (1 .. Max_Call_Bytes);
+                  Written : Natural;
+                  Reading : E.Error_Info;
+               begin
+                  Rewrite (Controls_Escaped (Raw), Room, Written, Reading);
+                  if E.Is_Ok (Reading) then
+                     return Room (1 .. Written);
+                  end if;
+               end;
+            end if;
+            return As_JSON_String (Raw);
+         elsif Kind in "integer" | "number" then
+            return (if Is_JSON_Number (Raw) then Raw else As_JSON_String (Raw));
+         elsif Kind = "boolean" then
+            return (if Raw in "true" | "false" then Raw
+                    else As_JSON_String (Raw));
+         elsif Kind = "null" then
+            return (if Raw = "null" then Raw else As_JSON_String (Raw));
          end if;
          return As_JSON_Value (Raw);
       end As_Typed_Value;
@@ -1104,8 +1250,9 @@ package body Model_Runner.Tools is
                         end if;
                         Add (As_JSON_String (Key));
                         Add (": ");
-                        Add (As_JSON_Value
-                               ((if V_Last >= V_First
+                        Add (As_Typed_Value
+                               (Name, Key,
+                                (if V_Last >= V_First
                                  then Reply (V_First .. V_Last) else "")));
                         Count := Count + 1;
                      end if;
@@ -1122,8 +1269,9 @@ package body Model_Runner.Tools is
 
       --  Read one <function=NAME> ... </function> block, Qwen3-Coder's form:
       --  the name after the '=', and each <parameter=ARG> ... </parameter>
-      --  whose value stands on its own lines. The value's surrounding
-      --  whitespace is dropped and it is written back as its JSON type.
+      --  whose value stands on its own lines. The line break either side
+      --  of the value is dropped and it is written back as its schema's
+      --  type.
       procedure Take_Qwen (First, Last : Natural) is
          Args  : String (1 .. Max_Call_Bytes);
          A_Len : Natural := 0;
@@ -1197,20 +1345,33 @@ package body Model_Runner.Tools is
                         loop
                            V_Last := V_Last + 1;
                         end loop;
-                        --  The value is on its own lines; drop the whitespace
-                        --  around it.
-                        while V_First <= V_Last
-                          and then Reply (V_First) in
-                            ' ' | ASCII.LF | ASCII.CR | ASCII.HT
-                        loop
+                        P := V_Last + 1;
+
+                        --  The value stands on its own lines: the one line
+                        --  break after the tag and the one before its close
+                        --  are the form's, and go, as llama.cpp reads them;
+                        --  everything else is the value's own. All the
+                        --  whitespace went once, and an edit's indented
+                        --  passage lost its indent and matched nothing.
+                        if V_First <= V_Last and then Reply (V_First) = ASCII.CR
+                          and then V_First < V_Last
+                          and then Reply (V_First + 1) = ASCII.LF
+                        then
+                           V_First := V_First + 2;
+                        elsif V_First <= V_Last
+                          and then Reply (V_First) = ASCII.LF
+                        then
                            V_First := V_First + 1;
-                        end loop;
-                        while V_Last >= V_First
-                          and then Reply (V_Last) in
-                            ' ' | ASCII.LF | ASCII.CR | ASCII.HT
-                        loop
+                        end if;
+                        if V_Last >= V_First and then Reply (V_Last) = ASCII.LF
+                        then
                            V_Last := V_Last - 1;
-                        end loop;
+                           if V_Last >= V_First
+                             and then Reply (V_Last) = ASCII.CR
+                           then
+                              V_Last := V_Last - 1;
+                           end if;
+                        end if;
                         if Key /= "" then
                            if Count > 0 then
                               Add (", ");
@@ -1223,7 +1384,6 @@ package body Model_Runner.Tools is
                                     then Reply (V_First .. V_Last) else "")));
                            Count := Count + 1;
                         end if;
-                        P := V_Last + 1;
                      end;
                   end;
                else
@@ -1544,8 +1704,14 @@ package body Model_Runner.Tools is
                   exit when Name_Last > Reply'Last;
 
                   declare
+                     --  The recipient as written, a CR before the line break
+                     --  dropped: "all\r" is "all".
                      Name       : constant String :=
-                       Reply (Pos .. Name_Last - 1);
+                       Reply (Pos .. (if Name_Last - 1 >= Pos
+                                        and then Reply (Name_Last - 1)
+                                                 = ASCII.CR
+                                      then Name_Last - 2
+                                      else Name_Last - 1));
                      Body_First : constant Natural := Name_Last + 1;
                      Body_Last  : Natural := Body_First - 1;
                   begin
@@ -1558,7 +1724,13 @@ package body Model_Runner.Tools is
                         Body_Last := Reply'Last;
                      end if;
 
-                     if Name /= "all" and then Name'Length > 0 then
+                     --  A recipient is a tool on offer, where the caller said
+                     --  what was offered, and a name in any case: ">>> import
+                     --  os" in prose the grammar did not hold is prose.
+                     if Name /= "all" and then Is_Name (Name)
+                       and then (Offered = null
+                                 or else Offers (Offered.all, Name))
+                     then
                         declare
                            Open : Natural := Body_First;
                         begin
@@ -1616,6 +1788,187 @@ package body Model_Runner.Tools is
                end;
             end loop;
          end;
+
+      when Mistral_Call =>
+         --  Mistral's own: [TOOL_CALLS] before each call, the name, [ARGS]
+         --  and the arguments object -- as Mistral Small 3.2, Devstral and
+         --  Magistral write them and llama.cpp reads them. The older form,
+         --  [TOOL_CALLS] and a list of {"name": .., "arguments": ..}
+         --  objects, is read too.
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Marks (Index, Mistral_Calls) then
+               declare
+                  P : Natural := Index + Mistral_Calls'Length;
+               begin
+                  while P <= Reply'Last
+                    and then Reply (P) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+                  loop
+                     P := P + 1;
+                  end loop;
+
+                  if P <= Reply'Last and then Reply (P) = '[' then
+                     --  The list: each object in it a call.
+                     P := P + 1;
+                     loop
+                        while P <= Reply'Last and then Reply (P) /= '{'
+                          and then Reply (P) /= ']'
+                        loop
+                           P := P + 1;
+                        end loop;
+                        exit when P > Reply'Last or else Reply (P) = ']';
+                        declare
+                           Shut  : constant Natural := Object_End (P);
+                           Taken : Boolean;
+                        begin
+                           if Shut = 0 then
+                              Malformed;
+                              return;
+                           end if;
+                           Take_One (Reply (P .. Shut), Taken => Taken);
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
+                           P := Shut + 1;
+                        end;
+                     end loop;
+                     Index := P;
+                  else
+                     declare
+                        Name_First : constant Natural := P;
+                        Name_Last  : Natural := P;
+                     begin
+                        while Name_Last <= Reply'Last
+                          and then not Marks (Name_Last, Mistral_Args)
+                          and then not Marks (Name_Last, Mistral_Calls)
+                        loop
+                           Name_Last := Name_Last + 1;
+                        end loop;
+                        if Name_Last > Reply'Last
+                          or else not Marks (Name_Last, Mistral_Args)
+                        then
+                           Malformed;
+                           return;
+                        end if;
+                        declare
+                           Name : constant String :=
+                             Trimmed (Reply (Name_First .. Name_Last - 1));
+                           Open : Natural := Name_Last + Mistral_Args'Length;
+                        begin
+                           while Open <= Reply'Last
+                             and then Reply (Open) in ' ' | ASCII.LF
+                                                    | ASCII.CR | ASCII.HT
+                           loop
+                              Open := Open + 1;
+                           end loop;
+                           if Name = "" or else Open > Reply'Last
+                             or else Reply (Open) /= '{'
+                           then
+                              Malformed;
+                              return;
+                           end if;
+                           declare
+                              Shut : constant Natural := Object_End (Open);
+                           begin
+                              if Shut = 0 then
+                                 Malformed;
+                                 return;
+                              end if;
+                              Store_Object (Name, Reply (Open .. Shut));
+                              if E.Is_Error (Status) then
+                                 return;
+                              end if;
+                              Index := Shut + 1;
+                           end;
+                        end;
+                     end;
+                  end if;
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
+
+      when DeepSeek_Fenced | DeepSeek_Plain =>
+         --  DeepSeek's: each call between its own markers, inside the
+         --  calls' envelope. R1 and V3 write the call's kind, the
+         --  separator, the name on a line of its own and the arguments in a
+         --  ```json fence; V3.1 writes the name, the separator and the
+         --  arguments. Either is read in either syntax, as one reader: what
+         --  stands before the separator says which.
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Marks (Index, DeepSeek_Call_Begin) then
+               declare
+                  First : constant Natural :=
+                    Index + DeepSeek_Call_Begin'Length;
+                  Shut  : Natural := First;
+                  Sep   : Natural := 0;
+               begin
+                  while Shut <= Reply'Last
+                    and then not Marks (Shut, DeepSeek_Call_End)
+                  loop
+                     if Sep = 0 and then Marks (Shut, DeepSeek_Sep) then
+                        Sep := Shut;
+                     end if;
+                     Shut := Shut + 1;
+                  end loop;
+                  if Shut > Reply'Last or else Sep = 0 then
+                     Malformed;
+                     return;
+                  end if;
+
+                  declare
+                     Before : constant String :=
+                       Trimmed (Reply (First .. Sep - 1));
+                     After  : constant Natural := Sep + DeepSeek_Sep'Length;
+                     Line   : Natural := After;
+                     Open   : Natural;
+                  begin
+                     if Before = "function" then
+                        while Line < Shut and then Reply (Line) /= ASCII.LF
+                        loop
+                           Line := Line + 1;
+                        end loop;
+                        Open := Line;
+                     else
+                        Open := After;
+                     end if;
+                     while Open < Shut and then Reply (Open) /= '{' loop
+                        Open := Open + 1;
+                     end loop;
+
+                     declare
+                        Name : constant String :=
+                          (if Before = "function"
+                           then Trimmed (Reply (After .. Line - 1))
+                           else Before);
+                        Last_Brace : constant Natural :=
+                          (if Open < Shut then Object_End (Open) else 0);
+                     begin
+                        if Name = "" then
+                           Malformed;
+                           return;
+                        end if;
+                        if Open >= Shut then
+                           Store (Name, "{}");
+                        elsif Last_Brace = 0 or else Last_Brace >= Shut then
+                           Malformed;
+                           return;
+                        else
+                           Store_Object (Name, Reply (Open .. Last_Brace));
+                        end if;
+                        if E.Is_Error (Status) then
+                           return;
+                        end if;
+                     end;
+                  end;
+                  Index := Shut + DeepSeek_Call_End'Length;
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
       end case;
    exception
       when others =>

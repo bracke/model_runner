@@ -1,6 +1,7 @@
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Model_Runner.Text;
 with Ada.Unchecked_Deallocation;
@@ -625,8 +626,29 @@ package body Model_Runner.Conversation is
       Offered : access constant Model_Runner.Tools.Definitions'Class := null)
    is
       Asked : Model_Runner.Tools.Calls;
+
+      --  Where the reply's answer begins: past the first </think>, or --
+      --  where a <think> opens and never closes -- past the reply's end,
+      --  since all of it was reasoning. Calls are read only from there. A
+      --  reasoning line that names <tool_call> paired with the real call's
+      --  close and lost it, and a call drafted in the reasoning was run.
+      function Answer_Start return Positive is
+         Close : constant Natural := Ada.Strings.Fixed.Index (Reply, "</think>");
+         Open  : constant Natural := Ada.Strings.Fixed.Index (Reply, "<think>");
+      begin
+         if Close /= 0 then
+            return Close + 8;
+         elsif Open /= 0 then
+            return Reply'Last + 1;
+         end if;
+         return Reply'First;
+      end Answer_Start;
+
+      Answer_At : constant Positive := Answer_Start;
    begin
-      Model_Runner.Tools.Read_Calls (Asked, Reply, Reading, Syntax => Syntax, Offered => Offered);
+      Model_Runner.Tools.Read_Calls
+        (Asked, Reply (Answer_At .. Reply'Last), Reading,
+         Syntax => Syntax, Offered => Offered);
 
       if E.Is_Error (Reading)
         or else Model_Runner.Tools.Count (Asked) = 0
@@ -647,7 +669,15 @@ package body Model_Runner.Conversation is
          --  block's body for Functionary's recipient form -- so a mixed
          --  reply's words are kept beside its calls rather than the raw
          --  blocks being handed back as text.
-         Model_Runner.Tools.Spoken_Span (Reply, Syntax, First, Last);
+         Model_Runner.Tools.Spoken_Span
+           (Reply (Answer_At .. Reply'Last), Syntax, First, Last);
+
+         --  And the reasoning before it, which is the turn's too.
+         if Answer_At > Reply'First
+           and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Recipient_JSON)
+         then
+            First := Reply'First;
+         end if;
          Append_Asking (Item, Reply (First .. Last), Status);
 
          for Index in 1 .. Model_Runner.Tools.Count (Asked) loop

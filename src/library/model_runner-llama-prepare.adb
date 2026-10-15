@@ -16,7 +16,8 @@ procedure Prepare
    Stretch  : Rotary_Request := No_Rotary_Request;
    Panel_Cache : String := "";
    Context  : Natural := 0;
-   Cache    : Cache_Precision := Exact)
+   Cache    : Cache_Precision := Exact;
+   Paged    : Boolean := True)
 is
    Ignored : E.Error_Info;
 
@@ -119,6 +120,11 @@ begin
          Item.Able := Model_Runner.Backend.Reference.Describe;
       when Model_Runner.Backend.Backend_Device =>
          Item.Able := Model_Runner.Backend.Device.Describe;
+
+         --  Said to the device, which fits its budget to the first model
+         --  prepared on it and adds what one beside it -- a draft --
+         --  holds; see Note_Model.
+         Model_Runner.Backend.Device.Note_Model (Item.Device_Ticket);
    end case;
 
    --  Evaluation is matrix by vector and nothing else. A backend that
@@ -268,7 +274,10 @@ begin
                  Model_Runner.Templates.Recognise (Source_Text);
                Again : E.Error_Info;
             begin
-               if Name /= "" then
+               --  A shape no carried format writes has nothing to stand in.
+               if Name /= ""
+                 and then Model_Runner.Templates.Built_In (Name) /= ""
+               then
                   Model_Runner.Templates.Close (Item.Chat);
                   Model_Runner.Templates.Compile
                     (Item.Chat, Model_Runner.Templates.Built_In (Name),
@@ -2190,43 +2199,15 @@ begin
          --  plan, so a gigabyte left 16,384 positions too close. A long
          --  context named is room the matrices give up: more of the model
          --  on the processor, and the run slower but whole.
-         Session_Margin  : constant Interfaces.Unsigned_64 := 3 * 2 ** 29;
-         Stream_Margin   : constant Interfaces.Unsigned_64 := 2 ** 29;
+         Session_Margin  : constant Interfaces.Unsigned_64 :=
+           Device_Session_Margin;
+         Stream_Margin   : constant Interfaces.Unsigned_64 := Split_Margin;
          State_Slots     : constant := 5;
-         Planned_Context : constant := 16_384;
+         Planned_Context : constant := Planned_Device_Context;
 
+         --  Device_Room, which the run's own choice of the device weighs.
          function Counted_Room (Planned : Natural) return Interfaces.Unsigned_64
-         is
-            Plan    : Model_Runner.Memory.Session_Plan;
-            Planning : E.Error_Info;
-            --  The heaps, or what the host says the device may take of
-            --  them where that is less.
-            Budget  : constant Interfaces.Unsigned_64 :=
-              Model_Runner.Backend.Device.Budget_Bytes;
-            Heaps   : constant Interfaces.Unsigned_64 :=
-              (if Budget > 0
-               then Interfaces.Unsigned_64'Min
-                      (Budget, Model_Runner.Backend.Device.Heap_Bytes)
-               else Model_Runner.Backend.Device.Heap_Bytes);
-            States  : constant Interfaces.Unsigned_64 :=
-              (if Hybrid (Item.Settings.Kind)
-               then Interfaces.Unsigned_64 (State_Slots)
-                    * Interfaces.Unsigned_64
-                        (State_Room (Item.Settings)
-                         + Conv_Room (Item.Settings)) * 4
-               else 0);
-         begin
-            if Planned = 0 or else Heaps = 0 then
-               return 0;
-            end if;
-            Plan_Session (Item, Planned, Plan, Planning, Cache => Cache);
-            if E.Is_Error (Planning)
-              or else Heaps <= Session_Margin + States + Plan.KV_Cache_Bytes
-            then
-               return 0;
-            end if;
-            return Heaps - Session_Margin - States - Plan.KV_Cache_Bytes;
-         end Counted_Room;
+         is (Device_Room (Item.Settings, Planned, Cache, Paged));
 
          Planned : Natural := Context;
          Room    : Interfaces.Unsigned_64 := 0;
@@ -2296,6 +2277,15 @@ begin
             Room := Room - Stream_Margin;
          end if;
 
+         --  A model beside the first -- a draft -- takes its matrices on
+         --  top of the budget the first was fitted to, and is not split
+         --  for a context of its own: the room was counted for the first.
+         if Model_Runner.Backend.Device.Is_Beside (Item.Device_Ticket) then
+            Model_Runner.Backend.Device.Add_Beside (Item.Device_Ticket, Total);
+            Item.Able := Model_Runner.Backend.Device.Describe;
+            Room := 0;
+         end if;
+
          if Room > 0 then
             Model_Runner.Backend.Device.Fit_Budget (Room);
             Item.Able := Model_Runner.Backend.Device.Describe;
@@ -2314,6 +2304,8 @@ begin
          if Item.Device_Context = 0
            and then Context = 0
            and then Item.Able.Memory_Bytes > 0
+           and then not Model_Runner.Backend.Device.Is_Beside
+                          (Item.Device_Ticket)
          then
             declare
                Weights : constant Interfaces.Unsigned_64 := Item.Able.Memory_Bytes;
@@ -2585,22 +2577,29 @@ begin
                end if;
             end;
 
-            --  The first panel of every matrix and its last: a file
-            --  rewritten in place with its size and time kept differs
-            --  somewhere, and where it does not differ at either end the
-            --  key's change stamp has already told it apart.
+            --  The first panel of every matrix, its middle one and its
+            --  last: a file rewritten in place with its size and time kept
+            --  differs somewhere, and where it does not differ at either
+            --  end the key's change stamp has already told it apart. The
+            --  middle as well, for what the ends cannot say -- a layout
+            --  that went wrong only inside a matrix, or bytes gone bad
+            --  there. Every matrix the layout takes is whole panels
+            --  (Interleaves), so the last is a whole one too.
             for Which in Held'Range loop
                exit when not Verify;
-               for At_End in Boolean loop
+               for Pick in 1 .. 3 loop
                   declare
                      Where : constant View_Access := Held (Which);
                      Size  : constant B.Byte_Count :=
                        IL.Panel_Bytes
                          (Where.all.Format, IL.Panel_Rows, Blocks_Of (Where));
+                     Panels : constant B.Byte_Count :=
+                       B.Byte_Count (Where.all.Rows / IL.Panel_Rows);
                      Panel : constant B.Byte_Count :=
-                       (if At_End
-                        then B.Byte_Count (Where.all.Rows / IL.Panel_Rows) - 1
-                        else 0);
+                       (case Pick is
+                          when 1 => 0,
+                          when 2 => (Panels - 1) / 2,
+                          when others => Panels - 1);
                      Row_Size : constant B.Byte_Count :=
                        B.Byte_Count (Blocks_Of (Where))
                        * B.Byte_Count

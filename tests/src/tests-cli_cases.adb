@@ -14,6 +14,7 @@ with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Execute;
+with Model_Runner.CLI.Partials;
 
 with Ada.Strings.Unbounded;
 with Ada.Text_IO.Text_Streams;
@@ -3560,6 +3561,19 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Model);
    end A_Rerank_Pair_Is_Whole;
 
+   --  Whether a write's own partial (Partials.Beside) is left beside Path.
+   function Partial_Left (Path : String) return Boolean is
+      Search : Ada.Directories.Search_Type;
+      Found  : Boolean;
+   begin
+      Ada.Directories.Start_Search
+        (Search, Ada.Directories.Containing_Directory (Path),
+         Ada.Directories.Simple_Name (Path) & "*.partial");
+      Found := Ada.Directories.More_Entries (Search);
+      Ada.Directories.End_Search (Search);
+      return Found;
+   end Partial_Left;
+
    procedure Saved_Context_Changes_Nothing
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3593,8 +3607,20 @@ package body Tests.CLI_Cases is
                  & Natural'Image (Status));
          return Last_Output;
       end Said;
+      --  Another run's save of the same file, under way: its partial is
+      --  its own. One name for the file alone let this run's create empty
+      --  it and rename it away.
+      Theirs : constant String := Saved & ".partial";
+      Their_Text : constant String := "another run's, being written";
    begin
       Tiny_Model.Write (Model, Room => 64);
+      declare
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Theirs);
+         Ada.Text_IO.Put_Line (F, Their_Text);
+         Ada.Text_IO.Close (F);
+      end;
 
       declare
          Plain  : constant String := Said ("", "");
@@ -3608,8 +3634,19 @@ package body Tests.CLI_Cases is
          Assert (Reused = Plain,
                  "reusing a saved context changed the answer: <" & Reused
                  & "> against <" & Plain & ">");
+         declare
+            F : Ada.Text_IO.File_Type;
+         begin
+            Assert (Ada.Directories.Exists (Theirs),
+                    "another run's partial of the same file was taken");
+            Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Theirs);
+            Assert (Ada.Text_IO.Get_Line (F) = Their_Text,
+                    "another run's partial of the same file was written over");
+            Ada.Text_IO.Close (F);
+            Ada.Directories.Delete_File (Theirs);
+         end;
          --  Written beside its name and moved into place: nothing beside.
-         Assert (Ada.Directories.Exists (Saved) and then not Ada.Directories.Exists (Saved & ".partial"),
+         Assert (Ada.Directories.Exists (Saved) and then not Partial_Left (Saved),
                  "a saved session left its partial file, or is not there");
       end;
 
@@ -13805,24 +13842,37 @@ package body Tests.CLI_Cases is
          end;
       end;
 
-      --  4. Trimming leftovers keeps a file written a moment ago.
+      --  4. Trimming leftovers keeps a file written a moment ago. Each
+      --  write's partial is its own (Partials.Beside): one name for the
+      --  file alone was shared by two runs saving it, and the second's
+      --  create emptied the first's under it. The sweep takes both forms.
       declare
          Folder : constant String := "obj/trim-settled";
-         Fresh  : constant String := Folder & "/other.kv.partial";
+         Fresh  : constant String :=
+           Model_Runner.CLI.Partials.Beside (Folder & "/other.kv");
+         Again  : constant String :=
+           Model_Runner.CLI.Partials.Beside (Folder & "/other.kv");
+         Shared : constant String := Folder & "/old.kv.partial";
          F      : Ada.Text_IO.File_Type;
       begin
+         Assert (Fresh /= Again,
+                 "two writes of one file were given the one partial name");
          if not Ada.Directories.Exists (Folder) then
             Ada.Directories.Create_Path (Folder);
          end if;
          Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Fresh);
          Ada.Text_IO.Put_Line (F, "being written");
          Ada.Text_IO.Close (F);
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Shared);
+         Ada.Text_IO.Put_Line (F, "left by an older run");
+         Ada.Text_IO.Close (F);
          Model_Runner.Platform.Trim_Directory
-           (Folder, "*.kv.partial", 0, Settled => 600.0);
+           (Folder, "*.kv*.partial", 0, Settled => 600.0);
          Assert (Ada.Directories.Exists (Fresh),
                  "a partial another run is writing now was deleted");
-         Model_Runner.Platform.Trim_Directory (Folder, "*.kv.partial", 0);
-         Assert (not Ada.Directories.Exists (Fresh),
+         Model_Runner.Platform.Trim_Directory (Folder, "*.kv*.partial", 0);
+         Assert (not Ada.Directories.Exists (Fresh)
+                 and then not Ada.Directories.Exists (Shared),
                  "a leftover partial was kept where nothing asked it kept");
       end;
    end Terminal_Text_Is_Shown_And_Measured;
@@ -13898,9 +13948,258 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Victim);
    end Models_Remove_Stays_In_The_Store;
 
+   --  The prefill cache is keyed by the backend and the repacking asked
+   --  as well as the model and its settings: two runs that differ in them
+   --  each refused the other's file, read the prompt whole and wrote their
+   --  own over it, so alternating them kept no cache at all. Each keeps a
+   --  file of its own now, and the run asked again finds its own.
+   procedure The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Env renames Ada.Environment_Variables;
+      Model  : constant String := "obj/prefill-key-model.gguf";
+      Home   : constant String :=
+        Ada.Directories.Full_Name ("obj/prefill-key-cache");
+      Was    : constant String :=
+        (if Env.Exists ("XDG_CACHE_HOME") then Env.Value ("XDG_CACHE_HOME")
+         else "");
+      Had    : constant Boolean := Env.Exists ("XDG_CACHE_HOME");
+
+      procedure Run_With (Extra : String; Backend : String := "cpu") is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, "abab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         if Backend /= "" then
+            Add (Source, "--backend");
+            Add (Source, Backend);
+         end if;
+         if Extra /= "" then
+            Add (Source, "--repack");
+            Add (Source, Extra);
+         end if;
+         Ran (Source, Status);
+         Assert (Status = 0, "a run with the cache on failed");
+      end Run_With;
+
+      function Kept return Natural is
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+         Count  : Natural := 0;
+         Folder : constant String := Home & "/model_runner/prefill";
+      begin
+         if not Ada.Directories.Exists (Folder) then
+            return 0;
+         end if;
+         Ada.Directories.Start_Search (Search, Folder, "*.kv");
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            Count := Count + 1;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         return Count;
+      end Kept;
+   begin
+      if Ada.Directories.Exists (Home) then
+         Ada.Directories.Delete_Tree (Home);
+      end if;
+      Ada.Directories.Create_Path (Home);
+      Tiny_Model.Write (Model, Room => 64);
+      Env.Set ("XDG_CACHE_HOME", Home);
+      begin
+         Run_With ("");
+         Run_With ("rows");
+         Run_With ("");
+         Assert (Kept = 2,
+                 "runs asking for other repacking kept" & Natural'Image (Kept)
+                 & " prefill caches, not one each");
+         --  And one that leaves the backend to the program.
+         Run_With ("", Backend => "");
+         Assert (Kept = 3,
+                 "a run whose backend was not asked kept" & Natural'Image (Kept)
+                 & " prefill caches beside the two, not one of its own");
+      exception
+         when others =>
+            if Had then
+               Env.Set ("XDG_CACHE_HOME", Was);
+            else
+               Env.Clear ("XDG_CACHE_HOME");
+            end if;
+            raise;
+      end;
+      if Had then
+         Env.Set ("XDG_CACHE_HOME", Was);
+      else
+         Env.Clear ("XDG_CACHE_HOME");
+      end if;
+      Ada.Directories.Delete_Tree (Home);
+   end The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking;
+
+   --  A draft named for a model numbers its tokens as the model does, by
+   --  text and not by count alone: two vocabularies of the same size that
+   --  share almost no text -- Llama 2's and Mistral's, both 32,000 -- were
+   --  taken for each other, and the draft was accepted nearly never. The
+   --  fixture's two vocabularies are sixteen pieces each, and different.
+   procedure A_Named_Draft_Shares_The_Text
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Target : constant String := "obj/draft-text-target.gguf";
+      Other  : constant String := "obj/draft-text-other.gguf";
+
+      procedure Put (Path : String; Pairs : Boolean) is
+         Image : Model_Runner.Bytes.Byte_Array_Access;
+         File  : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Tiny_Model.Build (Image, Byte_Pair => Pairs, Room => 256);
+         Ada.Streams.Stream_IO.Create
+           (File, Ada.Streams.Stream_IO.Out_File, Path);
+         declare
+            Bytes : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+              with Import, Address => Image.all'Address;
+         begin
+            Ada.Streams.Stream_IO.Write (File, Bytes);
+         end;
+         Ada.Streams.Stream_IO.Close (File);
+         Model_Runner.Bytes.Free (Image);
+      end Put;
+
+      function Drafted (Draft : String) return Natural is
+         Source : Fixed_Arguments;
+         Status : Natural;
+      begin
+         Add (Source, "run");
+         Add (Source, Target);
+         Add (Source, "--backend");
+         Add (Source, "cpu");
+         Add (Source, "--no-cache");
+         Add (Source, "--draft-model");
+         Add (Source, Draft);
+         Add (Source, "--prompt");
+         Add (Source, "ab");
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Ran (Source, Status);
+         return Status;
+      end Drafted;
+   begin
+      Put (Target, False);
+      Put (Other, True);
+
+      Assert (Drafted (Target) = 0,
+              "a draft that is the model itself was refused: " & Last_Output);
+      Assert (Drafted (Other) /= 0,
+              "a draft of as many tokens but other text was taken");
+
+      Ada.Directories.Delete_File (Target);
+      Ada.Directories.Delete_File (Other);
+   end A_Named_Draft_Shares_The_Text;
+
+   --  The device run takes unasked is the one whose load will hold the
+   --  model: a dense model's matrices weighed against the room the load
+   --  counts -- the device's heaps less the context at the length the run
+   --  plans and the precision it keeps -- and not the budget alone. A
+   --  dense model between the two went to the device and was refused
+   --  there, where the processor had room. Written here as its metadata
+   --  alone, a large Llama of eighty layers and sixty-four key heads, whose
+   --  context at the planned 16,384 positions is more than the device has;
+   --  at 512 it fits, and the file's few bytes go to the device.
+   procedure The_Unasked_Device_Counts_The_Context
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Path    : constant String := "obj/wide-context-model.gguf";
+      Awake   : Boolean;
+      Builder : Fixtures.Builder;
+      Image   : Model_Runner.Bytes.Byte_Array_Access;
+      File    : Ada.Streams.Stream_IO.File_Type;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+
+      function Chosen (Context : Natural) return Model_Runner.Backend.Backend_Kind
+      is (Model_Runner.CLI.Execute.Unasked_Backend
+            (Path, 0, Screen, Context_Size => Context));
+   begin
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device to weigh a context against");
+         return;
+      end if;
+      Model_Runner.Backend.Device.Close;
+
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_U32 (Builder, "llama.block_count", 80);
+      Fixtures.Add_U32 (Builder, "llama.embedding_length", 8192);
+      Fixtures.Add_U32 (Builder, "llama.feed_forward_length", 28672);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count", 64);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", 64);
+      Fixtures.Add_U32 (Builder, "llama.context_length", 131072);
+      Fixtures.Add_F32
+        (Builder, "llama.attention.layer_norm_rms_epsilon", 1.0E-5);
+      Fixtures.Add_Tensor
+        (Builder, "output.weight", [8, 2], Model_Runner.GGUF.Type_F32,
+         Fixtures.Encode_F32 ([0 .. 15 => 0.5]));
+      Fixtures.Build (Builder, Image);
+
+      Ada.Streams.Stream_IO.Create
+        (File, Ada.Streams.Stream_IO.Out_File, Path);
+      declare
+         Bytes : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+           with Import, Address => Image.all'Address;
+      begin
+         Ada.Streams.Stream_IO.Write (File, Bytes);
+      end;
+      Ada.Streams.Stream_IO.Close (File);
+      Model_Runner.Bytes.Free (Image);
+
+      Model_Runner.Localization.Open
+        (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Opt.Normal);
+
+      Assert (Model_Runner.Backend."="
+                (Chosen (0), Model_Runner.Backend.Backend_CPU),
+              "a dense model whose planned context the device cannot hold "
+              & "beside it was given the device unasked");
+      Assert (Model_Runner.Backend."="
+                (Chosen (512), Model_Runner.Backend.Backend_Device),
+              "a dense model whose context the device holds was kept "
+              & "off it");
+      Model_Runner.Backend.Device.Close;
+      Ada.Directories.Delete_File (Path);
+   end The_Unasked_Device_Counts_The_Context;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking'Access,
+         "the prefill cache is keyed by the backend and repacking asked, and "
+         & "two runs that differ keep one each");
+      Register_Routine
+        (T, A_Named_Draft_Shares_The_Text'Access,
+         "a draft named for a model shares its text, not only its count "
+         & "of tokens");
+      Register_Routine
+        (T, The_Unasked_Device_Counts_The_Context'Access,
+         "the device run takes unasked counts the context the load will "
+         & "keep beside a dense model");
       Register_Routine
         (T, Models_Remove_Stays_In_The_Store'Access,
          "models remove takes a model of the store by its own name");

@@ -86,6 +86,7 @@ package body Model_Runner.Drafts is
          return Result;
       exception
          when others =>
+            Containers.Close (Candidate);
             Shards.Close (Source);
             return False;
       end Alike;
@@ -97,12 +98,13 @@ package body Model_Runner.Drafts is
          return "";
       end if;
 
-      begin
-         Model_Bytes := Long_Long_Integer (Size (Model_Path));
-      exception
-         when others =>
-            return "";
-      end;
+      --  Every shard's bytes, where the model is in several files: the
+      --  share a draft is weighed against is of the whole model.
+      Model_Bytes :=
+        Long_Long_Integer (Shards.Total_Size (Model_Path));
+      if Model_Bytes = 0 then
+         return "";
+      end if;
 
       Start_Search (Search, Dir, "*.gguf", [Ordinary_File => True, others => False]);
       while More_Entries (Search) loop

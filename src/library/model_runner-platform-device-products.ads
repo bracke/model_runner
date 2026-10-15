@@ -3016,6 +3016,29 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of matrices kept.
    function Resident (Item : Engine) return Natural;
 
+   --  How many of the read-ahead's slots hold a copy no sequence has taken
+   --  yet: nought once every matrix fetched ahead was named as it was
+   --  fetched.
+   --
+   --  @return Slots in use.
+   function Prefetches_Held return Natural;
+
+   --  Whether the device keeps a matrix of this shape under this key: what
+   --  a product naming it would find rather than copy.
+   --
+   --  @param Item Engine to inspect.
+   --  @param Key What the matrix is known by.
+   --  @param Packing Its format.
+   --  @param Rows Rows it holds.
+   --  @param Columns Elements a row holds.
+   --  @return True where it is kept.
+   function Holds
+     (Item    : Engine;
+      Key     : System.Address;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural) return Boolean;
+
    --  How many bytes those matrices take on the device.
    --
    --  @param Item Engine to inspect.

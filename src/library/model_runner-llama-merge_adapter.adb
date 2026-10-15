@@ -14,8 +14,10 @@ is
 
    --  How much the adapter's own metadata says to scale by. A rank-r
    --  adapter is trained with a factor of alpha over r, and the file
-   --  carries alpha; leaving it out would scale every fine-tune by its
-   --  rank.
+   --  carries alpha; the pair is merged at the scale times alpha over the
+   --  rank, or at the scale alone where the file states no alpha or a
+   --  nought -- llama.cpp's get_scale. Merged at alpha alone, a rank-16
+   --  adapter of alpha 32 went in at sixteen times its delta.
    Alpha : N.Wide_Real := 0.0;
 
    --  The same, as bits, for the digest below.
@@ -121,7 +123,8 @@ is
                declare
                   Factor : constant N.Wide_Real :=
                     N.Wide_Real (Right (Which)) * N.Wide_Real (Scale)
-                    * Alpha;
+                    * (if Alpha = 0.0 then 1.0
+                       else Alpha / N.Wide_Real (Rank));
 
                   At_Row : constant B.Byte_Count :=
                     Target.Offset
@@ -212,6 +215,44 @@ begin
       return;
    end if;
 
+   --  What the adapter says it is, as llama.cpp asks: an adapter, a
+   --  low-rank one, for this architecture -- and not one activated by an
+   --  invocation sequence, whose delta applies only after it and which a
+   --  merge would apply everywhere. A same-shaped adapter for another
+   --  architecture merged silently.
+   declare
+      General : constant String :=
+        Containers.String_Value (Source, "general.type");
+      Kind    : constant String :=
+        Containers.String_Value (Source, "adapter.type");
+      Arch    : constant String :=
+        Containers.String_Value (Source, "general.architecture");
+   begin
+      if General /= "adapter" or else Kind /= "lora" then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text
+           (Status, "feature",
+            (if General /= "adapter" then "general_type_" & General
+             else "adapter_type_" & Kind),
+            E.Param_Identifier);
+         return;
+      end if;
+
+      if Arch /= Architecture_Name (Item.Settings.Kind) then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text
+           (Status, "feature", "adapter_for_" & Arch, E.Param_Identifier);
+         return;
+      end if;
+
+      if Containers.Has (Source, "adapter.alora.invocation_tokens") then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text
+           (Status, "feature", "activated_adapter", E.Param_Identifier);
+         return;
+      end if;
+   end;
+
    --  What the adapter says about itself, before its bytes are read.
    declare
       Value : N.Wide_Real;
@@ -219,7 +260,7 @@ begin
    begin
       Containers.Get_Float
         (Source, "adapter.lora.alpha", 0.0, 1.0E6, Value, Local);
-      Alpha := (if E.Is_Ok (Local) then Value else 1.0);
+      Alpha := (if E.Is_Ok (Local) then Value else 0.0);
       Alpha_Bits := N.Bits (Real (Alpha));
    end;
 

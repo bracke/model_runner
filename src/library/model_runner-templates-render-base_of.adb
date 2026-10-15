@@ -170,6 +170,13 @@ begin
             return Field_Of (Held_Of (Item.Message_Slot), "content");
          end if;
          return Content_Of (Bound_Message);
+      --  The caller's flag is a boolean, as HF passes it: "is true" and
+      --  "is boolean" hold of it, and it prints as True. Held as text it
+      --  answered neither and printed as "true".
+      when Term_Generation_Prompt =>
+         return (Kind => Value_Boolean,
+                 Start => (if Add_Generation_Prompt then 1 else 0),
+                 others => <>);
       when Term_True =>
          return (Kind => Value_Boolean, Start => 1, others => <>);
       when Term_False =>

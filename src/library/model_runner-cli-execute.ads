@@ -3,6 +3,7 @@ with Model_Runner.Backend;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
+with Model_Runner.Llama;
 with Model_Runner.Localization;
 with Model_Runner.Presentation;
 
@@ -56,11 +57,19 @@ package Model_Runner.CLI.Execute is
    --  @param Model_Path The model, as run would be given it.
    --  @param Device_Memory The device budget named, 0 for the default.
    --  @param Screen Where run's notes about the choice go.
+   --  @param Context_Size The context named, 0 for none: a dense model's
+   --    room on the device is counted less it.
+   --  @param Cache The precision the context is kept in.
+   --  @param Paged False where --no-paged is named.
    --  @return The backend.
    function Unasked_Backend
      (Model_Path    : String;
       Device_Memory : Interfaces.Unsigned_64;
-      Screen        : in out Model_Runner.Presentation.Console)
+      Screen        : in out Model_Runner.Presentation.Console;
+      Context_Size  : Natural := 0;
+      Cache         : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Halved;
+      Paged         : Boolean := True)
       return Model_Runner.Backend.Backend_Kind;
 
 end Model_Runner.CLI.Execute;

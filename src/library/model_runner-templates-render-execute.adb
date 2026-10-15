@@ -13,8 +13,34 @@ begin
    begin
       case Step.Op is
          when Op_Text =>
-            Put (Item.Source.all
-                   (Step.Offset + 1 .. Step.Offset + Step.Length));
+            --  Line breaks as the language reads them: a CRLF or a lone
+            --  CR in the template's own text is one line break.
+            declare
+               Text : String renames
+                 Item.Source.all (Step.Offset + 1 .. Step.Offset + Step.Length);
+            begin
+               if (for some C of Text => C = ASCII.CR) then
+                  declare
+                     Out_Text : String (1 .. Text'Length);
+                     Used     : Natural := 0;
+                  begin
+                     for At_Char in Text'Range loop
+                        if Text (At_Char) /= ASCII.CR then
+                           Used := Used + 1;
+                           Out_Text (Used) := Text (At_Char);
+                        elsif At_Char = Text'Last
+                          or else Text (At_Char + 1) /= ASCII.LF
+                        then
+                           Used := Used + 1;
+                           Out_Text (Used) := ASCII.LF;
+                        end if;
+                     end loop;
+                     Put (Out_Text (1 .. Used));
+                  end;
+               else
+                  Put (Text);
+               end if;
+            end;
             Position := Position + 1;
 
          when Op_Output =>
@@ -47,6 +73,7 @@ begin
          when Op_For_Next =>
             if Current < Loop_Stop and then not Breaking then
                Current := Current + 1;
+               Next_Pass;
                if Step.Binds then
                   Bind_Message (Current);
                end if;
@@ -212,6 +239,7 @@ begin
             begin
                if Call_At < Asked and then not Breaking then
                   Call_At := Call_At + 1;
+                  Next_Pass;
                   if Data_Calls.Kind = Value_Data then
                      Store (Named, Element_At (Data_Calls, Long_Long_Integer (Call_At - 1)));
                   else
@@ -278,6 +306,7 @@ begin
          when Op_Range_Next =>
             Range_At := Range_At + Range_Step;
             if Counting_On and then not Breaking then
+               Next_Pass;
                Assign_Text
                  (Range_Slot, Model_Runner.Text.Image (Range_At),
                   Value_Number);

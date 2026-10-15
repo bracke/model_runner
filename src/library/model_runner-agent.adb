@@ -41,12 +41,16 @@ package body Model_Runner.Agent is
    ---------------
 
    function Answer_Of (Reply : String) return String is
-      Close : constant Natural :=
-        Ada.Strings.Fixed.Index (Reply, "</think>", Ada.Strings.Backward);
+      --  The first close, as llama.cpp takes it: a reply whose answer
+      --  quotes "</think>" keeps what follows the quote.
+      Close : constant Natural := Ada.Strings.Fixed.Index (Reply, "</think>");
       First : Positive := (if Close = 0 then Reply'First else Close + 8);
    begin
       if Close = 0 then
-         return Reply;
+         --  Reasoning that never closed is no answer: a delegated task
+         --  that stopped mid-thought handed its thinking back as one.
+         return (if Ada.Strings.Fixed.Index (Reply, "<think>") /= 0
+                 then "" else Reply);
       end if;
       while First <= Reply'Last and then Reply (First) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
          First := First + 1;
@@ -266,6 +270,10 @@ package body Model_Runner.Agent is
                when Model_Runner.Tools.Function_XML => return Ends ("</function>");
                when Model_Runner.Tools.Tool_Call_JSON | Model_Runner.Tools.Qwen_XML =>
                   return Ends ("</tool_call>");
+               when Model_Runner.Tools.DeepSeek_Fenced
+                  | Model_Runner.Tools.DeepSeek_Plain =>
+                  return Ends (Model_Runner.Tools.DeepSeek_Calls_End)
+                    or else Ends (Model_Runner.Tools.DeepSeek_Call_End);
                when others => return Ends ("}") or else Ends ("```");
             end case;
          end;

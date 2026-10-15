@@ -1536,7 +1536,18 @@ begin
       end if;
    end loop;
 
-   Flush_Literal (Source'Last, False);
+   --  Less the one line break the template ends on, as HF compiles a
+   --  template (keep_trailing_newline off): kept, it stood at the
+   --  generation point, ahead of everything the model wrote.
+   Flush_Literal
+     ((if Source'Length >= 2
+         and then Source (Source'Last - 1 .. Source'Last) = ASCII.CR & ASCII.LF
+       then Source'Last - 2
+       elsif Source'Length >= 1
+         and then Source (Source'Last) in ASCII.LF | ASCII.CR
+       then Source'Last - 1
+       else Source'Last),
+      False);
    if E.Is_Error (Status) then
       return;
    end if;

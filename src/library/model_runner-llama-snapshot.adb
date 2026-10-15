@@ -55,6 +55,19 @@ is
    Marks : constant B.Byte_Count :=
      (if Item.Marks = null then 0 else Held * 4 * 8);
 
+   --  And last, where the session drafts from the block past the stack,
+   --  that block's own keys and values for every committed position: a
+   --  number saying so, then the rows at four bytes an element. Left out,
+   --  a session that adopted the file drafted from a block attending over
+   --  zeros below the adopted point -- verified, so right, but seldom
+   --  taken. A reader that finds the section missing -- a file from
+   --  before it was written, or a model without the block -- leaves the
+   --  block's rows as they are.
+   Block : constant B.Byte_Count :=
+     (if Drafts_Next (Item)
+      then 8 + Held * (KV_Width + V_Width) * 4
+      else 0);
+
    --  Whether the caches go as halves: a session holding halves, or an
    --  exact one whose every key and value is a half already -- which is
    --  what a device keeping its cache in halves gives back.
@@ -132,7 +145,8 @@ is
        + Spans * KV_Width * Width
        + Spans * V_Width * Width
        + States * 4
-       + Marks);
+       + Marks
+       + Block);
 
    At_Byte : B.Byte_Count := 0;
 
@@ -428,5 +442,27 @@ begin
             Put_Count (Mark.Next);
          end;
       end loop;
+   end if;
+
+   if Block > 0 then
+      declare
+         Own     : constant Boolean := Item.Next_Keys /= null;
+         Keys    : constant T.Real_Array_Access :=
+           (if Own then Item.Next_Keys else Item.Keys);
+         Values  : constant T.Real_Array_Access :=
+           (if Own then Item.Next_Values else Item.Values);
+         Base    : constant Element_Count :=
+           (if Own then 0 else Keys_At (Item, Settings.Layers));
+         V_Base  : constant Element_Count :=
+           (if Own then 0 else Values_At (Item, Settings.Layers));
+      begin
+         Put_Count (1);
+         for Index in 0 .. Element_Count (Held * KV_Width) - 1 loop
+            Put_Bits (N.Bits (Keys.all (Base + Index)));
+         end loop;
+         for Index in 0 .. Element_Count (Held * V_Width) - 1 loop
+            Put_Bits (N.Bits (Values.all (V_Base + Index)));
+         end loop;
+      end;
    end if;
 end Snapshot;

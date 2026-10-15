@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -87,6 +88,10 @@ package body Model_Runner.Tokenizer is
       Item.Longest_Marker := 0;
       Item.Marker_Starts := [others => False];
       Item.Space_Prefix := True;
+      Item.Lowercase := True;
+      Item.Strip_Accents := True;
+      Item.Right_Strips := False;
+      Item.Left_Strip := No_Token;
       Item.Merge_Spaces := False;
       Item.Longest_Piece := 0;
       Item.Unknown_Cost := 0.0;
@@ -373,31 +378,33 @@ package body Model_Runner.Tokenizer is
          elsif Name = "bert" then
             --  No cutting rule to name and no merge table to read. What a
             --  WordPiece vocabulary states beyond its pieces is how the text
-            --  is to be changed before they are looked up, and this build
-            --  implements the one answer every published bert file gives:
-            --  lower-cased, with the accents taken off.
-            --
-            --  A file that says otherwise is refused rather than folded
-            --  anyway. A vocabulary cut without folding carries pieces with
-            --  capitals in them, and folding the text before looking those
-            --  up finds none of them -- every word would come back unknown,
-            --  which is an answer and not an error.
+            --  is changed before they are looked up: lower-cased, and the
+            --  accents taken off, each where the file's normalizer says --
+            --  tokenizer.ggml.normalizer.lowercase, true where absent, and
+            --  normalizer.strip_accents, which follows the lowercasing where
+            --  absent, as the other runtime reads the two. A cased bert's
+            --  vocabulary holds capitals, and folding the text before
+            --  looking them up spelled every capital word unknown. The older
+            --  do_lower_case is read where the newer key is not written.
             Item.Model := Kind_WordPiece;
 
             declare
-               Folds : Boolean;
-               Local : E.Error_Info;
+               Folds, Strips : Boolean;
+               Local         : E.Error_Info;
             begin
                Containers.Get_Boolean
-                 (Source, "tokenizer.ggml.do_lower_case", Folds, Local);
-               if E.Is_Ok (Local) and then not Folds then
-                  Item.Model := Kind_Unsupported;
-                  Status := E.Make (E.Tokenizer_Unsupported_Model);
-                  E.Add_Text
-                    (Status, "model", "bert without folding",
-                     E.Param_Identifier);
-                  return;
+                 (Source, "tokenizer.ggml.normalizer.lowercase", Folds, Local);
+               if not E.Is_Ok (Local) then
+                  Containers.Get_Boolean
+                    (Source, "tokenizer.ggml.do_lower_case", Folds, Local);
                end if;
+               Item.Lowercase := (if E.Is_Ok (Local) then Folds else True);
+
+               Containers.Get_Boolean
+                 (Source, "tokenizer.ggml.normalizer.strip_accents", Strips,
+                  Local);
+               Item.Strip_Accents :=
+                 (if E.Is_Ok (Local) then Strips else Item.Lowercase);
             end;
          elsif Name = "t5" then
             Item.Model := Kind_Unigram;
@@ -728,7 +735,11 @@ package body Model_Runner.Tokenizer is
 
             Item.Entries.Append (Entry_Value);
 
-            if Entry_Value.Class in Class_Control | Class_User_Defined
+            --  A marker is a control piece, an author's own, or the unknown
+            --  piece written out -- "<unk>" in a text is that token, as the
+            --  other runtime partitions its special pieces out of a text.
+            if Entry_Value.Class
+                 in Class_Control | Class_User_Defined | Class_Unknown
               and then Last > 0
             then
                Item.Longest_Marker := Natural'Max (Item.Longest_Marker, Last);
@@ -741,7 +752,16 @@ package body Model_Runner.Tokenizer is
             --  ordinary pieces alone, because the special ones are written
             --  with a score of zero or with a filler and neither says
             --  anything about what a rare piece costs.
-            if Last > 0 then
+            --  Over the pieces a road looks up in a text: a control piece
+            --  and an author's own are cut out of the text before any road
+            --  sees it (Marker_At), and one long added piece made the
+            --  best-path walk try every length up to it at every byte.
+            --  RWKV's walk takes every piece.
+            if Last > 0
+              and then (Item.Model = Kind_RWKV
+                        or else Entry_Value.Class
+                                  not in Class_Control | Class_User_Defined)
+            then
                Item.Longest_Piece :=
                  Natural'Max
                    (Item.Longest_Piece,
@@ -782,7 +802,9 @@ package body Model_Runner.Tokenizer is
                      if not Inserted then
                         Token_Maps.Replace_Element (Item.Lookup, Where, Token_Id (Index - 1));
                      end if;
-                     if Entry_Value.Class in Class_Control | Class_User_Defined then
+                     if Entry_Value.Class
+                          in Class_Control | Class_User_Defined | Class_Unknown
+                     then
                         Item.Markers.Include (Text, Token_Id (Index - 1));
                      end if;
                   end;
@@ -1009,6 +1031,57 @@ package body Model_Runner.Tokenizer is
             Item.Add_End := False;
          end if;
 
+         --  And WordPiece adds both, whatever a file says: the classifier
+         --  token first and the separator last are what every bert was
+         --  trained to read, and the other runtime writes them for this
+         --  road without asking the beginning and end flags. A file whose
+         --  add_eos_token said false lost the separator here.
+         if Item.Model = Kind_WordPiece then
+            Item.Add_Beginning := True;
+            Item.Add_End := True;
+         end if;
+
+         --  Which markers take the whitespace beside them off the text, by
+         --  the names the other runtime knows them by (llama-vocab.cpp):
+         --  a Phi-3 file's markers what follows them, so its template's
+         --  "<|user|>\nHi<|end|>\n" reads no line ends; the mask of the
+         --  jina-v2 and later embedders, and of ModernBERT, what comes
+         --  before it.
+         declare
+            function Lower (Text : String) return String
+            is (Ada.Characters.Handling.To_Lower (Text));
+
+            function Holds (Text, Part : String) return Boolean
+            is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+
+            Named : constant String :=
+              Lower (Containers.String_Value (Source, "general.name"));
+            Rule  : constant String :=
+              Containers.String_Value (Source, "tokenizer.ggml.pre");
+            Arch  : constant String :=
+              Containers.String_Value (Source, "general.architecture");
+
+            function Marker (Text : String) return Token_Id is
+               Position : constant Token_Maps.Cursor :=
+                 Item.Markers.Find (Text);
+            begin
+               return (if Token_Maps.Has_Element (Position)
+                       then Token_Maps.Element (Position) else No_Token);
+            end Marker;
+         begin
+            if Holds (Rule, "jina-v2-de") or else Holds (Rule, "jina-v2-es")
+              or else Holds (Rule, "jina-v2-code")
+              or else Holds (Arch, "nomic-bert-moe")
+              or else Holds (Arch, "jina-bert-v3")
+            then
+               Item.Left_Strip := Marker ("<mask>");
+            elsif Holds (Named, "phi-3") or else Holds (Named, "phi3") then
+               Item.Right_Strips := True;
+            elsif Holds (Named, "modern-bert") then
+               Item.Left_Strip := Marker ("[MASK]");
+            end if;
+         end;
+
          --  And whether the SentencePiece road writes a marker before the
          --  first character. Absent means it does, which is what every such
          --  vocabulary meant until gemma2 and gemma3 said otherwise; this
@@ -1022,6 +1095,11 @@ package body Model_Runner.Tokenizer is
          elsif Scratch.Code /= E.GGUF_Missing_Metadata_Key then
             Status := Scratch;
             return;
+         elsif Item.Model = Kind_Unigram then
+            --  A unigram file that does not say puts no marker first, as
+            --  the other runtime reads one: its default is off, and only
+            --  the SentencePiece road turns it on unasked.
+            Item.Space_Prefix := False;
          end if;
 
          --  And whether a run of whitespace becomes one marker or as many
@@ -1381,16 +1459,23 @@ package body Model_Runner.Tokenizer is
       --  code points written out here.
       function Stands_Alone (Code_Point : Natural) return Boolean;
 
-      --  Whether a code point is thrown away rather than read: a control, a
-      --  combining mark left after the accents come off, or the replacement
-      --  character a decoder leaves where it could not read.
-      function Discarded (Code_Point : Natural) return Boolean;
+      --  Whether a code point is thrown away rather than read: a control --
+      --  any of Cc, Cf, Co and Cs, so a zero-width space or a soft hyphen
+      --  goes rather than turning its word unknown -- a combining mark left
+      --  after the accents come off, where they come off, or the
+      --  replacement character a decoder leaves where it could not read.
+      function Discarded
+        (Code_Point : Natural; Strip_Accents : Boolean) return Boolean;
 
       --  Whether a code point separates words without being one.
       function Breaks (Code_Point : Natural) return Boolean;
 
-      --  The code point with its accent taken off and lower-cased.
-      function Folded (Code_Point : Natural) return Natural;
+      --  The code point with its accent taken off and lower-cased, each
+      --  where the vocabulary's normalizer does it.
+      function Folded
+        (Code_Point    : Natural;
+         Lowercase     : Boolean;
+         Strip_Accents : Boolean) return Natural;
 
    end Word_Piece;
 
@@ -1435,17 +1520,15 @@ package body Model_Runner.Tokenizer is
       function Stands_Alone (Code_Point : Natural) return Boolean
       is (Ideograph (Code_Point) or else Punctuation (Code_Point));
 
-      function Discarded (Code_Point : Natural) return Boolean
+      function Discarded
+        (Code_Point : Natural; Strip_Accents : Boolean) return Boolean
       is (Code_Point = 0
           or else Code_Point = 16#FFFD#
-          or else Handling.Is_Mark (Wide (Code_Point))
-          or else (Handling.Is_Control (Wide (Code_Point))
-                   and then Code_Point not in 9 | 10 | 13));
+          or else (Strip_Accents and then Cutting.Is_Mark (Code_Point))
+          or else Cutting.Is_Control (Code_Point));
 
       function Breaks (Code_Point : Natural) return Boolean
-      is (Code_Point in 32 | 9 | 10 | 11 | 12 | 13
-          or else Handling.Is_Space (Wide (Code_Point))
-          or else Handling.Is_Line_Terminator (Wide (Code_Point)));
+      is (Cutting.Is_Space (Code_Point));
 
       --  The accent first and the case after. To_Basic takes the diacritic
       --  off a character that carries one; a text whose accents are already
@@ -1458,9 +1541,18 @@ package body Model_Runner.Tokenizer is
       --  marks -- Hangul is the case -- stays whole here where a decomposing
       --  implementation would take it apart. Latin text, which is what these
       --  vocabularies are overwhelmingly cut from, is the same either way.
-      function Folded (Code_Point : Natural) return Natural
-      is (Wide_Wide_Character'Pos
-            (Handling.To_Lower (Handling.To_Basic (Wide (Code_Point)))));
+      function Folded
+        (Code_Point    : Natural;
+         Lowercase     : Boolean;
+         Strip_Accents : Boolean) return Natural
+      is
+         Plain : constant Wide_Wide_Character :=
+           (if Strip_Accents then Handling.To_Basic (Wide (Code_Point))
+            else Wide (Code_Point));
+      begin
+         return Wide_Wide_Character'Pos
+           (if Lowercase then Handling.To_Lower (Plain) else Plain);
+      end Folded;
 
    end Word_Piece;
 
@@ -1515,7 +1607,7 @@ package body Model_Runner.Tokenizer is
          begin
             if Candidate /= No_Token
               and then Class_Of (Item, Candidate) in
-                         Class_Control | Class_User_Defined
+                         Class_Control | Class_User_Defined | Class_Unknown
             then
                Token := Candidate;
                Length := Reach;
@@ -2201,9 +2293,12 @@ package body Model_Runner.Tokenizer is
                      Close_Word;
                   else
                      declare
-                        Folded : constant Natural := Word_Piece.Folded (Code);
+                        Folded : constant Natural :=
+                          Word_Piece.Folded
+                            (Code, Item.Lowercase, Item.Strip_Accents);
                      begin
-                        if Word_Piece.Discarded (Folded) then
+                        if Word_Piece.Discarded (Folded, Item.Strip_Accents)
+                        then
                            null;
                         elsif Word_Piece.Stands_Alone (Folded) then
                            Close_Word;
@@ -2662,9 +2757,14 @@ package body Model_Runner.Tokenizer is
                                 Find (Item,
                                       Normal (At_Byte .. At_Byte + Span - 1));
                            begin
+                              --  The pieces the other runtime's matcher
+                              --  holds: normal, an author's own and the
+                              --  unused. The unknown piece and the bytes
+                              --  are not text a word is spelled with.
                               if Piece /= No_Token
                                 and then Class_Of (Item, Piece)
-                                         /= Class_Control
+                                         in Class_Normal | Class_User_Defined
+                                          | Class_Unused
                               then
                                  --  Covered only from a boundary that is
                                  --  reached, at a worth that is a number:
@@ -3110,6 +3210,20 @@ package body Model_Runner.Tokenizer is
       Cutting.Free (Made);
    end Cut;
 
+   --  What the stripping beside a marker takes off: the ASCII whitespace
+   --  C's isspace answers for, which is what the other runtime trims.
+   function Blank (Char : Character) return Boolean
+   is (Char in ' ' | ASCII.HT | ASCII.LF | ASCII.VT | ASCII.FF | ASCII.CR);
+
+   --  Whether a marker takes the whitespace after it off the text: every
+   --  one in a vocabulary that says so but the three the other runtime
+   --  leaves alone.
+   function Strips_Right (Item : Vocabulary; Token : Token_Id) return Boolean
+   is (Item.Right_Strips
+       and then Token_Text (Item, Token) /= "<unk>"
+       and then Token_Text (Item, Token) /= "<s>"
+       and then Token_Text (Item, Token) /= "<|endoftext|>");
+
    procedure Encode
      (Item          : Vocabulary;
       Text          : String;
@@ -3210,9 +3324,15 @@ package body Model_Runner.Tokenizer is
             end loop;
 
             declare
-               Stop : constant Natural :=
+               Stop : Natural :=
                  (if Found = 0 then Text'Last else Found - 1);
             begin
+               if Found /= 0 and then Token = Item.Left_Strip then
+                  while Stop >= From and then Blank (Text (Stop)) loop
+                     Stop := Stop - 1;
+                  end loop;
+               end if;
+
                if Stop >= From then
                   Part (Text (From .. Stop), Lead, Ok);
                   if not Ok then
@@ -3233,6 +3353,12 @@ package body Model_Runner.Tokenizer is
 
             Lead := Item.Model = Kind_SentencePiece;
             From := Found + Reach;
+
+            if Strips_Right (Item, Token) then
+               while From <= Text'Last and then Blank (Text (From)) loop
+                  From := From + 1;
+               end loop;
+            end if;
          end;
       end loop;
 

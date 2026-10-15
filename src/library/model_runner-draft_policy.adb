@@ -32,6 +32,12 @@ package body Model_Runner.Draft_Policy is
    is
       Result : Plan;
    begin
+      --  Nothing drafts where a round could not be rewound: a model whose
+      --  linear layers read one state keeps no ring (L.Rewinds_Drafts).
+      if not L.Rewinds_Drafts (Prepared) then
+         return Result;
+      end if;
+
       --  From the block past the stack, on its own, unless a draft costs
       --  too much of a token to pay: the block and the head over the stack
       --  and the head, which is 0.19 on Qwen3.5-4B, where three proposals a

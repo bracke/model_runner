@@ -1892,10 +1892,16 @@ begin
             Item.Owed_At := Natural (Reserved);
             Item.Owed_Count := 1;
          else
-            Item.Owed_Count :=
-              Natural'Max (Item.Owed_At + Item.Owed_Count,
-                           Natural (Reserved) + 1)
-              - Item.Owed_At;
+            --  The union, from the lower start: a rewind between two
+            --  tokens starts the later below the earlier range.
+            declare
+               Last : constant Natural :=
+                 Natural'Max (Item.Owed_At + Item.Owed_Count,
+                              Natural (Reserved) + 1);
+            begin
+               Item.Owed_At := Natural'Min (Item.Owed_At, Natural (Reserved));
+               Item.Owed_Count := Last - Item.Owed_At;
+            end;
          end if;
       end if;
 

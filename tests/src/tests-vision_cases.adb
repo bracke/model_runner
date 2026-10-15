@@ -3215,9 +3215,26 @@ package body Tests.Vision_Cases is
                Assert (L.Turned_By (Twin, 8) = (T => 6, H => 6, W => 6),
                        "the twin did not go on from the adopted places");
 
+               --  Cut short of the marks and of what follows them -- the
+               --  block past the stack's keys and values, where the model
+               --  drafts from one -- which a snapshot from before either
+               --  was written ends without.
                L.Reset (Twin);
-               L.Adopt (Twin, Ready, Bytes (Bytes'First .. Bytes'Last - 8 * 4 * 8),
-                        Status);
+               declare
+                  Settings : constant L.Configuration := L.Config (Ready);
+                  Block    : constant B.Byte_Count :=
+                    (if L.Drafts_Next (Live)
+                     then 8 + 8 * B.Byte_Count
+                                    (Settings.KV_Heads
+                                     * (Settings.Head_Size + Settings.Value_Size))
+                              * 4
+                     else 0);
+               begin
+                  L.Adopt
+                    (Twin, Ready,
+                     Bytes (Bytes'First .. Bytes'Last - 8 * 4 * 8 - Block),
+                     Status);
+               end;
                Assert (E.Is_Ok (Status), "the cut snapshot did not adopt");
                Assert (L.Turned_By (Twin, 4) = (T => 4, H => 4, W => 4),
                        "a snapshot without marks did not turn by the index");

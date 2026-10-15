@@ -733,11 +733,10 @@ package body Reference_Tokenizer is
                     Wide_Wide_Character'Pos
                       (Handling.To_Lower (Handling.To_Basic (Wide (Code))));
                begin
-                  if Handling.Is_Mark (Wide (Folded))
+                  if Regex_Cutter.Is_Mark (Folded)
                     or else Folded = 0
                     or else Folded = 16#FFFD#
-                    or else (Handling.Is_Control (Wide (Folded))
-                             and then Folded not in 9 | 10 | 13)
+                    or else Regex_Cutter.Is_Control (Folded)
                   then
                      null;
                   elsif Punctuation (Folded) or else Ideograph (Folded) then

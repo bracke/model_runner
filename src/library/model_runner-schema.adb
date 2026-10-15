@@ -1,3 +1,5 @@
+with Model_Runner.Grammar;
+
 package body Model_Runner.Schema is
 
    package E renames Model_Runner.Errors;
@@ -1043,11 +1045,17 @@ package body Model_Runner.Schema is
       --  break or two and an indent of at most twenty -- so a model cannot
       --  write whitespace to the token limit and call it an object.
       Put ("ws ::= ( "" "" | [\x0A]{1,2} [ \x09]{0,20} )?" & Character'Val (10));
-      --  What a string is in a tag: anything up to the next tag. The
-      --  reader takes the whitespace off either end of it.
+      --  What a string is in a tag: anything up to the tag's own close.
+      --  The reader takes the one line break off either end of it.
       --  Text with a '<' in it where no tag follows: code compares with
-      --  one, and a value that stopped at it cut an edit short mid-line.
-      Put ("text ::= ( [^<] | ""<"" [^/] )*" & Character'Val (10));
+      --  one, and a value that stopped at it cut an edit short mid-line;
+      --  and held from every "</", a value could close no tag it held --
+      --  an edit of HTML could write no </div>.
+      if Close /= "" then
+         Put (Model_Runner.Grammar.Excluding ("text", Close));
+      else
+         Put ("text ::= ( [^<] | ""<"" [^/] )*" & Character'Val (10));
+      end if;
       --  A string in a Python call: JSON's, or single-quoted, or between
       --  three quotes and across lines, as a call's longer text is
       --  written; the escapes inside are read back by the call reader.

@@ -73,8 +73,13 @@ package Model_Runner.Panel_Cache is
    --  mapping kept until Release. What was written is the host's to write
    --  back.
    --
+   --  The name is taken over whatever holds it in one step. Named or not,
+   --  the mapping stays until Release, so a caller that could not name
+   --  the file can still copy the panels out of it first.
+   --
    --  @param Item The file built.
-   --  @param Ok False where it could not be named; nothing is left.
+   --  @param Ok False where it could not be named; the part file is gone,
+   --    the mapping kept.
    procedure Finish (Item : in out Building; Ok : out Boolean);
 
    --  Let the built file's mapping go, once it is mapped again for reading.

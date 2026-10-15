@@ -103,6 +103,35 @@ procedure Each_Begin (Step : Instruction) is
         & Ada.Strings.Unbounded.To_String (Out_Text)
         & (if Listing then "]" else "}");
    end Filtered;
+
+   --  A string walked as the language walks one: a character at a time,
+   --  as a list of one-character strings -- whole UTF-8 characters, not
+   --  bytes. Walked as anything else it rendered nothing.
+   function Characters (Text : String) return String is
+      Out_Text : Ada.Strings.Unbounded.Unbounded_String;
+      At_Byte  : Natural := Text'First;
+   begin
+      Ada.Strings.Unbounded.Append (Out_Text, "[");
+      while At_Byte <= Text'Last loop
+         declare
+            Lead  : constant Natural := Character'Pos (Text (At_Byte));
+            Width : constant Positive :=
+              (if Lead >= 16#F0# then 4 elsif Lead >= 16#E0# then 3
+               elsif Lead >= 16#C0# then 2 else 1);
+            Upto  : constant Natural :=
+              Natural'Min (Text'Last, At_Byte + Width - 1);
+         begin
+            if At_Byte > Text'First then
+               Ada.Strings.Unbounded.Append (Out_Text, ", ");
+            end if;
+            Ada.Strings.Unbounded.Append
+              (Out_Text, Quoted (Text (At_Byte .. Upto)));
+            At_Byte := Upto + 1;
+         end;
+      end loop;
+      Ada.Strings.Unbounded.Append (Out_Text, "]");
+      return Ada.Strings.Unbounded.To_String (Out_Text);
+   end Characters;
 begin
    L.Var := Step.Offset;
    L.Key := Step.Length;
@@ -110,10 +139,11 @@ begin
    L.Reversed := Step.Reversed;
 
    case V.Kind is
-      when Value_Data | Value_JSON =>
+      when Value_Data | Value_JSON | Value_Text =>
          declare
             Src : constant String :=
-              (if Step.Test_At /= 0
+              (if V.Kind = Value_Text then Characters (Text_Of (V))
+               elsif Step.Test_At /= 0
                  and then (Is_JSON_List (JSON_Text (V))
                            or else Is_JSON_Mapping (JSON_Text (V)))
                then Filtered (JSON_Text (V))
@@ -190,7 +220,13 @@ begin
          return;
    end case;
 
-   if L.Total = 0 or else Loop_Depth >= Max_Loops then
+   if L.Total = 0 then
+      Position := Step.Target;
+      return;
+   elsif Loop_Depth >= Max_Loops then
+      --  Refused, not skipped: a loop the template meant, left out unsaid.
+      Refuse (Item.Names (L.Var).Offset, Item.Names (L.Var).Length,
+              E.Template_Nesting_Too_Deep);
       Position := Step.Target;
       return;
    end if;

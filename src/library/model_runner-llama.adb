@@ -118,11 +118,18 @@ package body Model_Runner.Llama is
    --  Its distance from the lowest position that layer still holds. For a
    --  layer that holds everything that is the position itself, which is
    --  what this was before there was anything else.
+   --
+   --  A position below that is not held, and is read as the lowest the
+   --  layer holds: what a window would see from there is gone. A shift
+   --  that closes a hole across a slid layer's front leaves it so -- the
+   --  origin at what was kept, the next position's window reaching
+   --  before it -- and the difference went below zero.
    function Cell_Of
      (Item : Session; Layer : Natural; Position : Element_Count)
       return Element_Count
    is (if Item.Origin = null then Position
-       else Position - Item.Origin.all (Layer));
+       else Element_Count'Max (Position, Item.Origin.all (Layer))
+            - Item.Origin.all (Layer));
 
    --  The same reason the kernels give. Every activation and weight here
    --  came out of a model file, so a not-a-number or an infinity is possible
@@ -2448,7 +2455,8 @@ package body Model_Runner.Llama is
       Stretch  : Rotary_Request := No_Rotary_Request;
       Panel_Cache : String := "";
       Context  : Natural := 0;
-      Cache    : Cache_Precision := Exact)
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True)
    is separate;
 
    -----------
@@ -2919,6 +2927,9 @@ package body Model_Runner.Llama is
    --  @param Count How many.
    --  @param Target Receives Count results of Each rows.
    --  @param Status Success, or the first refusal.
+   --  @param Gates The layer's gate stack, where Stack is it or its up:
+   --    the device may hold the two as one region.
+   --  @param Ups The layer's up stack, likewise.
    procedure Product_Slice
      (Item    : Session;
       Slice   : T.View;
@@ -2928,7 +2939,9 @@ package body Model_Runner.Llama is
       Vectors : T.Real_Array_Access;
       Count   : Element_Count;
       Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Gates   : T.View := T.Empty_View;
+      Ups     : T.View := T.Empty_View)
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
@@ -2957,7 +2970,7 @@ package body Model_Runner.Llama is
 
       Model_Runner.Backend.Device.Dispatch_Slice
         (Stack, Each, Member, Vectors, Count, Target, Status,
-         Item.Stopping);
+         Item.Stopping, Gates => Gates, Ups => Ups);
    end Product_Slice;
 
    --  Whether a matrix's format wants its activation's sums over a
@@ -3424,9 +3437,18 @@ package body Model_Runner.Llama is
 
    --  Whether the ring still reaches a position: nothing written since
    --  has come round to its slot.
+   --  And no further back than the ring has held states since it was
+   --  last made from one: a ring made anew, adopted or restored from a
+   --  checkpoint holds that one slot, the others nothing.
+   --  An architecture whose linear layers read one state reaches only
+   --  where it stands (One_State_Slot).
    function In_Reach (Item : Session; Position : Natural) return Boolean
    is (Position <= Item.Kept_Newest
-       and then Item.Kept_Newest - Position <= Item.Kept_States);
+       and then Position >= Item.Ring_Floor
+       and then Item.Kept_Newest - Position <= Item.Kept_States
+       and then (Item.Owner = null
+                 or else not One_State_Slot (Item.Owner.Settings.Kind)
+                 or else Position = Item.Committed));
 
    --  The position whose state the one a position reads is made from: the
    --  position itself where its slot holds a state, the nearest state
@@ -4126,6 +4148,14 @@ package body Model_Runner.Llama is
                         Run.Whose.Record_Of (Slot) :=
                           (if Lazy and then Step < Run.Count - 1
                            then Position else 0);
+
+                        --  A record there now, whatever an earlier run's
+                        --  rule made of the position: that state is gone.
+                        if Run.Whose.Made_At = Position
+                          and then Run.Whose.Record_Of (Slot) = Position
+                        then
+                           Run.Whose.Made_At := 0;
+                        end if;
                      end if;
                   end;
                end loop;
@@ -7298,6 +7328,7 @@ package body Model_Runner.Llama is
       --  has been told to give everything back, so there is no address left
       --  for it to be wrong about.
       Release_Weights (Item);
+      Model_Runner.Backend.Device.Forget_Model (Item.Device_Ticket);
       if Item.Panel_Writer /= null then
          while not Item.Panel_Writer'Terminated loop
             delay 0.01;
@@ -7659,6 +7690,13 @@ package body Model_Runner.Llama is
       Upto     : Element_Count)
    is separate;
 
+   --  The device's cache this session holds given back: its pages, its
+   --  block and its seat, and the buffers once nobody holds any. What
+   --  Close does, and what Adopt does before it fills the host's copy --
+   --  a session that kept its seat took no block again, and the device
+   --  attended over the conversation it had held before.
+   procedure Give_Back_Device_Cache (Item : in out Session);
+
    procedure Snapshot
      (Item   : in out Session;
       Source : Model'Class;
@@ -7996,8 +8034,10 @@ package body Model_Runner.Llama is
    --  default paged session -- whose plan is in halves already -- was
    --  counted at half its device copy, and a block at a third of what it
    --  took.
-   function Session_Needs
-     (Source   : Model'Class;
+   --  What the device holds for a session's cache, as Session_Needs counts
+   --  it; see there.
+   function Device_Cache_Bytes
+     (Settings : Configuration;
       Plan     : Mem.Session_Plan;
       Capacity : Natural;
       Held     : Cache_Precision;
@@ -8005,42 +8045,23 @@ package body Model_Runner.Llama is
    is
       subtype U64 is Interfaces.Unsigned_64;
 
-      Settings : Configuration renames Source.Settings;
-
       Row   : constant U64 :=
         U64 (Settings.KV_Heads) * U64 (Settings.Head_Size + Settings.Value_Size);
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
 
-      --  Positions a layer holds, rounded up to the page where paged; the
-      --  widest of them; and the elements of every layer's rows.
-      Cells   : U64 := 0;
+      --  The widest layer's positions.
       Widest  : U64 := 0;
    begin
-      if Model_Runner.Backend."/="
-           (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
-      then
-         return Plan.Total_Resident;
-      end if;
-
       for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
-         declare
-            Held_Here : constant U64 := U64 (Layer_Cells (Settings, Capacity, Layer));
-            Here      : constant U64 :=
-              (if Paged
-               then (Held_Here + U64 (Page_Positions) - 1)
-                    / U64 (Page_Positions) * U64 (Page_Positions)
-               else Held_Here);
-         begin
-            Cells := Cells + Here;
-            Widest := U64'Max (Widest, Held_Here);
-         end;
+         Widest :=
+           U64'Max (Widest, U64 (Layer_Cells (Settings, Capacity, Layer)));
       end loop;
 
       declare
          Front    : constant U64 := (if Paged then U64 (Page_Front) else 0);
          Tables   : constant U64 := U64 (Model_Runner.Backend.Device.Table_Room);
-
-         Device : constant U64 :=
+      begin
+         return
            (case Held is
               when Eighth | Fourth =>
                 --  The packed words in the binary32 buffer: paged, a copy
@@ -8051,10 +8072,79 @@ package body Model_Runner.Llama is
                  else Plan.KV_Cache_Bytes + (Tables + Sinks) * 4 + Widest * Row * 2),
               when Exact | Halved =>
                 Device_Copy_Bytes (Settings, Capacity, Held, Paged));
-      begin
-         return Plan.Total_Resident + Device;
       end;
+   end Device_Cache_Bytes;
+
+   function Session_Needs
+     (Source   : Model'Class;
+      Plan     : Mem.Session_Plan;
+      Capacity : Natural;
+      Held     : Cache_Precision;
+      Paged    : Boolean) return Interfaces.Unsigned_64 is
+   begin
+      if Model_Runner.Backend."/="
+           (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+      then
+         return Plan.Total_Resident;
+      end if;
+
+      return Plan.Total_Resident
+        + Device_Cache_Bytes (Source.Settings, Plan, Capacity, Held, Paged);
    end Session_Needs;
+
+   -----------------
+   -- Device_Room --
+   -----------------
+
+   function Device_Room
+     (Settings : Configuration;
+      Context  : Natural;
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True) return Interfaces.Unsigned_64
+   is
+      subtype U64 is Interfaces.Unsigned_64;
+
+      Session_Margin : constant U64 := Device_Session_Margin;
+
+      --  A hybrid's states, five deep: a drafted round's rewind.
+      State_Slots : constant := 5;
+
+      Plan     : Mem.Session_Plan;
+      Planning : E.Error_Info;
+
+      Budget : constant U64 := Model_Runner.Backend.Device.Budget_Bytes;
+      Heaps  : constant U64 :=
+        (if Budget > 0
+         then U64'Min (Budget, Model_Runner.Backend.Device.Heap_Bytes)
+         else Model_Runner.Backend.Device.Heap_Bytes);
+      States : constant U64 :=
+        (if Hybrid (Settings.Kind)
+         then U64 (State_Slots)
+              * U64 (State_Room (Settings) + Conv_Room (Settings)) * 4
+         else 0);
+   begin
+      if Context = 0 or else Heaps = 0 then
+         return 0;
+      end if;
+
+      Plan_For (Settings, Context, Plan, Planning, Cache => Cache);
+      if E.Is_Error (Planning) then
+         return 0;
+      end if;
+
+      declare
+         --  The device's own copy of the cache, which is not the host's
+         --  plan: binary32 rows paged beside a half-precision copy are six
+         --  bytes an element where the plan says four.
+         Cache_Bytes : constant U64 :=
+           Device_Cache_Bytes (Settings, Plan, Context, Cache, Paged);
+      begin
+         if Heaps <= Session_Margin + States + Cache_Bytes then
+            return 0;
+         end if;
+         return Heaps - Session_Margin - States - Cache_Bytes;
+      end;
+   end Device_Room;
 
    ----------
    -- Open --
@@ -8073,18 +8163,12 @@ package body Model_Runner.Llama is
       Paged          : Boolean := False)
    is separate;
 
-   -----------
-   -- Close --
-   -----------
+   ----------------------------
+   -- Give_Back_Device_Cache --
+   ----------------------------
 
-   procedure Close (Item : in out Session) is
+   procedure Give_Back_Device_Cache (Item : in out Session) is
    begin
-      if Item.Owner /= null and then Item.Current /= Closed then
-         if Item.Owner.Sessions > 0 then
-            Item.Owner.Sessions := Item.Owner.Sessions - 1;
-         end if;
-      end if;
-
       --  The pages of the device's cache this session held, given back --
       --  every slot it owns, wherever they are -- and the buffer let go
       --  once nobody holds a page, as a block does. Not cleared: a page
@@ -8144,6 +8228,21 @@ package body Model_Runner.Llama is
       end if;
 
       Item.Seat := -1;
+   end Give_Back_Device_Cache;
+
+   -----------
+   -- Close --
+   -----------
+
+   procedure Close (Item : in out Session) is
+   begin
+      if Item.Owner /= null and then Item.Current /= Closed then
+         if Item.Owner.Sessions > 0 then
+            Item.Owner.Sessions := Item.Owner.Sessions - 1;
+         end if;
+      end if;
+
+      Give_Back_Device_Cache (Item);
 
       --  What the device owed the host is a closed session's, and the next
       --  session opened in this one's place settles from nothing: carried
@@ -8152,6 +8251,8 @@ package body Model_Runner.Llama is
       --  them -- a perplexity's every chunk past the first read as noise.
       Item.Owed_Count := 0;
       Item.Owed_At := 0;
+      Item.Turned := False;
+      Item.Check_Slot := False;
 
       Free_Cells (Item.Cells);
       Free_Cells (Item.At_Keys);
@@ -8538,7 +8639,9 @@ package body Model_Runner.Llama is
             --  what the device holds in the others is not read again.
             Item.State_On_Device := False;
             Item.Kept_Newest := 0;
+            Item.Ring_Floor := 0;
             Item.Record_Of := [others => 0];
+            Item.Made_At := 0;
          elsif In_Reach (Item, Position)
            and then Replay_Base (Item, Position) >= 0
          then
@@ -8579,6 +8682,7 @@ package body Model_Runner.Llama is
             Item.State_On_Device := True;
             Item.Ring_Written := False;
             Item.Kept_Newest := Position;
+            Item.Ring_Floor := Position;
             if State_Slot (Item, Position) < Ring_Most then
                Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
             end if;
@@ -8605,6 +8709,7 @@ package body Model_Runner.Llama is
             Item.State_On_Device := False;
             Item.Ring_Written := True;
             Item.Kept_Newest := Position;
+            Item.Ring_Floor := Position;
             if State_Slot (Item, Position) < Ring_Most then
                Item.Record_Of (Natural (State_Slot (Item, Position))) := 0;
             end if;
@@ -8648,7 +8753,12 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      if Item.Delta_State = null or else Count = Item.Kept_States then
+      --  Nothing to keep where the linear layers read their state in one
+      --  place: the ring's other slots would never be read, and the state
+      --  carried into another slot would be read from none.
+      if Item.Delta_State = null or else Count = Item.Kept_States
+        or else One_State_Slot (Item.Owner.Settings.Kind)
+      then
          return;
       end if;
 
@@ -8700,9 +8810,14 @@ package body Model_Runner.Llama is
          Item.Conv_State := Convs;
          Item.Kept_States := Count;
          Item.Record_Of := [others => 0];
+         Item.Made_At := 0;
          Item.Kept_Newest := Item.Committed;
+         Item.Ring_Floor := Item.Committed;
       end;
    end Keep_States;
+
+   function Rewinds_Drafts (Item : Model) return Boolean
+   is (not One_State_Slot (Item.Settings.Kind));
 
    function States_Kept (Item : Session) return Natural
    is (if Item.Delta_State = null then Natural'Last else Item.Kept_States);
@@ -8747,7 +8862,9 @@ package body Model_Runner.Llama is
       Item.State_On_Device := False;
       Item.Ring_Written := False;
       Item.Kept_Newest := 0;
+      Item.Ring_Floor := 0;
       Item.Record_Of := [others => 0];
+      Item.Made_At := 0;
       Item.Check_At := 0;
       Item.Check_On_Device := False;
 
@@ -9325,6 +9442,9 @@ package body Model_Runner.Llama is
                   Item.Record_Of
                     (Natural (State_Slot (Item, First + Natural (T) + 1))) :=
                     First + Natural (T) + 1;
+                  if Item.Made_At = First + Natural (T) + 1 then
+                     Item.Made_At := 0;
+                  end if;
                   Written_Conv (T) :=
                     State_Slot (Item, First + Natural (T) + 1) * Every_Conv
                     + Memory;

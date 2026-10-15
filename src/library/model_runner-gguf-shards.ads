@@ -164,6 +164,16 @@ package Model_Runner.GGUF.Shards is
    function Shard_Path
      (First : String; Index : Positive; Count : Positive) return String;
 
+   --  How many bytes a model's files hold between them: the file alone,
+   --  or -- named by a shard -- every shard the name's count says, those
+   --  that are there. What a model weighs before it is opened: sized by
+   --  its first shard, a 19 GB model in two files weighed 9.5 and was
+   --  taken where it would not fit.
+   --
+   --  @param Path Path of the model, or of any of its shards.
+   --  @return The bytes, or nought where none of the files is there.
+   function Total_Size (Path : String) return Model_Runner.Bytes.Byte_Count;
+
    --  Whether a path ends in the convention's suffix at all.
    --
    --  @param Path Path to test.

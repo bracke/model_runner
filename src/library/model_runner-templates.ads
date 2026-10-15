@@ -268,6 +268,14 @@ package Model_Runner.Templates is
    --    is recognised.
    function Recognise (Source : String) return String;
 
+   --  The names Recognise gives the call shapes no carried format writes:
+   --  Mistral's, and DeepSeek's two. Syntax_Of reads them; Built_In has no
+   --  template for them, and a model's own template is never replaced by
+   --  one.
+   Mistral_Shape        : constant String := "mistral";
+   DeepSeek_Shape       : constant String := "deepseek";
+   DeepSeek_Plain_Shape : constant String := "deepseek-v3.1";
+
    --  The shape a model rendered with a carried format writes tool calls in.
    --
    --  The chat format and the call syntax are one choice: the format tells
@@ -281,6 +289,17 @@ package Model_Runner.Templates is
    --    as its format asks, and the open JSON it now and then writes
    --    instead.
    function Syntax_Of (Name : String) return Model_Runner.Tools.Call_Syntax;
+
+   --  The shape a run reads a model's calls in, the agent's loop and the
+   --  report of a single reply alike: the format's own syntax, and where
+   --  that is the JSON envelope, the bare or fenced object too, since a
+   --  model asked for a call often writes it without the envelope. One
+   --  function for both: the report read JSON only, and never reported a
+   --  Gemma, Qwen3-Coder, MiniCPM or Functionary model's calls.
+   --
+   --  @param Name Format name, as Syntax_Of takes it.
+   --  @return The syntax the run reads calls in.
+   function Reading_Syntax (Name : String) return Model_Runner.Tools.Call_Syntax;
 
    --  The chat formats this build carries, in the order they are offered.
    --
@@ -619,6 +638,8 @@ private
       Arg1 : Natural := 0;
       Arg2 : Natural := 0;
       Arg3 : Natural := 0;
+      --  The one filter with four: truncate's leeway.
+      Arg4 : Natural := 0;
    end record;
 
    --  How many filters may follow one another on a term.

@@ -3032,6 +3032,13 @@ package body Tests.Inference_Cases is
       begin
          Refused_With (Kept'Last - 3, "in its last panel");
          Refused_With (Kept'First + 32, "in its shape digest");
+
+         --  And inside a matrix, which neither end shows: the fixture's
+         --  second matrix is thirty-two rows of Q8_0, four panels of 272
+         --  bytes 544 past the header's 4096, and its second is the
+         --  middle the load reads as well.
+         Refused_With
+           (Kept'First + 4096 + 544 + 272 + 3, "inside a matrix");
       end;
 
       Ada.Directories.Delete_File (Path);
@@ -10476,7 +10483,7 @@ package body Tests.Inference_Cases is
       --  The pieces a text is built from, chosen so that each class every
       --  expression names is present and each boundary the rules draw
       --  differently can arise.
-      Atoms : constant array (1 .. 48) of Case_Text :=
+      Atoms : constant array (1 .. 57) of Case_Text :=
         [new String'("ab"), new String'("Hello"), new String'("WORLD"),
          new String'("camelCase"), new String'("x"), new String'(" "),
          new String'("  "), new String'("     "), new String'("         "),
@@ -10503,7 +10510,27 @@ package body Tests.Inference_Cases is
          new String'(U (16#AC00#)),         --  a Hangul syllable
          new String'(U (16#43F#) & U (16#440#)),  --  Cyrillic lowercase
          new String'(U (16#391#)),          --  Greek capital alpha
-         new String'("<sentinel:12>"), new String'("IMGIMGABZ")];
+         new String'("<sentinel:12>"), new String'("IMGIMGABZ"),
+         --  And the scripts and categories past the Unicode 4.0 the
+         --  standard library's tables stop at, which the engine read its
+         --  letters, digits, marks and cases from: Malayalam with a chillu
+         --  (U+0D7B, a letter since 5.1), the ideographic zero between two
+         --  ideographs and two Roman numerals (letter numbers, numbers to
+         --  every expression and letters to the standard library), an
+         --  ideograph of extension C, a combining mark of 7.0, a Cyrillic
+         --  capital and small of extension B, a Latin capital of extension
+         --  D, and the Mongolian vowel separator -- a space in 4.0, a
+         --  format character since 6.3.
+         new String'(U (16#D05#) & U (16#D35#) & U (16#D7B#)),
+         new String'(U (16#4E8C#) & U (16#3007#) & U (16#4E8C#)
+                     & U (16#56DB#) & U (16#5E74#)),
+         new String'(U (16#216B#)),
+         new String'(U (16#2A700#)),
+         new String'("a" & U (16#1AB0#)),
+         new String'(U (16#A640#) & U (16#A641#)),
+         new String'(U (16#A7A0#) & "b"),
+         new String'(U (16#180E#)),
+         new String'(U (16#2160#) & "IV")];
 
       --  A small deterministic generator, so a failure names a text that
       --  can be typed into a test.
@@ -11917,12 +11944,17 @@ package body Tests.Inference_Cases is
       --  The logits a model produces, optionally after merging the
       --  adapter above into it.
       procedure Answer
-        (Merged : Boolean;
-         Apply  : Boolean;
-         Half   : Boolean;
-         Alien  : Boolean;
-         Result : out Logit_Vector;
-         Merge  : out E.Error_Info)
+        (Merged   : Boolean;
+         Apply    : Boolean;
+         Half     : Boolean;
+         Alien    : Boolean;
+         Result   : out Logit_Vector;
+         Merge    : out E.Error_Info;
+         Rank     : Positive := 1;
+         Alpha    : Float := Tiny_Model.Adapter_Alpha;
+         Scale    : N.Real := 1.0;
+         Identity : Tiny_Model.Adapter_Identity := Tiny_Model.Low_Rank;
+         For_Arch : String := "llama")
       is
          Image : B.Byte_Array_Access;
       begin
@@ -11947,7 +11979,8 @@ package body Tests.Inference_Cases is
 
             if Apply then
                Tiny_Model.Write_Adapter
-                 (Adapter, Half => Half, Foreign => Alien);
+                 (Adapter, Half => Half, Foreign => Alien, Rank => Rank,
+                  Alpha => Alpha, Identity => Identity, For_Arch => For_Arch);
 
                declare
                   From   : Model_Runner.Byte_Sources.Files.File_Source;
@@ -11961,7 +11994,7 @@ package body Tests.Inference_Cases is
                   Containers.Reader.Parse (Second, From, Status => Local);
                   Assert (E.Is_Ok (Local), "the adapter did not parse");
 
-                  L.Merge_Adapter (Ready, Second, From, Status => Merge);
+                  L.Merge_Adapter (Ready, Second, From, Scale, Merge);
 
                   Containers.Close (Second);
                   Model_Runner.Byte_Sources.Files.Close (From);
@@ -12026,6 +12059,65 @@ package body Tests.Inference_Cases is
               "a merged adapter and a model written with the same "
               & "difference disagree by"
               & Model_Runner.Numerics.Real'Image (Worst));
+
+      --  A rank-four pair is merged at its alpha over four, as llama.cpp
+      --  merges it: the same difference in its first row and column, at
+      --  four times the alpha, is the baked model again. Merged at the
+      --  alpha alone, it went in at four times what it describes.
+      --  And one stating a nought for its alpha -- or none -- is merged
+      --  at the scale alone: at a scale of the fixture's alpha, the baked
+      --  model; a nought merged nothing.
+      declare
+         procedure Same_As_Baked (What : String) is
+            Off : Model_Runner.Numerics.Real := 0.0;
+         begin
+            Assert (E.Is_Ok (Merge),
+                    What & " did not merge: "
+                    & E.Error_Code'Image (Merge.Code));
+            for Index in Baked'Range loop
+               Off := Model_Runner.Numerics.Real'Max
+                 (Off, abs (Baked (Index) - Adapted (Index)));
+            end loop;
+            Assert (Off < 1.0E-4,
+                    What & " and the model written with its difference "
+                    & "disagree by" & Model_Runner.Numerics.Real'Image (Off));
+         end Same_As_Baked;
+      begin
+         Answer (Merged => False, Apply => True, Half => False,
+                 Alien => False, Result => Adapted, Merge => Merge,
+                 Rank => 4, Alpha => 4.0 * Tiny_Model.Adapter_Alpha);
+         Same_As_Baked ("a rank-four adapter at four times the alpha");
+
+         Answer (Merged => False, Apply => True, Half => False,
+                 Alien => False, Result => Adapted, Merge => Merge,
+                 Alpha => 0.0, Scale => N.Real (Tiny_Model.Adapter_Alpha));
+         Same_As_Baked ("an adapter stating a nought for its alpha");
+
+         Answer (Merged => False, Apply => True, Half => False,
+                 Alien => False, Result => Adapted, Merge => Merge,
+                 Alpha => -1.0, Scale => N.Real (Tiny_Model.Adapter_Alpha));
+         Same_As_Baked ("an adapter stating no alpha");
+      end;
+
+      --  An adapter is what it says it is, for the model it is merged
+      --  into: a file that is not an adapter, not a low-rank one, one
+      --  activated by a sequence, or one for another architecture is
+      --  refused rather than merged.
+      for Which in Tiny_Model.Not_An_Adapter .. Tiny_Model.Activated loop
+         Answer (Merged => False, Apply => True, Half => False,
+                 Alien => False, Result => Adapted, Merge => Merge,
+                 Identity => Which);
+         Assert (Merge.Code = E.Arch_Unsupported_Feature,
+                 "an adapter file that is "
+                 & Tiny_Model.Adapter_Identity'Image (Which)
+                 & " was merged: " & E.Error_Code'Image (Merge.Code));
+      end loop;
+      Answer (Merged => False, Apply => True, Half => False,
+              Alien => False, Result => Adapted, Merge => Merge,
+              For_Arch => "qwen2");
+      Assert (Merge.Code = E.Arch_Unsupported_Feature,
+              "an adapter for qwen2 was merged into a llama: "
+              & E.Error_Code'Image (Merge.Code));
 
       --  Half a pair describes half a difference, which is nothing.
       Answer (Merged => False, Apply => True, Half => True,
@@ -17567,6 +17659,1126 @@ package body Tests.Inference_Cases is
       end;
    end Paired_Stacks_Are_Held_Once;
 
+   --  A rewind below what the device still owes the host, and a batch
+   --  from there: the rows the batch wrote below the old owed range are
+   --  the device's too. The union of the two ranges kept the earlier
+   --  start, so the host's copy of the rows between the rewind and that
+   --  start stayed the old conversation's, and a snapshot -- or a slide,
+   --  a shift, a layer the host attends -- read them. The snapshot taken
+   --  after such a turn, read into a fresh session, answers as a session
+   --  that read the same tokens straight does.
+   procedure A_Rewind_Below_The_Owed_Rows_Is_Fetched
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      First_Turn : Vocab.Token_Array (1 .. 40);
+      Second_Turn : Vocab.Token_Array (1 .. 30);
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+
+      --  One turn after the rewind, read as a batch or a token at a time;
+      --  the two merge what is owed in different places.
+      procedure Turn (By_Tokens : Boolean) is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Ready  : Boolean;
+         Status : E.Error_Info;
+         Last, Turned, Straight : Logit_Vector;
+         Kept   : B.Byte_Array_Access;
+         Worst  : N.Real := 0.0;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_Device, Ready);
+         Assert (Ready, "the model did not prepare on the device");
+
+         --  The first turn, settled by a snapshot, and one token past it
+         --  that the device owes; then back to the middle of the first
+         --  turn and another turn from there.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch (Live, Under.Ready, First_Turn, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the first turn failed");
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the first snapshot failed");
+            B.Free (Kept);
+            L.Evaluate (Live, Under.Ready, 7, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the token past the turn failed");
+            L.Rewind (Live, 20, Status);
+            Assert (E.Is_Ok (Status), "the rewind was refused");
+            if By_Tokens then
+               for Token of Second_Turn loop
+                  L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+                  Assert (E.Is_Ok (Status), "a token of the second turn failed");
+               end loop;
+            else
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Second_Turn, Last, Status => Status);
+               Assert (E.Is_Ok (Status), "the second turn failed");
+            end if;
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the second snapshot failed");
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status),
+                    "the snapshot was not adopted: " & E.Error_Code'Image (Status.Code));
+            L.Evaluate (Live, Under.Ready, 9, Turned, Status => Status);
+            Assert (E.Is_Ok (Status), "the token after adopting failed");
+            L.Close (Live);
+         end;
+         B.Free (Kept);
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Evaluate_Batch
+              (Live, Under.Ready, Vocab."&" (First_Turn (1 .. 20), Second_Turn), Last,
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the straight run failed");
+            L.Evaluate (Live, Under.Ready, 9, Straight, Status => Status);
+            Assert (E.Is_Ok (Status), "the straight token failed");
+            L.Close (Live);
+         end;
+
+         for Index in Turned'Range loop
+            Worst := N.Real'Max (Worst, abs (Turned (Index) - Straight (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-3,
+                 "the turn after a rewind below the owed rows, read "
+                 & (if By_Tokens then "a token at a time" else "as a batch")
+                 & ", answers" & N.Real'Image (Worst)
+                 & " away from the same tokens read straight");
+      end Turn;
+   begin
+      for Index in First_Turn'Range loop
+         First_Turn (Index) := Vocab.Token_Id ((Index * 5 + 1) mod Tiny_Model.Vocabulary);
+      end loop;
+      for Index in Second_Turn'Range loop
+         Second_Turn (Index) := Vocab.Token_Id ((Index * 3 + 2) mod Tiny_Model.Vocabulary);
+      end loop;
+
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, "note: no device to owe rows on");
+         return;
+      end if;
+
+      Tiny_Model.Build (Image, Room => 128);
+      Turn (By_Tokens => False);
+      Turn (By_Tokens => True);
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Rewind_Below_The_Owed_Rows_Is_Fetched;
+
+   --  A hybrid's ring made anew holds one state, the committed one: what
+   --  Keep_States carried over, what Adopt read in. The slots behind it
+   --  hold nothing, and a rewind into them was taken -- every linear
+   --  layer went on from a state of zeros, the output silently another
+   --  conversation's. Refused now, and Rewind_Point says so, until the
+   --  ring has been written past the floor again; a rewind within what
+   --  was written since is taken and answers as the straight run.
+   procedure A_Ring_Made_Anew_Reaches_Only_What_It_Holds
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Last, Again, Straight : Logit_Vector;
+         Kept   : B.Byte_Array_Access;
+         Worst  : N.Real := 0.0;
+      begin
+         Start (Under);
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt (1 .. 6), Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the prompt failed");
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the snapshot failed");
+
+            --  Made anew at six: nothing behind six is held.
+            L.Keep_States (Live, 3, Status);
+            Assert (E.Is_Ok (Status), "the session would not keep states");
+            Assert (L.Rewind_Point (Live, 4) /= 4,
+                    "the ring made anew says it reaches a position behind it");
+            L.Rewind (Live, 4, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind behind a ring made anew was taken: "
+                    & E.Error_Code'Image (Status.Code));
+
+            --  Written past the floor, a rewind to what was written is
+            --  taken and answers as the straight run.
+            L.Evaluate (Live, Under.Ready, Prompt (7), Last, Status => Status);
+            L.Evaluate (Live, Under.Ready, Prompt (8), Last, Status => Status);
+            L.Rewind (Live, 7, Status);
+            Assert (E.Is_Ok (Status),
+                    "a rewind within the written ring was refused");
+            L.Evaluate (Live, Under.Ready, Prompt (8), Again, Status => Status);
+            Assert (E.Is_Ok (Status), "the token after the rewind failed");
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Straight, Status => Status);
+            Assert (E.Is_Ok (Status), "the straight run failed");
+            L.Close (Live);
+         end;
+         for Index in Again'Range loop
+            Worst := N.Real'Max (Worst, abs (Again (Index) - Straight (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-4,
+                 "a rewind within the ring answers" & N.Real'Image (Worst)
+                 & " away from the straight run");
+
+         --  Adopted, with a ring kept: the same floor.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Keep_States (Live, 3, Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status), "the snapshot was not adopted");
+            L.Rewind (Live, 4, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind behind an adopted ring was taken: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+         B.Free (Kept);
+
+         --  Restored from a checkpoint the ring had run past: the slots
+         --  behind it hold the later positions' states, and are not
+         --  reached either.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Keep_States (Live, 2, Status);
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt (1 .. 4), Last, Status => Status);
+            L.Mark_Checkpoint (Live);
+            for Index in 5 .. 8 loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Last, Status => Status);
+            end loop;
+            L.Rewind (Live, 4, Status);
+            Assert (E.Is_Ok (Status), "the rewind to the checkpoint was refused");
+            L.Rewind (Live, 3, Status);
+            Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                    "a rewind behind a restored checkpoint was taken: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+      end;
+      B.Free (Image);
+   end A_Ring_Made_Anew_Reaches_Only_What_It_Holds;
+
+   --  The Mamba family, RWKV6 and Jamba scan their state where it lies,
+   --  never a slot of a ring. A ring asked for -- drafting asks, a round
+   --  being a rewind -- moved the state into the slot the committed count
+   --  reads while the scan read the first, so the next token went on from
+   --  zeros; and a rewind into it was taken and restored nothing. Now
+   --  such a session keeps no ring: the next token answers as the
+   --  straight run does, a rewind behind where it stands is refused, and
+   --  nothing drafts on the model.
+   procedure One_State_Models_Keep_No_Ring
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6];
+      Kinds  : constant array (1 .. 4) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Mamba, Tiny_Model.Mamba2, Tiny_Model.Rwkv6,
+         Tiny_Model.Jamba];
+   begin
+      for Kind of Kinds loop
+         declare
+            Name  : constant String :=
+              Tiny_Model.Fixture_Architecture'Image (Kind);
+            Image : B.Byte_Array_Access;
+         begin
+            Tiny_Model.Build (Image, Kind => Kind);
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Under  : Harness (Held'Access);
+               Status : E.Error_Info;
+               Last, Kept, Straight : Logit_Vector;
+               Worst  : N.Real := 0.0;
+               Plan   : Model_Runner.Draft_Policy.Plan;
+            begin
+               Start (Under);
+               Assert (not L.Rewinds_Drafts (Under.Ready),
+                       Name & " says a round could be rewound on it");
+
+               declare
+                  Live : L.Session;
+               begin
+                  L.Open (Live, Under.Ready, Status => Status);
+                  Assert (E.Is_Ok (Status), Name & ": the session did not open");
+                  for Index in 1 .. 3 loop
+                     L.Evaluate
+                       (Live, Under.Ready, Prompt (Index), Last,
+                        Status => Status);
+                  end loop;
+                  L.Keep_States (Live, 3, Status);
+                  Assert (E.Is_Ok (Status), Name & ": keeping states failed");
+                  L.Evaluate
+                    (Live, Under.Ready, Prompt (4), Kept, Status => Status);
+                  Assert (E.Is_Ok (Status), Name & ": the fourth token failed");
+                  L.Rewind (Live, 3, Status);
+                  Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                          Name & ": a rewind behind where it stands was "
+                          & "taken: " & E.Error_Code'Image (Status.Code));
+
+                  Plan := Model_Runner.Draft_Policy.Decide
+                    (Under.Ready, Live,
+                     (Tokens => 4, Tokens_Set => True, Lookup => True,
+                      Model_Named => False),
+                     Draft_Ready => False, Auto_Drafted => False);
+                  Assert (Plan.Tokens = 0 and then not Plan.From_Context
+                          and then not Plan.From_Next,
+                          Name & ": a draft was planned for a model whose "
+                          & "rounds cannot be rewound");
+                  L.Close (Live);
+               end;
+
+               --  Adopted, then a token on: the adopted point is behind
+               --  where the session stands, and its state is not kept.
+               declare
+                  Live : L.Session;
+                  Snap : B.Byte_Array_Access;
+               begin
+                  L.Open (Live, Under.Ready, Status => Status);
+                  for Index in 1 .. 3 loop
+                     L.Evaluate
+                       (Live, Under.Ready, Prompt (Index), Last,
+                        Status => Status);
+                  end loop;
+                  L.Snapshot (Live, Under.Ready, Snap, Status);
+                  Assert (E.Is_Ok (Status), Name & ": the snapshot failed");
+                  L.Adopt (Live, Under.Ready, Snap.all, Status);
+                  Assert (E.Is_Ok (Status), Name & ": the adopt failed");
+                  B.Free (Snap);
+                  L.Evaluate
+                    (Live, Under.Ready, Prompt (4), Last, Status => Status);
+                  L.Rewind (Live, 3, Status);
+                  Assert (Status.Code = E.Tensor_Shape_Mismatch,
+                          Name & ": a rewind to the adopted point after a "
+                          & "token was taken: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Close (Live);
+               end;
+
+               declare
+                  Live : L.Session;
+               begin
+                  L.Open (Live, Under.Ready, Status => Status);
+                  for Token of Prompt loop
+                     L.Evaluate
+                       (Live, Under.Ready, Token, Straight, Status => Status);
+                  end loop;
+                  L.Close (Live);
+               end;
+               for Index in Kept'Range loop
+                  Worst := N.Real'Max (Worst, abs (Kept (Index) - Straight (Index)));
+               end loop;
+               Assert (Worst = 0.0,
+                       Name & ": the token after states were kept answers"
+                       & N.Real'Image (Worst) & " away from the straight run");
+            end;
+            B.Free (Image);
+         end;
+      end loop;
+
+      --  And a model whose ring is read still drafts.
+      declare
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+         begin
+            Start (Under);
+            Assert (L.Rewinds_Drafts (Under.Ready),
+                    "a hybrid whose ring is read says it cannot be rewound");
+         end;
+         B.Free (Image);
+      end;
+   end One_State_Models_Keep_No_Ring;
+
+   --  A shift whose hole a slid window layer straddles: the layer keeps
+   --  only what follows the hole, its origin at what was kept, and the
+   --  next position's window reaches before that origin -- the cell it
+   --  asked for went below zero and the token raised. The token is read
+   --  now, from what the layer holds, on the processor and the device.
+   procedure A_Shift_Across_A_Slid_Window_Reads_On
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Count : constant := 700;
+      Prompt : Vocab.Token_Array (1 .. Count);
+      Image  : B.Byte_Array_Access;
+
+      procedure Shift_On (Backend : Model_Runner.Backend.Backend_Kind) is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Ready  : Boolean;
+         Status : E.Error_Info;
+         Last   : Logit_Vector;
+         Live   : L.Session;
+         Name   : constant String :=
+           Model_Runner.Backend.Backend_Kind'Image (Backend);
+      begin
+         Start (Under, Backend, Ready);
+         if not Ready then
+            return;
+         end if;
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), Name & ": the session did not open");
+         for Token of Prompt loop
+            L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+            Assert (E.Is_Ok (Status), Name & ": a token of the prompt failed");
+         end loop;
+
+         --  One kept, all but three of the rest dropped: the window layers'
+         --  fronts lie inside the hole, and three rows move.
+         L.Shift (Live, Under.Ready, Keep => 1, Drop => Count - 4,
+                  Status => Status);
+         Assert (E.Is_Ok (Status),
+                 Name & ": the shift was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         for Token of Prompt (1 .. 6) loop
+            L.Evaluate (Live, Under.Ready, Token, Last, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    Name & ": a token after the shift failed: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+         Assert (Model_Runner.Kernels.All_Finite (Last),
+                 Name & ": the shifted context answered with logits that "
+                 & "are not numbers");
+         L.Close (Live);
+      end Shift_On;
+
+      Awake : Boolean;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) :=
+           Vocab.Token_Id ((Index * 7 + 3) mod Tiny_Model.Vocabulary);
+      end loop;
+      Tiny_Model.Build (Image, Window => 8, Room => 1024);
+      Shift_On (Model_Runner.Backend.Backend_CPU);
+      Model_Runner.Backend.Device.Open (Awake);
+      if Awake then
+         Shift_On (Model_Runner.Backend.Backend_Device);
+         Model_Runner.Backend.Device.Close;
+      end if;
+      B.Free (Image);
+   end A_Shift_Across_A_Slid_Window_Reads_On;
+
+   --  A panel file that cannot be named -- another load's in the way, a
+   --  sync that failed -- leaves the load copying its panels out of the
+   --  mapping before it lets it go. Finish gave the mapping up when it
+   --  failed, and the copy after it read unmapped memory: the process
+   --  died of a fault. The part file goes; the panels are still there to
+   --  read until Release. And a name another build already holds is taken
+   --  over in one step, not deleted and then renamed after.
+   procedure A_Panel_File_Not_Named_Is_Still_Read
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package D renames Ada.Directories;
+      package Map renames Model_Runner.Platform.Mapping;
+      use type Interfaces.Unsigned_8;
+
+      --  A directory, not empty, where the file would go: nothing renames
+      --  a file over it.
+      Path   : constant String :=
+        D.Compose (D.Current_Directory, "panel-unnamed-test.panels");
+      Header : constant String := "MRPANELS test header";
+      Total  : constant B.Byte_Count := 2 * 4096 + 3;
+   begin
+      if not D.Exists (Path) then
+         D.Create_Directory (Path);
+      end if;
+      declare
+         F : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, D.Compose (Path, "x"));
+         Ada.Text_IO.Close (F);
+      end;
+
+      declare
+         Built  : Model_Runner.Panel_Cache.Building;
+         Panels : System.Address;
+         Ok     : Boolean;
+      begin
+         Model_Runner.Panel_Cache.Begin_Build
+           (Built, Path, Header, Total, Panels, Ok);
+         if Map.Is_Supported and then Ok then
+            declare
+               Into : B.Byte_Array (1 .. Total)
+                 with Import, Address => Panels;
+               Same : Boolean := True;
+            begin
+               for Index in Into'Range loop
+                  Into (Index) := B.Byte (Index mod 251);
+               end loop;
+               Model_Runner.Panel_Cache.Finish (Built, Ok);
+               Assert (not Ok, "a file was named over a directory");
+               declare
+                  Search : D.Search_Type;
+                  Found  : D.Directory_Entry_Type;
+                  Left   : Boolean := False;
+               begin
+                  D.Start_Search
+                    (Search, D.Current_Directory,
+                     D.Simple_Name (Path) & ".*.part");
+                  while D.More_Entries (Search) loop
+                     D.Get_Next_Entry (Search, Found);
+                     Left := True;
+                     D.Delete_File (D.Full_Name (Found));
+                  end loop;
+                  D.End_Search (Search);
+                  Assert (not Left,
+                          "the part file of a build not named was left");
+               end;
+
+               --  What the load copies out before it releases.
+               for Index in Into'Range loop
+                  Same := Same and then Into (Index) = B.Byte (Index mod 251);
+               end loop;
+               Assert (Same, "the panels of a build not named changed");
+            end;
+            Model_Runner.Panel_Cache.Release (Built);
+         end if;
+      end;
+      D.Delete_Tree (Path);
+
+      --  A name held by a file already: taken over.
+      declare
+         Over : constant String :=
+           D.Compose (D.Current_Directory, "panel-over-test.panels");
+         F : Ada.Text_IO.File_Type;
+         Built  : Model_Runner.Panel_Cache.Building;
+         Panels : System.Address;
+         Ok     : Boolean;
+      begin
+         Ada.Text_IO.Create (F, Ada.Text_IO.Out_File, Over);
+         Ada.Text_IO.Put_Line (F, "another load's");
+         Ada.Text_IO.Close (F);
+         Model_Runner.Panel_Cache.Begin_Build
+           (Built, Over, Header, Total, Panels, Ok);
+         if Map.Is_Supported and then Ok then
+            Model_Runner.Panel_Cache.Finish (Built, Ok);
+            Assert (Ok, "a name another file held was not taken over");
+            Model_Runner.Panel_Cache.Release (Built);
+            Assert (B.Byte_Count (D.Size (Over)) = 4096 + Total,
+                    "the name holds the other file still");
+         end if;
+         if D.Exists (Over) then
+            D.Delete_File (Over);
+         end if;
+      end;
+   end A_Panel_File_Not_Named_Is_Still_Read;
+
+   --  A snapshot with bytes past what its header says is refused: a file
+   --  two runs wrote at once, or one cut short and written on after, can
+   --  hold every field in range and another run's rows after them. The
+   --  same snapshot whole is taken.
+   procedure A_Snapshot_Longer_Than_It_Says_Is_Refused
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6];
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Last   : Logit_Vector;
+         Kept   : B.Byte_Array_Access;
+         Live   : L.Session;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+         Assert (E.Is_Ok (Status), "the prompt failed");
+         L.Snapshot (Live, Under.Ready, Kept, Status);
+         Assert (E.Is_Ok (Status), "the snapshot failed");
+
+         declare
+            Longer : constant B.Byte_Array := B."&" (Kept.all, B.Byte'(0));
+         begin
+            L.Adopt (Live, Under.Ready, Longer, Status);
+            Assert (Status.Code = E.Lifecycle_Cache_Unreadable,
+                    "a snapshot a byte longer than it says was taken: "
+                    & E.Error_Code'Image (Status.Code));
+            Assert (L.Position (Live) = 0,
+                    "a refused snapshot left a context behind");
+         end;
+         L.Adopt (Live, Under.Ready, Kept.all, Status);
+         Assert (E.Is_Ok (Status),
+                 "the snapshot whole was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Close (Live);
+         B.Free (Kept);
+      end;
+      B.Free (Image);
+   end A_Snapshot_Longer_Than_It_Says_Is_Refused;
+
+   --  A session that has run on the device and adopts another
+   --  conversation: the device's copy is taken again from what was read.
+   --  The session kept its block, took none again, and its next token
+   --  attended over the conversation it held before -- where a fresh
+   --  session adopting the same snapshot answers the snapshot's.
+   procedure An_Adopting_Session_Takes_The_Device_Copy_Again
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Before : constant Vocab.Token_Array := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+      Other  : constant Vocab.Token_Array := [11, 9, 7, 5, 3, 1, 2, 4];
+      Image  : B.Byte_Array_Access;
+      Awake  : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, "note: no device to adopt on");
+         return;
+      end if;
+      Tiny_Model.Build (Image, Room => 64);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Ready  : Boolean;
+         Status : E.Error_Info;
+         Last, Reused, Fresh : Logit_Vector;
+         Kept   : B.Byte_Array_Access;
+         Worst  : N.Real := 0.0;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_Device, Ready);
+         Assert (Ready, "the model did not prepare on the device");
+
+         --  The snapshot of the other conversation.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Evaluate_Batch (Live, Under.Ready, Other, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the other conversation failed");
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the snapshot failed");
+            L.Close (Live);
+         end;
+
+         --  A session that ran a conversation of its own, then adopts it.
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Evaluate_Batch (Live, Under.Ready, Before, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the session's own conversation failed");
+            L.Evaluate (Live, Under.Ready, 12, Last, Status => Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status), "the snapshot was not adopted");
+            L.Evaluate (Live, Under.Ready, 13, Reused, Status => Status);
+            Assert (E.Is_Ok (Status), "the token after adopting failed");
+            L.Close (Live);
+         end;
+
+         declare
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Status => Status);
+            L.Adopt (Live, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status), "the fresh session did not adopt");
+            L.Evaluate (Live, Under.Ready, 13, Fresh, Status => Status);
+            L.Close (Live);
+         end;
+         B.Free (Kept);
+
+         for Index in Reused'Range loop
+            Worst := N.Real'Max (Worst, abs (Reused (Index) - Fresh (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-4,
+                 "a session that had run on the device answers"
+                 & N.Real'Image (Worst)
+                 & " away from a fresh one after adopting the same snapshot");
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end An_Adopting_Session_Takes_The_Device_Copy_Again;
+
+   --  A position whose state a run after a rewind made from a check's
+   --  records stays a state only until a record is written there again:
+   --  back behind it, a second check left a record for the same position,
+   --  and the mark of the first run's state still said it was one -- a
+   --  rewind to it read the record's rows as the state, and the hybrid
+   --  went on from noise. The answer after it is the straight run's.
+   procedure A_Record_Written_Again_Is_A_Record
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Room  : constant := 64;
+      Front : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+      Image : B.Byte_Array_Access;
+      Near  : constant N.Real := 2.0E-3;
+      Backends : constant array (1 .. 2) of Model_Runner.Backend.Backend_Kind :=
+        [Model_Runner.Backend.Backend_CPU, Model_Runner.Backend.Backend_Device];
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room, Wide_State => True);
+      for Backend of Backends loop
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Status : E.Error_Info;
+            Answer, Want : Logit_Vector;
+
+            --  The second check from the end of the front, in the same
+            --  conversation or -- Reset between -- in the next.
+            procedure Again
+              (After_Reset : Boolean;
+               Settled     : Boolean := False) is
+               Live  : L.Session;
+               Got   : Logit_Vector;
+               Worst : N.Real := 0.0;
+            begin
+               L.Open (Live, Under.Ready, Context => Room, Status => Status);
+               L.Keep_States (Live, 4, Status);
+               Assert (E.Is_Ok (Status), "the session would not keep states");
+               for Token of Front loop
+                  L.Evaluate (Live, Under.Ready, Token, Answer, Status => Status);
+               end loop;
+
+               --  A check, back into it, and on: the position the rewind
+               --  lands on is made a state from the check's records.
+               L.Evaluate_Batch
+                 (Live, Under.Ready, [7, 8, 9, 10], Answer, Status => Status);
+               L.Rewind (Live, 5, Status);
+               Assert (E.Is_Ok (Status), "the first rewind into the check was refused");
+               L.Evaluate (Live, Under.Ready, 11, Answer, Status => Status);
+               L.Evaluate (Live, Under.Ready, 12, Answer, Status => Status);
+
+               if After_Reset then
+                  L.Reset (Live);
+                  for Token of Front loop
+                     L.Evaluate (Live, Under.Ready, Token, Answer, Status => Status);
+                  end loop;
+               else
+                  L.Rewind (Live, Front'Length, Status);
+                  Assert (E.Is_Ok (Status), "the rewind to the front was refused");
+               end if;
+
+               --  A second check over the same positions, and back into it.
+               L.Evaluate_Batch
+                 (Live, Under.Ready, [13, 14, 15, 2], Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the second check failed");
+
+               --  The ring read whole while the session stands past it: every
+               --  record made a state again, or marked lost.
+               if Settled then
+                  declare
+                     Kept : B.Byte_Array_Access;
+                  begin
+                     L.Snapshot (Live, Under.Ready, Kept, Status);
+                     B.Free (Kept);
+                  end;
+               end if;
+               L.Rewind (Live, 5, Status);
+               Assert (E.Is_Ok (Status), "the rewind into the second check was refused");
+               L.Evaluate (Live, Under.Ready, 3, Got, Status => Status);
+               Assert (E.Is_Ok (Status), "the token after it failed");
+               L.Close (Live);
+
+               for Index in Want'Range loop
+                  Worst := N.Real'Max (Worst, abs (Want (Index) - Got (Index)));
+               end loop;
+               Assert (Worst <= Near,
+                       "a rewind to a position a second check left a record at"
+                       & (if After_Reset then ", after a reset," else "")
+                       & " answers" & N.Real'Image (Worst)
+                       & " away from the straight run");
+            end Again;
+            Ready : Boolean;
+            Awake : Boolean := True;
+         begin
+            if Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Device) then
+               Model_Runner.Backend.Device.Open (Awake);
+            end if;
+            if Awake then
+               Start (Under, Backend, Ready);
+               Assert (Ready, "the hybrid did not prepare");
+               declare
+                  Live : L.Session;
+               begin
+                  L.Open (Live, Under.Ready, Context => Room, Status => Status);
+                  for Token of Vocab."&" (Front, Vocab.Token_Array'[13, 14, 3]) loop
+                     L.Evaluate (Live, Under.Ready, Token, Want, Status => Status);
+                  end loop;
+                  L.Close (Live);
+               end;
+               Again (After_Reset => False);
+               Again (After_Reset => True);
+               Again (After_Reset => False, Settled => True);
+            end if;
+            if Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Device) then
+               Model_Runner.Backend.Device.Close;
+            end if;
+         end;
+      end loop;
+      B.Free (Image);
+   end A_Record_Written_Again_Is_A_Record;
+
+   --  One session object closed within a LongRoPE model's trained context
+   --  and opened again past it: the token's table of angles is made again.
+   --  The one the closed session left matched the new session's base,
+   --  stretch and position, and its first token at that position turned
+   --  by the short factors where it reads the long. It answers as a
+   --  session opened past the context from the start.
+   procedure A_Reopened_Session_Turns_By_Its_Own_Table
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Prompt : constant Vocab.Token_Array := [1, 4, 5];
+      Next   : constant Vocab.Token_Id := 6;
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Phi3, Long_Rope => True);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Last, Reopened, Fresh : Logit_Vector;
+         Live   : L.Session;
+         Worst  : N.Real := 0.0;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Tiny_Model.Context / 2, Status => Status);
+         Assert (E.Is_Ok (Status), "the short session did not open");
+         L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+         L.Evaluate (Live, Under.Ready, Next, Last, Status => Status);
+         L.Close (Live);
+
+         L.Open (Live, Under.Ready, Tiny_Model.Context, Status => Status);
+         Assert (E.Is_Ok (Status), "the long session did not open");
+         L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+         L.Evaluate (Live, Under.Ready, Next, Reopened, Status => Status);
+         L.Close (Live);
+
+         declare
+            Other : L.Session;
+         begin
+            L.Open (Other, Under.Ready, Tiny_Model.Context, Status => Status);
+            L.Evaluate_Batch (Other, Under.Ready, Prompt, Last, Status => Status);
+            L.Evaluate (Other, Under.Ready, Next, Fresh, Status => Status);
+            L.Close (Other);
+         end;
+         for Index in Fresh'Range loop
+            Worst := N.Real'Max (Worst, abs (Fresh (Index) - Reopened (Index)));
+         end loop;
+         Assert (Worst = 0.0,
+                 "a session opened again past the trained context answers"
+                 & N.Real'Image (Worst) & " away from one opened there first");
+      end;
+      B.Free (Image);
+   end A_Reopened_Session_Turns_By_Its_Own_Table;
+
+   --  A snapshot carries the block past the stack's own keys and values:
+   --  a session that adopted one drafted from a block attending over zeros
+   --  below the adopted point, every draft verified and seldom taken. The
+   --  block's draft after adopting is the draft the saved session makes.
+   procedure A_Snapshot_Carries_The_Block_Past_The_Stack
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Room   : constant := 64;
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+      Image  : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : aliased Harness (Held'Access);
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         declare
+            Width  : constant N.Element_Count :=
+              N.Element_Count (L.Config (Under.Ready).Embedding);
+            Live, Again : L.Session;
+            Logits, Want, Got : Logit_Vector := [others => 0.0];
+            Nothing : N.Real_Array (1 .. 0);
+            Last    : N.Real_Array (0 .. Width - 1);
+            Handed  : N.Real_Array (0 .. Width - 1);
+            Kept    : B.Byte_Array_Access;
+            Worst   : N.Real := 0.0;
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (L.Drafts_Next (Live), "the session does not draft");
+
+            --  Each position read, and the block's cache written there.
+            for Index in Prompt'Range loop
+               L.Evaluate
+                 (Live, Under.Ready, Prompt (Index), Logits, Status => Status);
+               Last := L.Last_State (Live);
+               L.Draft_Next
+                 (Live, Under.Ready,
+                  Prompt (Natural'Min (Index + 1, Prompt'Last)), Last,
+                  Index - 1, Nothing, Handed, Status);
+               Assert (E.Is_Ok (Status), "the block's cache was not written");
+            end loop;
+            L.Snapshot (Live, Under.Ready, Kept, Status);
+            Assert (E.Is_Ok (Status), "the snapshot failed");
+            L.Draft_Next
+              (Live, Under.Ready, 3, Last, Prompt'Length - 1, Want, Handed,
+               Status);
+            Assert (E.Is_Ok (Status), "the saved session did not draft");
+            L.Close (Live);
+
+            L.Open (Again, Under.Ready, Context => Room, Status => Status);
+            L.Adopt (Again, Under.Ready, Kept.all, Status);
+            Assert (E.Is_Ok (Status),
+                    "the snapshot was not adopted: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Draft_Next
+              (Again, Under.Ready, 3, Last, Prompt'Length - 1, Got, Handed,
+               Status);
+            Assert (E.Is_Ok (Status), "the adopting session did not draft");
+            L.Close (Again);
+            B.Free (Kept);
+
+            for Index in Want'Range loop
+               Worst := N.Real'Max (Worst, abs (Want (Index) - Got (Index)));
+            end loop;
+            Assert (Worst = 0.0,
+                    "the block drafts" & N.Real'Image (Worst)
+                    & " away after adopting from what the saved session drafts");
+         end;
+      end;
+      B.Free (Image);
+   end A_Snapshot_Carries_The_Block_Past_The_Stack;
+
+   --  A session object opened again does not keep the checkpoint slot the
+   --  session closed in it asked for: its seat on the device was a slot
+   --  larger than the ring it holds, room taken for nothing. Its seat is
+   --  the one a session never asked takes.
+   procedure A_Reopened_Session_Asks_For_No_Checkpoint_Slot
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Interfaces.Unsigned_64;
+      Room   : constant := 32;
+      Prompt : constant Vocab.Token_Array := [4, 7, 2, 9];
+      Image  : B.Byte_Array_Access;
+      Awake  : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error, "note: no device to seat a ring on");
+         return;
+      end if;
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen35, Room => Room);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Ready  : Boolean;
+         Status : E.Error_Info;
+         Last   : Logit_Vector;
+         Reused, Fresh : Interfaces.Unsigned_64;
+
+         procedure Run (Live : in out L.Session; Checkpoints : Boolean) is
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            L.Keep_States (Live, 3, Status);
+            if Checkpoints then
+               L.Hold_Checkpoints (Live);
+            end if;
+            L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the prompt failed");
+         end Run;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_Device, Ready);
+         Assert (Ready, "the hybrid did not prepare on the device");
+         declare
+            Live : L.Session;
+         begin
+            Run (Live, Checkpoints => True);
+            L.Close (Live);
+            Run (Live, Checkpoints => False);
+            Reused := Model_Runner.Backend.Device.State_Room_Bytes;
+            L.Close (Live);
+         end;
+         declare
+            Live : L.Session;
+         begin
+            Run (Live, Checkpoints => False);
+            Fresh := Model_Runner.Backend.Device.State_Room_Bytes;
+            L.Close (Live);
+         end;
+         Assert (Fresh > 0, "a hybrid's ring took no room on the device");
+         Assert (Reused = Fresh,
+                 "a session object opened again seats"
+                 & Interfaces.Unsigned_64'Image (Reused)
+                 & " bytes where a fresh one seats"
+                 & Interfaces.Unsigned_64'Image (Fresh));
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Reopened_Session_Asks_For_No_Checkpoint_Slot;
+
+   --  A template that will not compile, written in a call shape no
+   --  carried format writes -- Mistral's [TOOL_CALLS]name[ARGS] -- has no
+   --  stand-in: the shape names only how calls are read, and an empty
+   --  template standing in for it rendered every conversation as nothing.
+   procedure A_Shape_With_No_Carried_Format_Stands_In_For_Nothing
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build
+        (Image,
+         Template => "{{ '[TOOL_CALLS]' + name + '[ARGS]' }}"
+                     & "{{ messages | no_such_filter }}");
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_CPU, Ready);
+         Assert (Ready, "the fixture did not prepare");
+         Assert (not L.Template_Stood_In (Under.Ready),
+                 "a template in a shape no carried format writes had one "
+                 & "stand in for it: " & L.Template_Format (Under.Ready));
+      end;
+      B.Free (Image);
+   end A_Shape_With_No_Carried_Format_Stands_In_For_Nothing;
+
+   --  Two models on one device -- a target and its draft -- share its
+   --  budget: the first is the one it is fitted to, and one beside it
+   --  adds its matrices to every fitting until it is closed. Fitted to
+   --  its own room, a draft dropped the target's reservation for its
+   --  context; and the target's own fitting, its weights alone, left the
+   --  draft's matrices to be given back and uploaded again. And the room
+   --  the load counts for a dense model is the device's own
+   --  copy of the context: binary32 rows paged beside their halves are six
+   --  bytes an element, where the host's plan says four.
+   procedure A_Second_Model_Adds_To_The_Device_Budget
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      package Device renames Model_Runner.Backend.Device;
+      use type Interfaces.Unsigned_64;
+
+      Ready : Boolean;
+      First, Second : Natural;
+      Small : constant Interfaces.Unsigned_64 := 64 * 2 ** 20;
+      Draft : constant Interfaces.Unsigned_64 := 16 * 2 ** 20;
+   begin
+      Device.Close;
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+
+      Device.Note_Model (First);
+      Device.Note_Model (Second);
+      Assert (not Device.Is_Beside (First) and then Device.Is_Beside (Second),
+              "the first model on the device was taken for one beside it, "
+              & "or the second for the first");
+
+      Device.Fit_Budget (Small);
+      Assert (Device.Describe.Memory_Bytes = Small,
+              "a fitting of the first model alone was not its own");
+
+      Device.Add_Beside (Second, Draft);
+      Assert (Device.Describe.Memory_Bytes = Small + Draft,
+              "a draft's matrices were not added to the budget fitted");
+
+      Device.Fit_Budget (Small);
+      Assert (Device.Describe.Memory_Bytes = Small + Draft,
+              "the target's next fitting dropped the draft's matrices:"
+              & Interfaces.Unsigned_64'Image (Device.Describe.Memory_Bytes));
+
+      Device.Forget_Model (Second);
+      Device.Fit_Budget (Small);
+      Assert (Device.Describe.Memory_Bytes = Small,
+              "a closed draft's matrices stayed in the budget");
+      Device.Forget_Model (First);
+
+      --  The room counted beside a context: a binary32 one paged takes six
+      --  bytes an element on the device, a half-precision one two, so the
+      --  rooms differ by twice what the host's plans do.
+      declare
+         Image    : B.Byte_Array_Access;
+         Parsed   : Containers.Container;
+         Settings : L.Configuration;
+         Status   : E.Error_Info;
+         Exact_Plan, Half_Plan : Model_Runner.Memory.Session_Plan;
+         Context  : constant := 4_096;
+      begin
+         Tiny_Model.Build (Image, Room => Context);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture did not parse");
+            L.Read_Config (Parsed, Settings => Settings, Status => Status);
+            Assert (E.Is_Ok (Status), "the fixture's configuration was refused");
+            Containers.Close (Parsed);
+         end;
+         B.Free (Image);
+
+         L.Plan_For (Settings, Context, Exact_Plan, Status, Cache => L.Exact);
+         L.Plan_For (Settings, Context, Half_Plan, Status, Cache => L.Halved);
+         declare
+            Plans : constant Interfaces.Unsigned_64 :=
+              Exact_Plan.KV_Cache_Bytes - Half_Plan.KV_Cache_Bytes;
+            Rooms : constant Interfaces.Unsigned_64 :=
+              L.Device_Room (Settings, Context, L.Halved, Paged => True)
+              - L.Device_Room (Settings, Context, L.Exact, Paged => True);
+         begin
+            Assert (Plans > 0 and then Rooms >= Plans * 19 / 10,
+                    "the room beside a binary32 context was counted at the "
+                    & "host's plan:" & Interfaces.Unsigned_64'Image (Rooms)
+                    & " less than a half-precision one, where the plans "
+                    & "differ by" & Interfaces.Unsigned_64'Image (Plans));
+         end;
+      end;
+
+      Device.Close;
+   end A_Second_Model_Adds_To_The_Device_Budget;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -17640,6 +18852,58 @@ package body Tests.Inference_Cases is
         (T, A_Wrapped_Window_Reads_Alike_On_The_Device'Access,
          "a windowed layer's ring, wrapped by a long prompt, reads alike on "
          & "the device and the processor");
+      Register_Routine
+        (T, A_Rewind_Below_The_Owed_Rows_Is_Fetched'Access,
+         "a turn rewound below the rows the device owes the host is fetched "
+         & "whole, and its snapshot answers as the tokens read straight");
+      Register_Routine
+        (T, A_Ring_Made_Anew_Reaches_Only_What_It_Holds'Access,
+         "a hybrid's ring made anew or adopted refuses a rewind behind the "
+         & "one state it holds");
+      Register_Routine
+        (T, One_State_Models_Keep_No_Ring'Access,
+         "a model whose linear layers read one state keeps no ring, answers "
+         & "as the straight run after one is asked, and drafts nothing");
+      Register_Routine
+        (T, A_Shift_Across_A_Slid_Window_Reads_On'Access,
+         "a shift whose hole a slid window layer straddles reads on, on the "
+         & "processor and the device");
+      Register_Routine
+        (T, A_Panel_File_Not_Named_Is_Still_Read'Access,
+         "a panel file that cannot be named is still read until released, "
+         & "and a name already held is taken over");
+      Register_Routine
+        (T, A_Snapshot_Longer_Than_It_Says_Is_Refused'Access,
+         "a snapshot with bytes past what its header says is refused, and "
+         & "the same whole is taken");
+      Register_Routine
+        (T, An_Adopting_Session_Takes_The_Device_Copy_Again'Access,
+         "a session that ran on the device and adopts a snapshot answers as "
+         & "a fresh session adopting it does");
+      Register_Routine
+        (T, A_Record_Written_Again_Is_A_Record'Access,
+         "a position a second check leaves a record at again is read as a "
+         & "record, and the answer after a rewind to it is the straight run's");
+      Register_Routine
+        (T, A_Reopened_Session_Turns_By_Its_Own_Table'Access,
+         "a session object opened again past a LongRoPE model's trained "
+         & "context turns by its own table");
+      Register_Routine
+        (T, A_Snapshot_Carries_The_Block_Past_The_Stack'Access,
+         "a snapshot carries the block past the stack's keys and values, and "
+         & "the block drafts after adopting what it drafted before");
+      Register_Routine
+        (T, A_Reopened_Session_Asks_For_No_Checkpoint_Slot'Access,
+         "a session object opened again seats the ring a fresh one does, "
+         & "without the closed session's checkpoint slot");
+      Register_Routine
+        (T, A_Shape_With_No_Carried_Format_Stands_In_For_Nothing'Access,
+         "a template in a call shape no carried format writes has nothing "
+         & "stand in for it");
+      Register_Routine
+        (T, A_Second_Model_Adds_To_The_Device_Budget'Access,
+         "a model beside the first on the device adds to its budget, and "
+         & "the room counts the device's own copy of a context");
       Register_Routine
         (T, Paired_Stacks_Are_Held_Once'Access,
          "a mixture's gate and up stacks a short way apart go to the device "

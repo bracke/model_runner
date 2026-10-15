@@ -1530,4 +1530,180 @@ package body Model_Runner.Grammar is
       return False;
    end Is_Complete;
 
+   ---------------
+   -- Excluding --
+   ---------------
+
+   function Excluding
+     (Rule    : String;
+      Literal : String;
+      Ending  : Boolean := True) return String
+   is
+      LF : constant String := [1 => Character'Val (10)];
+
+      --  The literals' code points, one row a literal; Literal holds them
+      --  parted by line breaks.
+      Most_Literals : constant := 8;
+      Most_Points   : constant := 64;
+      type Row is array (1 .. Most_Points) of Natural;
+      Points  : array (1 .. Most_Literals) of Row := [others => [others => 0]];
+      Lengths : array (1 .. Most_Literals) of Natural := [others => 0];
+      Held    : Natural := 0;
+
+      --  One code point as this grammar escapes it.
+      function Escaped (Value : Natural) return String is
+         Hex   : constant String := "0123456789ABCDEF";
+         Out_S : String (1 .. 10) := "\U00000000";
+         Rest  : Natural := Value;
+      begin
+         for Index in reverse 3 .. 10 loop
+            Out_S (Index) := Hex (Hex'First + Rest mod 16);
+            Rest := Rest / 16;
+         end loop;
+         return Out_S;
+      end Escaped;
+
+      --  A literal's first Count code points, quoted.
+      function Prefix (Which, Count : Natural) return String is
+         Result : String (1 .. 2 + 10 * Count);
+         Used   : Natural := 1;
+      begin
+         Result (1) := '"';
+         for Index in 1 .. Count loop
+            Result (Used + 1 .. Used + 10) := Escaped (Points (Which) (Index));
+            Used := Used + 10;
+         end loop;
+         Result (Used + 1) := '"';
+         return Result (1 .. Used + 1);
+      end Prefix;
+
+      --  Whether literal A's first Count points are literal B's.
+      function Same (A, B, Count : Natural) return Boolean is
+      begin
+         if Lengths (B) < Count then
+            return False;
+         end if;
+         for Index in 1 .. Count loop
+            if Points (A) (Index) /= Points (B) (Index) then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Same;
+
+      --  Whether literal Which's first Count points were met as an earlier
+      --  literal's, so each beginning is written once.
+      function Seen (Which, Count : Natural) return Boolean is
+      begin
+         for Earlier in 1 .. Which - 1 loop
+            if Count < Lengths (Earlier) and then Same (Which, Earlier, Count)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Seen;
+
+      --  What may not follow literal Which's first Count points: whatever
+      --  continues any literal that begins so, and -- after a beginning --
+      --  whatever begins one again, so that a fresh beginning is never
+      --  taken as text.
+      function Stops (Which, Count : Natural) return String is
+         Result : String (1 .. 10 * 2 * Most_Literals);
+         Used   : Natural := 0;
+
+         procedure Add (Value : Natural) is
+            Code : constant String := Escaped (Value);
+         begin
+            for At_Code in 0 .. Used / 10 - 1 loop
+               if Result (At_Code * 10 + 1 .. At_Code * 10 + 10) = Code then
+                  return;
+               end if;
+            end loop;
+            Result (Used + 1 .. Used + 10) := Code;
+            Used := Used + 10;
+         end Add;
+      begin
+         for Other in 1 .. Held loop
+            if Count < Lengths (Other) and then Same (Which, Other, Count) then
+               Add (Points (Other) (Count + 1));
+            end if;
+            if Count > 0 then
+               Add (Points (Other) (1));
+            end if;
+         end loop;
+         return "[^" & Result (1 .. Used) & "]";
+      end Stops;
+
+      Body_Text : String (1 .. 64 * 1024);
+      Body_Used : Natural := 0;
+      Ends_Text : String (1 .. 32 * 1024);
+      Ends_Used : Natural := 0;
+
+      procedure Say (Text : String) is
+      begin
+         Body_Text (Body_Used + 1 .. Body_Used + Text'Length) := Text;
+         Body_Used := Body_Used + Text'Length;
+      end Say;
+
+      procedure Say_End (Text : String) is
+      begin
+         Ends_Text (Ends_Used + 1 .. Ends_Used + Text'Length) := Text;
+         Ends_Used := Ends_Used + Text'Length;
+      end Say_End;
+
+      At_Byte : Natural := Literal'First;
+   begin
+      --  The literals, parted.
+      while At_Byte <= Literal'Last loop
+         if Held = 0 or else Literal (At_Byte) = Character'Val (10) then
+            if Held = Most_Literals then
+               exit;
+            end if;
+            Held := Held + 1;
+            if Literal (At_Byte) = Character'Val (10) then
+               At_Byte := At_Byte + 1;
+               goto Next_Byte;
+            end if;
+         end if;
+         declare
+            Value, Length : Natural;
+         begin
+            Model_Runner.UTF8.Decode_First
+              (Literal (At_Byte .. Literal'Last), Value, Length);
+            if Lengths (Held) < Most_Points then
+               Lengths (Held) := Lengths (Held) + 1;
+               Points (Held) (Lengths (Held)) :=
+                 (if Length = 0 then Character'Pos (Literal (At_Byte))
+                  else Value);
+            end if;
+            At_Byte := At_Byte + Natural'Max (Length, 1);
+         end;
+         <<Next_Byte>>
+      end loop;
+
+      if Held = 0 or else Lengths (1) = 0 then
+         return Rule & " ::= [^\x00]*" & LF;
+      end if;
+
+      --  Every beginning of every literal, the empty one first, each with
+      --  what may not follow it.
+      Say (Stops (1, 0));
+      for Which in 1 .. Held loop
+         for Count in 1 .. Lengths (Which) - 1 loop
+            if not Seen (Which, Count) then
+               Say (" | " & Prefix (Which, Count) & " " & Stops (Which, Count));
+               Say_End ((if Ends_Used = 0 then "" else " | ")
+                        & Prefix (Which, Count));
+            end if;
+         end loop;
+      end loop;
+
+      if not Ending or else Ends_Used = 0 then
+         return Rule & " ::= ( " & Body_Text (1 .. Body_Used) & " )*" & LF;
+      end if;
+      return Rule & " ::= ( " & Body_Text (1 .. Body_Used) & " )* " & Rule
+        & "_end?" & LF & Rule & "_end ::= " & Ends_Text (1 .. Ends_Used) & LF;
+   end Excluding;
+
 end Model_Runner.Grammar;

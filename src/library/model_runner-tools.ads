@@ -127,7 +127,40 @@ package Model_Runner.Tools is
       Function_XML,     --  <function name=".."><param name="p">v</param></function>
       Qwen_XML,         --  <function=..><parameter=p>\nv\n</parameter></function>
       Recipient_JSON,   --  >>>name\n{"a": 1}, Functionary's recipient form
-      Python_Code);     --  ```tool_code\nname(a=1)\n```, Gemma's; or open JSON
+      Python_Code,      --  ```tool_code\nname(a=1)\n```, Gemma's; or open JSON
+      Mistral_Call,     --  [TOOL_CALLS]name[ARGS]{"a": 1}, Mistral's own
+      DeepSeek_Fenced,  --  DeepSeek R1's: function, the name, a ```json fence
+      DeepSeek_Plain);  --  DeepSeek V3.1's: the name, the object
+
+   --  The two characters DeepSeek's markers are written with, as UTF-8:
+   --  U+FF5C, the fullwidth vertical line, and U+2581, the lower one-eighth
+   --  block that stands for a space.
+   Full_Bar  : constant String :=
+     Character'Val (16#EF#) & Character'Val (16#BD#) & Character'Val (16#9C#);
+   Low_Block : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#96#) & Character'Val (16#81#);
+
+   --  DeepSeek's call markers: the calls' envelope, each call's, and the
+   --  separator between the call's kind or name and what follows.
+   DeepSeek_Calls_Begin : constant String :=
+     "<" & Full_Bar & "tool" & Low_Block & "calls" & Low_Block & "begin"
+     & Full_Bar & ">";
+   DeepSeek_Calls_End   : constant String :=
+     "<" & Full_Bar & "tool" & Low_Block & "calls" & Low_Block & "end"
+     & Full_Bar & ">";
+   DeepSeek_Call_Begin  : constant String :=
+     "<" & Full_Bar & "tool" & Low_Block & "call" & Low_Block & "begin"
+     & Full_Bar & ">";
+   DeepSeek_Call_End    : constant String :=
+     "<" & Full_Bar & "tool" & Low_Block & "call" & Low_Block & "end"
+     & Full_Bar & ">";
+   DeepSeek_Sep         : constant String :=
+     "<" & Full_Bar & "tool" & Low_Block & "sep" & Full_Bar & ">";
+
+   --  Mistral's: what opens each call, and what parts its name from its
+   --  arguments.
+   Mistral_Calls : constant String := "[TOOL_CALLS]";
+   Mistral_Args  : constant String := "[ARGS]";
 
    --  Read every call a reply carries.
    --

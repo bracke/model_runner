@@ -38,4 +38,17 @@ package Regex_Cutter is
       Ends        : out Ends_Array;
       Count       : out Natural);
 
+   --  Whether a code point is a mark, category M, by the tables here.
+   --
+   --  @param Code_Point The code point.
+   --  @return True for every nonspacing, spacing and enclosing mark.
+   function Is_Mark (Code_Point : Natural) return Boolean;
+
+   --  Whether a code point is a control a WordPiece text drops: Cc, Cf, Co
+   --  or Cs, by the tables here.
+   --
+   --  @param Code_Point The code point.
+   --  @return True for such a code point.
+   function Is_Control (Code_Point : Natural) return Boolean;
+
 end Regex_Cutter;

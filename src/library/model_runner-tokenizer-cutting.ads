@@ -52,4 +52,26 @@ private package Model_Runner.Tokenizer.Cutting is
    --  @return True for every code point Unicode files under P.
    function Is_Punctuation (Code_Point : Natural) return Boolean;
 
+   --  Whether a code point is a Unicode mark, category M, at the version
+   --  the other runtime's tables are made from.
+   --
+   --  @param Code_Point The code point.
+   --  @return True for every nonspacing, spacing and enclosing mark.
+   function Is_Mark (Code_Point : Natural) return Boolean;
+
+   --  Whether a code point is a control as the other runtime counts one:
+   --  categories Cc, Cf, Co and Cs.
+   --
+   --  @param Code_Point The code point.
+   --  @return True for a control, a format character, a private-use one
+   --    or a surrogate.
+   function Is_Control (Code_Point : Natural) return Boolean;
+
+   --  Whether a code point is Unicode whitespace, White_Space.
+   --
+   --  @param Code_Point The code point.
+   --  @return True for the tab to carriage-return controls, the spaces,
+   --    the next-line control and the two separators.
+   function Is_Space (Code_Point : Natural) return Boolean;
+
 end Model_Runner.Tokenizer.Cutting;

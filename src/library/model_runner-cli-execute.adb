@@ -3,6 +3,7 @@ with Ada.Streams.Stream_IO;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Model_Runner.CLI.Partials;
 
 with Model_Runner.Text;
 with Model_Runner.CLI.Execute.Support;
@@ -52,8 +53,9 @@ package body Model_Runner.CLI.Execute is
 
       --  Beside its name, on the device, then in its place: a session
       --  saved over one that was there is the old one or the new one,
-      --  never the old one cut off by a full disk part way.
-      Partial : constant String := Path & ".partial";
+      --  never the old one cut off by a full disk part way -- under a name
+      --  of this write's own, so two runs saving one file never share it.
+      Partial : constant String := Model_Runner.CLI.Partials.Beside (Path);
       use type Hostkit.Durability.Outcome;
    begin
       Status := E.Success;
@@ -161,7 +163,11 @@ package body Model_Runner.CLI.Execute is
    function Unasked_Backend
      (Model_Path    : String;
       Device_Memory : Interfaces.Unsigned_64;
-      Screen        : in out Model_Runner.Presentation.Console)
+      Screen        : in out Model_Runner.Presentation.Console;
+      Context_Size  : Natural := 0;
+      Cache         : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Halved;
+      Paged         : Boolean := True)
       return Model_Runner.Backend.Backend_Kind
    is
       use type Interfaces.Unsigned_64;
@@ -169,6 +175,12 @@ package body Model_Runner.CLI.Execute is
    begin
       Item.Kind := Opt.Command_Run;
       Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
+      Item.Context_Size := Context_Size;
+      Item.Cache := Cache;
+      if not Paged then
+         Item.Paged := False;
+         Item.Paged_Named := True;
+      end if;
       if Device_Memory > 0 then
          Item.Device_Memory := Device_Memory;
          Item.Device_Memory_Set := True;

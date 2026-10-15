@@ -3866,6 +3866,394 @@ package body Tests.GGUF_Cases is
    --
    --  Each case here is one thing the folding or the spelling does, chosen
    --  against a reader that leaves it out rather than by inspection.
+   ------------------------------------------------------
+   -- Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them --
+   ------------------------------------------------------
+
+   --  What a vocabulary says about itself beyond its pieces, read as the
+   --  other runtime reads it (llama-vocab.cpp), each case against a reader
+   --  that leaves the rule out:
+   --
+   --  1. A Phi-3 file's markers take the whitespace after them, but for
+   --     <unk>, <s> and <|endoftext|>: its template writes a line end after
+   --     every marker, and a reader keeping them gave the model a byte it
+   --     was not trained to see at every turn.
+   --  2. The mask of the later jina and nomic embedders takes the
+   --     whitespace before it.
+   --  3. The unknown piece written out in a text is that piece.
+   --  4. A WordPiece file's normalizer keys are read, lowercase and
+   --     strip_accents each, and a format character such as a zero-width
+   --     space is dropped as a control is.
+   --  5. A WordPiece text ends with its separator whatever the file's end
+   --     flag says.
+   --  6. The best-path road spells a text with ordinary pieces, not with
+   --     the byte pieces; a unigram file that does not say puts no marker
+   --     first; and one long added piece does not make every byte of a
+   --     text try every length up to it.
+   --  7. The letters and numbers of the cutting rules are Unicode's own,
+   --     past the 4.0 the standard library's tables stop at: Qwen2 holds
+   --     Malayalam with a chillu as one word, and cuts the ideographic
+   --     zero out of a run of ideographs as the number it is.
+   procedure Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Id;
+      use type Vocab.Token_Array;
+      use type Vocab.Piece_Ends;
+
+      function U (Code : Natural) return String
+        renames Model_Runner.UTF8.Encode;
+
+      Marked : constant String := U (16#2581#);
+
+      type Text_Access is access constant String;
+      type Piece is record
+         Text  : Text_Access;
+         Kind  : Integer := 1;
+         Score : Float := -1.0;
+      end record;
+      type Piece_List is array (Natural range <>) of Piece;
+
+      type Answer is (Absent, Yes, No);
+
+      procedure Put (Builder : in out Fixtures.Builder; Key : String;
+                     Value : Answer) is
+      begin
+         if Value /= Absent then
+            Fixtures.Add_Bool (Builder, Key, Value = Yes);
+         end if;
+      end Put;
+
+      --  Load a vocabulary of these pieces, ids from nought.
+      procedure Load
+        (Words         : in out Vocab.Vocabulary;
+         Model         : String;
+         Pieces        : Piece_List;
+         Name          : String := "";
+         Architecture  : String := "llama";
+         Lowercase     : Answer := Absent;
+         Strip_Accents : Answer := Absent;
+         Add_End       : Answer := Absent;
+         Space_Prefix  : Answer := Absent)
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Status  : E.Error_Info;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", Architecture);
+         if Name /= "" then
+            Fixtures.Add_String (Builder, "general.name", Name);
+         end if;
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", Model);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Pieces'Length);
+         for P of Pieces loop
+            Fixtures.String_Element (Builder, P.Text.all);
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Pieces'Length);
+         for P of Pieces loop
+            Fixtures.Float_Element
+              (Builder, Model_Runner.Numerics.Real (P.Score));
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32,
+            Pieces'Length);
+         for P of Pieces loop
+            Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (P.Kind));
+         end loop;
+         Fixtures.End_Array (Builder);
+         Put (Builder, "tokenizer.ggml.normalizer.lowercase", Lowercase);
+         Put (Builder, "tokenizer.ggml.normalizer.strip_accents",
+              Strip_Accents);
+         Put (Builder, "tokenizer.ggml.add_eos_token", Add_End);
+         Put (Builder, "tokenizer.ggml.add_space_prefix", Space_Prefix);
+         if Model = "t5" then
+            Fixtures.Add_U32 (Builder, "tokenizer.ggml.unknown_token_id", 0);
+         end if;
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "a vocabulary fixture did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a vocabulary fixture did not load: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         B.Free (Image);
+      end Load;
+
+      function Encoded
+        (Words : Vocab.Vocabulary; Text : String; Ends : Boolean := False)
+         return Vocab.Token_Array
+      is
+         Made   : Vocab.Token_Array (1 .. 64);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Vocab.Encode (Words, Text, Ends, Ends, Made, Last, Status);
+         Assert (E.Is_Ok (Status),
+                 "a text did not encode: " & E.Error_Code'Image (Status.Code));
+         return Made (1 .. Last);
+      end Encoded;
+
+      function Shown (Tokens : Vocab.Token_Array) return String is
+      begin
+         if Tokens'Length = 0 then
+            return "";
+         end if;
+         return Natural'Image (Natural (Tokens (Tokens'First)))
+           & Shown (Tokens (Tokens'First + 1 .. Tokens'Last));
+      end Shown;
+
+      --  The SentencePiece pieces the first three cases spell with: the
+      --  markers, the pieces "Hi" is merged from, and the line end's byte.
+      SPM : constant Piece_List :=
+        [0  => (new String'("<unk>"), 2, 0.0),
+         1  => (new String'("<s>"), 3, 0.0),
+         2  => (new String'("</s>"), 3, 0.0),
+         3  => (new String'("<|user|>"), 3, 0.0),
+         4  => (new String'("<|end|>"), 3, 0.0),
+         5  => (new String'("<|assistant|>"), 3, 0.0),
+         6  => (new String'("<|endoftext|>"), 3, 0.0),
+         7  => (new String'("<mask>"), 3, 0.0),
+         8  => (new String'(Marked), 1, -3.0),
+         9  => (new String'("H"), 1, -3.0),
+         10 => (new String'("i"), 1, -3.0),
+         11 => (new String'(Marked & "H"), 1, -2.0),
+         12 => (new String'(Marked & "Hi"), 1, -1.0),
+         13 => (new String'("<0x0A>"), 6, 0.0)];
+
+      Words : Vocab.Vocabulary;
+   begin
+      --  1. Phi-3's markers take the line end after them.
+      Load (Words, "llama", SPM, Name => "Phi-3-mini-4k-instruct");
+      declare
+         Got : constant Vocab.Token_Array :=
+           Encoded (Words, "<|user|>" & ASCII.LF & "Hi<|end|>" & ASCII.LF
+                    & "<|assistant|>" & ASCII.LF);
+      begin
+         Assert (Got = Vocab.Token_Array'[3, 12, 4, 5],
+                 "a Phi-3 turn read the line ends after its markers:"
+                 & Shown (Got));
+      end;
+      declare
+         Got : constant Vocab.Token_Array :=
+           Encoded (Words, "<|endoftext|>" & ASCII.LF & "Hi");
+      begin
+         Assert (Got'Length > 2 and then Got (Got'First) = 6
+                 and then Got (Got'First + 1) /= 12,
+                 "<|endoftext|> took the line end after it, which the other "
+                 & "runtime leaves:" & Shown (Got));
+      end;
+      Vocab.Close (Words);
+
+      --  And a file of another name keeps them.
+      Load (Words, "llama", SPM, Name => "Mistral-7B");
+      declare
+         Got : constant Vocab.Token_Array :=
+           Encoded (Words, "<|user|>" & ASCII.LF & "Hi");
+      begin
+         Assert (Got'Length > 2,
+                 "a marker of a file not named Phi-3 took the line end after "
+                 & "it:" & Shown (Got));
+      end;
+
+      --  3. The unknown piece written out is that piece.
+      declare
+         Got : constant Vocab.Token_Array := Encoded (Words, "Hi<unk>");
+      begin
+         Assert (Got = Vocab.Token_Array'[12, 0],
+                 "<unk> written in a text was not read as the unknown "
+                 & "piece:" & Shown (Got));
+      end;
+      Vocab.Close (Words);
+
+      --  2. The mask of a nomic mixture takes the space before it, and the
+      --  same text under another architecture keeps it.
+      Load (Words, "llama", SPM, Architecture => "nomic-bert-moe");
+      declare
+         Got : constant Vocab.Token_Array := Encoded (Words, "Hi <mask>");
+      begin
+         Assert (Got = Vocab.Token_Array'[12, 7],
+                 "the mask kept the space before it:" & Shown (Got));
+      end;
+      Vocab.Close (Words);
+      Load (Words, "llama", SPM);
+      declare
+         Got : constant Vocab.Token_Array := Encoded (Words, "Hi <mask>");
+      begin
+         Assert (Got = Vocab.Token_Array'[12, 8, 7],
+                 "a mask of a plain file lost the space before it:"
+                 & Shown (Got));
+      end;
+      Vocab.Close (Words);
+
+      --  4 and 5. WordPiece's normalizer, and its separator.
+      declare
+         function Bert return Piece_List is
+            Result : Piece_List (0 .. 109);
+         begin
+            for Index in Result'Range loop
+               Result (Index) :=
+                 (new String'
+                    (case Index is
+                        when 100 => "[UNK]",
+                        when 101 => "[CLS]",
+                        when 102 => "[SEP]",
+                        when 3 => Marked & "hi",
+                        when 4 => Marked & "Hi",
+                        when 5 => Marked & "e",
+                        when 6 => Marked & U (16#E9#),
+                        when others =>
+                          "p" & Model_Runner.Text.Trim
+                                  (Natural'Image (Index))),
+                  (if Index = 100 then 2 elsif Index in 101 | 102 then 3
+                   else 1),
+                  0.0);
+            end loop;
+            return Result;
+         end Bert;
+
+         Pieces : constant Piece_List := Bert;
+
+         procedure Check
+           (Text : String; Want : Vocab.Token_Id; What : String) is
+            Got : constant Vocab.Token_Array :=
+              Encoded (Words, Text, Ends => True);
+         begin
+            Assert (Got = Vocab.Token_Array'[101, Want, 102],
+                    What & ":" & Shown (Got));
+         end Check;
+      begin
+         Load (Words, "bert", Pieces, Architecture => "bert");
+         Check ("Hi", 3, "an unstated normalizer did not lower-case");
+         Check (U (16#E9#), 5, "an unstated normalizer kept the accent");
+         Check ("h" & U (16#200B#) & "i", 3,
+                "a zero-width space was not dropped as a control");
+         Vocab.Close (Words);
+
+         Load (Words, "bert", Pieces, Architecture => "bert",
+               Lowercase => No);
+         Check ("Hi", 4, "a cased vocabulary was lower-cased");
+         Check (U (16#E9#), 6,
+                "a cased vocabulary stating no accent rule lost the accent");
+         Vocab.Close (Words);
+
+         Load (Words, "bert", Pieces, Architecture => "bert",
+               Lowercase => Yes, Strip_Accents => No);
+         Check (U (16#E9#), 6, "a vocabulary keeping accents lost one");
+         Check ("Hi", 3, "a vocabulary lower-casing did not");
+         Vocab.Close (Words);
+
+         Load (Words, "bert", Pieces, Architecture => "bert",
+               Add_End => No);
+         Assert (Vocab.Adds_Beginning (Words) and then Vocab.Adds_End (Words),
+                 "a WordPiece file whose end flag says false did not ask for "
+                 & "its separator");
+         Vocab.Close (Words);
+      end;
+
+      --  6. The best-path road.
+      declare
+         Long : constant String (1 .. 1000) := [others => 'z'];
+
+         Pieces : constant Piece_List :=
+           [0  => (new String'("<unk>"), 2, 0.0),
+            1  => (new String'("<s>"), 3, 0.0),
+            2  => (new String'("</s>"), 3, 0.0),
+            3  => (new String'("<0x41>"), 6, 0.0),
+            4  => (new String'("<"), 1, -1.0),
+            5  => (new String'("0"), 1, -1.0),
+            6  => (new String'("x"), 1, -1.0),
+            7  => (new String'("4"), 1, -1.0),
+            8  => (new String'("1"), 1, -1.0),
+            9  => (new String'(">"), 1, -1.0),
+            10 => (new String'(Marked & "x"), 1, 0.0),
+            11 => (new String'(Marked), 1, -1.0),
+            12 => (new String'("a"), 1, -1.0),
+            13 => (new String'(Long), 4, 0.0)];
+      begin
+         Load (Words, "t5", Pieces, Space_Prefix => No);
+         declare
+            Got : constant Vocab.Token_Array := Encoded (Words, "<0x41>");
+         begin
+            Assert (Got = Vocab.Token_Array'[4, 5, 6, 7, 8, 9],
+                    "the best-path road spelled a text with a byte piece:"
+                    & Shown (Got));
+         end;
+
+         declare
+            Text   : constant String (1 .. 60_000) := [others => 'a'];
+            Made   : Vocab.Token_Array (1 .. 60_001);
+            Last   : Natural;
+            Status : E.Error_Info;
+            Begun  : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            use type Ada.Calendar.Time;
+         begin
+            Vocab.Encode (Words, Text, False, False, Made, Last, Status);
+            Assert (E.Is_Ok (Status) and then Last = Text'Length,
+                    "a long text of one piece did not encode whole");
+            Assert (Ada.Calendar.Clock - Begun < 5.0,
+                    "a text of one piece took past five seconds to encode "
+                    & "beside an added piece a thousand bytes long");
+         end;
+         Vocab.Close (Words);
+
+         Load (Words, "t5", Pieces);
+         declare
+            Got : constant Vocab.Token_Array := Encoded (Words, "x");
+         begin
+            Assert (Got = Vocab.Token_Array'[6],
+                    "a unigram file stating nothing put a marker first:"
+                    & Shown (Got));
+         end;
+         Vocab.Close (Words);
+      end;
+
+      --  7. Unicode's own letters and numbers, under Qwen2.
+      declare
+         Image  : B.Byte_Array_Access;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+
+         procedure Cuts (Text : String; Want : Vocab.Piece_Ends;
+                         What : String) is
+            Got  : Vocab.Piece_Ends (1 .. Text'Length + 1);
+            Made : Natural;
+         begin
+            Vocab.Cut (Words, Text, Got, Made, Status);
+            Assert (E.Is_Ok (Status), "a text would not cut");
+            Assert (Made = Want'Length
+                    and then Got (1 .. Made) = Want,
+                    What & ": cut into" & Natural'Image (Made) & " pieces");
+         end Cuts;
+      begin
+         BPE_Vocabulary.Build ("qwen2", Image);
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "the qwen2 fixture did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status), "the qwen2 fixture did not load");
+
+         Cuts (U (16#D05#) & U (16#D35#) & U (16#D7B#), [9],
+               "Malayalam with a chillu was not one word");
+         Cuts (U (16#4E8C#) & U (16#3007#) & U (16#4E8C#) & U (16#56DB#)
+               & U (16#5E74#), [3, 6, 15],
+               "the ideographic zero was not cut out as a number");
+         Cuts (U (16#2A700#) & U (16#2A701#), [8],
+               "two ideographs of extension C were not one word");
+
+         Vocab.Close (Words);
+         Containers.Close (Item);
+         B.Free (Image);
+      end;
+   end Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them;
+
    ------------------------------------------------
    -- Word_Piece_Wraps_A_Text_By_Construction --
    ------------------------------------------------
@@ -7911,6 +8299,17 @@ package body Tests.GGUF_Cases is
               "the second shard's path was derived as "
               & Shards.Shard_Path (One, 2, 2) & " and not " & Two);
 
+      --  A model in two files weighs both: what a run weighs against the
+      --  device is the whole model, not its first file.
+      Assert (Shards.Total_Size (One)
+              = B.Byte_Count (Ada.Directories.Size (One))
+                + B.Byte_Count (Ada.Directories.Size (Two)),
+              "a model in two files was weighed at"
+              & B.Byte_Count'Image (Shards.Total_Size (One))
+              & " bytes, not the two files' sum");
+      Assert (Shards.Total_Size ("obj/no-such-model.gguf") = 0,
+              "a model that is not there weighs something");
+
       --  Both files, read as the one model they are.
       declare
          Set  : Shards.Shard_Set;
@@ -8531,9 +8930,69 @@ package body Tests.GGUF_Cases is
       end;
    end Integer_Kernels_Refuse_What_They_Cannot_Reach;
 
+   --  A linear stretch stated under the key it had before it was
+   --  rope.scaling.factor -- rope.scale_linear, which SuperHOT and LongChat
+   --  files carry -- is read, as llama.cpp reads it: it ran unstretched.
+   --  And the newer key, where both are there, is the one taken.
+   procedure The_Old_Linear_Stretch_Key_Is_Read
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Model_Runner.Kernels.Rotary_Scaling_Kind;
+
+      function Read (Old, New_Factor : Float) return Model_Runner.Llama.Configuration
+      is
+         Builder  : Fixtures.Builder;
+         Image    : B.Byte_Array_Access;
+         Item     : Containers.Container;
+         Status   : E.Error_Info;
+         Settings : Model_Runner.Llama.Configuration;
+      begin
+         Fixtures.Add_String (Builder, "general.architecture", "llama");
+         Fixtures.Add_U32 (Builder, "llama.context_length", 16);
+         Fixtures.Add_U32 (Builder, "llama.embedding_length", 8);
+         Fixtures.Add_U32 (Builder, "llama.block_count", 2);
+         Fixtures.Add_U32 (Builder, "llama.feed_forward_length", 12);
+         Fixtures.Add_U32 (Builder, "llama.attention.head_count", 2);
+         if Old > 0.0 then
+            Fixtures.Add_F32 (Builder, "llama.rope.scale_linear", N.Real (Old));
+         end if;
+         if New_Factor > 0.0 then
+            Fixtures.Add_F32
+              (Builder, "llama.rope.scaling.factor", N.Real (New_Factor));
+         end if;
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "the configuration did not parse");
+         Model_Runner.Llama.Read_Config
+           (Item, Settings => Settings, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the configuration was refused: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         B.Free (Image);
+         return Settings;
+      end Read;
+
+      Old_Only : constant Model_Runner.Llama.Configuration := Read (4.0, 0.0);
+      Both     : constant Model_Runner.Llama.Configuration := Read (4.0, 2.0);
+   begin
+      Assert (Old_Only.Scaling.Kind = Model_Runner.Kernels.Linear
+              and then Old_Only.Scaling.Frequency = 0.25,
+              "a stretch stated as rope.scale_linear was not read: "
+              & Model_Runner.Kernels.Rotary_Scaling_Kind'Image
+                  (Old_Only.Scaling.Kind));
+      Assert (Both.Scaling.Frequency = 0.5,
+              "where both keys are there, the newer was not the one taken");
+   end The_Old_Linear_Stretch_Key_Is_Read;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Old_Linear_Stretch_Key_Is_Read'Access,
+         "a linear stretch stated under the old key, rope.scale_linear, is "
+         & "read");
       Register_Routine
         (T, Typed_Readers_Decode_What_The_Bytes_Say'Access,
          "every typed reader decodes what the bytes say, at every edge");
@@ -8562,6 +9021,11 @@ package body Tests.GGUF_Cases is
         (T, Word_Piece_Wraps_A_Text_By_Construction'Access,
          "a WordPiece text is wrapped in its markers whether the file says "
          & "so or not");
+      Register_Routine
+        (T, Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them'Access,
+         "a vocabulary's strip marks, normalizer, separator, best-path "
+         & "pieces and Unicode classes are read as the other runtime reads "
+         & "them");
       Register_Routine
         (T, Word_Piece_Decoding_Puts_Spaces_Back'Access,
          "a WordPiece piece decodes to the word it helps spell");

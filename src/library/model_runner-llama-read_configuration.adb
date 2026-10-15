@@ -475,6 +475,20 @@ begin
          Status := Local;
          return;
       end if;
+
+      --  Or the key it had before it had that name, as llama.cpp reads
+      --  it: a linearly stretched Llama of that age -- SuperHOT, LongChat
+      --  -- states only rope.scale_linear, and ran unstretched past its
+      --  base context.
+      if not E.Is_Ok (Local) then
+         Containers.Get_Float
+           (Source, Model_Key (Settings.Kind, "rope.scale_linear"), 0.0,
+            1.0E6, Value, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+      end if;
       if E.Is_Ok (Local) and then Value > 0.0 then
          Settings.Scaling.Frequency := 1.0 / Value;
 

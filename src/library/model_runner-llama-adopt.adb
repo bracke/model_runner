@@ -235,8 +235,11 @@ begin
       return;
    end if;
 
-   --  Nothing of what was there survives, whether or not this succeeds.
+   --  Nothing of what was there survives, whether or not this succeeds:
+   --  not on the host, and not on the device, whose copy is taken again
+   --  from what is read here.
    Reset (Item);
+   Give_Back_Device_Cache (Item);
 
    declare
       Magic   : constant Interfaces.Unsigned_64 := Get;
@@ -428,7 +431,9 @@ begin
       end;
    end if;
    Item.Kept_Newest := Natural (Held);
+   Item.Ring_Floor := Natural (Held);
    Item.Record_Of := [others => 0];
+   Item.Made_At := 0;
 
    --  What was adopted is the host's, whatever the device held.
    Item.State_On_Device := False;
@@ -466,6 +471,64 @@ begin
             Item.Marked := Natural (Held);
          end if;
       end if;
+   end if;
+
+   --  The block past the stack's keys and values, where the file carries
+   --  them (Snapshot): into the block's cache where this session drafts
+   --  from it, read past where it does not.
+   if not Trouble and then At_Byte < From'Length then
+      if Get /= 1 then
+         Refuse (E.Lifecycle_Cache_Unreadable, "the block past the stack");
+      else
+         declare
+            Into    : constant Boolean := Drafts_Next (Item);
+            Own     : constant Boolean := Item.Next_Keys /= null;
+            Keys    : constant T.Real_Array_Access :=
+              (if Own then Item.Next_Keys else Item.Keys);
+            Values  : constant T.Real_Array_Access :=
+              (if Own then Item.Next_Values else Item.Values);
+            Base    : constant Element_Count :=
+              (if Own then 0 else Keys_At (Item, Settings.Layers));
+            V_Base  : constant Element_Count :=
+              (if Own then 0 else Values_At (Item, Settings.Layers));
+         begin
+            for Index in 0 .. Held * KV_Width - 1 loop
+               declare
+                  Value : constant Real := N.From_Bits (Get_Bits);
+               begin
+                  exit when Trouble;
+                  if not N.Is_Finite (Value) then
+                     Refuse (E.Lifecycle_Cache_Unreadable, "a key not a number");
+                     exit;
+                  end if;
+                  if Into then
+                     Keys.all (Base + Index) := Value;
+                  end if;
+               end;
+            end loop;
+            for Index in 0 .. Held * V_Width - 1 loop
+               declare
+                  Value : constant Real := N.From_Bits (Get_Bits);
+               begin
+                  exit when Trouble;
+                  if not N.Is_Finite (Value) then
+                     Refuse (E.Lifecycle_Cache_Unreadable, "a value not a number");
+                     exit;
+                  end if;
+                  if Into then
+                     Values.all (V_Base + Index) := Value;
+                  end if;
+               end;
+            end loop;
+         end;
+      end if;
+   end if;
+
+   --  And nothing past what the header says: a file two writers
+   --  interleaved, or one cut short and topped up, can hold every field in
+   --  range and another run's bytes after them.
+   if not Trouble and then At_Byte /= From'Length then
+      Refuse (E.Lifecycle_Cache_Unreadable, "bytes past the end");
    end if;
 
    if Trouble then

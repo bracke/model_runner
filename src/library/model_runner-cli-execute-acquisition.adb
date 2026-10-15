@@ -465,7 +465,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Stretch      => Asked_Rotation (Item),
             Panel_Cache  => Panel_Path,
             Context      => Item.Context_Size,
-            Cache        => Item.Cache);
+            Cache        => Item.Cache,
+            Paged        => Session_Paging (Item));
 
          --  A chat format named on the command line replaces the model's
          --  own, and whatever Prepare chose. Nothing here guesses a format

@@ -890,7 +890,10 @@ package body Tests.Template_Cases is
       Same ("{{ 'Hello World' | upper }}", "HELLO WORLD", "upper");
       Same ("{{ 'hello WORLD' | capitalize }}", "Hello world", "capitalize");
       Same ("{{ 'hello big WORLD' | title }}", "Hello Big World", "title");
-      Same ("{{ ' 42x' | int }}", "42", "int reads the leading number");
+      --  As jinja2's int reads text: whole or not at all, the spaces
+      --  round it aside; ' 42x' is no number and is nought, '3.9' is 3.
+      Same ("{{ ' 42x' | int }} {{ ' 42 ' | int }} {{ '3.9' | int }}",
+            "0 42 3", "int reads a number whole or not at all");
       Same ("{{ 'x' | string }}", "x", "string is the text as it is");
       Same ("{{ 'x' | safe }}", "x", "safe is the text as it is");
       Same ("{{ '' | default('d') }}|{{ '' | default('d', true) }}"
@@ -1515,6 +1518,19 @@ package body Tests.Template_Cases is
    --  own file, read from fixtures, rendered on the same conversations
    --  and compared byte for byte. The model's own file is what jinja2
    --  was crossed against, so this is the crossing kept in the suite.
+   --  Whether a write's own partial (Partials.Beside) is left beside Path.
+   function Partial_Left (Path : String) return Boolean is
+      Search : Ada.Directories.Search_Type;
+      Found  : Boolean;
+   begin
+      Ada.Directories.Start_Search
+        (Search, Ada.Directories.Containing_Directory (Path),
+         Ada.Directories.Simple_Name (Path) & "*.partial");
+      Found := Ada.Directories.More_Entries (Search);
+      Ada.Directories.End_Search (Search);
+      return Found;
+   end Partial_Left;
+
    procedure Carried_Formats_Match_The_Models_Own_Templates
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2192,7 +2208,7 @@ package body Tests.Template_Cases is
          --  Saved beside its name and moved into place, nothing is left
          --  beside it; cut short, it is said not read rather than taken up
          --  for the part that came.
-         Assert (not Ada.Directories.Exists (File & ".partial"), "a save left its partial file");
+         Assert (not Partial_Left (File), "a save left its partial file");
          declare
             use Ada.Streams.Stream_IO;
             Whole : File_Type;
@@ -3960,6 +3976,134 @@ package body Tests.Template_Cases is
               "a template that adds no prompt was said to open the answer");
    end The_Opening_Is_What_The_Prompt_Adds;
 
+   --  The language's own semantics where a template leans on them, each
+   --  set beside what jinja2 3.1 renders for the same text: an assignment
+   --  in a loop's body lasts the one pass; none, false and the empty
+   --  string are three values, not one; a filter's arguments go where it
+   --  says; '~' binds looser than '*'; the generation prompt flag is a
+   --  boolean; a template's last line break is dropped as HF drops it;
+   --  a string's length, slices, first and last count characters; a loop
+   --  over a string walks it; strip() takes every space off.
+   procedure Language_Semantics_Match_Jinja
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      function Rendered (Source : String) return String is
+         Item   : Tmpl.Compiled;
+         Status : E.Error_Info;
+         Talk   : Conv.History;
+         Room   : String (1 .. 8192);
+         Last   : Natural;
+      begin
+         Tmpl.Compile (Item, Source, Status => Status);
+         if E.Is_Error (Status) then
+            Tmpl.Close (Item);
+            return "compile: " & E.Error_Code'Image (Status.Code);
+         end if;
+         Conv.Open (Talk, Status => Status);
+         Conv.Append (Talk, Conv.User_Role, "hi", Status);
+         Tmpl.Render (Item, Talk, "<s>", "</s>", True, Room, Last, Status);
+         Conv.Close (Talk);
+         Tmpl.Close (Item);
+         if E.Is_Error (Status) then
+            return "render: " & E.Error_Code'Image (Status.Code);
+         end if;
+         return Room (1 .. Last);
+      end Rendered;
+
+      --  Every difference, said together.
+      Missed : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Check (Source, Wanted, What : String) is
+         Got : constant String := Rendered (Source);
+      begin
+         if Got /= Wanted then
+            Ada.Strings.Unbounded.Append
+              (Missed, ASCII.LF & What & ": rendered [" & Got
+               & "] where jinja2 renders [" & Wanted & "]");
+         end if;
+      end Check;
+
+      E_Acute : constant String :=
+        Character'Val (16#C3#) & Character'Val (16#A9#);
+      NBSP    : constant String :=
+        Character'Val (16#C2#) & Character'Val (16#A0#);
+   begin
+      Check ("{% set x=0 %}{% for i in [1,2,3] %}{% set x=x+i %}{{x}}"
+             & "{% endfor %}{{x}}", "1230",
+             "an assignment in a loop's body carried into the next pass");
+      Check ("{% set x=0 %}{% for i in range(3) %}{% set x=x+i %}{{x}}"
+             & "{% endfor %}{{x}}", "0120",
+             "an assignment in a range loop's body carried into the next pass");
+      Check ("{{ '' == none }} {{ false == none }} {{ 0 == false }} "
+             & "{{ '' == false }} {{ none == none }} {{ none != '' }}",
+             "False False True False True True",
+             "none, false and the empty string compared equal");
+      Check ("{{ ['a','b']|map('upper')|list }}", "['A', 'B']",
+             "map with a filter's name was read as an attribute");
+      Check ("{{ [{'n':'x'},{'n':'y'}]|join(', ', attribute='n') }}", "x, y",
+             "join's attribute was taken for its separator");
+      Check ("{{ [{'a':9,'n':1},{'a':1,'n':3}]|max(attribute='n') }} "
+             & "{{ [{'a':1,'n':3},{'a':9,'n':1}]|min(attribute='n') }}",
+             "{'a': 1, 'n': 3} {'a': 9, 'n': 1}",
+             "max's or min's attribute was not used");
+      Check ("{{ {'b':1,'a':[{'d':2,'c':3}]}|tojson(sort_keys=true) }} "
+             & "{{ '" & E_Acute & "'|tojson(ensure_ascii=true) }}",
+             "{""a"": [{""c"": 3, ""d"": 2}], ""b"": 1} """ & '\' & "u00e9""",
+             "tojson's sort_keys or ensure_ascii was dropped");
+      Check ("{{ [{'n':'x'},{}]|map(attribute='n', default='-')|list }} "
+             & "{{ ['A','a','b']|unique|list }} {{ 'ff'|int(base=16) }}",
+             "['x', '-'] ['A', 'b'] 255",
+             "map's stand-in, unique's case or int's base was not used");
+      Check ("{{ 'hello world foo bar'|truncate(9, leeway=0) }} "
+             & "{{ 'hello world'|truncate(9, leeway=0) }} "
+             & "{{ 'hello world'|truncate(9) }}",
+             "hello... hello... hello world",
+             "truncate's leeway was taken for its end or not used");
+      Check ("{{ false == 0 }} {{ true == 1 }} {{ 1 == true }}",
+             "True True True", "a boolean was not the number it stands for");
+      Check ("{{ -1|abs(2) }}", "render: TEMPLATE_UNKNOWN_FILTER",
+             "an argument a filter has not got was not refused");
+      Check ("{{ 'x'|int(5) }} {{ [{'n':1},{'n':1}]|unique(attribute='n')"
+             & "|list }}", "5 [{'n': 1}]",
+             "int's default or unique's attribute was dropped");
+      Check ("{{ '-' ~ '='*3 }} {{ 'a' ~ 2*3 + 'b' }} {{ '-' ~ '='*3 ~ '-' }} "
+             & "{{ 1 ~ 2 * 3 }}", "-=== a6b -===- 16",
+             "'~' bound as tightly as '*'");
+      Check ("{{ add_generation_prompt is true }} {{ add_generation_prompt }}"
+             & " {{ add_generation_prompt is boolean }}", "True True True",
+             "the generation prompt flag was not a boolean");
+      Check ("a" & ASCII.LF, "a",
+             "a template's last line break was kept");
+      Check ("a" & ASCII.CR & ASCII.LF & "b", "a" & ASCII.LF & "b",
+             "a template's CRLF was not read as a line break");
+      Check ("{{ '" & E_Acute & "'|length }} {{ '" & E_Acute & "a'[:1] }} "
+             & "{{ '" & E_Acute & "a'|first }} {{ 'a" & E_Acute & "'|last }}",
+             "1 " & E_Acute & " " & E_Acute & " " & E_Acute,
+             "a string's length, slice, first or last counted bytes");
+      Check ("{% for c in 'ab' %}[{{c}}]{% endfor %}", "[a][b]",
+             "a loop over a string rendered nothing");
+      Check ("{{ '" & ASCII.VT & ASCII.FF & "x" & NBSP & " '.strip()|length }}",
+             "1", "strip() left vertical tabs, form feeds or Unicode spaces");
+      --  Loops nested past the room for them, through a macro that calls
+      --  itself: refused, where the innermost was left out unsaid.
+      Check ("{% macro m(n) %}{% for a in [1] %}{% for b in [1] %}"
+             & "{% for c in [1] %}{% for d in [1] %}{% if n > 0 %}"
+             & "{{ m(n - 1) }}{% endif %}{% endfor %}{% endfor %}{% endfor %}"
+             & "{% endfor %}{% endmacro %}{{ m(12) }}",
+             "render: TEMPLATE_NESTING_TOO_DEEP",
+             "loops past the room for them were left out unsaid");
+      Check ("{% macro m(n) %}{% for a in range(1) %}{% for b in range(1) %}"
+             & "{% for c in range(1) %}{% for d in range(1) %}{% if n > 0 %}"
+             & "{{ m(n - 1) }}{% endif %}{% endfor %}{% endfor %}{% endfor %}"
+             & "{% endfor %}{% endmacro %}{{ m(12) }}",
+             "render: TEMPLATE_NESTING_TOO_DEEP",
+             "range loops past the room for them went on unsaid");
+      Assert (Ada.Strings.Unbounded.Length (Missed) = 0,
+              Ada.Strings.Unbounded.To_String (Missed));
+   end Language_Semantics_Match_Jinja;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3981,6 +4125,10 @@ package body Tests.Template_Cases is
          "lists, mappings, a schema's members, a call's arguments and the "
          & "conversation are walked, indexed, asked about and written as "
          & "the language does it, and a loop's assignments stay its own");
+      Register_Routine
+        (T, Language_Semantics_Match_Jinja'Access,
+         "loops, comparisons, filters' arguments, '~', the generation flag, "
+         & "line breaks and strings render as jinja2 renders them");
       Register_Routine
         (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
          "the carried qwen3-coder, minicpm and gemma formats render the "

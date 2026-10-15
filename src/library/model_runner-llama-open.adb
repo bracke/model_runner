@@ -497,6 +497,9 @@ begin
             T.Allocate (State_Room (Settings), Item.Delta_State);
             Item.Kept_States := 0;
             Item.Kept_Newest := 0;
+            Item.Ring_Floor := 0;
+            Item.Record_Of := [others => 0];
+            Item.Made_At := 0;
 
             if Settings.Shared_Feed > 0 then
                T.Allocate
@@ -570,6 +573,9 @@ begin
             T.Allocate (State_Room (Settings), Item.Delta_State);
             Item.Kept_States := 0;
             Item.Kept_Newest := 0;
+            Item.Ring_Floor := 0;
+            Item.Record_Of := [others => 0];
+            Item.Made_At := 0;
             if Item.Conv_State /= null then
                Item.Conv_State.all := [others => 0.0];
             end if;
@@ -614,6 +620,9 @@ begin
             T.Allocate (State_Room (Settings), Item.Delta_State);
             Item.Kept_States := 0;
             Item.Kept_Newest := 0;
+            Item.Ring_Floor := 0;
+            Item.Record_Of := [others => 0];
+            Item.Made_At := 0;
             if Item.Conv_State /= null then
                Item.Conv_State.all := [others => 0.0];
             end if;
@@ -711,6 +720,16 @@ begin
    begin
       Item.Long_Rope := Capacity > Trained;
    end;
+
+   --  And the token's table of angles made again: one kept from a session
+   --  this one replaced, turned by the other table or another model's
+   --  factors, matched this one's base, stretch and position all the same.
+   Item.Turned := False;
+
+   --  And no checkpoint slot past the ring until this session asks for
+   --  one (Hold_Checkpoints): a session object opened again kept the one
+   --  the closed session asked for, and its seat a slot larger.
+   Item.Check_Slot := False;
 
    --  The arithmetic, fixed for the session's life: the backend's
    --  default as it stands now, read once here and never again while

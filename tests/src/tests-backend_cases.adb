@@ -7759,6 +7759,7 @@ package body Tests.Backend_Cases is
    is
       pragma Unreferenced (T_Case);
       package Device renames Model_Runner.Backend.Device;
+      use type Interfaces.Unsigned_64;
 
       Width   : constant N.Element_Count := 256;
       Feed    : constant N.Element_Count := 256;
@@ -7804,6 +7805,9 @@ package body Tests.Backend_Cases is
       Device.Close;
       Device.Open (Ready);
       if not Ready then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device to hold a mixture's paired stacks on");
          return;
       end if;
 
@@ -7843,6 +7847,21 @@ package body Tests.Backend_Cases is
       T.Allocate (Feed, Slice);
       Vector.all := Fixtures.Sequence (Width, 34, 1.0);
 
+      --  Fetched ahead, as a split mixture's next layer is, before the
+      --  device holds anything: the pair as its one region, which is what
+      --  the expert's sequence then takes -- every slot given up again.
+      --  Fetched as two, neither was ever taken, and each kept its slot.
+      Device.Prefetch_Stacks (Gates, Ups, Downs);
+      Assert (Device.Prefetches_Held = 2,
+              "the read-ahead fetched" & Natural'Image (Device.Prefetches_Held)
+              & " copies of a paired layer, not its region and its way down");
+      Device.Dispatch_Expert
+        (Gates, Ups, Downs, Feed, Width, 2, 0, Vector, 1, Paired, Status);
+      Assert (E.Is_Ok (Status), "an expert after the read-ahead did not run");
+      Assert (Device.Prefetches_Held = 0,
+              Natural'Image (Device.Prefetches_Held)
+              & " copies fetched ahead were never taken");
+
       Device.Hold_Pair (Gates, Ups, Status);
       Assert (E.Is_Ok (Status), "the paired stacks were not held");
       Device.Hold (Downs, Status);
@@ -7865,6 +7884,21 @@ package body Tests.Backend_Cases is
                  & Natural'Image (Device.Streamed_Copies - Copied)
                  & " matrices and left" & Natural'Image (Device.Resident)
                  & " held, where the region it was held as serves");
+
+         --  A slice of either, named with its pair, reads the region.
+         Device.Dispatch_Slice
+           (Ups, Feed, 1, Vector, 1, Slice, Status,
+            Gates => Gates, Ups => Ups);
+         Assert (E.Is_Ok (Status), "the up's slice did not run");
+         Assert (Device.Streamed_Copies = Copied,
+                 "a slice of the paired up stack was copied for its run");
+         Device.Dispatch_Slice (Ups_Apart, Feed, 1, Vector, 1, Apart, Status);
+         Assert (E.Is_Ok (Status), "the apart up's slice did not run");
+         for Index in 0 .. Feed - 1 loop
+            Assert (Slice.all (Slice.all'First + Index)
+                    = Apart.all (Apart.all'First + Index),
+                    "a slice of the paired up read other rows than the up's");
+         end loop;
 
          --  The gate stack named alone, which the device does not hold.
          Device.Dispatch_Slice (Gates, Feed, 1, Vector, 1, Slice, Status);
@@ -7946,6 +7980,44 @@ package body Tests.Backend_Cases is
          Assert (not Added,
                  "a gated gather was taken reading a step that chose nothing");
       end;
+
+      --  And a device whose budget holds a stack but not the region: the
+      --  load holds the gate alone, and the steps name the two apart --
+      --  the gate found, not the region copied every run beside it.
+      Device.Close;
+      Device.Open
+        (Ready,
+         Budget => Interfaces.Unsigned_64 (Gate_Q'Length)
+                   + Interfaces.Unsigned_64 (Gate_Q'Length) / 2);
+      Assert (Ready, "the device opened once and not at a small budget");
+      declare
+         Declined : E.Error_Info;
+      begin
+         --  The two do not fit together either, and the second held puts
+         --  the first out: said, not fatal.
+         Device.Hold_Pair (Gates, Ups, Declined);
+      end;
+      Assert (Device.Resident = 1,
+              "a region the budget could not keep left"
+              & Natural'Image (Device.Resident)
+              & " stacks held, not one alone");
+      declare
+         Copied : constant Natural := Device.Streamed_Copies;
+      begin
+         Device.Dispatch_Expert
+           (Gates, Ups, Downs, Feed, Width, 2, 0, Vector, 1, Paired, Status);
+         Assert (E.Is_Ok (Status),
+                 "an expert past a small budget did not run");
+         --  The stack held is found; the other and the way down copied.
+         Assert (Device.Streamed_Copies = Copied + 2,
+                 "an expert past a small budget copied"
+                 & Natural'Image (Device.Streamed_Copies - Copied)
+                 & " matrices, not the two the device does not hold");
+      end;
+      Device.Dispatch_Expert
+        (Gates_Apart, Ups_Apart, Downs, Feed, Width, 2, 0, Vector, 1, Apart,
+         Status);
+      Same (Paired, Apart, "an expert past a small budget");
 
       Device.Close;
       T.Free (Vector);

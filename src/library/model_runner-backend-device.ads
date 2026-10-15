@@ -216,6 +216,39 @@ package Model_Runner.Backend.Device is
    --  @param Bytes The budget asked for.
    procedure Fit_Budget (Bytes : Interfaces.Unsigned_64);
 
+   --  A model prepared for the device, said to it: the first is the one
+   --  whose room the budget is fitted to; one prepared beside it -- a
+   --  draft -- adds its matrices' bytes to whatever budget is fitted, now
+   --  and at every later fitting, until it is forgotten. Fitted to its own
+   --  room instead, a draft's load dropped the target's reservation for
+   --  its context, and the target's next fitting -- its own weights alone
+   --  -- left the draft's matrices given back and uploaded again.
+   --
+   --  @param Ticket What Forget_Model is given back: which opening of the
+   --    device it was made in, and the model's place beside the first, or
+   --    none for the first. Nought where no device is open.
+   procedure Note_Model (Ticket : out Natural);
+
+   --  Whether a ticket is for a model prepared beside the first.
+   --
+   --  @param Ticket A ticket from Note_Model.
+   --  @return True for a model beside the first, in this opening.
+   function Is_Beside (Ticket : Natural) return Boolean;
+
+   --  The bytes a model beside the first adds to the budget: added to the
+   --  budget fitted now, and to every later fitting.
+   --
+   --  @param Ticket The model's ticket.
+   --  @param Bytes Its matrices' bytes.
+   procedure Add_Beside (Ticket : Natural; Bytes : Interfaces.Unsigned_64);
+
+   --  A model closed: its bytes come off every later fitting, and the next
+   --  model prepared is the first again once every model is gone. Nothing
+   --  for a ticket of an earlier opening.
+   --
+   --  @param Ticket The model's ticket; nought after.
+   procedure Forget_Model (Ticket : in out Natural);
+
    --  Whether a matrix copied to the device keeps its file's pages in the
    --  host's memory: see Products.Keep_File_Pages.
    --
@@ -1315,6 +1348,11 @@ package Model_Runner.Backend.Device is
       Up   : Model_Runner.Tensors.View;
       Down : Model_Runner.Tensors.View);
 
+   --  How many stacks fetched ahead no sequence has taken yet.
+   --
+   --  @return Read-ahead slots in use.
+   function Prefetches_Held return Natural;
+
    --  One RWKV6 block as the device's sequence takes it: its widths, the
    --  pack of its small tables and where each lies in it, its two
    --  low-rank maps down, its eight projections, and where its two
@@ -2011,6 +2049,10 @@ package Model_Runner.Backend.Device is
    --  @param Target Receives Count results of Each rows.
    --  @param Status Success, or what one product would have said.
    --  @param Cancel Stop request to watch, or null for none.
+   --  @param Gates The mixture's gate stack, where Stack is it or its up
+   --    stack: the two may be held as one region (Hold_Pair), which is
+   --    then what is read.
+   --  @param Ups The mixture's up stack, likewise.
    procedure Dispatch_Slice
      (Stack   : Model_Runner.Tensors.View;
       Each    : Model_Runner.Numerics.Element_Count;
@@ -2019,7 +2061,10 @@ package Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Gates   : Model_Runner.Tensors.View := Model_Runner.Tensors.Empty_View;
+      Ups     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View);
 
    --  A token's mixture, as one submission: the chosen experts' gate and
    --  up projections gathered into one dispatch each, the gate's unit and

@@ -1,4 +1,5 @@
 with Ada.Calendar.Formatting;
+with Ada.Characters.Handling;
 with Ada.Calendar.Time_Zones;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
@@ -721,7 +722,21 @@ package body Model_Runner.Templates is
       --  Zephyr-style templates share its <|user|> and <|assistant|> markers
       --  and close a turn with </s>, and the carried phi3 writes the role by
       --  interpolation, so <|user|> is not literal in it.
-      if Has ("<function=") and then Has ("<parameter=") then
+      --  Two call shapes only a model's own template writes, read off it
+      --  before the turn markers: Mistral's [TOOL_CALLS]name[ARGS] and
+      --  DeepSeek's separator, with the call's kind before it (R1 and V3)
+      --  or its name (V3.1). No carried format stands in for either, so
+      --  they name only the shape the calls are read in.
+      if Has (Model_Runner.Tools.Mistral_Calls)
+        and then Has (Model_Runner.Tools.Mistral_Args)
+      then
+         return Mistral_Shape;
+      elsif Has (Model_Runner.Tools.DeepSeek_Sep) then
+         return (if Has ("function" & Model_Runner.Tools.DeepSeek_Sep)
+                   or else Has ("tool['type'] + '"
+                                & Model_Runner.Tools.DeepSeek_Sep)
+                 then DeepSeek_Shape else DeepSeek_Plain_Shape);
+      elsif Has ("<function=") and then Has ("<parameter=") then
          return Format_Name (Format_Qwen3_Coder);
       elsif Has ("<function name=") and then Has ("<param name=") then
          return Format_Name (Format_MiniCPM);
@@ -748,7 +763,10 @@ package body Model_Runner.Templates is
    ---------------
 
    function Syntax_Of (Name : String) return Model_Runner.Tools.Call_Syntax
-   is (if Name = Format_Name (Format_Qwen3_Coder)
+   is (if Name = Mistral_Shape then Model_Runner.Tools.Mistral_Call
+       elsif Name = DeepSeek_Shape then Model_Runner.Tools.DeepSeek_Fenced
+       elsif Name = DeepSeek_Plain_Shape then Model_Runner.Tools.DeepSeek_Plain
+       elsif Name = Format_Name (Format_Qwen3_Coder)
        then Model_Runner.Tools.Qwen_XML
        elsif Name = Format_Name (Format_MiniCPM)
        then Model_Runner.Tools.Function_XML
@@ -757,6 +775,15 @@ package body Model_Runner.Templates is
        elsif Name = Format_Name (Format_Functionary)
        then Model_Runner.Tools.Recipient_JSON
        else Model_Runner.Tools.Tool_Call_JSON);
+
+   --------------------
+   -- Reading_Syntax --
+   --------------------
+
+   function Reading_Syntax (Name : String) return Model_Runner.Tools.Call_Syntax
+   is (if Model_Runner.Tools."=" (Syntax_Of (Name), Model_Runner.Tools.Tool_Call_JSON)
+       then Model_Runner.Tools.Open_JSON
+       else Syntax_Of (Name));
 
    --  Where a loop's filter begins: the " if " of "for x in list if test",
    --  at the list's own level and outside quotes, or zero where there is

@@ -7,30 +7,19 @@ package body Model_Runner.Tools.Constraint is
    package E renames Model_Runner.Errors;
 
    --  A grammar with no calls in it: the model was offered nothing, so its
-   --  reply is prose and nothing follows it.
-   Prose_Only : constant String :=
-     "root ::= ( [^<] | ""<"" [^/] )*" & ASCII.LF;
+   --  reply is prose and nothing follows it -- any prose: it was held from
+   --  every "</", and an answer could close no HTML tag it opened.
+   Prose_Only : constant String := "root ::= [^\x00]*" & ASCII.LF;
 
    --  Any text at all: where a form cannot be shaped, a reply that is not
    --  held to it, rather than one held away from its own calls.
    Free_Text : constant String := "root ::= [^\x00]*" & ASCII.LF;
 
-   --  The loose grammar's fixed part: the call envelope around a general
-   --  JSON value, with the one hole -- the name rule -- filled from the
-   --  tools offered. This is the fallback, used when a tool's argument
-   --  schema cannot be turned into a grammar of its own; it still
-   --  guarantees a readable call naming a tool on offer, only without
-   --  pinning the argument shape. The quote and backslash are written as
-   --  \x22 and \x5C throughout, to spare a reader counting backslashes
-   --  through two layers of quoting.
-   Loose_Fixed : constant String :=
-     "root ::= think? prose calls?" & ASCII.LF &
-     "think ::= ""<think>""? ( [^<] | ""<"" [^/] )* ""</think>"" ws" & ASCII.LF &
-     "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF &
-     "calls ::= call ( ws call )*" & ASCII.LF &
-     "call ::= ""<tool_call>"" ws obj ws ""</tool_call>""" & ASCII.LF &
-     "obj ::= ""{"" ws ""\x22name\x22"" ws "":"" ws name ws "","" ws "
-       & """\x22arguments\x22"" ws "":"" ws value ws ""}""" & ASCII.LF &
+   --  A general JSON value and the space between its tokens, which every
+   --  loose grammar with JSON arguments leans on. The quote and backslash
+   --  are written as \x22 and \x5C throughout, to spare a reader counting
+   --  backslashes through two layers of quoting.
+   Loose_Values : constant String :=
      "value ::= object | array | string | number | ""true"" | ""false"" "
        & "| ""null""" & ASCII.LF &
      "object ::= ""{"" ws ( member ( ws "","" ws member )* )? ws ""}""" &
@@ -49,6 +38,72 @@ package body Model_Runner.Tools.Constraint is
      "fracp ::= ""."" [0-9]+" & ASCII.LF &
      "expp ::= [eE] [+-]? [0-9]+" & ASCII.LF &
      "ws ::= [ \x09\x0A\x0D]*" & ASCII.LF;
+
+   --  The loose grammar's call in the JSON envelope: a general JSON value
+   --  for the arguments, with the one hole -- the name rule -- filled from
+   --  the tools offered. This is the fallback, used when a tool's argument
+   --  schema cannot be turned into a grammar of its own; it still
+   --  guarantees a readable call naming a tool on offer, only without
+   --  pinning the argument shape.
+   Loose_Envelope : constant String :=
+     "call ::= ""<tool_call>"" ws obj ws ""</tool_call>""" & ASCII.LF &
+     "obj ::= ""{"" ws ""\x22name\x22"" ws "":"" ws name ws "","" ws "
+       & """\x22arguments\x22"" ws "":"" ws value ws ""}""" & ASCII.LF;
+
+   --  What opens a call in each syntax, as the grammar writes it: what a
+   --  reply's prose may not hold. Everything else it may: refused every "<"
+   --  followed by t, f or /, a reply could hold no <table>, no </div> and
+   --  no List<typename> beside its calls.
+   function Opener (Syntax : Call_Syntax) return String
+   is (case Syntax is
+         when Function_XML => "<function name=""",
+         when Mistral_Call => Mistral_Calls,
+         when DeepSeek_Fenced | DeepSeek_Plain => DeepSeek_Calls_Begin,
+         when others => "<tool_call>");
+
+   --  MiniCPM's prose holds no JSON envelope either: a model offered the
+   --  element form is not let drift into the envelope, which its reader
+   --  would not take for a call.
+   function Prose_Rule (Syntax : Call_Syntax) return String
+   is (Model_Runner.Grammar.Excluding
+         ("prose",
+          Opener (Syntax)
+          & (if Syntax = Function_XML then ASCII.LF & "<tool_call>" else "")));
+
+   --  Whether a syntax's arguments are a JSON object after a marked name,
+   --  rather than in the JSON envelope or in tags.
+   function Marked_JSON (Syntax : Call_Syntax) return Boolean
+   is (Syntax in Mistral_Call | DeepSeek_Fenced | DeepSeek_Plain);
+
+   --  How a run of calls is written: Mistral's each opened by its own
+   --  marker and nothing between them, DeepSeek's inside the calls'
+   --  envelope, the rest one after another with space between.
+   function Calls_Rule (Syntax : Call_Syntax) return String
+   is (case Syntax is
+         when Mistral_Call => "calls ::= call ( call )*" & ASCII.LF,
+         when DeepSeek_Fenced | DeepSeek_Plain =>
+           "calls ::= """ & DeepSeek_Calls_Begin & """ ws call ( ws call )* ws """
+           & DeepSeek_Calls_End & """" & ASCII.LF,
+         when others => "calls ::= call ( ws call )*" & ASCII.LF);
+
+   --  One call in a marked JSON syntax, the name and the arguments the
+   --  grammar fragments given: as Mistral writes it, [TOOL_CALLS]name[ARGS]
+   --  and the object; as DeepSeek R1 and V3 write it, the call's marker,
+   --  "function", the separator, the name on its own line and the object
+   --  in a ```json fence; as V3.1 writes it, the name, the separator and
+   --  the object.
+   function Marked_Call (Syntax : Call_Syntax; Name, Args : String) return String
+   is (case Syntax is
+         when Mistral_Call =>
+           """" & Mistral_Calls & """ " & Name & " """ & Mistral_Args & """ "
+           & Args,
+         when DeepSeek_Fenced =>
+           """" & DeepSeek_Call_Begin & "function" & DeepSeek_Sep & """ "
+           & Name & " ""\x0A```json\x0A"" " & Args & " ws ""```"" ws """
+           & DeepSeek_Call_End & """",
+         when others =>
+           """" & DeepSeek_Call_Begin & """ " & Name & " """ & DeepSeek_Sep
+           & """ " & Args & " """ & DeepSeek_Call_End & """");
 
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
@@ -217,18 +272,21 @@ package body Model_Runner.Tools.Constraint is
    --  one that closes it. Refused that, a reasoning model never left its
    --  reasoning: it wrote fences for "</think>" and was forced into a call
    --  by the first '<' it wrote.
-   Think_Rule : constant String :=
-     "think ::= ""<think>""? ( [^<] | ""<"" [^/] )* ""</think>"" ws"
-     & ASCII.LF;
+   --  Its body any reasoning but the close: held from every "</" once, it
+   --  could close no tag it quoted.
+   function Think_Rule return String
+   is ("think ::= ""<think>""? think_body ""</think>"" ws" & ASCII.LF
+       & Model_Runner.Grammar.Excluding ("think_body", "</think>"));
 
    --  The loose grammar for a tag syntax: the envelope around parameters
    --  named freely, each holding text. Names still constrained to the
    --  tools offered. The spellings of the tags are filled in per syntax.
-   procedure Put_Loose_Tags (B : in out Builder; Sp : Spelling) is
+   procedure Put_Loose_Tags
+     (B : in out Builder; Sp : Spelling; Syntax : Call_Syntax) is
    begin
       Put (B, "root ::= think? prose calls?" & ASCII.LF);
       Put (B, Think_Rule);
-      Put (B, "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF);
+      Put (B, Prose_Rule (Syntax));
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
       Put (B, "call ::= """ & Sp.Opens.all & """ name """ & Sp.Named.all
               & """ ws params """ & Sp.Closes.all & """" & ASCII.LF);
@@ -236,7 +294,8 @@ package body Model_Runner.Tools.Constraint is
               & Sp.After.all & """ text """ & Sp.Close.all & """ ws )*"
               & ASCII.LF);
       Put (B, "pname ::= [A-Za-z_] [A-Za-z0-9_.-]*" & ASCII.LF);
-      Put (B, "text ::= ( [^<] | ""<"" [^/] )*" & ASCII.LF);
+      --  A value is anything up to its own close.
+      Put (B, Model_Runner.Grammar.Excluding ("text", Sp.Close.all));
       Put (B, "ws ::= [ \x09\x0A\x0D]*" & ASCII.LF);
    end Put_Loose_Tags;
 
@@ -246,18 +305,28 @@ package body Model_Runner.Tools.Constraint is
      (Offered : Definitions; B : in out Builder; Syntax : Call_Syntax) is
    begin
       if In_Tags (Syntax) then
-         Put_Loose_Tags (B, Spelled (Syntax));
+         Put_Loose_Tags (B, Spelled (Syntax), Syntax);
       else
-         Put (B, Loose_Fixed);
+         Put (B, "root ::= think? prose calls?" & ASCII.LF);
+         Put (B, Think_Rule);
+         Put (B, Prose_Rule (Syntax));
+         Put (B, Calls_Rule (Syntax));
+         if Marked_JSON (Syntax) then
+            Put (B, "call ::= " & Marked_Call (Syntax, "name", "value")
+                 & ASCII.LF);
+         else
+            Put (B, Loose_Envelope);
+         end if;
+         Put (B, Loose_Values);
       end if;
       --  The names, quoted as JSON has them in the envelope and bare in a
-      --  tag.
+      --  tag or after a marker.
       Put (B, "name ::= ");
       for Index in 1 .. Count (Offered) loop
          if Index > 1 then
             Put (B, " | ");
          end if;
-         if In_Tags (Syntax) then
+         if In_Tags (Syntax) or else Marked_JSON (Syntax) then
             Put (B, """" & Tool_Name (Offered, Index) & """");
          else
             Put (B, """\x22" & Tool_Name (Offered, Index) & "\x22""");
@@ -327,10 +396,10 @@ package body Model_Runner.Tools.Constraint is
          Put (B, "root ::= think? (calls | answer)" & ASCII.LF);
       else
          Put (B, "root ::= think? prose calls?" & ASCII.LF);
-         Put (B, "prose ::= ( [^<] | ""<"" [^tf/] )*" & ASCII.LF);
+         Put (B, Prose_Rule (Syntax));
       end if;
       Put (B, Think_Rule);
-      Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
+      Put (B, Calls_Rule (Syntax));
 
       Put (B, "call ::= ");
       for Index in 1 .. Count_Of loop
@@ -404,6 +473,13 @@ package body Model_Runner.Tools.Constraint is
                              & Tool_Name (Offered, Index) & Sp.Named.all
                              & """ ws args_" & Image (Index)
                              & " """ & Sp.Closes.all & """" & ASCII.LF);
+                     elsif Marked_JSON (Syntax) then
+                        Put (B, "call_" & Image (Index) & " ::= "
+                             & Marked_Call
+                                 (Syntax,
+                                  """" & Tool_Name (Offered, Index) & """",
+                                  "args_" & Image (Index))
+                             & ASCII.LF);
                      else
                         Put (B, "call_" & Image (Index)
                              & " ::= ""<tool_call>"" ws ""{"" ws "
@@ -816,7 +892,7 @@ package body Model_Runner.Tools.Constraint is
          Tight   : Builder :=
            (Room => new String (1 .. 256 * 1024), others => <>);
          Loose   : Builder :=
-           (Room => new String (1 .. Loose_Fixed'Length + 32 * 1024),
+           (Room => new String (1 .. Loose_Values'Length + 64 * 1024),
             others => <>);
          Ok      : Boolean;
       begin

@@ -686,6 +686,17 @@ package Model_Runner.Llama is
    --  @return The factor a score is multiplied by.
    function Score_Scale (Settings : Configuration) return Real;
 
+   --  Whether an architecture's linear layers read one state, never a
+   --  slot of a ring: the Mamba family, RWKV6 and Jamba scan the state
+   --  where it lies, so a session of one keeps no ring and is rewound
+   --  only to the front -- and nothing drafts on it, a round being a
+   --  rewind past what it proposed.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True where the state is read in one place.
+   function One_State_Slot (Item : Architecture) return Boolean
+   is (Pure_SSM (Item) or else Is_RWKV (Item) or else Is_Jamba (Item));
+
    --  Whether a layer of a hybrid architecture is a linear one. The
    --  full attention layers are every Linear_Every-th, counting from one,
    --  as the file counts them; an architecture with no interval has none.
@@ -1106,6 +1117,8 @@ package Model_Runner.Llama is
    --    session is then held to -- and less its states.
    --  @param Cache The precision the session will keep its context in,
    --    which is what that context is counted at.
+   --  @param Paged Whether the session's cache on the device will be paged,
+   --    which with the precision is what the device holds for it.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1123,7 +1136,44 @@ package Model_Runner.Llama is
       Stretch  : Rotary_Request := No_Rotary_Request;
       Panel_Cache : String := "";
       Context  : Natural := 0;
-      Cache    : Cache_Precision := Exact);
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True);
+
+   --  What a device's room is for a dense model's matrices, as Prepare
+   --  counts it: the device's heaps -- or the host's budget for them,
+   --  where less -- less the session's context as the device will hold it
+   --  at that many positions and precision, paged or a block, less the
+   --  hybrid's states a drafted round's rewind keeps, and less
+   --  Session_Margin. One function, so that the run choosing the device
+   --  unasked weighs the room the load will give it: weighed against the
+   --  budget instead, a sixteen-bit 7B of 14 GB went to the device and was
+   --  refused there, where the processor had room.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Context Positions the session will hold.
+   --  @param Cache The precision it keeps them in.
+   --  @param Paged Whether the device's cache is paged.
+   --  @return The room, or nought where the context leaves none.
+   function Device_Room
+     (Settings : Configuration;
+      Context  : Natural;
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True) return Interfaces.Unsigned_64;
+
+   --  The positions Prepare plans a dense model's device room for when
+   --  the run names none: the model's own context halves down to this
+   --  while its matrices do not fit, and no further.
+   Planned_Device_Context : constant := 16_384;
+
+   --  What a device's room keeps back beside the context: the batch's
+   --  buffers, the driver and the desktop. The heaps say half a gigabyte
+   --  more than the part maps, and a paged context a sixth more than its
+   --  plan, so a gigabyte left 16,384 positions too close.
+   Device_Session_Margin : constant := 3 * 2 ** 29;
+
+   --  What a split dense model's room gives up besides: the streamed
+   --  feed-forward's answers and matrices a long prompt's batch holds.
+   Split_Margin : constant := 2 ** 29;
 
    --  Merge a low-rank adapter into a prepared model's weights.
    --
@@ -2299,6 +2349,14 @@ package Model_Runner.Llama is
    --  @return True where Draft_Next may be called.
    function Drafts_Next (Item : Session) return Boolean;
 
+   --  Whether a session of this model can be rewound past what a round
+   --  proposed, which drafting needs: every architecture but those whose
+   --  linear layers read one state (One_State_Slot).
+   --
+   --  @param Item A prepared model.
+   --  @return True where drafting may run.
+   function Rewinds_Drafts (Item : Model) return Boolean;
+
    --  What a draft from the block past the stack costs against a token:
    --  the bytes the block and the output head read, over the bytes the
    --  stack and the head read -- a mixture's experts counted at the share
@@ -2927,6 +2985,11 @@ private
       Feed_Room    : Interfaces.Unsigned_64 := 0;
       Feed_Weights : Interfaces.Unsigned_64 := 0;
 
+      --  What the device was told of this model as it was prepared there:
+      --  the first on it, or one beside it whose matrices the budget
+      --  holds on top; see Backend.Device.Note_Model. Nought elsewhere.
+      Device_Ticket : Natural := 0;
+
       --  What has been merged into those weights, as a digest of every
       --  adapter and the scale it was applied at. Zero for a model as its
       --  file describes it.
@@ -3330,6 +3393,13 @@ private
       --  still hold what was written there and a later rewind's slot is
       --  intact only if nothing has come round to it.
       Kept_Newest : Natural := 0;
+
+      --  The lowest position whose slot holds a state the ring was
+      --  written with: where the ring was last made from one state --
+      --  made anew (Keep_States), adopted, or restored from a checkpoint
+      --  -- the slots behind it hold nothing. Nought for a ring filled
+      --  from the front.
+      Ring_Floor : Natural := 0;
 
       --  What each slot of the ring holds on the device, where a check
       --  left records there rather than states (Replay_States): nought

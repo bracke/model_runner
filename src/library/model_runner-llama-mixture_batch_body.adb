@@ -1280,14 +1280,16 @@ begin
 
             Product_Slice
               (Item, Expert_At.Gate, Current.Gate_Stack, Feed, Which,
-               Item.Gather_In, Held, Item.Gather_A, Status);
+               Item.Gather_In, Held, Item.Gather_A, Status,
+               Gates => Current.Gate_Stack, Ups => Current.Up_Stack);
             if E.Is_Error (Status) then
                return;
             end if;
 
             Product_Slice
               (Item, Expert_At.Up, Current.Up_Stack, Feed, Which,
-               Item.Gather_In, Held, Item.Gather_B, Status);
+               Item.Gather_In, Held, Item.Gather_B, Status,
+               Gates => Current.Gate_Stack, Ups => Current.Up_Stack);
             if E.Is_Error (Status) then
                return;
             end if;

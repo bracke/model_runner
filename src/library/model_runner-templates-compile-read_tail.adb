@@ -259,52 +259,89 @@ begin
                      case Slot is
                         when 1 => Step.Arg1 := Kept;
                         when 2 => Step.Arg2 := Kept;
-                        when others => Step.Arg3 := Kept;
+                        when 3 => Step.Arg3 := Kept;
+                        when others => Step.Arg4 := Kept;
                      end case;
                   end Put_Argument;
 
+                  --  The slot each filter's own keywords take, in the order
+                  --  the language's own signature gives them: one table, a
+                  --  filter's keyword in another's place -- join's
+                  --  attribute taken for its separator, truncate's leeway
+                  --  for its ending. A keyword the filter has not got is
+                  --  refused rather than dropped.
                   function Slot_Of_Keyword (Key : String) return Natural
                   is
+                     function Named (Name : String) return Boolean
+                     is (Key = Name);
                   begin
-                     if Key = "attribute" then
-                        return (if Word = "sort" then 3 else 1);
-                     elsif Key = "reverse" then
-                        return (if Word = "dictsort" then 3 else 1);
-                     elsif Key = "case_sensitive" then
-                        return (if Word = "dictsort" then 1 else 2);
-                     elsif Key = "by" then
-                        return 2;
-                     elsif Key = "width" then
-                        return 1;
-                     elsif Key = "first" then
-                        return 2;
-                     elsif Key = "blank" then
-                        return 3;
-                     elsif Key = "d" or else Key = "default" then
-                        return 1;
-                     elsif Key = "indent" then
-                        return 1;
-                     elsif Key = "precision" or else Key = "linecount"
-                       or else Key = "slices"
-                     then
-                        return 1;
-                     elsif Key = "method" or else Key = "fill_with"
-                       or else Key = "start" or else Key = "count"
-                     then
-                        return (if Key = "count" then 3 else 2);
-                     elsif Key = "break_long_words" or else Key = "killwords"
-                     then
-                        return 2;
-                     elsif Key = "wrapstring" or else Key = "end" then
-                        return 3;
-                     elsif Key = "leeway" then
-                        return 3;
-                     elsif Key = "ensure_ascii" or else Key = "sort_keys"
-                     then
-                        --  Taken and ignored: every byte written
-                        --  here is UTF-8 already, and a mapping is
-                        --  written in the order it holds.
-                        return 2;
+                     if Word = "trim" then
+                        return (if Named ("chars") then 1 else 0);
+                     elsif Word = "tojson" then
+                        return (if Named ("indent") then 1
+                                elsif Named ("ensure_ascii") then 2
+                                elsif Named ("sort_keys") then 3 else 0);
+                     elsif Word = "int" then
+                        return (if Named ("default") then 1
+                                elsif Named ("base") then 2 else 0);
+                     elsif Word = "float" then
+                        return (if Named ("default") then 1 else 0);
+                     elsif Word = "round" then
+                        return (if Named ("precision") then 1
+                                elsif Named ("method") then 2 else 0);
+                     elsif Word = "sum" then
+                        return (if Named ("attribute") then 1
+                                elsif Named ("start") then 2 else 0);
+                     elsif Word in "batch" | "slice" then
+                        return (if Named ("linecount") or else Named ("slices") then 1
+                                elsif Named ("fill_with") then 2 else 0);
+                     elsif Word = "groupby" then
+                        return (if Named ("attribute") then 1
+                                elsif Named ("default") then 2
+                                elsif Named ("case_sensitive") then 3 else 0);
+                     elsif Word = "attr" then
+                        return (if Named ("name") then 1 else 0);
+                     elsif Word = "wordwrap" then
+                        return (if Named ("width") then 1
+                                elsif Named ("break_long_words") then 2
+                                elsif Named ("wrapstring") then 3 else 0);
+                     elsif Word = "truncate" then
+                        return (if Named ("length") then 1
+                                elsif Named ("killwords") then 2
+                                elsif Named ("end") then 3
+                                elsif Named ("leeway") then 4 else 0);
+                     elsif Word = "center" then
+                        return (if Named ("width") then 1 else 0);
+                     elsif Word in "max" | "min" then
+                        return (if Named ("case_sensitive") then 1
+                                elsif Named ("attribute") then 3 else 0);
+                     elsif Word in "default" | "d" then
+                        return (if Named ("default_value") then 1
+                                elsif Named ("boolean") then 2 else 0);
+                     elsif Word = "replace" then
+                        return (if Named ("old") then 1 elsif Named ("new") then 2
+                                elsif Named ("count") then 3 else 0);
+                     elsif Word = "join" then
+                        return (if Named ("d") then 1
+                                elsif Named ("attribute") then 2 else 0);
+                     elsif Word = "map" then
+                        return (if Named ("attribute") then 2
+                                elsif Named ("default") then 3 else 0);
+                     elsif Word = "sort" then
+                        return (if Named ("reverse") then 1
+                                elsif Named ("case_sensitive") then 2
+                                elsif Named ("attribute") then 3 else 0);
+                     elsif Word = "dictsort" then
+                        return (if Named ("case_sensitive") then 1
+                                elsif Named ("by") then 2
+                                elsif Named ("reverse") then 3 else 0);
+                     elsif Word = "indent" then
+                        return (if Named ("width") then 1
+                                elsif Named ("first") then 2
+                                elsif Named ("blank") then 3 else 0);
+                     elsif Word = "unique" then
+                        return (if Named ("case_sensitive") then 1
+                                elsif Named ("attribute") then 2 else 0);
                      end if;
                      return 0;
                   end Slot_Of_Keyword;
@@ -390,6 +427,13 @@ begin
                            Scan := Scan + 1;
                         end if;
                      end loop;
+
+                     --  More than the filter takes: refused, where the
+                     --  rest went unread and |int(5) was |int.
+                     if Skip_Spaces (Inside, Scan) <= Inside'Last then
+                        Result := Refused (Word, E.Template_Unknown_Filter);
+                        return;
+                     end if;
                      if Found < Natural'Min (Wanted, Needed) then
                         Result :=
                           Refused (Word, E.Template_Unknown_Filter);
@@ -407,7 +451,7 @@ begin
                   Result.Numeric := True;
                elsif Word = "tojson" then
                   Step.Kind := Filter_JSON;
-                  Read_Arguments (2, 0);
+                  Read_Arguments (3, 0);
                elsif Word = "params" then
                   Step.Kind := Filter_Params;
                elsif Word = "qwen_params" then
@@ -425,11 +469,11 @@ begin
                elsif Word = "int" then
                   Step.Kind := Filter_Int;
                   Result.Numeric := True;
-                  Read_Arguments (0);
+                  Read_Arguments (2, 0);
                elsif Word = "float" then
                   Step.Kind := Filter_Float;
                   Result.Numeric := True;
-                  Read_Arguments (0);
+                  Read_Arguments (1, 0);
                elsif Word = "round" then
                   Step.Kind := Filter_Round;
                   Result.Numeric := True;
@@ -465,7 +509,7 @@ begin
                   Read_Arguments (3, 0);
                elsif Word = "truncate" then
                   Step.Kind := Filter_Truncate;
-                  Read_Arguments (3, 0);
+                  Read_Arguments (4, 0);
                elsif Word = "center" then
                   Step.Kind := Filter_Center;
                   Read_Arguments (1, 0);
@@ -503,12 +547,14 @@ begin
                elsif Word = "min" then
                   Step.Kind := Filter_Min;
                   Result.Numeric := True;
+                  Read_Arguments (3, 0);
                elsif Word = "join" then
                   Step.Kind := Filter_Join;
                   Read_Arguments (2, 0);
                elsif Word = "map" then
+                  --  A filter's name, or an attribute and its stand-in.
                   Step.Kind := Filter_Map;
-                  Read_Arguments (1, 1);
+                  Read_Arguments (3, 1);
                elsif Word = "select" then
                   Step.Kind := Filter_Select;
                   Read_Arguments (2, 0);
@@ -532,7 +578,7 @@ begin
                   Read_Arguments (3, 0);
                elsif Word = "unique" then
                   Step.Kind := Filter_Unique;
-                  Read_Arguments (0);
+                  Read_Arguments (2, 0);
                elsif Word = "list" then
                   Step.Kind := Filter_List;
                   Read_Arguments (0);

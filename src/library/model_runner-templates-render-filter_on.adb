@@ -19,18 +19,32 @@ begin
       when Filter_JSON =>
          --  Indented where asked, as Python indents: one element a
          --  line, a nested container opening on the line of its
-         --  key, and an empty one staying on one line.
-         if Step.Arg1 /= 0 then
-            declare
-               Width : constant Natural :=
-                 Natural'Max
-                   (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1)))));
-            begin
-               return As_Text
-                 (Indented_JSON (Untupled (JSON_Text (Value)), Width));
-            end;
-         end if;
-         return As_Text (Untupled (JSON_Text (Value)));
+         --  key, and an empty one staying on one line. A mapping's
+         --  keys in order where sort_keys says so, and every character
+         --  past ASCII escaped where ensure_ascii does -- both taken
+         --  and ignored once, and a template asking for either wrote
+         --  what it had not asked for.
+         declare
+            Sorting : constant Boolean :=
+              Step.Arg3 /= 0
+              and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg3)));
+            Ascii   : constant Boolean :=
+              Step.Arg2 /= 0
+              and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
+            Plain   : constant String :=
+              (if Sorting then Keys_Sorted (Untupled (JSON_Text (Value)))
+               else Untupled (JSON_Text (Value)));
+            Shaped  : constant String :=
+              (if Step.Arg1 /= 0
+               then Indented_JSON
+                      (Plain,
+                       Natural'Max
+                         (0, Bounded (Number_Of
+                                        (Value_Of (Item.Operands.all (Step.Arg1))))))
+               else Plain);
+         begin
+            return As_Text (if Ascii then Ascii_Escaped (Shaped) else Shaped);
+         end;
 
       when Filter_Params =>
          return As_Text (Params_Of (JSON_Text (Value)));
@@ -57,7 +71,35 @@ begin
          return Value;
 
       when Filter_Min =>
-         --  The smallest number in a list.
+         --  The smallest number in a list, or the element whose member
+         --  is, as max takes it.
+         if Step.Arg3 /= 0 then
+            declare
+               Src   : constant String := Listed (Value);
+               Name  : constant String :=
+                 Value_Of (Item.Operands.all (Step.Arg3));
+               Spans : Span_Array;
+               Count : Natural;
+               Best  : Natural := 0;
+
+               function Key_Of (S : Span) return Held
+               is (Along (Read_Out (Src (S.First .. S.Last)), Name));
+            begin
+               Elements_Of (Src, Spans, Count);
+               for I in 1 .. Count loop
+                  if Best = 0
+                    or else Before (Key_Of (Spans (I)), Key_Of (Spans (Best)),
+                                    True)
+                  then
+                     Best := I;
+                  end if;
+               end loop;
+               if Best = 0 then
+                  return Nothing;
+               end if;
+               return Read_Out (Src (Spans (Best).First .. Spans (Best).Last));
+            end;
+         end if;
          declare
             Src    : constant String := JSON_Text (Value);
             Cursor : Natural;
@@ -90,10 +132,51 @@ begin
          end;
 
       when Filter_Int =>
-         return As_Number (Number_Of (Printed (Value)));
+         --  As the language takes one: the text as a whole number in
+         --  the base given, or as a number with its fraction dropped,
+         --  or -- where it is neither -- the default given, nought
+         --  where none is. "x" | int(5) was nought.
+         declare
+            T     : constant String := Model_Runner.Text.Trim (Printed (Value));
+            Base  : constant Natural :=
+              (if Step.Arg2 = 0 then 10
+               else Natural'Max
+                      (0, Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg2))))));
+            Whole : Long_Long_Integer;
+            Taken : Boolean;
+         begin
+            if Value.Kind = Value_Boolean then
+               return As_Number (Long_Long_Integer (Value.Start));
+            end if;
+            Integer_In_Base (T, Base, Whole, Taken);
+            if Taken then
+               return As_Number (Whole);
+            elsif Base = 10 and then Is_JSON_Number (T) then
+               return As_Number
+                 (Long_Long_Integer (Long_Float'Truncation (Real_Of (T))));
+            elsif Step.Arg1 /= 0 then
+               return As_Number
+                 (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))));
+            end if;
+            return As_Number (0);
+         end;
 
       when Filter_Float =>
-         return As_Number (Real_Image (Real_Of (Printed (Value))));
+         declare
+            T : constant String := Model_Runner.Text.Trim (Printed (Value));
+         begin
+            if Value.Kind = Value_Boolean then
+               return As_Number
+                 (Real_Image (Long_Float (Value.Start)));
+            elsif Is_JSON_Number (T) then
+               return As_Number (Real_Image (Real_Of (T)));
+            elsif Step.Arg1 /= 0 then
+               return As_Number
+                 (Real_Image
+                    (Real_Of (Value_Of (Item.Operands.all (Step.Arg1)))));
+            end if;
+            return As_Number (Real_Image (0.0));
+         end;
 
       when Filter_Round =>
          --  To the precision given, the common way -- to the
@@ -518,7 +601,11 @@ begin
             Ending : constant String :=
               (if Step.Arg3 = 0 then "..."
                else Value_Of (Item.Operands.all (Step.Arg3)));
-            Leeway : constant Natural := 5;
+            Leeway : constant Natural :=
+              (if Step.Arg4 = 0 then 5
+               else Natural (Long_Long_Integer'Max (0, Long_Long_Integer'Min
+                      (Number_Of (Value_Of (Item.Operands.all (Step.Arg4))),
+                       Long_Long_Integer (Natural'Last)))));
             Keep_To : constant Integer := Length - Ending'Length;
          begin
             if T'Length <= Length + Leeway or else Keep_To <= 0 then
@@ -862,16 +949,49 @@ begin
          end;
 
       when Filter_Map =>
-         --  One member of each element, as a list.
+         --  One member of each element, as a list -- map(attribute=..),
+         --  the stand-in where it has none -- or each element through
+         --  the filter named first, map('upper'): read as a member's
+         --  name, a filter's gave a list of nothing.
          declare
             Src   : constant String := Listed (Value);
             Name  : constant String :=
-              (if Step.Arg1 = 0 then ""
+              (if Step.Arg2 = 0 then ""
+               else Value_Of (Item.Operands.all (Step.Arg2)));
+            Named_Filter : constant String :=
+              (if Step.Arg1 = 0 or else Step.Arg2 /= 0 then ""
                else Value_Of (Item.Operands.all (Step.Arg1)));
+            Through : constant Filter_Kind := Filter_Named (Named_Filter);
             Spans : Span_Array;
             Count : Natural;
             R     : Ada.Strings.Unbounded.Unbounded_String;
          begin
+            if Named_Filter /= "" then
+               if Through = Filter_None then
+                  Refuse (0, 0, E.Template_Unknown_Filter);
+                  return Nothing;
+               end if;
+               Elements_Of (Src, Spans, Count);
+               Ada.Strings.Unbounded.Append (R, "[");
+               for Index in 1 .. Count loop
+                  if Index > 1 then
+                     Ada.Strings.Unbounded.Append (R, ", ");
+                  end if;
+                  declare
+                     Each : constant Held :=
+                       Filter_On
+                         (Read_Out (Src (Spans (Index).First
+                                         .. Spans (Index).Last)),
+                          (Kind => Through, others => 0));
+                  begin
+                     Ada.Strings.Unbounded.Append
+                       (R, (if Each.Kind = Value_Undefined then "null"
+                            else JSON_Text (Each)));
+                  end;
+               end loop;
+               Ada.Strings.Unbounded.Append (R, "]");
+               return As_Data (Ada.Strings.Unbounded.To_String (R));
+            end if;
             Elements_Of (Src, Spans, Count);
             Ada.Strings.Unbounded.Append (R, "[");
             for Index in 1 .. Count loop
@@ -885,7 +1005,11 @@ begin
                            Name);
                begin
                   Ada.Strings.Unbounded.Append
-                    (R, (if Member.Kind = Value_Undefined then "null"
+                    (R, (if Member.Kind = Value_Undefined
+                         then (if Step.Arg3 /= 0
+                               then JSON_Text
+                                      (Held_Of (Item.Operands.all (Step.Arg3)))
+                               else "null")
                          else JSON_Text (Member)));
                end;
             end loop;
@@ -1109,13 +1233,32 @@ begin
          end;
 
       when Filter_Unique =>
-         --  The elements with every repeat after the first dropped.
+         --  The elements with every repeat after the first dropped: by
+         --  the member named, where one is, and text without regard to
+         --  case unless asked, as the language takes them.
          declare
             Src   : constant String := Listed (Value);
+            Name  : constant String :=
+              (if Step.Arg2 = 0 then ""
+               else Value_Of (Item.Operands.all (Step.Arg2)));
+            Cased : constant Boolean :=
+              Step.Arg1 /= 0
+              and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg1)));
             Spans : Span_Array;
             Count : Natural;
             Kept  : Span_Array;
             Held_Count : Natural := 0;
+
+            --  What two elements are told apart by.
+            function Key_Of (S : Span) return String is
+               Each : constant Held := Read_Out (Src (S.First .. S.Last));
+               Key  : constant Held :=
+                 (if Name = "" then Each else Along (Each, Name));
+               Text : constant String := JSON_Text (Key);
+            begin
+               return (if Cased or else Key.Kind /= Value_Text then Text
+                       else Ada.Characters.Handling.To_Lower (Text));
+            end Key_Of;
          begin
             Elements_Of (Src, Spans, Count);
             for I in 1 .. Count loop
@@ -1123,9 +1266,7 @@ begin
                   Seen : Boolean := False;
                begin
                   for J in 1 .. Held_Count loop
-                     if Src (Spans (I).First .. Spans (I).Last)
-                        = Src (Kept (J).First .. Kept (J).Last)
-                     then
+                     if Key_Of (Spans (I)) = Key_Of (Kept (J)) then
                         Seen := True;
                         exit;
                      end if;

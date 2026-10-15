@@ -91,8 +91,9 @@ package Model_Runner.Agent is
    --  A reply as an answer: what follows its reasoning. A model whose
    --  template opens a think block before the reply -- Qwen3.5's -- writes
    --  its reasoning and closes the block with "</think>"; the answer is
-   --  what comes after the last such close, and a reply with none is its
-   --  answer whole.
+   --  what comes after the first such close, as llama.cpp reads it. A reply
+   --  with none is its answer whole -- unless it opened a block it never
+   --  closed, which is reasoning cut short and no answer at all.
    --
    --  @param Reply The reply's text.
    --  @return The answer.

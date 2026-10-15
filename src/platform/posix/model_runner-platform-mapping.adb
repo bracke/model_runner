@@ -273,6 +273,11 @@ package body Model_Runner.Platform.Mapping is
             return;
          end if;
 
+         --  Held by the region from here, as Open holds it, so that what
+         --  raises below -- the reservation is the host's -- is closed by
+         --  the handler rather than left open.
+         Item.Handle := Long_Long_Integer (Handle);
+
          --  The whole length given blocks now, not as the panels are
          --  written: a sparse file on a disk that fills part way faults
          --  the writer with SIGBUS in the middle of a store, where no
@@ -285,6 +290,7 @@ package body Model_Runner.Platform.Mapping is
             if C_Close (Handle) /= 0 then
                null;
             end if;
+            Item.Handle := -1;
             return;
          end if;
 
@@ -302,12 +308,12 @@ package body Model_Runner.Platform.Mapping is
             if C_Close (Handle) /= 0 then
                null;
             end if;
+            Item.Handle := -1;
             return;
          end if;
 
          Item.Address := Base_Address;
          Item.Size := Size;
-         Item.Handle := Long_Long_Integer (Handle);
          Model_Runner.Platform.Mapped_Ranges.Note (Base_Address, Size);
          Available := True;
       end;

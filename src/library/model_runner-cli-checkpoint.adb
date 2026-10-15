@@ -7,6 +7,7 @@ with Ada.Unchecked_Deallocation;
 
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Model_Runner.CLI.Partials;
 
 with Model_Runner.Text;
 
@@ -38,7 +39,7 @@ package body Model_Runner.CLI.Checkpoint is
       use Ada.Streams.Stream_IO;
       File    : Stream_IO.File_Type;
       Buf     : US.Unbounded_String;
-      Partial : constant String := Path & ".partial";
+      Partial : constant String := Model_Runner.CLI.Partials.Beside (Path);
       use type Hostkit.Durability.Outcome;
 
       procedure LP (S : String) is

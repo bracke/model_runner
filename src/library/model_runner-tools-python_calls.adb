@@ -143,6 +143,13 @@ package body Model_Runner.Tools.Python_Calls is
                      when 'n'      => Put ("\n");
                      when 't'      => Put ("\t");
                      when 'r'      => Put ("\r");
+                     --  Python's other one-letter escapes, as JSON writes
+                     --  the characters: kept as written, "\b" reached a tool
+                     --  as a backslash and a b.
+                     when 'b'      => Put ("\b");
+                     when 'f'      => Put ("\f");
+                     when 'v'      => Put ("\u000b");
+                     when 'a'      => Put ("\u0007");
                      when '\'      => Put ("\\");
                      when '"'      => Put ("\""");
                      when '''      => Put ("'");

@@ -7,7 +7,6 @@ with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Quantization;
-with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Platform;
 with Model_Runner.UTF8;
 
@@ -528,16 +527,29 @@ package body Model_Runner.CLI.Execute.Support is
       Result : Opt.Command := Item;
       Ready  : Boolean;
 
-      --  The bytes of a file the device need not hold: a mixture's
-      --  experts, or where it has none, the feed-forward of every layer
-      --  whose gate, up and down the processor's panels take. Nought where
-      --  the file cannot be read as a model, which discounts nothing and so
-      --  never puts on the device what would not fit there: the cautious
-      --  answer, not a guess.
-      function Spared_Bytes (Path : String) return Interfaces.Unsigned_64 is
-         From      : Files.File_Source;
+      --  What a model asks of the device, read from its files: the bytes
+      --  of its matrices, as stored and as binary32 (what an adapter merges
+      --  into); the bytes the device need not hold -- a mixture's experts,
+      --  or where it has none, the feed-forward of every layer whose gate,
+      --  up and down the processor's panels take; and its configuration,
+      --  which with the run's context and cache is the room the load will
+      --  count. Measured is False where the files cannot be read as a
+      --  model, and the spared bytes then nought, which discounts nothing
+      --  and so never puts on the device what would not fit there: the
+      --  cautious answer, not a guess.
+      type Measures is record
+         Measured : Boolean := False;
+         Matrices : Interfaces.Unsigned_64 := 0;
+         Widened  : Interfaces.Unsigned_64 := 0;
+         Spared   : Interfaces.Unsigned_64 := 0;
+         Settings : L.Configuration;
+      end record;
+
+      function Measure (Path : String) return Measures is
+         From      : Shards.Shard_Set;
          Parsed    : Containers.Container;
          Condition : E.Error_Info;
+         Result    : Measures;
          Total     : Interfaces.Unsigned_64 := 0;
          Dense     : Interfaces.Unsigned_64 := 0;
 
@@ -563,55 +575,81 @@ package body Model_Runner.CLI.Execute.Support is
                          Model_Runner.Numerics.Element_Count
                            (Containers.Tensor_Dimension (Parsed, Index, 1))));
       begin
-         Files.Open (From, Path, Status => Condition);
-         if E.Is_Error (Condition) then
-            return 0;
-         end if;
-
-         Containers.Reader.Parse (Parsed, From, Status => Condition);
+         --  Every shard's tensors, as the model will be read: the first
+         --  shard's alone discounted a third of a model in three files.
+         Shards.Open_Model (From, Parsed, Path, Status => Condition);
          if not E.Is_Error (Condition) then
-            for Index in 1 .. Containers.Tensor_Count (Parsed) loop
-               declare
-                  Name : constant String :=
-                    Containers.Tensor_Name (Parsed, Index);
-                  Gate : constant Natural :=
-                    Ada.Strings.Fixed.Index (Name, "ffn_gate.weight");
-               begin
-                  if Ada.Strings.Fixed.Index (Name, "_exps.") > 0 then
-                     Total := Total + Containers.Tensor_Bytes (Parsed, Index);
-                  elsif Gate > 0 and then Gate + 14 = Name'Last then
-                     declare
-                        Stem : constant String := Name (Name'First .. Gate - 1);
-                        Up   : constant Natural := Named (Stem & "ffn_up.weight");
-                        Down : constant Natural := Named (Stem & "ffn_down.weight");
-                     begin
-                        if Paneled (Index) and then Paneled (Up)
-                          and then Paneled (Down)
-                        then
-                           Dense := Dense
-                             + Containers.Tensor_Bytes (Parsed, Index)
-                             + Containers.Tensor_Bytes (Parsed, Up)
-                             + Containers.Tensor_Bytes (Parsed, Down);
-                        end if;
-                     end;
-                  end if;
-               end;
-            end loop;
-            if Total = 0 then
-               Total := Dense;
-            end if;
+            L.Read_Config (Parsed, Settings => Result.Settings,
+                           Status => Condition);
+            Result.Measured := E.Is_Ok (Condition);
+
+            declare
+               --  The token table is read a row at a time by the host,
+               --  and goes to the device only as the head it doubles for.
+               Tied : constant Boolean := Named ("output.weight") = 0;
+            begin
+               for Index in 1 .. Containers.Tensor_Count (Parsed) loop
+                  declare
+                     Name : constant String :=
+                       Containers.Tensor_Name (Parsed, Index);
+                     Gate : constant Natural :=
+                       Ada.Strings.Fixed.Index (Name, "ffn_gate.weight");
+                     Elements : Interfaces.Unsigned_64 := 1;
+                  begin
+                     if Containers.Tensor_Rank (Parsed, Index) >= 2
+                       and then (Tied or else Name /= "token_embd.weight")
+                     then
+                        Result.Matrices := Result.Matrices
+                          + Containers.Tensor_Bytes (Parsed, Index);
+                        for Axis in 1 .. Containers.Tensor_Rank (Parsed, Index)
+                        loop
+                           Elements := Elements
+                             * Interfaces.Unsigned_64
+                                 (Containers.Tensor_Dimension
+                                    (Parsed, Index, Axis));
+                        end loop;
+                        Result.Widened := Result.Widened + Elements * 4;
+                     end if;
+
+                     if Ada.Strings.Fixed.Index (Name, "_exps.") > 0 then
+                        Total := Total
+                          + Containers.Tensor_Bytes (Parsed, Index);
+                     elsif Gate > 0 and then Gate + 14 = Name'Last then
+                        declare
+                           Stem : constant String :=
+                             Name (Name'First .. Gate - 1);
+                           Up   : constant Natural :=
+                             Named (Stem & "ffn_up.weight");
+                           Down : constant Natural :=
+                             Named (Stem & "ffn_down.weight");
+                        begin
+                           if Paneled (Index) and then Paneled (Up)
+                             and then Paneled (Down)
+                           then
+                              Dense := Dense
+                                + Containers.Tensor_Bytes (Parsed, Index)
+                                + Containers.Tensor_Bytes (Parsed, Up)
+                                + Containers.Tensor_Bytes (Parsed, Down);
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end loop;
+            end;
+            Result.Spared := (if Total = 0 then Dense else Total);
          end if;
 
          Containers.Close (Parsed);
-         Files.Close (From);
-         return Total;
+         Shards.Close (From);
+         return Result;
       exception
          when others =>
             --  Anything raised here is not a file that will not read --
             --  that is the status above -- but a fault: closed, and on.
-            Files.Close (From);
+            Containers.Close (Parsed);
+            Shards.Close (From);
             raise;
-      end Spared_Bytes;
+      end Measure;
    begin
       if Item.Backend_Set then
          return Result;
@@ -639,32 +677,84 @@ package body Model_Runner.CLI.Execute.Support is
            Model_Runner.Platform.Resolve_Model_Path
              (T.To_String (Item.Model_Path));
 
+         --  Every shard's, where the model is in several files.
          Weights : constant Interfaces.Unsigned_64 :=
-           (if Ada.Directories.Exists (Path)
-            then Interfaces.Unsigned_64 (Ada.Directories.Size (Path))
-            else 0);
+           Interfaces.Unsigned_64 (Shards.Total_Size (Path));
 
          Holds : constant Interfaces.Unsigned_64 :=
            Model_Runner.Backend.Device.Describe.Memory_Bytes;
+
+         Seen : constant Measures :=
+           (if Weights > 0 and then Holds > 0 then Measure (Path)
+            else (others => <>));
+
+         --  An adapter is merged into binary32 weights, and those are what
+         --  the device would hold: a 2 GB four-bit 3B is twelve.
+         Adapted : constant Boolean := not T.Is_Empty (Item.Adapter_Path);
+
+         --  What the load will hold, and what the panels may take of it.
+         Asked : constant Interfaces.Unsigned_64 :=
+           (if Adapted and then Seen.Measured then Seen.Widened
+            elsif Seen.Measured then Seen.Matrices
+            else Weights);
+         Spared : constant Interfaces.Unsigned_64 :=
+           (if Adapted then 0 else Seen.Spared);
+
+         --  The room a dense model's load counts, at the context the run
+         --  named or the one the load plans where it named none: weighed
+         --  against the budget instead, a model between the two went to
+         --  the device and was refused there.
+         Dense : constant Boolean :=
+           Seen.Measured and then Seen.Settings.Experts = 0;
+         On_Device : Opt.Command := Item;
+         Room : Interfaces.Unsigned_64 := 0;
+
+         Takes : Boolean := False;
       begin
-         if Weights > 0
-           and then Holds > 0
-           and then (Weights <= Holds
-                     or else Weights - Spared_Bytes (Path) <= Holds)
-         then
+         if Dense then
+            On_Device.Backend := Model_Runner.Backend.Backend_Device;
+            Room :=
+              L.Device_Room
+                (Seen.Settings,
+                 (if Item.Context_Size > 0 then Item.Context_Size
+                  else Natural'Min (Seen.Settings.Context_Length,
+                                    L.Planned_Device_Context)),
+                 Item.Cache, Session_Paging (On_Device));
+            Takes :=
+              Room > 0
+              and then (Asked <= Room
+                        or else (Room > L.Split_Margin
+                                 and then Spared <= Asked
+                                 and then Asked - Spared
+                                          <= Room - L.Split_Margin));
+         else
+            Room := Holds;
+            Takes :=
+              Weights > 0
+              and then Holds > 0
+              and then (Asked <= Holds
+                        or else (Spared <= Asked
+                                 and then Asked - Spared <= Holds));
+         end if;
+
+         if Takes then
             Result.Backend := Model_Runner.Backend.Backend_Device;
          else
             Model_Runner.Backend.Device.Close;
 
-            if Weights > Holds and then Holds > 0 then
+            --  A dense model whose context leaves the device no room at
+            --  all is said so, rather than as bytes against a nought.
+            if Dense and then Room = 0 then
+               Screen.Put_Message ("cli.note.backend_fit_cpu");
+            elsif Asked > Room and then Room > 0 then
                Screen.Put_Message
                  ("cli.note.backend_auto_cpu",
                   [Loc.Named
                      ("requested",
-                      Model_Runner.Text.Image (Long_Long_Integer (Weights))),
+                      Model_Runner.Text.Image (Long_Long_Integer (Asked))),
                    Loc.Named
                      ("limit",
-                      Model_Runner.Text.Image (Long_Long_Integer (Holds)))]);
+                      Model_Runner.Text.Image (Long_Long_Integer (Room)))]);
             end if;
          end if;
       end;
@@ -694,7 +784,7 @@ package body Model_Runner.CLI.Execute.Support is
       Path   : constant String :=
         Model_Runner.Platform.Resolve_Model_Path (T.To_String (Item.Model_Path));
       Weights : constant Interfaces.Unsigned_64 :=
-        (if Ada.Directories.Exists (Path) then Interfaces.Unsigned_64 (Ada.Directories.Size (Path)) else 0);
+        Interfaces.Unsigned_64 (Shards.Total_Size (Path));
    begin
       if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU)
         and then L."=" (Item.Repack, L.No_Repack)

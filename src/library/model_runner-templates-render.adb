@@ -277,6 +277,76 @@ is
    function Text_Of (Value : Held) return String
    is (Ada.Strings.Unbounded.To_String (Value.Text));
 
+   --  Text as the language counts it: in characters, which are UTF-8
+   --  sequences here, not bytes. Counted in bytes, 'é'|length was 2 and
+   --  a slice or a first could part a character.
+
+   --  How many bytes the character beginning at a byte takes, by its
+   --  lead byte, held to the text.
+   function Char_Width (Text : String; At_Byte : Positive) return Positive is
+      Lead  : constant Natural := Character'Pos (Text (At_Byte));
+      Width : constant Positive :=
+        (if Lead >= 16#F0# then 4 elsif Lead >= 16#E0# then 3
+         elsif Lead >= 16#C0# then 2 else 1);
+   begin
+      return Natural'Min (Width, Text'Last - At_Byte + 1);
+   end Char_Width;
+
+   --  How many characters a text holds: every byte but a continuation.
+   function Char_Count (Text : String) return Natural is
+      Total : Natural := 0;
+   begin
+      for C of Text loop
+         if Character'Pos (C) not in 16#80# .. 16#BF# then
+            Total := Total + 1;
+         end if;
+      end loop;
+      return Total;
+   end Char_Count;
+
+   --  Where the character Count characters in begins, or one past the
+   --  text where it holds fewer.
+   function Byte_Of_Char (Text : String; Count : Natural) return Positive is
+      At_Byte : Positive := Text'First;
+   begin
+      for Unused in 1 .. Count loop
+         exit when At_Byte > Text'Last;
+         At_Byte := At_Byte + Char_Width (Text, At_Byte);
+      end loop;
+      return At_Byte;
+   end Byte_Of_Char;
+
+   --  Where the character that ends at a byte begins.
+   function Char_Before (Text : String; Last_Byte : Positive) return Positive
+   is
+      At_Byte : Positive := Last_Byte;
+   begin
+      while At_Byte > Text'First
+        and then Character'Pos (Text (At_Byte)) in 16#80# .. 16#BF#
+        and then Last_Byte - At_Byte < 3
+      loop
+         At_Byte := At_Byte - 1;
+      end loop;
+      return At_Byte;
+   end Char_Before;
+
+   --  The code point a character's bytes say, or the lead byte where they
+   --  say none.
+   function Point_Of (Piece : String) return Natural is
+      Point, Length : Natural;
+   begin
+      Model_Runner.UTF8.Decode_First (Piece, Point, Length);
+      return (if Length = 0 then Character'Pos (Piece (Piece'First))
+              else Point);
+   end Point_Of;
+
+   --  Whether a code point is space as Python's str.isspace has it, which
+   --  is what strip() with nothing in its brackets takes off.
+   function Is_Space_Point (Point : Natural) return Boolean
+   is (Point in 16#09# .. 16#0D# | 16#1C# .. 16#20# | 16#85# | 16#A0#
+             | 16#1680# | 16#2000# .. 16#200A# | 16#2028# | 16#2029#
+             | 16#202F# | 16#205F# | 16#3000#);
+
    --  Where a list of messages ends: Index, or a slot's Length, holds
    --  one past its last position where it was cut short --
    --  messages[:-1] -- and nought where it runs to the end.
@@ -913,19 +983,21 @@ is
             --  is nothing, where the language would raise.
             declare
                Held : constant String := Text_Of (Value);
+               Chars : constant Long_Long_Integer :=
+                 Long_Long_Integer (Char_Count (Held));
                At_Char : constant Long_Long_Integer :=
-                 (if Wanted < 0
-                  then Long_Long_Integer (Held'Length) + Wanted
-                  else Wanted);
+                 (if Wanted < 0 then Chars + Wanted else Wanted);
             begin
-               if At_Char < 0
-                 or else At_Char >= Long_Long_Integer (Held'Length)
-               then
+               if At_Char < 0 or else At_Char >= Chars then
                   return Nothing;
                end if;
-               return As_Text
-                 (Held (Held'First + Natural (At_Char)
-                        .. Held'First + Natural (At_Char)));
+               declare
+                  From : constant Positive :=
+                    Byte_Of_Char (Held, Natural (At_Char));
+               begin
+                  return As_Text
+                    (Held (From .. From + Char_Width (Held, From) - 1));
+               end;
             end;
          when Value_Call =>
             --  The calls of a turn, indexed: Index zero says the whole
@@ -994,7 +1066,7 @@ is
    function Length_Of (Value : Held) return Natural is
    begin
       case Value.Kind is
-         when Value_Text => return Text_Of (Value)'Length;
+         when Value_Text => return Char_Count (Text_Of (Value));
          when Value_Data => return JSON_Length (Text_Of (Value));
          when Value_JSON => return JSON_Length (JSON_Text (Value));
          when Value_Tools => return Tool_Count;
@@ -1224,8 +1296,14 @@ is
    Loops     : array (1 .. Max_Loops) of Loop_State;
    Loop_Depth : Natural := 0;
 
+   --  Past the room for loops a template is refused: a loop not pushed
+   --  went on unsaid, and the pop at its end took the loop around it, its
+   --  saved names put back in the middle of that loop.
    procedure Push_Loop (State : Loop_State) is
    begin
+      if Loop_Depth >= Max_Loops then
+         Refuse (0, 0, E.Template_Nesting_Too_Deep);
+      end if;
       if Loop_Depth < Max_Loops then
          Loop_Depth := Loop_Depth + 1;
          Loops (Loop_Depth) := State;
@@ -1271,6 +1349,18 @@ is
          Pool_Used := Floor;
       end if;
    end Restore_Names;
+
+   --  Begin the innermost loop's next pass: the names put back to what
+   --  they held when the loop began, a namespace's field aside, as at its
+   --  end. A name the body assigns lasts the one pass, as the language
+   --  scopes it: "set x = x + i" in a body read the previous pass's x, and
+   --  1, 2, 3 summed to 1, 3, 6.
+   procedure Next_Pass is
+   begin
+      if Loop_Depth > 0 then
+         Restore_Names (Loops (Loop_Depth).Saved, Loops (Loop_Depth).Floor);
+      end if;
+   end Next_Pass;
 
    procedure Pop_Loop is
    begin
@@ -1644,8 +1734,29 @@ is
         (if Step.At_Operand = 0 then " " & ASCII.HT & ASCII.LF & ASCII.CR
          else Value_Of (Item.Operands.all (Step.At_Operand)));
 
-      function Is_Trimmed (Letter : Character) return Boolean
-      is (for some Wanted of Argument => Wanted = Letter);
+      --  Whether the character whose bytes these are is one taken off:
+      --  space as Python's isspace has it where nothing was named, and a
+      --  character of the argument -- a character, not a byte of one --
+      --  where something was.
+      function Is_Trimmed (Piece : String) return Boolean is
+         Point : constant Natural := Point_Of (Piece);
+         At_Byte : Positive := Argument'First;
+      begin
+         if Step.At_Operand = 0 then
+            return Is_Space_Point (Point);
+         end if;
+         while At_Byte <= Argument'Last loop
+            declare
+               Width : constant Positive := Char_Width (Argument, At_Byte);
+            begin
+               if Argument (At_Byte .. At_Byte + Width - 1) = Piece then
+                  return True;
+               end if;
+               At_Byte := At_Byte + Width;
+            end;
+         end loop;
+         return False;
+      end Is_Trimmed;
 
       First : Natural := Held'First;
       Last  : Natural := Held'Last;
@@ -1661,13 +1772,20 @@ is
 
          when Method_Strip | Method_Left_Strip | Method_Right_Strip =>
             if Step.Kind /= Method_Right_Strip then
-               while First <= Last and then Is_Trimmed (Held (First)) loop
-                  First := First + 1;
+               while First <= Last
+                 and then Is_Trimmed
+                            (Held (First .. First + Char_Width (Held, First) - 1))
+               loop
+                  First := First + Char_Width (Held, First);
                end loop;
             end if;
             if Step.Kind /= Method_Left_Strip then
-               while Last >= First and then Is_Trimmed (Held (Last)) loop
-                  Last := Last - 1;
+               while Last >= First
+                 and then Is_Trimmed
+                            (Held (Natural'Max (First, Char_Before (Held, Last))
+                                   .. Last))
+               loop
+                  Last := Natural'Max (First, Char_Before (Held, Last)) - 1;
                end loop;
             end if;
             return Held (First .. Last);
@@ -1675,7 +1793,7 @@ is
          when Method_Cut_From | Method_Cut_To =>
             declare
                Length : constant Long_Long_Integer :=
-                 Long_Long_Integer (Held'Length);
+                 Long_Long_Integer (Char_Count (Held));
                Cut    : Long_Long_Integer := Number_Of (Argument);
             begin
                if Cut < 0 then
@@ -1684,11 +1802,17 @@ is
                Cut := Long_Long_Integer'Max
                  (0, Long_Long_Integer'Min (Cut, Length));
 
-               if Step.Kind = Method_Cut_From then
-                  return Held (Held'First + Natural (Cut) .. Held'Last);
-               else
-                  return Held (Held'First .. Held'First + Natural (Cut) - 1);
-               end if;
+               --  At a character, counted in characters.
+               declare
+                  At_Byte : constant Positive :=
+                    Byte_Of_Char (Held, Natural (Cut));
+               begin
+                  if Step.Kind = Method_Cut_From then
+                     return Held (At_Byte .. Held'Last);
+                  else
+                     return Held (Held'First .. At_Byte - 1);
+                  end if;
+               end;
             end;
 
          when Method_Split_Whole =>
@@ -2324,6 +2448,219 @@ is
       return Printed (A) < Printed (B);
    end Before;
 
+   --  JSON with every character past ASCII written as an escape, as
+   --  Python's json.dumps writes it with ensure_ascii: \u and four hex
+   --  digits, a character past the first plane as its surrogate pair.
+   --  Outside strings JSON holds no such character, so the whole text is
+   --  walked alike.
+   function Ascii_Escaped (Text : String) return String is
+      R       : Ada.Strings.Unbounded.Unbounded_String;
+      At_Byte : Natural := Text'First;
+      Hex     : constant String := "0123456789abcdef";
+
+      procedure Escape (Unit : Natural) is
+      begin
+         Ada.Strings.Unbounded.Append
+           (R, "\u" & Hex (Hex'First + Unit / 4096 mod 16)
+               & Hex (Hex'First + Unit / 256 mod 16)
+               & Hex (Hex'First + Unit / 16 mod 16)
+               & Hex (Hex'First + Unit mod 16));
+      end Escape;
+   begin
+      while At_Byte <= Text'Last loop
+         if Character'Pos (Text (At_Byte)) < 128 then
+            Ada.Strings.Unbounded.Append (R, Text (At_Byte));
+            At_Byte := At_Byte + 1;
+         else
+            declare
+               Point, Length : Natural;
+            begin
+               Model_Runner.UTF8.Decode_First
+                 (Text (At_Byte .. Text'Last), Point, Length);
+               if Length = 0 then
+                  --  Not UTF-8: the byte as the character of that number.
+                  Escape (Character'Pos (Text (At_Byte)));
+                  At_Byte := At_Byte + 1;
+               else
+                  if Point > 16#FFFF# then
+                     Escape (16#D800# + (Point - 16#10000#) / 1024);
+                     Escape (16#DC00# + (Point - 16#10000#) mod 1024);
+                  else
+                     Escape (Point);
+                  end if;
+                  At_Byte := At_Byte + Length;
+               end if;
+            end;
+         end if;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (R);
+   end Ascii_Escaped;
+
+   --  JSON with every mapping's members in the order of their keys, at
+   --  every depth, as json.dumps writes it with sort_keys.
+   function Keys_Sorted (Src : String) return String is
+      Trimmed : constant String := Model_Runner.Text.Trim (Src);
+      R       : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      if Is_JSON_Mapping (Trimmed) then
+         declare
+            Keys, Values : Span_Array;
+            Count  : Natural := 0;
+            Cursor : Natural := Trimmed'First + 1;
+            Key, Value : Span;
+            Found  : Boolean;
+         begin
+            loop
+               Next_Member (Trimmed, Cursor, Key, Value, Found);
+               exit when not Found or else Count = Max_Elements;
+               Count := Count + 1;
+               Keys (Count) := Key;
+               Values (Count) := Value;
+            end loop;
+
+            --  An insertion sort: a mapping in a template is small.
+            for I in 2 .. Count loop
+               declare
+                  K : constant Span := Keys (I);
+                  V : constant Span := Values (I);
+                  J : Natural := I - 1;
+               begin
+                  while J >= 1
+                    and then Decoded (Trimmed (Keys (J).First .. Keys (J).Last))
+                             > Decoded (Trimmed (K.First .. K.Last))
+                  loop
+                     Keys (J + 1) := Keys (J);
+                     Values (J + 1) := Values (J);
+                     J := J - 1;
+                  end loop;
+                  Keys (J + 1) := K;
+                  Values (J + 1) := V;
+               end;
+            end loop;
+
+            Ada.Strings.Unbounded.Append (R, "{");
+            for I in 1 .. Count loop
+               if I > 1 then
+                  Ada.Strings.Unbounded.Append (R, ", ");
+               end if;
+               Ada.Strings.Unbounded.Append
+                 (R, Trimmed (Keys (I).First .. Keys (I).Last) & ": "
+                     & Keys_Sorted
+                         (Trimmed (Values (I).First .. Values (I).Last)));
+            end loop;
+            Ada.Strings.Unbounded.Append (R, "}");
+         end;
+         return Ada.Strings.Unbounded.To_String (R);
+      elsif Is_JSON_List (Trimmed) then
+         declare
+            Cursor : Natural := Trimmed'First + 1;
+            Piece  : Span;
+            Found  : Boolean;
+            Any    : Boolean := False;
+         begin
+            Ada.Strings.Unbounded.Append (R, "[");
+            loop
+               Next_Element (Trimmed, Cursor, Piece, Found);
+               exit when not Found;
+               if Any then
+                  Ada.Strings.Unbounded.Append (R, ", ");
+               end if;
+               Ada.Strings.Unbounded.Append
+                 (R, Keys_Sorted (Trimmed (Piece.First .. Piece.Last)));
+               Any := True;
+            end loop;
+            Ada.Strings.Unbounded.Append (R, "]");
+         end;
+         return Ada.Strings.Unbounded.To_String (R);
+      end if;
+      return Src;
+   end Keys_Sorted;
+
+   --  A whole number written in a base, as Python's int reads one: a sign,
+   --  the digits of that base, and for bases 2, 8 and 16 the prefix that
+   --  names the base. Taken is False where the text is not one.
+   procedure Integer_In_Base
+     (Text  : String;
+      Base  : Natural;
+      Value : out Long_Long_Integer;
+      Taken : out Boolean)
+   is
+      I        : Natural := Text'First;
+      Negative : Boolean := False;
+      Any      : Boolean := False;
+   begin
+      Value := 0;
+      Taken := False;
+      if Base < 2 or else Base > 36 or else Text'Length = 0 then
+         return;
+      end if;
+      if Text (I) in '+' | '-' then
+         Negative := Text (I) = '-';
+         I := I + 1;
+      end if;
+      if I + 1 <= Text'Last and then Text (I) = '0'
+        and then ((Base = 16 and then Text (I + 1) in 'x' | 'X')
+                  or else (Base = 8 and then Text (I + 1) in 'o' | 'O')
+                  or else (Base = 2 and then Text (I + 1) in 'b' | 'B'))
+      then
+         I := I + 2;
+      end if;
+      while I <= Text'Last loop
+         declare
+            C     : constant Character := Text (I);
+            Digit : constant Integer :=
+              (case C is
+                 when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+                 when 'a' .. 'z' => Character'Pos (C) - Character'Pos ('a') + 10,
+                 when 'A' .. 'Z' => Character'Pos (C) - Character'Pos ('A') + 10,
+                 when '_' => -2,
+                 when others => -1);
+         begin
+            if Digit = -2 and then Any then
+               null;
+            elsif Digit < 0 or else Digit >= Base then
+               return;
+            else
+               if Value > (Long_Long_Integer'Last - Long_Long_Integer (Digit))
+                          / Long_Long_Integer (Base)
+               then
+                  return;
+               end if;
+               Value := Value * Long_Long_Integer (Base)
+                 + Long_Long_Integer (Digit);
+               Any := True;
+            end if;
+         end;
+         I := I + 1;
+      end loop;
+      if Negative then
+         Value := -Value;
+      end if;
+      Taken := Any;
+   end Integer_In_Base;
+
+   --  The filter a name says, for map('name'): the ones that take no
+   --  argument; Filter_None for any other.
+   function Filter_Named (Name : String) return Filter_Kind
+   is (if Name = "upper" then Filter_Upper
+       elsif Name = "lower" then Filter_Lower
+       elsif Name = "capitalize" then Filter_Capitalize
+       elsif Name = "title" then Filter_Title
+       elsif Name = "trim" then Filter_Trim
+       elsif Name in "string" | "safe" then Filter_String
+       elsif Name = "int" then Filter_Int
+       elsif Name = "float" then Filter_Float
+       elsif Name in "length" | "count" then Filter_Length
+       elsif Name = "tojson" then Filter_JSON
+       elsif Name = "abs" then Filter_Abs
+       elsif Name = "first" then Filter_First
+       elsif Name = "last" then Filter_Last
+       elsif Name = "list" then Filter_List
+       elsif Name = "reverse" then Filter_Reverse
+       elsif Name = "unique" then Filter_Unique
+       elsif Name = "striptags" then Filter_Striptags
+       else Filter_None);
+
    function Filter_On (Value : Held; Step : Filter_Step) return Held is separate;
 
    --  What is inside a bracket after a value: a position where it is
@@ -2654,10 +2991,27 @@ is
       return False;
    end Mixes_Text_And_Data;
 
+   --  Whether an operand joins with '~' and with a product's join too:
+   --  the language binds '*' before '~' and '~' before '+', so the
+   --  products between the '~'s and '+'s are worked out first, and the
+   --  pieces -- text, once a '~' stands among them -- run together.
+   function Concat_Mixed (Value : Operand) return Boolean
+   is (Value.Count > 1
+       and then (for some Index in 2 .. Value.Count =>
+                   Value.Terms (Index).Join = Join_Concat)
+       and then (for some Index in 2 .. Value.Count =>
+                   Value.Terms (Index).Join
+                     in Join_Times | Join_Divide | Join_Floor | Join_Modulo
+                      | Join_Power));
+
    procedure Emit_Operand (Value : Operand) is
    begin
       if Has_Markup (Value) then
          Put (Markup_Joined (Value));
+         return;
+      end if;
+      if Concat_Mixed (Value) then
+         Put (Value_Of (Value));
          return;
       end if;
       --  A sum is printed as the number it comes to, and anything else
@@ -2923,6 +3277,36 @@ is
       --  "<tok>" * n, as Python repeats a string.
       if Has_Markup (Value) then
          return Markup_Joined (Value);
+      end if;
+
+      --  '~' binds looser than a product, as the language binds it: the
+      --  products between the '~'s and '+'s are worked out first, then
+      --  the pieces' text runs together. Run together whole, '-' ~ '=' * 3
+      --  was "-=3".
+      if Concat_Mixed (Value) then
+         declare
+            Joined : Ada.Strings.Unbounded.Unbounded_String;
+            From   : Positive := 1;
+         begin
+            for Index in 2 .. Value.Count + 1 loop
+               if Index > Value.Count
+                 or else Value.Terms (Index).Join
+                           in Join_Concat | Join_Plus | Join_Minus
+               then
+                  declare
+                     Piece : Operand;
+                  begin
+                     Piece.Count := Index - From;
+                     Piece.Terms (1 .. Piece.Count) :=
+                       Value.Terms (From .. Index - 1);
+                     Piece.Terms (1).Join := Join_Plus;
+                     Ada.Strings.Unbounded.Append (Joined, Value_Of (Piece));
+                  end;
+                  From := Index;
+               end if;
+            end loop;
+            return Ada.Strings.Unbounded.To_String (Joined);
+         end;
       end if;
 
       if Is_Repetition (Value) then
@@ -3255,7 +3639,28 @@ is
                   L : constant Held := Held_Of (Value.Left);
                   R : constant Held := Held_Of (Value.Right);
                begin
-                  if L.Kind in Structured and then R.Kind in Structured
+                  if L.Kind in Value_None | Value_Boolean | Value_Undefined
+                    or else R.Kind in Value_None | Value_Boolean
+                                    | Value_Undefined
+                  then
+                     --  None, a boolean and an undefined name are values of
+                     --  their own and equal only their own kind, as Python
+                     --  has it -- but a boolean is the number it stands
+                     --  for, 0 == false. Compared as their text, none, false
+                     --  and the empty string were all one value.
+                     if L.Kind = Value_Boolean and then R.Kind = Value_Boolean
+                     then
+                        Same := L.Start = R.Start;
+                     elsif L.Kind = Value_Boolean and then R.Kind = Value_Number
+                     then
+                        Same := Real_Of (Text_Of (R)) = Long_Float (L.Start);
+                     elsif R.Kind = Value_Boolean and then L.Kind = Value_Number
+                     then
+                        Same := Real_Of (Text_Of (L)) = Long_Float (R.Start);
+                     else
+                        Same := L.Kind = R.Kind;
+                     end if;
+                  elsif L.Kind in Structured and then R.Kind in Structured
                   then
                      --  A message against what a filter kept of the
                      --  messages, a list against a list: equal where
@@ -3695,6 +4100,7 @@ is
       begin
          if L.Index < L.Total and then not Breaking then
             L.Index := L.Index + 1;
+            Next_Pass;
             Bind_Element (L);
             Position := Step.Target + 1;
          else

@@ -5,8 +5,6 @@ procedure Do_Run
    Catalog : Loc.Catalog;
    Status  : out Natural)
 is
-   pragma Unreferenced (Catalog);
-
    Source    : Shards.Shard_Set;
    Container : Containers.Container;
    Prepared  : aliased L.Model;
@@ -16,7 +14,12 @@ is
    --  so a repeated prompt prefix is not read again -- unless the caller
    --  opts out, manages a session by hand, or the run is interactive or
    --  an agent's, which own their sessions. The file is keyed by the
-   --  model and the settings a reused cache must match.
+   --  model and the settings a reused cache must match -- the backend
+   --  and the repacking asked among them: a run on the processor and one
+   --  on the device each refused the other's file, read the prompt whole
+   --  and wrote its own over it, so alternating the two kept no cache;
+   --  and where the two did match, a greedy run's answer turned on which
+   --  backend ran before it.
    Auto_Cache : constant Boolean :=
      not Item.No_Cache
      and then T.Is_Empty (Item.Load_Session)
@@ -31,7 +34,14 @@ is
               & "|" & L.Cache_Name (Item.Cache)
               & "|" & L.Value_Precision'Image (Item.Values)
               & "|" & Item.Context_Size'Image
-              & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic))
+              & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic)
+              & "|" & (if Item.Backend_Set
+                       then Model_Runner.Backend.Backend_Kind'Image
+                              (Item.Backend)
+                       else "AUTO")
+              & "|" & (if Item.Repack_Asked
+                       then L.Repack_Mode'Image (Item.Repack)
+                       else "UNASKED"))
       else "");
    Load_Path : constant String :=
      (if not T.Is_Empty (Item.Load_Session)
@@ -94,7 +104,10 @@ is
    --  Qwen2's small models against Qwen2.5's large ones, which pad to
    --  152,064. A proposal is a number, so any draft of no more numbers
    --  keeps the target's distribution; the text is what says whether it
-   --  will ever be accepted.
+   --  will ever be accepted -- compared at the same size too, as
+   --  llama.cpp compares them: Llama 2 and Mistral both number 32,000 and
+   --  share almost no text, and a draft of the one for the other was taken
+   --  and accepted nearly nothing, slower than not drafting.
    function Numbers_Alike
      (Draft, Target : L.Model) return Boolean
    is
@@ -106,9 +119,7 @@ is
       Size    : constant Natural := L.Config (Draft).Vocabulary;
       Differ  : Natural := 0;
    begin
-      if Size = L.Config (Target).Vocabulary then
-         return True;
-      elsif Size > L.Config (Target).Vocabulary
+      if Size > L.Config (Target).Vocabulary
         or else Drafts = null or else Targets = null
       then
          return False;
@@ -158,6 +169,10 @@ is
 
    Cancel    : aliased Model_Runner.Cancellation.Token;
    Attached  : Boolean := False;
+
+   --  Set where the device the run chose itself refused the model at its
+   --  fit, so that the run is made again on the processor; see Run_With.
+   Retry_On_CPU : Boolean := False;
    Condition : E.Error_Info;
    Ignored   : E.Error_Info;
    Outcome   : Gen.Result;
@@ -415,4 +430,18 @@ begin
          end;
       end if;
    end case;
+
+   --  The device the run chose for itself would not hold the model --
+   --  its counted room is less than the budget the choice weighed --
+   --  and nobody asked for the device: the processor, which has room,
+   --  runs it instead of the run ending in a refusal nobody chose.
+   if Retry_On_CPU then
+      declare
+         Again : Opt.Command := Item;
+      begin
+         Again.Backend := Model_Runner.Backend.Backend_CPU;
+         Pres.Put_Note (Screen, "cli.note.backend_fit_cpu");
+         Do_Run (With_Panels (Again), Screen, Catalog, Status);
+      end;
+   end if;
 end Do_Run;

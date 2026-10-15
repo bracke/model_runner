@@ -3019,12 +3019,17 @@ begin
             Item.Owed_At := Item.Committed;
             Item.Owed_Count := Natural (Count);
          else
-            --  Two calls' ranges are consecutive, so the union is the
-            --  first of the earlier and the last of the later.
-            Item.Owed_Count :=
-              Natural'Max (Item.Owed_At + Item.Owed_Count,
-                           Item.Committed + Natural (Count))
-              - Item.Owed_At;
+            --  The union of the two: consecutive as a run goes, but a
+            --  rewind between the calls starts the later below the
+            --  earlier, and the rows from there are the device's too.
+            declare
+               Last : constant Natural :=
+                 Natural'Max (Item.Owed_At + Item.Owed_Count,
+                              Item.Committed + Natural (Count));
+            begin
+               Item.Owed_At := Natural'Min (Item.Owed_At, Item.Committed);
+               Item.Owed_Count := Last - Item.Owed_At;
+            end;
          end if;
 
       end if;

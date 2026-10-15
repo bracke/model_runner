@@ -22,6 +22,8 @@ with Model_Runner.Grammar;
 with Hostkit.Fs;
 with Hostkit.Metadata;
 with Model_Runner.Tools;
+with Model_Runner.Conversation;
+with Model_Runner.Templates;
 with Model_Runner.UTF8;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.CLI.Command_Lines;
@@ -3060,6 +3062,332 @@ package body Tests.Tools_Cases is
               "a failure was not answered as its class is");
    end Failures_Are_Recovered_By_Their_Class;
 
+   --  Calls read as each family writes them, round 13 of the review:
+   --  a Qwen3-Coder value keeps its indent and is typed by its schema;
+   --  Llama 3's "parameters" is read; Mistral's [TOOL_CALLS] and
+   --  DeepSeek's two forms are read, recognised in a template and held
+   --  by the grammar; a MiniCPM reply's words end where its first call
+   --  begins; prose, reasoning and a tag's value may hold any tag but
+   --  the call's own; a call is read past the reasoning, never in it; an
+   --  answer is what follows the first close of the reasoning; a
+   --  Functionary recipient is a tool on offer; an object standing open
+   --  is a call only where it names one.
+   procedure Calls_Are_Read_As_Families_Write_Them
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant Character := ASCII.LF;
+
+      Offer : constant String :=
+        "[{""type"": ""function"", ""function"": {""name"": ""edit"", "
+        & """parameters"": {""type"": ""object"", ""properties"": {"
+        & """old_string"": {""type"": ""string""}, "
+        & """version"": {""type"": ""string""}, "
+        & """count"": {""type"": ""integer""}, "
+        & """flag"": {""type"": ""boolean""}, "
+        & """tags"": {""type"": ""array""}}}}}]";
+
+      Defs : aliased Tools.Definitions;
+
+      --  The calls a reply carries in a syntax, as name(arguments) one
+      --  after another; or the error it was refused with.
+      function Read
+        (Reply   : String;
+         Syntax  : Tools.Call_Syntax;
+         Offered : Boolean := True) return String
+      is
+         Asked  : Tools.Calls;
+         Status : E.Error_Info;
+         Said   : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Tools.Read_Calls
+           (Asked, Reply, Status, Syntax => Syntax,
+            Offered => (if Offered then Defs'Unchecked_Access else null));
+         if E.Is_Error (Status) then
+            Tools.Close (Asked);
+            return "error " & E.Error_Code'Image (Status.Code);
+         end if;
+         for Index in 1 .. Tools.Count (Asked) loop
+            Ada.Strings.Unbounded.Append
+              (Said, Tools.Called (Asked, Index) & "("
+                     & Tools.Arguments (Asked, Index) & ")");
+         end loop;
+         Tools.Close (Asked);
+         return Ada.Strings.Unbounded.To_String (Said);
+      end Read;
+
+      function Span
+        (Reply : String; Syntax : Tools.Call_Syntax) return String
+      is
+         First, Last : Natural;
+      begin
+         Tools.Spoken_Span (Reply, Syntax, First, Last);
+         return Reply (First .. Last);
+      end Span;
+
+      procedure Same (Got, Wanted, What : String) is
+      begin
+         Assert (Got = Wanted, What & ": [" & Got & "] where [" & Wanted
+                 & "] was meant");
+      end Same;
+
+      Status : E.Error_Info;
+
+      Ds_Fenced : constant String :=
+        Tools.DeepSeek_Calls_Begin & Tools.DeepSeek_Call_Begin & "function"
+        & Tools.DeepSeek_Sep & "edit" & LF & "```json" & LF
+        & "{""count"": 2}" & LF & "```" & Tools.DeepSeek_Call_End
+        & Tools.DeepSeek_Calls_End;
+      Ds_Plain  : constant String :=
+        Tools.DeepSeek_Calls_Begin & Tools.DeepSeek_Call_Begin & "edit"
+        & Tools.DeepSeek_Sep & "{""count"": 3}" & Tools.DeepSeek_Call_End
+        & Tools.DeepSeek_Calls_End;
+   begin
+      Tools.Read (Defs, Offer, Status);
+      Assert (E.Is_Ok (Status), "the offer would not read");
+
+      --  Qwen3-Coder: one line break either side of a value is the form's;
+      --  the rest, and the schema's type, are the value's.
+      Same (Read ("<tool_call>" & LF & "<function=edit>" & LF
+                  & "<parameter=old_string>" & LF & "    return x" & LF
+                  & "</parameter>" & LF
+                  & "<parameter=version>" & LF & "3.10" & LF & "</parameter>"
+                  & LF & "<parameter=count>" & LF & "42" & LF & "</parameter>"
+                  & LF & "<parameter=flag>" & LF & "true" & LF & "</parameter>"
+                  & LF & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
+            "edit({""old_string"": ""    return x"", ""version"": ""3.10"", "
+            & """count"": 42, ""flag"": true})",
+            "a Qwen3-Coder call's values were trimmed or typed by their look");
+      Same (Read ("<function=other>" & LF & "<parameter=n>" & LF & "0123" & LF
+                  & "</parameter>" & LF & "</function>", Tools.Qwen_XML,
+                  Offered => False),
+            "other({""n"": ""0123""})",
+            "a leading nought was written as a bare number");
+
+      --  Llama 3's own spelling.
+      Same (Read ("{""name"": ""edit"", ""parameters"": {""count"": 1}}",
+                  Tools.Open_JSON),
+            "edit({""count"": 1})",
+            "a call under ""parameters"" was not read");
+
+      --  An object naming a tool not offered is the answer's text.
+      Same (Read ("{""answer"": {""name"": ""other"", ""arguments"": {}}}",
+                  Tools.Open_JSON),
+            "", "an object naming no tool on offer was read as a call");
+
+      --  Mistral's, both forms.
+      Same (Read ("Sure.[TOOL_CALLS]edit[ARGS]{""count"": 1}"
+                  & "[TOOL_CALLS]edit[ARGS]{""count"": 2}", Tools.Mistral_Call),
+            "edit({""count"": 1})edit({""count"": 2})",
+            "Mistral's [TOOL_CALLS]name[ARGS] calls were not read");
+      Same (Read ("[TOOL_CALLS][{""name"": ""edit"", ""arguments"": "
+                  & "{""count"": 3}}]", Tools.Mistral_Call),
+            "edit({""count"": 3})",
+            "Mistral's older list of calls was not read");
+      Same (Read ("[TOOL_CALLS]edit{""count"": 1}", Tools.Mistral_Call),
+            "error TOOLS_CALL_MALFORMED",
+            "a Mistral call with no [ARGS] was not refused");
+
+      --  DeepSeek's, both forms, in either syntax.
+      Same (Read ("Let me." & Ds_Fenced, Tools.DeepSeek_Fenced),
+            "edit({""count"": 2})", "DeepSeek R1's fenced call was not read");
+      Same (Read (Ds_Plain, Tools.DeepSeek_Plain),
+            "edit({""count"": 3})", "DeepSeek V3.1's call was not read");
+      Same (Read (Ds_Plain, Tools.DeepSeek_Fenced),
+            "edit({""count"": 3})",
+            "DeepSeek's two forms were not read by one reader");
+
+      --  And the templates that write them recognised.
+      Same (Model_Runner.Templates.Recognise
+              ("{{ '[TOOL_CALLS]' + name + '[ARGS]' + args }}"),
+            Model_Runner.Templates.Mistral_Shape,
+            "a Mistral template was not recognised");
+      Same (Model_Runner.Templates.Recognise
+              ("{{ '" & Tools.DeepSeek_Call_Begin & "' + tool['type'] + '"
+               & Tools.DeepSeek_Sep & "' }}"),
+            Model_Runner.Templates.DeepSeek_Shape,
+            "a DeepSeek R1 template was not recognised");
+      Same (Model_Runner.Templates.Recognise
+              ("{{ '" & Tools.DeepSeek_Call_Begin & "' + name + '"
+               & Tools.DeepSeek_Sep & "' }}"),
+            Model_Runner.Templates.DeepSeek_Plain_Shape,
+            "a DeepSeek V3.1 template was not recognised");
+      Assert (Tools."=" (Model_Runner.Templates.Syntax_Of
+                           (Model_Runner.Templates.Mistral_Shape),
+                         Tools.Mistral_Call)
+              and then Tools."=" (Model_Runner.Templates.Syntax_Of
+                                    (Model_Runner.Templates.DeepSeek_Shape),
+                                  Tools.DeepSeek_Fenced)
+              and then Tools."=" (Model_Runner.Templates.Syntax_Of
+                                    (Model_Runner.Templates.DeepSeek_Plain_Shape),
+                                  Tools.DeepSeek_Plain),
+              "a recognised shape was not read in its own syntax");
+      Assert (Model_Runner.Templates.Built_In
+                (Model_Runner.Templates.Mistral_Shape) = "",
+              "a shape no carried format writes had a template to stand in");
+
+      --  A run reads in the format's syntax, the envelope opened up.
+      Assert (Tools."=" (Model_Runner.Templates.Reading_Syntax
+                           (Model_Runner.Templates.Format_Name
+                              (Model_Runner.Templates.Format_Qwen3_Coder)),
+                         Tools.Qwen_XML)
+              and then Tools."=" (Model_Runner.Templates.Reading_Syntax (""),
+                                  Tools.Open_JSON),
+              "a run read calls in a syntax other than its format's");
+
+      --  The grammar holds the new forms as it holds the others.
+      Assert (Full_Set_Takes_In
+                (Tools.Mistral_Call,
+                 "Sure.[TOOL_CALLS]calculator[ARGS]{""a"":47,""op"":""+"","
+                 & """b"":89}"),
+              "a Mistral call was refused by its grammar");
+      Assert (not Full_Set_Takes_In
+                (Tools.Mistral_Call,
+                 "[TOOL_CALLS]calculator[ARGS]{""a"":47}"),
+              "a Mistral call missing arguments was taken");
+      Assert (Full_Set_Takes_In
+                (Tools.DeepSeek_Fenced,
+                 Tools.DeepSeek_Calls_Begin & Tools.DeepSeek_Call_Begin
+                 & "function" & Tools.DeepSeek_Sep & "calculator" & LF
+                 & "```json" & LF & "{""a"":47,""op"":""+"",""b"":89}" & LF
+                 & "```" & Tools.DeepSeek_Call_End & Tools.DeepSeek_Calls_End),
+              "a DeepSeek R1 call was refused by its grammar");
+      Assert (Full_Set_Takes_In
+                (Tools.DeepSeek_Plain,
+                 Tools.DeepSeek_Calls_Begin & Tools.DeepSeek_Call_Begin
+                 & "calculator" & Tools.DeepSeek_Sep
+                 & "{""a"":47,""op"":""+"",""b"":89}" & Tools.DeepSeek_Call_End
+                 & Tools.DeepSeek_Calls_End),
+              "a DeepSeek V3.1 call was refused by its grammar");
+
+      --  Any tag in prose, reasoning or a value but the call's own.
+      Assert (Full_Set_Takes_In
+                (Tools.Tool_Call_JSON,
+                 "<table><tr><td>a</td></tr></table> List<typename> <"),
+              "prose holding <table>, </td> or List<typename> was refused");
+      Assert (Full_Set_Takes_In
+                (Tools.Qwen_XML,
+                 "<think>the old one closed with </div> here</think>" & LF
+                 & "<tool_call>" & LF & "<function=write_file>" & LF
+                 & "<parameter=path>" & LF & "a.html" & LF & "</parameter>"
+                 & LF & "<parameter=content>" & LF & "<div>x</div>" & LF
+                 & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
+              "a </div> in reasoning or in a value was refused");
+      Assert (not Full_Set_Takes_In
+                (Tools.Tool_Call_JSON, "<tool_call>not a call"),
+              "the call's own opener was taken as prose");
+      Assert (not Full_Set_Takes_In
+                (Tools.Tool_Call_JSON, "a <<tool_call>not a call"),
+              "the call's opener after a '<' was taken as prose");
+      --  Where an answer schema leaves no prose, reasoning holding a tag.
+      Assert (Grammar_Takes_Answer
+                ("<think>a </div> b</think>{""answer"":4183}",
+                 "{""type"":""object"",""properties"":{""answer"":"
+                 & "{""type"":""integer""}},""required"":[""answer""]}"),
+              "reasoning holding </div> was refused ahead of a shaped answer");
+      --  The rule itself, over two literals: any text that holds neither.
+      declare
+         Rules : G.Compiled;
+         State : G.Matcher;
+
+         function Takes (Text : String) return Boolean is
+         begin
+            G.Start (Rules, State, Status);
+            G.Advance (Rules, State, Text, Status);
+            return E.Is_Ok (Status) and then G.Is_Complete (Rules, State);
+         end Takes;
+      begin
+         G.Compile
+           (Rules, Model_Runner.Grammar.Excluding ("root", "<ab>" & LF & "<cd>"),
+            Status);
+         Assert (E.Is_Ok (Status), "the excluding rule would not compile");
+         Assert (Takes ("x <a <c <abc <ce > <") and then not Takes ("x <ab> y")
+                 and then not Takes ("<<cd>") and then Takes (""),
+                 "the excluding rule took a literal or refused other text");
+         G.Close (Rules);
+      end;
+
+      --  And with nothing offered, any reply at all.
+      declare
+         None_Offered : Tools.Definitions;
+         Rules  : G.Compiled;
+         State  : G.Matcher;
+      begin
+         Tools.Read (None_Offered, "[]", Status);
+         Constraint.Compile_Call_Grammar (None_Offered, Rules, Status);
+         G.Start (Rules, State, Status);
+         G.Advance (Rules, State, "<div>x</div> </tool_call>", Status);
+         Assert (E.Is_Ok (Status) and then G.Is_Complete (Rules, State),
+                 "a reply with nothing offered was held from a closing tag");
+         G.Close (Rules);
+         Tools.Close (None_Offered);
+      end;
+
+      --  A MiniCPM or Mistral reply's words end at its first call.
+      Same (Span ("Let me add." & LF & "<function name=""calculator"">"
+                  & "<param name=""a"">1</param></function>",
+                  Tools.Function_XML),
+            "Let me add.", "a MiniCPM reply's words held its calls");
+      Same (Span ("Sure.[TOOL_CALLS]edit[ARGS]{}", Tools.Mistral_Call),
+            "Sure.", "a Mistral reply's words held its calls");
+      Same (Span ("#include <functional>" & LF & "<function=edit>" & LF
+                  & "</function>", Tools.Qwen_XML),
+            "#include <functional>",
+            "a Qwen reply's words were cut at text that is no call");
+
+      --  A call is read past the reasoning, not in it.
+      declare
+         Talk    : Model_Runner.Conversation.History;
+         Reading : E.Error_Info;
+      begin
+         Model_Runner.Conversation.Open (Talk, Status => Status);
+         Model_Runner.Conversation.Append
+           (Talk, Model_Runner.Conversation.User_Role, "go", Status);
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>I will write a <tool_call> block.</think>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": "
+                  & "{""count"": 1}}</tool_call>",
+            Status, Reading, Syntax => Tools.Tool_Call_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a <tool_call> named in the reasoning lost the real call: "
+                 & E.Error_Code'Image (Reading.Code));
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>{""name"": ""edit"", ""arguments"": {}}</think>"
+                  & " It is three.",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Model_Runner.Conversation.Call_Count
+                   (Talk, Model_Runner.Conversation.Length (Talk)) = 0,
+                 "a call drafted in the reasoning was taken");
+         Model_Runner.Conversation.Close (Talk);
+      end;
+
+      --  The answer follows the first close; reasoning cut short is none.
+      Same (Model_Runner.Agent.Answer_Of ("a</think>b</think>c"), "b</think>c",
+            "the answer followed the last close of the reasoning");
+      Same (Model_Runner.Agent.Answer_Of ("<think>still thinking"), "",
+            "reasoning cut short was taken for the answer");
+
+      --  A recipient is a name, and one on offer.
+      Same (Read (">>> import os" & LF & "print (1)", Tools.Recipient_JSON),
+            "", "prose after >>> was read as a call");
+      Same (Read (">>> import os" & LF & "print (1)", Tools.Recipient_JSON,
+                  Offered => False),
+            "", "prose after >>> was read as a call where nothing was offered");
+
+      --  Python's other escapes in a Gemma call, as the characters.
+      Same (Read ("```tool_code" & LF & "edit(old_string=""a\bb"")" & LF
+                  & "```", Tools.Python_Code),
+            "edit({""old_string"": ""a\bb""})",
+            "a \b in a Python call reached the tool as a backslash and a b");
+      Same (Span ("all" & ASCII.CR & LF & "Hello", Tools.Recipient_JSON),
+            "Hello", "a recipient of all written with CRLF was not all");
+      Tools.Close (Defs);
+   end Calls_Are_Read_As_Families_Write_Them;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3158,6 +3486,10 @@ package body Tests.Tools_Cases is
          "the Qwen3-Coder and MiniCPM tag syntaxes are shaped by the call "
          & "grammar: a parameter per tag, the schema in it, a think block "
          & "ahead, and a malformed tag refused");
+      Register_Routine
+        (T, Calls_Are_Read_As_Families_Write_Them'Access,
+         "calls are read as Qwen3-Coder, Llama 3, Mistral, DeepSeek, MiniCPM "
+         & "and Functionary write them, past the reasoning and not in it");
       Register_Routine
         (T, Recipient_Is_Shaped'Access,
          "Functionary's recipient form is shaped by the call grammar: a "

@@ -162,6 +162,33 @@ package Model_Runner.Grammar is
      (Item  : Compiled;
       State : Matcher) return Boolean;
 
+   --  A rule, in this grammar's own text, for any run of text that does not
+   --  hold Literal: every character but Literal's first, and every proper
+   --  beginning of Literal followed by a character that neither continues
+   --  it nor begins it again. A call grammar's prose is what comes before a
+   --  call's opener, and a tag's text what comes before its close; refused
+   --  every "<" followed by t, f or / instead, an answer could hold no
+   --  <table>, no </div> and no List<typename>.
+   --
+   --  Literal is read as UTF-8 and written back as escaped code points, so
+   --  any opener reads the same; it may hold several literals parted by
+   --  line breaks, and the text holds none of them. No literal may begin
+   --  another, and a literal's first character may not appear in it again
+   --  -- which holds of every opener and close this program writes; where
+   --  it does not, the rule is narrower than it says, never wider.
+   --
+   --  @param Rule Name of the rule written.
+   --  @param Literal What the text may not hold: one literal, or several
+   --    parted by line breaks, at most eight of at most 64 characters.
+   --  @param Ending True to let the text end on a proper beginning of
+   --    Literal, through a second rule named Rule & "_end", as a reply
+   --    that stops on a lone "<" may.
+   --  @return The rule's lines, each ended by a line break.
+   function Excluding
+     (Rule    : String;
+      Literal : String;
+      Ending  : Boolean := True) return String;
+
 private
 
    --  A code point, as a grammar matches them.

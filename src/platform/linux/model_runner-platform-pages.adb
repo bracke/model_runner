@@ -127,6 +127,10 @@ package body Model_Runner.Platform.Pages is
    --  through the process's own handle on it, and an aligned buffer the
    --  reads land in.
    O_Direct    : constant := 8#40000#;
+
+   --  And closed across an exec: a tool's child started while a matrix is
+   --  copied would otherwise hold the model's file open past the run.
+   O_Cloexec   : constant := 8#2000000#;
    Prot_Rw     : constant := 3;
    Map_Private_Anonymous : constant := 16#22#;
    Direct_Least : constant := 1_048_576;
@@ -173,8 +177,8 @@ package body Model_Runner.Platform.Pages is
 
       Handle : Long_Long_Integer;
       Offset : Model_Runner.Bytes.Byte_Count;
-      Again  : Interfaces.C.int;
-      Bounce : System.Address;
+      Again  : Interfaces.C.int := -1;
+      Bounce : System.Address := System.Null_Address;
    begin
       Done := False;
 
@@ -193,7 +197,7 @@ package body Model_Runner.Platform.Pages is
          C_Name : Interfaces.C.Strings.chars_ptr :=
            Interfaces.C.Strings.New_String (Name);
       begin
-         Again := C_Open (C_Name, O_Direct);
+         Again := C_Open (C_Name, O_Direct + O_Cloexec);
          Interfaces.C.Strings.Free (C_Name);
       end;
       if Again < 0 then
@@ -256,11 +260,31 @@ package body Model_Runner.Platform.Pages is
          if C_Munmap (Bounce, Direct_Chunk) /= 0 then
             null;
          end if;
+         Bounce := System.Null_Address;
          if C_Close (Again) /= 0 then
             null;
          end if;
+         Again := -1;
          Done := not Failed;
       end;
+   exception
+      --  A fault in the copy is a run not read here, and the caller reads
+      --  it through the mapping; the buffer and the second opening go
+      --  with it rather than staying for the life of the process.
+      when others =>
+         if Bounce /= System.Null_Address
+           and then Bounce /= To_Address (Integer_Address'Last)
+         then
+            if C_Munmap (Bounce, Direct_Chunk) /= 0 then
+               null;
+            end if;
+         end if;
+         if Again >= 0 then
+            if C_Close (Again) /= 0 then
+               null;
+            end if;
+         end if;
+         Done := False;
    end Read_Direct;
 
    procedure Fetch_Soon

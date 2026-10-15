@@ -6805,11 +6805,31 @@ package body Model_Runner.Platform.Device.Products is
    end Drop_Spares;
 
    procedure Fit_Budget
-     (Item : in out Engine; Bytes : Interfaces.Unsigned_64) is
+     (Item : in out Engine; Bytes : Interfaces.Unsigned_64)
+   is
+      --  The second heap is the host's memory as Open takes it: no more of
+      --  it than leaves Host_Reserve available, where the host says what
+      --  is. The host's budget for the device, which a fitting's room is
+      --  counted from, does not see the panels, the kept pages or the
+      --  host's own cache beside it, so the reserve is what keeps them.
+      --  What the second heap holds already is out of what is available
+      --  now, and counted back: a fitting made after the weights went over
+      --  would otherwise take them for the host's and give them back.
+      Available : constant Interfaces.Unsigned_64 :=
+        Model_Runner.Platform.Available_Memory;
+      Holding   : constant Interfaces.Unsigned_64 :=
+        Item.Tier_Kept (2) + Item.Tier_Spare (2);
+      Affords   : constant Interfaces.Unsigned_64 :=
+        (if Available = 0 then Interfaces.Unsigned_64'Last
+         elsif Available + Holding > Host_Reserve
+         then Available + Holding - Host_Reserve
+         else 0);
    begin
       Item.Tier_Limit (2) :=
         (if Item.Second >= 0
-         then Interfaces.Unsigned_64'Min (Bytes, Item.Second_Heap)
+         then Interfaces.Unsigned_64'Min
+                (Interfaces.Unsigned_64'Min (Bytes, Item.Second_Heap),
+                 Affords)
          else 0);
       Item.Tier_Limit (1) :=
         Interfaces.Unsigned_64'Min (Bytes - Item.Tier_Limit (2), Item.Heap);
@@ -6819,6 +6839,18 @@ package body Model_Runner.Platform.Device.Products is
    function Given_Back (Item : Engine) return Natural is (Item.Released);
 
    function Streamed_Copies (Item : Engine) return Natural is (Item.Streamed);
+
+   function Holds
+     (Item    : Engine;
+      Key     : System.Address;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural) return Boolean
+   is (Key /= System.Null_Address
+       and then Index_Find
+                  (Item, Key,
+                   Interfaces.Unsigned_64 (Rows) * Row_Bytes (Packing, Columns),
+                   Packing, Rows, Columns) /= 0);
 
    -------------------
    -- Cached_Bytes --
@@ -6969,6 +7001,17 @@ package body Model_Runner.Platform.Device.Products is
    end record;
 
    Prefetches : array (Prefetch_Index) of Prefetched;
+
+   function Prefetches_Held return Natural is
+      Held : Natural := 0;
+   begin
+      for Slot of Prefetches loop
+         if Slot.Used then
+            Held := Held + 1;
+         end if;
+      end loop;
+      return Held;
+   end Prefetches_Held;
 
    type Copy_Job is record
       Into  : System.Address := System.Null_Address;

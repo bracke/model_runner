@@ -4,6 +4,7 @@ with Ada.IO_Exceptions;
 with Ada.Streams.Stream_IO;
 with System.Storage_Elements;
 with Hostkit.Durability;
+with Hostkit.Fs;
 with Hostkit.Host;
 with Model_Runner.Platform;
 with Model_Runner.Text;
@@ -233,19 +234,36 @@ package body Model_Runner.Panel_Cache is
    procedure Finish (Item : in out Building; Ok : out Boolean) is
       Path : constant String := Ada.Strings.Unbounded.To_String (Item.Path);
       Part : constant String := Ada.Strings.Unbounded.To_String (Item.Part);
+
+      --  The part file goes, the mapping stays: a failure here leaves the
+      --  caller copying the panels out of the region before it releases
+      --  it, and a region unmapped under that copy was a fault.
+      procedure Drop_Part is
+      begin
+         if Ada.Directories.Exists (Part) then
+            Ada.Directories.Delete_File (Part);
+         end if;
+      exception
+         when others =>
+            null;
+      end Drop_Part;
    begin
       Ok := False;
       --  The panels on the device before the name says they are whole: a
       --  crash after a rename that outran the data would leave a file
       --  whose first panel verifies over zeros past it.
       if Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed then
-         Abandon (Item);
+         Drop_Part;
          return;
       end if;
-      if Ada.Directories.Exists (Path) then
-         Ada.Directories.Delete_File (Path);
+
+      --  Over whatever is there in one step: another load of the same
+      --  model may have named its own a moment before, and a delete and
+      --  a rename after it raced that load's.
+      if not Hostkit.Fs.Replace_File (Part, Path) then
+         Drop_Part;
+         return;
       end if;
-      Ada.Directories.Rename (Part, Path);
       Settle_Name (Path);
       Ok := True;
 
@@ -254,8 +272,10 @@ package body Model_Runner.Panel_Cache is
          Model_Runner.Platform.Panel_Cache_Most, Keep => Path);
    exception
       when others =>
-         Abandon (Item);
-         Ok := False;
+         --  Named already, the trim's trouble is the trim's.
+         if not Ok then
+            Drop_Part;
+         end if;
    end Finish;
 
    -------------
@@ -360,10 +380,10 @@ package body Model_Runner.Panel_Cache is
          if Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed then
             raise Ada.IO_Exceptions.Use_Error;
          end if;
-         if Ada.Directories.Exists (Path) then
-            Ada.Directories.Delete_File (Path);
+         --  Over another load's in one step, as Finish names its own.
+         if not Hostkit.Fs.Replace_File (Part, Path) then
+            raise Ada.IO_Exceptions.Use_Error;
          end if;
-         Ada.Directories.Rename (Part, Path);
          Settle_Name (Path);
 
          --  The cache kept to its bound, these panels whatever their size.

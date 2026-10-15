@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.GGUF.Containers.Reader;
@@ -90,6 +91,44 @@ package body Model_Runner.GGUF.Shards is
       return First (First'First .. First'Last - Suffix_Length)
              & "-" & Padded (Index) & "-of-" & Padded (Count) & ".gguf";
    end Shard_Path;
+
+   ----------------
+   -- Total_Size --
+   ----------------
+
+   function Total_Size (Path : String) return B.Byte_Count is
+
+      --  A file's bytes, or nought where it is not there to be sized.
+      function One (Name : String) return B.Byte_Count is
+      begin
+         if Name = "" or else not Ada.Directories.Exists (Name) then
+            return 0;
+         end if;
+         return B.Byte_Count (Ada.Directories.Size (Name));
+      exception
+         when others =>
+            return 0;
+      end One;
+   begin
+      if not Is_Shard_Name (Path) then
+         return One (Path);
+      end if;
+
+      declare
+         Count_At : constant Positive := Path'Last - 9;
+         Count    : constant Natural :=
+           Natural'Value (Path (Count_At .. Count_At + 4));
+         Total    : B.Byte_Count := 0;
+      begin
+         if Count = 0 then
+            return One (Path);
+         end if;
+         for Index in 1 .. Count loop
+            Total := Total + One (Shard_Path (Path, Index, Count));
+         end loop;
+         return Total;
+      end;
+   end Total_Size;
 
    ----------
    -- Open --

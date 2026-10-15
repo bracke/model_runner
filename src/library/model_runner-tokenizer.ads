@@ -558,6 +558,21 @@ private
       --  every prompt they are given as a word that begins a sentence.
       Space_Prefix  : Boolean := True;
 
+      --  Whether the WordPiece road lower-cases the text and takes its
+      --  accents off before looking pieces up, as the file's normalizer
+      --  says; see Load.
+      Lowercase     : Boolean := True;
+      Strip_Accents : Boolean := True;
+
+      --  Whether the whitespace beside a marker is taken off the text
+      --  around it, as the other runtime marks a few vocabularies' special
+      --  pieces by name: every marker of a Phi-3 file strips what follows
+      --  it but for <unk>, <s> and <|endoftext|>, and the mask of the jina
+      --  and ModernBERT embedders strips what comes before it. See
+      --  Strips_Right and Strips_Left in the body.
+      Right_Strips  : Boolean := False;
+      Left_Strip    : Token_Id := No_Token;
+
       --  The longest piece this vocabulary calls a control token or one of
       --  its author's own, which is as far as the scan for a marker in the
       --  text can ever have to look. Zero when there is no such piece, and

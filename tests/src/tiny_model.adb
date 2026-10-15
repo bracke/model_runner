@@ -82,7 +82,8 @@ package body Tiny_Model is
       Split_Latent    : Boolean := False;
       Caps            : Boolean := True;
       Alignment       : Natural := 0;
-      Header_Pad      : Natural := 0)
+      Header_Pad      : Natural := 0;
+      Template        : String := "")
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -996,10 +997,11 @@ package body Tiny_Model is
       --  conversation path can be exercised end to end without a real model.
       Fixtures.Add_String
         (Builder, "tokenizer.chat_template",
-         "{% for message in messages %}"
-         & "{{ message['role'] + ': ' + message['content'] + '\n' }}"
-         & "{% endfor %}"
-         & "{% if add_generation_prompt %}{{ 'assistant: ' }}{% endif %}");
+         (if Template /= "" then Template
+          else "{% for message in messages %}"
+               & "{{ message['role'] + ': ' + message['content'] + '\n' }}"
+               & "{% endfor %}"
+               & "{% if add_generation_prompt %}{{ 'assistant: ' }}{% endif %}"));
 
       --  The byte-pair vocabulary. Sixteen pieces again, so the embedding
       --  matrix fits either, and the same three control tokens at the same
@@ -2046,12 +2048,15 @@ package body Tiny_Model is
    --------------------
 
    procedure Write_Adapter
-     (Path    : String;
-      Half    : Boolean := False;
-      Foreign : Boolean := False;
-      Deep    : Boolean := False;
-      Rank    : Positive := 1;
-      Apart   : Boolean := False)
+     (Path     : String;
+      Half     : Boolean := False;
+      Foreign  : Boolean := False;
+      Deep     : Boolean := False;
+      Rank     : Positive := 1;
+      Apart    : Boolean := False;
+      Alpha    : Float := Adapter_Alpha;
+      Identity : Adapter_Identity := Low_Rank;
+      For_Arch : String := "llama")
    is
       Wide_Of : constant Natural :=
         (if Deep then Deep_Embedding else Embedding);
@@ -2071,10 +2076,19 @@ package body Tiny_Model is
          then "blk.0.attn_norm.weight"
          else "blk.0.attn_q.weight");
    begin
-      Fixtures.Add_String (Builder, "general.architecture", "llama");
-      Fixtures.Add_String (Builder, "general.type", "adapter");
-      Fixtures.Add_String (Builder, "adapter.type", "lora");
-      Fixtures.Add_F32 (Builder, "adapter.lora.alpha", Adapter_Alpha);
+      Fixtures.Add_String (Builder, "general.architecture", For_Arch);
+      Fixtures.Add_String
+        (Builder, "general.type",
+         (if Identity = Not_An_Adapter then "model" else "adapter"));
+      Fixtures.Add_String
+        (Builder, "adapter.type",
+         (if Identity = Not_Low_Rank then "control_vector" else "lora"));
+      if Alpha >= 0.0 then
+         Fixtures.Add_F32 (Builder, "adapter.lora.alpha", N.Real (Alpha));
+      end if;
+      if Identity = Activated then
+         Fixtures.Add_U32 (Builder, "adapter.alora.invocation_tokens", 4);
+      end if;
 
       --  The first of the pair is the rank by the input width; the second
       --  is the output width by the rank. GGUF writes the contiguous

@@ -2918,6 +2918,28 @@ begin
                return 0;
          end Whole;
 
+         --  The storage the session keeps its context in, named the way
+         --  the command names it: f32, f16, q8 or q4, and by default what
+         --  the command keeps by default.
+         function Cache_Asked return Model_Runner.Llama.Cache_Precision is
+            Named : constant String := Option ("--kv-cache", "f16");
+         begin
+            return
+              (if Named = Model_Runner.Llama.Cache_Name
+                           (Model_Runner.Llama.Halved)
+               then Model_Runner.Llama.Halved
+               elsif Named = Model_Runner.Llama.Cache_Name
+                               (Model_Runner.Llama.Eighth)
+               then Model_Runner.Llama.Eighth
+               elsif Named = Model_Runner.Llama.Cache_Name
+                               (Model_Runner.Llama.Fourth)
+               then Model_Runner.Llama.Fourth
+               elsif Named = Model_Runner.Llama.Cache_Name
+                               (Model_Runner.Llama.Exact)
+               then Model_Runner.Llama.Exact
+               else Model_Runner.Llama.Halved);
+         end Cache_Asked;
+
          --  A count of bytes, which is past what a Natural holds, with the
          --  K, M or G run takes after it. A bare number only, it once
          --  read "12G" as nothing, and a sitting meant at twelve gigabytes
@@ -2976,7 +2998,10 @@ begin
                   Model_Runner.CLI.Options.Normal);
                return Model_Runner.Backend.Backend_Name
                  (Model_Runner.CLI.Execute.Unasked_Backend
-                    (Option ("--model", ""), Bytes ("--device-memory"), Screen));
+                    (Option ("--model", ""), Bytes ("--device-memory"), Screen,
+                     Context_Size => Whole ("--context-size"),
+                     Cache        => Cache_Asked,
+                     Paged        => not Given ("--no-paged")));
             end;
          end Chosen;
 
@@ -3053,23 +3078,7 @@ begin
                   --  The storage the session keeps its context in, named the way
                   --  the command names it: f32, f16, q8 or q4, and by default
                   --  what the command keeps by default.
-                  Cache       =>
-                    (declare
-                       Named : constant String := Option ("--kv-cache", "f16");
-                     begin
-                       (if Named = Model_Runner.Llama.Cache_Name
-                                    (Model_Runner.Llama.Halved)
-                        then Model_Runner.Llama.Halved
-                        elsif Named = Model_Runner.Llama.Cache_Name
-                                        (Model_Runner.Llama.Eighth)
-                        then Model_Runner.Llama.Eighth
-                        elsif Named = Model_Runner.Llama.Cache_Name
-                                        (Model_Runner.Llama.Fourth)
-                        then Model_Runner.Llama.Fourth
-                        elsif Named = Model_Runner.Llama.Cache_Name
-                                        (Model_Runner.Llama.Exact)
-                        then Model_Runner.Llama.Exact
-                        else Model_Runner.Llama.Halved)),
+                  Cache       => Cache_Asked,
                   Backend     => Backend_Of (Chosen_Backend),
                   Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
                   Draft       => Option ("--draft-model", ""),

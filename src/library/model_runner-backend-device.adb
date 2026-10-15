@@ -76,6 +76,29 @@ package body Model_Runner.Backend.Device is
    --  has to get it.
    Opened_Budget : Interfaces.Unsigned_64 := 0;
 
+   --  The models prepared on the device in this opening, and the bytes
+   --  those beside the first add to every fitting of the budget; see
+   --  Note_Model. A ticket is the opening's number times Most_Models and
+   --  the model's place, so that one of an earlier opening is not counted
+   --  against this one's.
+   Most_Models   : constant := 64;
+   Opening       : Natural := 0;
+   Models_Noted  : Natural := 0;
+   Beside        : array (1 .. Most_Models) of Interfaces.Unsigned_64 :=
+     [others => 0];
+   Places_Used   : array (1 .. Most_Models) of Boolean := [others => False];
+
+   function Beside_Bytes return Interfaces.Unsigned_64 is
+      Sum : Interfaces.Unsigned_64 := 0;
+   begin
+      for Place in Beside'Range loop
+         if Places_Used (Place) then
+            Sum := Sum + Beside (Place);
+         end if;
+      end loop;
+      return Sum;
+   end Beside_Bytes;
+
    --  And how it was opened to wait, for the same reason.
    Opened_Slice    : Duration := 0.020;
    Opened_Patience : Duration := 60.0;
@@ -530,6 +553,10 @@ package body Model_Runner.Backend.Device is
       Sharing := Share_Host;
       Opened_Which := Which;
       Opened_Budget := Budget;
+      Opening := (Opening + 1) mod (Natural'Last / Most_Models - 1);
+      Models_Noted := 0;
+      Places_Used := [others => False];
+      Beside := [others => 0];
       Opened_Slice := Slice;
       Opened_Patience := Patience;
       Ready_Now := True;
@@ -617,9 +644,91 @@ package body Model_Runner.Backend.Device is
    procedure Fit_Budget (Bytes : Interfaces.Unsigned_64) is
    begin
       if Ready_Now and then Opened_Budget = 0 then
-         Products.Fit_Budget (Engine, Bytes);
+         Products.Fit_Budget
+           (Engine,
+            Interfaces.Unsigned_64'Min
+              (Bytes + Beside_Bytes, Products.Heaps (Engine)));
       end if;
    end Fit_Budget;
+
+   ----------------
+   -- Note_Model --
+   ----------------
+
+   procedure Note_Model (Ticket : out Natural) is
+   begin
+      Ticket := 0;
+      if not Ready_Now then
+         return;
+      end if;
+
+      Models_Noted := Models_Noted + 1;
+      if Models_Noted = 1 then
+         Ticket := (Opening + 1) * Most_Models;
+         return;
+      end if;
+
+      for Place in Places_Used'Range loop
+         if not Places_Used (Place) then
+            Places_Used (Place) := True;
+            Beside (Place) := 0;
+            Ticket := (Opening + 1) * Most_Models + Place;
+            return;
+         end if;
+      end loop;
+   end Note_Model;
+
+   ---------------
+   -- Is_Beside --
+   ---------------
+
+   function Is_Beside (Ticket : Natural) return Boolean
+   is (Ready_Now
+       and then Ticket / Most_Models = Opening + 1
+       and then Ticket mod Most_Models in Places_Used'Range
+       and then Places_Used (Ticket mod Most_Models));
+
+   ----------------
+   -- Add_Beside --
+   ----------------
+
+   procedure Add_Beside (Ticket : Natural; Bytes : Interfaces.Unsigned_64) is
+   begin
+      if Is_Beside (Ticket) then
+         Beside (Ticket mod Most_Models) :=
+           Beside (Ticket mod Most_Models) + Bytes;
+
+         --  Onto the budget fitted now, where one was fitted; a budget
+         --  the device opened with is the caller's and is held to.
+         if Opened_Budget = 0 then
+            Products.Fit_Budget
+              (Engine,
+               Interfaces.Unsigned_64'Min
+                 (Products.Capacity (Engine) + Bytes,
+                  Products.Heaps (Engine)));
+         end if;
+      end if;
+   end Add_Beside;
+
+   ------------------
+   -- Forget_Model --
+   ------------------
+
+   procedure Forget_Model (Ticket : in out Natural) is
+   begin
+      if Ready_Now and then Models_Noted > 0
+        and then Ticket / Most_Models = Opening + 1
+      then
+         if Ticket mod Most_Models = 0 then
+            Models_Noted := Models_Noted - 1;
+         elsif Is_Beside (Ticket) then
+            Places_Used (Ticket mod Most_Models) := False;
+            Beside (Ticket mod Most_Models) := 0;
+            Models_Noted := Models_Noted - 1;
+         end if;
+      end if;
+      Ticket := 0;
+   end Forget_Model;
 
    procedure Put_Cache_Halves
      (At_Value : Model_Runner.Numerics.Element_Count;
@@ -1021,8 +1130,11 @@ package body Model_Runner.Backend.Device is
            Model_Runner.Bytes.Byte_Count (Gates.Columns / 256) * 144
            * Model_Runner.Bytes.Byte_Count (Gates.Rows);
       begin
+         --  And the region within a gigabyte: the kernels count its bytes
+         --  in 32-bit words from its base, the up's slices past the gate's.
          if Ups.Offset < Gates.Offset + Gate_Bytes
            or else Ups.Offset - Gates.Offset - Gate_Bytes > 2**20
+           or else Ups.Offset - Gates.Offset + Gate_Bytes > 2**30
          then
             return (others => <>);
          end if;
@@ -1034,7 +1146,18 @@ package body Model_Runner.Backend.Device is
               Products.Pair_Pad
                 (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns));
          begin
-            if Gates.Offset < Model_Runner.Bytes.Byte_Count (Pad) then
+            --  Nor where the load held either alone, the region not
+            --  fitting: then the steps name the stacks as they were held.
+            if Gates.Offset < Model_Runner.Bytes.Byte_Count (Pad)
+              or else Products.Holds
+                        (Engine, At_Offset (Gates.Base, Gates.Offset),
+                         Products.Packed_Q4_K, Natural (Gates.Rows),
+                         Natural (Gates.Columns))
+              or else Products.Holds
+                        (Engine, At_Offset (Ups.Base, Ups.Offset),
+                         Products.Packed_Q4_K, Natural (Ups.Rows),
+                         Natural (Ups.Columns))
+            then
                return (others => <>);
             end if;
             return
@@ -1049,6 +1172,7 @@ package body Model_Runner.Backend.Device is
          end;
       end;
    end Pair_Of;
+
    --  Why a product that did not run did not run.
    --
    --  This backend has one operation and the device has it, so a product
@@ -2449,15 +2573,28 @@ package body Model_Runner.Backend.Device is
             Natural (V.Rows), Natural (V.Columns),
             At_Offset (V.Base, V.Offset));
       end One;
+
+      --  Where the two lie as one region, the region, as every step that
+      --  reads either names it; see Pair_Of. Fetched as two, neither copy
+      --  was ever taken and each held a slot until the model closed.
+      Pair : constant Stack_Pair := Pair_Of (Gate, Up);
    begin
       if not Ready_Now then
          return;
       end if;
-      One (Gate);
-      One (Up);
+      if Pair.Paired then
+         Products.Prefetch
+           (Engine, Gate.Base, Gate.Span, Pair.Start, Products.Packed_Q4_K,
+            Pair.Rows, Natural (Gate.Columns), Pair.Key);
+      else
+         One (Gate);
+         One (Up);
+      end if;
       One (Down);
       Products.Prefetch_Go (Engine);
    end Prefetch_Stacks;
+
+   function Prefetches_Held return Natural is (Products.Prefetches_Held);
 
    ------------------
    -- Start_Shared --
@@ -2882,6 +3019,9 @@ package body Model_Runner.Backend.Device is
          --  Where a mixture's gate and up stacks lie as one region, held
          --  and read as one; see Pair_Of.
          Pair : constant Stack_Pair := Pair_Of (Gate_Stack, Up_Stack);
+
+         --  Whether a token's gate and up went as one gated gather.
+         Fused_Pair : Boolean := False;
 
          --  Every step's rows, in order, so the offsets above are a sum rather
          --  than a tally kept by hand.
@@ -4401,11 +4541,16 @@ package body Model_Runner.Backend.Device is
                      Natural (Width), Used, Step_Route, Added,
                      Key => Pair.Key, Kept => False,
                      From_Step => Step_Norm_Feed, Unit => Unit);
-                  if not Added then
-                     return;
+
+                  --  Refused, nothing was added: the two gathers below.
+                  Fused_Pair := Added;
+                  if Added then
+                     Step_Room
+                       (Model_Runner.Numerics.Element_Count (Used * Feed));
                   end if;
-                  Step_Room (Model_Runner.Numerics.Element_Count (Used * Feed));
-               else
+               end if;
+
+               if not Fused_Pair then
                   Products.Add_Gathered_Product
                     (Steps, Gate_Stack.Base, Gate_Stack.Span,
                      (if Pair.Paired then Pair.Start else Gate_Stack.Offset),
@@ -5972,12 +6117,27 @@ package body Model_Runner.Backend.Device is
       Count   : Model_Runner.Numerics.Element_Count;
       Target  : T.Real_Array_Access;
       Status  : out E.Error_Info;
-      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null;
+      Gates   : T.View := T.Empty_View;
+      Ups     : T.View := T.Empty_View)
    is
       Steps   : Products.Sequence;
       Packing : Products.Weight_Packing;
       Added   : Boolean;
       Wanted  : constant Model_Runner.Numerics.Element_Count := Each * Count;
+
+      --  Where the stack is one of a pair held as one region, the region,
+      --  as every other step reading it names it; see Pair_Of.
+      Pair : constant Stack_Pair :=
+        (if T.Is_Present (Gates) and then T.Is_Present (Ups)
+         then Pair_Of (Gates, Ups) else (others => <>));
+      Same_Place : constant Boolean :=
+        Stack.Base = Gates.Base and then Stack.Rows = Gates.Rows
+        and then Stack.Columns = Gates.Columns;
+      Is_Gate : constant Boolean :=
+        Pair.Paired and then Same_Place and then Stack.Offset = Gates.Offset;
+      Is_Up   : constant Boolean :=
+        Pair.Paired and then Same_Place and then Stack.Offset = Ups.Offset;
    begin
       if not Ready_Now then
          Status := E.Make (E.Backend_Closed);
@@ -6001,10 +6161,19 @@ package body Model_Runner.Backend.Device is
 
       Products.Open_Sequence (Steps);
       Products.Add_Gathered_Product
-        (Steps, Stack.Base, Stack.Span, Stack.Offset, Packing,
-         Natural (Stack.Rows), Natural (Each), Natural (Stack.Columns),
+        (Steps, Stack.Base, Stack.Span,
+         (if Is_Gate or else Is_Up then Pair.Start else Stack.Offset),
+         Packing,
+         (if Is_Gate or else Is_Up then Pair.Rows else Natural (Stack.Rows)),
+         Natural (Each), Natural (Stack.Columns),
          [1 => Member, others => 0], 1, Added,
-         Key => At_Offset (Stack.Base, Stack.Offset));
+         Key =>
+           (if Is_Gate or else Is_Up then Pair.Key
+            else At_Offset (Stack.Base, Stack.Offset)),
+         Region_At =>
+           (if Is_Gate then Pair.Pad
+            elsif Is_Up then Pair.Pad + Natural (Pair.Pair_At)
+            else 0));
       if not Added then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -6266,11 +6435,19 @@ package body Model_Runner.Backend.Device is
             Pair.Rows, Natural (Gates.Columns), Key => Pair.Key, Ok => Ok);
       end;
 
+      --  The region not kept, each as it fits: the gate held alone, the
+      --  steps name the two apart (Pair_Of), and the up is held or not as
+      --  it was before the two were paired.
       if not Ok then
-         Declined
-           (Status,
-            Interfaces.Unsigned_64 (Pair.Rows)
-            * Interfaces.Unsigned_64 (T.Row_Bytes (Gates)));
+         declare
+            Second : E.Error_Info;
+         begin
+            Hold (Gates, Status);
+            Hold (Ups, Second);
+            if not E.Is_Error (Status) then
+               Status := Second;
+            end if;
+         end;
       end if;
    end Hold_Pair;
 

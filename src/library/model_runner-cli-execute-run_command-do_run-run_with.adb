@@ -50,6 +50,23 @@ begin
    Load
      (Item, Screen, Source, Container, Prepared, True,
       Reporter'Unchecked_Access, Cancel'Unchecked_Access, Condition);
+
+   --  A device the run chose itself, without a device option asked for,
+   --  that will not hold the model: said by the caller and run again on
+   --  the processor (Retry_On_CPU), not refused.
+   if E."=" (Condition.Code, E.Memory_Limit_Exceeded)
+     and then Model_Runner.Backend."="
+                (Item.Backend, Model_Runner.Backend.Backend_Device)
+     and then not Item.Backend_Set
+     and then not Item.Device_Memory_Set
+     and then not Item.Device_Index_Set
+     and then not Item.Device_Patience_Set
+   then
+      Cleanup;
+      Retry_On_CPU := True;
+      return;
+   end if;
+
    if E.Is_Error (Condition) then
       Fail (Condition);
       return;
@@ -687,11 +704,8 @@ begin
                --  object too, as a session's /work reads it: models
                --  asked for a call often write it without the envelope.
                Tool_Syntax =>
-                 (if Model_Runner.Tools."="
-                       (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
-                        Model_Runner.Tools.Tool_Call_JSON)
-                  then Model_Runner.Tools.Open_JSON
-                  else Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared))),
+                 Model_Runner.Templates.Reading_Syntax
+                   (L.Template_Format (Prepared)),
                Compact     => Item.Compact,
                Answer_Schema =>
                  (if Answer /= null then Answer.all else ""),
@@ -1756,8 +1770,16 @@ begin
             Asked   : Model_Runner.Tools.Calls;
             Reading : E.Error_Info;
          begin
+            --  In the shape the model's own format writes calls, against
+            --  the tools it was offered, as the agent and the chat read
+            --  them: read as JSON only, a Gemma, Qwen3-Coder, MiniCPM or
+            --  Functionary model's calls were never reported.
             Model_Runner.Tools.Read_Calls
-              (Asked, Gen.Generated_Text (Outcome), Reading);
+              (Asked, Gen.Generated_Text (Outcome), Reading,
+               Syntax  =>
+                 Model_Runner.Templates.Reading_Syntax
+                   (L.Template_Format (Prepared)),
+               Offered => Offered'Unchecked_Access);
             if E.Is_Error (Reading) then
                Pres.Report (Screen, Reading);
             end if;
@@ -1818,10 +1840,12 @@ begin
                      Keep => Save_Path);
                   --  And what a write killed part way left beside one --
                   --  not one another run is writing now, which is a
-                  --  partial too: only those left a while.
+                  --  partial too: only those left a while. Each write's
+                  --  own name (Partials.Beside), and the one name all
+                  --  shared once.
                   Model_Runner.Platform.Trim_Directory
-                    (Model_Runner.Platform.Cache_Directory, "*.kv.partial", 0,
-                     Keep => Save_Path & ".partial", Settled => 600.0);
+                    (Model_Runner.Platform.Cache_Directory, "*.kv*.partial", 0,
+                     Keep => Save_Path, Settled => 600.0);
                end if;
 
                if E.Is_Error (Condition) and then not Auto then

@@ -126,6 +126,11 @@ package Tiny_Model is
    --  files comparable.
    Adapter_Alpha : constant := 2.0;
 
+   --  What an adapter file says it is: a low-rank adapter; a file whose
+   --  general.type is not "adapter"; an adapter of another type than
+   --  "lora"; and one activated by an invocation sequence.
+   type Adapter_Identity is (Low_Rank, Not_An_Adapter, Not_Low_Rank, Activated);
+
    --  Write an adapter for the tiny model: one rank-one pair, on the query
    --  projection of layer zero.
    --
@@ -145,13 +150,22 @@ package Tiny_Model is
    --  @param Deep Size the pair for the k-quant fixture's widths rather
    --    than the narrow one's, which is what a model wide enough to be
    --    worth timing a merge on uses.
+   --  @param Alpha The alpha the file states, or a negative number for
+   --    none: a rank-r adapter is merged at alpha over r, and at the scale
+   --    alone where it states none or a nought.
+   --  @param Identity What the file says it is: a low-rank adapter, or
+   --    something else a merge has to refuse.
+   --  @param For_Arch The architecture the file says it adapts.
    procedure Write_Adapter
-     (Path    : String;
-      Half    : Boolean := False;
-      Foreign : Boolean := False;
-      Deep    : Boolean := False;
-      Rank    : Positive := 1;
-      Apart   : Boolean := False);
+     (Path     : String;
+      Half     : Boolean := False;
+      Foreign  : Boolean := False;
+      Deep     : Boolean := False;
+      Rank     : Positive := 1;
+      Apart    : Boolean := False;
+      Alpha    : Float := Adapter_Alpha;
+      Identity : Adapter_Identity := Low_Rank;
+      For_Arch : String := "llama");
 
    --  The shapes a supported model comes in, and the one place that says
    --  what each of them means.
@@ -408,6 +422,8 @@ package Tiny_Model is
    --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
    --    twenty-eight wide, as the real models' are, rather than four: the
    --    one width the device keeps a state in registers for.
+   --  @param Template The chat template the file carries, or empty for the
+   --    fixture's own small one.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -438,6 +454,7 @@ package Tiny_Model is
       Split_Latent    : Boolean := False;
       Caps            : Boolean := True;
       Alignment       : Natural := 0;
-      Header_Pad      : Natural := 0);
+      Header_Pad      : Natural := 0;
+      Template        : String := "");
 
 end Tiny_Model;
