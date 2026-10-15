@@ -52,10 +52,11 @@ A true/false value becomes the option's `--flag` or `--no-flag`. Any option
 the `run` command accepts works this way; a key the command does not take is
 ignored.
 
-Three keys are **not** options — they are places and a secret:
+Four keys are **not** options — a model, places and a secret:
 
 | key            | falls back for                | env override           |
 |----------------|-------------------------------|------------------------|
+| `model`        | the model `model_runner` and `run` take when none is named, in place of the list to choose from: a path, an alias or a Hugging Face reference | — |
 | `models-dir`   | where a bare model name is found and a download is kept | `MODEL_RUNNER_MODELS` |
 | `sessions-dir` | where a bare session name is kept | `MODEL_RUNNER_SESSIONS` |
 | `hf-token`     | the Hugging Face token for a gated repository | `HF_TOKEN` |

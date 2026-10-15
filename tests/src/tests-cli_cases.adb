@@ -15087,6 +15087,89 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Path);
    end The_Unasked_Device_Counts_The_Context;
 
+   --  The settings file's model is the one run takes where none is named:
+   --  a path, as a named one would be, and the list is not asked. Without
+   --  it, and no terminal to ask at, no model is named.
+   procedure The_Settings_Model_Stands_In_For_None_Named
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Model : constant String :=
+        Ada.Directories.Full_Name ("obj/default-model.gguf");
+      Home  : constant String := Ada.Directories.Full_Name ("obj/default-home");
+      Setup : Ada.Text_IO.File_Type;
+
+      --  The program itself, whose settings are read once a process: read
+      --  here, a model the file named would stand in for every later
+      --  test's missing one.
+      Plain  : constant String := "../bin/model_runner";
+      Binary : constant String :=
+        (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+
+      function Without_A_Model return Natural is
+         Args   : Project_Tools.Processes.Argument_Vectors.Vector;
+         Status : aliased Integer := 0;
+
+         procedure Add_Word (Word : String) is
+         begin
+            Project_Tools.Processes.Argument_Vectors.Append
+              (Args, Ada.Strings.Unbounded.To_Unbounded_String (Word));
+         end Add_Word;
+      begin
+         Add_Word ("run");
+         Add_Word ("--prompt");
+         Add_Word ("ab");
+         Add_Word ("--max-tokens");
+         Add_Word ("1");
+         Add_Word ("--backend");
+         Add_Word ("cpu");
+         declare
+            Ignored : constant String :=
+              Project_Tools.Processes.Command_Output
+                (Command   => Binary,
+                 Arguments => Args,
+                 Status    => Status'Access);
+            pragma Unreferenced (Ignored);
+         begin
+            return Natural (Status);
+         end;
+      end Without_A_Model;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      Ada.Directories.Create_Path (Home);
+      Ada.Text_IO.Create (Setup, Ada.Text_IO.Out_File, Home & "/settings.conf");
+      Ada.Text_IO.Put_Line (Setup, "model = " & Model);
+      Ada.Text_IO.Close (Setup);
+
+      Ada.Environment_Variables.Set
+        ("MODEL_RUNNER_CONFIG", Home & "/settings.conf");
+      declare
+         Status : constant Natural := Without_A_Model;
+      begin
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Assert (Status = 0,
+                 "the settings file's model did not run where none was "
+                 & "named: status" & Natural'Image (Status));
+      end;
+
+      Ada.Text_IO.Create (Setup, Ada.Text_IO.Out_File, Home & "/settings.conf");
+      Ada.Text_IO.Close (Setup);
+      Ada.Environment_Variables.Set
+        ("MODEL_RUNNER_CONFIG", Home & "/settings.conf");
+      declare
+         Status : constant Natural := Without_A_Model;
+      begin
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Assert (Status = E.Exit_Status (E.Make (E.CLI_Missing_Model_Path)),
+                 "with no model in the settings and none named, run ended "
+                 & "with status" & Natural'Image (Status));
+      end;
+   exception
+      when others =>
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         raise;
+   end The_Settings_Model_Stands_In_For_None_Named;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -15098,6 +15181,10 @@ package body Tests.CLI_Cases is
         (T, A_Named_Draft_Shares_The_Text'Access,
          "a draft named for a model shares its text, not only its count "
          & "of tokens");
+      Register_Routine
+        (T, The_Settings_Model_Stands_In_For_None_Named'Access,
+         "the settings file's model is the one run takes where none is "
+         & "named");
       Register_Routine
         (T, The_Unasked_Device_Counts_The_Context'Access,
          "the device run takes unasked counts the context the load will "

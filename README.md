@@ -61,8 +61,9 @@ $ model_runner run tiny-model.gguf --raw --prompt "ab" --seed 42 --temperature 0
 ## Commands
 
 ```
-model_runner [MODEL]         a session on a terminal: the model named, or
-                             one chosen from the models directory
+model_runner [MODEL]         a session on a terminal: the model named, the
+                             settings file's `model`, or one chosen from the
+                             models directory
 model_runner run MODEL       generate text from a model file
 model_runner embed MODEL     reduce a text to one vector
 model_runner inspect MODEL   report what a model file contains

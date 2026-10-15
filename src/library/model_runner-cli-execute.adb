@@ -5,6 +5,7 @@ with Hostkit.Durability;
 with Hostkit.Fs;
 with Model_Runner.CLI.Partials;
 
+with Model_Runner.Config;
 with Model_Runner.Platform;
 with Model_Runner.Text;
 with Model_Runner.CLI.Execute.Support;
@@ -130,8 +131,18 @@ package body Model_Runner.CLI.Execute is
                declare
                   Chosen : Opt.Command := Item;
                   Picked : Boolean;
+
+                  --  The settings file's own model, where it names one:
+                  --  a path, an alias or a reference, as one named here
+                  --  would be, and the list is not asked.
+                  Default : constant String := Model_Runner.Config.Value ("model");
                begin
-                  Choose_Model (Screen, Chosen.Model_Path, Picked);
+                  if Default /= "" then
+                     Chosen.Model_Path := T.To_Bounded (Default);
+                     Picked := True;
+                  else
+                     Choose_Model (Screen, Chosen.Model_Path, Picked);
+                  end if;
                   if Picked then
                      Do_Run (With_Panels (Resolved_Backend (Chosen, Screen)), Screen,
                              Catalog, Status);
