@@ -28,3 +28,8 @@ tests/fixtures/*.render text eol=lf
 tests/fixtures/*.txt text eol=lf
 tests/fixtures/*.vision-crossing text eol=lf
 tests/fixtures/*.jpg binary
+
+#  The tokenizer corpus holds carriage returns on purpose -- a line-ending
+#  case is one of the texts tokenizers disagree on -- so it is kept byte
+#  for byte, never normalized.
+tests/fixtures/tokenizer-cross.txt -text
