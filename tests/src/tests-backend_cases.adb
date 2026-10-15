@@ -8876,6 +8876,161 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end Listed_Walks_As_Integers_Stay_Close;
 
+   --  A long batch's listed product splits its experts: a run of at most
+   --  four positions is walked as integers, the rest tiled. The Q8_0 walk
+   --  took the first four vectors of every run, long ones too, and stored
+   --  them over what the tile stored -- whichever finished last won, and a
+   --  Q8_0 way down's prompt (Mellum's) answered differently run to run.
+   --  Sixty-four positions route to experts 0 and 1, three to expert 3: the
+   --  down projection's long runs are tiled with the rounding asked or not,
+   --  so their slots are the same bits either way, and only the short
+   --  run's three may differ.
+   procedure A_Split_Batch_Leaves_Its_Long_Runs_To_The_Tile
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type Products.Walk_Rounding;
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 256;
+      Feed    : constant := 256;
+      Count   : constant := 64;
+      Short   : constant := 3;
+      Padded  : constant Natural := Products.Run_Slots (Experts, Used, Count);
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1) := [others => 0.0];
+      Gates  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Width * Feed - 1);
+      Inputs : N.Real_Array (0 .. Count * Width - 1);
+
+      At_Listed : constant N.Element_Count :=
+        N.Element_Count (Count) * (Experts + 2 * Used + 32 * Experts + 3 * Used);
+      At_Down   : constant N.Element_Count :=
+        At_Listed + N.Element_Count (Count * Padded * Feed);
+      Room      : constant N.Element_Count :=
+        At_Down + N.Element_Count (Count * Padded * Width);
+
+      subtype Answers is N.Real_Array (0 .. Room - 1);
+      Plain, Rounded : Answers := [others => 0.0];
+
+      type Byte_Access is access B.Byte_Array;
+      G_Bytes : Byte_Access;
+      D_Bytes : Byte_Access;
+
+      procedure Run_With (Rounding : Products.Walk_Rounding; Into : out Answers) is
+         Steps : Products.Sequence;
+      begin
+         Into := [others => 0.0];
+         Products.Round_Walks (Engine, Rounding);
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address,
+            B.Byte_Count (Router'Length) * 4, 0,
+            Products.Values_F32, Experts, Width, Added, Kept => False);
+         Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+         Products.Add_Invert (Steps, Experts, Used, 2, Added);
+         Products.Add_Listed_Product
+           (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+            Products.Packed_Q4_K, Experts * Feed, Feed, Width, Experts, Used, 3,
+            Count, Added, Chained => False);
+         Assert (Added, "the listed gates were refused");
+         Products.Add_Listed_Product
+           (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+            Products.Packed_Q8_0, Experts * Width, Width, Feed, Experts, Used, 3,
+            Count, Added, By_Slot => True);
+         Assert (Added, "the listed downs were refused");
+         Products.Run (Engine, Steps, Inputs, Count, Into, Ok, Halted);
+         Assert (Ok, "the split batch was refused");
+      end Run_With;
+
+      Differing : Natural := 0;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Device_Notes.Skip ("for a split batch's long runs");
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+         if not Ready then
+            Devices.Close (Opened);
+         end if;
+      end if;
+      if not Ready then
+         Device_Notes.Skip ("for a split batch's long runs");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Round_Walks (Engine, Products.Rounds_Every);
+      Assert (Products.Rounds_Walks (Engine) = Products.Rounds_Every,
+              "the device here does not round its walks");
+
+      --  Every position scores experts 0 and 1 by its second element,
+      --  which is one; the first three score expert 3 far above them by
+      --  their first, the rest far below.
+      Router (0 * Width + 1) := 2.0;
+      Router (1 * Width + 1) := 1.5;
+      Router (2 * Width + 1) := -5.0;
+      Router (3 * Width + 0) := 10.0;
+      for Index in Gates'Range loop
+         Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
+      end loop;
+      for Index in Downs'Range loop
+         Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
+      end loop;
+      for P in 0 .. N.Element_Count (Count) - 1 loop
+         for C in 0 .. N.Element_Count (Width) - 1 loop
+            Inputs (P * Width + C) :=
+              (if C = 0 then (if P < Short then 1.0 else -1.0)
+               elsif C = 1 then 1.0
+               else N.Real (((P * Width + C) * 13) mod 17) / 17.0 - 0.45);
+         end loop;
+      end loop;
+      G_Bytes := new B.Byte_Array'(Fixtures.Encode_Q4_K (Gates.all));
+      D_Bytes := new B.Byte_Array'(Fixtures.Encode_Q8_0 (Downs.all));
+
+      Run_With (Products.Rounds_None, Plain);
+      Run_With (Products.Rounds_Every, Rounded);
+
+      --  The down projection's slots, a row of the width each.
+      declare
+         Row : N.Element_Count := At_Down;
+      begin
+         while Row + Width <= Room loop
+            for C in 0 .. N.Element_Count (Width) - 1 loop
+               if Plain (Row + C) /= Rounded (Row + C) then
+                  Differing := Differing + 1;
+                  exit;
+               end if;
+            end loop;
+            Row := Row + Width;
+         end loop;
+      end;
+
+      Assert (Differing > 0,
+              "no slot of the split batch was walked as integers");
+      Assert (Differing <= Short,
+              Natural'Image (Differing) & " slots of the way down answered "
+              & "otherwise rounded than not, where only the short run's"
+              & Natural'Image (Short) & " are walked: a long run's were "
+              & "walked over the tile");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Split_Batch_Leaves_Its_Long_Runs_To_The_Tile;
+
    procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -11792,6 +11947,10 @@ package body Tests.Backend_Cases is
         (T, A_Whole_Group_Bundle_Attends_As_A_Host_Does'Access,
          "a group of five, six or seven heads bundled whole attends as the "
          & "host works it out");
+      Register_Routine
+        (T, A_Split_Batch_Leaves_Its_Long_Runs_To_The_Tile'Access,
+         "a split batch leaves its long runs to the tile, the same bits "
+         & "rounded or not");
       Register_Routine
         (T, Listed_Walks_As_Integers_Stay_Close'Access,
          "a mixture's experts walking a few positions as integers stay "

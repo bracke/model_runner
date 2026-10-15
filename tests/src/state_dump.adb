@@ -3,6 +3,8 @@ with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
+with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
@@ -34,7 +36,8 @@ package body State_Dump is
       Backend : Model_Runner.Backend.Backend_Kind;
       Top     : Positive;
       Most    : Positive;
-      Result  : out Report)
+      Result  : out Report;
+      Round   : Boolean := False)
    is
       Source    : aliased Files.File_Source;
       Container : Containers.Container;
@@ -50,6 +53,27 @@ package body State_Dump is
       end Say;
    begin
       Result := (others => <>);
+
+      --  The device is the program's to open before a model is prepared
+      --  on it; prepared unopened, every batch answered that it was
+      --  closed.
+      if Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Device)
+      then
+         declare
+            Awake : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            if not Awake then
+               Say ("dump-states: no device answered");
+               Result.Failed := True;
+               return;
+            end if;
+            if Round then
+               Model_Runner.Backend.Device.Round_Walks
+                 (Model_Runner.Platform.Device.Products.Rounds_Every);
+            end if;
+         end;
+      end if;
 
       Files.Open (Source, Model, Status => Status);
       if E.Is_Ok (Status) then
@@ -155,6 +179,8 @@ package body State_Dump is
                               States => States, Every => Every,
                               Status => Status);
                            if E.Is_Error (Status) then
+                              --  The record is cut short, so the file is
+                              --  not one to read: said, and the run ends.
                               Say ("dump-states: a batch failed: "
                                    & E.Error_Code'Image (Status.Code));
                               Result.Failed := True;
@@ -231,11 +257,14 @@ package body State_Dump is
                         end;
                      end loop;
 
-                     Row_Of_States'Write (Out_At, Kept.all);
+                     if not Result.Failed then
+                        Row_Of_States'Write (Out_At, Kept.all);
+                     end if;
                      Free (Kept);
                   end;
 
                   L.Close (Live);
+                  exit when Result.Failed;
                   Result.Texts := Result.Texts + 1;
                   Result.Positions := Result.Positions + Last;
                   Say ("dump-states:" & Natural'Image (Result.Texts)

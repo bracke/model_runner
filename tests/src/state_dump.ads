@@ -35,6 +35,8 @@ package State_Dump is
    --  @param Top How many of the model's likeliest next tokens a position
    --    keeps.
    --  @param Most The most positions a text is read to.
+   --  @param Round Whether the device's walks of a few positions round
+   --    their activations to bytes, as run's default arithmetic has them.
    --  @param Result What was done.
    procedure Run
      (Model   : String;
@@ -43,6 +45,7 @@ package State_Dump is
       Backend : Model_Runner.Backend.Backend_Kind;
       Top     : Positive;
       Most    : Positive;
-      Result  : out Report);
+      Result  : out Report;
+      Round   : Boolean := False);
 
 end State_Dump;

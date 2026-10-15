@@ -2732,6 +2732,16 @@ void main() {
         return;
     }
 
+    //  A run longer than the walk's vectors is the matrix kernel's: a long
+    //  batch's experts with few positions walk, the rest tile. Without
+    //  this the walk took the first vectors of every long run as well and
+    //  stored them over what the tile stored, in whichever order the two
+    //  finished -- a Q8_0 way down's prompt answered differently run to
+    //  run, Mellum's text with it.
+    if (listed && run_count > VEC) {
+        return;
+    }
+
     //  Where each vector begins, and whether it is one: past the run or
     //  the batch it reads the last real one and is not stored.
     uint from_k[VEC];

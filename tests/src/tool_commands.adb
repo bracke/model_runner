@@ -197,10 +197,10 @@ package body Tool_Commands is
 
    Takes_Dump_States : aliased constant String :=
      "--model PATH --texts LIST --out PATH [--backend NAME] [--top N]"
-     & " [--most N]";
+     & " [--most N] [--arith f32|int8]";
 
    Opts_Dump_States : aliased constant String :=
-     " --model --texts --out --backend --top --most ";
+     " --model --texts --out --backend --top --most --arith ";
 
    Says_Token_Cross : aliased constant String :=
      "tokenize a corpus with each model, here and with llama-tokenize";
