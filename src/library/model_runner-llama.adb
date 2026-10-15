@@ -333,6 +333,15 @@ package body Model_Runner.Llama is
    --  product wrappers below are above its body.
    function Named_As (Item : Model'Class; Which : T.View) return String;
 
+   --  Tell a session's watcher what a product is about to read: an
+   --  expert's slice as that expert of its stack, any other matrix by its
+   --  own name, and nothing where the matrix has none.
+   procedure Tell
+     (Item   : Session;
+      Weight : T.View;
+      Values : Real_Array;
+      Rows   : Element_Count);
+
    --  Bytes one cache element occupies, in each of the two storages a
    --  session may ask for. Exact is the correctness baseline every published
    --  figure is taken against; halved is what it says, and the conformance
@@ -881,7 +890,8 @@ package body Model_Runner.Llama is
                Item.Named.all (Item.Named_Up) :=
                  (Base   => Result.Base,
                   Offset => Result.Offset,
-                  Name   => Model_Runner.Text.To_Bounded (Name));
+                  Name   => Model_Runner.Text.To_Bounded (Name),
+                  others => <>);
             end if;
          end if;
       end;
@@ -1228,6 +1238,31 @@ package body Model_Runner.Llama is
             return;
          end if;
       end if;
+
+      --  Each stack against its experts' count and length, so that a
+      --  product reading one expert is told as that expert.
+      declare
+         procedure Mark (Whole : T.View; Rows : Element_Count) is
+         begin
+            if Item.Named = null then
+               return;
+            end if;
+            for Index in 1 .. Item.Named_Up loop
+               if Item.Named.all (Index).Base = Whole.Base
+                 and then Item.Named.all (Index).Offset = Whole.Offset
+               then
+                  Item.Named.all (Index).Experts := Item.Settings.Experts;
+                  Item.Named.all (Index).Slice :=
+                    B.Byte_Count (Rows) * T.Row_Bytes (Whole);
+                  return;
+               end if;
+            end loop;
+         end Mark;
+      begin
+         Mark (Gates, Feed);
+         Mark (Ups, Feed);
+         Mark (Downs, Width);
+      end;
 
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
       Current.Gate_Stack := Gates;
@@ -2497,13 +2532,7 @@ package body Model_Runner.Llama is
    begin
       --  What this product was given, where anything asked to be told.
       if Item.Seen /= null then
-         declare
-            Which : constant String := Named_As (Item.Owner.all, Weight);
-         begin
-            if Which /= "" then
-               Item.Seen.Note (Which, Vector.all, 1);
-            end if;
-         end;
+         Tell (Item, Weight, Vector.all, 1);
       end if;
 
       case (if Item.Host_Feed then Model_Runner.Backend.Backend_CPU
@@ -2552,16 +2581,24 @@ package body Model_Runner.Llama is
       --  token's three projections are: hooking only the single product
       --  below would miss them, and did -- a watched run named the
       --  feed-forward's matrices and none of attention's.
+      --  Apart, each reads its own stretch of the activation, and is told
+      --  that stretch.
       if Item.Seen /= null then
          for Index in Weights'Range loop
-            declare
-               Which : constant String :=
-                 Named_As (Item.Owner.all, Weights (Index));
-            begin
-               if Which /= "" then
-                  Item.Seen.Note (Which, Vector.all, 1);
-               end if;
-            end;
+            if Apart = 0 then
+               Tell (Item, Weights (Index), Vector.all, 1);
+            else
+               declare
+                  From : constant Element_Count :=
+                    Vector.all'First
+                    + Element_Count (Index - Weights'First) * Apart;
+               begin
+                  Tell
+                    (Item, Weights (Index),
+                     Vector.all (From .. From + Weights (Index).Columns - 1),
+                     1);
+               end;
+            end if;
          end loop;
       end if;
 
@@ -2879,8 +2916,6 @@ package body Model_Runner.Llama is
    begin
       if Item.Seen /= null then
          declare
-            Which : constant String := Named_As (Item.Owner.all, Weight);
-
             --  Exactly the rows this product will read, and not whatever
             --  the buffer happens to be: a round hands a buffer sized for
             --  the whole batch and multiplies a few of its rows, so a
@@ -2888,9 +2923,9 @@ package body Model_Runner.Llama is
             --  column width several times too wide.
             Room : constant Element_Count := Count * Weight.Columns;
          begin
-            if Which /= "" and then Vectors.all'Length >= Room then
-               Item.Seen.Note
-                 (Which,
+            if Vectors.all'Length >= Room then
+               Tell
+                 (Item, Weight,
                   Vectors.all (Vectors.all'First
                                .. Vectors.all'First + Room - 1),
                   Count);
@@ -2957,12 +2992,11 @@ package body Model_Runner.Llama is
 
       if Item.Seen /= null then
          declare
-            Which : constant String := Named_As (Item.Owner.all, Slice);
             Room  : constant Element_Count := Count * Slice.Columns;
          begin
-            if Which /= "" and then Vectors.all'Length >= Room then
-               Item.Seen.Note
-                 (Which,
+            if Vectors.all'Length >= Room then
+               Tell
+                 (Item, Slice,
                   Vectors.all (Vectors.all'First
                                .. Vectors.all'First + Room - 1),
                   Count);
@@ -8579,6 +8613,56 @@ package body Model_Runner.Llama is
 
       return "";
    end Named_As;
+
+   ----------
+   -- Tell --
+   ----------
+
+   procedure Tell
+     (Item   : Session;
+      Weight : T.View;
+      Values : Real_Array;
+      Rows   : Element_Count)
+   is
+      Owner : Model'Class renames Item.Owner.all;
+   begin
+      if Item.Seen = null or else Owner.Named = null then
+         return;
+      end if;
+
+      --  An expert first: its slice begins where the stack does for the
+      --  first of them, and that one is not the stack.
+      for Index in 1 .. Owner.Named_Up loop
+         declare
+            Entry_Of : Named_View renames Owner.Named.all (Index);
+         begin
+            if Entry_Of.Experts > 0
+              and then Entry_Of.Base = Weight.Base
+              and then Weight.Offset >= Entry_Of.Offset
+              and then Weight.Offset
+                       < Entry_Of.Offset
+                         + B.Byte_Count (Entry_Of.Experts) * Entry_Of.Slice
+              and then B.Byte_Count (Weight.Rows) * T.Row_Bytes (Weight)
+                       = Entry_Of.Slice
+            then
+               Item.Seen.Note_Expert
+                 (Model_Runner.Text.To_String (Entry_Of.Name),
+                  Natural ((Weight.Offset - Entry_Of.Offset)
+                           / Entry_Of.Slice),
+                  Entry_Of.Experts, Values, Rows);
+               return;
+            end if;
+         end;
+      end loop;
+
+      declare
+         Which : constant String := Named_As (Owner, Weight);
+      begin
+         if Which /= "" then
+            Item.Seen.Note (Which, Values, Rows);
+         end if;
+      end;
+   end Tell;
 
    function Committed_Token (Item : Session; Index : Natural) return Token_Id is
    begin

@@ -1737,6 +1737,29 @@ package Model_Runner.Llama is
       Values : Real_Array;
       Rows   : Element_Count) is abstract;
 
+   --  One expert's product, before it happens: a stack of experts is one
+   --  tensor in the file, and what a watcher wants is which expert of it
+   --  a row was routed to -- llama-imatrix keeps a sum and a count an
+   --  expert, under the stack's name. Told for every product, however few
+   --  rows the expert was given, as the other runtime collects every
+   --  routed product. A watcher that does not care is told nothing.
+   --
+   --  @param Item The watcher.
+   --  @param Which The stack's name, as the file names it.
+   --  @param Expert Which expert of the stack, from zero.
+   --  @param Experts How many experts the stack holds.
+   --  @param Values The vectors about to be multiplied by the expert, laid
+   --    out a row at a time: the rows routed to it, and for the down
+   --    projection their gated activations.
+   --  @param Rows How many vectors Values holds.
+   procedure Note_Expert
+     (Item    : in out Watcher;
+      Which   : String;
+      Expert  : Natural;
+      Experts : Positive;
+      Values  : Real_Array;
+      Rows    : Element_Count) is null;
+
    type Watcher_Access is access all Watcher'Class;
 
    --  Have a session report every product to a watcher.
@@ -2830,10 +2853,15 @@ private
 
    --  A matrix's name against where its bytes begin, for a watcher to ask
    --  which matrix a product is about to read.
+   --  A stack of experts says how many it holds and how long one is, so
+   --  that a product reading one expert's slice can be told as that
+   --  expert's.
    type Named_View is record
-      Base   : System.Address := System.Null_Address;
-      Offset : Model_Runner.Bytes.Byte_Count := 0;
-      Name   : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Base    : System.Address := System.Null_Address;
+      Offset  : Model_Runner.Bytes.Byte_Count := 0;
+      Name    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Experts : Natural := 0;
+      Slice   : Model_Runner.Bytes.Byte_Count := 0;
    end record;
 
    type Named_View_List is array (Positive range <>) of Named_View;

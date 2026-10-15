@@ -35,7 +35,12 @@ is
      and then not Grouped (Settings)
      and then T.Is_Present (Current.Gate_Stack)
      and then T.Is_Present (Current.Up_Stack)
-     and then T.Is_Present (Current.Down_Stack);
+     and then T.Is_Present (Current.Down_Stack)
+
+     --  A watched run goes the plain road below, whose products tell each
+     --  expert what it was given, the gated activation for its down
+     --  projection among them; the gathered sequence tells nothing.
+     and then Item.Seen = null;
 begin
    --  On the pool, one position goes the way a batch does: an expert to
    --  a worker, whole, and the pool woken once a layer. Cut across the
@@ -54,6 +59,7 @@ begin
      and then Workers_CPU."/=" (Item.Team, null)
      and then Input /= Result
      and then Result.all'Length = Input.all'Length
+     and then Item.Seen = null
    then
       declare
          Grouped : Boolean;
@@ -72,16 +78,6 @@ begin
            (0 .. Used - 1);
          Shares : Real_Array (0 .. Element_Count (Used) - 1);
       begin
-         if Item.Seen /= null then
-            declare
-               Which : constant String :=
-                 Named_As (Item.Owner.all, Current.Router);
-            begin
-               if Which /= "" then
-                  Item.Seen.Note (Which, Input.all, 1);
-               end if;
-            end;
-         end if;
 
          Model_Runner.Backend.Device.Dispatch_Route
            (Current.Router, Current.Router_Bias, Settings.Experts, Used,
@@ -239,30 +235,6 @@ begin
                Status := E.Make (E.Memory_Allocation_Failed);
                return;
             end if;
-         end if;
-
-         --  What each product was given, where anything asked to be
-         --  told: the same names the slice-at-a-time road notes.
-         if Item.Seen /= null then
-            for Slot in Chosen'Range loop
-               declare
-                  Which : Expert renames
-                    Current.Experts.all (Chosen (Slot));
-
-                  Gate_Name : constant String :=
-                    Named_As (Item.Owner.all, Which.Gate);
-                  Up_Name   : constant String :=
-                    Named_As (Item.Owner.all, Which.Up);
-               begin
-                  if Gate_Name /= "" then
-                     Item.Seen.Note (Gate_Name, Input.all, 1);
-                  end if;
-
-                  if Up_Name /= "" then
-                     Item.Seen.Note (Up_Name, Input.all, 1);
-                  end if;
-               end;
-            end loop;
          end if;
 
          declare

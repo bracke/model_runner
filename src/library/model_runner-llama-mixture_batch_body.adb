@@ -33,11 +33,14 @@ is
    --  each. Three megabytes a layer beside the experts' thirty-five,
    --  and 0.14 ms a layer of a four-row batch where the bytes were
    --  0.09 -- and on a token, the same three dispatches for one row.
+   --  Not while a watcher listens: the workers run the kernels directly,
+   --  and the road an expert at a time below tells each expert its rows.
    On_Pool : constant Boolean :=
      (Item.Host_Feed
       or else Model_Runner.Backend."="
                 (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU))
-     and then Workers_CPU."/=" (Item.Team, null);
+     and then Workers_CPU."/=" (Item.Team, null)
+     and then Item.Seen = null;
 
    --  Whether the shared expert goes as three products of its own, cut
    --  across the whole pool, rather than as one item of the experts'
@@ -976,35 +979,6 @@ begin
                end loop;
             end loop;
 
-            --  What each product was given, where anything asked to be
-            --  told, said here on the submitting task as the road below
-            --  says it.
-            if Item.Seen /= null and then Counts (Which) > 0 then
-               declare
-                  Expert_At : Expert renames Current.Experts.all (Which);
-                  Gate_Name : constant String :=
-                    Named_As (Item.Owner.all, Expert_At.Gate);
-                  Up_Name   : constant String :=
-                    Named_As (Item.Owner.all, Expert_At.Up);
-                  Down_Name : constant String :=
-                    Named_As (Item.Owner.all, Expert_At.Down);
-               begin
-                  --  The gathered input is not built yet on this task;
-                  --  a watcher is told the positions' own rows instead,
-                  --  which is what the products read, gathered.
-                  if Gate_Name /= "" or else Up_Name /= ""
-                    or else Down_Name /= ""
-                  then
-                     Item.Seen.Note
-                       ((if Gate_Name /= "" then Gate_Name
-                         elsif Up_Name /= "" then Up_Name
-                         else Down_Name),
-                        Rows.all (Rows.all'First
-                                  .. Rows.all'First + Count * Width - 1),
-                        Count);
-                  end if;
-               end;
-            end if;
          end loop;
 
          --  The runs: each expert's members in Chunk_Size at a time.
@@ -1232,34 +1206,8 @@ begin
               and then T.Is_Present (Current.Gate_Stack)
               and then T.Is_Present (Current.Up_Stack)
               and then T.Is_Present (Current.Down_Stack)
+              and then Item.Seen = null
             then
-               if Item.Seen /= null then
-                  declare
-                     Room : constant Element_Count := Held * Width;
-                     Gate_Name : constant String :=
-                       Named_As (Item.Owner.all, Expert_At.Gate);
-                     Up_Name   : constant String :=
-                       Named_As (Item.Owner.all, Expert_At.Up);
-                  begin
-                     if Gate_Name /= "" then
-                        Item.Seen.Note
-                          (Gate_Name,
-                           Item.Gather_In.all
-                             (Item.Gather_In.all'First
-                              .. Item.Gather_In.all'First + Room - 1),
-                           Held);
-                     end if;
-
-                     if Up_Name /= "" then
-                        Item.Seen.Note
-                          (Up_Name,
-                           Item.Gather_In.all
-                             (Item.Gather_In.all'First
-                              .. Item.Gather_In.all'First + Room - 1),
-                           Held);
-                     end if;
-                  end;
-               end if;
 
                Model_Runner.Backend.Device.Dispatch_Expert
                  (Current.Gate_Stack, Current.Up_Stack,

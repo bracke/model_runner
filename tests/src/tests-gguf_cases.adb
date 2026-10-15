@@ -1326,6 +1326,187 @@ package body Tests.GGUF_Cases is
               "a name shorter than the layer prefix was counted");
    end A_Matrix_Is_Collected_As_Llama_Collects_It;
 
+   --  A mixture's experts are collected as llama-imatrix collects them:
+   --  under the stack's name, a row of sums and a count an expert, every
+   --  routed product counted however few rows it had, and the down
+   --  projection told its gated activation rather than the layer's input.
+   procedure A_Mixture_Matrix_Keeps_An_Expert_Apart
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Model_Path : constant String := "obj/imatrix-mixture.gguf";
+      Into       : constant String := "obj/imatrix-mixture-matrix.gguf";
+      Chunk      : constant := 16;
+      Chunks     : constant := 2;
+      Used       : constant := 2;
+
+      function Bits is new Ada.Unchecked_Conversion
+        (Interfaces.Unsigned_32, Interfaces.IEEE_Float_32);
+
+      Model_Source, Source : Model_Runner.Byte_Sources.Files.File_Source;
+      Model, Item          : Containers.Container;
+      Status               : E.Error_Info;
+      Result               : Imatrix_Run.Report;
+      Stacks               : Natural := 0;
+
+      function Reals (Name : String) return N.Real_Array is
+         Which : constant Natural := Containers.Find_Tensor (Item, Name);
+         Held  : B.Byte_Array
+           (0 .. B.Byte_Count (Containers.Tensor_Bytes (Item, Which)) - 1);
+         Said  : E.Error_Info;
+         Out_Of : N.Real_Array (0 .. N.Element_Count (Held'Length / 4) - 1);
+      begin
+         Model_Runner.Byte_Sources.Files.Read
+           (Source, B.Byte_Count (Containers.Tensor_Offset (Item, Which)),
+            Held, Said);
+         for Index in Out_Of'Range loop
+            declare
+               At_Byte : constant B.Byte_Count := B.Byte_Count (Index) * 4;
+               Word    : Interfaces.Unsigned_32 := 0;
+            begin
+               for K in reverse 0 .. 3 loop
+                  Word := Interfaces.Shift_Left (Word, 8)
+                    or Interfaces.Unsigned_32 (Held (At_Byte + B.Byte_Count (K)));
+               end loop;
+               Out_Of (Index) := N.Real (Bits (Word));
+            end;
+         end loop;
+         return Out_Of;
+      end Reals;
+   begin
+      Tiny_Model.Write
+        (Model_Path, Room => 64, Kind => Tiny_Model.Qwen3_MoE,
+         Shape => Tiny_Model.Mixed);
+      Project_Tools.Files.Write_Raw_File
+        ("obj/imatrix-corpus.txt", String'(1 .. 48 => 'c'));
+      Imatrix_Run.Run
+        (Model_Path, "obj/imatrix-corpus.txt", Chunk => Chunk,
+         Chunks => Chunks, Threads => 2, Into => Into, Result => Result);
+      Assert (Result.Ran,
+              "no matrix was collected: "
+              & Result.Detail (1 .. Result.Detail_Up));
+
+      Model_Runner.Byte_Sources.Files.Open
+        (Model_Source, Model_Path, Status => Status);
+      Containers.Reader.Parse (Model, Model_Source, Status => Status);
+      Assert (E.Is_Ok (Status), "the model did not parse");
+      Model_Runner.Byte_Sources.Files.Open (Source, Into, Status => Status);
+      Containers.Reader.Parse (Item, Source, Status => Status);
+      Assert (E.Is_Ok (Status), "the matrix did not parse");
+
+      for Which in 1 .. Containers.Tensor_Count (Model) loop
+         declare
+            Name : constant String := Containers.Tensor_Name (Model, Which);
+            Stack : constant Boolean :=
+              Containers.Tensor_Rank (Model, Which) = 3;
+         begin
+            if Stack then
+               Stacks := Stacks + 1;
+               declare
+                  Sums_At : constant Natural :=
+                    Containers.Find_Tensor (Item, Name & ".in_sum2");
+                  Counts_At : constant Natural :=
+                    Containers.Find_Tensor (Item, Name & ".counts");
+                  Experts : constant Natural :=
+                    Natural (Containers.Tensor_Dimension (Model, Which, 3));
+                  Columns : constant Natural :=
+                    Natural (Containers.Tensor_Dimension (Model, Which, 1));
+               begin
+                  Assert (Sums_At /= 0 and then Counts_At /= 0,
+                          Name & " was not collected; every routed "
+                          & "product is");
+                  Assert (Containers.Tensor_Rank (Item, Sums_At) = 2
+                          and then Natural (Containers.Tensor_Dimension
+                                              (Item, Sums_At, 1)) = Columns
+                          and then Natural (Containers.Tensor_Dimension
+                                              (Item, Sums_At, 2)) = Experts,
+                          Name & "'s sums are not a row an expert");
+                  Assert (Natural (Containers.Tensor_Dimension
+                                     (Item, Counts_At, 1)) = 1
+                          and then Natural (Containers.Tensor_Dimension
+                                              (Item, Counts_At, 2)) = Experts,
+                          Name & "'s counts are not one an expert");
+
+                  declare
+                     Counts : constant N.Real_Array :=
+                       Reals (Name & ".counts");
+                     Total  : N.Real := 0.0;
+                     Busy   : Natural := 0;
+                  begin
+                     for C of Counts loop
+                        Total := Total + C;
+                        if C > 0.0 then
+                           Busy := Busy + 1;
+                        end if;
+                     end loop;
+                     Assert (Natural (Total) = Chunk * Chunks * Used,
+                             Name & " counted" & Natural'Image (Natural (Total))
+                             & " routed rows, where"
+                             & Natural'Image (Chunk * Chunks * Used)
+                             & " were routed");
+                     Assert (Busy >= 2,
+                             Name & " gave every row to one expert");
+
+                     --  Each expert's row of sums is its own: squares
+                     --  where it was given rows, and none where it was
+                     --  not.
+                     declare
+                        Sums : constant N.Real_Array :=
+                          Reals (Name & ".in_sum2");
+                     begin
+                        for Expert in 0 .. Experts - 1 loop
+                           declare
+                              Mass : N.Real := 0.0;
+                              From : constant N.Element_Count :=
+                                Sums'First
+                                + N.Element_Count (Expert)
+                                  * N.Element_Count (Columns);
+                           begin
+                              for Column in 0 .. N.Element_Count (Columns) - 1
+                              loop
+                                 Mass := Mass + Sums (From + Column);
+                              end loop;
+                              Assert
+                                ((Mass > 0.0)
+                                 = (Counts (Counts'First
+                                            + N.Element_Count (Expert)) > 0.0),
+                                 Name & " expert" & Natural'Image (Expert)
+                                 & "'s sums do not follow its count");
+                           end;
+                        end loop;
+                     end;
+                  end;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Assert (Stacks > 0, "the fixture has no stacks of experts");
+
+      --  Gate and up read the same rows; down reads what the gate made of
+      --  them, which is not the layer's input.
+      declare
+         Gate : constant N.Real_Array :=
+           Reals ("blk.0.ffn_gate_exps.weight.in_sum2");
+         Up   : constant N.Real_Array :=
+           Reals ("blk.0.ffn_up_exps.weight.in_sum2");
+         Down : constant N.Real_Array :=
+           Reals ("blk.0.ffn_down_exps.weight.in_sum2");
+         use type N.Real_Array;
+      begin
+         Assert (Gate = Up, "the gate and the up projection were told "
+                 & "different rows of one input");
+         Assert (Down'Length /= Gate'Length or else Down /= Gate,
+                 "the down projection was told the layer's input");
+      end;
+
+      Containers.Close (Item);
+      Model_Runner.Byte_Sources.Files.Close (Source);
+      Containers.Close (Model);
+      Model_Runner.Byte_Sources.Files.Close (Model_Source);
+   end A_Mixture_Matrix_Keeps_An_Expert_Apart;
+
    procedure Claimed_Array_Is_Refused
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -9921,6 +10102,10 @@ package body Tests.GGUF_Cases is
          "a quantized file is what llama-quantize writes around its "
          & "tensors: exclusions, fallbacks, alignment, key types, and "
          & "experts weighted one at a time");
+      Register_Routine
+        (T, A_Mixture_Matrix_Keeps_An_Expert_Apart'Access,
+         "a mixture's matrix keeps an expert apart: a row of sums and a "
+         & "count an expert, under the stack's name");
       Register_Routine
         (T, A_Matrix_Is_Collected_As_Llama_Collects_It'Access,
          "an importance matrix is collected as llama-imatrix collects one: "

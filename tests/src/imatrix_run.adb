@@ -40,12 +40,22 @@ package body Imatrix_Run is
    use type Ada.Real_Time.Time;
    use type Model_Runner.GGUF.U64;
 
+   --  How many rows each expert of a stack was given.
+   type Count_List is array (Natural range <>) of Long_Long_Integer;
+   type Count_List_Access is access Count_List;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Count_List, Count_List_Access);
+
    --  One matrix's running total: a sum of squares a column, and how many
-   --  rows went into them.
+   --  rows went into them. A stack of experts keeps a sum and a count an
+   --  expert, the sums end to end, as llama-imatrix does.
    type Tally is record
-      Name  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
-      Sums  : T.Real_Array_Access := null;
-      Rows  : Long_Long_Integer := 0;
+      Name    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Sums    : T.Real_Array_Access := null;
+      Rows    : Long_Long_Integer := 0;
+      Experts : Natural := 0;
+      Counts  : Count_List_Access := null;
    end record;
 
    --  As many as the model has: a list that doubles when it fills. It was
@@ -83,6 +93,76 @@ package body Imatrix_Run is
       Values : N.Real_Array;
       Rows   : N.Element_Count);
 
+   overriding procedure Note_Expert
+     (Item    : in out Collector;
+      Which   : String;
+      Expert  : Natural;
+      Experts : Positive;
+      Values  : N.Real_Array;
+      Rows    : N.Element_Count);
+
+   --  The tally a matrix adds into, made with Size sums the first time it
+   --  is met; zero where there is no room for it.
+   function Slot_Of
+     (Item  : in out Collector;
+      Which : String;
+      Size  : N.Element_Count) return Natural
+   is
+   begin
+      for Index in 1 .. Item.Up loop
+         if Model_Runner.Text.To_String (Item.Held (Index).Name) = Which then
+            return Index;
+         end if;
+      end loop;
+
+      if Item.Held = null or else Item.Up = Item.Held'Length then
+         declare
+            Grown : constant Tally_List_Access :=
+              new Tally_List
+                (1 .. (if Item.Held = null then 8
+                       else 2 * Item.Held'Length));
+         begin
+            if Item.Held /= null then
+               Grown (1 .. Item.Up) := Item.Held (1 .. Item.Up);
+               Free (Item.Held);
+            end if;
+            Item.Held := Grown;
+         end;
+      end if;
+
+      Item.Up := Item.Up + 1;
+      Item.Held (Item.Up).Name := Model_Runner.Text.To_Bounded (Which);
+      T.Allocate (Size, Item.Held (Item.Up).Sums);
+      if Item.Held (Item.Up).Sums = null then
+         Item.Up := Item.Up - 1;
+         return 0;
+      end if;
+      Item.Held (Item.Up).Sums.all := [others => 0.0];
+      return Item.Up;
+   end Slot_Of;
+
+   --  Each row's squares into Sums from From on: the same column of every
+   --  row adds into the same place.
+   procedure Add_Squares
+     (Sums   : in out N.Real_Array;
+      From   : N.Element_Count;
+      Values : N.Real_Array;
+      Rows   : N.Element_Count;
+      Width  : N.Element_Count) is
+   begin
+      for Row in 0 .. Rows - 1 loop
+         declare
+            At_Row : constant N.Element_Count := Values'First + Row * Width;
+         begin
+            for Column in 0 .. Width - 1 loop
+               Sums (From + Column) :=
+                 Sums (From + Column)
+                 + Values (At_Row + Column) * Values (At_Row + Column);
+            end loop;
+         end;
+      end loop;
+   end Add_Squares;
+
    overriding procedure Note
      (Item   : in out Collector;
       Which  : String;
@@ -91,67 +171,72 @@ package body Imatrix_Run is
    is
       Width : constant N.Element_Count :=
         (if Rows = 0 then 0 else Values'Length / Rows);
-      Slot  : Natural := 0;
+      Slot  : Natural;
    begin
       if Width = 0 or else not Counted (Which, Natural (Rows)) then
          return;
       end if;
 
-      for Index in 1 .. Item.Up loop
-         if Model_Runner.Text.To_String (Item.Held (Index).Name) = Which then
-            Slot := Index;
-            exit;
-         end if;
-      end loop;
-
-      if Slot = 0 then
-         if Item.Held = null or else Item.Up = Item.Held'Length then
-            declare
-               Grown : constant Tally_List_Access :=
-                 new Tally_List
-                   (1 .. (if Item.Held = null then 8
-                          else 2 * Item.Held'Length));
-            begin
-               if Item.Held /= null then
-                  Grown (1 .. Item.Up) := Item.Held (1 .. Item.Up);
-                  Free (Item.Held);
-               end if;
-               Item.Held := Grown;
-            end;
-         end if;
-         Item.Up := Item.Up + 1;
-         Slot := Item.Up;
-         Item.Held (Slot).Name := Model_Runner.Text.To_Bounded (Which);
-         T.Allocate (Width, Item.Held (Slot).Sums);
-         if Item.Held (Slot).Sums = null then
-            Item.Up := Item.Up - 1;
-            return;
-         end if;
-         Item.Held (Slot).Sums.all := [others => 0.0];
-      end if;
-
-      --  A matrix met by a batch is met by every row of it, and the sums
-      --  are over rows: the same column of every row adds into the same
-      --  place.
-      if Item.Held (Slot).Sums.all'Length /= Width then
+      Slot := Slot_Of (Item, Which, Width);
+      if Slot = 0
+        or else Item.Held (Slot).Experts /= 0
+        or else Item.Held (Slot).Sums.all'Length /= Width
+      then
          return;
       end if;
 
-      for Row in 0 .. Rows - 1 loop
-         declare
-            At_Row : constant N.Element_Count := Values'First + Row * Width;
-         begin
-            for Column in 0 .. Width - 1 loop
-               Item.Held (Slot).Sums.all (Column) :=
-                 Item.Held (Slot).Sums.all (Column)
-                 + Values (At_Row + Column) * Values (At_Row + Column);
-            end loop;
-         end;
-      end loop;
-
+      Add_Squares
+        (Item.Held (Slot).Sums.all, Item.Held (Slot).Sums.all'First,
+         Values, Rows, Width);
       Item.Held (Slot).Rows :=
         Item.Held (Slot).Rows + Long_Long_Integer (Rows);
    end Note;
+
+   --  Every routed product, as llama-imatrix collects one: however few
+   --  rows the expert was given, into that expert's own sums and count.
+   overriding procedure Note_Expert
+     (Item    : in out Collector;
+      Which   : String;
+      Expert  : Natural;
+      Experts : Positive;
+      Values  : N.Real_Array;
+      Rows    : N.Element_Count)
+   is
+      Width : constant N.Element_Count :=
+        (if Rows = 0 then 0 else Values'Length / Rows);
+      Slot  : Natural;
+   begin
+      if Width = 0 or else Expert >= Experts then
+         return;
+      end if;
+
+      Slot := Slot_Of (Item, Which, Width * N.Element_Count (Experts));
+      if Slot = 0 then
+         return;
+      end if;
+
+      declare
+         Held : Tally renames Item.Held (Slot);
+      begin
+         if Held.Counts = null then
+            Held.Experts := Experts;
+            Held.Counts := new Count_List'(0 .. Experts - 1 => 0);
+         end if;
+
+         if Held.Experts /= Experts
+           or else Held.Sums.all'Length /= Width * N.Element_Count (Experts)
+         then
+            return;
+         end if;
+
+         Add_Squares
+           (Held.Sums.all,
+            Held.Sums.all'First + N.Element_Count (Expert) * Width,
+            Values, Rows, Width);
+         Held.Counts (Expert) := Held.Counts (Expert) + Long_Long_Integer (Rows);
+         Held.Rows := Held.Rows + Long_Long_Integer (Rows);
+      end;
+   end Note_Expert;
 
    -------------
    -- Summary --
@@ -387,11 +472,12 @@ package body Imatrix_Run is
                      One : constant N.Real_Array (0 .. 0) :=
                        [0 => N.Real (Watching.Held (Index).Rows)];
 
-                     --  A stack of experts is told here as one matrix:
-                     --  the engine names the stack and not the expert a
-                     --  row was routed to, so what it would write is one
-                     --  sum where llama.cpp keeps one an expert, divided
-                     --  by counts that are not each expert's. Left out,
+                     Experts : constant Natural :=
+                       Watching.Held (Index).Experts;
+
+                     --  A stack told only as a whole, by a road that did
+                     --  not say which expert a row went to, would be one
+                     --  sum where llama.cpp keeps one an expert. Left out,
                      --  the quantizer writes the stack unweighted, which
                      --  is what it does for any tensor a matrix omits.
                      Owner : constant Natural :=
@@ -402,10 +488,39 @@ package body Imatrix_Run is
                        and then Containers.Tensor_Dimension
                                   (Container, Owner, 3) > 1;
                   begin
-                     if Stack then
+                     if Stack and then Experts = 0 then
                         goto Next_Matrix;
                      end if;
                      Result.Matrices := Result.Matrices + 1;
+
+                     if Experts > 0 then
+                        --  As llama-imatrix writes a stack: a row of sums
+                        --  an expert, and a count an expert.
+                        declare
+                           Counts : N.Real_Array (0 .. N.Element_Count (Experts) - 1);
+                        begin
+                           for Expert in 0 .. Experts - 1 loop
+                              Counts (N.Element_Count (Expert)) :=
+                                N.Real (Watching.Held (Index).Counts (Expert));
+                           end loop;
+
+                           Fixtures.Add_Tensor
+                             (Maker, Name & ".in_sum2",
+                              [1 => Model_Runner.GGUF.U64
+                                      (Wide / N.Element_Count (Experts)),
+                               2 => Model_Runner.GGUF.U64 (Experts)],
+                              Model_Runner.GGUF.Type_F32,
+                              Fixtures.Encode_F32
+                                (Watching.Held (Index).Sums.all));
+
+                           Fixtures.Add_Tensor
+                             (Maker, Name & ".counts",
+                              [1 => 1, 2 => Model_Runner.GGUF.U64 (Experts)],
+                              Model_Runner.GGUF.Type_F32,
+                              Fixtures.Encode_F32 (Counts));
+                        end;
+                        goto Next_Matrix;
+                     end if;
 
                      Fixtures.Add_Tensor
                        (Maker, Name & ".in_sum2",
@@ -470,6 +585,9 @@ package body Imatrix_Run is
             for Index in 1 .. Watching.Up loop
                if Watching.Held (Index).Sums /= null then
                   T.Free (Watching.Held (Index).Sums);
+               end if;
+               if Watching.Held (Index).Counts /= null then
+                  Free (Watching.Held (Index).Counts);
                end if;
             end loop;
             if Watching.Held /= null then
