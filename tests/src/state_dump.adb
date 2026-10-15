@@ -3,6 +3,7 @@ with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
+with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Byte_Sources.Files;
@@ -51,8 +52,17 @@ package body State_Dump is
       begin
          Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error, Item);
       end Say;
+      On_Device : constant Boolean :=
+        Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Device);
    begin
       Result := (others => <>);
+
+      --  The processor's arithmetic as run's default has it, where asked:
+      --  its products over activations rounded to bytes.
+      if Round then
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (L.Quantized_Roles (L.Integer_Activations));
+      end if;
 
       --  The device is the program's to open before a model is prepared
       --  on it; prepared unopened, every batch answered that it was
@@ -80,8 +90,12 @@ package body State_Dump is
          Containers.Reader.Parse (Container, Source, Status => Status);
       end if;
       if E.Is_Ok (Status) then
+         --  As run prepares and opens it: the context half precision,
+         --  paged on the device, so that the states trained on are the
+         --  states the drafting block is handed in a run.
          L.Prepare (Engine, Container, Source, Backend => Backend,
-                    Status => Status);
+                    Status => Status, Context => Most,
+                    Cache => L.Halved, Paged => On_Device);
       end if;
       if E.Is_Error (Status) then
          Say ("dump-states: the model would not load: "
@@ -135,7 +149,8 @@ package body State_Dump is
                   end if;
                   Last := Natural'Min (Last, Most);
 
-                  L.Open (Live, Engine, Context => Last, Status => Status);
+                  L.Open (Live, Engine, Context => Last, Status => Status,
+                          Cache => L.Halved, Paged => On_Device);
                   if E.Is_Error (Status) then
                      Say ("dump-states: no session for " & Path & ": "
                           & E.Error_Code'Image (Status.Code));
