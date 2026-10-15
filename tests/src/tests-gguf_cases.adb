@@ -1,4 +1,5 @@
 with AUnit.Test_Cases;
+with Ada.Text_IO;
 with Ada.Calendar;
 with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;
@@ -61,6 +62,17 @@ package body Tests.GGUF_Cases is
    use type B.Byte_Array_Access;
    package G renames Model_Runner.GGUF;
    package Containers renames Model_Runner.GGUF.Containers;
+
+   --  Say where the processor lacks what a "chosen against plain" test
+   --  compares: without it the chosen arm is the plain one, and the test
+   --  would compare the baseline with itself and pass for nothing.
+   procedure Note_Without (Capability : String; Test : String) is
+   begin
+      Ada.Text_IO.Put_Line
+        (Ada.Text_IO.Standard_Error,
+         "note: this processor has no " & Capability & "; " & Test
+         & " has no second arm to compare here");
+   end Note_Without;
 
    --  Build a small, entirely well-formed container: a few scalar metadata
    --  types, one string array, one float array and two tensors.
@@ -1458,6 +1470,11 @@ package body Tests.GGUF_Cases is
          end loop;
       end Compare;
    begin
+      if not Deep then
+         Note_Without ("byte dot product", "the packers' comparison");
+         return;
+      end if;
+
       --  A spread that uses the whole of a byte's range, with a tie every
       --  other element and the largest magnitude exactly 127 so that the
       --  scale is one and a tie stays a tie.
@@ -1539,6 +1556,11 @@ package body Tests.GGUF_Cases is
       Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
       Seen : Natural := 0;
    begin
+      if not Wide then
+         Note_Without ("wide vectors", "the decoders' comparison");
+         return;
+      end if;
+
       for Format of Formats loop
          declare
             Name : constant String := Model_Runner.GGUF.Type_Name (Format);
@@ -1916,6 +1938,13 @@ package body Tests.GGUF_Cases is
          return Seed;
       end Next;
    begin
+      if not Wide then
+         Note_Without ("wide vectors", "the grid rows' wide arm");
+      end if;
+      if not Deep then
+         Note_Without ("byte dot product", "the grid rows' byte arm");
+      end if;
+
       for Format of Formats loop
          Assert (QI.Has_Integer_Kernel (Format),
                  G.Tensor_Type'Image (Format) & " has no integer product");
@@ -2062,6 +2091,13 @@ package body Tests.GGUF_Cases is
          return Seed;
       end Next;
    begin
+      if not Wide then
+         Note_Without ("wide vectors", "the row kernels' wide arm");
+      end if;
+      if not Deep then
+         Note_Without ("byte dot product", "the row kernels' byte arm");
+      end if;
+
       B.Allocate (Width * B.Byte_Count (Blocks) * B.Byte_Count (Rows), Data);
       Assert (Data /= null, "could not allocate block data");
 
@@ -2120,9 +2156,11 @@ package body Tests.GGUF_Cases is
             Deep_Sums : N.Wide_Real_Array (0 .. Rows * Count - 1) :=
               [others => 0.0];
 
-            --  The bound the quantized path is already held to everywhere
-            --  else, quoted from the same place rather than invented here.
-            Room : constant N.Wide_Real := 5.0E-2;
+            --  The rounding of exact integer sums as they are scaled: the
+            --  worst this fixture gives is 1.5E-5 of the larger magnitude.
+            --  It was the sweep's 5E-2 -- three thousand times that, room
+            --  for a dropped block to pass.
+            Room : constant N.Wide_Real := 1.0E-4;
          begin
             QI.Use_Deep_Rows (True);
             QI.Accumulate_Rows
@@ -3252,9 +3290,10 @@ package body Tests.GGUF_Cases is
    --  end-of-sequence one -- MiniCPM5 ends a sequence with </s> and a turn
    --  with <|im_end|> -- is done at either. The turn-enders are the ids the
    --  file declares as eot and eom, and the vocabulary's own special tokens
-   --  whose text is a marker the chat formats write. A normal token that
-   --  happens to spell such a marker is text, and an ordinary token is not
-   --  an end.
+   --  whose text is a marker the chat formats write. A token typed normal
+   --  that spells one of the markers the other runtime makes control by its
+   --  text -- <|end|> is one -- is that control and ends generation, as it
+   --  does there; an ordinary token is not an end.
    procedure Turn_End_Tokens_End_Generation
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3326,8 +3365,9 @@ package body Tests.GGUF_Cases is
               "a control <|eot_id|> ends generation");
       Assert (Vocab.Ends_Generation (Words, 6),
               "a control <EOT> ends generation");
-      Assert (not Vocab.Ends_Generation (Words, 4),
-              "a normal token spelling <|end|> is text, not an end");
+      Assert (Vocab.Ends_Generation (Words, 4),
+              "a token typed normal spelling <|end|> did not end generation, "
+              & "where the other runtime makes it a control by its text");
       Assert (not Vocab.Ends_Generation (Words, 3),
               "an ordinary token does not end generation");
       Assert (not Vocab.Ends_Generation (Words, 0),
@@ -3421,8 +3461,9 @@ package body Tests.GGUF_Cases is
          Vocab.Load (Words, Item, Status => Status);
          Containers.Close (Item);
          B.Free (Image);
-         Assert (E.Is_Error (Status),
-                 "an eot identifier outside the vocabulary was accepted");
+         Assert (Status.Code = E.GGUF_Metadata_Out_Of_Range,
+                 "an eot identifier outside the vocabulary was taken with "
+                 & E.Error_Code'Image (Status.Code));
       end;
       Vocab.Close (Words);
    end Turn_End_Tokens_End_Generation;
@@ -3552,8 +3593,9 @@ package body Tests.GGUF_Cases is
       Write_Tokens (Builder);
       Fixtures.Add_U32 (Builder, "tokenizer.ggml.add_bos_token", 7);
       Load_Built (Builder, Words, Status);
-      Assert (E.Is_Error (Status),
-              "a mistyped add_bos_token was accepted");
+      Assert (Status.Code = E.GGUF_Metadata_Type_Mismatch,
+              "a mistyped add_bos_token was taken with "
+              & E.Error_Code'Image (Status.Code));
       Vocab.Close (Words);
 
       --  Minus one means the model has no such token, and is not an error.
@@ -3894,6 +3936,19 @@ package body Tests.GGUF_Cases is
    --     past the 4.0 the standard library's tables stop at: Qwen2 holds
    --     Malayalam with a chillu as one word, and cuts the ideographic
    --     zero out of a run of ideographs as the number it is.
+   --  8. A piece the other runtime makes a control by its text is read as
+   --     the token where a text writes it, typed ordinary or not: Qwen2's
+   --     "</s>" and Falcon's "<|endoftext|>" are, in the files; and a
+   --     fill-in marker the file names no identifier for. Beside Gemma 4's
+   --     "<|tool_response>", "</s>" is ordinary.
+   --  9. WordPiece takes an accent off as that runtime does, to the first
+   --     code point of the canonical decomposition, and no further: a
+   --     Hangul syllable is its first letter, a full-width colon itself.
+   --     It lower-cases by Unicode's own table, and stands alone only the
+   --     ideographs of the blocks the reference names.
+   --  10. The best-path road adds its scores in double precision, as the
+   --     other runtime and SentencePiece do: in single, a run of seven
+   --     "a" spelled otherwise.
    procedure Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4110,6 +4165,10 @@ package body Tests.GGUF_Cases is
                         when 4 => Marked & "Hi",
                         when 5 => Marked & "e",
                         when 6 => Marked & U (16#E9#),
+                        when 7 => Marked & U (16#1112#),
+                        when 8 => Marked & U (16#FF1A#),
+                        when 9 => Marked & U (16#10D0#),
+                        when 10 => Marked & "x" & U (16#2B830#),
                         when others =>
                           "p" & Model_Runner.Text.Trim
                                   (Natural'Image (Index))),
@@ -4136,6 +4195,15 @@ package body Tests.GGUF_Cases is
          Check (U (16#E9#), 5, "an unstated normalizer kept the accent");
          Check ("h" & U (16#200B#) & "i", 3,
                 "a zero-width space was not dropped as a control");
+         --  9.
+         Check (U (16#D55C#), 7,
+                "a Hangul syllable was not its first letter");
+         Check (U (16#FF1A#), 8,
+                "a full-width colon was taken to the ASCII one");
+         Check (U (16#1C90#), 9,
+                "a Georgian capital was not lower-cased by Unicode's table");
+         Check ("x" & U (16#2B830#), 10,
+                "an ideograph below U+2B920 stood alone");
          Vocab.Close (Words);
 
          Load (Words, "bert", Pieces, Architecture => "bert",
@@ -4251,6 +4319,67 @@ package body Tests.GGUF_Cases is
          Vocab.Close (Words);
          Containers.Close (Item);
          B.Free (Image);
+      end;
+
+      --  8. Pieces made control by their text.
+      declare
+         Named : constant Piece_List :=
+           [0  => (new String'("<unk>"), 2, 0.0),
+            1  => (new String'("<s>"), 3, 0.0),
+            2  => (new String'("</s>"), 1, 0.0),
+            3  => (new String'("<|endoftext|>"), 1, 0.0),
+            4  => (new String'("<|fim_prefix|>"), 1, 0.0),
+            5  => (new String'(Marked), 1, -3.0),
+            6  => (new String'("H"), 1, -3.0),
+            7  => (new String'("i"), 1, -3.0),
+            8  => (new String'(Marked & "H"), 1, -2.0),
+            9  => (new String'(Marked & "Hi"), 1, -1.0),
+            10 => (new String'("<0x0A>"), 6, 0.0),
+            11 => (new String'("<|tool_response>"), 3, 0.0)];
+
+         procedure Reads (Text : String; Want : Vocab.Token_Array;
+                          What : String) is
+            Got : constant Vocab.Token_Array := Encoded (Words, Text);
+         begin
+            Assert (Got = Want, What & ":" & Shown (Got));
+         end Reads;
+      begin
+         Load (Words, "llama", Named (0 .. 10));
+         Reads ("Hi</s>", [9, 2], "an ordinary </s> was read as its letters");
+         Reads ("Hi<|endoftext|>", [9, 3],
+                "an ordinary <|endoftext|> was read as its letters");
+         Reads ("Hi<|fim_prefix|>", [9, 4],
+                "a fill-in marker no key names was read as its letters");
+         Vocab.Close (Words);
+
+         Load (Words, "llama", Named);
+         declare
+            Got : constant Vocab.Token_Array := Encoded (Words, "Hi</s>");
+         begin
+            Assert (Got /= Vocab.Token_Array'[9, 2],
+                    "</s> beside <|tool_response> was read as the token");
+         end;
+         Vocab.Close (Words);
+      end;
+
+      --  10. Sums in double precision.
+      declare
+         Run : constant Piece_List :=
+           [0 => (new String'("<unk>"), 2, 0.0),
+            1 => (new String'("<s>"), 3, 0.0),
+            2 => (new String'("</s>"), 3, 0.0),
+            3 => (new String'("a"), 1, -14.8),
+            4 => (new String'("aa"), 1, -7.7)];
+      begin
+         Load (Words, "t5", Run, Space_Prefix => No);
+         declare
+            Got : constant Vocab.Token_Array := Encoded (Words, "aaaaaaa");
+         begin
+            Assert (Got = Vocab.Token_Array'[3, 4, 4, 4],
+                    "a run of seven was spelled by single-precision sums:"
+                    & Shown (Got));
+         end;
+         Vocab.Close (Words);
       end;
    end Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them;
 
@@ -8441,6 +8570,12 @@ package body Tests.GGUF_Cases is
          Shards.Open_Model (Set, Held, One, Status => Status);
          Assert (E.Is_Error (Status),
                  "a model missing one of its two files opened anyway");
+         --  Said as the second file not opening, and naming it -- not some
+         --  other refusal of the set.
+         Assert (E.Text_Of (Status, "shard") = Two,
+                 "a missing second file was refused as "
+                 & E.Error_Code'Image (Status.Code) & " naming "
+                 & E.Text_Of (Status, "shard") & ", not as its own absence");
          Shards.Close (Set);
       end;
 
@@ -8836,6 +8971,10 @@ package body Tests.GGUF_Cases is
          return Ok;
       end Runs;
    begin
+      if not Deep then
+         Note_Without ("byte dot product", "the byte kernel's bounds");
+      end if;
+
       if Deep then
          QI.Use_Deep_Rows (True);
 

@@ -37,7 +37,11 @@ package Model_Runner.Platform.Signals is
 
    --  Route interrupts to a cancellation token.
    --
-   --  Installing over an existing installation replaces the target token.
+   --  Installing over an existing installation replaces the target token,
+   --  and nests: the program installs for its whole life, a run for its own
+   --  token, and the run's Remove gives the binding back to the program's.
+   --  A signal ignored when the first Install comes -- a job started under
+   --  nohup, or with & from a script -- is left ignored.
    --
    --  @param Token Token to set when an interrupt arrives.
    --  @param Installed True when the handler was attached.
@@ -45,7 +49,10 @@ package Model_Runner.Platform.Signals is
      (Token     : Model_Runner.Cancellation.Token_Reference;
       Installed : out Boolean);
 
-   --  Stop routing interrupts and restore the previous behaviour. Idempotent.
+   --  Undo the latest Install: the token bound before it is bound again,
+   --  and the last Remove gives every signal back what it did before the
+   --  first Install. A Remove with none to undo binds nothing and detaches
+   --  whatever is attached.
    procedure Remove;
 
    --  Name of the exception the last failed Install raised, for diagnosis.
@@ -69,6 +76,11 @@ package Model_Runner.Platform.Signals is
    --    the prompt again, say.
    procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "");
 
+   --  Whether the program is said to wait for a typed line.
+   --
+   --  @return True between Set_Waiting_For_Input (True) and (False).
+   function Waiting_For_Input return Boolean;
+
    --  Say what the terminal's own mode was while the program holds it raw:
    --  told to end there, it ends at once, and puts that mode back first --
    --  a terminal left raw does not echo, and the remedy is `reset` typed
@@ -79,6 +91,13 @@ package Model_Runner.Platform.Signals is
 
    --  The terminal has its own mode back; nothing to put back on ending.
    procedure Release_Terminal_Mode;
+
+   --  Say whether the program draws on the terminal's other screen while it
+   --  holds the terminal: told to end there, it leaves that screen first,
+   --  or the shell's prompt comes back on a screen nothing shows again.
+   --
+   --  @param On True once the other screen is entered, False once left.
+   procedure Note_Alternate_Screen (On : Boolean);
 
    --  Whether the note was said for an interrupt since the program last
    --  began to wait: what it says need not be said again.

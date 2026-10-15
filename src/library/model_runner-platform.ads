@@ -301,6 +301,13 @@ package Model_Runner.Platform is
    --  @return True only where the host says so plainly.
    function Byte_Products return Boolean;
 
+   --  Whether an idle worker may wait at low power on a watched line
+   --  (MONITORX and MWAITX), rather than spin. Asked once by the worker
+   --  pool; False wherever the host does not say so plainly.
+   --
+   --  @return True where the processor has the pair.
+   function Low_Power_Waits return Boolean;
+
    --  The host this build targets, as hostkit reports it.
    --
    --  Asked rather than inferred. The engine has one behaviour that differs

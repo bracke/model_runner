@@ -49,8 +49,20 @@ package body Model_Runner.Agent is
       if Close = 0 then
          --  Reasoning that never closed is no answer: a delegated task
          --  that stopped mid-thought handed its thinking back as one.
-         return (if Ada.Strings.Fixed.Index (Reply, "<think>") /= 0
-                 then "" else Reply);
+         --  Reasoning is what opens the reply, as llama.cpp reads it: an
+         --  answer that mentions <think> further on is still an answer.
+         declare
+            Lead : Positive := Reply'First;
+         begin
+            while Lead <= Reply'Last
+              and then Reply (Lead) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+            loop
+               Lead := Lead + 1;
+            end loop;
+            return (if Reply'Last - Lead + 1 >= 7
+                      and then Reply (Lead .. Lead + 6) = "<think>"
+                    then "" else Reply);
+         end;
       end if;
       while First <= Reply'Last and then Reply (First) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
          First := First + 1;

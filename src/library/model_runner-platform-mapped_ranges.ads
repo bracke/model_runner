@@ -39,10 +39,17 @@ package Model_Runner.Platform.Mapped_Ranges is
    --  @param Handle The mapping's file, as noted.
    --  @param Offset Where the run begins in that file.
    --  @return True where the run is a noted mapping's and it noted a handle.
+   --    Where True, the handle stays the mapping's -- Forget waits -- until
+   --    Located_Done is called, which the caller must do once it holds the
+   --    file by a handle of its own, or no longer needs it.
    function Locate
      (Start  : System.Address;
       Length : Model_Runner.Bytes.Byte_Count;
       Handle : out Long_Long_Integer;
       Offset : out Model_Runner.Bytes.Byte_Count) return Boolean;
+
+   --  Say a handle Locate gave out is no longer being opened from: the
+   --  mappings it named may be forgotten again.
+   procedure Located_Done;
 
 end Model_Runner.Platform.Mapped_Ranges;

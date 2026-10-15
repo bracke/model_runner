@@ -1124,20 +1124,6 @@ package body Model_Runner.Tools is
          return I > S'Last;
       end Is_JSON_Number;
 
-      --  A param value as its JSON form: a number, true, false or null bare,
-      --  so a typed tool gets a typed argument; anything else -- including a
-      --  CDATA-wrapped value, which never looks like a number -- as a string.
-      function As_JSON_Value (Raw : String) return String is
-      begin
-         if Raw = "true" or else Raw = "false" or else Raw = "null"
-           or else Is_JSON_Number (Raw)
-         then
-            return Raw;
-         else
-            return As_JSON_String (Raw);
-         end if;
-      end As_JSON_Value;
-
       --  The type the offered tool's schema gives a parameter: "string",
       --  "integer", "number", "boolean", "array", "object" or "null"; or
       --  empty where the tool is not offered, the parameter not described,
@@ -1164,19 +1150,30 @@ package body Model_Runner.Tools is
       --  false or null bare, anything else a string. A list a Qwen wrote in
       --  a tag was taken for a string holding one, and refused; a string
       --  that looked like a number reached the tool as a number.
+      --  What JSON takes around a value: spaces, tabs and line ends.
+      Spaces : constant Ada.Strings.Maps.Character_Set :=
+        Ada.Strings.Maps.To_Set
+          (" " & ASCII.HT & ASCII.LF & ASCII.CR);
+
+      --  Anything but a string is read as JSON is, its spaces around it
+      --  no part of it: a "42" written on a line of its own between other
+      --  spaces than the one line break either side stayed the string
+      --  " 42 ", which the tool's schema refused.
       function As_Typed_Value (Tool, Key, Raw : String) return String is
          Kind : constant String := Schema_Type (Tool, Key);
+         Bare : constant String :=
+           Ada.Strings.Fixed.Trim (Raw, Spaces, Spaces);
       begin
          if Kind = "string" then
             return As_JSON_String (Raw);
          elsif Kind in "array" | "object" then
-            if Raw /= "" and then Raw (Raw'First) in '[' | '{' then
+            if Bare /= "" and then Bare (Bare'First) in '[' | '{' then
                declare
                   Room    : String (1 .. Max_Call_Bytes);
                   Written : Natural;
                   Reading : E.Error_Info;
                begin
-                  Rewrite (Controls_Escaped (Raw), Room, Written, Reading);
+                  Rewrite (Controls_Escaped (Bare), Room, Written, Reading);
                   if E.Is_Ok (Reading) then
                      return Room (1 .. Written);
                   end if;
@@ -1184,14 +1181,17 @@ package body Model_Runner.Tools is
             end if;
             return As_JSON_String (Raw);
          elsif Kind in "integer" | "number" then
-            return (if Is_JSON_Number (Raw) then Raw else As_JSON_String (Raw));
+            return (if Is_JSON_Number (Bare) then Bare
+                    else As_JSON_String (Raw));
          elsif Kind = "boolean" then
-            return (if Raw in "true" | "false" then Raw
+            return (if Bare in "true" | "false" then Bare
                     else As_JSON_String (Raw));
          elsif Kind = "null" then
-            return (if Raw = "null" then Raw else As_JSON_String (Raw));
+            return (if Bare = "null" then Bare else As_JSON_String (Raw));
          end if;
-         return As_JSON_Value (Raw);
+         return (if Bare in "true" | "false" | "null"
+                   or else Is_JSON_Number (Bare)
+                 then Bare else As_JSON_String (Raw));
       end As_Typed_Value;
 
       --  Read one <function ...> ... </function> block into a call: its name

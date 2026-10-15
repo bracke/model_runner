@@ -9,10 +9,10 @@
 
 //  The generating row product for the twelve low-bit formats -- and Q8_0,
 //  IQ4, Q2_K and Q3_K beside them -- on a subgroup
-//  of thirty-two: compiled once a format, the format named by a define, so
+//  of sixty-four: compiled once a format, the format named by a define, so
 //  each pipeline carries its own decode and codebook and nothing else.
 //
-//  Sixteen lanes share a group of 256 elements and a workgroup has two groups
+//  Sixteen lanes share a group of 256 elements and a workgroup has four groups
 //  in flight; a lane takes sixteen elements one after another, which for
 //  every format here lies in one block and one run of its fields, and dots
 //  them with four vec4s of the activation. Where a format's value is a grid

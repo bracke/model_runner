@@ -94,4 +94,13 @@ package body Model_Runner.Platform.Mapping is
       Available := False;
    end Open_Writable;
 
+   --------------
+   -- Finalize --
+   --------------
+
+   overriding procedure Finalize (Item : in out Region) is
+   begin
+      Close (Item);
+   end Finalize;
+
 end Model_Runner.Platform.Mapping;

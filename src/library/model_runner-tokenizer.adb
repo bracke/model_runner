@@ -3,10 +3,10 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
-with Ada.Wide_Wide_Characters.Handling;
 
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer.Cutting;
+with Model_Runner.Tokenizer.Folding;
 with Model_Runner.UTF8;
 
 package body Model_Runner.Tokenizer is
@@ -813,6 +813,123 @@ package body Model_Runner.Tokenizer is
          end;
       end loop;
 
+      --  The pieces the other runtime makes control by their text, whatever
+      --  the file types them: a turn's or a generation's end, and a fill-in
+      --  marker the file names no identifier for (llama-vocab.cpp). A
+      --  Qwen2 file types its "</s>" and a Falcon file its "<|endoftext|>"
+      --  as ordinary pieces, and llama.cpp reads either written in a text
+      --  as the token, where this read it as its characters. And the one
+      --  it makes ordinary: "</s>" beside Gemma 4's "<|tool_response>".
+      declare
+         procedure Make_Control (Text : String) is
+            Token : constant Token_Id := Find (Item, Text);
+         begin
+            if Token /= No_Token
+              and then Item.Entries (Natural (Token) + 1).Class
+                         not in Class_Control | Class_User_Defined
+                              | Class_Unknown
+            then
+               Item.Entries (Natural (Token) + 1).Class := Class_Control;
+               Item.Markers.Include (Text, Token);
+               Item.Longest_Marker :=
+                 Natural'Max (Item.Longest_Marker, Text'Length);
+               Item.Marker_Starts (Text (Text'First)) := True;
+            end if;
+         end Make_Control;
+
+         --  The names of a list, each ended by a nought byte.
+         Stop : constant Character := ASCII.NUL;
+
+         --  Every name of a list: the ends of a turn or of a generation.
+         procedure Every_Named (Names : String) is
+            From : Positive := Names'First;
+         begin
+            for Index in Names'Range loop
+               if Names (Index) = Stop then
+                  Make_Control (Names (From .. Index - 1));
+                  From := Index + 1;
+               end if;
+            end loop;
+         end Every_Named;
+
+         --  A fill-in group: the first of its names the vocabulary holds,
+         --  where the file names no identifier for it.
+         procedure First_Named (Key, Old_Key : String; Names : String) is
+            From : Positive := Names'First;
+         begin
+            if Containers.Has (Source, Key)
+              or else (Old_Key /= "" and then Containers.Has (Source, Old_Key))
+            then
+               return;
+            end if;
+            for Index in Names'Range loop
+               if Names (Index) = Stop then
+                  if Find (Item, Names (From .. Index - 1)) /= No_Token then
+                     Make_Control (Names (From .. Index - 1));
+                     return;
+                  end if;
+                  From := Index + 1;
+               end if;
+            end loop;
+         end First_Named;
+
+         --  DeepSeek's full-width bar and SentencePiece's space, in bytes.
+         Bar   : constant String :=
+           Character'Val (16#EF#) & Character'Val (16#BD#)
+           & Character'Val (16#9C#);
+         Space : constant String :=
+           Character'Val (16#E2#) & Character'Val (16#96#)
+           & Character'Val (16#81#);
+      begin
+         Every_Named
+           ("<|eot_id|>" & Stop & "<|im_end|>" & Stop & "<|end|>" & Stop
+            & "<|return|>" & Stop & "<|call|>" & Stop & "<|flush|>" & Stop
+            & "<|calls|>" & Stop & "<end_of_turn>" & Stop
+            & "<|endoftext|>" & Stop & "</s>" & Stop & "<|eom_id|>" & Stop
+            & "<EOT>" & Stop & "_<EOT>" & Stop & "[EOT]" & Stop & "[EOS]"
+            & Stop & "<|end_of_text|>" & Stop & "<end_of_utterance>" & Stop
+            & "<eos>" & Stop & "<turn|>" & Stop & "<|tool_response>" & Stop
+            & "<" & Bar & "end" & Space & "of" & Space & "sentence" & Bar
+            & ">" & Stop & "[e~[" & Stop);
+
+         First_Named
+           ("tokenizer.ggml.fim_pre_token_id", "tokenizer.ggml.prefix_token_id",
+            "<|fim_prefix|>" & Stop & "<fim-prefix>" & Stop & "<fim_prefix>"
+            & Stop & "<" & Bar & "fim" & Space & "begin" & Bar & ">" & Stop
+            & "<PRE>" & Stop & Space & "<PRE>" & Stop & "<|code_prefix|>"
+            & Stop & "<|prefix|>" & Stop);
+         First_Named
+           ("tokenizer.ggml.fim_suf_token_id", "tokenizer.ggml.suffix_token_id",
+            "<|fim_suffix|>" & Stop & "<fim-suffix>" & Stop & "<fim_suffix>"
+            & Stop & "<" & Bar & "fim" & Space & "hole" & Bar & ">" & Stop
+            & "<SUF>" & Stop & Space & "<SUF>" & Stop & "<|code_suffix|>"
+            & Stop & "<|suffix|>" & Stop);
+         First_Named
+           ("tokenizer.ggml.fim_mid_token_id", "tokenizer.ggml.middle_token_id",
+            "<|fim_middle|>" & Stop & "<fim-middle>" & Stop & "<fim_middle>"
+            & Stop & "<" & Bar & "fim" & Space & "end" & Bar & ">" & Stop
+            & "<MID>" & Stop & Space & "<MID>" & Stop & "<|code_middle|>"
+            & Stop & "<|middle|>" & Stop);
+         First_Named
+           ("tokenizer.ggml.fim_pad_token_id", "",
+            "<|fim_pad|>" & Stop & "<fim-pad>" & Stop & "<fim_pad>" & Stop
+            & "<PAD>" & Stop & "[PAD]" & Stop);
+         First_Named
+           ("tokenizer.ggml.fim_rep_token_id", "",
+            "<|fim_repo|>" & Stop & "<|repo_name|>" & Stop & "<fim-repo>"
+            & Stop & "<REPO>" & Stop & "<reponame>" & Stop);
+         First_Named
+           ("tokenizer.ggml.fim_sep_token_id", "", "<|file_sep|>" & Stop);
+
+         if Find (Item, "<|tool_response>") /= No_Token
+           and then Find (Item, "</s>") /= No_Token
+         then
+            Item.Entries (Natural (Find (Item, "</s>")) + 1).Class :=
+              Class_Normal;
+            Item.Markers.Exclude ("</s>");
+         end if;
+      end;
+
       --  Special tokens.
       --
       --  A missing key leaves the identifier unset: not every model declares
@@ -1470,21 +1587,9 @@ package body Model_Runner.Tokenizer is
       --  Whether a code point separates words without being one.
       function Breaks (Code_Point : Natural) return Boolean;
 
-      --  The code point with its accent taken off and lower-cased, each
-      --  where the vocabulary's normalizer does it.
-      function Folded
-        (Code_Point    : Natural;
-         Lowercase     : Boolean;
-         Strip_Accents : Boolean) return Natural;
-
    end Word_Piece;
 
    package body Word_Piece is
-
-      package Handling renames Ada.Wide_Wide_Characters.Handling;
-
-      function Wide (Code_Point : Natural) return Wide_Wide_Character
-      is (Wide_Wide_Character'Val (Code_Point));
 
       --  An ideograph is a letter that is not written with an alphabet, and
       --  what tells one is that it has no case: neither its lower nor its
@@ -1498,7 +1603,9 @@ package body Model_Runner.Tokenizer is
           or else Code_Point in 16#20000# .. 16#2A6DF#
           or else Code_Point in 16#2A700# .. 16#2B73F#
           or else Code_Point in 16#2B740# .. 16#2B81F#
-          or else Code_Point in 16#2B820# .. 16#2CEAF#
+          --  From U+2B920, not U+2B820: the bound the reference tokenizer's
+          --  own code states, and the other runtime with it.
+          or else Code_Point in 16#2B920# .. 16#2CEAF#
           or else Code_Point in 16#F900# .. 16#FAFF#
           or else Code_Point in 16#2F800# .. 16#2FA1F#);
 
@@ -1529,30 +1636,6 @@ package body Model_Runner.Tokenizer is
 
       function Breaks (Code_Point : Natural) return Boolean
       is (Cutting.Is_Space (Code_Point));
-
-      --  The accent first and the case after. To_Basic takes the diacritic
-      --  off a character that carries one; a text whose accents are already
-      --  written as separate combining marks loses them to Discarded
-      --  instead, so both spellings of an accented word arrive at the same
-      --  letters.
-      --
-      --  This is not a full canonical decomposition, and the difference is
-      --  worth stating: a syllable that decomposes into pieces which are not
-      --  marks -- Hangul is the case -- stays whole here where a decomposing
-      --  implementation would take it apart. Latin text, which is what these
-      --  vocabularies are overwhelmingly cut from, is the same either way.
-      function Folded
-        (Code_Point    : Natural;
-         Lowercase     : Boolean;
-         Strip_Accents : Boolean) return Natural
-      is
-         Plain : constant Wide_Wide_Character :=
-           (if Strip_Accents then Handling.To_Basic (Wide (Code_Point))
-            else Wide (Code_Point));
-      begin
-         return Wide_Wide_Character'Pos
-           (if Lowercase then Handling.To_Lower (Plain) else Plain);
-      end Folded;
 
    end Word_Piece;
 
@@ -2289,26 +2372,32 @@ package body Model_Runner.Tokenizer is
                   exit when Width = 0;
                   Index := Index + Width;
 
-                  if Word_Piece.Breaks (Code) then
-                     Close_Word;
-                  else
-                     declare
-                        Folded : constant Natural :=
-                          Word_Piece.Folded
-                            (Code, Item.Lowercase, Item.Strip_Accents);
-                     begin
-                        if Word_Piece.Discarded (Folded, Item.Strip_Accents)
-                        then
-                           null;
-                        elsif Word_Piece.Stands_Alone (Folded) then
-                           Close_Word;
-                           Extend (Folded);
-                           Close_Word;
-                        else
-                           Extend (Folded);
-                        end if;
-                     end;
-                  end if;
+                  --  As the other runtime reads a code point: its first
+                  --  decomposed one, where the accents come off; then
+                  --  whether it breaks a word, goes, or stands alone, by
+                  --  that code point's own class; and lower-cased last.
+                  declare
+                     Taken : constant Natural :=
+                       (if Item.Strip_Accents
+                        then Folding.First_Of_Decomposition (Code)
+                        else Code);
+                     Cased : constant Natural :=
+                       (if Item.Lowercase then Folding.Lower (Taken)
+                        else Taken);
+                  begin
+                     if Word_Piece.Breaks (Taken) then
+                        Close_Word;
+                     elsif Word_Piece.Discarded (Taken, Item.Strip_Accents)
+                     then
+                        null;
+                     elsif Word_Piece.Stands_Alone (Taken) then
+                        Close_Word;
+                        Extend (Cased);
+                        Close_Word;
+                     else
+                        Extend (Cased);
+                     end if;
+                  end;
                end;
 
                exit when Refused;
@@ -2679,7 +2768,7 @@ package body Model_Runner.Tokenizer is
             type Edge is record
                From  : Natural := 0;
                Token : Token_Id := No_Token;
-               Sum   : Float := Float'First;
+               Sum   : Long_Float := Long_Float'First;
             end record;
 
             type Edge_Array is array (Natural range <>) of Edge;
@@ -2731,7 +2820,7 @@ package body Model_Runner.Tokenizer is
 
             --  One code point at a time, and from each boundary every piece
             --  the vocabulary holds that starts there. A boundary the walk
-            --  never reached carries Float'First and cannot win anything,
+            --  never reached carries Long_Float'First and cannot win anything,
             --  which is what keeps a partial character from being an edge.
             declare
                At_Byte : Natural := 1;
@@ -2750,7 +2839,7 @@ package body Model_Runner.Tokenizer is
                         Width := 1;
                      end if;
 
-                     if Best (At_Byte - 1).Sum > Float'First then
+                     if Best (At_Byte - 1).Sum > Long_Float'First then
                         for Span in 1 .. Reach loop
                            declare
                               Piece : constant Token_Id :=
@@ -2771,7 +2860,7 @@ package body Model_Runner.Tokenizer is
                                  --  a piece of -inf or NaN covered nothing,
                                  --  and the unknown's edge was left out.
                                  if Span = Width
-                                   and then Best (At_Byte - 1).Sum > Float'First
+                                   and then Best (At_Byte - 1).Sum > Long_Float'First
                                    and then Score_Of (Item, Piece) = Score_Of (Item, Piece)
                                    and then Score_Of (Item, Piece) > Float'First
                                  then
@@ -2784,12 +2873,12 @@ package body Model_Runner.Tokenizer is
                                     --  by its own score, which is what
                                     --  makes it beat the pieces it spells
                                     --  out to.
-                                    Worth : constant Float :=
+                                    Worth : constant Long_Float :=
                                       (if Class_Of (Item, Piece)
                                           = Class_User_Defined
                                        then 0.0
-                                       else Score_Of (Item, Piece));
-                                    Reached : constant Float :=
+                                       else Long_Float (Score_Of (Item, Piece)));
+                                    Reached : constant Long_Float :=
                                       Best (At_Byte - 1).Sum + Worth;
                                  begin
                                     if Reached
@@ -2811,11 +2900,11 @@ package body Model_Runner.Tokenizer is
                      --  one unseen character would leave the lattice
                      --  unconnected and fail the whole encode.
                      if not Covered
-                       and then Best (At_Byte - 1).Sum > Float'First
+                       and then Best (At_Byte - 1).Sum > Long_Float'First
                      then
                         declare
-                           Reached : constant Float :=
-                             Best (At_Byte - 1).Sum + Item.Unknown_Cost;
+                           Reached : constant Long_Float :=
+                             Best (At_Byte - 1).Sum + Long_Float (Item.Unknown_Cost);
                         begin
                            if Reached > Best (At_Byte + Width - 1).Sum then
                               Best (At_Byte + Width - 1) :=
@@ -2839,7 +2928,7 @@ package body Model_Runner.Tokenizer is
             --  for a text near the bound. An end no path reaches -- every
             --  piece across a stretch unknown and no unknown to stand for
             --  it -- is said, not walked into a token of minus one.
-            if Best (Normal'Length).Sum <= Float'First or else Best (Normal'Length).Token = No_Token then
+            if Best (Normal'Length).Sum <= Long_Float'First or else Best (Normal'Length).Token = No_Token then
                Put (E.Tokenizer_Missing_Byte_Fallback);
                Release;
                return;

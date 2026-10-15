@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Hostkit.Parent_Watch;
+with Model_Runner.Platform.Signals;
 with Hostkit.Signals;
 with Model_Runner.CLI.Execute;
 with Model_Runner.Config;
@@ -383,7 +384,25 @@ package body Model_Runner.CLI.Driver is
       begin
          null;
       end;
-      Run (Source, Status);
+      --  Told to end, or interrupted, for the whole of the process and not
+      --  only a run's: a chooser holding the terminal raw before any run
+      --  was killed where it stood by SIGTERM, the terminal left raw and on
+      --  its other screen. Bound to no token here; a run binds its own.
+      declare
+         Attached : Boolean;
+      begin
+         Model_Runner.Platform.Signals.Install (null, Attached);
+         Run (Source, Status);
+         if Attached then
+            Model_Runner.Platform.Signals.Remove;
+         end if;
+      exception
+         when others =>
+            if Attached then
+               Model_Runner.Platform.Signals.Remove;
+            end if;
+            raise;
+      end;
    end Run_Process;
 
 end Model_Runner.CLI.Driver;

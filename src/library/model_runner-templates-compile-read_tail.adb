@@ -260,9 +260,34 @@ begin
                         when 1 => Step.Arg1 := Kept;
                         when 2 => Step.Arg2 := Kept;
                         when 3 => Step.Arg3 := Kept;
-                        when others => Step.Arg4 := Kept;
+                        when 4 => Step.Arg4 := Kept;
+                        when 5 => Step.Arg5 := Kept;
+                        when 6 => Step.Arg6 := Kept;
+                        when 7 => Step.Arg7 := Kept;
+                        when others => Step.Arg8 := Kept;
                      end case;
                   end Put_Argument;
+
+                  --  The slot a filter's Nth positional argument takes, in
+                  --  its own signature's order, or nought for one it has
+                  --  not got: max and min's second is their attribute,
+                  --  after case_sensitive, and map's after the filter's
+                  --  name are that filter's own. Taken in order, max(x,
+                  --  'a') read no attribute and map('join', ', ') took the
+                  --  separator for a member's name.
+                  function Slot_Of_Position (Position : Positive) return Natural
+                  is
+                  begin
+                     if Word in "max" | "min" then
+                        return (case Position is
+                                  when 1 => 1, when 2 => 3, when others => 0);
+                     elsif Word = "map" then
+                        return (case Position is
+                                  when 1 => 1, when 2 => 4, when 3 => 5,
+                                  when 4 => 6, when 5 => 7, when others => 0);
+                     end if;
+                     return Position;
+                  end Slot_Of_Position;
 
                   --  The slot each filter's own keywords take, in the order
                   --  the language's own signature gives them: one table, a
@@ -375,7 +400,7 @@ begin
                            Value : Operand;
                            Read  : Boolean;
                            Kept  : Natural;
-                           Slot  : Natural := Found + 1;
+                           Slot  : Natural := Slot_Of_Position (Found + 1);
                            Key_First, Key_Last : Natural;
                            Ahead : Natural := Scan;
                         begin
@@ -400,6 +425,13 @@ begin
                                  return;
                               end if;
                               Scan := Skip_Spaces (Inside, Ahead) + 1;
+                           end if;
+
+                           --  A positional past the filter's signature.
+                           if Slot = 0 then
+                              Result :=
+                                Refused (Word, E.Template_Unknown_Filter);
+                              return;
                            end if;
 
                            Read_Operand (Inside, Scan, Value, Read);
@@ -515,7 +547,7 @@ begin
                   Read_Arguments (1, 0);
                elsif Word = "format" then
                   Step.Kind := Filter_Format;
-                  Read_Arguments (3, 0);
+                  Read_Arguments (8, 0);
                elsif Word = "striptags" then
                   Step.Kind := Filter_Striptags;
                   Read_Arguments (0);
@@ -554,7 +586,7 @@ begin
                elsif Word = "map" then
                   --  A filter's name, or an attribute and its stand-in.
                   Step.Kind := Filter_Map;
-                  Read_Arguments (3, 1);
+                  Read_Arguments (7, 1);
                elsif Word = "select" then
                   Step.Kind := Filter_Select;
                   Read_Arguments (2, 0);

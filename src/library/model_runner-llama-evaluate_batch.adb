@@ -336,7 +336,8 @@ is
        --  slot for it at this layer's place, a slot a layer so a batch
        --  that chains does not land every layer's sinks on the last's;
        --  the ones past the room go to the host, as a single token's do.
-       and then Sinks_Fit (L.Sinks, Index)
+       and then Sinks_Fit (L.Sinks, Index, Item.Paged,
+                           Sink_Footprint (Item.Owner.Settings))
        and then (L.Attention_Norm /= null)
                 = not Normalizes_After (Settings.Kind)
        and then (not Normalizes_After (Settings.Kind)
@@ -1761,7 +1762,7 @@ begin
                                 Cell_Of (Item, Natural (Index), Reserved)
                                 + Count,
                                 Paged => Item.Paged)),
-                     Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index)),
+                     Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged),
                      Alpha => Settings.Gate_Alpha,
                      Limit => Settings.Gate_Limit,
 
@@ -2428,7 +2429,7 @@ begin
                         Packed    => Packed_Shape (Item, Base, V_Base,
                                                    KV_Width, V_Width,
                                                    Seated => False),
-                        Sinks_At  => Sinks_Ready (Current.Sinks, Natural (Index)),
+                        Sinks_At  => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged),
                      Alpha => Settings.Gate_Alpha,
                      Limit => Settings.Gate_Limit,
                      Cancel => Item.Stopping);

@@ -346,7 +346,10 @@ void main() {
         float az6 = x[zb + 48u]; float az7 = x[zb + 49u];
 
         for (uint r = 0u; r < NUM_ROWS; ++r) {
-            uint row = first_row + r;
+            //  Held to the last row for the read: the last workgroup of an
+            //  odd count carries a row past the matrix, whose answer the
+            //  store below drops but whose bytes were read all the same.
+            uint row = min (first_row + r, shape.rows - 1u);
             uint at = shape.base + slice + row * span + i * 176u;
             uint head = at >> 2u;
 

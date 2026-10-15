@@ -3273,6 +3273,15 @@ package body Tests.Tools_Cases is
                  & LF & "<parameter=content>" & LF & "<div>x</div>" & LF
                  & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
               "a </div> in reasoning or in a value was refused");
+      Assert (Full_Set_Takes_In
+                (Tools.Tool_Call_JSON,
+                 "std::cout << x << 1; cat <<EOF" & LF & "<<</div>"),
+              "prose holding << was refused");
+      Assert (Full_Set_Takes_In
+                (Tools.Mistral_Call,
+                 "[[1, 2], [3, 4]] [[x]][TOOL_CALLS]calculator[ARGS]"
+                 & "{""a"":47,""op"":""+"",""b"":89}"),
+              "prose holding [[ was refused ahead of a Mistral call");
       Assert (not Full_Set_Takes_In
                 (Tools.Tool_Call_JSON, "<tool_call>not a call"),
               "the call's own opener was taken as prose");
@@ -3388,9 +3397,262 @@ package body Tests.Tools_Cases is
       Tools.Close (Defs);
    end Calls_Are_Read_As_Families_Write_Them;
 
+   --  Reasoning is what opens a reply, as llama.cpp reads it: an answer
+   --  that mentions <think> further on, with no close, is an answer -- it
+   --  was emptied, and the calls it made dropped -- while a reply that
+   --  opens on <think>, after any spaces, and never closes it is none.
+   procedure A_Reply_Mentioning_Think_Keeps_Its_Answer
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      LF      : constant String := [1 => ASCII.LF];
+      Mention : constant String :=
+        "Models write <think> before their reasoning.";
+      Status  : E.Error_Info;
+      Defs    : aliased Tools.Definitions;
+   begin
+      Assert (Model_Runner.Agent.Answer_Of (Mention) = Mention,
+              "an answer that mentions <think> was taken for reasoning");
+      Assert (Model_Runner.Agent.Answer_Of (LF & "  <think>still thinking")
+              = "",
+              "reasoning opened after spaces and cut short was an answer");
+
+      Tools.Read
+        (Defs,
+         "[{""type"":""function"",""function"":{""name"":""edit"","
+         & """parameters"":{""type"":""object"",""properties"":"
+         & "{""count"":{""type"":""integer""}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool would not read");
+      declare
+         Talk    : Model_Runner.Conversation.History;
+         Reading : E.Error_Info;
+      begin
+         Model_Runner.Conversation.Open (Talk, Status => Status);
+         Model_Runner.Conversation.Append
+           (Talk, Model_Runner.Conversation.User_Role, "go", Status);
+         Model_Runner.Conversation.Append_Reply
+           (Talk, Mention & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": "
+                  & "{""count"": 1}}</tool_call>",
+            Status, Reading, Syntax => Tools.Tool_Call_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call after an answer mentioning <think> was dropped");
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "  <think>I will call edit"
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": "
+                  & "{""count"": 1}}</tool_call>",
+            Status, Reading, Syntax => Tools.Tool_Call_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Model_Runner.Conversation.Call_Count
+                   (Talk, Model_Runner.Conversation.Length (Talk)) = 0,
+                 "a call inside reasoning that never closed was taken");
+         Model_Runner.Conversation.Close (Talk);
+      end;
+      Tools.Close (Defs);
+   end A_Reply_Mentioning_Think_Keeps_Its_Answer;
+
+   --  A Qwen3-Coder value its schema types as other than a string is read
+   --  as JSON reads one, the spaces around it none of it: a number written
+   --  on a line of its own between more than the one line break either
+   --  side stayed the string " 42 ", where the tool asked a number. A
+   --  string keeps every space but those two line breaks.
+   procedure A_Typed_Qwen_Value_Is_Read_Without_Its_Spaces
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      LF     : constant String := [1 => ASCII.LF];
+      Status : E.Error_Info;
+      Defs   : aliased Tools.Definitions;
+      Asked  : Tools.Calls;
+   begin
+      Tools.Read
+        (Defs,
+         "[{""type"":""function"",""function"":{""name"":""edit"","
+         & """parameters"":{""type"":""object"",""properties"":"
+         & "{""count"":{""type"":""integer""},"
+         & """flag"":{""type"":""boolean""},"
+         & """list"":{""type"":""array""},"
+         & """text"":{""type"":""string""}}}}}]",
+         Status);
+      Assert (E.Is_Ok (Status), "the tool would not read");
+      Tools.Read_Calls
+        (Asked,
+         "<tool_call>" & LF & "<function=edit>" & LF
+         & "<parameter=count>" & LF & "  42 " & LF & "</parameter>" & LF
+         & "<parameter=flag>" & LF & " true" & LF & LF & "</parameter>" & LF
+         & "<parameter=list>" & LF & "  [1, 2]" & LF & "</parameter>" & LF
+         & "<parameter=text>" & LF & "  7 " & LF & "</parameter>" & LF
+         & "</function>" & LF & "</tool_call>",
+         Status, Syntax => Tools.Qwen_XML,
+         Offered => Defs'Unchecked_Access);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1,
+              "the call was not read");
+      Assert (Tools.Arguments (Asked, 1)
+              = "{""count"": 42, ""flag"": true, ""list"": [1, 2], "
+                & """text"": ""  7 ""}",
+              "the typed values were read with their spaces: "
+              & Tools.Arguments (Asked, 1));
+      Tools.Close (Asked);
+      Tools.Close (Defs);
+   end A_Typed_Qwen_Value_Is_Read_Without_Its_Spaces;
+
+   --  The excluding rule takes every text that holds none of its literals
+   --  -- and, held not to end on a beginning of one, ends on none -- and
+   --  no other, over every text of up to six characters drawn from the
+   --  literals' own characters and one more. "<<" and "[[" are among
+   --  them: a beginning before a fresh first character was refused, so a
+   --  call grammar's prose could hold no C++ shift and no nested list. A
+   --  set whose literals hold a first character past their front is
+   --  written narrower, and held only to take nothing that holds one.
+   procedure Excluding_Takes_What_Holds_No_Literal
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      LF : constant String := [1 => ASCII.LF];
+
+      --  Whether Text holds Literal anywhere.
+      function Holds (Text, Literal : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Text, Literal) /= 0);
+
+      --  Whether Text ends on a proper, non-empty beginning of Literal.
+      function Ends_Begun (Text, Literal : String) return Boolean is
+      begin
+         for Count in 1 .. Literal'Length - 1 loop
+            if Text'Length >= Count
+              and then Text (Text'Last - Count + 1 .. Text'Last)
+                       = Literal (Literal'First .. Literal'First + Count - 1)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Ends_Begun;
+
+      type Text_Access is access constant String;
+      type Text_List is array (Positive range <>) of Text_Access;
+
+      procedure Check
+        (Literals : Text_List;
+         Alphabet : String;
+         Exact    : Boolean)
+      is
+         Joined : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         for L of Literals loop
+            if Ada.Strings.Unbounded.Length (Joined) > 0 then
+               Ada.Strings.Unbounded.Append (Joined, LF);
+            end if;
+            Ada.Strings.Unbounded.Append (Joined, L.all);
+         end loop;
+
+         for Ending in Boolean loop
+            declare
+               Rules  : G.Compiled;
+               State  : G.Matcher;
+               Status : E.Error_Info;
+               Text   : String (1 .. 6);
+               Tried  : Natural := 0;
+
+               function Takes (Item : String) return Boolean is
+               begin
+                  G.Start (Rules, State, Status);
+                  Assert (E.Is_Ok (Status), "the excluding rule would not start");
+                  G.Advance (Rules, State, Item, Status);
+                  return E.Is_Ok (Status) and then G.Is_Complete (Rules, State);
+               end Takes;
+
+               function Wanted (Item : String) return Boolean is
+               begin
+                  for L of Literals loop
+                     if Holds (Item, L.all)
+                       or else (not Ending and then Ends_Begun (Item, L.all))
+                     then
+                        return False;
+                     end if;
+                  end loop;
+                  return True;
+               end Wanted;
+
+               procedure Try (Length : Natural) is
+                  Item : constant String := Text (1 .. Length);
+                  Took : constant Boolean := Takes (Item);
+               begin
+                  Tried := Tried + 1;
+                  if Exact then
+                     Assert (Took = Wanted (Item),
+                             "the excluding rule over "
+                             & Ada.Strings.Unbounded.To_String (Joined)
+                             & (if Ending then "" else " (no ending)")
+                             & (if Took then " took """ else " refused """)
+                             & Item & """");
+                  else
+                     Assert (not Took or else Wanted (Item),
+                             "the narrower excluding rule took """ & Item
+                             & """, which holds a literal");
+                  end if;
+               end Try;
+
+               procedure Walk (Length : Natural) is
+               begin
+                  Try (Length);
+                  if Length < Text'Last then
+                     for C of Alphabet loop
+                        Text (Length + 1) := C;
+                        Walk (Length + 1);
+                     end loop;
+                  end if;
+               end Walk;
+            begin
+               G.Compile
+                 (Rules,
+                  G.Excluding
+                    ("root", Ada.Strings.Unbounded.To_String (Joined), Ending),
+                  Status);
+               Assert (E.Is_Ok (Status),
+                       "the excluding rule over "
+                       & Ada.Strings.Unbounded.To_String (Joined)
+                       & " would not compile");
+               Walk (0);
+               Assert (Tried > 1000, "too few texts were tried");
+               G.Close (Rules);
+            end;
+         end loop;
+      end Check;
+
+      Tag   : aliased constant String := "<ab>";
+      Other : aliased constant String := "<cd>";
+      Close : aliased constant String := "</t>";
+      Open  : aliased constant String := "<f=";
+      List  : aliased constant String := "[TC]";
+      Sign  : aliased constant String := "$";
+      Inner : aliased constant String := "a<b";
+   begin
+      Check ([Tag'Access, Other'Access], "<abcd>", Exact => True);
+      Check ([Close'Access, Open'Access], "</tf=", Exact => True);
+      Check ([List'Access], "[TC]", Exact => True);
+      Check ([Sign'Access, Tag'Access], "$<ab>", Exact => True);
+      Check ([Inner'Access, Other'Access], "a<bcd>", Exact => False);
+   end Excluding_Takes_What_Holds_No_Literal;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, A_Typed_Qwen_Value_Is_Read_Without_Its_Spaces'Access,
+         "a Qwen value typed other than a string is read without the spaces "
+         & "around it");
+      Register_Routine
+        (T, A_Reply_Mentioning_Think_Keeps_Its_Answer'Access,
+         "a reply that mentions <think> past its start keeps its answer and "
+         & "its calls");
+      Register_Routine
+        (T, Excluding_Takes_What_Holds_No_Literal'Access,
+         "the excluding rule takes every text that holds none of its "
+         & "literals and no other, << and [[ among them");
       Register_Routine
         (T, Failures_Are_Recovered_By_Their_Class'Access,
          "a failure in the agent loop is recovered from as its class says");

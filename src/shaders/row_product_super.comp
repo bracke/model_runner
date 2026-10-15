@@ -11,11 +11,12 @@
 //  sixteen weights instead of once for eight and never redundantly across a
 //  sub-block's lanes.
 //
-//  Sixteen lanes share a super-block and a workgroup of thirty-two takes two
+//  Sixteen lanes share a super-block and a subgroup of sixty-four takes four
 //  at a time, striding the row's super-blocks between them; each lane carries
 //  a partial for every row the workgroup lands, and the subgroup adds them at
-//  the end. One workgroup is one subgroup of thirty-two, which is what lets
-//  the device run it at that width.
+//  the end. A workgroup is one subgroup of sixty-four -- two for a long row's
+//  compilation (KSPLIT), whose halves are added through shared memory --
+//  which is what lets the device run it at that width.
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -340,7 +341,7 @@ void main() {
     uint ir = itid & 3u;                 // 0..3
     uint v_im = il >> 1u;                // 0 or 1: which half of the block
     uint v_in = il & 1u;
-    uint l0 = 4u * (2u * ir + v_in);     // 0..15
+    uint l0 = 4u * (2u * ir + v_in);     // 0, 4 .. 28
     uint q_word = (32u * v_im + l0) >> 2u;   // word of quants this lane reads
     uint y_off = 64u * v_im + l0;            // element of the activation
 
@@ -399,13 +400,19 @@ void main() {
             //  stride word for a feed-forward's pair, and for a gathered
             //  pair -- a mixture's gate and up stacks, an expert a slice --
             //  the joins word, the stride being the slice's.
-            uint row = first_row + r % NUM_ROWS;
+            //  Held to the last row for the read: the last workgroup of an
+            //  odd count carries a row past the matrix, whose answer the
+            //  store below drops but whose bytes were read all the same.
+            uint row = min (first_row + r % NUM_ROWS, shape.rows - 1u);
             uint pair = shape.routed != 0u ? shape.joins : shape.stride;
             uint at = shape.base + (shape.routed != 0u ? slice : 0u)
                       + (r >= NUM_ROWS ? pair : 0u)
                       + row * span + i * 144u;
 #else
-            uint row = first_row + r;
+            //  Held to the last row for the read: the last workgroup of an
+            //  odd count carries a row past the matrix, whose answer the
+            //  store below drops but whose bytes were read all the same.
+            uint row = min (first_row + r, shape.rows - 1u);
             uint at = shape.base + slice + row * span + i * 144u;
 #endif
             uint head = at >> 2u;

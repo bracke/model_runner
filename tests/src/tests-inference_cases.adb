@@ -54,6 +54,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Generation;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
+with Model_Runner.Templates;
 with Model_Runner.Tokenizer;
 
 with Conformance;
@@ -61,6 +62,7 @@ with BPE_Vocabulary;
 with Unigram_Vocabulary;
 with Reference_Tokenizer;
 with Reference_Transformer;
+with Device_Notes;
 with Tiny_Model;
 
 package body Tests.Inference_Cases is
@@ -285,14 +287,7 @@ package body Tests.Inference_Cases is
 
          Start (Under, Model_Runner.Backend.Backend_Device, Able);
 
-         if not Able then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device fused a layer here");
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Able, "the fixture did not prepare");
 
          L.Open (Live, Under.Ready, Status => Status);
          Assert (E.Is_Ok (Status), "session did not open on the device");
@@ -410,14 +405,7 @@ package body Tests.Inference_Cases is
 
          Start (Under, Model_Runner.Backend.Backend_Device, Able);
 
-         if not Able then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device attended out of its copy here");
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Able, "the fixture did not prepare");
 
          --  Exact first, so the device is known not to be reading the
          --  copy before it is asked to.
@@ -1289,14 +1277,7 @@ package body Tests.Inference_Cases is
          Able   : Boolean;
       begin
          Start (Under, Model_Runner.Backend.Backend_Device, Able);
-         if not Able then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device kept a checkpoint here");
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Able, "the fixture did not prepare");
 
          L.Open (Live, Under.Ready, Status => Status);
          Assert (E.Is_Ok (Status), "the session did not open on the device");
@@ -1306,12 +1287,12 @@ package body Tests.Inference_Cases is
            (Live, Under.Ready, Prompt (1 .. 3), Straight, Status => Status);
          Assert (E.Is_Ok (Status), "the batch before the checkpoint failed");
          L.Mark_Checkpoint (Live);
-         if not L.Checkpoint_On_Device (Live) then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: the device ran no linear layer here; the checkpoint "
-               & "stayed on the host");
-         end if;
+         --  The device runs the hybrid's linear layers whole, so the
+         --  checkpoint is its: one left on the host is a checkpoint this
+         --  test would rewind to without holding the device's to anything.
+         Assert (L.Checkpoint_On_Device (Live),
+                 "the device ran no linear layer here; the checkpoint "
+                 & "stayed on the host");
          L.Evaluate_Batch
            (Live, Under.Ready, Prompt (4 .. 5), Straight, Status => Status);
          Assert (E.Is_Ok (Status), "the batch past the checkpoint failed");
@@ -1627,6 +1608,145 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end A_Hybrid_Drafts_From_Its_Next_Block;
+
+   --  A block past the stack drafts on any architecture that carries one,
+   --  not only on the hybrids it shipped with: Mellum was released
+   --  without the block it was trained with, and one trained for it is a
+   --  plain attention layer -- no gate beside its queries, perhaps no
+   --  norm on its heads. The block was read only on the hybrids, its
+   --  buffers made only for them, and its queries always split for a
+   --  gate, so such a block was counted as a layer of the stack. Here a
+   --  dense Qwen3, a Mellum-shaped mixture and a Llama without head norms
+   --  each carry one: it is counted apart, the session drafts, and the
+   --  block's cache written in one batch drafts what it drafts written a
+   --  position at a time.
+   procedure A_Block_Past_Any_Stack_Drafts
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package T renames Model_Runner.Tensors;
+      Room   : constant := 64;
+      Prompt : constant Vocab.Token_Array (1 .. 5) := [4, 7, 2, 9, 5];
+      Kinds  : constant array (1 .. 3) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Qwen3, Tiny_Model.Mellum, Tiny_Model.Llama];
+   begin
+      for Kind of Kinds loop
+         declare
+            Image : B.Byte_Array_Access;
+            Name  : constant String :=
+              Tiny_Model.Fixture_Architecture'Image (Kind);
+         begin
+            if Tiny_Model."=" (Kind, Tiny_Model.Mellum) then
+               Tiny_Model.Build
+                 (Image, Kind => Kind, Room => Room, Experts => 4,
+                  Experts_Used => 2, Window => 8, Draft_Block => True);
+            else
+               Tiny_Model.Build
+                 (Image, Kind => Kind, Room => Room, Draft_Block => True);
+            end if;
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Under  : aliased Harness (Held'Access);
+               Status : E.Error_Info;
+            begin
+               Start (Under);
+
+               declare
+                  Settings : constant L.Configuration :=
+                    L.Config (Under.Ready);
+                  Width    : constant N.Element_Count :=
+                    N.Element_Count (Settings.Embedding);
+                  States   : T.Real_Array_Access;
+                  Last     : Logit_Vector;
+                  One, Fed : Logit_Vector := [others => 0.0];
+                  Handed   : N.Real_Array (0 .. Width - 1);
+                  Nothing  : N.Real_Array (1 .. 0);
+                  Live, Again : L.Session;
+
+                  function State_At (P : Natural) return N.Real_Array
+                  is (States.all (States.all'First + N.Element_Count (P) * Width
+                                  .. States.all'First
+                                     + N.Element_Count (P + 1) * Width - 1));
+               begin
+                  Assert (Settings.Next_Layers = 1,
+                          Name & "'s block past the stack was not counted");
+                  Assert (Settings.Layers = Tiny_Model.Layers,
+                          Name & "'s block was counted as a layer of the "
+                          & "stack");
+
+                  T.Allocate (Width * Prompt'Length, States);
+                  L.Open (Live, Under.Ready, Context => Room,
+                          Status => Status);
+                  Assert (E.Is_Ok (Status), "the session did not open");
+                  Assert (L.Drafts_Next (Live), Name & "'s session does not draft");
+
+                  L.Evaluate_Batch
+                    (Live, Under.Ready, Prompt, Last, States => States,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status), "the prompt failed");
+
+                  --  A position at a time, the last with its distribution.
+                  for P in 0 .. Prompt'Length - 2 loop
+                     if P = Prompt'Length - 2 then
+                        L.Draft_Next
+                          (Live, Under.Ready, Prompt (P + 2), State_At (P), P,
+                           One, Handed, Status);
+                     else
+                        L.Draft_Next
+                          (Live, Under.Ready, Prompt (P + 2), State_At (P), P,
+                           Nothing, Handed, Status);
+                     end if;
+                     Assert (E.Is_Ok (Status),
+                             Name & "'s block did not draft: "
+                             & E.Error_Code'Image (Status.Code));
+                  end loop;
+                  for V of One loop
+                     Assert (V'Valid, Name & "'s drafted logit is not a number");
+                  end loop;
+                  L.Close (Live);
+
+                  --  The same cache written in one batch.
+                  L.Open (Again, Under.Ready, Context => Room,
+                          Status => Status);
+                  L.Evaluate_Batch
+                    (Again, Under.Ready, Prompt, Last, States => States,
+                     Status => Status);
+                  L.Feed_Next
+                    (Again, Under.Ready,
+                     Prompt (Prompt'First + 1 .. Prompt'Last - 1),
+                     States.all (States.all'First
+                                 .. States.all'First
+                                    + N.Element_Count (Prompt'Length - 2)
+                                      * Width - 1),
+                     0, Status);
+                  Assert (E.Is_Ok (Status),
+                          Name & "'s block would not be fed: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Draft_Next
+                    (Again, Under.Ready, Prompt (Prompt'Last),
+                     State_At (Prompt'Length - 2), Prompt'Length - 2, Fed,
+                     Handed, Status);
+                  Assert (E.Is_Ok (Status), "the fed block did not draft");
+                  declare
+                     Worst : N.Real := 0.0;
+                  begin
+                     for Index in One'Range loop
+                        Worst := N.Real'Max (Worst, abs (One (Index) - Fed (Index)));
+                     end loop;
+                     Assert (Worst <= 1.0E-4,
+                             Name & "'s block fed in a batch drafts"
+                             & N.Real'Image (Worst)
+                             & " away from it fed a position at a time");
+                  end;
+                  L.Close (Again);
+                  T.Free (States);
+               end;
+            end;
+            B.Free (Image);
+         end;
+      end loop;
+   end A_Block_Past_Any_Stack_Drafts;
 
    --  And drafting from the block while sampling keeps the model's own
    --  distribution. Above temperature zero a proposal is kept with the
@@ -3771,10 +3891,10 @@ package body Tests.Inference_Cases is
 
       --  Every architecture the device reads, windowed where it can be,
       --  and then heads as wide as Gemma's -- two hundred and fifty-six,
-      --  past the room the device's attention kernel keeps --
-      --  which the device must decline and the processor take: for a
-      --  hundred days it did not decline it, and every Gemma answered in
-      --  nonsense while every fixture, four wide, agreed to the bit.
+      --  once past the room the device's attention kernel kept, and for a
+      --  hundred days not declined, every Gemma answering in nonsense while
+      --  every fixture, four wide, agreed to the bit. The kernel reads them
+      --  now, and the device takes those layers whole.
       declare
          --  And the hybrid, dense and as a mixture with its shared
          --  expert: its attention layers go whole with the gate beside
@@ -3871,14 +3991,47 @@ package body Tests.Inference_Cases is
                     (Model_Runner.Platform.Device.Products.Rounds_Every);
                end if;
                for Chunk in reverse 1 .. 3 loop
-                  Logits_On
-                    (Image, Model_Runner.Backend.Backend_Device,
-                     (if Chunk = 3 then Length elsif Chunk = 2 then 41
-                      else 1),
-                     Device, Why);
-                  Assert (Why = E.No_Error,
-                          "the device refused " & Name & ": "
-                          & E.Error_Code'Image (Why));
+                  declare
+                     Whole_Was  : constant Natural :=
+                       Model_Runner.Backend.Device.Layers_Whole;
+                     Handed_Was : constant Natural :=
+                       Model_Runner.Backend.Device.Layers_Handed;
+                     Whole, Handed : Natural;
+                  begin
+                     Logits_On
+                       (Image, Model_Runner.Backend.Backend_Device,
+                        (if Chunk = 3 then Length elsif Chunk = 2 then 41
+                         else 1),
+                        Device, Why);
+                     Assert (Why = E.No_Error,
+                             "the device refused " & Name & ": "
+                             & E.Error_Code'Image (Why));
+
+                     --  And the device ran it: a comparison of the
+                     --  processor with layers handed back to it is the
+                     --  processor against itself. Every row goes whole
+                     --  but the one routing past sixteen experts, which
+                     --  the device gathers a layer in pieces (not stacked:
+                     --  Max_Members), and which must go that way.
+                     Whole := Model_Runner.Backend.Device.Layers_Whole
+                       - Whole_Was;
+                     Handed := Model_Runner.Backend.Device.Layers_Handed
+                       - Handed_Was;
+                     if Row.Used > Model_Runner.Backend.Device.Max_Members
+                     then
+                        Assert (Whole = 0 and then Handed > 0,
+                                Name & " routing past the gather's sixteen "
+                                & "went" & Natural'Image (Whole)
+                                & " layers whole and" & Natural'Image (Handed)
+                                & " in pieces");
+                     else
+                        Assert (Whole > 0 and then Handed = 0,
+                                Name & " went" & Natural'Image (Whole)
+                                & " layers whole on the device and"
+                                & Natural'Image (Handed)
+                                & " to the processor");
+                     end if;
+                  end;
                   Worst := 0.0;
                   for Index in Host'Range loop
                      Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
@@ -4371,6 +4524,7 @@ package body Tests.Inference_Cases is
       Image : B.Byte_Array_Access;
 
       Words : Model_Runner.Localization.Catalog;
+      Awake : Boolean;
 
    begin
       Model_Runner.Localization.Open
@@ -4400,21 +4554,36 @@ package body Tests.Inference_Cases is
          L.Close (Model, Status);
 
          --  And so does the device, without being asked to repack anything.
-         --  A machine with no device refuses for want of one, which is a
-         --  different code and is not what this is about.
+         --  Opened here: a test before this one closes it, and a prepare on
+         --  a closed device succeeds without one, so everything below that
+         --  asks what the device holds was skipped whatever the close did.
+         Model_Runner.Backend.Device.Open (Awake);
+         if not Awake then
+            Device_Notes.Skip ("to read a q4_1 model on");
+         end if;
          L.Prepare
            (Model, Item, Source,
             Backend => Model_Runner.Backend.Backend_Device,
             Status  => Status);
+         Assert (E.Is_Ok (Status),
+                 "a q4_1 model was refused by the device backend, which "
+                 & "now decodes it: " & E.Error_Code'Image (Status.Code));
 
-         if Status.Code = E.Backend_No_Device then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device read a q4_1 model here");
-         else
-            Assert (E.Is_Ok (Status),
-                    "a q4_1 model was refused by the device backend, which "
-                    & "now decodes it: " & E.Error_Code'Image (Status.Code));
+         --  And a token run there, so the device holds the model's matrices
+         --  when it is asked below what a close leaves.
+         if Awake then
+            declare
+               Live : L.Session;
+               Last : Logit_Vector;
+            begin
+               L.Open (Live, Model, Status => Status);
+               Assert (E.Is_Ok (Status), "the q4_1 session did not open");
+               L.Evaluate (Live, Model, 1, Last, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a q4_1 token failed on the device: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Close (Live);
+            end;
          end if;
 
          --  And the two lists that have to agree do. Said here as well as in
@@ -4461,7 +4630,7 @@ package body Tests.Inference_Cases is
          --  because the symptom needs an allocator to reuse an address and a
          --  test cannot insist on that. The sweep is what would catch a
          --  behaviour regression; this catches the mechanism going away.
-         if Model_Runner.Backend.Device.Is_Ready then
+         if Awake then
             Assert (Model_Runner.Backend.Device.Resident > 0,
                     "the device held nothing before the model closed, so "
                     & "what follows would pass whatever the close did");
@@ -4486,6 +4655,9 @@ package body Tests.Inference_Cases is
          Containers.Close (Item);
       end;
 
+      if Awake then
+         Model_Runner.Backend.Device.Close;
+      end if;
       Model_Runner.Localization.Close (Words);
       B.Free (Image);
    end Device_Reads_A_Model_In_Any_Format;
@@ -4518,6 +4690,7 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready, Budget => 1024);
 
       if not Ready then
+         Device_Notes.Skip ("for device says when a model will not fit");
          return;
       end if;
 
@@ -4700,6 +4873,7 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip ("for a run says which layers the device took");
             B.Free (Image);
             return;
          end if;
@@ -4707,11 +4881,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          --  In bytes, four elements to the word, and in nibbles, two --
          --  half a word a row, which the packing merges -- so every layer
@@ -4755,6 +4925,7 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip ("for a run says which layers the device took");
             B.Free (Image);
             return;
          end if;
@@ -4762,11 +4933,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          L.Open (Live, Under.Ready, Status => Status);
          Assert (E.Is_Ok (Status),
@@ -4809,6 +4976,7 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip ("for a run says which layers the device took");
             B.Free (Image);
             return;
          end if;
@@ -4816,11 +4984,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          --  What the device would need for this context, and what one
          --  buffer there holds: a small fixture's is far under it, and
@@ -4937,6 +5101,8 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip
+              ("for sessions of different sizes share the device s cache");
             B.Free (Image);
             return;
          end if;
@@ -4944,11 +5110,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          --  Shortest first, so that every session after the first wants
          --  more room than the buffer has been dealt for.
@@ -5103,6 +5265,8 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip
+              ("for two models on one device keep their own caches");
             B.Free (Plain);
             B.Free (Hybrid);
             return;
@@ -5113,12 +5277,7 @@ package body Tests.Inference_Cases is
          Start (Two, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready_Two);
 
-         if not Ready_One or else not Ready_Two then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Plain);
-            B.Free (Hybrid);
-            return;
-         end if;
+         Assert (Ready_One and then Ready_Two, "a fixture did not prepare");
 
          --  A session of each, stepped one after the other so that both
          --  hold blocks of the one buffer at the same time.
@@ -5132,6 +5291,8 @@ package body Tests.Inference_Cases is
          for Index in Prompt'Range loop
             declare
                Whole_One, Whole_Two : Natural;
+               Handed : constant Natural :=
+                 Model_Runner.Backend.Device.Layers_Handed;
             begin
                Whole_One := Model_Runner.Backend.Device.Layers_Whole;
                L.Evaluate (First, One.Ready, Prompt (Index), Said_One,
@@ -5139,29 +5300,33 @@ package body Tests.Inference_Cases is
                Assert (E.Is_Ok (Status), "the first model would not evaluate");
                Whole_Two := Model_Runner.Backend.Device.Layers_Whole;
 
-               --  Whether both models keep their layers whole on the device
-               --  at once is the box's cache budget to decide -- this one's
-               --  buffer does not stretch to two, so one falls to the
-               --  processor, a slower run and not a fault. Noted, not failed;
-               --  what each model says is held to its lone answer below.
-               if Whole_Two <= Whole_One then
-                  Ada.Text_IO.Put_Line
-                    (Ada.Text_IO.Standard_Error,
-                     "note: the first model kept no layer whole on the device"
-                     & " beside the second");
-               end if;
+               --  Both models keep their layers whole on the device at once:
+               --  two contexts this small are well inside any device's
+               --  cache, so one falling to the processor is the blocks of
+               --  the one buffer failing to sit side by side -- which is
+               --  this test's question, and was only noted.
+               Assert (Whole_Two > Whole_One,
+                       "the first model kept no layer whole on the device "
+                       & "beside the second");
 
                L.Evaluate (Second, Two.Ready, Prompt (Index), Said_Two,
                            Status => Status);
                Assert (E.Is_Ok (Status),
                        "the second model would not evaluate");
 
-               if Model_Runner.Backend.Device.Layers_Whole <= Whole_Two then
-                  Ada.Text_IO.Put_Line
-                    (Ada.Text_IO.Standard_Error,
-                     "note: the second model kept no layer whole on the"
-                     & " device beside the first");
-               end if;
+               Assert (Model_Runner.Backend.Device.Layers_Whole > Whole_Two,
+                       "the second model kept no layer whole on the device "
+                       & "beside the first");
+
+               --  Every layer of both, not some: the hybrid's linear layers
+               --  go whole on a ring seat of their own, and its attention
+               --  layers could fall to the host for want of a block while
+               --  those went on counting.
+               Assert (Model_Runner.Backend.Device.Layers_Handed = Handed,
+                       "the two models handed"
+                       & Natural'Image
+                           (Model_Runner.Backend.Device.Layers_Handed - Handed)
+                       & " layers to the host side by side");
             end;
          end loop;
 
@@ -5320,6 +5485,8 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip
+              ("for the cache moves its blocks rather than growing");
             B.Free (Image);
             return;
          end if;
@@ -5327,11 +5494,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          declare
             use type Interfaces.Unsigned_64;
@@ -5340,16 +5503,15 @@ package body Tests.Inference_Cases is
             Two_Short : constant Interfaces.Unsigned_64 := Takes (Short, 2);
             One_Long  : constant Interfaces.Unsigned_64 := Takes (Long, 1);
          begin
-            --  A device that holds no cache at all says nothing here, and
-            --  neither does one where a short block and a long one come
-            --  to the same size.
-            if One_Short = 0 or else Two_Short <= One_Short
-              or else One_Long <= One_Short
-            then
-               Model_Runner.Backend.Device.Close;
-               B.Free (Image);
-               return;
-            end if;
+            --  The device is open and the sessions ran on it, so a cache
+            --  that holds nothing, or a short block and a long one of one
+            --  size, is the fault this is here to see, not a reason to say
+            --  nothing.
+            Assert (One_Short > 0 and then Two_Short > One_Short
+                    and then One_Long > One_Short,
+                    "the device's cache took" & One_Short'Image
+                    & " bytes for a short block," & Two_Short'Image
+                    & " for two and" & One_Long'Image & " for a long one");
 
             declare
                Short_Room : array (1 .. 5) of L.Session;
@@ -5540,6 +5702,8 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip
+              ("for the room of rings moves its seats rather than growing");
             B.Free (Image);
             return;
          end if;
@@ -5547,11 +5711,7 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
 
          declare
             use type Interfaces.Unsigned_64;
@@ -5560,16 +5720,13 @@ package body Tests.Inference_Cases is
             Two_Small : constant Interfaces.Unsigned_64 := Takes (Small, 2);
             One_Large : constant Interfaces.Unsigned_64 := Takes (Large, 1);
          begin
-            --  A device that seats no ring at all says nothing here, and
-            --  neither does one whose rings are all the same size however
-            --  many states are kept.
-            if One_Small = 0 or else Two_Small <= One_Small
-              or else One_Large <= One_Small
-            then
-               Model_Runner.Backend.Device.Close;
-               B.Free (Image);
-               return;
-            end if;
+            --  Seated on an open device: no ring at all, or rings of one
+            --  size however many states are kept, is the fault this sees.
+            Assert (One_Small > 0 and then Two_Small > One_Small
+                    and then One_Large > One_Small,
+                    "the device's rings took" & One_Small'Image
+                    & " bytes for a small one," & Two_Small'Image
+                    & " for two and" & One_Large'Image & " for a large one");
 
             declare
                Seated : array (1 .. 5) of L.Session;
@@ -5664,6 +5821,134 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end The_Room_Of_Rings_Moves_Its_Seats_Rather_Than_Growing;
 
+   -------------------------------------------------
+   -- A_Batch_The_Ring_Wraps_Keeps_Its_First_States --
+   -------------------------------------------------
+
+   --  A batch as long as the ring, or a little longer, on the device: the
+   --  first positions' convolution memories take rows of the memory the
+   --  batch began with, and the batch's last position writes the slot that
+   --  memory is in. Written in one pass with workgroups in no order, the
+   --  memory was read after it was written over, and a rewind to the first
+   --  positions read memories made of later ones. Every batch from two to
+   --  twelve, and a rewind to each of its first two positions where the
+   --  ring reaches: what comes next is what a session that read those one
+   --  at a time says.
+   procedure A_Batch_The_Ring_Wraps_Keeps_Its_First_States
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 64;
+      Front  : constant Vocab.Token_Array (1 .. 3) := [4, 5, 6];
+      Batch  : constant Vocab.Token_Array (1 .. 12) :=
+        [7, 8, 9, 10, 11, 12, 13, 14, 3, 2, 7, 9];
+      Next   : constant Vocab.Token_Id := 11;
+      Near   : constant N.Real := 2.0E-3;
+
+      Image : B.Byte_Array_Access;
+      Tried : Natural := 0;
+
+      function Worst (Left, Right : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in Left'Range loop
+            Most := N.Real'Max (Most, abs (Left (Index) - Right (Index)));
+         end loop;
+         return Most;
+      end Worst;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen35, Room => Room, Wide_State => True);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Awake : Boolean;
+
+         Status : E.Error_Info;
+         Answer : Logit_Vector;
+
+         procedure Begin_With (Live : in out L.Session) is
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Status);
+            Assert (E.Is_Ok (Status), "a hybrid session did not open");
+            L.Keep_States (Live, 4, Status);
+            Assert (E.Is_Ok (Status), "the session would not keep states");
+            for Token of Front loop
+               L.Evaluate (Live, Under.Ready, Token, Answer, Status => Status);
+               Assert (E.Is_Ok (Status), "the front did not evaluate");
+            end loop;
+         end Begin_With;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if not Awake then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "note: no device to wrap a hybrid's ring on");
+            B.Free (Image);
+            return;
+         end if;
+
+         Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                Ready => Ready);
+         Assert (Ready, "the hybrid did not prepare on the device");
+
+         for Length in 2 .. Batch'Last loop
+            for Back in 1 .. 2 loop
+               if Back < Length then
+                  declare
+                     Want, Got : Logit_Vector;
+                     Live      : L.Session;
+                     At_Point  : constant Natural := Front'Length + Back;
+                  begin
+                     --  The straight answer: the first Back one at a time.
+                     Begin_With (Live);
+                     for Index in 1 .. Back loop
+                        L.Evaluate (Live, Under.Ready, Batch (Index), Answer,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status), "the straight run failed");
+                     end loop;
+                     L.Evaluate (Live, Under.Ready, Next, Want,
+                                 Status => Status);
+                     Assert (E.Is_Ok (Status), "the straight next failed");
+                     L.Close (Live);
+
+                     Begin_With (Live);
+                     L.Evaluate_Batch
+                       (Live, Under.Ready, Batch (1 .. Length), Answer,
+                        Status => Status);
+                     Assert (E.Is_Ok (Status), "the batch did not evaluate");
+                     if L.Rewind_Point (Live, At_Point) = At_Point then
+                        L.Rewind (Live, At_Point, Status);
+                        Assert (E.Is_Ok (Status), "a rewind was refused");
+                        L.Evaluate (Live, Under.Ready, Next, Got,
+                                    Status => Status);
+                        Assert (E.Is_Ok (Status), "the next failed");
+                        Assert (Worst (Want, Got) <= Near,
+                                "a rewind to position" & Natural'Image (Back)
+                                & " of a batch of" & Natural'Image (Length)
+                                & " says" & N.Real'Image (Worst (Want, Got))
+                                & " away from the straight run");
+                        Tried := Tried + 1;
+                     end if;
+                     L.Close (Live);
+                  end;
+               end if;
+            end loop;
+         end loop;
+
+         --  The ring reaches the first positions of a batch as long as it.
+         Assert (Tried >= 4,
+                 "only" & Natural'Image (Tried)
+                 & " rewinds into a batch were in the ring's reach");
+         Model_Runner.Backend.Device.Close;
+      end;
+
+      B.Free (Image);
+   end A_Batch_The_Ring_Wraps_Keeps_Its_First_States;
+
    ----------------------------------------------------------
    -- A_Check_Leaves_Records_A_Rewind_Makes_States_Of --
    ----------------------------------------------------------
@@ -5731,6 +6016,8 @@ package body Tests.Inference_Cases is
          Model_Runner.Backend.Device.Open (Awake);
 
          if not Awake then
+            Device_Notes.Skip
+              ("for a check leaves records a rewind makes states of");
             B.Free (Image);
             return;
          end if;
@@ -5738,12 +6025,11 @@ package body Tests.Inference_Cases is
          Start (Under, Backend => Model_Runner.Backend.Backend_Device,
                 Ready => Ready);
 
-         if not Ready or else not Model_Runner.Backend.Device.Replays_States (128)
-         then
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
+         --  Every device this program opens has the kernel; one that did
+         --  not would be skipping the replay this is about.
+         Assert (Model_Runner.Backend.Device.Replays_States (128),
+                 "the device has no kernel to replay a check's records");
 
          --  Nothing to carry a state through is refused, not run.
          declare
@@ -8004,6 +8290,7 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for drafting runs on a device");
          return;
       end if;
 
@@ -8143,6 +8430,7 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a short batch stays whole on a halves cache");
          return;
       end if;
 
@@ -8224,6 +8512,8 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for pages dealt ahead answer as pages dealt late");
          return;
       end if;
 
@@ -8392,6 +8682,7 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a paged window slides as a block slides");
          return;
       end if;
 
@@ -8502,6 +8793,8 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a draft of smaller pages is paged beside its model");
          return;
       end if;
 
@@ -8648,6 +8941,8 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for preparing a draft keeps its model on the device");
          return;
       end if;
 
@@ -8879,6 +9174,8 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a shift on the device reaches its cache copy");
          return;
       end if;
 
@@ -9005,6 +9302,7 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a paged picture reaches the device pages");
          return;
       end if;
 
@@ -9137,6 +9435,8 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a paged draft leaves the target its own tables");
          return;
       end if;
 
@@ -12648,6 +12948,10 @@ package body Tests.Inference_Cases is
             Live, Plain, Adopted : L.Session;
             From_Device, From_Host, Direct : Logit_Vector;
             Kept : B.Byte_Array_Access;
+            Whole_Was  : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Whole;
+            Handed_Was : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Handed;
          begin
             L.Open (Live, Over.Ready, Cache => Cache, Status => Status);
             Assert (E.Is_Ok (Status), "the device session did not open for " & What);
@@ -12669,6 +12973,34 @@ package body Tests.Inference_Cases is
                   Assert (E.Is_Ok (Status), "the processor evaluation failed for " & What);
                end loop;
             end if;
+
+            --  The device packed it, every layer whole -- handed back, the
+            --  host would have packed it and this would cross the host with
+            --  itself -- and answered as the processor does: they part by a
+            --  few units in the last place, and a row on a rounding boundary
+            --  packs a level apart, which is what a thousandth is room for.
+            Assert (Model_Runner.Backend.Device.Layers_Whole > Whole_Was
+                    and then Model_Runner.Backend.Device.Layers_Handed
+                             = Handed_Was,
+                    "the packed session went"
+                    & Natural'Image
+                        (Model_Runner.Backend.Device.Layers_Whole - Whole_Was)
+                    & " layers whole and"
+                    & Natural'Image
+                        (Model_Runner.Backend.Device.Layers_Handed - Handed_Was)
+                    & " to the host " & What);
+            declare
+               Worst : N.Real := 0.0;
+            begin
+               for Index in From_Host'Range loop
+                  Worst := N.Real'Max
+                    (Worst, abs (From_Device (Index) - From_Host (Index)));
+               end loop;
+               Assert (Worst < 1.0e-3,
+                       "the device's packed session answers " & What
+                       & N.Real'Image (Worst)
+                       & " away from the processor's");
+            end;
 
             L.Snapshot (Live, Over.Ready, Kept, Status);
             Assert (E.Is_Ok (Status), "the device session did not snapshot for " & What);
@@ -12694,7 +13026,7 @@ package body Tests.Inference_Cases is
                   Worst := N.Real'Max
                     (Worst, abs (From_Device (Index) - Direct (Index)));
                end loop;
-               Assert (Worst < 5.0e-2,
+               Assert (Worst < 1.0e-3,
                        "the block the device packed " & What
                        & " goes on" & N.Real'Image (Worst)
                        & " away from the block the processor packs");
@@ -12711,14 +13043,7 @@ package body Tests.Inference_Cases is
          end if;
 
          Start (Over, Model_Runner.Backend.Backend_Device, Able);
-         if not Able then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device packed a block here");
-            Model_Runner.Backend.Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Able, "the fixture did not prepare");
          Start (Under);
 
          Cross (L.Eighth, False, "in bytes, a token at a time");
@@ -13659,9 +13984,7 @@ package body Tests.Inference_Cases is
       begin
          Model_Runner.Backend.Device.Open (Awake);
          if not Awake then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device to cross a window pattern on");
+            Device_Notes.Skip ("to cross a window pattern on");
          else
             for Kind in Tiny_Model.Fixture_Architecture loop
                if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 | Tiny_Model.Mellum then
@@ -13702,27 +14025,62 @@ package body Tests.Inference_Cases is
                         Reference_Transformer.Close (Second);
                         Containers.Close (Parsed);
 
+                        --  The device is open, so a model that did not
+                        --  prepare on it is a failure, not a pass with
+                        --  nothing compared; and its layers go whole, or
+                        --  the reference is held to the processor again.
                         Start (Under, Model_Runner.Backend.Backend_Device, Able);
-                        if Able then
-                           L.Open (Live, Under.Ready, Status => Status);
-                           Assert (E.Is_Ok (Status),
-                                   "the device session did not open");
+                        Assert (Able, "the fixture did not prepare");
+                        L.Open (Live, Under.Ready, Status => Status);
+                        Assert (E.Is_Ok (Status),
+                                "the device session did not open");
+                        declare
+                           Whole_Was  : constant Natural :=
+                             Model_Runner.Backend.Device.Layers_Whole;
+                           Handed_Was : constant Natural :=
+                             Model_Runner.Backend.Device.Layers_Handed;
+                        begin
                            L.Evaluate_Batch
                              (Live, Under.Ready, Prompt, Last,
                               Status => Status);
                            Assert (E.Is_Ok (Status),
                                    "the device batch failed: "
                                    & E.Error_Code'Image (Status.Code));
-                           for Index in Expected'Range loop
-                              Worst := Long_Float'Max
-                                (Worst,
-                                 abs (Long_Float
-                                        (Last (Model_Runner.Numerics
-                                                 .Element_Count (Index)))
-                                      - Expected (Index)));
-                           end loop;
-                           L.Close (Live);
-                        end if;
+                           --  But OLMo2, which normalizes its whole queries
+                           --  and keys -- a step the sequence has none of --
+                           --  and goes over in pieces by design.
+                           Assert
+                             ((if Tiny_Model."=" (Kind, Tiny_Model.Olmo2)
+                              then Model_Runner.Backend.Device.Layers_Whole
+                                     = Whole_Was
+                                   and then
+                                     Model_Runner.Backend.Device.Layers_Handed
+                                       > Handed_Was
+                              else Model_Runner.Backend.Device.Layers_Whole
+                                     > Whole_Was
+                                   and then
+                                     Model_Runner.Backend.Device.Layers_Handed
+                                       = Handed_Was),
+                              Tiny_Model.Fixture_Architecture'Image (Kind)
+                              & " REACHING went"
+                              & Natural'Image
+                                  (Model_Runner.Backend.Device.Layers_Whole
+                                   - Whole_Was)
+                              & " layers whole on the device and"
+                              & Natural'Image
+                                  (Model_Runner.Backend.Device.Layers_Handed
+                                   - Handed_Was)
+                              & " to the host");
+                        end;
+                        for Index in Expected'Range loop
+                           Worst := Long_Float'Max
+                             (Worst,
+                              abs (Long_Float
+                                     (Last (Model_Runner.Numerics
+                                              .Element_Count (Index)))
+                                   - Expected (Index)));
+                        end loop;
+                        L.Close (Live);
                      end;
                      B.Free (Image);
                      Assert (Worst < 1.0E-3,
@@ -14438,7 +14796,8 @@ package body Tests.Inference_Cases is
               (Cache   : L.Cache_Precision;
                Batched : Boolean;
                Bound   : Long_Float;
-               What    : String)
+               What    : String;
+               Paged   : Boolean := False)
             is
                Over   : Harness (Held'Access);
                Live   : L.Session;
@@ -14447,22 +14806,50 @@ package body Tests.Inference_Cases is
                Worst  : Long_Float := 0.0;
             begin
                Start (Over, Model_Runner.Backend.Backend_Device, Able);
-               if not Able then
-                  return;
-               end if;
+               Assert (Able, "the fixture did not prepare");
 
-               L.Open (Live, Over.Ready, Cache => Cache, Status => Status);
+               L.Open (Live, Over.Ready, Cache => Cache, Paged => Paged,
+                       Status => Status);
                Assert (E.Is_Ok (Status), "the device session did not open " & What);
-               if Batched then
-                  L.Evaluate_Batch (Live, Over.Ready, Prompt, Got, Status => Status);
-               else
-                  for Token of Prompt loop
-                     L.Evaluate (Live, Over.Ready, Token, Got, Status => Status);
-                     exit when E.Is_Error (Status);
-                  end loop;
-               end if;
-               Assert (E.Is_Ok (Status), "the device evaluation failed " & What
-                       & ": " & E.Error_Code'Image (Status.Code));
+               declare
+                  Whole_Was  : constant Natural :=
+                    Model_Runner.Backend.Device.Layers_Whole;
+                  Handed_Was : constant Natural :=
+                    Model_Runner.Backend.Device.Layers_Handed;
+               begin
+                  if Batched then
+                     L.Evaluate_Batch
+                       (Live, Over.Ready, Prompt, Got, Status => Status);
+                  else
+                     for Token of Prompt loop
+                        L.Evaluate
+                          (Live, Over.Ready, Token, Got, Status => Status);
+                        exit when E.Is_Error (Status);
+                     end loop;
+                  end if;
+                  Assert (E.Is_Ok (Status), "the device evaluation failed "
+                          & What & ": " & E.Error_Code'Image (Status.Code));
+
+                  --  The sinks and the clamped gate on the device itself:
+                  --  a layer handed back is the processor's answer held to
+                  --  the reference a second time.
+                  Assert (Model_Runner.Backend.Device.Layers_Whole
+                            > Whole_Was
+                          and then Model_Runner.Backend.Device.Layers_Handed
+                                   = Handed_Was,
+                          "the device took"
+                          & Natural'Image
+                              (Model_Runner.Backend.Device.Layers_Whole
+                               - Whole_Was)
+                          & " of a gpt-oss model's layers whole " & What
+                          & " and handed back"
+                          & Natural'Image
+                              (Model_Runner.Backend.Device.Layers_Handed
+                               - Handed_Was)
+                          & ", the first "
+                          & Model_Runner.Backend.Device.Handing'Image
+                              (Model_Runner.Backend.Device.First_Handing));
+               end;
                L.Close (Live);
                L.Close (Over.Ready, Status);
 
@@ -14495,6 +14882,15 @@ package body Tests.Inference_Cases is
                           "a token at a time in bytes");
                On_Device (L.Eighth, True, Conformance.Fourth_Absolute_Tolerance,
                           "as a batch in bytes");
+
+               --  And paged in halves, which is how a run on the device
+               --  holds its context unasked: the sinks reserved past the
+               --  pages and never put there sent every layer of it to the
+               --  host.
+               On_Device (L.Halved, False, 5.0E-2,
+                          "a token at a time paged in halves", Paged => True);
+               On_Device (L.Halved, True, 5.0E-2,
+                          "as a batch paged in halves", Paged => True);
                Model_Runner.Backend.Device.Close;
             else
                Ada.Text_IO.Put_Line
@@ -15538,12 +15934,7 @@ package body Tests.Inference_Cases is
          begin
             Start (Under, Backend, Able);
 
-            if not Able then
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error,
-                  "note: no device shifted a window here");
-               return;
-            end if;
+            Assert (Able, "the fixture did not prepare");
 
             L.Open (Live, Under.Ready, Context => Room, Status => Status);
             Assert (E.Is_Ok (Status), "the session did not open" & Where);
@@ -15701,10 +16092,10 @@ package body Tests.Inference_Cases is
          Threads => 2,
          Result  => Found);
 
-      if Found.Result = External_Model.Skipped then
-         --  Run from somewhere the fixture is not; nothing to hold.
-         return;
-      end if;
+      --  Skipped means no file there, and the fixture was written just
+      --  above: a skip is the writing failing, not nothing to hold.
+      Assert (Found.Result /= External_Model.Skipped,
+              "the fixture written for this test was not found at " & Model);
 
       Assert (Found.Result = External_Model.Failed,
               "a request larger than the context was not refused");
@@ -16825,14 +17216,7 @@ package body Tests.Inference_Cases is
       begin
          Start (Under, Model_Runner.Backend.Backend_Device, Able);
 
-         if not Able then
-            Ada.Text_IO.Put_Line
-              (Ada.Text_IO.Standard_Error,
-               "note: no device took the mixture fixture");
-            Device.Close;
-            B.Free (Image);
-            return;
-         end if;
+         Assert (Able, "the fixture did not prepare");
 
          declare
             Settings : constant L.Configuration := L.Config (Under.Ready);
@@ -16997,6 +17381,8 @@ package body Tests.Inference_Cases is
          Device.Open (Ready, Budget => Budget);
 
          if not Ready then
+            Device_Notes.Skip
+              ("for a budget too small answers what a large one does");
             return;
          end if;
 
@@ -17021,10 +17407,7 @@ package body Tests.Inference_Cases is
 
             Able := E.Is_Ok (Status);
 
-            if not Able then
-               Device.Close;
-               return;
-            end if;
+            Assert (Able, "the fixture did not prepare");
 
             L.Open (Live, Under.Ready, Status => Status);
             Assert (E.Is_Ok (Status), "the session would not open");
@@ -17176,6 +17559,8 @@ package body Tests.Inference_Cases is
          Device.Open (Ready, Budget => Budget);
 
          if not Ready then
+            Device_Notes.Skip
+              ("for what a token reads decides whether it fits");
             Absent := True;
             return;
          end if;
@@ -17527,7 +17912,27 @@ package body Tests.Inference_Cases is
                     "a second session on the processor answers otherwise than the first, by"
                     & Long_Float'Image (Apart));
          end;
-         Run (Model_Runner.Backend.Backend_Device, Device_Last, Device_Rows, Times => 2);
+         declare
+            Whole_Was  : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Whole;
+            Handed_Was : constant Natural :=
+              Model_Runner.Backend.Device.Layers_Handed;
+         begin
+            Run (Model_Runner.Backend.Backend_Device, Device_Last, Device_Rows,
+                 Times => 2);
+            --  On the device, every layer: one handed back is the
+            --  processor's own window read twice.
+            Assert (Model_Runner.Backend.Device.Layers_Whole > Whole_Was
+                    and then Model_Runner.Backend.Device.Layers_Handed
+                             = Handed_Was,
+                    "past a wrapped window the device went"
+                    & Natural'Image
+                        (Model_Runner.Backend.Device.Layers_Whole - Whole_Was)
+                    & " layers whole and"
+                    & Natural'Image
+                        (Model_Runner.Backend.Device.Layers_Handed - Handed_Was)
+                    & " to the host");
+         end;
          for Index in Host_Last'Range loop
             Worst := Long_Float'Max (Worst, abs (Long_Float (Host_Last (Index) - Device_Last (Index))));
          end loop;
@@ -17544,6 +17949,108 @@ package body Tests.Inference_Cases is
       B.Free (Image);
       Model_Runner.Backend.Device.Close;
    end A_Wrapped_Window_Reads_Alike_On_The_Device;
+
+   --  A batch attending past Deep_Span positions with heads of sixty-four
+   --  or fewer: the deep matrix kernel, eight subgroups a workgroup, each
+   --  putting its block's answer down in shared memory and reading it
+   --  back. The narrow kernel put every subgroup's down in the first
+   --  subgroup's room and read its own, so seven of eight blocks read
+   --  another's answer, or its own scores. The Q8_0 fixture's heads of
+   --  sixteen take that kernel; the processor says what the rows are.
+   procedure A_Narrow_Head_Attends_Deep_On_The_Device
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package T renames Model_Runner.Tensors;
+      subtype Element_Count is Model_Runner.Numerics.Element_Count;
+      Image  : B.Byte_Array_Access;
+      Count  : constant := 2560;
+      Batch  : constant := 256;
+      Prompt : Vocab.Token_Array (1 .. Count);
+      Awake  : Boolean;
+   begin
+      for Index in Prompt'Range loop
+         Prompt (Index) :=
+           Vocab.Token_Id ((Index * 5 + Index / 7) mod Tiny_Model.Vocabulary);
+      end loop;
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device to attend deep on");
+         return;
+      end if;
+      Tiny_Model.Build (Image, Tiny_Model.Q8_0, Room => 4096);
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+         Host_Rows, Device_Rows : T.Real_Array_Access;
+         Worst : Long_Float := 0.0;
+
+         --  Every position's row, read in batches as a run reads a prompt.
+         procedure Run
+           (Backend : Model_Runner.Backend.Backend_Kind;
+            Rows    : out T.Real_Array_Access)
+         is
+            Pass   : T.Real_Array_Access;
+            Under  : Harness (Held'Access);
+            Able   : Boolean;
+            Live   : L.Session;
+            Last   : Logit_Vector;
+            Status : E.Error_Info;
+            From   : Positive := Prompt'First;
+         begin
+            T.Allocate (Element_Count (Count) * Tiny_Model.Vocabulary, Rows);
+            T.Allocate (Batch * Element_Count (Tiny_Model.Vocabulary), Pass);
+            Start (Under, Backend, Able);
+            Assert (Able, "the model did not prepare on "
+                    & Model_Runner.Backend.Backend_Kind'Image (Backend));
+            L.Open (Live, Under.Ready, 4096, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            while From <= Prompt'Last loop
+               declare
+                  Upto : constant Positive :=
+                    Positive'Min (Prompt'Last, From + Batch - 1);
+                  Wide : constant Element_Count :=
+                    Element_Count (Upto - From + 1) * Tiny_Model.Vocabulary;
+                  At_Row : constant Element_Count :=
+                    Element_Count (From - Prompt'First)
+                    * Tiny_Model.Vocabulary;
+               begin
+                  L.Evaluate_Batch
+                    (Live, Under.Ready, Prompt (From .. Upto), Last,
+                     Every => Pass, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the batch failed: "
+                          & E.Error_Code'Image (Status.Code));
+                  Rows.all (At_Row .. At_Row + Wide - 1) :=
+                    Pass.all (Pass.all'First .. Pass.all'First + Wide - 1);
+                  From := Upto + 1;
+               end;
+            end loop;
+            L.Close (Live);
+            T.Free (Pass);
+         end Run;
+      begin
+         Run (Model_Runner.Backend.Backend_CPU, Host_Rows);
+         Run (Model_Runner.Backend.Backend_Device, Device_Rows);
+         for Index in Host_Rows'Range loop
+            Worst := Long_Float'Max
+              (Worst,
+               abs (Long_Float (Host_Rows (Index) - Device_Rows (Index))));
+         end loop;
+         T.Free (Host_Rows);
+         T.Free (Device_Rows);
+         --  Two thousand positions of a half-precision cache leave a
+         --  hundredth between the two; the blocks read from another
+         --  subgroup's room were eight logits out.
+         Assert (Worst < 5.0E-2,
+                 "attending past the deep span, the device answers "
+                 & "otherwise than the processor, by"
+                 & Long_Float'Image (Worst));
+      end;
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+   end A_Narrow_Head_Attends_Deep_On_The_Device;
 
    --  A mixture's gate and up stacks, Q4_K and a short way apart in the
    --  file, go to the device once, as one region: the load holds it, the
@@ -17567,6 +18074,7 @@ package body Tests.Inference_Cases is
       --  pieces, and matrices copied for the run alone.
       type Tally is record
          Loaded, Run, Pieces, Copied : Natural := 0;
+         Last : Logit_Vector := [others => 0.0];
       end record;
 
       function Count (Format : Tiny_Model.Weight_Format) return Tally
@@ -17610,6 +18118,7 @@ package body Tests.Inference_Cases is
                     "the batch failed: " & E.Error_Code'Image (Status.Code));
 
             Result.Run := Device.Resident;
+            Result.Last := Last;
             Result.Pieces := Device.Layers_Handed - Handed;
             Result.Copied := Device.Streamed_Copies - Copied;
             L.Close (Live);
@@ -17619,13 +18128,42 @@ package body Tests.Inference_Cases is
          return Result;
       end Count;
 
+      --  The same token and batch on the processor: what the paired
+      --  stacks' answer is held to, the counts alone being as good for a
+      --  gated gather that read the wrong rows.
+      function On_Host return Logit_Vector is
+         Image : B.Byte_Array_Access;
+         Last  : Logit_Vector;
+      begin
+         Tiny_Model.Build
+           (Image, Tiny_Model.Q4_K, Kind => Tiny_Model.Qwen3_MoE,
+            Experts => 4, Experts_Used => 2);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the host session did not open");
+            L.Evaluate (Live, Under.Ready, Prompt (1), Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the host's token failed");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt (2 .. Prompt'Last), Last,
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the host's batch failed");
+            L.Close (Live);
+         end;
+         B.Free (Image);
+         return Last;
+      end On_Host;
+
       Awake : Boolean;
    begin
       Device.Open (Awake);
       if not Awake then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error,
-            "note: no device to hold a mixture's stacks on");
+         Device_Notes.Skip ("to hold a mixture's stacks on");
          return;
       end if;
 
@@ -17651,6 +18189,18 @@ package body Tests.Inference_Cases is
                  & " matrices on the device beside the paired stacks, where"
                  & Natural'Image (Apart.Run - Apart.Loaded)
                  & " go beside stacks apart: a second copy of a stack");
+         declare
+            Host  : constant Logit_Vector := On_Host;
+            Worst : N.Real := 0.0;
+         begin
+            for Index in Host'Range loop
+               Worst := N.Real'Max
+                 (Worst, abs (Host (Index) - Paired.Last (Index)));
+            end loop;
+            Assert (Worst <= 1.0E-2,
+                    "the paired Q4_K mixture on the device answers"
+                    & N.Real'Image (Worst) & " away from the processor");
+         end;
          Assert (Apart.Copied = 0 and then Paired.Copied = 0,
                  "a mixture's run copied"
                  & Natural'Image (Apart.Copied)
@@ -18029,6 +18579,46 @@ package body Tests.Inference_Cases is
       end;
    end One_State_Models_Keep_No_Ring;
 
+   --  Nor is a draft looked for beside a model nothing drafts on: the
+   --  plan was empty, but a paired draft was still found, loaded and
+   --  counted against the device's budget, then never asked a token.
+   procedure A_Model_That_Never_Drafts_Seeks_No_Draft
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Never : constant array (1 .. 3) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Mamba, Tiny_Model.Rwkv6, Tiny_Model.Jamba];
+      Unasked : constant Model_Runner.Draft_Policy.Asked :=
+        (Tokens => 4, Tokens_Set => False, Lookup => False,
+         Model_Named => False);
+
+      function Seeks (Kind : Tiny_Model.Fixture_Architecture) return Boolean
+      is
+         Image : B.Byte_Array_Access;
+         Found : Boolean;
+      begin
+         Tiny_Model.Build (Image, Kind => Kind);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+         begin
+            Start (Under);
+            Found := Model_Runner.Draft_Policy.Seeks_Paired_Draft
+                       (Under.Ready, Unasked);
+         end;
+         B.Free (Image);
+         return Found;
+      end Seeks;
+   begin
+      Assert (Seeks (Tiny_Model.Llama),
+              "a model that drafts looked for no paired draft");
+      for Kind of Never loop
+         Assert (not Seeks (Kind),
+                 Tiny_Model.Fixture_Architecture'Image (Kind)
+                 & " looked for a paired draft it can never draft with");
+      end loop;
+   end A_Model_That_Never_Drafts_Seeks_No_Draft;
+
    --  A shift whose hole a slid window layer straddles: the layer keeps
    --  only what follows the hole, its origin at what was kept, and the
    --  next position's window reaches before that origin -- the cell it
@@ -18042,7 +18632,17 @@ package body Tests.Inference_Cases is
       Prompt : Vocab.Token_Array (1 .. Count);
       Image  : B.Byte_Array_Access;
 
-      procedure Shift_On (Backend : Model_Runner.Backend.Backend_Kind) is
+      --  The logits after the shift and its six tokens, on a backend. Not
+      --  held to a fresh session fed what the shift kept: past the first
+      --  layer a moved row's key was made in the old context, so a shift
+      --  answers near that session and not as it does -- 0.13 here, against
+      --  0.15 with the keys left unturned. The shift's arithmetic is held
+      --  exactly by the slid-cache shift test; this holds the two backends
+      --  to each other, which is what the device's half of it adds.
+      procedure Shift_On
+        (Backend : Model_Runner.Backend.Backend_Kind;
+         Shifted : out Logit_Vector)
+      is
          Held   : aliased constant B.Byte_Array := Image.all;
          Under  : Harness (Held'Access);
          Ready  : Boolean;
@@ -18053,9 +18653,7 @@ package body Tests.Inference_Cases is
            Model_Runner.Backend.Backend_Kind'Image (Backend);
       begin
          Start (Under, Backend, Ready);
-         if not Ready then
-            return;
-         end if;
+         Assert (Ready, "the fixture did not prepare");
          L.Open (Live, Under.Ready, Status => Status);
          Assert (E.Is_Ok (Status), Name & ": the session did not open");
          for Token of Prompt loop
@@ -18079,9 +18677,22 @@ package body Tests.Inference_Cases is
          Assert (Model_Runner.Kernels.All_Finite (Last),
                  Name & ": the shifted context answered with logits that "
                  & "are not numbers");
+         Shifted := Last;
          L.Close (Live);
       end Shift_On;
 
+      function Apart (Left, Right : Logit_Vector) return Long_Float is
+         Worst : Long_Float := 0.0;
+      begin
+         for Index in Left'Range loop
+            Worst := Long_Float'Max
+              (Worst, abs (Long_Float (Left (Index))
+                           - Long_Float (Right (Index))));
+         end loop;
+         return Worst;
+      end Apart;
+
+      Host_Shifted, Device_Shifted : Logit_Vector;
       Awake : Boolean;
    begin
       for Index in Prompt'Range loop
@@ -18089,11 +18700,17 @@ package body Tests.Inference_Cases is
            Vocab.Token_Id ((Index * 7 + 3) mod Tiny_Model.Vocabulary);
       end loop;
       Tiny_Model.Build (Image, Window => 8, Room => 1024);
-      Shift_On (Model_Runner.Backend.Backend_CPU);
+      Shift_On (Model_Runner.Backend.Backend_CPU, Host_Shifted);
       Model_Runner.Backend.Device.Open (Awake);
       if Awake then
-         Shift_On (Model_Runner.Backend.Backend_Device);
+         Shift_On (Model_Runner.Backend.Backend_Device, Device_Shifted);
          Model_Runner.Backend.Device.Close;
+         Assert (Apart (Device_Shifted, Host_Shifted) <= 1.0E-3,
+                 "the device's shifted context answers"
+                 & Long_Float'Image (Apart (Device_Shifted, Host_Shifted))
+                 & " away from the processor's");
+      else
+         Device_Notes.Skip ("to shift a slid window on");
       end if;
       B.Free (Image);
    end A_Shift_Across_A_Slid_Window_Reads_On;
@@ -18267,8 +18884,7 @@ package body Tests.Inference_Cases is
    begin
       Model_Runner.Backend.Device.Open (Awake);
       if not Awake then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error, "note: no device to adopt on");
+         Device_Notes.Skip ("to adopt on");
          return;
       end if;
       Tiny_Model.Build (Image, Room => 64);
@@ -18277,14 +18893,17 @@ package body Tests.Inference_Cases is
          Under  : Harness (Held'Access);
          Ready  : Boolean;
          Status : E.Error_Info;
-         Last, Reused, Fresh : Logit_Vector;
+         Last, Reused, Fresh, Straight : Logit_Vector;
          Kept   : B.Byte_Array_Access;
          Worst  : N.Real := 0.0;
       begin
          Start (Under, Model_Runner.Backend.Backend_Device, Ready);
          Assert (Ready, "the model did not prepare on the device");
 
-         --  The snapshot of the other conversation.
+         --  The snapshot of the other conversation, and the token after it
+         --  as that conversation's own session answers it: what both the
+         --  adopting sessions are held to, since two of them reading the
+         --  same stale rows would agree with each other.
          declare
             Live : L.Session;
          begin
@@ -18293,6 +18912,8 @@ package body Tests.Inference_Cases is
             Assert (E.Is_Ok (Status), "the other conversation failed");
             L.Snapshot (Live, Under.Ready, Kept, Status);
             Assert (E.Is_Ok (Status), "the snapshot failed");
+            L.Evaluate (Live, Under.Ready, 13, Straight, Status => Status);
+            Assert (E.Is_Ok (Status), "the other conversation's token failed");
             L.Close (Live);
          end;
 
@@ -18329,6 +18950,14 @@ package body Tests.Inference_Cases is
                  "a session that had run on the device answers"
                  & N.Real'Image (Worst)
                  & " away from a fresh one after adopting the same snapshot");
+         Worst := 0.0;
+         for Index in Fresh'Range loop
+            Worst := N.Real'Max (Worst, abs (Fresh (Index) - Straight (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-4,
+                 "a session adopting a snapshot answers"
+                 & N.Real'Image (Worst)
+                 & " away from the session the snapshot was taken of");
       end;
       B.Free (Image);
       Model_Runner.Backend.Device.Close;
@@ -18680,6 +19309,39 @@ package body Tests.Inference_Cases is
                  & "stand in for it: " & L.Template_Format (Under.Ready));
       end;
       B.Free (Image);
+
+      --  The shape was seen for what it is: the calls are read the Mistral
+      --  way, though nothing stands in to render them.
+      Assert (Model_Runner.Templates.Recognise
+                ("{{ '[TOOL_CALLS]' + name + '[ARGS]' }}")
+              = Model_Runner.Templates.Mistral_Shape,
+              "the Mistral call shape was not recognised");
+
+      --  And the other half, without which the first passes for a stand-in
+      --  that never stands in: a template that will not compile, written
+      --  the ChatML way, which a carried format writes, has that format
+      --  stand in, and says so.
+      Tiny_Model.Build
+        (Image,
+         Template => "{{ '<|im_start|>' + messages[0]['content'] }}"
+                     & "{{ messages | no_such_filter }}");
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_CPU, Ready);
+         Assert (Ready, "the ChatML fixture did not prepare");
+         Assert (L.Template_Stood_In (Under.Ready),
+                 "a ChatML template that would not compile had nothing "
+                 & "stand in for it");
+         Assert (L.Template_Format (Under.Ready)
+                 = Model_Runner.Templates.Format_Name
+                     (Model_Runner.Templates.Format_ChatML),
+                 "a ChatML template had "
+                 & L.Template_Format (Under.Ready) & " stand in for it");
+      end;
+      B.Free (Image);
    end A_Shape_With_No_Carried_Format_Stands_In_For_Nothing;
 
    --  Two models on one device -- a target and its draft -- share its
@@ -18706,6 +19368,7 @@ package body Tests.Inference_Cases is
       Device.Close;
       Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for a second model adds to the device budget");
          return;
       end if;
 
@@ -18853,6 +19516,14 @@ package body Tests.Inference_Cases is
          "a windowed layer's ring, wrapped by a long prompt, reads alike on "
          & "the device and the processor");
       Register_Routine
+        (T, A_Batch_The_Ring_Wraps_Keeps_Its_First_States'Access,
+         "a hybrid's batch as long as its ring keeps its first positions' "
+         & "states on the device");
+      Register_Routine
+        (T, A_Narrow_Head_Attends_Deep_On_The_Device'Access,
+         "a batch of narrow heads attending past the deep span reads alike "
+         & "on the device and the processor");
+      Register_Routine
         (T, A_Rewind_Below_The_Owed_Rows_Is_Fetched'Access,
          "a turn rewound below the rows the device owes the host is fetched "
          & "whole, and its snapshot answers as the tokens read straight");
@@ -18864,6 +19535,9 @@ package body Tests.Inference_Cases is
         (T, One_State_Models_Keep_No_Ring'Access,
          "a model whose linear layers read one state keeps no ring, answers "
          & "as the straight run after one is asked, and drafts nothing");
+      Register_Routine
+        (T, A_Model_That_Never_Drafts_Seeks_No_Draft'Access,
+         "a model nothing drafts on looks for no draft beside it");
       Register_Routine
         (T, A_Shift_Across_A_Slid_Window_Reads_On'Access,
          "a shift whose hole a slid window layer straddles reads on, on the "
@@ -18904,6 +19578,10 @@ package body Tests.Inference_Cases is
         (T, A_Second_Model_Adds_To_The_Device_Budget'Access,
          "a model beside the first on the device adds to its budget, and "
          & "the room counts the device's own copy of a context");
+      Register_Routine
+        (T, A_Block_Past_Any_Stack_Drafts'Access,
+         "a block past the stack drafts on any architecture that carries "
+         & "one, fed in a batch as a position at a time");
       Register_Routine
         (T, Paired_Stacks_Are_Held_Once'Access,
          "a mixture's gate and up stacks a short way apart go to the device "

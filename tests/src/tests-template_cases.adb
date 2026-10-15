@@ -1755,6 +1755,10 @@ package body Tests.Template_Cases is
          use type Tmpl.Thinking_Choice;
          Carried, Own : Tmpl.Compiled;
          Status       : E.Error_Info;
+
+         --  Cases rendered by both and compared: a format whose own
+         --  template refused every case would otherwise assert nothing.
+         Compared : Natural := 0;
       begin
          Tmpl.Compile
            (Carried, Tmpl.Built_In (Tmpl.Format_Name (Format)),
@@ -1831,12 +1835,20 @@ package body Tests.Template_Cases is
                              & Tmpl.Thinking_Choice'Image (Choice)
                              & ": carried (" & A (1 .. A_Last) & ") own ("
                              & B (1 .. B_Last) & ")");
+                     Compared := Compared + 1;
                   end;
                end if;
                <<Next_Case>>
             end loop;
          end loop;
 
+         --  Every shape but the few one template or the other may refuse:
+         --  the plain turns at least, with and without a system, and a
+         --  reply.
+         Assert (Compared >= 6,
+                 Tmpl.Format_Name (Format) & " was compared with the model's "
+                 & "own template in only" & Natural'Image (Compared)
+                 & " cases");
          Tmpl.Close (Carried);
          Tmpl.Close (Own);
       end Compare;
@@ -2182,7 +2194,10 @@ package body Tests.Template_Cases is
             Conv.Append (Long, Conv.Assistant_Role, "a dog", Status);
             Conv.Append (Long, Conv.User_Role, "and now?", Status);
             Conv.Compact (Long, Keep_Recent => 1, Dropped => Dropped);
-            Assert (Dropped > 0 and then Conv."=" (Conv.Sender_At (Long, 1), Conv.User_Role)
+            --  Five turns, one kept and the first carrying the digest: three
+            --  go, two are left.
+            Assert (Dropped = 3 and then Conv.Length (Long) = 2
+                    and then Conv."=" (Conv.Sender_At (Long, 1), Conv.User_Role)
                     and then Conv.Parts_At (Long, 1) = Parts,
                     "compaction dropped the parts of the turn that carries its digest:" & Dropped'Image);
             Conv.Close (Long);
@@ -3789,7 +3804,13 @@ package body Tests.Template_Cases is
       --  pulled back to the assistant turn that produced it, so no orphan
       --  result leads the tail.
       Conv.Compact (Messages, Keep_Recent => 3, Dropped => Dropped);
-      Assert (Dropped > 0, "compaction dropped nothing from a full history");
+      --  Twelve turns: the system message, the task, and the last
+      --  round-and-a-half pulled back to the call that answers it -- six
+      --  dropped, six left.
+      Assert (Dropped = 6 and then Conv.Length (Messages) = 6,
+              "compaction of twelve turns dropped" & Natural'Image (Dropped)
+              & " and left" & Natural'Image (Conv.Length (Messages))
+              & ", not six and six");
 
       Assert (Conv.Sender_At (Messages, 1) = Conv.System_Role
               and then Conv.Content_At (Messages, 1) = "Be brief.",
@@ -3817,9 +3838,14 @@ package body Tests.Template_Cases is
                  "compaction lost the task");
          --  The dropped turns leave a digest folded into the task, so the run
          --  keeps the thread of what it did -- including the calls it made.
-         Assert (Contains (Task_Text, "calc"),
+         --  The calls as the digest names them, each dropped round's, and
+         --  none of the kept ones': "calc" alone matched any leftover word.
+         Assert (Contains (Task_Text, "- called calc")
+                 and then Contains (Task_Text, "- result: result 1")
+                 and then Contains (Task_Text, "- result: result 3")
+                 and then not Contains (Task_Text, "- result: result 4"),
                  "compaction folded no digest of the dropped calls into "
-                 & "the task");
+                 & "the task: " & Task_Text);
       end;
 
       declare
@@ -3903,7 +3929,7 @@ package body Tests.Template_Cases is
       Conv.Append (Messages, Conv.User_Role, "the task", Status);
       Rounds (1);
       Conv.Compact (Messages, 3, Dropped, Work.Record_Text);
-      Assert (Dropped > 0
+      Assert (Dropped = 6 and then Conv.Length (Messages) = 5
               and then Count (Conv.Content_At (Messages, 1), "run_checks") = 1,
               "the task did not carry the record: " & Conv.Content_At (Messages, 1));
 
@@ -3911,6 +3937,10 @@ package body Tests.Template_Cases is
       Work.Note ("run_checks", "", Tr.Reads, Tr.Done);
       Rounds (6);
       Conv.Compact (Messages, 3, Dropped, Work.Record_Text);
+      Assert (Dropped = 10 and then Conv.Length (Messages) = 5,
+              "a second compaction dropped" & Natural'Image (Dropped)
+              & " and left" & Natural'Image (Conv.Length (Messages))
+              & ", not ten and five");
       declare
          Task_Text : constant String := Conv.Content_At (Messages, 1);
       begin
@@ -4100,6 +4130,20 @@ package body Tests.Template_Cases is
              & "{% endfor %}{% endmacro %}{{ m(12) }}",
              "render: TEMPLATE_NESTING_TOO_DEEP",
              "range loops past the room for them went on unsaid");
+      --  And a filter's positional arguments where its signature puts
+      --  them: max and min's second is the attribute, map's after the
+      --  filter's name go to that filter, and format takes as many as
+      --  its text asks.
+      Check ("{{ ([{'a':9,'n':1},{'a':1,'n':3}]|max(false,'n')).a }} "
+             & "{{ ([{'a':1,'n':3},{'a':9,'n':1}]|min(false,'n')).a }}",
+             "1 9", "max's or min's second argument was not its attribute");
+      Check ("{{ '%s-%s-%s-%s-%s'|format(1,2,3,4,5) }}", "1-2-3-4-5",
+             "format took no more than three arguments");
+      Check ("{{ [['a','b'],['c']]|map('join', ', ')|join('|') }} "
+             & "{{ ['abcdef','xy']|map('truncate', 5, true, '..', 0)"
+             & "|join(',') }}",
+             "a, b|c abc..,xy",
+             "map's arguments after a filter's name did not reach the filter");
       Assert (Ada.Strings.Unbounded.Length (Missed) = 0,
               Ada.Strings.Unbounded.To_String (Missed));
    end Language_Semantics_Match_Jinja;

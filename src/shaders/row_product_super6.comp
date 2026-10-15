@@ -328,7 +328,10 @@ void main() {
         vec4 by96 = x4[xb + 24u];
 
         for (uint r = 0u; r < NUM_ROWS; ++r) {
-            uint row = first_row + r;
+            //  Held to the last row for the read: the last workgroup of an
+            //  odd count carries a row past the matrix, whose answer the
+            //  store below drops but whose bytes were read all the same.
+            uint row = min (first_row + r, shape.rows - 1u);
             uint at = shape.base + slice + row * span + i * 210u;
 
             uint qlb = at;                   // ql at byte 0

@@ -156,9 +156,11 @@ begin
          begin
             Item.Key_Row.all := Keyed.all (K_At .. K_At + KV_Width - 1);
 
-            Normalize_Heads
-              (Item.Key_Row.all, KV_Heads, Head_Size, Current.Key_Norm.all,
-               Settings.Epsilon, Item.Head_Row.all);
+            if Current.Key_Norm /= null then
+               Normalize_Heads
+                 (Item.Key_Row.all, KV_Heads, Head_Size, Current.Key_Norm.all,
+                  Settings.Epsilon, Item.Head_Row.all);
+            end if;
 
             K.Apply_Rotary
               (Item.Key_Row.all, KV_Heads, Head_Size,

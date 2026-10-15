@@ -62,6 +62,18 @@ package body Model_Runner.Platform is
          return "";
    end Environment_Value;
 
+   --  One of the base directories the XDG specification names, as it says
+   --  to read it: a relative value is invalid and is ignored, so that the
+   --  default under HOME is used -- one relative to wherever the program
+   --  happened to start put a cache there, and a trim that compared names
+   --  never found the file it was keeping.
+   function XDG_Value (Name : String) return String is
+      Value : constant String := Environment_Value (Name);
+   begin
+      return (if Value /= "" and then GNAT.OS_Lib.Is_Absolute_Path (Value)
+              then Value else "");
+   end XDG_Value;
+
    --------------------------
    -- Environment_Exists --
    --------------------------
@@ -322,7 +334,7 @@ package body Model_Runner.Platform is
         renames Hostkit.Fs.Join;
 
       Override    : constant String := Environment_Value ("MODEL_RUNNER_CONFIG");
-      Config_Home : constant String := Environment_Value ("XDG_CONFIG_HOME");
+      Config_Home : constant String := XDG_Value ("XDG_CONFIG_HOME");
       Home        : constant String := Environment_Value ("HOME");
    begin
       if Override /= "" then
@@ -349,7 +361,7 @@ package body Model_Runner.Platform is
       function Under (Base : String; Part : String) return String
         renames Hostkit.Fs.Join;
 
-      Cache_Home : constant String := Environment_Value ("XDG_CACHE_HOME");
+      Cache_Home : constant String := XDG_Value ("XDG_CACHE_HOME");
       Home       : constant String := Environment_Value ("HOME");
    begin
       if Cache_Home /= "" then
@@ -465,6 +477,19 @@ package body Model_Runner.Platform is
       Total : Long_Long_Integer := 0;
       Look  : Search_Type;
       Item  : Directory_Entry_Type;
+
+      --  The file kept, and each the search finds, named in full, every
+      --  doubled separator and dot gone. Compared as given, a cache under a
+      --  relative folder, or one with a doubled separator, never matched
+      --  what it was, and the file just written was the first to go.
+      function Full (Path : String) return String is
+      begin
+         return (if Path = "" then "" else Full_Name (Path));
+      exception
+         when others =>
+            return Path;
+      end Full;
+      Kept : constant String := Full (Keep);
    begin
       if Folder = "" or else not Exists (Folder) then
          return;
@@ -512,7 +537,7 @@ package body Model_Runner.Platform is
          begin
             --  Aged only where an age was asked: Mark_Used stamps a whole
             --  second, which can be half of one ahead of the clock.
-            if Name /= Keep
+            if Full (Name) /= Kept
               and then (Settled = 0.0 or else Now - List (I).Used >= Settled)
             then
                Delete_File (Name);
@@ -545,7 +570,7 @@ package body Model_Runner.Platform is
 
       Override   : constant String := Environment_Value (Override_Var);
       From_Config : constant String := Model_Runner.Config.Value (Config_Key);
-      Data       : constant String := Environment_Value ("XDG_DATA_HOME");
+      Data       : constant String := XDG_Value ("XDG_DATA_HOME");
       Home       : constant String := Environment_Value ("HOME");
    begin
       if Override /= "" then
@@ -720,8 +745,22 @@ package body Model_Runner.Platform is
       use type System.Multiprocessors.CPU_Range;
       Count : constant System.Multiprocessors.CPU_Range :=
         System.Multiprocessors.Number_Of_CPUs;
+      Online : constant Positive := (if Count < 1 then 1 else Positive (Count));
+
+      --  Fewer where the process is held to fewer -- `taskset`, a cpuset, a
+      --  container: the processors online counted eight to sixteen workers
+      --  spinning on four, every product waiting for one descheduled.
+      Usable : Hostkit.Host.Processor_Set;
+      Held   : Natural := 0;
    begin
-      return (if Count < 1 then 1 else Positive (Count));
+      if Hostkit.Host.Usable_Processors (Usable) then
+         for May of Usable loop
+            if May then
+               Held := Held + 1;
+            end if;
+         end loop;
+      end if;
+      return (if Held in 1 .. Online then Held else Online);
    exception
       when others =>
          return 1;
@@ -750,6 +789,18 @@ package body Model_Runner.Platform is
       when others =>
          return False;
    end Byte_Products;
+
+   ---------------------
+   -- Low_Power_Waits --
+   ---------------------
+
+   function Low_Power_Waits return Boolean is
+   begin
+      return Model_Runner.Platform.Instructions.Low_Power_Waits;
+   exception
+      when others =>
+         return False;
+   end Low_Power_Waits;
 
    ---------------------
    -- Physical_Memory --

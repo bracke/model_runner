@@ -2,6 +2,7 @@ with Ada.Exceptions;
 with Ada.Interrupts;
 with Ada.Interrupts.Names;
 with Ada.Real_Time.Timing_Events;
+with Ada.Task_Identification;
 
 with Hostkit.Descriptors;
 with Hostkit.Signals;
@@ -72,11 +73,16 @@ package body Model_Runner.Platform.Signals is
       procedure Set_Waiting (Value : Boolean; Note : String);
       procedure Hold (Saved : Hostkit.Terminal_Control.Mode);
       procedure Release;
+      procedure Note_Alternate (On : Boolean);
       function Ended return Boolean;
       function Noted return Boolean;
+      function Is_Waiting return Boolean;
 
       --  Point the handler at a token.
       procedure Bind (Token : Model_Runner.Cancellation.Token_Reference);
+
+      --  The token it points at.
+      function Target_Of return Model_Runner.Cancellation.Token_Reference;
 
       --  Number of interrupts since the last Bind.
       function Count return Natural;
@@ -97,6 +103,11 @@ package body Model_Runner.Platform.Signals is
       Mode_Held : Boolean := False;
       Held_Mode : Hostkit.Terminal_Control.Mode;
 
+      --  Whether the program drew on the terminal's other screen: given
+      --  back on ending, or the shell's prompt comes back on a screen the
+      --  shell never sees again.
+      Alternate : Boolean := False;
+
       procedure Put_Mode_Back;
    end Handler;
 
@@ -110,6 +121,13 @@ package body Model_Runner.Platform.Signals is
 
          if Target /= null then
             Target.all.Request;
+         elsif not Waiting and then not Told then
+            --  Nothing bound to stop -- the program is between runs, or in
+            --  a command that has none -- so the interrupt does what it did
+            --  before anything took it: the program ends, the terminal put
+            --  back first, with the status a shell gives an interrupted one.
+            Put_Mode_Back;
+            Quick_Exit (130);
          end if;
          --  Waiting for a line, the terminal has dropped what was typed:
          --  said now, not once the next line comes.
@@ -140,19 +158,23 @@ package body Model_Runner.Platform.Signals is
 
       function Count return Natural is (Seen);
 
+      function Target_Of return Model_Runner.Cancellation.Token_Reference is (Target);
+
       procedure Put_Mode_Back is
       begin
          if Mode_Held then
             --  And the screen modes a prompt sets: pasted text marked, the
             --  cursor hidden. Left on, the shell after showed ^[[200~ round
-            --  every paste. (Not the other screen: leaving one not entered
-            --  puts the cursor back where nothing saved it.)
+            --  every paste. The other screen only where one was entered:
+            --  leaving one not entered puts the cursor back where nothing
+            --  saved it.
             --  Said where the editor said them, a terminal: a log the error
             --  stream goes to is not one, and is not written them.
             if Is_A_Terminal (2) = 1 then
                declare
                   Back : constant String :=
-                    ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
+                    (if Alternate then ASCII.ESC & "[?1049l" else "")
+                    & ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
                   Ignored : constant Integer := Write_Error (2, Back, Back'Length);
                   pragma Unreferenced (Ignored);
                begin
@@ -179,7 +201,13 @@ package body Model_Runner.Platform.Signals is
       procedure Release is
       begin
          Mode_Held := False;
+         Alternate := False;
       end Release;
+
+      procedure Note_Alternate (On : Boolean) is
+      begin
+         Alternate := On;
+      end Note_Alternate;
 
       procedure Overdue (Event : in out Ada.Real_Time.Timing_Events.Timing_Event) is
          pragma Unreferenced (Event);
@@ -202,7 +230,10 @@ package body Model_Runner.Platform.Signals is
          Interrupt;
          Ada.Real_Time.Timing_Events.Set_Handler
            (Deadline, Ada.Real_Time.Clock + Ending_Grace, Overdue'Access);
-         if Waiting then
+         --  Waiting for a line, or with nothing bound to stop -- a chooser
+         --  before a run, a command with none -- there is nothing to end
+         --  cleanly: ended here, the terminal given back as it was.
+         if Waiting or else Target = null then
             declare
                Ignored : constant Integer := Write_Error (2, Stopped_Line, Stopped_Line'Length);
                --  What was half typed goes with it, not to the shell.
@@ -229,6 +260,8 @@ package body Model_Runner.Platform.Signals is
       end Set_Waiting;
 
       function Noted return Boolean is (Said);
+
+      function Is_Waiting return Boolean is (Waiting);
 
       function Ended return Boolean is (Told);
 
@@ -267,18 +300,23 @@ package body Model_Runner.Platform.Signals is
          or
             terminate;
          end select;
-         while Recording or else Recording_Ends loop
-            if Recording and then Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Interrupt) then
-               Hostkit.Signals.Clear (Hostkit.Signals.Signal_Interrupt);
+         --  Ended with the program as well as by Remove: a run that raised
+         --  past its own removal left this watching, and the program's
+         --  ending waited on it for ever after saying what went wrong.
+         while (Recording or else Recording_Ends)
+           and then Ada.Task_Identification.Is_Callable
+                      (Ada.Task_Identification.Environment_Task)
+         loop
+            --  Taken, not read and then cleared: one that came between the
+            --  two -- the second told-to-end, which means now -- was lost.
+            if Recording and then Hostkit.Signals.Take (Hostkit.Signals.Signal_Interrupt) then
                Handler.Interrupt;
             end if;
             if Recording_Ends then
-               if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Terminate) then
-                  Hostkit.Signals.Clear (Hostkit.Signals.Signal_Terminate);
+               if Hostkit.Signals.Take (Hostkit.Signals.Signal_Terminate) then
                   Handler.Ending;
                end if;
-               if Hostkit.Signals.Arrived (Hostkit.Signals.Signal_Hangup) then
-                  Hostkit.Signals.Clear (Hostkit.Signals.Signal_Hangup);
+               if Hostkit.Signals.Take (Hostkit.Signals.Signal_Hangup) then
                   Handler.Ending;
                end if;
             end if;
@@ -296,6 +334,48 @@ package body Model_Runner.Platform.Signals is
    Attached : Boolean := False;
    Last_Failure : Model_Runner.Text.Bounded;
 
+   --  Installs nest: the program installs for its whole life, so that an
+   --  ending told before a run -- in a chooser, holding the terminal raw --
+   --  is handled, and a run installs again for its own token. Each Remove
+   --  gives the binding back to the one before; the last detaches.
+   Most_Depth : constant := 8;
+   type Token_Stack is array (1 .. Most_Depth) of Model_Runner.Cancellation.Token_Reference;
+   Bound_Before : Token_Stack := [others => null];
+   Depth        : Natural := 0;
+
+   --  What each signal did before this took it, given back when the last
+   --  Remove detaches: an interrupt ignored by whoever started the program
+   --  -- a job a script ran with & -- stays ignored, and a hang-up ignored
+   --  under nohup is neither taken nor set to end the program afterwards.
+   Interrupt_Before : Hostkit.Signals.Disposition := Hostkit.Signals.Disposition_Default;
+   Terminate_Before : Hostkit.Signals.Disposition := Hostkit.Signals.Disposition_Default;
+   Hangup_Before    : Hostkit.Signals.Disposition := Hostkit.Signals.Disposition_Default;
+
+   --  Record Item unless it was ignored, saying what it did before. True
+   --  where it is recorded now.
+   function Take_Over
+     (Item   : Hostkit.Signals.Signal;
+      Before : out Hostkit.Signals.Disposition) return Boolean
+   is
+      use type Hostkit.Signals.Disposition;
+   begin
+      if not Hostkit.Signals.Replace_Disposition
+               (Item, Hostkit.Signals.Disposition_Record, Before)
+      then
+         raise Program_Error with
+           Hostkit.Signals.Name (Item) & " is reserved, and the host would not record it";
+      end if;
+      if Before = Hostkit.Signals.Disposition_Ignore then
+         --  Given back at once: ignored is what whoever started this asked.
+         if not Hostkit.Signals.Set_Disposition (Item, Hostkit.Signals.Disposition_Ignore) then
+            raise Program_Error with
+              Hostkit.Signals.Name (Item) & " was ignored, and could not be ignored again";
+         end if;
+         return False;
+      end if;
+      return True;
+   end Take_Over;
+
    ------------------
    -- Is_Supported --
    ------------------
@@ -308,8 +388,14 @@ package body Model_Runner.Platform.Signals is
 
    procedure Install
      (Token     : Model_Runner.Cancellation.Token_Reference;
-      Installed : out Boolean) is
+      Installed : out Boolean)
+   is
+      use type Hostkit.Signals.Disposition;
    begin
+      if Depth < Most_Depth then
+         Depth := Depth + 1;
+         Bound_Before (Depth) := Handler.Target_Of;
+      end if;
       Handler.Bind (Token);
 
       --  An interrupt, and being told to end -- by a timeout, a closed
@@ -318,30 +404,28 @@ package body Model_Runner.Platform.Signals is
       --  project.
       if not Attached then
          if not Ada.Interrupts.Is_Reserved (Ada.Interrupts.Names.SIGINT) then
-            Ada.Interrupts.Attach_Handler
-              (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
-         elsif Hostkit.Signals.Set_Disposition
-                 (Hostkit.Signals.Signal_Interrupt, Hostkit.Signals.Disposition_Record)
-         then
-            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Interrupt);
-            Recording := True;
-            Interrupt_Watch.Start;
-         else
-            raise Program_Error with "interrupt 2 is reserved, and the host would not record it";
-         end if;
-         if Hostkit.Signals.Set_Disposition
-                 (Hostkit.Signals.Signal_Terminate, Hostkit.Signals.Disposition_Record)
-           and then Hostkit.Signals.Set_Disposition
-                      (Hostkit.Signals.Signal_Hangup, Hostkit.Signals.Disposition_Record)
-         then
-            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Terminate);
-            Hostkit.Signals.Clear (Hostkit.Signals.Signal_Hangup);
-            Recording_Ends := True;
-            if not Recording then
-               Interrupt_Watch.Start;
+            if Hostkit.Signals.Current_Disposition
+                 (Hostkit.Signals.Signal_Interrupt, Interrupt_Before)
+              and then Interrupt_Before = Hostkit.Signals.Disposition_Ignore
+            then
+               null;
+            else
+               Interrupt_Before := Hostkit.Signals.Disposition_Default;
+               Ada.Interrupts.Attach_Handler
+                 (Handler.Interrupt'Access, Ada.Interrupts.Names.SIGINT);
             end if;
-         else
-            raise Program_Error with "the ending signals are reserved, and the host would not record them";
+         elsif Take_Over (Hostkit.Signals.Signal_Interrupt, Interrupt_Before) then
+            Recording := True;
+         end if;
+
+         --  Either, or both: one left ignored is not watched for.
+         Recording_Ends :=
+           Take_Over (Hostkit.Signals.Signal_Terminate, Terminate_Before);
+         Recording_Ends :=
+           Take_Over (Hostkit.Signals.Signal_Hangup, Hangup_Before)
+           or else Recording_Ends;
+         if Recording or else Recording_Ends then
+            Interrupt_Watch.Start;
          end if;
          Attached := True;
       end if;
@@ -367,21 +451,28 @@ package body Model_Runner.Platform.Signals is
    procedure Remove is
       Ignored : Boolean;
    begin
-      Handler.Bind (null);
+      if Depth > 0 then
+         Handler.Bind (Bound_Before (Depth));
+         Depth := Depth - 1;
+      else
+         Handler.Bind (null);
+      end if;
 
-      if Attached then
+      if Attached and then Depth = 0 then
          if Recording then
             Recording := False;
             Ignored := Hostkit.Signals.Set_Disposition
-              (Hostkit.Signals.Signal_Interrupt, Hostkit.Signals.Disposition_Default);
-         else
+              (Hostkit.Signals.Signal_Interrupt, Interrupt_Before);
+         elsif not Ada.Interrupts.Is_Reserved (Ada.Interrupts.Names.SIGINT)
+           and then Ada.Interrupts.Is_Attached (Ada.Interrupts.Names.SIGINT)
+         then
             Ada.Interrupts.Detach_Handler (Ada.Interrupts.Names.SIGINT);
          end if;
          Recording_Ends := False;
          Ignored := Hostkit.Signals.Set_Disposition
-           (Hostkit.Signals.Signal_Terminate, Hostkit.Signals.Disposition_Default);
+           (Hostkit.Signals.Signal_Terminate, Terminate_Before);
          Ignored := Hostkit.Signals.Set_Disposition
-           (Hostkit.Signals.Signal_Hangup, Hostkit.Signals.Disposition_Default);
+           (Hostkit.Signals.Signal_Hangup, Hangup_Before);
          Attached := False;
       end if;
    exception
@@ -405,12 +496,19 @@ package body Model_Runner.Platform.Signals is
       Handler.Release;
    end Release_Terminal_Mode;
 
+   procedure Note_Alternate_Screen (On : Boolean) is
+   begin
+      Handler.Note_Alternate (On);
+   end Note_Alternate_Screen;
+
    procedure Set_Waiting_For_Input (Waiting : Boolean; Note : String := "") is
    begin
       Handler.Set_Waiting (Waiting, Note);
    end Set_Waiting_For_Input;
 
    function Interrupt_Noted return Boolean is (Handler.Noted);
+
+   function Waiting_For_Input return Boolean is (Handler.Is_Waiting);
 
    function Ending_Asked return Boolean is (Handler.Ended);
 

@@ -104,6 +104,11 @@ begin
       Slot    : constant Element_Count := Base + Cell * KV_Width;
       V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
       Usable  : Boolean := True;
+
+      --  Whether the block's queries carry a gate a head, as a hybrid's
+      --  full attention layers do: twice the queries' rows.
+      Gated   : constant Boolean :=
+        Natural (Current.Query.Rows) = 2 * Natural (Heads * Head_Size);
    begin
       --  The block's input: the next token's embedding and the state,
       --  each normalized by its own gain, side by side, projected.
@@ -142,22 +147,37 @@ begin
         (Source, Item.Activation.all, Current.Attention_Norm.all,
          Current.Attention_Norm_Bias, Item.Normalized.all);
 
-      Product_Group
-        (Item, [Current.Query, Current.Key, Current.Value],
-         Item.Normalized,
-         [Item.Query_Full, Item.Key_Row, Item.Value_Row], Status);
+      --  A hybrid's queries carry a gate a head beside them, split out
+      --  here and laid over the blend; a plain layer's are the queries.
+      if Gated then
+         Product_Group
+           (Item, [Current.Query, Current.Key, Current.Value],
+            Item.Normalized,
+            [Item.Query_Full, Item.Key_Row, Item.Value_Row], Status);
+      else
+         Product_Group
+           (Item, [Current.Query, Current.Key, Current.Value],
+            Item.Normalized,
+            [Item.Query, Item.Key_Row, Item.Value_Row], Status);
+      end if;
       if E.Is_Error (Status) then
          return;
       end if;
 
-      Split_Head_Gates (Item, Settings);
+      if Gated then
+         Split_Head_Gates (Item, Settings);
+      end if;
 
-      Normalize_Heads
-        (Item.Query.all, Heads, Head_Size, Current.Query_Norm.all,
-         Settings.Epsilon, Item.Head_Row.all);
-      Normalize_Heads
-        (Item.Key_Row.all, KV_Heads, Head_Size, Current.Key_Norm.all,
-         Settings.Epsilon, Item.Head_Row.all);
+      if Current.Query_Norm /= null then
+         Normalize_Heads
+           (Item.Query.all, Heads, Head_Size, Current.Query_Norm.all,
+            Settings.Epsilon, Item.Head_Row.all);
+      end if;
+      if Current.Key_Norm /= null then
+         Normalize_Heads
+           (Item.Key_Row.all, KV_Heads, Head_Size, Current.Key_Norm.all,
+            Settings.Epsilon, Item.Head_Row.all);
+      end if;
 
       K.Apply_Rotary_Pair
         (Item.Query.all, Heads, Item.Key_Row.all, KV_Heads, Head_Size,
@@ -197,7 +217,9 @@ begin
          return;
       end if;
 
-      Gate_Heads (Item);
+      if Gated then
+         Gate_Heads (Item);
+      end if;
 
       Product
         (Item, Current.Attention_Out, Item.Attention, Item.Normalized,

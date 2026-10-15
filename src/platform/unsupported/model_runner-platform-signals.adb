@@ -42,7 +42,15 @@ package body Model_Runner.Platform.Signals is
 
    procedure Release_Terminal_Mode is null;
 
+   procedure Note_Alternate_Screen (On : Boolean) is
+      pragma Unreferenced (On);
+   begin
+      null;
+   end Note_Alternate_Screen;
+
    function Interrupt_Noted return Boolean is (False);
+
+   function Waiting_For_Input return Boolean is (False);
 
    function Ending_Asked return Boolean is (False);
 

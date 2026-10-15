@@ -6,6 +6,7 @@ with Tests.Gate_Cases;
 with Tests.GGUF_Cases;
 with Tests.Grammar_Cases;
 with Tests.Inference_Cases;
+with Tests.Platform_Cases;
 with Tests.Accounting_Cases;
 with Tests.Agent_Loop_Cases;
 with Tests.Sampling_Cases;
@@ -31,6 +32,7 @@ package body Tests.Suite is
    Gate_Case      : aliased Tests.Gate_Cases.Case_Type;
    Framework_Case : aliased Tests.Framework_Cases.Case_Type;
    Agent_Loop_Case : aliased Tests.Agent_Loop_Cases.Case_Type;
+   Platform_Case  : aliased Tests.Platform_Cases.Case_Type;
 
    -----------
    -- Suite --
@@ -52,6 +54,7 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, Vision_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Gate_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Framework_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Platform_Case'Access);
       return Result'Access;
    end Suite;
 

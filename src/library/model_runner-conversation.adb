@@ -628,17 +628,27 @@ package body Model_Runner.Conversation is
       Asked : Model_Runner.Tools.Calls;
 
       --  Where the reply's answer begins: past the first </think>, or --
-      --  where a <think> opens and never closes -- past the reply's end,
-      --  since all of it was reasoning. Calls are read only from there. A
-      --  reasoning line that names <tool_call> paired with the real call's
-      --  close and lost it, and a call drafted in the reasoning was run.
+      --  where reasoning opens the reply and never closes -- past the
+      --  reply's end, since all of it was reasoning. Calls are read only
+      --  from there. A reasoning line that names <tool_call> paired with
+      --  the real call's close and lost it, and a call drafted in the
+      --  reasoning was run. Reasoning is what opens the reply, as
+      --  llama.cpp reads it: an answer that mentions <think> further on
+      --  keeps its calls.
       function Answer_Start return Positive is
          Close : constant Natural := Ada.Strings.Fixed.Index (Reply, "</think>");
-         Open  : constant Natural := Ada.Strings.Fixed.Index (Reply, "<think>");
+         Lead  : Positive := Reply'First;
       begin
          if Close /= 0 then
             return Close + 8;
-         elsif Open /= 0 then
+         end if;
+         while Lead <= Reply'Last
+           and then Reply (Lead) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+         loop
+            Lead := Lead + 1;
+         end loop;
+         if Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>"
+         then
             return Reply'Last + 1;
          end if;
          return Reply'First;

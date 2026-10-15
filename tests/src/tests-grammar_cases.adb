@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with AUnit.Test_Cases;
 with AUnit.Assertions; use AUnit.Assertions;
 
@@ -240,17 +242,51 @@ package body Tests.Grammar_Cases is
               "a repeat whose body reads a character was refused");
 
       --  The bounds. Each is a refusal rather than an allocation.
+      --  Nesting past the bound, written whole -- every group closed
+      --  round one character -- so that what refuses it is the depth: the
+      --  string this was, a run of opening brackets alone, was a syntax
+      --  error at any bound, and the refusal it was held to took that too.
       declare
-         Deep : String (1 .. 2 * G.Max_Rules) := [others => ' '];
+         Opens  : constant String (1 .. G.Max_Rules) := [others => '('];
+         Closes : constant String (1 .. G.Max_Rules) := [others => ')'];
       begin
-         for Index in 1 .. G.Max_Rules loop
-            Deep (2 * Index - 1) := '(';
-            Deep (2 * Index) := ' ';
+         Assert (Refusal ("root ::= " & Opens & """a""" & Closes)
+                   = E.Grammar_Nesting_Too_Deep,
+                 "nesting past the bound was not refused as nesting: "
+                 & E.Error_Code'Image
+                     (Refusal ("root ::= " & Opens & """a""" & Closes)));
+         --  And a nesting inside the bound is taken.
+         Assert (Refusal ("root ::= ((((""a""))))") = E.No_Error
+                 and then Completes ("root ::= ((((""a""))))", "a"),
+                 "nesting well inside the bound was refused");
+      end;
+
+      --  And more rules than the bound, each named once, wide rather than
+      --  deep: refused as too large, not cut short to the rules that fit.
+      declare
+         Text : Ada.Strings.Unbounded.Unbounded_String :=
+           Ada.Strings.Unbounded.To_Unbounded_String ("root ::= r1" & ASCII.LF);
+      begin
+         for Index in 1 .. G.Max_Rules + 8 loop
+            declare
+               Name : constant String :=
+                 Ada.Strings.Fixed.Trim (Natural'Image (Index), Ada.Strings.Both);
+               Next : constant String :=
+                 Ada.Strings.Fixed.Trim (Natural'Image (Index + 1),
+                                         Ada.Strings.Both);
+            begin
+               Ada.Strings.Unbounded.Append
+                 (Text,
+                  "r" & Name & " ::= ""a"" "
+                  & (if Index < G.Max_Rules + 8 then "r" & Next else "")
+                  & ASCII.LF);
+            end;
          end loop;
-         Assert (Refusal ("root ::= " & Deep) in E.Grammar_Nesting_Too_Deep
-                                              | E.Grammar_Syntax_Error
-                                              | E.Grammar_Too_Large,
-                 "unbounded nesting was accepted");
+         Assert (Refusal (Ada.Strings.Unbounded.To_String (Text))
+                   = E.Grammar_Too_Large,
+                 "more rules than the bound were not refused as too large: "
+                 & E.Error_Code'Image
+                     (Refusal (Ada.Strings.Unbounded.To_String (Text))));
       end;
    end Refusals_Name_What_Was_Wrong;
 
@@ -427,13 +463,21 @@ package body Tests.Grammar_Cases is
                  "the tag grammar would not compile: "
                  & E.Error_Code'Image (Status.Code) & " -- " & Why);
          G.Start (Item, State, Status);
+         Assert (E.Is_Ok (Status),
+                 "the matcher would not start: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
          for Index in Text'Range loop
             if not G.Accepts (Item, State, Text (Index .. Index)) then
                Taken := False;
                exit;
             end if;
+            --  A refusal is the grammar's, by Accepts or Is_Complete: an
+            --  error here was a case that wanted refusing passing on a
+            --  fault.
             G.Advance (Item, State, Text (Index .. Index), Status);
-            exit when E.Is_Error (Status);
+            Assert (E.Is_Ok (Status),
+                    "advancing over an accepted character failed: "
+                    & E.Error_Code'Image (Status.Code) & " -- " & Why);
          end loop;
          if Taken then
             Taken := G.Is_Complete (Item, State);
@@ -514,13 +558,21 @@ package body Tests.Grammar_Cases is
                  "the call grammar would not compile: "
                  & E.Error_Code'Image (Status.Code) & " -- " & Why);
          G.Start (Item, State, Status);
+         Assert (E.Is_Ok (Status),
+                 "the matcher would not start: "
+                 & E.Error_Code'Image (Status.Code) & " -- " & Why);
          for Index in Text'Range loop
             if not G.Accepts (Item, State, Text (Index .. Index)) then
                Taken := False;
                exit;
             end if;
+            --  A refusal is the grammar's, by Accepts or Is_Complete: an
+            --  error here was a case that wanted refusing passing on a
+            --  fault.
             G.Advance (Item, State, Text (Index .. Index), Status);
-            exit when E.Is_Error (Status);
+            Assert (E.Is_Ok (Status),
+                    "advancing over an accepted character failed: "
+                    & E.Error_Code'Image (Status.Code) & " -- " & Why);
          end loop;
          if Taken then
             Taken := G.Is_Complete (Item, State);
@@ -584,8 +636,13 @@ package body Tests.Grammar_Cases is
                exit;
             end if;
 
+            --  A refusal is the grammar's, by Accepts or Is_Complete: an
+            --  error here was a case that wanted refusing passing on a
+            --  fault.
             G.Advance (Item, State, Text (Index .. Index), Status);
-            exit when E.Is_Error (Status);
+            Assert (E.Is_Ok (Status),
+                    "advancing over an accepted character failed: "
+                    & E.Error_Code'Image (Status.Code) & " -- " & Why);
          end loop;
 
          if Taken then

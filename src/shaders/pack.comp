@@ -215,15 +215,18 @@ void main() {
         //  fall in: a row that begins or ends inside a word shares it
         //  with its neighbour, and only the bytes that are this row's go
         //  in. A lane a word.
-        int first = int (row_at) >> 2;
-        int last = int (row_at + shape.width - 1u) >> 2;
+        //  The words counted unsigned, a cache past two gigabytes being a
+        //  byte offset no signed word holds; only the offset within the
+        //  row, a few bytes either side, is signed.
+        uint first = row_at >> 2;
+        uint last = (row_at + shape.width - 1u) >> 2;
 
-        for (int wi = first + int (lane); wi <= last; wi += int (LANES)) {
+        for (uint wi = first + lane; wi <= last; wi += LANES) {
             uint word = 0u;
             uint mask = 0u;
 
             for (uint k = 0u; k < 4u; k++) {
-                int c = wi * 4 + int (k) - int (row_at);
+                int c = int (wi * 4u + k - row_at);
 
                 if (c >= 0 && c < int (shape.width)) {
                     float step =
@@ -237,7 +240,7 @@ void main() {
                 }
             }
 
-            put_word (uint (wi), word, mask);
+            put_word (wi, word, mask);
         }
         return;
     }
@@ -266,15 +269,15 @@ void main() {
         //  this block's go in. A row of four elements in nibbles is two
         //  bytes, so half of its one word is the row after it.
         uint block_at = row_at + start / 2u;
-        int first = int (block_at) >> 2;
-        int last = int (block_at + (span + 1u) / 2u - 1u) >> 2;
+        uint first = block_at >> 2;
+        uint last = (block_at + (span + 1u) / 2u - 1u) >> 2;
 
-        for (int wi = first; wi <= last; wi++) {
+        for (uint wi = first; wi <= last; wi++) {
             uint word = 0u;
             uint mask = 0u;
 
             for (uint k = 0u; k < 8u; k++) {
-                int i = (wi * 4 - int (block_at)) * 2 + int (k);
+                int i = int (wi * 4u - block_at) * 2 + int (k);
 
                 if (i >= 0 && i < int (span)) {
                     precise float level =
@@ -286,7 +289,7 @@ void main() {
                 }
             }
 
-            put_word (uint (wi), word, mask);
+            put_word (wi, word, mask);
         }
     }
 }

@@ -21,6 +21,7 @@ with Model_Runner.Limits;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Localization;
 with Model_Runner.Platform.Signals;
+with Model_Runner.Platform.Signals.Waiting;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
@@ -1489,6 +1490,11 @@ package body Model_Runner.CLI.Interactive is
             --  Whether the line was edited as it was typed, coloured then.
             Edited : Boolean := False;
 
+            --  The wait for the line, said to the handler and ended however
+            --  this is left: an exception past it left the program said to
+            --  wait, and a later ending skipped stopping and saving the run.
+            Wait_Held : Model_Runner.Platform.Signals.Waiting.Guard;
+
             Effect  : Line_Effect;
             Handled : Boolean;
             pragma Unreferenced (Handled);
@@ -1501,8 +1507,8 @@ package body Model_Runner.CLI.Interactive is
                then
                   Cancel.Reset;
                end if;
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (True, Note => Pres.Message_Value
+               Model_Runner.Platform.Signals.Waiting.Begin_Wait
+                 (Wait_Held, Note => Pres.Message_Value
                                   (Screen, (if Pending (Typing) = "" then "cli.interactive.dropped_line"
                                             else "cli.interactive.dropped")) & ASCII.LF
                                 --  What was typed is dropped: the prompt is
@@ -1591,10 +1597,10 @@ package body Model_Runner.CLI.Interactive is
                      Draining := False;
                   end if;
                end;
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
+               Model_Runner.Platform.Signals.Waiting.Stop_Wait (Wait_Held);
             exception
                when Ada.Text_IO.End_Error =>
-                  Model_Runner.Platform.Signals.Set_Waiting_For_Input (False);
+                  Model_Runner.Platform.Signals.Waiting.Stop_Wait (Wait_Held);
                   exit Read_Loop;
             end;
 

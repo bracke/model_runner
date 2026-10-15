@@ -922,6 +922,13 @@ package body Benchmarks is
          --  on a pool that nothing has told to stop, and the finalizer
          --  waits on the workers.
          Model_Runner.Backend.CPU.Close (Team);
+      exception
+         --  Closed on the way out as well: a pool left open by an
+         --  exception kept its workers waiting, and leaving the block
+         --  waited on them for ever instead of saying what went wrong.
+         when others =>
+            Model_Runner.Backend.CPU.Close (Team);
+            raise;
       end Measure_Expert_Shapes;
 
       procedure Measure_Token_Budget
@@ -1163,6 +1170,13 @@ package body Benchmarks is
 
          Model_Runner.Backend.CPU.Close (Team);
          Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+      exception
+         --  Closed on the way out as well: a pool left open by an
+         --  exception kept its workers waiting, and leaving the block
+         --  waited on them for ever instead of saying what went wrong.
+         when others =>
+            Model_Runner.Backend.CPU.Close (Team);
+            raise;
       end Measure_Token_Budget;
 
       --  The same row product with the activations quantized to a byte.
@@ -1644,6 +1658,13 @@ package body Benchmarks is
                end if;
 
                Model_Runner.Backend.CPU.Close (Team);
+            exception
+               --  Closed on the way out as well: a pool left open by an
+               --  exception kept its workers waiting, and leaving the block
+               --  waited on them for ever instead of saying what went wrong.
+               when others =>
+                  Model_Runner.Backend.CPU.Close (Team);
+                  raise;
             end;
          end loop;
 

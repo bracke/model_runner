@@ -15,11 +15,13 @@ is
    --  opts out, manages a session by hand, or the run is interactive or
    --  an agent's, which own their sessions. The file is keyed by the
    --  model and the settings a reused cache must match -- the backend
-   --  and the repacking asked among them: a run on the processor and one
-   --  on the device each refused the other's file, read the prompt whole
-   --  and wrote its own over it, so alternating the two kept no cache;
-   --  and where the two did match, a greedy run's answer turned on which
-   --  backend ran before it.
+   --  and the repacking run among them, as the run resolved them rather
+   --  than as they were asked: a run on the processor and one on the
+   --  device each refused the other's file, read the prompt whole and
+   --  wrote its own over it, so alternating the two kept no cache; and
+   --  where the two did match, a greedy run's answer turned on which
+   --  backend ran before it. Keyed by what was asked, two unasked runs
+   --  the program sent to different backends still shared one.
    Auto_Cache : constant Boolean :=
      not Item.No_Cache
      and then T.Is_Empty (Item.Load_Session)
@@ -35,13 +37,8 @@ is
               & "|" & L.Value_Precision'Image (Item.Values)
               & "|" & Item.Context_Size'Image
               & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic)
-              & "|" & (if Item.Backend_Set
-                       then Model_Runner.Backend.Backend_Kind'Image
-                              (Item.Backend)
-                       else "AUTO")
-              & "|" & (if Item.Repack_Asked
-                       then L.Repack_Mode'Image (Item.Repack)
-                       else "UNASKED"))
+              & "|" & Model_Runner.Backend.Backend_Kind'Image (Item.Backend)
+              & "|" & L.Repack_Mode'Image (Item.Repack))
       else "");
    Load_Path : constant String :=
      (if not T.Is_Empty (Item.Load_Session)
@@ -444,4 +441,16 @@ begin
          Do_Run (With_Panels (Again), Screen, Catalog, Status);
       end;
    end if;
+exception
+   --  A run that raised -- past the pool, which is closed on the way out
+   --  -- is cleaned up as one that failed: the interrupt handler given
+   --  back, which otherwise held a token in this frame's popped stack and
+   --  a watcher the program's ending waited on for ever; the session, the
+   --  model and the device closed.
+   when others =>
+      Cleanup;
+      if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
+         Model_Runner.Backend.Device.Close;
+      end if;
+      raise;
 end Do_Run;

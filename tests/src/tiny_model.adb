@@ -83,7 +83,8 @@ package body Tiny_Model is
       Caps            : Boolean := True;
       Alignment       : Natural := 0;
       Header_Pad      : Natural := 0;
-      Template        : String := "")
+      Template        : String := "";
+      Draft_Block     : Boolean := False)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -194,6 +195,7 @@ package body Tiny_Model is
       --  Or as many as the caller asked for.
       Blocks : constant Natural :=
         (if Depth > 0 then Depth
+         elsif Draft_Block and then Kind /= Qwen35 then Layers + 1
          elsif Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
          elsif Kind = Jamba then 4
          elsif Kind = Deepseek2 then 3
@@ -676,6 +678,11 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".ssm.inner_size",
             Interfaces.Unsigned_32 (Linear_Heads * State_Width));
+         Fixtures.Add_U32 (Builder, Prefix & ".nextn_predict_layers", 1);
+      end if;
+
+      --  And a block past the stack on any other architecture, where asked.
+      if Draft_Block and then Kind /= Qwen35 then
          Fixtures.Add_U32 (Builder, Prefix & ".nextn_predict_layers", 1);
       end if;
 
@@ -1750,7 +1757,7 @@ package body Tiny_Model is
          --  What makes the block past the stack a draft: the projection
          --  from the next token's embedding beside the stack's state,
          --  the normalization of each, and the one ahead of the head.
-         if Kind = Qwen35 and then Index >= Layers then
+         if (Kind = Qwen35 or else Draft_Block) and then Index >= Layers then
             Weight (Layer_Name (Index, "nextn.eh_proj.weight"),
                     [G.U64 (2 * Embedding), G.U64 (Embedding)]);
             Norm (Layer_Name (Index, "nextn.enorm.weight"));

@@ -2652,8 +2652,11 @@ void main() {
             //  A hundred and ten bytes is not a whole number of words, so
             //  every other block begins half way into one; word_of takes
             //  the shift once a run.
+            //  The scale's two bytes begin on an even byte, so they lie in
+            //  one word: read alone, not with the word after it, which for
+            //  a matrix's last block is past the end of the matrix.
             uint d_at = at + 108u;
-            float d = unpackHalf2x16(word_of(d_at >> 2u, (d_at & 3u) * 8u)).x;
+            float d = unpackHalf2x16(w[d_at >> 2u] >> ((d_at & 3u) * 8u)).x;
 
             uint scales_at = at + 96u;
             uint scales_shift = (scales_at & 3u) * 8u;

@@ -125,7 +125,8 @@ is
        --  layer's sink. Sinks_Ready gives a slot a layer now, and the
        --  layers past what the room holds are the ones this sends to the
        --  host.
-       and then Sinks_Fit (L.Sinks, Index)
+       and then Sinks_Fit (L.Sinks, Index, Item.Paged,
+                           Sink_Footprint (Item.Owner.Settings))
 
        --  The normalization on the way in, which every architecture
        --  has but the one that normalizes on the way out and has the
@@ -1160,7 +1161,7 @@ begin
 
                      --  The layer's sinks, put where the attention
                      --  reads them.
-                     Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index)),
+                     Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged),
                      Alpha => Settings.Gate_Alpha,
                      Limit => Settings.Gate_Limit,
 
@@ -1538,7 +1539,8 @@ begin
                --  A layer with sinks the device has no room for attends
                --  on the host; the pair below is given the others'.
                if Item.Held = Halved or else not Resident
-                 or else not Sinks_Fit (Current.Sinks, Natural (Index))
+                 or else not Sinks_Fit
+                               (Current.Sinks, Natural (Index), Item.Paged)
                  or else Hybrid (Settings.Kind)
                then
                   --  How much arithmetic the heads are between them: every
@@ -1591,7 +1593,7 @@ begin
                      Max_Bias => Settings.Max_Bias,
                      Packed => Packed_Shape (Item, Base, V_Base,
                                              KV_Width, V_Width),
-                     Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index)),
+                     Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged),
                      Alpha => Settings.Gate_Alpha,
                      Limit => Settings.Gate_Limit,
                      Cancel => Item.Stopping);
@@ -1626,7 +1628,7 @@ begin
                      Max_Bias => Settings.Max_Bias,
                      Packed => Packed_Shape (Item, Base, V_Base,
                                              KV_Width, V_Width),
-                     Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index)));
+                     Sinks_At => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged));
 
                   if Projected then
                      Usable := True;

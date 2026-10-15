@@ -638,8 +638,14 @@ private
       Arg1 : Natural := 0;
       Arg2 : Natural := 0;
       Arg3 : Natural := 0;
-      --  The one filter with four: truncate's leeway.
+      --  Truncate's leeway; map's first argument to the filter it names.
       Arg4 : Natural := 0;
+      --  Format's fifth to eighth, and map's second to fourth to its
+      --  filter.
+      Arg5 : Natural := 0;
+      Arg6 : Natural := 0;
+      Arg7 : Natural := 0;
+      Arg8 : Natural := 0;
    end record;
 
    --  How many filters may follow one another on a term.

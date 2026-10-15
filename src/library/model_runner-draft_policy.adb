@@ -10,6 +10,7 @@ package body Model_Runner.Draft_Policy is
    is (not Request.Model_Named
        and then not Request.Lookup
        and then Request.Tokens > 0
+       and then L.Rewinds_Drafts (Prepared)
        and then L.Vocabulary (Prepared) /= null);
 
    function Seeks_Store_Draft
@@ -21,6 +22,7 @@ package body Model_Runner.Draft_Policy is
        and then L.Config (Prepared).Experts = 0
        and then not L.Drafts_Next (Session)
        and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+       and then L.Rewinds_Drafts (Prepared)
        and then L.Vocabulary (Prepared) /= null);
 
    function Decide

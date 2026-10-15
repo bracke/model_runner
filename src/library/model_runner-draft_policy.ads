@@ -34,7 +34,9 @@ package Model_Runner.Draft_Policy is
    end record;
 
    --  Whether a draft the model names beside itself is looked for
-   --  (Drafts.Paired).
+   --  (Drafts.Paired): never for a model nothing drafts on
+   --  (Llama.Rewinds_Drafts), whose draft was loaded, counted against the
+   --  device's budget and never used.
    --
    --  @param Prepared The model.
    --  @param Request What was asked.
@@ -44,7 +46,8 @@ package Model_Runner.Draft_Policy is
 
    --  Whether, with no draft named or paired, one is looked for in the
    --  store and beside the model (Drafts.Find): a dense model whose token
-   --  reads Next_Draft_Bytes or more, with no block past its stack.
+   --  reads Next_Draft_Bytes or more, with no block past its stack, that
+   --  can be drafted on at all.
    --
    --  @param Prepared The model.
    --  @param Session A session open on it.

@@ -419,6 +419,9 @@ package Tiny_Model is
    --    for the default.
    --  @param Header_Pad Bytes of an extra string in the header, which moves
    --    where the data begins.
+   --  @param Draft_Block Whether the file carries, past its stack, a block
+   --    that drafts the next token, as a Qwen3.5's does, on an architecture
+   --    released without one.
    --  @param Wide_State Whether a Qwen3.5's linear heads are a hundred and
    --    twenty-eight wide, as the real models' are, rather than four: the
    --    one width the device keeps a state in registers for.
@@ -455,6 +458,7 @@ package Tiny_Model is
       Caps            : Boolean := True;
       Alignment       : Natural := 0;
       Header_Pad      : Natural := 0;
-      Template        : String := "");
+      Template        : String := "";
+      Draft_Block     : Boolean := False);
 
 end Tiny_Model;

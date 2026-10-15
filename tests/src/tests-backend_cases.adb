@@ -30,6 +30,7 @@ with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
 with Model_Runner.Tensors;
 
+with Device_Notes;
 with Fixtures;
 
 package body Tests.Backend_Cases is
@@ -205,6 +206,13 @@ package body Tests.Backend_Cases is
                At_Team := Team;
                At_Row := Wrong;
             end if;
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Pool);
+               raise;
          end;
 
          Assert (Opened, "pool did not open with the workers asked for");
@@ -313,6 +321,13 @@ package body Tests.Backend_Cases is
                At_Team := Team;
                At_Index := Wrong;
             end if;
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Pool);
+               raise;
          end;
 
          Assert (Opened, "pool did not open");
@@ -913,6 +928,13 @@ package body Tests.Backend_Cases is
       T.Free (Serial);
       T.Free (Wide);
       B.Free (Storage);
+   exception
+      --  Closed on the way out as well: a pool left open by an
+      --  exception kept its workers waiting, and leaving the block
+      --  waited on them for ever instead of saying what went wrong.
+      when others =>
+         CPU.Close (Pool);
+         raise;
    end More_Workers_Than_Rows;
 
    --  A closed pool rejects work rather than queueing it, and closing twice is
@@ -949,6 +971,13 @@ package body Tests.Backend_Cases is
       T.Free (Vector);
       T.Free (Target);
       B.Free (Storage);
+   exception
+      --  Closed on the way out as well: a pool left open by an
+      --  exception kept its workers waiting, and leaving the block
+      --  waited on them for ever instead of saying what went wrong.
+      when others =>
+         CPU.Close (Pool);
+         raise;
    end Closed_Pool_Rejects;
 
    --  A pool is reusable: many jobs run through the same workers, and no task
@@ -988,6 +1017,13 @@ package body Tests.Backend_Cases is
       T.Free (Serial);
       T.Free (Target);
       B.Free (Storage);
+   exception
+      --  Closed on the way out as well: a pool left open by an
+      --  exception kept its workers waiting, and leaving the block
+      --  waited on them for ever instead of saying what went wrong.
+      when others =>
+         CPU.Close (Pool);
+         raise;
    end Pool_Is_Reused;
 
    --  A pool that is created and then never used must still terminate. It
@@ -1016,6 +1052,13 @@ package body Tests.Backend_Cases is
       begin
          CPU.Close (Idle);
          Assert (not CPU.Is_Open (Idle), "a closed pool reported itself open");
+      exception
+         --  Closed on the way out as well: a pool left open by an
+         --  exception kept its workers waiting, and leaving the block
+         --  waited on them for ever instead of saying what went wrong.
+         when others =>
+            CPU.Close (Idle);
+            raise;
       end;
    end Unused_Pool_Terminates;
 
@@ -2087,6 +2130,7 @@ package body Tests.Backend_Cases is
       Device.Close;
       Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for device fits an unasked budget");
          return;
       end if;
 
@@ -2178,6 +2222,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => True);
 
       if not Ready then
+         Device_Notes.Skip ("for device reads the host memory when asked");
          return;
       end if;
 
@@ -2373,6 +2418,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
 
       if not Ready then
+         Device_Notes.Skip ("for resident cache attends as a host does");
          --  A machine with no device says nothing here, as the other
          --  device cases do.
          return;
@@ -2380,12 +2426,7 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Reserve_Cache (Room * 2, Room * 2, Ok);
 
-      if not Ok then
-         --  A device that will not hold a cache is a slower run, not a
-         --  wrong one; the engine falls back to the processor.
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Model_Runner.Backend.Device.Put_Cache (0, Keys, Ok);
       Assert (Ok, "a device that reserved room would not take the keys");
@@ -2530,6 +2571,7 @@ package body Tests.Backend_Cases is
       pragma Unreferenced (T);
       package Dev renames Model_Runner.Backend.Device;
       package Env renames Ada.Environment_Variables;
+      use type Interfaces.Unsigned_64;
 
       Ready, Ok : Boolean;
 
@@ -2553,16 +2595,19 @@ package body Tests.Backend_Cases is
       Dev.Close;
       Dev.Open (Ready, Share_Host => False);
       if not Ready then
+         Device_Notes.Skip ("for copy only cache keeps its rows");
          return;
       end if;
 
       Env.Set ("MR_FORCE_COPY_ONLY", "1");
       Dev.Reserve_Cache (64, 64, Ok, Allow_Copy_Only => True);
-      if not Ok then
-         Env.Clear ("MR_FORCE_COPY_ONLY");
-         Dev.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the copy-only cache");
+      --  The copy alone: two bytes an element, not the six of a binary32
+      --  cache with its copy beside it. Rows that are halves exactly read
+      --  back the same from either, so this is what says which it is.
+      Assert (Dev.Cached_Bytes = 64 * 2,
+              "a copy-only cache of 64 elements holds"
+              & Dev.Cached_Bytes'Image & " bytes, not its copy's 128");
 
       Dev.Put_Cache (40, Rows, Ok);
       Assert (Ok, "a copy-only cache would not take rows");
@@ -2570,6 +2615,11 @@ package body Tests.Backend_Cases is
 
       Dev.Reserve_Cache (1_048_576, 1_048_576, Ok, Allow_Copy_Only => True);
       Assert (Ok, "a copy-only cache would not grow");
+      Assert (Dev.Cached_Bytes >= 2 * 1_048_576
+              and then Dev.Cached_Bytes <= 2 * (1_048_576 + 1_048_576 / 4),
+              "a copy-only cache grown to 1,048,576 elements holds"
+              & Dev.Cached_Bytes'Image
+              & " bytes, not its copy's two an element and room to grow");
       Read_Back (40, "after it grew");
       Env.Clear ("MR_FORCE_COPY_ONLY");
       Dev.Release_Cache;
@@ -2580,6 +2630,11 @@ package body Tests.Backend_Cases is
                         Keys_Upto => 64);
       Env.Clear ("MR_FORCE_SPLIT_COPY");
       Assert (Ok, "a split copy was refused");
+      --  Split, the copy's own buffer holds the keys alone, the values in
+      --  a buffer of their own.
+      Assert (Dev.Cached_Bytes = 64 * 2,
+              "a split copy's keys buffer holds"
+              & Dev.Cached_Bytes'Image & " bytes, not the keys' 128");
 
       Dev.Put_Cache (8, Rows, Ok);
       Assert (Ok, "a split copy would not take keys");
@@ -2623,14 +2678,12 @@ package body Tests.Backend_Cases is
       Dev.Close;
       Dev.Open (Ready, Share_Host => False);
       if not Ready then
+         Device_Notes.Skip ("for second copy keeps its rows");
          return;
       end if;
 
       Dev.Reserve_Second_Cache (64, Ok);
-      if not Ok then
-         Dev.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the second cache");
 
       Dev.Put_Cache (At_Row, Rows, Ok);
       Assert (Ok, "the second copy would not take rows in its room");
@@ -2729,6 +2782,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for recorded attention says what a call says");
          Devices.Close (Held);
          return;
       end if;
@@ -2736,6 +2790,7 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for recorded attention says what a call says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -2752,12 +2807,7 @@ package body Tests.Backend_Cases is
 
       Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Products.Close (Engine);
-         Devices.Close (Opened);
-         Devices.Close (Held);
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Products.Put_Cache (Engine, 0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -3107,6 +3157,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
 
       if not Ready then
+         Device_Notes.Skip ("for joined pair says what two steps say");
          return;
       end if;
 
@@ -3154,10 +3205,7 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -3313,6 +3361,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
 
       if not Ready then
+         Device_Notes.Skip ("for fused layer says what the parts say");
          return;
       end if;
 
@@ -3374,10 +3423,7 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -3446,14 +3492,15 @@ package body Tests.Backend_Cases is
          Out_View, Gain, Epsilon, Gate_View, Up_View, Down_View, 0,
          Fused, Ok);
 
-      if Ok then
-         for Index in 0 .. Span - 1 loop
-            Assert (abs (Apart.all (Index) - Fused.all (Index)) <= Near,
-                    "a layer's second half named as one sequence differs "
-                    & "from the same nine steps done apart at component"
-                    & N.Element_Count'Image (Index));
-         end loop;
-      end if;
+      --  Refused, nothing would be compared: the sequence is what is under
+      --  test, and a gate that sends it back would otherwise pass.
+      Assert (Ok, "a layer's second half was refused as one sequence");
+      for Index in 0 .. Span - 1 loop
+         Assert (abs (Apart.all (Index) - Fused.all (Index)) <= Near,
+                 "a layer's second half named as one sequence differs "
+                 & "from the same nine steps done apart at component"
+                 & N.Element_Count'Image (Index));
+      end loop;
 
       T.Free (Blend);
       T.Free (Wrote);
@@ -3605,6 +3652,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
 
       if not Ready then
+         Device_Notes.Skip ("for normalized group says what the parts say");
          return;
       end if;
 
@@ -3699,17 +3747,17 @@ package body Tests.Backend_Cases is
            (Views, Given, Gain, Epsilon, Whole, Ok,
             Spread => Positions);
 
-         if Ok then
-            for Which in 1 .. 3 loop
-               for Index in 0 .. Positions * Rows (Which) - 1 loop
-                  Assert (abs (Apart (Which).all (Index)
-                               - Whole (Which).all (Index)) <= Near,
-                          "a normalization named with the matrices that "
-                          & "read it differs from the four done apart at "
-                          & "component" & N.Element_Count'Image (Index));
-               end loop;
+         Assert (Ok, "a normalization and the matrices that read it were "
+                 & "refused as one sequence");
+         for Which in 1 .. 3 loop
+            for Index in 0 .. Positions * Rows (Which) - 1 loop
+               Assert (abs (Apart (Which).all (Index)
+                            - Whole (Which).all (Index)) <= Near,
+                       "a normalization named with the matrices that "
+                       & "read it differs from the four done apart at "
+                       & "component" & N.Element_Count'Image (Index));
             end loop;
-         end if;
+         end loop;
 
          T.Free (Given);
       end;
@@ -3785,6 +3833,7 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
 
       if not Ready then
+         Device_Notes.Skip ("for whole layer says what two halves say");
          return;
       end if;
 
@@ -3860,10 +3909,7 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Reserve_Cache (Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -3879,10 +3925,7 @@ package body Tests.Backend_Cases is
          Head_Size => Natural (Head_Size),
          Rotary    => Natural (Rotary));
 
-      if not Ok then
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "a layer's first half was refused as one sequence");
 
       --  The cache write the host used to do between the halves.
       for Slot in 0 .. Positions - 1 loop
@@ -3914,10 +3957,7 @@ package body Tests.Backend_Cases is
             Positions => Natural (Positions));
       end;
 
-      if not Ok then
-         Model_Runner.Backend.Device.Close;
-         return;
-      end if;
+      Assert (Ok, "a layer's second half was refused as one sequence");
 
       --  And the whole of it as one, from the same empty cache.
       Model_Runner.Backend.Device.Put_Cache (0, Cache, Ok);
@@ -3935,14 +3975,13 @@ package body Tests.Backend_Cases is
          Key_Row, Value_Row, Whole, Ok,
          Positions => Natural (Positions));
 
-      if Ok then
-         for Index in 0 .. Positions * Width - 1 loop
-            Assert (abs (Apart.all (Index) - Whole.all (Index)) <= Near,
-                    "a layer named as one sequence differs from the same "
-                    & "layer named as two at component"
-                    & N.Element_Count'Image (Index));
-         end loop;
-      end if;
+      Assert (Ok, "a layer was refused as one sequence");
+      for Index in 0 .. Positions * Width - 1 loop
+         Assert (abs (Apart.all (Index) - Whole.all (Index)) <= Near,
+                 "a layer named as one sequence differs from the same "
+                 & "layer named as two at component"
+                 & N.Element_Count'Image (Index));
+      end loop;
 
       T.Free (Query_Row);
       T.Free (Key_Row);
@@ -4171,6 +4210,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a gathered mixture says what the host says");
          Devices.Close (Held);
          return;
       end if;
@@ -4178,6 +4218,7 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a gathered mixture says what the host says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -4374,11 +4415,13 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a projection bias is added where it lies");
          Devices.Close (Held);
          return;
       end if;
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a projection bias is added where it lies");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -5001,11 +5044,15 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for a pick and a scaled join say what the host says");
          Devices.Close (Held);
          return;
       end if;
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for a pick and a scaled join say what the host says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -5132,11 +5179,13 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for an assembled head says what it reads");
          Devices.Close (Held);
          return;
       end if;
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip ("for an assembled head says what it reads");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -5483,6 +5532,7 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for an rwkv block says what the host says");
          Devices.Close (Held);
          return;
       end if;
@@ -5541,6 +5591,7 @@ package body Tests.Backend_Cases is
    begin
       Model_Runner.Backend.Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for an rwkv layer without its pack is refused");
          Assert (not Model_Runner.Backend.Device.Runs_Rwkv,
                  "a closed device says it runs RWKV blocks");
          return;
@@ -5863,6 +5914,7 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a mamba2 mixer says what the host says");
          Devices.Close (Held);
          Free (Mix);
          Free (Start);
@@ -6202,6 +6254,7 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a mamba mixer says what the host says");
          Devices.Close (Held);
          return;
       end if;
@@ -6262,6 +6315,7 @@ package body Tests.Backend_Cases is
    begin
       Model_Runner.Backend.Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for a mamba2 layer without its pack is refused");
          Assert (not Model_Runner.Backend.Device.Runs_Mamba2,
                  "a closed device says it runs Mamba2 mixers");
          return;
@@ -6345,6 +6399,8 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for the packed attention says which heads it reads");
          Devices.Close (Held);
          return;
       end if;
@@ -6428,12 +6484,14 @@ package body Tests.Backend_Cases is
 
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a cache grows with room");
          Devices.Close (Held);
          return;
       end if;
 
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a cache grows with room");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -6553,11 +6611,13 @@ package body Tests.Backend_Cases is
          end if;
          Devices.Open (Opened, Held, 1, Ready);
          if not Ready then
+            Device_Notes.Skip ("for the gated pair says what its parts say");
             Devices.Close (Held);
             return;
          end if;
          Products.Open (Engine, Opened, Ready);
          if not Ready then
+            Device_Notes.Skip ("for the gated pair says what its parts say");
             Devices.Close (Opened);
             Devices.Close (Held);
             return;
@@ -6740,6 +6800,7 @@ package body Tests.Backend_Cases is
             end if;
          end if;
          if not Ready then
+            Device_Notes.Skip ("for rounded walks in a sequence stay close");
             Devices.Close (Held);
             return;
          end if;
@@ -6845,6 +6906,18 @@ package body Tests.Backend_Cases is
                                   Plain (Pair_At_N .. Plain'Last)),
                        "a gated pair said to walk as integers answered the "
                        & "binary32 walk's bits, so it did not");
+               --  And the other two walked as integers too, each within the
+               --  bound and not the binary32 bits under another name: a
+               --  rounding the gate never passed on held close by being
+               --  the same answer.
+               Assert (not N."=" (Every (Product_At .. Pair_At_N - 1),
+                                  Plain (Product_At .. Pair_At_N - 1)),
+                       "a plain product said to walk as integers answered "
+                       & "the binary32 walk's bits, so it did not");
+               Assert (not N."=" (Feeding (Pair_At_N .. Feeding'Last),
+                                  Plain (Pair_At_N .. Plain'Last)),
+                       "a feed-forward gated pair said to walk as integers "
+                       & "answered the binary32 walk's bits, so it did not");
             end;
 
             <<Next_Count>>
@@ -6902,6 +6975,7 @@ package body Tests.Backend_Cases is
             end if;
          end if;
          if not Ready then
+            Device_Notes.Skip ("for codebook walks as integers stay close");
             Devices.Close (Held);
             return;
          end if;
@@ -7036,11 +7110,13 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a streamed product is not kept");
          Devices.Close (Held);
          return;
       end if;
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a streamed product is not kept");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -7103,6 +7179,8 @@ package body Tests.Backend_Cases is
 
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for the keeper spins while asked and stops after");
          Devices.Close (Held);
          return;
       end if;
@@ -7292,11 +7370,15 @@ package body Tests.Backend_Cases is
          end if;
          Devices.Open (Opened, Held, 1, Ready);
          if not Ready then
+            Device_Notes.Skip
+              ("for the linear layer on the device says what the host says");
             Devices.Close (Held);
             return;
          end if;
          Products.Open (Engine, Opened, Ready);
          if not Ready then
+            Device_Notes.Skip
+              ("for the linear layer on the device says what the host says");
             Devices.Close (Opened);
             Devices.Close (Held);
             return;
@@ -7650,6 +7732,8 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
       Model_Runner.Backend.Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for the shared expert on the device says what the host says");
          B.Free (Gate_Bytes);
          B.Free (Up_Bytes);
          B.Free (Down_Bytes);
@@ -7805,9 +7889,7 @@ package body Tests.Backend_Cases is
       Device.Close;
       Device.Open (Ready);
       if not Ready then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error,
-            "note: no device to hold a mixture's paired stacks on");
+         Device_Notes.Skip ("to hold a mixture's paired stacks on");
          return;
       end if;
 
@@ -7835,11 +7917,13 @@ package body Tests.Backend_Cases is
       Down_Bytes.all := Down_Q;
       T.Make (G.Type_Q4_K, Experts * Feed, Width, Gate_Apart, 0, Gates_Apart,
               Status);
+      Assert (E.Is_Ok (Status), "the apart gate stack's view was not built");
       T.Make (G.Type_Q4_K, Experts * Feed, Width, Up_Apart, 0, Ups_Apart,
               Status);
+      Assert (E.Is_Ok (Status), "the apart up stack's view was not built");
       T.Make (G.Type_Q4_K, Experts * Width, Feed, Down_Bytes, 0, Downs,
               Status);
-      Assert (E.Is_Ok (Status), "a stack's view could not be built");
+      Assert (E.Is_Ok (Status), "the down stack's view was not built");
 
       T.Allocate (Width, Vector);
       T.Allocate (2 * Width, Paired);
@@ -7915,6 +7999,59 @@ package body Tests.Backend_Cases is
 
       Same (Paired, Apart, "an expert");
 
+      --  And both against the host's own arithmetic on the expert's three
+      --  slices, which no kernel shares: a fault common to the paired and
+      --  the apart reads would pass the comparison above.
+      declare
+         Row      : constant B.Byte_Count := 144;
+         Member   : constant := 2;
+         G_Slice, U_Slice, D_Slice : T.View;
+         G_Out, U_Out, D_Out : T.Real_Array_Access;
+         Worst, Most : N.Real := 0.0;
+      begin
+         T.Make (G.Type_Q4_K, Feed, Width, Gate_Apart,
+                 B.Byte_Count (Member * Feed) * Row, G_Slice, Status);
+         Assert (E.Is_Ok (Status), "the gate slice's view was not built");
+         T.Make (G.Type_Q4_K, Feed, Width, Up_Apart,
+                 B.Byte_Count (Member * Feed) * Row, U_Slice, Status);
+         Assert (E.Is_Ok (Status), "the up slice's view was not built");
+         T.Make (G.Type_Q4_K, Width, Feed, Down_Bytes,
+                 B.Byte_Count (Member * Width) * Row, D_Slice, Status);
+         Assert (E.Is_Ok (Status), "the down slice's view was not built");
+         T.Allocate (Feed, G_Out);
+         T.Allocate (Feed, U_Out);
+         T.Allocate (Width, D_Out);
+         CPU.Dispatch (null, G_Slice, Vector, G_Out, Status,
+                       Roles => CPU.No_Role);
+         Assert (E.Is_Ok (Status), "the host's gate product failed");
+         CPU.Dispatch (null, U_Slice, Vector, U_Out, Status,
+                       Roles => CPU.No_Role);
+         Assert (E.Is_Ok (Status), "the host's up product failed");
+         for Index in G_Out.all'Range loop
+            G_Out.all (Index) :=
+              G_Out.all (Index)
+              / (1.0 + N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                 (Float (-G_Out.all (Index)))))
+              * U_Out.all (Index);
+         end loop;
+         CPU.Dispatch (null, D_Slice, G_Out, D_Out, Status,
+                       Roles => CPU.No_Role);
+         Assert (E.Is_Ok (Status), "the host's down product failed");
+         for Index in 0 .. Width - 1 loop
+            Most := N.Real'Max (Most, abs D_Out.all (D_Out.all'First + Index));
+            Worst := N.Real'Max
+              (Worst, abs (Paired.all (Paired.all'First + Index)
+                           - D_Out.all (D_Out.all'First + Index)));
+         end loop;
+         Assert (Most > 0.0 and then Worst <= 1.0E-4,
+                 "an expert read from the paired region answers"
+                 & N.Real'Image (Worst)
+                 & " away from the host's own arithmetic on its slices");
+         T.Free (G_Out);
+         T.Free (U_Out);
+         T.Free (D_Out);
+      end;
+
       --  And a token's two experts at once, the host's choice.
       declare
          Chosen : constant Device.Member_List := [1 => 2, 2 => 0, others => 0];
@@ -7980,6 +8117,31 @@ package body Tests.Backend_Cases is
          Assert (not Added,
                  "a gated gather was taken reading a step that chose nothing");
       end;
+
+      --  And a routing over no more experts than the device's choosing
+      --  holds a position: over more, it would choose among the first of
+      --  them and say nothing of the rest.
+      for Experts_Routed in
+        Products.Max_Experts .. Products.Max_Experts + 1
+      loop
+         declare
+            Steps : Products.Sequence;
+            Added : Boolean;
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Region_Bytes.all'Address, Region_Bytes.all'Length, 0,
+               Products.Packed_Q4_K, Experts_Routed, 256, Added,
+               Kept => False);
+            Assert (Added, "a router of" & Natural'Image (Experts_Routed)
+                    & " rows was refused");
+            Products.Add_Route (Steps, Experts_Routed, 8, Added);
+            Assert (Added = (Experts_Routed = Products.Max_Experts),
+                    "a routing over" & Natural'Image (Experts_Routed)
+                    & " experts was "
+                    & (if Added then "taken" else "refused"));
+         end;
+      end loop;
 
       --  And a device whose budget holds a stack but not the region: the
       --  load holds the gate alone, and the steps name the two apart --
@@ -8059,11 +8221,13 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a cache past the storage bound is refused");
          Devices.Close (Held);
          return;
       end if;
       Products.Open (Engine, Opened, Ready);
       if not Ready then
+         Device_Notes.Skip ("for a cache past the storage bound is refused");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -8205,6 +8369,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for the heads step says what three steps say");
          Devices.Close (Held);
          return;
       end if;
@@ -8380,6 +8545,8 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a centred norm and a unit alone say what the host says");
          Devices.Close (Held);
          return;
       end if;
@@ -8387,6 +8554,8 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a centred norm and a unit alone say what the host says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -8650,6 +8819,7 @@ package body Tests.Backend_Cases is
          end if;
       end if;
       if not Ready then
+         Device_Notes.Skip ("for listed walks as integers stay close");
          Devices.Close (Held);
          return;
       end if;
@@ -8885,6 +9055,8 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a listed mixture says what the gathered one says");
          Devices.Close (Held);
          return;
       end if;
@@ -8892,6 +9064,8 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a listed mixture says what the gathered one says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -8995,6 +9169,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a whole group bundle attends as a host does");
          Devices.Close (Held);
          return;
       end if;
@@ -9002,6 +9177,7 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a whole group bundle attends as a host does");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -9167,6 +9343,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a split attention says what one piece says");
          Devices.Close (Held);
          return;
       end if;
@@ -9174,6 +9351,7 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for a split attention says what one piece says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -9188,12 +9366,7 @@ package body Tests.Backend_Cases is
 
       Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Products.Close (Engine);
-         Devices.Close (Opened);
-         Devices.Close (Held);
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Products.Put_Cache (Engine, 0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -9416,6 +9589,8 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a halved attention says nearly what the exact says");
          Devices.Close (Held);
          return;
       end if;
@@ -9423,6 +9598,8 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a halved attention says nearly what the exact says");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -9447,12 +9624,7 @@ package body Tests.Backend_Cases is
 
       Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
 
-      if not Ok then
-         Products.Close (Engine);
-         Devices.Close (Opened);
-         Devices.Close (Held);
-         return;
-      end if;
+      Assert (Ok, "the device would not reserve the test's cache");
 
       Products.Put_Cache (Engine, 0, Cache, Ok);
       Assert (Ok, "the cache would not be written");
@@ -10062,6 +10234,8 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip
+           ("for a packed attention says what the exact cache says");
          Devices.Close (Held);
          return;
       end if;
@@ -10337,6 +10511,7 @@ package body Tests.Backend_Cases is
       end if;
       Devices.Open (Opened, Held, 1, Ready);
       if not Ready then
+         Device_Notes.Skip ("for the device packs as the host packs");
          Devices.Close (Held);
          return;
       end if;
@@ -10602,6 +10777,8 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a wide head attends through the matrix like a narrow one");
          Devices.Close (Held);
          return;
       end if;
@@ -10609,6 +10786,8 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for a wide head attends through the matrix like a narrow one");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -10693,6 +10872,8 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Open (Ready);
 
       if not Ready then
+         Device_Notes.Skip
+           ("for an exact batch reads its vectors as they are");
          return;
       end if;
 
@@ -10797,6 +10978,7 @@ package body Tests.Backend_Cases is
       Devices.Open (Opened, Held, 1, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for the device stamps its steps");
          Devices.Close (Held);
          return;
       end if;
@@ -10804,6 +10986,7 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
 
       if not Ready then
+         Device_Notes.Skip ("for the device stamps its steps");
          Devices.Close (Opened);
          Devices.Close (Held);
          return;
@@ -10905,6 +11088,7 @@ package body Tests.Backend_Cases is
       Device.Close;
       Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for the device stamps its steps");
          return;
       end if;
 
@@ -11246,6 +11430,13 @@ package body Tests.Backend_Cases is
             end loop;
 
             CPU.Close (Team);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Team);
+               raise;
          end;
       end loop;
 

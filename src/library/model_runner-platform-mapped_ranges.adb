@@ -18,14 +18,20 @@ package body Model_Runner.Platform.Mapped_Ranges is
 
    protected Table is
       procedure Note (First, Last : Integer_Address; Handle : Long_Long_Integer);
-      procedure Forget (First : Integer_Address);
+
+      --  Waits while a handle Locate gave out is being opened again: a
+      --  region closed under that, its descriptor's number taken by the
+      --  next file opened, was another file read and called this one.
+      entry Forget (First : Integer_Address);
       function Holds (First, Last : Integer_Address) return Boolean;
       procedure Locate
         (First, Last : Integer_Address;
          Handle      : out Long_Long_Integer;
          Base        : out Integer_Address);
+      procedure Located_Done;
    private
-      Runs : Run_Table;
+      Runs    : Run_Table;
+      Readers : Natural := 0;
    end Table;
 
    protected body Table is
@@ -39,7 +45,7 @@ package body Model_Runner.Platform.Mapped_Ranges is
          end loop;
       end Note;
 
-      procedure Forget (First : Integer_Address) is
+      entry Forget (First : Integer_Address) when Readers = 0 is
       begin
          for R of Runs loop
             if R.Last /= 0 and then R.First = First then
@@ -66,10 +72,20 @@ package body Model_Runner.Platform.Mapped_Ranges is
             then
                Handle := R.Handle;
                Base := R.First;
+               if Handle >= 0 then
+                  Readers := Readers + 1;
+               end if;
                return;
             end if;
          end loop;
       end Locate;
+
+      procedure Located_Done is
+      begin
+         if Readers > 0 then
+            Readers := Readers - 1;
+         end if;
+      end Located_Done;
    end Table;
 
    procedure Note
@@ -110,5 +126,10 @@ package body Model_Runner.Platform.Mapped_Ranges is
                  else 0);
       return Handle >= 0;
    end Locate;
+
+   procedure Located_Done is
+   begin
+      Table.Located_Done;
+   end Located_Done;
 
 end Model_Runner.Platform.Mapped_Ranges;

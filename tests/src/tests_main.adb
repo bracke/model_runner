@@ -67,7 +67,11 @@ with Model_Runner.Images;
 with Model_Runner.Video;
 with Model_Runner.Vision;
 with Model_Runner.Tensors;
+with Hostkit.Descriptors;
+with Hostkit.Terminal_Control;
+with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Signals;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Packaging;
@@ -76,6 +80,8 @@ with Host_Load;
 with Imatrix_Run;
 with Agent_Eval;
 with Perplexity_Run;
+with State_Dump;
+with Tokenizer_Cross;
 with Quantize_Run;
 with Speed_Run;
 with Crossing;
@@ -96,6 +102,10 @@ procedure Tests_Main is
      new AUnit.Run.Test_Runner_With_Status (Tests.Suite.Suite);
 
    Reporter : AUnit.Reporter.Text.Text_Reporter;
+
+   --  The token the probe's interrupt handling is bound to: here, as the
+   --  handler outlives the call that installed it.
+   Probe_Token : aliased Model_Runner.Cancellation.Token;
 
    --  A backend named the way --backend names it. An unknown name is the
    --  processor rather than a refusal: these are measuring and validating
@@ -647,6 +657,13 @@ begin
                See_Frames (Pool'Unchecked_Access);
             end if;
             Model_Runner.Backend.CPU.Close (Pool);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               Model_Runner.Backend.CPU.Close (Pool);
+               raise;
          end;
          Ada.Text_IO.Put_Line
            ("encoded in" & Duration'Image (Ada.Calendar.Clock - Started) & " s"
@@ -2086,6 +2103,89 @@ begin
          end if;
       end;
 
+   elsif Command = "tokenizer-cross" then
+      --  The engine's tokenizer against llama-tokenize over real files;
+      --  see Tokenizer_Cross.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Result : Tokenizer_Cross.Report;
+      begin
+         if Option ("--models", "") = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "tokenizer-cross: --models is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+         Tokenizer_Cross.Run
+           (Llama   =>
+              Option ("--llama",
+                      "llama-tokenize"),
+            Models  => Option ("--models", ""),
+            Corpus  => Option ("--corpus", "fixtures/tokenizer-cross.txt"),
+            Scratch => "obj/tokenizer-cross",
+            Result  => Result);
+         Ada.Text_IO.Put_Line
+           ("models" & Natural'Image (Result.Models) & ", cases"
+            & Natural'Image (Result.Cases) & ", agree"
+            & Natural'Image (Result.Agreed) & ", differ"
+            & Natural'Image (Result.Differed) & ", failed"
+            & Natural'Image (Result.Failed));
+         if Result.Differed > 0 or else Result.Failed > 0
+           or else Result.Models = 0
+         then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "dump-states" then
+      --  The stack's final states and the model's own likeliest next
+      --  tokens over a list of texts, for training a block past it
+      --  outside the program; see State_Dump.
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         Result : State_Dump.Report;
+      begin
+         if Option ("--model", "") = "" or else Option ("--texts", "") = ""
+           or else Option ("--out", "") = ""
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "dump-states: --model, --texts and --out are required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+         State_Dump.Run
+           (Model   => Option ("--model", ""),
+            Texts   => Option ("--texts", ""),
+            Into    => Option ("--out", ""),
+            Backend => Backend_Of (Option ("--backend", "device")),
+            Top     => Positive'Value (Option ("--top", "8")),
+            Most    => Positive'Value (Option ("--most", "4096")),
+            Result  => Result);
+         if Result.Failed or else Result.Texts = 0 then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
    elsif Command = "perplexity" then
       --  What a quantization costs the model's predictions, which is the
       --  half of the format table this repository has always asserted and
@@ -2634,6 +2734,54 @@ begin
 
          Ada.Text_IO.Put_Line (Room (1 .. Last));
       end;
+
+   elsif Command = "probe" then
+      --  A process the suite watches from outside, for what only a whole
+      --  process shows: that one ending with interrupts still handled --
+      --  as one whose run raised past its own clean-up did -- ends, and not
+      --  waits for ever on the task that watched for them; and how many
+      --  workers a process held to some processors would take.
+      if Ada.Command_Line.Argument_Count >= 2
+        and then Ada.Command_Line.Argument (2) = "leave-signals"
+      then
+         declare
+            Attached : Boolean;
+         begin
+            Model_Runner.Platform.Signals.Install (Probe_Token'Unchecked_Access, Attached);
+            Ada.Text_IO.Put_Line ("installed " & Boolean'Image (Attached));
+         end;
+      elsif Ada.Command_Line.Argument_Count >= 2
+        and then Ada.Command_Line.Argument (2) = "hold-screen"
+      then
+         --  The terminal held raw on its other screen, as a list holds it,
+         --  with nothing bound to stop: told to end, the program ends at
+         --  once, and gives the terminal and the screen back first.
+         declare
+            Attached : Boolean;
+            Saved    : Hostkit.Terminal_Control.Mode;
+         begin
+            Model_Runner.Platform.Signals.Install (null, Attached);
+            if Hostkit.Terminal_Control.Save_Mode (Hostkit.Descriptors.Standard_Input, Saved) then
+               Model_Runner.Platform.Signals.Hold_Terminal_Mode (Saved);
+               if Hostkit.Terminal_Control.Set_Raw (Hostkit.Descriptors.Standard_Input) then
+                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?1049h");
+                  Model_Runner.Platform.Signals.Note_Alternate_Screen (True);
+                  Ada.Text_IO.Put_Line ("held");
+                  delay 30.0;
+               end if;
+            end if;
+         end;
+      elsif Ada.Command_Line.Argument_Count >= 2
+        and then Ada.Command_Line.Argument (2) = "processors"
+      then
+         Ada.Text_IO.Put_Line
+           (Natural'Image (Model_Runner.Platform.Processor_Count)
+            & Natural'Image (Model_Runner.Platform.Core_Count));
+      else
+         Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error,
+                               "usage: tests probe leave-signals | processors");
+         Ada.Command_Line.Set_Exit_Status (2);
+      end if;
 
    elsif Command = "slow" then
       --  The suite, reported by where its time went. It costs twenty-eight

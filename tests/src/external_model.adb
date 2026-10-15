@@ -483,6 +483,13 @@ package body External_Model is
             begin
                Generate (Team'Unchecked_Access, Third, Last_3, Count_3, Ok_3);
                CPU.Close (Team);
+            exception
+               --  Closed on the way out as well: a pool left open by an
+               --  exception kept its workers waiting, and leaving the block
+               --  waited on them for ever instead of saying what went wrong.
+               when others =>
+                  CPU.Close (Team);
+                  raise;
             end;
 
             Result.Thread_Stable :=

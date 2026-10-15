@@ -29,10 +29,13 @@ package body Tool_Commands is
    Name_Slow           : aliased constant String := "slow";
    Name_Device_Bench   : aliased constant String := "device-bench";
    Name_Perplexity     : aliased constant String := "perplexity";
+   Name_Dump_States    : aliased constant String := "dump-states";
+   Name_Token_Cross    : aliased constant String := "tokenizer-cross";
    Name_Agent_Eval     : aliased constant String := "agent-eval";
    Name_Agent_Trial    : aliased constant String := "agent-trial";
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
+   Name_Probe          : aliased constant String := "probe";
 
    Nothing : aliased constant String := "";
 
@@ -120,6 +123,12 @@ package body Tool_Commands is
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "[--formats] [--rounds N]";
+   Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
+
+   Says_Probe : aliased constant String :=
+     "a process for the suite to watch from outside: one that ends with its"
+     & " interrupt handling still installed, or one that says how many"
+     & " processors and cores it would take";
 
    Says_Outside : aliased constant String :=
      "run somebody else's measuring tool through this repository's load"
@@ -183,6 +192,25 @@ package body Tool_Commands is
    Says_Perplexity : aliased constant String :=
      "what a quantization costs the model's predictions";
 
+   Says_Dump_States : aliased constant String :=
+     "write a model's final states and likeliest next tokens over texts";
+
+   Takes_Dump_States : aliased constant String :=
+     "--model PATH --texts LIST --out PATH [--backend NAME] [--top N]"
+     & " [--most N]";
+
+   Opts_Dump_States : aliased constant String :=
+     " --model --texts --out --backend --top --most ";
+
+   Says_Token_Cross : aliased constant String :=
+     "tokenize a corpus with each model, here and with llama-tokenize";
+
+   Takes_Token_Cross : aliased constant String :=
+     "--models LIST [--llama PATH] [--corpus PATH]  (PATH defaults to llama-tokenize on the PATH)";
+
+   Opts_Token_Cross : aliased constant String :=
+     " --models --llama --corpus ";
+
    Says_Imatrix : aliased constant String :=
      "collect an importance matrix by running a corpus";
 
@@ -244,7 +272,7 @@ package body Tool_Commands is
      " --mmproj --image --frames --fps --threads --device --dump --expect"
      & " --repeats ";
 
-   Held : constant array (1 .. 31) of Command :=
+   Held : constant array (1 .. 34) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -259,6 +287,10 @@ package body Tool_Commands is
        Opts_Speed'Access),
       (Name_Perplexity'Access, Takes_Perplexity'Access,
        Says_Perplexity'Access, Opts_Perplex'Access),
+      (Name_Dump_States'Access, Takes_Dump_States'Access,
+       Says_Dump_States'Access, Opts_Dump_States'Access),
+      (Name_Token_Cross'Access, Takes_Token_Cross'Access,
+       Says_Token_Cross'Access, Opts_Token_Cross'Access),
       (Name_Quantize'Access, Takes_Quantize'Access,
        Says_Quantize'Access, Opts_Quantize'Access),
       (Name_Imatrix'Access, Takes_Imatrix'Access,
@@ -305,7 +337,9 @@ package body Tool_Commands is
       (Name_Agent_Eval'Access, Takes_Agent_Eval'Access,
        Says_Agent_Eval'Access, Opts_Agent_Eval'Access),
       (Name_Agent_Trial'Access, Takes_Trial'Access,
-       Says_Trial'Access, Opts_Trial'Access)];
+       Says_Trial'Access, Opts_Trial'Access),
+      (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
+       Opts_None'Access)];
 
    -----------
    -- Count --

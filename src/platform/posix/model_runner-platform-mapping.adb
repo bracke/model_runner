@@ -1,5 +1,6 @@
 with Model_Runner.Platform.Mapped_Ranges;
 with Ada.Directories;
+with Hostkit.Descriptors;
 with Hostkit.Durability;
 
 with Interfaces.C.Strings;
@@ -52,6 +53,16 @@ package body Model_Runner.Platform.Mapping is
      (Path  : Interfaces.C.Strings.chars_ptr;
       Flags : Interfaces.C.int) return Interfaces.C.int
    with Import, Convention => C, External_Name => "open";
+
+   --  A descriptor kept from every program this one starts.
+   procedure Not_Inherited (Handle : Interfaces.C.int) is
+      Ignored : constant Boolean :=
+        Hostkit.Descriptors.Set_Inheritable
+          (Hostkit.Descriptors.From_Native_Value (Long_Long_Integer (Handle)), False);
+      pragma Unreferenced (Ignored);
+   begin
+      null;
+   end Not_Inherited;
 
    function C_Close (Handle : Interfaces.C.int) return Interfaces.C.int
    with Import, Convention => C, External_Name => "close";
@@ -124,6 +135,13 @@ package body Model_Runner.Platform.Mapping is
          if Handle < 0 then
             return;
          end if;
+
+         --  Not handed to children: a tool or a build the run starts would
+         --  hold the model's file -- gigabytes, kept on the disk after the
+         --  model is deleted or replaced, for as long as any grandchild a
+         --  child left behind lives. Through the host's own call, as the
+         --  flag's value is not the same on every host.
+         Not_Inherited (Handle);
 
          --  Held at once, so whatever follows -- a refused mapping or an
          --  exception out of the bookkeeping -- closes it through Close.
@@ -273,6 +291,8 @@ package body Model_Runner.Platform.Mapping is
             return;
          end if;
 
+         Not_Inherited (Handle);
+
          --  Held by the region from here, as Open holds it, so that what
          --  raises below -- the reservation is the host's -- is closed by
          --  the handler rather than left open.
@@ -322,5 +342,14 @@ package body Model_Runner.Platform.Mapping is
          Close (Item);
          Available := False;
    end Open_Writable;
+
+   --------------
+   -- Finalize --
+   --------------
+
+   overriding procedure Finalize (Item : in out Region) is
+   begin
+      Close (Item);
+   end Finalize;
 
 end Model_Runner.Platform.Mapping;

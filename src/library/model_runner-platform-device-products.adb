@@ -1581,6 +1581,11 @@ package body Model_Runner.Platform.Device.Products is
    --  pipeline. RADV's own width for compute is sixty-four, which is the
    --  width asked, so nothing measured moved.
    Require_Full_Subgroups  : constant := 16#0000_0002#;
+
+   --  The subgroup width the matrix kernels number their subgroups by:
+   --  matrix_product.comp and attention_matrix.comp take a subgroup as
+   --  sixty-four lanes of the workgroup.
+   Matrix_Lanes : constant := 64;
    Structure_Required_Size : constant := 1000225001;
 
    type Required_Size_Info is record
@@ -4333,7 +4338,7 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          --  The super-block row product, from its module, at a workgroup of
-         --  thirty-two pinned to a subgroup of thirty-two -- one subgroup a
+         --  sixty-four pinned to a subgroup of sixty-four -- one subgroup a
          --  workgroup, which is what lets the device honour the width. It
          --  carries one vector, the generating width.
          if Item.Wave_Shader /= Null_Handle then
@@ -4842,6 +4847,7 @@ package body Model_Runner.Platform.Device.Products is
 
          Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
          Request : aliased Compute_Pipeline_Info;
+         Pin     : aliased Required_Size_Info;
       begin
          if Create = null then
             C.Strings.Free (Name);
@@ -5062,6 +5068,13 @@ package body Model_Runner.Platform.Device.Products is
             end;
          end if;
 
+         --  The matrix attention's at subgroups of sixty-four, whole, as
+         --  the matrix products are: it numbers its subgroups by sixty-four
+         --  lanes. Refused, the attention is the other kernels'.
+         Pin.Required := Matrix_Lanes;
+         Request.Stage.Next := Pin'Address;
+         Request.Stage.Flags := Require_Full_Subgroups;
+
          if Item.Attend_Matrix /= Null_Handle then
             Request.Stage.Module := Item.Attend_Matrix;
 
@@ -5204,6 +5217,9 @@ package body Model_Runner.Platform.Device.Products is
             Request.Stage.Specialized := Null_Handle;
          end;
 
+         Request.Stage.Next := Null_Handle;
+         Request.Stage.Flags := 0;
+
          --  And the unpacking of a packed layer into the copy that
          --  kernel reads, which is worth having only where it is.
          if Item.Unpacker /= Null_Handle
@@ -5232,6 +5248,7 @@ package body Model_Runner.Platform.Device.Products is
 
             Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
             Request : aliased Compute_Pipeline_Info;
+            Pin     : aliased Required_Size_Info;
          begin
             if Create = null then
                C.Strings.Free (Name);
@@ -5239,9 +5256,18 @@ package body Model_Runner.Platform.Device.Products is
                return;
             end if;
 
+            Pin.Required := Matrix_Lanes;
             Request.Stage.Module := Item.Matrix;
             Request.Stage.Name := Name;
             Request.Layout := Item.Layout;
+
+            --  Every one of these at subgroups of sixty-four, whole: the
+            --  kernels number their subgroups by sixty-four lanes, and at
+            --  another width two subgroups would take one tile's work
+            --  each. A device that will not run them so refuses them, and
+            --  is left on the row product.
+            Request.Stage.Next := Pin'Address;
+            Request.Stage.Flags := Require_Full_Subgroups;
 
             if Create (Item.Logical, Null_Handle, 1, Request'Address,
                        Null_Handle, Made'Access) /= 0
@@ -12232,6 +12258,10 @@ package body Model_Runner.Platform.Device.Products is
         or else Used = 0
         or else Used > Max_Route
         or else Experts < Used
+
+        --  No more than route.comp holds a position, which would choose
+        --  among the first of them and say nothing of the rest.
+        or else Experts > Max_Experts
         or else Steps.Items (Source).Rows /= Experts
       then
          return;

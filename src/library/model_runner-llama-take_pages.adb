@@ -308,6 +308,8 @@ begin
             Give_Up;
             return;
          end if;
+         Pages_Sinks_At := Pages_Taken;
+         Pages_Sink_Room := Sink_Footprint (Item.Owner.Settings);
 
          if Pages_Taken_Second > 0 then
             Model_Runner.Backend.Device.Reserve_Second_Cache
@@ -380,6 +382,9 @@ begin
             Give_Up;
             return;
          end if;
+         Pages_Sinks_At :=
+           Pages_Taken + Widest + Element_Count (Page_Table_Pad);
+         Pages_Sink_Room := Sink_Footprint (Item.Owner.Settings);
       end;
    end if;
 

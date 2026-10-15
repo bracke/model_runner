@@ -199,7 +199,13 @@ package body Model_Runner.Platform.Pages is
       begin
          Again := C_Open (C_Name, O_Direct + O_Cloexec);
          Interfaces.C.Strings.Free (C_Name);
+      exception
+         when others =>
+            Model_Runner.Platform.Mapped_Ranges.Located_Done;
+            raise;
       end;
+      --  Held by a handle of its own now, or not at all: the region may go.
+      Model_Runner.Platform.Mapped_Ranges.Located_Done;
       if Again < 0 then
          return;
       end if;

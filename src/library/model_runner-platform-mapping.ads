@@ -1,3 +1,4 @@
+private with Ada.Finalization;
 with System;
 
 with Model_Runner.Bytes;
@@ -105,11 +106,16 @@ private
    --  Handle is the file: a descriptor on POSIX, a HANDLE on Windows, which
    --  is pointer-sized and so does not fit in Integer. Mapping is the file
    --  mapping object Windows needs in addition; POSIX leaves it unset.
-   type Region is limited record
+   --  Closed when it goes, however its scope is left: one left by an
+   --  exception kept its mapping and its descriptor for the life of the
+   --  process.
+   type Region is new Ada.Finalization.Limited_Controlled with record
       Address : System.Address := System.Null_Address;
       Size    : Model_Runner.Bytes.Byte_Count := 0;
       Handle  : Long_Long_Integer := -1;
       Mapping : Long_Long_Integer := -1;
    end record;
+
+   overriding procedure Finalize (Item : in out Region);
 
 end Model_Runner.Platform.Mapping;

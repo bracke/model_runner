@@ -1,3 +1,4 @@
+with Ada.Text_IO;
 with Ada.Numerics.Long_Elementary_Functions;
 with AUnit.Test_Cases;
 with Ada.Numerics.Generic_Elementary_Functions;
@@ -298,6 +299,16 @@ package body Tests.Sampling_Cases is
       procedure Free is new Ada.Unchecked_Deallocation
         (N.Real_Array, Real_Access);
    begin
+      --  Without the wide walk the two arms are one, and would agree for
+      --  nothing.
+      if not Model_Runner.Platform.Byte_Products then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: this processor has no byte dot product; the top-k walks "
+            & "have no second arm to compare here");
+         return;
+      end if;
+
       for Length of Lengths loop
          declare
             Seed    : Interfaces.Unsigned_32 := 16#BEEF_0001#;
@@ -372,6 +383,9 @@ package body Tests.Sampling_Cases is
          Assert (Left = Right,
                  "greedy selection depended on the seed at step"
                  & Integer'Image (Step));
+         Assert (Left = 2,
+                 "greedy selection did not take the highest logit:"
+                 & Vocab.Token_Id'Image (Left));
       end loop;
 
       S.Close (First);
@@ -462,6 +476,38 @@ package body Tests.Sampling_Cases is
       end loop;
    end Fixed_Seed_Reproduces;
 
+   --  Which tokens a sampler draws, Draws times from one seed: what the
+   --  restricting tests read, each beside an unfiltered control that does
+   --  reach the candidates the filter is meant to drop -- without it, a
+   --  tail too improbable to be drawn at all passes for a filter.
+   type Seen_Tokens is array (Vocab.Token_Id range 0 .. Vocabulary - 1)
+     of Boolean;
+
+   function Drawn
+     (Config : S.Configuration;
+      Logits : Logit_Vector;
+      Draws  : Positive := 256) return Seen_Tokens
+   is
+      Sampler : S.Sampler;
+      Status  : E.Error_Info;
+      Token   : Vocab.Token_Id;
+      Seen    : Seen_Tokens := [others => False];
+   begin
+      S.Open (Sampler, Config, Vocabulary, 7, Status);
+      Assert (E.Is_Ok (Status), "sampler did not open");
+      for Step in 1 .. Draws loop
+         S.Sample (Sampler, Logits, Token, Status);
+         Assert (E.Is_Ok (Status), "sample failed");
+         Seen (Token) := True;
+      end loop;
+      S.Close (Sampler);
+      return Seen;
+   end Drawn;
+
+   --  Whether any token outside Kept was drawn.
+   function Outside (Seen : Seen_Tokens; Kept : Seen_Tokens) return Boolean
+   is (for some Token in Seen'Range => Seen (Token) and then not Kept (Token));
+
    --  Top-k restricts selection to the k highest-scoring candidates.
    procedure Top_K_Restricts (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -469,25 +515,21 @@ package body Tests.Sampling_Cases is
         (Temperature => 1.0, Top_K => 2, Top_P => 1.0, Min_P => 0.0,
          Repeat_Penalty => 1.0, Repeat_Window => 0,
          others => <>);
+      --  The six others carry most of the mass unfiltered.
       Logits : constant Logit_Vector :=
-        [0 => 0.0, 1 => 0.0, 2 => 10.0, 3 => 0.0,
-         4 => 0.0, 5 => 9.0, 6 => 0.0, 7 => 0.0];
-      Sampler : S.Sampler;
-      Status  : E.Error_Info;
-      Token   : Vocab.Token_Id;
+        [2 => 1.0, 5 => 0.9, others => 0.5];
+      Kept : constant Seen_Tokens := [2 | 5 => True, others => False];
+      Seen : constant Seen_Tokens := Drawn (Config, Logits);
+      Free : S.Configuration := Config;
    begin
-      S.Open (Sampler, Config, Vocabulary, 7, Status);
-      Assert (E.Is_Ok (Status), "sampler did not open");
-
-      for Step in 1 .. 64 loop
-         S.Sample (Sampler, Logits, Token, Status);
-         Assert (E.Is_Ok (Status), "sample failed");
-         Assert (Token = 2 or else Token = 5,
-                 "top-k admitted a candidate outside the two highest:"
-                 & Vocab.Token_Id'Image (Token));
-      end loop;
-
-      S.Close (Sampler);
+      Assert (not Outside (Seen, Kept),
+              "top-k admitted a candidate outside the two highest");
+      Assert (Seen (2) and then Seen (5),
+              "top-k never drew one of the two it keeps");
+      Free.Top_K := 0;
+      Assert (Outside (Drawn (Free, Logits), Kept),
+              "unfiltered, the draws never left the two highest: the "
+              & "test cannot tell a filter from none");
    end Top_K_Restricts;
 
    --  Top-p keeps the smallest set of candidates whose probability reaches
@@ -589,24 +631,22 @@ package body Tests.Sampling_Cases is
         (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Min_P => 0.5,
          Repeat_Penalty => 1.0, Repeat_Window => 0,
          others => <>);
+      --  The others at e^-1 of the most probable, under half of it; the
+      --  second at e^-0.1, over.
       Logits : constant Logit_Vector :=
-        [0 => 5.0, 1 => 4.9, others => -20.0];
-      Sampler : S.Sampler;
-      Status  : E.Error_Info;
-      Token   : Vocab.Token_Id;
+        [0 => 5.0, 1 => 4.9, others => 4.0];
+      Kept : constant Seen_Tokens := [0 | 1 => True, others => False];
+      Seen : constant Seen_Tokens := Drawn (Config, Logits);
+      Free : S.Configuration := Config;
    begin
-      S.Open (Sampler, Config, Vocabulary, 3, Status);
-      Assert (E.Is_Ok (Status), "sampler did not open");
-
-      for Step in 1 .. 64 loop
-         S.Sample (Sampler, Logits, Token, Status);
-         Assert (E.Is_Ok (Status), "sample failed");
-         Assert (Token = 0 or else Token = 1,
-                 "min-p admitted an improbable candidate:"
-                 & Vocab.Token_Id'Image (Token));
-      end loop;
-
-      S.Close (Sampler);
+      Assert (not Outside (Seen, Kept),
+              "min-p admitted a candidate under half the most probable");
+      Assert (Seen (0) and then Seen (1),
+              "min-p never drew one of the two it keeps");
+      Free.Min_P := 0.0;
+      Assert (Outside (Drawn (Free, Logits), Kept),
+              "unfiltered, the draws never left the two most probable: the "
+              & "test cannot tell a filter from none");
    end Min_P_Restricts;
 
    --  Top-a drops candidates below the square of the most probable, so where
@@ -617,24 +657,20 @@ package body Tests.Sampling_Cases is
         (Temperature => 1.0, Top_K => 0, Top_P => 1.0, Top_A => 0.5,
          Repeat_Penalty => 1.0, Repeat_Window => 0,
          others => <>);
+      --  Four to one: the peak at 0.8, the second at 0.2, under half of
+      --  0.8 squared.
       Logits : constant Logit_Vector :=
-        [0 => 8.0, 1 => 4.0, others => -20.0];
-      Sampler : S.Sampler;
-      Status  : E.Error_Info;
-      Token   : Vocab.Token_Id;
+        [0 => 8.0, 1 => 8.0 - 1.386_294_4, others => -20.0];
+      Kept : constant Seen_Tokens := [0 => True, others => False];
+      Seen : constant Seen_Tokens := Drawn (Config, Logits);
+      Free : S.Configuration := Config;
    begin
-      S.Open (Sampler, Config, Vocabulary, 3, Status);
-      Assert (E.Is_Ok (Status), "sampler did not open");
-
-      for Step in 1 .. 64 loop
-         S.Sample (Sampler, Logits, Token, Status);
-         Assert (E.Is_Ok (Status), "sample failed");
-         Assert (Token = 0,
-                 "top-a admitted an improbable candidate:"
-                 & Vocab.Token_Id'Image (Token));
-      end loop;
-
-      S.Close (Sampler);
+      Assert (not Outside (Seen, Kept),
+              "top-a admitted a candidate under its cut");
+      Free.Top_A := 0.0;
+      Assert (Outside (Drawn (Free, Logits), Kept),
+              "unfiltered, the second candidate was never drawn: the test "
+              & "cannot tell a filter from none");
    end Top_A_Restricts;
 
    --  A repetition penalty pushes a recently produced token down.
@@ -1778,16 +1814,17 @@ package body Tests.Sampling_Cases is
    --  be, so a smaller target produces less surprising text.
    --
    --  Measured as the average surprise of what it drew, in the model's own
-   --  bits, at two targets. What is held is the ordering: a run asked for
-   --  two bits is measurably less surprising than one asked for eight.
+   --  bits, at three targets: two and three bits are each met within half
+   --  a bit, and eight is above both.
    --
-   --  Not the absolute figure, and the reason is worth writing down. The
-   --  algorithm measures the surprise of its choice against the distribution
-   --  it truncated, not against the model's -- those differ by however much
-   --  the truncation removed -- so a run steering to four bits of its own
-   --  measure sits above four bits of the model's. Asserting the absolute
-   --  value would be asserting the size of that gap, which is a property of
-   --  the fixture rather than of the algorithm.
+   --  The algorithm measures the surprise of its choice against the
+   --  distribution it truncated, not against the model's, so the two
+   --  measures differ by however much the truncation removed. On a
+   --  power-law tail that is little at these targets: llama.cpp's own
+   --  chain lands at 2.37 and 3.05 bits here. The test used to hold only
+   --  the ordering, over a near-flat fixture no target under seven bits
+   --  can reach, and a sampler steering to four bits at a target of two
+   --  passed it.
    procedure Mirostat_Steers_Towards_Its_Target
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1846,8 +1883,12 @@ package body Tests.Sampling_Cases is
          return Sum / N.Wide_Real (Draws);
       end Surprise_At;
    begin
+      --  A power-law tail, as version one's test has: a near-flat one has
+      --  no truncation that reaches a low target -- every candidate is
+      --  more surprising than two bits -- and could hold only the order.
       for Index in Logits'Range loop
-         Logits (Index) := N.Real (Index mod 11) * 0.2;
+         Logits (Index) :=
+           N.Real (-1.5 * N.Log (N.Wide_Real (Index) + 1.0));
       end loop;
 
       Largest := Logits (0);
@@ -1864,7 +1905,16 @@ package body Tests.Sampling_Cases is
       declare
          Quiet : constant N.Wide_Real := Surprise_At (2.0);
          Loud  : constant N.Wide_Real := Surprise_At (8.0);
+         Third : constant N.Wide_Real := Surprise_At (3.0);
       begin
+         --  And near each target it can reach: the two, the three. Eight
+         --  is past what this tail holds once the head is kept, so it is
+         --  only above them. What llama.cpp's own chain gives here, run
+         --  apart: 2.37 and 3.05.
+         Assert (abs (Quiet - 2.0) <= 0.5 and then abs (Third - 3.0) <= 0.5,
+                 "mirostat steered to" & N.Wide_Real'Image (Quiet)
+                 & " bits at a target of two and"
+                 & N.Wide_Real'Image (Third) & " at three");
          Assert (Quiet < Loud - 0.5,
                  "mirostat produced" & N.Wide_Real'Image (Quiet)
                  & " bits at a target of two and"
@@ -1963,7 +2013,16 @@ package body Tests.Sampling_Cases is
       declare
          Quiet : constant N.Wide_Real := Surprise_At (2.0);
          Loud  : constant N.Wide_Real := Surprise_At (8.0);
+         Third : constant N.Wide_Real := Surprise_At (3.0);
       begin
+         --  And near each target it can reach: the two, the three. Eight
+         --  is past what this tail holds once the head is kept, so it is
+         --  only above them. What llama.cpp's own chain gives here, run
+         --  apart: 2.37 and 3.05.
+         Assert (abs (Quiet - 2.0) <= 0.5 and then abs (Third - 3.0) <= 0.5,
+                 "mirostat steered to" & N.Wide_Real'Image (Quiet)
+                 & " bits at a target of two and"
+                 & N.Wide_Real'Image (Third) & " at three");
          Assert (Quiet < Loud - 0.5,
                  "mirostat one produced" & N.Wide_Real'Image (Quiet)
                  & " bits at a target of two and"
@@ -2745,7 +2804,7 @@ package body Tests.Sampling_Cases is
          end case;
       end Some_Logit;
 
-      Answered : Natural := 0;
+      Errored : Natural := 0;
       Sampled  : Natural := 0;
       Refused  : Natural := 0;
    begin
@@ -2758,6 +2817,7 @@ package body Tests.Sampling_Cases is
             Status  : E.Error_Info;
             Opened  : E.Error_Info;
             Forbid  : constant Natural := Draw (Width);
+            Barred  : array (0 .. Width - 1) of Boolean := [others => False];
          begin
             --  Every setting varied together, including the combinations a
             --  person writing cases would not think to pair.
@@ -2777,11 +2837,15 @@ package body Tests.Sampling_Cases is
                end loop;
 
                for Ignored in 1 .. Forbid loop
-                  S.Forbid (Item, S.Token_Id (Draw (Width)));
+                  declare
+                     Barring : constant Natural := Draw (Width);
+                  begin
+                     S.Forbid (Item, S.Token_Id (Barring));
+                     Barred (Barring) := True;
+                  end;
                end loop;
 
                S.Sample (Item, Logits, Token, Status);
-               Answered := Answered + 1;
 
                if E.Is_Ok (Status) then
                   Sampled := Sampled + 1;
@@ -2789,12 +2853,18 @@ package body Tests.Sampling_Cases is
                           "case" & Natural'Image (Case_Number)
                           & " chose a token outside the vocabulary:"
                           & S.Token_Id'Image (Token));
+                  Assert (not Barred (Natural (Token)),
+                          "case" & Natural'Image (Case_Number)
+                          & " chose a forbidden token:"
+                          & S.Token_Id'Image (Token));
+               else
+                  --  Said it cannot: an error, never a token.
+                  Errored := Errored + 1;
                end if;
             else
                --  A configuration the sampler will not accept is a refusal
                --  too, and refusing before opening is the safest of the
                --  outcomes.
-               Answered := Answered + 1;
                Refused := Refused + 1;
             end if;
 
@@ -2802,8 +2872,9 @@ package body Tests.Sampling_Cases is
          end;
       end loop;
 
-      Assert (Answered = 2_000,
-              "only" & Natural'Image (Answered)
+      --  Every case one of the three: a token, an error, a refusal.
+      Assert (Sampled + Errored + Refused = 2_000,
+              "only" & Natural'Image (Sampled + Errored + Refused)
               & " of two thousand configurations were answered");
 
       --  And that they were answered both ways. Every configuration being
@@ -3195,6 +3266,13 @@ package body Tests.Sampling_Cases is
 
             S.Close (Sampler);
             CPU.Close (Pool);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Pool);
+               raise;
          end;
       end loop;
 

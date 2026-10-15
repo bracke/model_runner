@@ -1635,23 +1635,6 @@ package body Model_Runner.Grammar is
          return "[^" & Result (1 .. Used) & "]";
       end Stops;
 
-      Body_Text : String (1 .. 64 * 1024);
-      Body_Used : Natural := 0;
-      Ends_Text : String (1 .. 32 * 1024);
-      Ends_Used : Natural := 0;
-
-      procedure Say (Text : String) is
-      begin
-         Body_Text (Body_Used + 1 .. Body_Used + Text'Length) := Text;
-         Body_Used := Body_Used + Text'Length;
-      end Say;
-
-      procedure Say_End (Text : String) is
-      begin
-         Ends_Text (Ends_Used + 1 .. Ends_Used + Text'Length) := Text;
-         Ends_Used := Ends_Used + Text'Length;
-      end Say_End;
-
       At_Byte : Natural := Literal'First;
    begin
       --  The literals, parted.
@@ -1686,24 +1669,87 @@ package body Model_Runner.Grammar is
          return Rule & " ::= [^\x00]*" & LF;
       end if;
 
-      --  Every beginning of every literal, the empty one first, each with
-      --  what may not follow it.
-      Say (Stops (1, 0));
-      for Which in 1 .. Held loop
-         for Count in 1 .. Lengths (Which) - 1 loop
-            if not Seen (Which, Count) then
-               Say (" | " & Prefix (Which, Count) & " " & Stops (Which, Count));
-               Say_End ((if Ends_Used = 0 then "" else " | ")
-                        & Prefix (Which, Count));
-            end if;
-         end loop;
-      end loop;
+      --  Where no literal holds a literal's first character past its own
+      --  front -- every opener and close this program writes -- a text is
+      --  runs of other characters and of beginnings: a beginning followed
+      --  by a first character is a beginning cut short, the next one
+      --  starting there, and a run of them ends on a character that
+      --  neither continues the last nor begins one. Written as one
+      --  beginning and what may not follow it, a "<" before "<" -- C++'s
+      --  <<, a shell's heredoc -- was refused, as "[[" before Mistral's
+      --  opener was.
+      declare
+         --  Whether a code point is some literal's first.
+         function Is_First (Value : Natural) return Boolean is
+         begin
+            for Other in 1 .. Held loop
+               if Lengths (Other) > 0 and then Points (Other) (1) = Value then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Is_First;
 
-      if not Ending or else Ends_Used = 0 then
-         return Rule & " ::= ( " & Body_Text (1 .. Body_Used) & " )*" & LF;
-      end if;
-      return Rule & " ::= ( " & Body_Text (1 .. Body_Used) & " )* " & Rule
-        & "_end?" & LF & Rule & "_end ::= " & Ends_Text (1 .. Ends_Used) & LF;
+         Clean : Boolean := True;
+         Beginnings_Text : String (1 .. 32 * 1024);
+         Beginnings_Used : Natural := 0;
+         Exits_Text : String (1 .. 64 * 1024);
+         Exits_Used : Natural := 0;
+      begin
+         for Which in 1 .. Held loop
+            for Index in 2 .. Lengths (Which) loop
+               if Is_First (Points (Which) (Index)) then
+                  Clean := False;
+               end if;
+            end loop;
+         end loop;
+
+         if Clean then
+            for Which in 1 .. Held loop
+               for Count in 1 .. Lengths (Which) - 1 loop
+                  if not Seen (Which, Count) then
+                     declare
+                        Begun : constant String :=
+                          (if Beginnings_Used = 0 then "" else " | ")
+                          & Prefix (Which, Count);
+                        Left  : constant String :=
+                          (if Exits_Used = 0 then "" else " | ")
+                          & Prefix (Which, Count) & " " & Stops (Which, Count);
+                     begin
+                        Beginnings_Text
+                          (Beginnings_Used + 1
+                           .. Beginnings_Used + Begun'Length) := Begun;
+                        Beginnings_Used := Beginnings_Used + Begun'Length;
+                        Exits_Text (Exits_Used + 1 .. Exits_Used + Left'Length)
+                          := Left;
+                        Exits_Used := Exits_Used + Left'Length;
+                     end;
+                  end if;
+               end loop;
+            end loop;
+
+            --  Every literal one character long: none of them is written.
+            if Beginnings_Used = 0 then
+               return Rule & " ::= " & Stops (1, 0) & "*" & LF;
+            end if;
+
+            return Rule & " ::= ( " & Stops (1, 0) & " | " & Rule & "_run )*"
+              & (if Ending then " " & Rule & "_end?" else "") & LF
+              & Rule & "_run ::= " & Rule & "_begun* ( "
+              & Exits_Text (1 .. Exits_Used) & " )" & LF
+              & Rule & "_begun ::= " & Beginnings_Text (1 .. Beginnings_Used)
+              & LF
+              & (if Ending
+                 then Rule & "_end ::= " & Rule & "_begun+" & LF
+                 else "");
+         end if;
+      end;
+
+      --  Otherwise no first character at all: a literal holding one past
+      --  its front can be begun again inside itself, which runs of
+      --  beginnings do not follow. Narrower than the literals say, never
+      --  wider -- every literal this program writes is the other kind.
+      return Rule & " ::= " & Stops (1, 0) & "*" & LF;
    end Excluding;
 
 end Model_Runner.Grammar;

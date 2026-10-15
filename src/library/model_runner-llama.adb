@@ -3316,6 +3316,16 @@ package body Model_Runner.Llama is
      [others => null];
    Pages_Taken : Element_Count := 0;
 
+   --  Where the sinks of the session that last reserved the paged cache
+   --  lie, and how many elements of them it reserved: past its pages, or
+   --  past a round's table where it is a round's member. Take_Pages sets
+   --  both as it reserves; nought where no paged reserve holds any. A
+   --  paged session's sinks were reserved there and never put: every
+   --  gpt-oss layer of a paged session -- the device's default -- attended
+   --  on the host.
+   Pages_Sinks_At   : Element_Count := 0;
+   Pages_Sink_Room  : Element_Count := 0;
+
    --  The front of the cache's numbering, before the first page, that a
    --  paged session's tables are kept in: a word a page a layer and the
    --  padding, which the pool's slots and a pad a layer bound. Tables past
@@ -5365,6 +5375,8 @@ package body Model_Runner.Llama is
 
       Pages_Taken := 0;
       Pages_Taken_Second := 0;
+      Pages_Sinks_At := 0;
+      Pages_Sink_Room := 0;
       for Slot in Page_Owner'Range loop
          if Page_Owner (Slot) /= null then
             if Slot < Page_Cap then
@@ -5533,26 +5545,44 @@ package body Model_Runner.Llama is
       return Held;
    end Seats_Held;
 
-   --  Where a layer's sinks sit, in elements: after the table. Zero where
-   --  the cache holds no block yet.
-   function Sinks_Room_At return Element_Count
-   is (if Block_Taken > 0
+   --  Where a layer's sinks sit, in elements: after a block cache's
+   --  table, or where a paged cache's reserve put them. Zero where the
+   --  cache holds no block, or no paged reserve, yet.
+   function Sinks_Room_At (Paged : Boolean) return Element_Count
+   is (if Paged then Pages_Sinks_At
+       elsif Block_Taken > 0
        then Block_Taken + Element_Count (Model_Runner.Backend.Device.Table_Room)
        else 0);
 
+   --  How many elements of sinks the cache keeps for a session of either
+   --  kind, as reserved.
+   function Sink_Room_Held (Paged : Boolean) return Element_Count
+   is (if Paged then Pages_Sink_Room else Held_Sink_Room);
+
    --  Whether a layer's sinks can go to the device: the layer has them and
    --  the cache holds a slot for them at this layer's place, which is the
-   --  room past the table divided into one span of heads a layer.
+   --  room past the table divided into one span of heads a layer. Before
+   --  the session has reserved anything -- its first token, which asks
+   --  this before it takes its block or pages -- the room it is asked of
+   --  is what that take reserves, Own: the first layer of a session's first
+   --  token attended on the host, and a paged session's never took the
+   --  pages this would have had it reserve, so every layer of it did.
    --
    --  @param Sinks The layer's sinks, or null.
    --  @param Layer Which layer, so its slot falls after the earlier ones'.
-   --  @return True where Sinks_Ready would put them.
+   --  @param Paged Whether the session's cache is paged.
+   --  @param Own What the session's take reserves for sinks: its model's
+   --    Sink_Footprint.
+   --  @return True where Sinks_Ready will put them once the cache is taken.
    function Sinks_Fit
      (Sinks : Model_Runner.Tensors.Real_Array_Access;
-      Layer : Natural := 0) return Boolean
+      Layer : Natural := 0;
+      Paged : Boolean := False;
+      Own   : Element_Count := 0) return Boolean
    is (Sinks = null
        or else (Element_Count (Layer) + 1) * Sinks.all'Length
-               <= Held_Sink_Room);
+               <= (if Sink_Room_Held (Paged) > 0 then Sink_Room_Held (Paged)
+                   else Own));
 
    --  A layer's sinks put where the device's attention reads them, a head
    --  each after the round's table and a slot on from the layer before, and
@@ -5565,10 +5595,12 @@ package body Model_Runner.Llama is
    --
    --  @param Sinks The layer's sinks, or null.
    --  @param Layer Which layer, so its slot falls after the earlier ones'.
+   --  @param Paged Whether the session's cache is paged.
    --  @return Where they begin, in elements, or zero.
    function Sinks_Ready
      (Sinks : Model_Runner.Tensors.Real_Array_Access;
-      Layer : Natural := 0) return Natural
+      Layer : Natural := 0;
+      Paged : Boolean := False) return Natural
    is
       --  A slot a layer, so a token that chains its layers into one
       --  submission does not have every layer's sinks land on the last
@@ -5579,11 +5611,13 @@ package body Model_Runner.Llama is
       Span  : constant Element_Count :=
         (if Sinks = null then 0 else Sinks.all'Length);
       Where : constant Element_Count :=
-        Sinks_Room_At + Element_Count (Layer) * Span;
+        Sinks_Room_At (Paged) + Element_Count (Layer) * Span;
       Ok    : Boolean;
    begin
-      if Sinks = null or else Sinks_Room_At = 0
-        or else not Sinks_Fit (Sinks, Layer)
+      --  The room as reserved, not as it will be: this is asked once the
+      --  block or the pages are taken.
+      if Sinks = null or else Sinks_Room_At (Paged) = 0
+        or else (Element_Count (Layer) + 1) * Span > Sink_Room_Held (Paged)
       then
          return 0;
       end if;

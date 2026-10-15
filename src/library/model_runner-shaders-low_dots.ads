@@ -9,7 +9,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq3_S_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq3_S_Dots : constant Word_Array :=
@@ -2637,7 +2637,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq2_Xxs_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq2_Xxs_Dots : constant Word_Array :=
@@ -4824,7 +4824,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq2_Xs_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq2_Xs_Dots : constant Word_Array :=
@@ -7181,7 +7181,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq2_S_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq2_S_Dots : constant Word_Array :=
@@ -9641,7 +9641,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq3_Xxs_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq3_Xxs_Dots : constant Word_Array :=
@@ -11969,7 +11969,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq1_S_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq1_S_Dots : constant Word_Array :=
@@ -14743,7 +14743,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq1_M_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq1_M_Dots : constant Word_Array :=
@@ -17621,7 +17621,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V2_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V2_Dots : constant Word_Array :=
@@ -18286,7 +18286,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V3_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V3_Dots : constant Word_Array :=
@@ -18951,7 +18951,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V4_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V4_Dots : constant Word_Array :=
@@ -19616,7 +19616,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V5_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V5_Dots : constant Word_Array :=
@@ -20281,7 +20281,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V6_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V6_Dots : constant Word_Array :=
@@ -20946,7 +20946,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V7_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V7_Dots : constant Word_Array :=
@@ -21611,7 +21611,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V8_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V8_Dots : constant Word_Array :=
@@ -22276,7 +22276,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V2_Dots_Glu_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V2_Dots_Glu : constant Word_Array :=
@@ -22986,7 +22986,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V3_Dots_Glu_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V3_Dots_Glu : constant Word_Array :=
@@ -23696,7 +23696,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q8_0_V4_Dots_Glu_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q8_0_V4_Dots_Glu : constant Word_Array :=
@@ -24406,7 +24406,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq4_Nl_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq4_Nl_Dots : constant Word_Array :=
@@ -25673,7 +25673,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Iq4_Xs_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Iq4_Xs_Dots : constant Word_Array :=
@@ -26963,7 +26963,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Mxfp4_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Mxfp4_Dots : constant Word_Array :=
@@ -28240,7 +28240,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q2_K_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q2_K_Dots : constant Word_Array :=
@@ -29527,7 +29527,7 @@ package Model_Runner.Shaders.Low_Dots is
    --  Digest of ../src/shaders/row_product_wave_low.comp when these
    --  words were made from it.
    Row_Product_Wave_Q3_K_Dots_Digest : constant Interfaces.Unsigned_64 :=
-     16#61E5BD78B2F6A9E5#;
+     16#0E7B8850958B2562#;
 
    --  The compiled words, as the device is given them.
    Row_Product_Wave_Q3_K_Dots : constant Word_Array :=

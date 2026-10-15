@@ -251,8 +251,15 @@ package body Model_Runner.Panel_Cache is
       Ok := False;
       --  The panels on the device before the name says they are whole: a
       --  crash after a rename that outran the data would leave a file
-      --  whose first panel verifies over zeros past it.
-      if Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed then
+      --  whose first panel verifies over zeros past it. They were written
+      --  through the mapping, which only Linux makes the file's fsync
+      --  cover: put into the file first, as every POSIX host needs.
+      if Hostkit.Durability.Sync_Mapping
+           (Model_Runner.Platform.Mapping.Base (Item.Region),
+            Long_Long_Integer (Model_Runner.Platform.Mapping.Length (Item.Region)))
+           = Hostkit.Durability.Failed
+        or else Hostkit.Durability.Sync_File (Part) = Hostkit.Durability.Failed
+      then
          Drop_Part;
          return;
       end if;

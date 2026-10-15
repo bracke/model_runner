@@ -1,0 +1,53 @@
+Hello, world! It's a test; they're here, we'll see, I'd go, you've won.␞
+The year 2024 had 365 days; 1234567890 and 3.14159, 1e-10, 0x1F, 1,000,000.␞
+    indented line
+	tabbed line
+
+
+three newlines   trailing spaces   
+␞
+def f(x):
+    return x ** 2  # square
+
+print(f(12))
+␞
+procedure Main is
+begin
+   Ada.Text_IO.Put_Line ("Héllo");
+end Main;
+␞
+for (int i = 0; i < n; ++i) { a[i] <<= 1; b += a[i] >> 2; }␞
+<div class="x">&amp; <b>bold</b></div>␞
+日本語のテキストと漢字、ひらがな、カタカナ。中文测试：你好，世界！二〇二四年␞
+한국어 문장입니다. Ελληνικά κείμενα. Русский текст с ёлкой. עברית ועוד.␞
+അവൻ വന്നു. हिन्दी में वाक्य। தமிழ் உரை. ภาษาไทย ทดสอบ␞
+Emoji: 😀👍🏽👨‍👩‍👧‍👦 🇩🇰 ❤️ ✨ and symbols ∑∫√∞ ≠ ≤ → ©®™␞
+Mixed: café naïve façade Ångström Øresund straße ŒUVRE ǅ ﬁ ﬂ␞
+Zero width:​joined‍word soft­hyphen and nbsp　ideo space␞
+CamelCaseIdentifier snake_case_name kebab-case-name SCREAMING_CASE xmlHTTPRequest␞
+https://example.com/path?query=1&b=2#frag user@example.org /usr/local/bin␞
+    
+
+  	 
+ mixed
+line endings␞
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!!!!!!!!!!!!!!!!!! ...........␞
+"quoted" 'single' `backtick` «guillemets» „German“ “curly” ‘apostrophe’␞
+Numbers: ١٢٣ ٤٥٦ (Arabic-Indic) ১২৩ (Bengali) Ⅻ Ⅳ ½ ¾ ²³␞
+Math: $\frac{a}{b} + \sqrt{x^2 + y^2}$ and x_i^2 ≈ 0.5␞
+<|im_start|>user
+What is 2+2?<|im_end|>
+<|im_start|>assistant
+␞
+<s> [INST] hello [/INST] </s> <unk> <pad> <|endoftext|> <|user|> hi <|end|>␞
+ leading space␞
+trailing space ␞
+␞
+ ␞
+
+␞
+a␞
+A.B.C. U.S.A. e.g. i.e.␞
+SELECT id, name FROM users WHERE age >= 18 ORDER BY name DESC LIMIT 10;␞
+fn main() { let v: Vec<u32> = (0..10).map(|x| x * 2).collect(); println!("{:?}", v); }␞
+🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂 abababababababababababababababababababababababababababababab

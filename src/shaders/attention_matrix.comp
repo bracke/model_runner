@@ -860,8 +860,11 @@ void main() {
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
                     if (t * 16u < dv) {
+                        //  This subgroup's own stretch, as the read below
+                        //  and the scores' store take it: DM is BC here,
+                        //  so the stretch holds the block's components.
                         coopMatStore (pacc[m][t], ss,
-                                      m * 16u * DM + t * 16u, DM,
+                                      SS0 + m * 16u * DM + t * 16u, DM,
                                       gl_CooperativeMatrixLayoutRowMajor);
                     }
                 }

@@ -659,6 +659,13 @@ package body Perplexity_Run is
             --  ends: a pool nobody closes keeps its tasks alive and the
             --  program does not finish.
             CPU.Close (Team);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Team);
+               raise;
          end;
 
          Give (Base);

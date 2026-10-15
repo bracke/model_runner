@@ -695,6 +695,28 @@ begin
    --  required, since a file without them describes no model of this
    --  kind. And how many blocks past the stack the file carries, which
    --  the stack does not run and the count of layers does not include.
+   --  The blocks past the stack that draft the next token, on any
+   --  architecture whose file carries them: the hybrids' own, or one
+   --  trained for a model released without -- Mellum's. Read only on the
+   --  hybrids, a block another file carried was resolved as a layer of
+   --  the stack.
+   Containers.Get_Integer
+     (Source, Model_Key (Settings.Kind, "nextn_predict_layers"),
+      0, 4, Number, Local);
+   if Present_And_Wrong (Local) then
+      Status := Local;
+      return;
+   end if;
+   Settings.Next_Layers := (if E.Is_Ok (Local) then Natural (Number) else 0);
+
+   if Settings.Next_Layers >= Settings.Layers then
+      Status := E.Make (E.Arch_Invalid_Dimensions);
+      E.Add_Integer
+        (Status, "next_layers", Long_Long_Integer (Settings.Next_Layers));
+      return;
+   end if;
+   Settings.Layers := Settings.Layers - Settings.Next_Layers;
+
    if Hybrid (Settings.Kind) then
       Containers.Get_Integer
         (Source, Model_Key (Settings.Kind, "full_attention_interval"),
@@ -748,23 +770,6 @@ begin
            (Status, "key_heads", Long_Long_Integer (Settings.Key_Heads));
          return;
       end if;
-
-      Containers.Get_Integer
-        (Source, Model_Key (Settings.Kind, "nextn_predict_layers"),
-         0, 4, Number, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
-      end if;
-      Settings.Next_Layers := (if E.Is_Ok (Local) then Natural (Number) else 0);
-
-      if Settings.Next_Layers >= Settings.Layers then
-         Status := E.Make (E.Arch_Invalid_Dimensions);
-         E.Add_Integer
-           (Status, "next_layers", Long_Long_Integer (Settings.Next_Layers));
-         return;
-      end if;
-      Settings.Layers := Settings.Layers - Settings.Next_Layers;
 
       --  The shared expert's width, where the mixture has one.
       if Settings.Experts > 0 then
@@ -1221,18 +1226,25 @@ begin
             Containers.Get_Array_Length
               (Source, Key, Model_Runner.GGUF.Value_Bool, Length, Local);
             if E.Is_Ok (Local) then
-               if Length /= Settings.Layers then
+               --  A flag a layer of the stack, or of every block the file
+               --  carries: a block past the stack that drafts is turned as
+               --  its own flag says.
+               if Length not in Settings.Layers
+                                | Settings.Layers + Settings.Next_Layers
+               then
                   Status := E.Make (E.GGUF_Metadata_Out_Of_Range);
                   E.Add_Text (Status, "key", Key, E.Param_Identifier);
                   E.Add_Integer (Status, "value", Long_Long_Integer (Length));
                   E.Add_Integer
                     (Status, "minimum", Long_Long_Integer (Settings.Layers));
                   E.Add_Integer
-                    (Status, "maximum", Long_Long_Integer (Settings.Layers));
+                    (Status, "maximum",
+                     Long_Long_Integer
+                       (Settings.Layers + Settings.Next_Layers));
                   return;
                end if;
 
-               for Layer in 0 .. Settings.Layers - 1 loop
+               for Layer in 0 .. Length - 1 loop
                   Containers.Get_Boolean_Element
                     (Source, Key, Layer + 1, Flag, Local);
                   if E.Is_Error (Local) then

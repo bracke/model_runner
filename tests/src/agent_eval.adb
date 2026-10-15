@@ -715,6 +715,13 @@ package body Agent_Eval is
          --  closes it here for the same reason; this one did not, and the
          --  agent loop hung at teardown until it did.
          CPU.Close (Team);
+      exception
+         --  Closed on the way out as well: a pool left open by an
+         --  exception kept its workers waiting, and leaving the block
+         --  waited on them for ever instead of saying what went wrong.
+         when others =>
+            CPU.Close (Team);
+            raise;
       end;
 
       --  Detail is left as it stands: empty for a plain run, or the note

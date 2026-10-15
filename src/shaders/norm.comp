@@ -55,6 +55,11 @@ layout(local_size_x = LANES) in;
 //  The weight, one element a component, which the device keeps resident the
 //  way it keeps a matrix: a normalization weight is a tensor of the model
 //  and reaches this the way every other tensor does.
+//  Held to the largest half a value can be before it is written as one:
+//  past it the conversion makes an infinity, and the next product's sum
+//  over it is not a number.
+const float HALF_MOST = 65504.0;
+
 layout(std430, binding = 0) readonly  buffer Weight { float g[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
 layout(std430, binding = 2) writeonly buffer Target { float y[]; };
@@ -267,7 +272,7 @@ void main() {
                 made += join_of[k];
             }
             if (halved) {
-                h[at + c] = float16_t (made);
+                h[at + c] = float16_t (clamp (made, -HALF_MOST, HALF_MOST));
             } else {
                 y[at + c] = made;
             }
@@ -285,7 +290,7 @@ void main() {
             made += rj[at + c];
         }
         if (halved) {
-            h[at + c] = float16_t (made);
+            h[at + c] = float16_t (clamp (made, -HALF_MOST, HALF_MOST));
         } else {
             y[at + c] = made;
         }

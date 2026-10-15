@@ -24,10 +24,11 @@
 //  its ring has; a workgroup finds its run by its row.
 //
 //  Two passes, told apart by a word of the shape: the first convolves and
-//  writes the rows, reading the memory; the second writes the memories.
-//  The two are one dispatch each with a barrier between, because a
-//  position's memory may land in the slot another position of the batch
-//  is still reading -- the ring wraps -- and workgroups have no order.
+//  writes the rows, reading the memory, and writes the memories that read
+//  it too; the second writes the rest. The two are one dispatch each with
+//  a barrier between, because a position's memory may land in the slot
+//  another position of the batch is still reading -- the ring wraps --
+//  and workgroups have no order.
 //
 //  A workgroup a position and a block, its lanes over the block: a block
 //  is a head's width, so a query or key head is one block and its length
@@ -132,14 +133,28 @@ void main() {
     uint read_at = base + read_slot * shape.every + shape.memory_at;
     uint write_at = base + write_slot * shape.every + shape.memory_at;
 
-    if (shape.writing != 0u) {
-        //  Only the run's last Slots positions, whose slots are their
-        //  own: the ones before would write the same slots as these and
-        //  land in no order, and the host keeps only these.
-        if (p + slots < run_count) {
-            return;
-        }
+    //  Only the run's last Slots positions write their memories, whose
+    //  slots are their own: the ones before would write the same slots as
+    //  these and land in no order, and the host keeps only these.
+    bool writes = p + slots >= run_count;
 
+    //  A position whose memory takes rows of the one remembered reads
+    //  the read slot, and the position Slots - 1 writes it: in the same
+    //  pass, with workgroups in no order, a batch of Slots positions or a
+    //  few more wrote the slot under those reads. So the readers write
+    //  theirs here, in the convolving pass, which reads the read slot
+    //  only and writes none -- their own slots are not it where the ring
+    //  holds more than Taps - 2 -- and the writing pass writes only
+    //  memories made of the batch's rows. Where the ring is that short,
+    //  the slot a reader writes is the one it reads, and it is left to
+    //  the writing pass, the only workgroup there that touches it, each
+    //  lane reading a row before it writes one below.
+    bool reads_memory = p + 1u < remembered;
+    bool own_slot = write_slot != read_slot;
+
+    if (writes
+        && (shape.writing != 0u ? !(reads_memory && own_slot)
+                                : reads_memory && own_slot)) {
         //  The last Taps - 1 inputs, this position's newest: k of them
         //  is position t - (Taps - 2 - k), out of the batch where that
         //  is a position of it and out of the memory read where it is
@@ -156,6 +171,9 @@ void main() {
                 s[write_at + k * shape.mix + c0 + c] = held;
             }
         }
+    }
+
+    if (shape.writing != 0u) {
         return;
     }
 

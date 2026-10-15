@@ -36,4 +36,12 @@ private package Model_Runner.Platform.Instructions is
    --  @return True only where the host says so plainly.
    function Byte_Products return Boolean;
 
+   --  Whether this processor waits on a watched line at low power: AMD's
+   --  MONITORX and MWAITX, which an idle worker of a split run sleeps in
+   --  between tokens. Executed where they are absent -- any Intel part, an
+   --  AMD guest whose hypervisor hides them -- they fault the program.
+   --
+   --  @return True only where the host says so plainly.
+   function Low_Power_Waits return Boolean;
+
 end Model_Runner.Platform.Instructions;

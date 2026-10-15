@@ -455,6 +455,16 @@ begin
       end if;
       T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
       Item.History := new Token_History (0 .. Capacity - 1);
+
+      --  And what the block past the stack takes in and what it is
+      --  given, on any architecture that carries one: the last
+      --  position's final state, and the two normalized halves side by
+      --  side. Only the hybrids had these, and a block on any other
+      --  model -- Mellum's, trained for it -- never drafted.
+      if Settings.Next_Layers > 0 then
+         T.Allocate (Width, Item.Last_Final);
+         T.Allocate (2 * Width, Item.Next_Input);
+      end if;
       if Settings.Sections /= K.No_Sections then
          Item.Marks := new Rope_Marks (0 .. Capacity - 1);
          Item.Marked := 0;
@@ -479,13 +489,6 @@ begin
             --  split out from here into the two rows the rest reads.
             T.Allocate (2 * Wide, Item.Query_Full);
 
-            --  And what the block past the stack takes in and what
-            --  it is given: the last position's final state, and the
-            --  two normalized halves side by side.
-            if Settings.Next_Layers > 0 then
-               T.Allocate (Width, Item.Last_Final);
-               T.Allocate (2 * Width, Item.Next_Input);
-            end if;
             T.Allocate (Wide, Item.Head_Gate);
             T.Allocate (Element_Count (Mix_Width (Settings)), Item.Mix_Row);
             T.Allocate (Element_Count (Value_Width (Settings)), Item.Z_Row);

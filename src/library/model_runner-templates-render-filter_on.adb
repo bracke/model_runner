@@ -668,7 +668,13 @@ begin
                  (case Next is
                      when 1 => Step.Arg1,
                      when 2 => Step.Arg2,
-                     when others => Step.Arg3);
+                     when 3 => Step.Arg3,
+                     when 4 => Step.Arg4,
+                     when 5 => Step.Arg5,
+                     when 6 => Step.Arg6,
+                     when 7 => Step.Arg7,
+                     when 8 => Step.Arg8,
+                     when others => 0);
             begin
                Next := Next + 1;
                return (if At_Slot = 0 then ""
@@ -951,8 +957,9 @@ begin
       when Filter_Map =>
          --  One member of each element, as a list -- map(attribute=..),
          --  the stand-in where it has none -- or each element through
-         --  the filter named first, map('upper'): read as a member's
-         --  name, a filter's gave a list of nothing.
+         --  the filter named first, map('upper'), and what follows its
+         --  name that filter's own: map('join', ', '). Read as a
+         --  member's name, a filter's gave a list of nothing.
          declare
             Src   : constant String := Listed (Value);
             Name  : constant String :=
@@ -982,7 +989,10 @@ begin
                        Filter_On
                          (Read_Out (Src (Spans (Index).First
                                          .. Spans (Index).Last)),
-                          (Kind => Through, others => 0));
+                          (Kind => Through,
+                           Arg1 => Step.Arg4, Arg2 => Step.Arg5,
+                           Arg3 => Step.Arg6, Arg4 => Step.Arg7,
+                           others => 0));
                   begin
                      Ada.Strings.Unbounded.Append
                        (R, (if Each.Kind = Value_Undefined then "null"

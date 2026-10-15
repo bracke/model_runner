@@ -404,6 +404,13 @@ package body Imatrix_Run is
             --  like a slow collection rather than a stopped one because
             --  the summary was written into a buffer nothing flushed.
             CPU.Close (Team);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Team);
+               raise;
          end;
 
          L.Close (Engine, Status);

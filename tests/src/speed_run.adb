@@ -763,6 +763,13 @@ package body Speed_Run is
             Watch.Stop (Result.Clock);
 
             CPU.Close (Team);
+         exception
+            --  Closed on the way out as well: a pool left open by an
+            --  exception kept its workers waiting, and leaving the block
+            --  waited on them for ever instead of saying what went wrong.
+            when others =>
+               CPU.Close (Team);
+               raise;
          end;
 
          if Timeline and then Backend = Model_Runner.Backend.Backend_Device

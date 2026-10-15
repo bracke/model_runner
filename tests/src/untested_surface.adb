@@ -16,8 +16,8 @@ package body Untested_Surface is
    --  value; what can be asked of them is their contract, and Core_Count is
    --  the one that has been. Answered_Yes and Typed_Line wait for a person
    --  at the terminal the suite is run from: called here, they would hold
-   --  the run until someone typed. Hold_Terminal_Mode and
-   --  Release_Terminal_Mode say what to put back when the program is told
+   --  the run until someone typed. Release_Terminal_Mode says what to
+   --  put back when the program is told
    --  to end at a prompt, which ends the process: the suite cannot be told
    --  to end and go on; a run on a terminal, killed at its prompt, is how
    --  that is seen.
@@ -128,7 +128,6 @@ package body Untested_Surface is
          | "To_Tensor_Type"
          | "To_Value_Type"
          | "Typed_Line"
-         | "Hold_Terminal_Mode"
          | "Release_Terminal_Mode"
          | "Wide_From_Bits"
          | "Write_Text"

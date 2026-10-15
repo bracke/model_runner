@@ -15,6 +15,7 @@ with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.UTF8;
 with Model_Runner.Platform.Signals;
+with Model_Runner.Platform.Signals.Waiting;
 
 package body Model_Runner.CLI.Choosers is
 
@@ -599,6 +600,7 @@ package body Model_Runner.CLI.Choosers is
       --  second screen draws in place as before.
       Control (Term.Enter_Alternate_Screen);
       Guard.Alternate := True;
+      Model_Runner.Platform.Signals.Note_Alternate_Screen (True);
       Control (Term.Hide_Cursor);
 
       while not Finished (State) loop
@@ -612,6 +614,10 @@ package body Model_Runner.CLI.Choosers is
             Measured : constant Boolean := Term.Size (Output, Was);
          begin
             while not Hostkit.Descriptors.Wait_Readable (Input, 200) loop
+               --  Told to end while the list waits: chosen nothing, and the
+               --  guard gives the terminal back -- not the ten seconds the
+               --  run is given to stop and then the program ended raw.
+               exit when Model_Runner.Platform.Signals.Ending_Asked;
                if Measured and then Term.Size (Output, Now)
                  and then (Now.Rows /= Was.Rows or else Now.Columns /= Was.Columns)
                then
@@ -620,6 +626,12 @@ package body Model_Runner.CLI.Choosers is
                end if;
             end loop;
          end;
+
+         if Model_Runner.Platform.Signals.Ending_Asked then
+            State.Done := True;
+            State.Result := 0;
+            exit;
+         end if;
 
          --  Read what is there, and act on every key it holds.
          declare
@@ -1782,11 +1794,17 @@ package body Model_Runner.CLI.Choosers is
          declare
             --  Ctrl-C while it is asked: the question answered no, once
             --  Enter is pressed after it.
+            --  Ended however this is left: a line that never came -- the
+            --  input closed -- raised past Waiting (False).
+            Held : Model_Runner.Platform.Signals.Waiting.Guard;
             procedure Waiting (On : Boolean) is
             begin
-               Model_Runner.Platform.Signals.Set_Waiting_For_Input
-                 (On, Note => (if On then ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted")
-                               else ""));
+               if On then
+                  Model_Runner.Platform.Signals.Waiting.Begin_Wait
+                    (Held, Note => ASCII.LF & Pres.Message_Value (Screen, "cli.choose.interrupted"));
+               else
+                  Model_Runner.Platform.Signals.Waiting.Stop_Wait (Held);
+               end if;
             end Waiting;
             --  At a terminal, read raw: Escape and Ctrl-C answer at once.
             Ending : Line_End := Unavailable;

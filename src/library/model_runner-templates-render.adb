@@ -2504,7 +2504,25 @@ is
    begin
       if Is_JSON_Mapping (Trimmed) then
          declare
-            Keys, Values : Span_Array;
+            --  Every member, however many: held to the room a list's
+            --  elements take, a large tool schema's lost its last ones
+            --  unsaid.
+            function Members return Natural is
+               Cursor : Natural := Trimmed'First + 1;
+               Key, Value : Span;
+               Found  : Boolean;
+               Total  : Natural := 0;
+            begin
+               loop
+                  Next_Member (Trimmed, Cursor, Key, Value, Found);
+                  exit when not Found;
+                  Total := Total + 1;
+               end loop;
+               return Total;
+            end Members;
+
+            type Member_Spans is array (1 .. Members) of Span;
+            Keys, Values : Member_Spans;
             Count  : Natural := 0;
             Cursor : Natural := Trimmed'First + 1;
             Key, Value : Span;
@@ -2512,7 +2530,7 @@ is
          begin
             loop
                Next_Member (Trimmed, Cursor, Key, Value, Found);
-               exit when not Found or else Count = Max_Elements;
+               exit when not Found or else Count = Keys'Last;
                Count := Count + 1;
                Keys (Count) := Key;
                Values (Count) := Value;
@@ -2639,10 +2657,24 @@ is
       Taken := Any;
    end Integer_In_Base;
 
-   --  The filter a name says, for map('name'): the ones that take no
-   --  argument; Filter_None for any other.
+   --  The filter a name says, for map('name', ...): the ones that take no
+   --  argument, and those whose arguments go in their signature's order
+   --  -- map('join', ', '), map('truncate', 5) -- each taking map's
+   --  further ones as its own; Filter_None for any other.
    function Filter_Named (Name : String) return Filter_Kind
-   is (if Name = "upper" then Filter_Upper
+   is (if Name = "join" then Filter_Join
+       elsif Name = "truncate" then Filter_Truncate
+       elsif Name = "replace" then Filter_Replace
+       elsif Name in "default" | "d" then Filter_Default
+       elsif Name = "round" then Filter_Round
+       elsif Name = "center" then Filter_Center
+       elsif Name = "wordwrap" then Filter_Wordwrap
+       elsif Name = "indent" then Filter_Indent
+       elsif Name = "format" then Filter_Format
+       elsif Name = "sort" then Filter_Sort
+       elsif Name = "attr" then Filter_Attr
+       elsif Name = "sum" then Filter_Sum
+       elsif Name = "upper" then Filter_Upper
        elsif Name = "lower" then Filter_Lower
        elsif Name = "capitalize" then Filter_Capitalize
        elsif Name = "title" then Filter_Title

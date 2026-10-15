@@ -2507,6 +2507,9 @@ void main() {
                     float g = float (gate[e]);
                     both[e] *= shape.table == 1u ? gaussian_tanh(g)
                                                  : logistic_weighted(g);
+                    //  Held to the largest half before it is stored as
+                    //  one: past it the next product reads an infinity.
+                    both[e] = clamp (both[e], -65504.0, 65504.0);
                 }
 
                 coopMatStore

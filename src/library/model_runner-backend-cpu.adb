@@ -40,6 +40,13 @@ package body Model_Runner.Backend.CPU is
    --  ten microseconds and then goes to sleep exactly as it used to.
    Spin_Budget : constant := 20_000;
 
+   --  Whether a held worker may wait on its ticket's line at low power --
+   --  MONITORX and MWAITX, AMD's pair -- rather than spin on it. Asked once,
+   --  at elaboration below: executed where the processor has not got them
+   --  -- any Intel part, an AMD guest whose hypervisor hides them -- they
+   --  fault the program in the middle of a token.
+   Low_Power : Boolean := False;
+
    --  Wait for a job without leaving the processor, for a while.
    procedure Watch
      (Waking   : Wake_Access;
@@ -127,26 +134,32 @@ package body Model_Runner.Backend.CPU is
             if Turn > Spin_Budget then
                exit when Waking.Hold = 0 or else Waking.Shut /= 0;
 
-               --  Held: watch the ticket's line and wait on it at low
-               --  power, a write to it or a few microseconds ending the
-               --  wait, rather than spinning a core hot while the device
-               --  works -- which took the device's clock with it.
-               System.Machine_Code.Asm
-                 ("monitorx",
-                  Inputs =>
-                    [System.Address'Asm_Input
-                       ("a", Waking.Ticket'Address),
-                     Interfaces.Unsigned_32'Asm_Input ("c", 0),
-                     Interfaces.Unsigned_32'Asm_Input ("d", 0)],
-                  Volatile => True);
-               if Waking.Ticket = Mine then
+               if not Low_Power then
+                  --  Held, on a processor without the pair: spun on, as
+                  --  every x86-64 can.
+                  System.Machine_Code.Asm ("pause", Volatile => True);
+               else
+                  --  Held: watch the ticket's line and wait on it at low
+                  --  power, a write to it or a few microseconds ending the
+                  --  wait, rather than spinning a core hot while the device
+                  --  works -- which took the device's clock with it.
                   System.Machine_Code.Asm
-                    ("mwaitx",
+                    ("monitorx",
                      Inputs =>
-                       [Interfaces.Unsigned_32'Asm_Input ("a", 0),
-                        Interfaces.Unsigned_32'Asm_Input ("c", 2),
-                        Interfaces.Unsigned_32'Asm_Input ("b", 20_000)],
+                       [System.Address'Asm_Input
+                          ("a", Waking.Ticket'Address),
+                        Interfaces.Unsigned_32'Asm_Input ("c", 0),
+                        Interfaces.Unsigned_32'Asm_Input ("d", 0)],
                      Volatile => True);
+                  if Waking.Ticket = Mine then
+                     System.Machine_Code.Asm
+                       ("mwaitx",
+                        Inputs =>
+                          [Interfaces.Unsigned_32'Asm_Input ("a", 0),
+                           Interfaces.Unsigned_32'Asm_Input ("c", 2),
+                           Interfaces.Unsigned_32'Asm_Input ("b", 20_000)],
+                        Volatile => True);
+                  end if;
                end if;
             else
                --  The instruction that tells the processor this is a spin:
@@ -2095,4 +2108,5 @@ begin
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Sampling.Use_Wide_Walks
      (Model_Runner.Platform.Byte_Products);
+   Low_Power := Model_Runner.Platform.Low_Power_Waits;
 end Model_Runner.Backend.CPU;

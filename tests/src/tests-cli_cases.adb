@@ -13966,9 +13966,16 @@ package body Tests.CLI_Cases is
          else "");
       Had    : constant Boolean := Env.Exists ("XDG_CACHE_HOME");
 
+      --  Whether the last run read its prompt from a cache: what its
+      --  statistics say of the prompt, "of them read before".
+      Reused : Boolean := False;
+
       procedure Run_With (Extra : String; Backend : String := "cpu") is
+         use Ada.Text_IO;
          Source : Fixed_Arguments;
          Status : Natural;
+         Errors : File_Type;
+         Path   : constant String := "obj/prefill-key-errors.txt";
       begin
          Add (Source, "run");
          Add (Source, Model);
@@ -13977,6 +13984,7 @@ package body Tests.CLI_Cases is
          Add (Source, "abab");
          Add (Source, "--max-tokens");
          Add (Source, "2");
+         Add (Source, "--show-stats");
          if Backend /= "" then
             Add (Source, "--backend");
             Add (Source, Backend);
@@ -13985,8 +13993,21 @@ package body Tests.CLI_Cases is
             Add (Source, "--repack");
             Add (Source, Extra);
          end if;
-         Ran (Source, Status);
+         Create (Errors, Out_File, Path);
+         Set_Error (Errors);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
          Assert (Status = 0, "a run with the cache on failed");
+         Reused :=
+           Ada.Strings.Fixed.Index (Text_Of (Path), "of them read before") > 0;
       end Run_With;
 
       function Kept return Natural is
@@ -14014,17 +14035,53 @@ package body Tests.CLI_Cases is
       Tiny_Model.Write (Model, Room => 64);
       Env.Set ("XDG_CACHE_HOME", Home);
       begin
-         Run_With ("");
+         Run_With ("none");
+         Assert (not Reused, "the first run read a prompt from no cache");
          Run_With ("rows");
-         Run_With ("");
+         Assert (not Reused,
+                 "a run asking for other repacking read the first's cache");
+         --  The first again finds its own: what keeping one each is for.
+         Run_With ("none");
+         Assert (Reused,
+                 "a run asked again did not read its prompt from its cache");
          Assert (Kept = 2,
                  "runs asking for other repacking kept" & Natural'Image (Kept)
                  & " prefill caches, not one each");
-         --  And one that leaves the backend to the program.
-         Run_With ("", Backend => "");
-         Assert (Kept = 3,
-                 "a run whose backend was not asked kept" & Natural'Image (Kept)
-                 & " prefill caches beside the two, not one of its own");
+         --  A run that names no layout is keyed by the one it runs: the
+         --  processor takes the panels unasked, so it is the rows run's.
+         Run_With ("");
+         Assert (Reused and then Kept = 2,
+                 "a run whose layout was not asked kept" & Natural'Image (Kept)
+                 & " prefill caches, or did not read the rows run's");
+         --  And the backend likewise: one named, then one the program
+         --  sends to whichever of the two it sends it to -- keyed by what
+         --  was asked, the second kept a file of its own beside both.
+         declare
+            Awake : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            Model_Runner.Backend.Device.Close;
+            if Awake then
+               Run_With ("", Backend => "device");
+               Assert (Kept = 3,
+                       "a run on the device kept" & Natural'Image (Kept)
+                       & " prefill caches, not one beside the two");
+            else
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "note: no device to key a prefill cache by");
+            end if;
+            declare
+               Before : constant Natural := Kept;
+            begin
+               Run_With ("", Backend => "");
+               Assert (Reused and then Kept = Before,
+                       "a run whose backend was not asked kept"
+                       & Natural'Image (Kept) & " prefill caches, not the"
+                       & Natural'Image (Before)
+                       & " of the backend it was sent to");
+            end;
+         end;
       exception
          when others =>
             if Had then
@@ -14190,7 +14247,7 @@ package body Tests.CLI_Cases is
    begin
       Register_Routine
         (T, The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking'Access,
-         "the prefill cache is keyed by the backend and repacking asked, and "
+         "the prefill cache is keyed by the backend and repacking run, and "
          & "two runs that differ keep one each");
       Register_Routine
         (T, A_Named_Draft_Shares_The_Text'Access,

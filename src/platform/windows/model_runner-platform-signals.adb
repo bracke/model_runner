@@ -1,3 +1,4 @@
+with Ada.Task_Identification;
 with System;
 with Interfaces.C;
 
@@ -43,6 +44,9 @@ package body Model_Runner.Platform.Signals is
       --  Point the handler at a token.
       procedure Bind (Token : Model_Runner.Cancellation.Token_Reference);
 
+      --  The token it points at.
+      function Target_Of return Model_Runner.Cancellation.Token_Reference;
+
       --  Number of interrupts since the last Bind.
       function Count return Natural;
 
@@ -72,6 +76,8 @@ package body Model_Runner.Platform.Signals is
 
       function Count return Natural is (Seen);
 
+      function Target_Of return Model_Runner.Cancellation.Token_Reference is (Target);
+
    end Handler;
 
    --  Carries the event from the foreign thread into Ada. It is bounded: one
@@ -93,7 +99,12 @@ package body Model_Runner.Platform.Signals is
             terminate;
          end select;
 
-         while Running loop
+         --  Ended with the program too: a run that raised past its own
+         --  Remove left this polling, and the program's ending waited on it.
+         while Running
+           and then Ada.Task_Identification.Is_Callable
+                      (Ada.Task_Identification.Environment_Task)
+         loop
             select
                accept Stop;
                Running := False;
@@ -149,10 +160,21 @@ package body Model_Runner.Platform.Signals is
    -- Install --
    -------------
 
+   --  Installs nest, as the POSIX body's do: each Remove binds the token
+   --  bound before its Install, and the last detaches.
+   Most_Depth : constant := 8;
+   type Token_Stack is array (1 .. Most_Depth) of Model_Runner.Cancellation.Token_Reference;
+   Bound_Before : Token_Stack := [others => null];
+   Depth        : Natural := 0;
+
    procedure Install
      (Token     : Model_Runner.Cancellation.Token_Reference;
       Installed : out Boolean) is
    begin
+      if Depth < Most_Depth then
+         Depth := Depth + 1;
+         Bound_Before (Depth) := Handler.Target_Of;
+      end if;
       Handler.Bind (Token);
 
       if not Attached then
@@ -183,6 +205,13 @@ package body Model_Runner.Platform.Signals is
 
    procedure Remove is
    begin
+      if Depth > 0 then
+         Handler.Bind (Bound_Before (Depth));
+         Depth := Depth - 1;
+         if Depth > 0 then
+            return;
+         end if;
+      end if;
       if Attached then
          if Set_Console_Ctrl_Handler (Console_Handler'Address, 0) = 0 then
             null;
@@ -219,7 +248,15 @@ package body Model_Runner.Platform.Signals is
 
    procedure Release_Terminal_Mode is null;
 
+   procedure Note_Alternate_Screen (On : Boolean) is
+      pragma Unreferenced (On);
+   begin
+      null;
+   end Note_Alternate_Screen;
+
    function Interrupt_Noted return Boolean is (False);
+
+   function Waiting_For_Input return Boolean is (False);
 
    function Ending_Asked return Boolean is (False);
 
