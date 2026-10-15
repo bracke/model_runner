@@ -275,6 +275,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **tests speed runs one untimed pass before the timed ones**, as llama-bench does (not in turns mode). With three repeats the median was the second pass, which still ran warming: Mellum's prompt read 288 to 407 t/s across runs of one build, and reads 397 to 409 now. A figure published before this was taken with a cold first pass among the three.
 - **A session out of room compacts instead of refusing every turn after:** a turn the context has no room for has the conversation compacted -- the last six turns kept, then only the last if that was not enough -- with a note, and is asked again; a turn refused for room no longer resets the session and reads the whole conversation again.
 - **A reply cut at its token limit says so**, and that --max-tokens gives it more; one cut inside its reasoning is committed with the `<think>` block closed, so the next turn does not render it as still thinking.
 - **/reset keeps the --system message** the session started with.

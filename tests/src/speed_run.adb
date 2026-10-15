@@ -534,8 +534,17 @@ package body Speed_Run is
             --  around rather than the loading and the gaps between passes.
             Device_Clock.Sample (False);
 
-            for Pass in 1 .. Repeats loop
+            --  One pass before the timed ones, unless the passes are a
+            --  conversation's turns, as llama-bench runs one: the first
+            --  uploads the weights and builds the pipelines, and the
+            --  second still ran warming. With three repeats the median was
+            --  that second pass -- Mellum's prompt read 0.28 s there and
+            --  0.25 s from the third on, 0.36 s with the machine busy --
+            --  so the figure moved with how warm the part was, not with
+            --  the engine. Round zero is that pass; it is written over.
+            for Round in (if Turning then 1 else 0) .. Repeats loop
                declare
+                  Pass        : constant Positive := Positive'Max (Round, 1);
                   Own_Session : aliased L.Session;
                   Own_Draft   : aliased L.Session;
                   Session_At  : constant access L.Session :=
@@ -660,9 +669,9 @@ package body Speed_Run is
                   --  The last pass is warm whatever the count is, which
                   --  makes it the same measurement at three repeats and at
                   --  fifteen: 85, 88 and 89 across those, against 31 for a
-                  --  single pass that has no warm one to prefer and
-                  --  honestly reports a cold run.
-                  Device_Clock.Sample (Pass = Repeats);
+                  --  single cold pass -- which, with the untimed pass
+                  --  ahead of them, none of them now is.
+                  Device_Clock.Sample (Round = Repeats);
 
                   Started := Ada.Real_Time.Clock;
                   Spent_At := Host_Load.Processor_Seconds;
@@ -761,7 +770,7 @@ package body Speed_Run is
                   --  as the run ends rather than kept, because a median of
                   --  three runs is what this tool publishes and a budget is
                   --  a description of one of them.
-                  if Budget then
+                  if Budget and then Round > 0 then
                      declare
                         Times : constant L.Phase_Times :=
                           L.Time_Spent (Session);

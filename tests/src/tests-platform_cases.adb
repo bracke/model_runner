@@ -134,11 +134,13 @@ package body Tests.Platform_Cases is
               "SIGHUP could not be ignored");
       Signals.Install (Token'Unchecked_Access, Attached);
       Assert (Attached, "the handling was not installed: " & Signals.Failure_Name);
-      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Hangup, Now)
-              and then Now = Hostkit.Signals.Disposition_Ignore,
+      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Hangup, Now),
+              "SIGHUP's disposition could not be read");
+      Assert (Now = Hostkit.Signals.Disposition_Ignore,
               "an ignored SIGHUP was taken over by the run");
-      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Terminate, Now)
-              and then Now /= Hostkit.Signals.Disposition_Ignore,
+      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Terminate, Now),
+              "SIGTERM's disposition could not be read");
+      Assert (Now /= Hostkit.Signals.Disposition_Ignore,
               "SIGTERM, which was not ignored, was not taken");
       Signals.Remove;
       Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Hangup, Now),
