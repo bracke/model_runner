@@ -2317,6 +2317,10 @@ begin
          Planned : Natural := Context;
          Room    : Interfaces.Unsigned_64 := 0;
 
+         --  The room before a draft's share came off it, which the first
+         --  model claims from (Device.Claim).
+         Whole_Room : Interfaces.Unsigned_64 := 0;
+
          --  Whether the matrices' budget is the room counted here, rather
          --  than one the caller named.
          Counted_Here : Boolean := False;
@@ -2353,6 +2357,7 @@ begin
          end if;
 
          Room := Counted_Room (Planned);
+         Whole_Room := Room;
 
          --  Less what a draft prepared after this one will take: it is put
          --  on top of the budget fitted here, and a split that had taken
@@ -2393,7 +2398,31 @@ begin
          --  A model beside the first -- a draft -- takes its matrices on
          --  top of the budget the first was fitted to, and is not split
          --  for a context of its own: the room was counted for the first.
+         --  But only into the room the first left: stacked on a model split
+         --  to the whole of it, a draft ran the part out of memory at its
+         --  first submission. A draft run found for itself is then not
+         --  taken; one the caller named was left its room (Beside).
          if Model_Runner.Backend.Device.Is_Beside (Item.Device_Ticket) then
+            if Fit_Required
+              and then Total > Model_Runner.Backend.Device.Room_Beside
+            then
+               Status := E.Make (E.Memory_Limit_Exceeded);
+               E.Add_Text
+                 (Status, "category", "backend_memory", E.Param_Identifier);
+               E.Add_Integer
+                 (Status, "requested", Long_Long_Integer (Total),
+                  E.Param_Bytes);
+               E.Add_Integer
+                 (Status, "limit",
+                  Long_Long_Integer (Model_Runner.Backend.Device.Room_Beside),
+                  E.Param_Bytes);
+               E.Add_Text
+                 (Status, "backend",
+                  Model_Runner.Backend.Backend_Name (Item.Able.Kind),
+                  E.Param_Identifier);
+               Fail (Status);
+               return;
+            end if;
             Model_Runner.Backend.Device.Add_Beside (Item.Device_Ticket, Total);
             Item.Able := Model_Runner.Backend.Device.Describe;
             Room := 0;
@@ -2406,6 +2435,9 @@ begin
                Item.Device_Context := Planned;
                Counted_Here := True;
             end if;
+            Model_Runner.Backend.Device.Claim
+              (Whole_Room,
+               Interfaces.Unsigned_64'Min (Total, Item.Able.Memory_Bytes));
          end if;
 
          --  A budget the caller named is the weights', and is held to;
@@ -3530,6 +3562,11 @@ begin
       declare
          Held  : constant View_List := Matrices (Item);
          Total : Interfaces.Unsigned_64 := 0;
+
+         --  The budget before a draft's share came off it, and what the
+         --  mixture's matrices take of it (Device.Claim).
+         Whole_Budget : Interfaces.Unsigned_64 := Item.Able.Memory_Bytes;
+         Taken        : Interfaces.Unsigned_64 := 0;
       begin
          for Index in Held'Range loop
             declare
@@ -3553,6 +3590,19 @@ begin
                end if;
             end;
          end loop;
+
+         --  Less a draft's share where one is to come, as a dense
+         --  model's room is: the budget is what the mixture may take.
+         if Beside > 0
+           and then not Model_Runner.Backend.Device.Is_Beside
+                          (Item.Device_Ticket)
+           and then Item.Able.Memory_Bytes > Beside
+         then
+            Whole_Budget := Item.Able.Memory_Bytes;
+            Model_Runner.Backend.Device.Fit_Budget
+              (Item.Able.Memory_Bytes - Beside);
+            Item.Able := Model_Runner.Backend.Device.Describe;
+         end if;
 
          Item.Stacked := Total <= Item.Able.Memory_Bytes;
 
@@ -3600,7 +3650,19 @@ begin
                  Feed_Bytes > 0
                  and then Feed_Bytes < Total
                  and then Total - Feed_Bytes <= Item.Able.Memory_Bytes;
+               if Item.Split_Feed then
+                  Taken := Total - Feed_Bytes;
+               end if;
             end;
+         end if;
+
+         if not Model_Runner.Backend.Device.Is_Beside (Item.Device_Ticket)
+         then
+            Model_Runner.Backend.Device.Claim
+              (Whole_Budget,
+               (if Item.Stacked then Total
+                elsif Taken > 0 then Taken
+                else Item.Able.Memory_Bytes));
          end if;
       end;
 

@@ -242,6 +242,24 @@ package Model_Runner.Backend.Device is
    --  @param Bytes Its matrices' bytes.
    procedure Add_Beside (Ticket : Natural; Bytes : Interfaces.Unsigned_64);
 
+   --  The first model's room on the device, and what it takes of it: its
+   --  matrices where they fit, the budget it was split to where they do
+   --  not. What is left is what a model beside it may take, and a draft
+   --  bigger than that is refused where it was stacked on top and ran the
+   --  part out of memory at the first submission.
+   --
+   --  @param Room The room counted for the first model's matrices.
+   --  @param Claimed What the first model's matrices take of it.
+   procedure Claim (Room, Claimed : Interfaces.Unsigned_64);
+
+   --  What a model beside the first may take: the room the first claimed
+   --  from, less what it and the models beside it already take; the
+   --  largest number where nothing was claimed, or the caller named the
+   --  budget.
+   --
+   --  @return Bytes.
+   function Room_Beside return Interfaces.Unsigned_64;
+
    --  A model closed: its bytes come off every later fitting, and the next
    --  model prepared is the first again once every model is gone. Nothing
    --  for a ticket of an earlier opening.

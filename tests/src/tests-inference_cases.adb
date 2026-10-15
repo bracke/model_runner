@@ -19716,12 +19716,62 @@ package body Tests.Inference_Cases is
       --  with Beside, a dense model's budget is the room counted less it,
       --  where it took the whole room and the draft was put on top of it
       --  -- ThinkingCap and a 4B draft ran the part out of memory.
+      for Mixed in Boolean loop
+         declare
+            Image : B.Byte_Array_Access;
+            Rooms : array (Boolean) of Interfaces.Unsigned_64 := [others => 0];
+            Leave : constant Interfaces.Unsigned_64 := 2 ** 30;
+         begin
+            if Mixed then
+               Tiny_Model.Build
+                 (Image, Room => 4_096, Kind => Tiny_Model.Qwen3_MoE,
+                  Experts => 4, Experts_Used => 2);
+            else
+               Tiny_Model.Build (Image, Room => 4_096);
+            end if;
+            for Leaving in Boolean loop
+               declare
+                  Held   : aliased constant B.Byte_Array := Image.all;
+                  Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                    (Held'Access);
+                  Parsed : Containers.Container;
+                  Engine : L.Model;
+                  Status : E.Error_Info;
+               begin
+                  Containers.Reader.Parse (Parsed, Source, Status => Status);
+                  L.Prepare
+                    (Engine, Parsed, Source,
+                     Backend => Model_Runner.Backend.Backend_Device,
+                     Status => Status, Context => 4_096,
+                     Beside => (if Leaving then Leave else 0));
+                  Assert (E.Is_Ok (Status),
+                          "the fixture did not prepare on the device: "
+                          & E.Error_Code'Image (Status.Code));
+                  Rooms (Leaving) := Device.Describe.Memory_Bytes;
+                  L.Close (Engine, Status);
+                  Containers.Close (Parsed);
+               end;
+            end loop;
+            B.Free (Image);
+            Assert (Rooms (False) > Leave
+                    and then Rooms (False) - Rooms (True) = Leave,
+                    (if Mixed then "a mixture" else "a dense model")
+                    & " left a draft to come no room:"
+                    & Interfaces.Unsigned_64'Image (Rooms (False)) & " and"
+                    & Interfaces.Unsigned_64'Image (Rooms (True)));
+         end;
+      end loop;
+
+      --  And a draft beside a first model is held to the room the first
+      --  left: refused where the first claimed all of it, taken where it
+      --  left enough. Stacked on top, it ran the part out of memory at
+      --  its first submission.
       declare
-         Image : B.Byte_Array_Access;
-         Rooms : array (Boolean) of Interfaces.Unsigned_64 := [others => 0];
-         Leave : constant Interfaces.Unsigned_64 := 2 ** 30;
+         Image   : B.Byte_Array_Access;
+         Outcome : array (Boolean) of E.Error_Code;
+         Room    : constant Interfaces.Unsigned_64 := 2 ** 30;
       begin
-         Tiny_Model.Build (Image, Room => 4_096);
+         Tiny_Model.Build (Image, Room => 64);
          for Leaving in Boolean loop
             declare
                Held   : aliased constant B.Byte_Array := Image.all;
@@ -19730,27 +19780,31 @@ package body Tests.Inference_Cases is
                Parsed : Containers.Container;
                Engine : L.Model;
                Status : E.Error_Info;
+               Target : Natural;
             begin
+               Device.Note_Model (Target);
+               Device.Claim
+                 (Room, (if Leaving then Room - 2 ** 24 else Room));
                Containers.Reader.Parse (Parsed, Source, Status => Status);
                L.Prepare
                  (Engine, Parsed, Source,
                   Backend => Model_Runner.Backend.Backend_Device,
-                  Status => Status, Context => 4_096,
-                  Beside => (if Leaving then Leave else 0));
-               Assert (E.Is_Ok (Status),
-                       "the fixture did not prepare on the device: "
-                       & E.Error_Code'Image (Status.Code));
-               Rooms (Leaving) := Device.Describe.Memory_Bytes;
-               L.Close (Engine, Status);
+                  Status => Status, Context => 64);
+               Outcome (Leaving) := Status.Code;
+               if E.Is_Ok (Status) then
+                  L.Close (Engine, Status);
+               end if;
                Containers.Close (Parsed);
+               Device.Forget_Model (Target);
             end;
          end loop;
          B.Free (Image);
-         Assert (Rooms (False) > Leave
-                 and then Rooms (False) - Rooms (True) = Leave,
-                 "a draft to come was not left its room:"
-                 & Interfaces.Unsigned_64'Image (Rooms (False)) & " and"
-                 & Interfaces.Unsigned_64'Image (Rooms (True)));
+         Assert (Outcome (False) = E.Memory_Limit_Exceeded,
+                 "a draft beside a model that claimed the whole room was "
+                 & "taken: " & E.Error_Code'Image (Outcome (False)));
+         Assert (Outcome (True) = E.No_Error,
+                 "a draft beside a model that left it room was refused: "
+                 & E.Error_Code'Image (Outcome (True)));
       end;
 
       Device.Close;
@@ -19891,8 +19945,8 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Second_Model_Adds_To_The_Device_Budget'Access,
          "a model beside the first on the device adds to its budget, a "
-         & "draft to come is left its room, and the room counts the "
-         & "device's own copy of a context");
+         & "draft to come is left its room and held to it, and the room "
+         & "counts the device's own copy of a context");
       Register_Routine
         (T, A_Noted_Row_Lives_As_Its_Position'Access,
          "a picture's noted row is read back at its position and forgotten "

@@ -88,6 +88,10 @@ package body Model_Runner.Backend.Device is
      [others => 0];
    Places_Used   : array (1 .. Most_Models) of Boolean := [others => False];
 
+   --  The first model's room and its claim on it; see Claim.
+   Claimed_Room  : Interfaces.Unsigned_64 := 0;
+   Claimed_Bytes : Interfaces.Unsigned_64 := 0;
+
    function Beside_Bytes return Interfaces.Unsigned_64 is
       Sum : Interfaces.Unsigned_64 := 0;
    begin
@@ -555,6 +559,8 @@ package body Model_Runner.Backend.Device is
       Opened_Budget := Budget;
       Opening := (Opening + 1) mod (Natural'Last / Most_Models - 1);
       Models_Noted := 0;
+      Claimed_Room := 0;
+      Claimed_Bytes := 0;
       Places_Used := [others => False];
       Beside := [others => 0];
       Opened_Slice := Slice;
@@ -710,6 +716,32 @@ package body Model_Runner.Backend.Device is
       end if;
    end Add_Beside;
 
+   -----------
+   -- Claim --
+   -----------
+
+   procedure Claim (Room, Claimed : Interfaces.Unsigned_64) is
+   begin
+      if Ready_Now then
+         Claimed_Room := Room;
+         Claimed_Bytes := Claimed;
+      end if;
+   end Claim;
+
+   -----------------
+   -- Room_Beside --
+   -----------------
+
+   function Room_Beside return Interfaces.Unsigned_64 is
+      Taken : constant Interfaces.Unsigned_64 := Claimed_Bytes + Beside_Bytes;
+   begin
+      if not Ready_Now or else Opened_Budget /= 0 or else Claimed_Room = 0
+      then
+         return Interfaces.Unsigned_64'Last;
+      end if;
+      return (if Claimed_Room > Taken then Claimed_Room - Taken else 0);
+   end Room_Beside;
+
    ------------------
    -- Forget_Model --
    ------------------
@@ -721,6 +753,8 @@ package body Model_Runner.Backend.Device is
       then
          if Ticket mod Most_Models = 0 then
             Models_Noted := Models_Noted - 1;
+            Claimed_Room := 0;
+            Claimed_Bytes := 0;
          elsif Is_Beside (Ticket) then
             Places_Used (Ticket mod Most_Models) := False;
             Beside (Ticket mod Most_Models) := 0;
