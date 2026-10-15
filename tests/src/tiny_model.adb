@@ -923,7 +923,12 @@ package body Tiny_Model is
       --  architecture's own period is four: a reader that took the period
       --  and not the list windows the second layer, which this says sees
       --  everything.
-      if Window > 0 and then Kind = Olmo2 then
+      --  Mellum carrying a block past its stack lists them too, as the
+      --  file written for its drafting block does: the stack's marks and
+      --  the block's, a mark more than the stack has layers.
+      if Window > 0
+        and then (Kind = Olmo2 or else (Kind = Mellum and then Draft_Block))
+      then
          Fixtures.Begin_Array
            (Builder, Prefix & ".attention.sliding_window_pattern",
             Model_Runner.GGUF.Value_Bool, Blocks);
@@ -936,7 +941,7 @@ package body Tiny_Model is
       --  Mellum states its period, here two, so that of the fixture's two
       --  layers one slides and one sees everything, and the period is read
       --  rather than the architecture's four assumed.
-      if Window > 0 and then Kind = Mellum then
+      if Window > 0 and then Kind = Mellum and then not Draft_Block then
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.sliding_window_pattern", 2);
       end if;
