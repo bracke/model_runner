@@ -1141,6 +1141,9 @@ package Model_Runner.Llama is
    --    which is what that context is counted at.
    --  @param Paged Whether the session's cache on the device will be paged,
    --    which with the precision is what the device holds for it.
+   --  @param Beside Bytes of the device a model prepared after this one --
+   --    a draft -- will take: a dense model's room on the device is that
+   --    much less, so that the two fit together.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1159,7 +1162,8 @@ package Model_Runner.Llama is
       Panel_Cache : String := "";
       Context  : Natural := 0;
       Cache    : Cache_Precision := Exact;
-      Paged    : Boolean := True);
+      Paged    : Boolean := True;
+      Beside   : Interfaces.Unsigned_64 := 0);
 
    --  What a device's room is for a dense model's matrices, as Prepare
    --  counts it: the device's heaps -- or the host's budget for them,

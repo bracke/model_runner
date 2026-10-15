@@ -19712,6 +19712,47 @@ package body Tests.Inference_Cases is
          end;
       end;
 
+      --  And a draft to come is room the first model leaves: prepared
+      --  with Beside, a dense model's budget is the room counted less it,
+      --  where it took the whole room and the draft was put on top of it
+      --  -- ThinkingCap and a 4B draft ran the part out of memory.
+      declare
+         Image : B.Byte_Array_Access;
+         Rooms : array (Boolean) of Interfaces.Unsigned_64 := [others => 0];
+         Leave : constant Interfaces.Unsigned_64 := 2 ** 30;
+      begin
+         Tiny_Model.Build (Image, Room => 4_096);
+         for Leaving in Boolean loop
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Parsed : Containers.Container;
+               Engine : L.Model;
+               Status : E.Error_Info;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               L.Prepare
+                 (Engine, Parsed, Source,
+                  Backend => Model_Runner.Backend.Backend_Device,
+                  Status => Status, Context => 4_096,
+                  Beside => (if Leaving then Leave else 0));
+               Assert (E.Is_Ok (Status),
+                       "the fixture did not prepare on the device: "
+                       & E.Error_Code'Image (Status.Code));
+               Rooms (Leaving) := Device.Describe.Memory_Bytes;
+               L.Close (Engine, Status);
+               Containers.Close (Parsed);
+            end;
+         end loop;
+         B.Free (Image);
+         Assert (Rooms (False) > Leave
+                 and then Rooms (False) - Rooms (True) = Leave,
+                 "a draft to come was not left its room:"
+                 & Interfaces.Unsigned_64'Image (Rooms (False)) & " and"
+                 & Interfaces.Unsigned_64'Image (Rooms (True)));
+      end;
+
       Device.Close;
    end A_Second_Model_Adds_To_The_Device_Budget;
 
@@ -19849,8 +19890,9 @@ package body Tests.Inference_Cases is
          & "stand in for it");
       Register_Routine
         (T, A_Second_Model_Adds_To_The_Device_Budget'Access,
-         "a model beside the first on the device adds to its budget, and "
-         & "the room counts the device's own copy of a context");
+         "a model beside the first on the device adds to its budget, a "
+         & "draft to come is left its room, and the room counts the "
+         & "device's own copy of a context");
       Register_Routine
         (T, A_Noted_Row_Lives_As_Its_Position'Access,
          "a picture's noted row is read back at its position and forgotten "

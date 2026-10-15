@@ -73,6 +73,14 @@ package Model_Runner.CLI.Execute is
       Paged         : Boolean := True)
       return Model_Runner.Backend.Backend_Kind;
 
+   --  The room on the device run leaves beside a model for the draft it was
+   --  asked to draft with: the draft's file, which is about what its
+   --  matrices take there. Nothing where none was named.
+   --
+   --  @param Draft_Path The draft model named, or empty.
+   --  @return Bytes.
+   function Draft_Room (Draft_Path : String) return Interfaces.Unsigned_64;
+
    --  The arithmetic run takes for a prepared model: the one named, or
    --  where none is named the one the model is measured to want -- Gemma
    --  2's mixed one -- for a tool that measures what run does.

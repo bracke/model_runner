@@ -501,7 +501,11 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Panel_Cache  => Panel_Path,
             Context      => Item.Context_Size,
             Cache        => Item.Cache,
-            Paged        => Session_Paging (Item));
+            Paged        => Session_Paging (Item),
+            Beside       =>
+              (if Instead = ""
+               then Draft_Room (Model_Runner.Text.To_String (Item.Draft_Path))
+               else 0));
 
          --  A chat format named on the command line replaces the model's
          --  own, and whatever Prepare chose. Nothing here guesses a format

@@ -2493,7 +2493,8 @@ package body Model_Runner.Llama is
       Panel_Cache : String := "";
       Context  : Natural := 0;
       Cache    : Cache_Precision := Exact;
-      Paged    : Boolean := True)
+      Paged    : Boolean := True;
+      Beside   : Interfaces.Unsigned_64 := 0)
    is separate;
 
    -----------

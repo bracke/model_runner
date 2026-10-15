@@ -377,7 +377,8 @@ package body Speed_Run is
             Cache => Cache, Paged => Paged,
             Fit_Required => Device_Bytes = 0,
             Panel_Cache =>
-              Model_Runner.CLI.Execute.Unasked_Panel_Cache (Path, No_Cache));
+              Model_Runner.CLI.Execute.Unasked_Panel_Cache (Path, No_Cache),
+            Beside => Model_Runner.CLI.Execute.Draft_Room (Draft));
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Shards.Close (Source);

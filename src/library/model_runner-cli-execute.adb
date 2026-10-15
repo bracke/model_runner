@@ -161,6 +161,19 @@ package body Model_Runner.CLI.Execute is
          Status := E.Exit_Internal;
    end Dispatch;
 
+   ----------------
+   -- Draft_Room --
+   ----------------
+
+   function Draft_Room (Draft_Path : String) return Interfaces.Unsigned_64
+   is (if Draft_Path /= ""
+         and then Ada.Directories.Exists (Draft_Path)
+         and then Ada.Directories."="
+                    (Ada.Directories.Kind (Draft_Path),
+                     Ada.Directories.Ordinary_File)
+       then Interfaces.Unsigned_64 (Ada.Directories.Size (Draft_Path))
+       else 0);
+
    function Unasked_Backend
      (Model_Path    : String;
       Device_Memory : Interfaces.Unsigned_64;

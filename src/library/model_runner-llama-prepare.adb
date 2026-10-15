@@ -17,7 +17,8 @@ procedure Prepare
    Panel_Cache : String := "";
    Context  : Natural := 0;
    Cache    : Cache_Precision := Exact;
-   Paged    : Boolean := True)
+   Paged    : Boolean := True;
+   Beside   : Interfaces.Unsigned_64 := 0)
 is
    Ignored : E.Error_Info;
 
@@ -2345,13 +2346,21 @@ begin
          if Planned = 0 then
             Planned := Item.Settings.Context_Length;
             while Planned > Planned_Context
-              and then Counted_Room (Planned) < Total
+              and then Counted_Room (Planned) < Total + Beside
             loop
                Planned := Natural'Max (Planned_Context, Planned / 2);
             end loop;
          end if;
 
          Room := Counted_Room (Planned);
+
+         --  Less what a draft prepared after this one will take: it is put
+         --  on top of the budget fitted here, and a split that had taken
+         --  the whole room left it none -- ThinkingCap with a 4B draft ran
+         --  the part out of memory at its first submission.
+         if Beside > 0 and then Room > Beside then
+            Room := Room - Beside;
+         end if;
 
          --  The file's pages of what goes to the device are kept where the
          --  matrices are no more than two fifths of the device's heaps,
