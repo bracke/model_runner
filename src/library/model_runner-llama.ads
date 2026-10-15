@@ -686,6 +686,21 @@ package Model_Runner.Llama is
    --  @return The factor a score is multiplied by.
    function Score_Scale (Settings : Configuration) return Real;
 
+   --  Whether a block past the stack drafts on an architecture: where its
+   --  layer is the shape Draft_Next and Feed_Next compute -- normalized
+   --  attention with no biases, its heads normalized or not, and a gated
+   --  feed-forward or a mixture -- and nothing they leave out. A block on
+   --  any other architecture -- multi-head latent attention, biases, the
+   --  norms after a sublayer, the halves side by side -- is counted apart
+   --  from the stack, as the file counts it, and not drafted from: drafted
+   --  from, its proposals were rows the layer does not make, or the round
+   --  refused.
+   --
+   --  @param Kind Architecture to ask about.
+   --  @return True where its block drafts.
+   function Block_Drafts (Kind : Architecture) return Boolean
+   is (Kind in Llama | Qwen3 | Qwen3_MoE | Mellum | Qwen35 | Qwen35_MoE);
+
    --  Whether an architecture's linear layers read one state, never a
    --  slot of a ring: the Mamba family, RWKV6 and Jamba scan the state
    --  where it lies, so a session of one keeps no ring and is rewound
@@ -1732,6 +1747,33 @@ package Model_Runner.Llama is
    --  @param Index Zero-based position.
    --  @return Committed token, or No_Token when out of range.
    function Committed_Token (Item : Session; Index : Natural) return Token_Id;
+
+   --  Note what row a committed position was given in place of its token's
+   --  embedding: a digest of a picture's row, kept beside the history so
+   --  that a prefix comparison can tell two pictures apart. Every picture's
+   --  positions hold the same placeholder token, so the history alone took
+   --  the second picture asked about at a position for the first.
+   --
+   --  A rewind forgets the notes past it, a reset all of them, and a
+   --  session adopted from a file holds none: a position without a note is
+   --  one whose picture is not known.
+   --
+   --  @param Item Session the position is committed in.
+   --  @param Position Zero-based position.
+   --  @param Digest The row's digest; nought is no note.
+   procedure Note_Row
+     (Item     : in out Session;
+      Position : Natural;
+      Digest   : Interfaces.Unsigned_64);
+
+   --  What row a committed position was noted as given.
+   --
+   --  @param Item Session to inspect.
+   --  @param Position Zero-based position.
+   --  @return The digest Note_Row noted, or nought where none was or the
+   --    position is not committed.
+   function Row_Note
+     (Item : Session; Position : Natural) return Interfaces.Unsigned_64;
 
    --  What the position at an index turns by: the index itself in every
    --  part for a model whose positions have one, and for one whose
@@ -3006,6 +3048,11 @@ private
    type Token_History is array (Natural range <>) of Token_Id;
    type Token_History_Access is access Token_History;
 
+   --  What each position's given row was, where one was given: a digest of
+   --  a picture's row, nought for a position read from its token.
+   type Row_Notes is array (Natural range <>) of Interfaces.Unsigned_64;
+   type Row_Notes_Access is access Row_Notes;
+
    --  What a committed position turns by, for a model whose positions have
    --  three parts: its place, and the position a text token after it
    --  takes. A text token's place is the three parts equal and its next
@@ -3193,6 +3240,7 @@ private
       Key_Scales   : Model_Runner.Tensors.Real_Array_Access := null;
       Value_Scales : Model_Runner.Tensors.Real_Array_Access := null;
       History    : Token_History_Access := null;
+      Notes      : Row_Notes_Access := null;
 
       --  One mark a position, for a model whose positions have three
       --  parts; null for every other model, whose rotation reads the

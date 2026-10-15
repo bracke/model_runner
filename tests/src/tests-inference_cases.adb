@@ -1748,6 +1748,108 @@ package body Tests.Inference_Cases is
       end loop;
    end A_Block_Past_Any_Stack_Drafts;
 
+   --  A block on an architecture whose layer Draft_Next does not compute --
+   --  Qwen2's projections carry biases -- is counted apart from the stack,
+   --  as the file counts it, and not drafted from: the stack is the file's
+   --  layers without it, and the session drafts nothing.
+   --  Drafted from, its proposals were rows the layer does not make, and on
+   --  DeepSeek2's latent attention the round refused every generation.
+   procedure A_Block_Draft_Next_Cannot_Compute_Is_Left_Alone
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+      With_Block, Without : Logit_Vector;
+
+      procedure Last_Of
+        (Block : Boolean; Last : out Logit_Vector; Drafts : out Boolean)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen2, Draft_Block => Block);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+            Assert (L.Config (Under.Ready).Layers = Tiny_Model.Layers,
+                    "a block Draft_Next cannot compute was counted as a layer "
+                    & "of the stack");
+            Assert (L.Config (Under.Ready).Next_Layers = 0,
+                    "a block Draft_Next cannot compute was kept to draft from");
+            L.Open (Live, Under.Ready, Status => Status);
+            Drafts := L.Drafts_Next (Live);
+            L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+            Assert (E.Is_Ok (Status), "the prompt failed");
+            L.Close (Live);
+         end;
+         B.Free (Image);
+      end Last_Of;
+
+      Drafts_With, Drafts_Without : Boolean;
+   begin
+      Last_Of (True, With_Block, Drafts_With);
+      Last_Of (False, Without, Drafts_Without);
+      Assert (not Drafts_With, "a Qwen2 session drafts from its block");
+      --  Not compared: the fixture's weights follow one another, and a
+      --  block's tensors move those written after them.
+      for V of With_Block loop
+         Assert (V'Valid, "the stack beside an unread block answered a "
+                 & "logit that is not a number");
+      end loop;
+   end A_Block_Draft_Next_Cannot_Compute_Is_Left_Alone;
+
+   --  A picture's row noted at a committed position is read back there, a
+   --  position without a note reads nought, and a rewind past it or a
+   --  reset forgets it: the notes are what a prefix comparison tells two
+   --  pictures apart by, and a note outliving its position would vouch for
+   --  a picture no longer there.
+   procedure A_Noted_Row_Lives_As_Its_Position
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Interfaces.Unsigned_64;
+      Prompt : constant Vocab.Token_Array (1 .. 4) := [4, 7, 2, 9];
+      Image  : B.Byte_Array_Access;
+      Last   : Logit_Vector;
+   begin
+      Tiny_Model.Build (Image);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         L.Evaluate_Batch (Live, Under.Ready, Prompt, Last, Status => Status);
+         Assert (E.Is_Ok (Status), "the prompt failed");
+
+         L.Note_Row (Live, 2, 16#C0FFEE#);
+         Assert (L.Row_Note (Live, 2) = 16#C0FFEE#,
+                 "a noted row was not read back at its position");
+         Assert (L.Row_Note (Live, 1) = 0,
+                 "a position with no note read one");
+         Assert (L.Row_Note (Live, 40) = 0,
+                 "a position past the committed read a note");
+
+         L.Rewind (Live, 2, Status);
+         Assert (E.Is_Ok (Status), "the rewind failed");
+         Assert (L.Row_Note (Live, 2) = 0,
+                 "a note outlived the rewind past its position");
+
+         L.Evaluate_Batch (Live, Under.Ready, Prompt (3 .. 4), Last,
+                           Status => Status);
+         L.Note_Row (Live, 3, 7);
+         L.Reset (Live);
+         Assert (L.Row_Note (Live, 3) = 0, "a note outlived the reset");
+         L.Close (Live);
+      end;
+      B.Free (Image);
+   end A_Noted_Row_Lives_As_Its_Position;
+
    --  And drafting from the block while sampling keeps the model's own
    --  distribution. Above temperature zero a proposal is kept with the
    --  chance its own probability allows against the block's, and a refused
@@ -19578,6 +19680,14 @@ package body Tests.Inference_Cases is
         (T, A_Second_Model_Adds_To_The_Device_Budget'Access,
          "a model beside the first on the device adds to its budget, and "
          & "the room counts the device's own copy of a context");
+      Register_Routine
+        (T, A_Noted_Row_Lives_As_Its_Position'Access,
+         "a picture's noted row is read back at its position and forgotten "
+         & "past a rewind or a reset");
+      Register_Routine
+        (T, A_Block_Draft_Next_Cannot_Compute_Is_Left_Alone'Access,
+         "a block on an architecture Draft_Next does not compute is counted "
+         & "apart and not drafted from");
       Register_Routine
         (T, A_Block_Past_Any_Stack_Drafts'Access,
          "a block past the stack drafts on any architecture that carries "

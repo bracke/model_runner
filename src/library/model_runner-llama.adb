@@ -378,6 +378,8 @@ package body Model_Runner.Llama is
 
    procedure Deallocate_History is
      new Ada.Unchecked_Deallocation (Token_History, Token_History_Access);
+   procedure Deallocate_Notes is
+     new Ada.Unchecked_Deallocation (Row_Notes, Row_Notes_Access);
    procedure Deallocate_Marks is
      new Ada.Unchecked_Deallocation (Rope_Marks, Rope_Marks_Access);
 
@@ -8408,6 +8410,9 @@ package body Model_Runner.Llama is
       if Item.History /= null then
          Deallocate_History (Item.History);
       end if;
+      if Item.Notes /= null then
+         Deallocate_Notes (Item.Notes);
+      end if;
 
       Item.Owner := null;
       Item.Team := null;
@@ -8583,6 +8588,24 @@ package body Model_Runner.Llama is
          return Item.History.all (Index);
       end if;
    end Committed_Token;
+
+   procedure Note_Row
+     (Item     : in out Session;
+      Position : Natural;
+      Digest   : Interfaces.Unsigned_64) is
+   begin
+      if Item.Notes /= null and then Position in Item.Notes.all'Range
+        and then Position < Item.Committed
+      then
+         Item.Notes.all (Position) := Digest;
+      end if;
+   end Note_Row;
+
+   function Row_Note
+     (Item : Session; Position : Natural) return Interfaces.Unsigned_64
+   is (if Item.Notes /= null and then Position in Item.Notes.all'Range
+         and then Position < Item.Committed
+       then Item.Notes.all (Position) else 0);
 
    -----------
    -- Reset --
@@ -8771,6 +8794,14 @@ package body Model_Runner.Llama is
       if Position = 0 and then Item.Origin /= null then
          Item.Origin.all := [others => 0];
       end if;
+      --  But a position's note says what row it was given, and a row
+      --  written there again before a note is -- a turn read part way and
+      --  cancelled -- would be taken for the one noted.
+      if Item.Notes /= null then
+         for Index in Position .. Item.Notes.all'Last loop
+            Item.Notes.all (Index) := 0;
+         end loop;
+      end if;
       Item.Committed := Position;
       Item.Marked := Natural'Min (Item.Marked, Position);
    end Rewind;
@@ -8876,6 +8907,9 @@ package body Model_Runner.Llama is
       Item.Marked := 0;
       if Item.History /= null then
          Item.History.all := [others => Model_Runner.Tokenizer.No_Token];
+      end if;
+      if Item.Notes /= null then
+         Item.Notes.all := [others => 0];
       end if;
 
       --  And every layer holds the front of the context again, which is

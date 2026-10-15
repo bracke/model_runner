@@ -197,7 +197,7 @@ package body Tool_Commands is
 
    Takes_Dump_States : aliased constant String :=
      "--model PATH --texts LIST --out PATH [--backend NAME] [--top N]"
-     & " [--most N] [--arith f32|int8]";
+     & " [--most N] [--arith int8|f32]  (int8, run's default, unless f32)";
 
    Opts_Dump_States : aliased constant String :=
      " --model --texts --out --backend --top --most --arith ";

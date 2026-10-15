@@ -158,28 +158,27 @@ package body State_Dump is
                      exit;
                   end if;
 
-                  Interfaces.Integer_32'Write
-                    (Out_At, Interfaces.Integer_32 (Last));
-                  Interfaces.Integer_32'Write
-                    (Out_At, Interfaces.Integer_32 (Width));
-                  Interfaces.Integer_32'Write
-                    (Out_At, Interfaces.Integer_32 (Top));
-                  for Index in 1 .. Last loop
-                     Interfaces.Integer_32'Write
-                       (Out_At, Interfaces.Integer_32 (Held (Index)));
-                  end loop;
-
-                  --  The tops first, then the states: two passes over
-                  --  the text, so that each is written in one run.
+                  --  The whole record held until every batch is in, and
+                  --  written then or not at all: a record cut short is a
+                  --  file a reader misparses from there on.
                   declare
                      type Row_Of_States is
                        array (N.Element_Count range <>) of Float;
                      type Row_Access is access Row_Of_States;
                      procedure Free is new Ada.Unchecked_Deallocation
                        (Row_Of_States, Row_Access);
+                     type Row_Of_Ids is
+                       array (N.Element_Count range <>) of Interfaces.Integer_32;
+                     type Ids_Access is access Row_Of_Ids;
+                     procedure Free is new Ada.Unchecked_Deallocation
+                       (Row_Of_Ids, Ids_Access);
                      Kept : Row_Access :=
                        new Row_Of_States (0 .. Width * N.Element_Count (Last)
                                                 - 1);
+                     Top_Ids : Ids_Access :=
+                       new Row_Of_Ids (0 .. N.Element_Count (Last * Top) - 1);
+                     Top_Lps : Row_Access :=
+                       new Row_Of_States (0 .. N.Element_Count (Last * Top) - 1);
                      Lo : Positive := 1;
                   begin
                      while Lo <= Last loop
@@ -250,15 +249,18 @@ package body State_Dump is
                                       + Long_Float (N.Log (N.Wide_Real (Sum)));
                                  begin
                                     for K in 1 .. Top loop
-                                       Interfaces.Integer_32'Write
-                                         (Out_At,
-                                          Interfaces.Integer_32 (Best (K)));
-                                    end loop;
-                                    for K in 1 .. Top loop
-                                       Float'Write
-                                         (Out_At,
-                                          Float (Long_Float (Best_Of (K))
-                                                 - Norm));
+                                       declare
+                                          At_Top : constant N.Element_Count :=
+                                            (N.Element_Count (Lo - 1) + Row)
+                                            * N.Element_Count (Top)
+                                            + N.Element_Count (K - 1);
+                                       begin
+                                          Top_Ids (At_Top) :=
+                                            Interfaces.Integer_32 (Best (K));
+                                          Top_Lps (At_Top) :=
+                                            Float (Long_Float (Best_Of (K))
+                                                   - Norm);
+                                       end;
                                     end loop;
                                  end;
                               end;
@@ -273,9 +275,31 @@ package body State_Dump is
                      end loop;
 
                      if not Result.Failed then
+                        Interfaces.Integer_32'Write
+                          (Out_At, Interfaces.Integer_32 (Last));
+                        Interfaces.Integer_32'Write
+                          (Out_At, Interfaces.Integer_32 (Width));
+                        Interfaces.Integer_32'Write
+                          (Out_At, Interfaces.Integer_32 (Top));
+                        for Index in 1 .. Last loop
+                           Interfaces.Integer_32'Write
+                             (Out_At, Interfaces.Integer_32 (Held (Index)));
+                        end loop;
+                        for P in 0 .. N.Element_Count (Last) - 1 loop
+                           for K in 0 .. N.Element_Count (Top) - 1 loop
+                              Interfaces.Integer_32'Write
+                                (Out_At, Top_Ids (P * N.Element_Count (Top) + K));
+                           end loop;
+                           for K in 0 .. N.Element_Count (Top) - 1 loop
+                              Float'Write
+                                (Out_At, Top_Lps (P * N.Element_Count (Top) + K));
+                           end loop;
+                        end loop;
                         Row_Of_States'Write (Out_At, Kept.all);
                      end if;
                      Free (Kept);
+                     Free (Top_Ids);
+                     Free (Top_Lps);
                   end;
 
                   L.Close (Live);

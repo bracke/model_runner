@@ -2181,7 +2181,7 @@ begin
             Top     => Positive'Value (Option ("--top", "8")),
             Most    => Positive'Value (Option ("--most", "4096")),
             Result  => Result,
-            Round   => Option ("--arith", "f32") = "int8");
+            Round   => Option ("--arith", "int8") = "int8");
          if Result.Failed or else Result.Texts = 0 then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

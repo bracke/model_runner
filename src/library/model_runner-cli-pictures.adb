@@ -825,7 +825,12 @@ package body Model_Runner.CLI.Pictures is
                      Model_Runner.Vision.Plan_Slices
                        (Item.Eyes, Picture.Width, Picture.Height,
                         OW, OH, RW, RH, GC, GR, Sl, Cnt);
-                     Model_Runner.Images.Resample (Picture, OW, OH, Fitted);
+                     --  Both the overview and the refined picture through
+                     --  the bicubic filter, as the reference's processor
+                     --  resizes them; the triangle, unasked, gave every
+                     --  sliced picture other slices than either reference.
+                     Model_Runner.Images.Resample
+                       (Picture, OW, OH, Fitted, Model_Runner.Images.Cubic);
                      if Fitted.Pixels = null then
                         Status := E.Make (E.Memory_Allocation_Failed);
                         E.Add_Text
@@ -842,7 +847,8 @@ package body Model_Runner.CLI.Pictures is
                         Slice_Cols_Val := GC;
                         Tiles := 1 + Cnt;
                         Model_Runner.Images.Resample
-                          (Picture, RW, RH, Refined);
+                          (Picture, RW, RH, Refined,
+                           Model_Runner.Images.Cubic);
                         if Refined.Pixels = null then
                            Status := E.Make (E.Memory_Allocation_Failed);
                            E.Add_Text

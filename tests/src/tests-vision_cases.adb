@@ -683,7 +683,7 @@ package body Tests.Vision_Cases is
    --  or the other way round, which a later converter may.
    procedure Write_Projector
      (Path : String; W : Projector_Weights; Swapped : Boolean;
-      Kind : String := "gemma3")
+      Kind : String := "gemma3"; Scale : Natural := 0)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -707,6 +707,11 @@ package body Tests.Vision_Cases is
       Fixtures.Add_U32 (Builder, "clip.vision.projection_dim", Text_P);
       Fixtures.Add_U32 (Builder, "clip.vision.block_count", Blocks_P);
       Fixtures.Add_U32 (Builder, "clip.vision.attention.head_count", Heads_P);
+      if Scale > 0 then
+         Fixtures.Add_U32
+           (Builder, "clip.vision.projector.scale_factor",
+            Interfaces.Unsigned_32 (Scale));
+      end if;
       Fixtures.Add_F32
         (Builder, "clip.vision.attention.layer_norm_epsilon", 1.0e-6);
       Fixtures.Begin_Array
@@ -1054,6 +1059,25 @@ package body Tests.Vision_Cases is
          Vision.Close (Eyes);
       end loop;
 
+      --  The pooling side is the file's where it names one, as the
+      --  reference reads clip.vision.projector.scale_factor, and four
+      --  where it does not: two over the four patches a side is a grid
+      --  of two by two, four is the one row.
+      for Halved in Boolean loop
+         declare
+            Scale : constant Positive := (if Halved then 2 else 4);
+         begin
+            Write_Projector
+              ("obj/vision-projector.gguf", W.all, False, Scale => Scale);
+            Vision.Open (Eyes, "obj/vision-projector.gguf", Status);
+            Assert (E.Is_Ok (Status)
+                    and then Vision.Rows_Per_Picture (Eyes) = (4 / Scale) ** 2,
+                    "a projector pooling by" & Scale'Image & " makes"
+                    & Vision.Rows_Per_Picture (Eyes)'Image & " rows a picture");
+            Vision.Close (Eyes);
+         end;
+      end loop;
+
       --  Refusals.
       Write_Projector ("obj/vision-projector.gguf", W.all, False, Kind => "llava");
       Vision.Open (Eyes, "obj/vision-projector.gguf", Status);
@@ -1238,6 +1262,83 @@ package body Tests.Vision_Cases is
                           & Natural'Image (Outcome.Reused_Tokens) & " of"
                           & Natural'Image (Outcome.Prompt_Tokens)
                           & " tokens reused, the other picture's rows unread");
+               end;
+
+               --  And the session held from the run before -- interactive
+               --  mode's, a turn cancelled after its picture was read --
+               --  with no file in it: the session knows what rows its soft
+               --  positions were given, and another picture is read again
+               --  where the same placeholder tokens stand. Every picture's
+               --  soft positions hold the one token, so the history alone
+               --  took the second picture for the first.
+               declare
+                  Kept : Gen.Request := Request;
+                  At_Picture : Natural := 0;
+               begin
+                  Kept.Reuse_Committed_Prefix := True;
+                  L.Reset (Live);
+                  Gen.Release (Outcome);
+                  Gen.Generate
+                    (Ready, Live, "cab", Request, Stop, null, null, null,
+                     null, null, null, Pictures => Pictures, Outcome => Outcome);
+                  for Index in 0 .. Outcome.Prompt_Tokens - 1 loop
+                     if L.Committed_Token (Live, Index) = Pictures.Soft then
+                        At_Picture := Index;
+                        exit;
+                     end if;
+                  end loop;
+                  Gen.Release (Outcome);
+                  Gen.Generate
+                    (Ready, Live, "cab", Kept, Stop, null, null, null,
+                     null, null, null, Pictures => Other, Outcome => Outcome);
+                  Assert (Outcome.Reused_Tokens <= At_Picture,
+                          "a held session's prefix was taken past its "
+                          & "picture into another's:"
+                          & Natural'Image (Outcome.Reused_Tokens)
+                          & " tokens reused, the picture at"
+                          & Natural'Image (At_Picture));
+
+                  --  The same picture asked again is the same rows: taken
+                  --  whole, as any held prefix is.
+                  Gen.Release (Outcome);
+                  Gen.Generate
+                    (Ready, Live, "cab", Kept, Stop, null, null, null,
+                     null, null, null, Pictures => Other, Outcome => Outcome);
+                  Assert (Outcome.Reused_Tokens > At_Picture + Per,
+                          "the same picture asked again was read again:"
+                          & Natural'Image (Outcome.Reused_Tokens)
+                          & " tokens reused");
+
+                  --  A shift through the picture is refused, as the
+                  --  reference's server shifts nothing with a projector
+                  --  loaded; one past it moves as any.
+                  L.Shift (Live, Ready, At_Picture + 1, 1, Status);
+                  Assert (Status.Code = E.Arch_Unsupported_Feature,
+                          "a shift through a picture was taken: "
+                          & E.Error_Code'Image (Status.Code));
+                  L.Shift (Live, Ready, L.Position (Live) - 1, 1, Status);
+                  Assert (E.Is_Ok (Status), "a shift past the picture was "
+                          & "refused: " & E.Error_Code'Image (Status.Code));
+
+                  --  And a session read back from a snapshot knows no
+                  --  picture: its soft positions are read again.
+                  declare
+                     Saved : B.Byte_Array_Access;
+                  begin
+                     L.Snapshot (Live, Ready, Saved, Status);
+                     Assert (E.Is_Ok (Status), "the session was not saved");
+                     L.Adopt (Live, Ready, Saved.all, Status);
+                     Assert (E.Is_Ok (Status), "the session was not read back");
+                     B.Free (Saved);
+                  end;
+                  Gen.Release (Outcome);
+                  Gen.Generate
+                    (Ready, Live, "cab", Kept, Stop, null, null, null,
+                     null, null, null, Pictures => Other, Outcome => Outcome);
+                  Assert (Outcome.Reused_Tokens <= At_Picture,
+                          "a session read back took its picture as known:"
+                          & Natural'Image (Outcome.Reused_Tokens)
+                          & " tokens reused");
                end;
                T.Free (Other.Rows);
                Pictures.Rows := Kept_Rows;
@@ -1654,6 +1755,92 @@ package body Tests.Vision_Cases is
             Free (Pictures.Slice_Cols);
             Pictures.Video_As_Frames := False;
             Pictures.Video_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Marker := Vocab.No_Token;
+            Pictures.Slice_Closer := Vocab.No_Token;
+            Pictures.Slice_Marker_Text := Model_Runner.Text.Empty;
+            Pictures.Slice_Row_End := Model_Runner.Text.Empty;
+            Pictures.Count := 1;
+         end;
+
+         --  Pictures of counts of their own, the first with a slice: every
+         --  marker of an entry takes the entry's count. Read by the
+         --  marker's number, the first picture's slice took the second
+         --  picture's count and the second picture fell to Per. "c", LF,
+         --  "c" is "c", "b" for the first's two rows each, then a line
+         --  break and "c" for the second's five.
+         declare
+            Expected : Vocab.Token_Array (1 .. 128);
+            Count    : Natural := 0;
+            Raw      : Vocab.Token_Array (1 .. 128);
+            Read     : Natural;
+            Text     : constant String := "cb" & ASCII.LF & "c";
+            Seen     : Natural := 0;
+         begin
+            Pictures.Marker_Text := Model_Runner.Text.To_Bounded ("c");
+            Pictures.Slice_Marker := Vocab.Find (Words.all, "b");
+            Pictures.Slice_Closer := Vocab.Find (Words.all, "<0x61>");
+            Pictures.Slice_Marker_Text := Model_Runner.Text.To_Bounded ("b");
+            Pictures.Slice_Row_End :=
+              Model_Runner.Text.To_Bounded ([1 => ASCII.LF]);
+            Pictures.Crops := new Gen.Crop_Counts'(1, 0);
+            Pictures.Slice_Cols := new Gen.Crop_Counts'(1, 0);
+            Pictures.Counts := new Gen.Crop_Counts'(2, 5);
+            Pictures.Count := 2;
+            T.Free (Pictures.Rows);
+            T.Allocate (9 * Width, Pictures.Rows);
+            Seed := 719;
+            for Value of Pictures.Rows.all loop
+               Value := Next;
+            end loop;
+
+            Vocab.Encode (Words.all, Text, True, False, Raw, Read, Status);
+            Assert (E.Is_Ok (Status), "the counted-pictures text did not tokenize");
+            for Index in 1 .. Read loop
+               Count := Count + 1;
+               Expected (Count) := Raw (Index);
+               if Raw (Index) = Pictures.Marker
+                 or else Raw (Index) = Pictures.Slice_Marker
+               then
+                  Seen := Seen + 1;
+                  for Row in 1 .. (if Seen <= 2 then 2 else 5) loop
+                     Count := Count + 1;
+                     Expected (Count) := Pictures.Soft;
+                  end loop;
+                  Count := Count + 1;
+                  Expected (Count) :=
+                    (if Raw (Index) = Pictures.Marker then Pictures.Closer
+                     else Pictures.Slice_Closer);
+               end if;
+            end loop;
+            Assert (Seen = 3, "the counted-pictures text has" & Seen'Image
+                    & " markers, not three");
+
+            L.Reset (Live);
+            Gen.Release (Outcome);
+            Gen.Generate
+              (Ready, Live, "c" & ASCII.LF & "c", Request, Stop, null, null,
+               null, null, null, null, Pictures => Pictures,
+               Outcome => Outcome);
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the counted-pictures run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (Outcome.Prompt_Tokens = Count,
+                    "the counted-pictures prompt is"
+                    & Natural'Image (Outcome.Prompt_Tokens)
+                    & " tokens, not" & Natural'Image (Count)
+                    & ": a slice took another picture's count");
+            for Index in 1 .. Count loop
+               Assert (L.Committed_Token (Live, Index - 1) = Expected (Index),
+                       "token" & Natural'Image (Index)
+                       & " of the counted-pictures prompt is "
+                       & Vocab.Token_Id'Image (L.Committed_Token (Live, Index - 1))
+                       & ", not " & Vocab.Token_Id'Image (Expected (Index)));
+            end loop;
+
+            Free (Pictures.Counts);
+            Free (Pictures.Crops);
+            Free (Pictures.Slice_Cols);
             Pictures.Marker_Text := Model_Runner.Text.Empty;
             Pictures.Slice_Marker := Vocab.No_Token;
             Pictures.Slice_Closer := Vocab.No_Token;
@@ -2693,6 +2880,35 @@ package body Tests.Vision_Cases is
          T.Free (Rows);
          Images.Free (Small);
       end;
+
+      --  And a narrow one: a side under half a window rounds to nought
+      --  first, as the reference's smart_resize rounds it, and is then
+      --  scaled up -- five hundred by three is 832 by 8, a grid of one by
+      --  104. Rounded to a positive first, it raised rather than fitting.
+      --  Past two hundred to one it is refused, as the reference refuses
+      --  it, rather than encoded.
+      declare
+         Narrow : Images.Raster;
+      begin
+         Images.Resample (Picture, 500, 3, Narrow);
+         Vision.Encode (Eyes, Narrow, null, Rows, Grid_Rows, Grid_Columns,
+                        Status => Status);
+         Assert (E.Is_Ok (Status), "a narrow picture did not encode: "
+                 & E.Error_Code'Image (Status.Code));
+         Assert (Grid_Rows = 1 and then Grid_Columns = 104,
+                 "a narrow picture's grid is" & Natural'Image (Grid_Rows)
+                 & " by" & Natural'Image (Grid_Columns) & ", not 1 by 104");
+         T.Free (Rows);
+         Images.Free (Narrow);
+         Images.Resample (Picture, 650, 3, Narrow);
+         Vision.Encode (Eyes, Narrow, null, Rows, Grid_Rows, Grid_Columns,
+                        Status => Status);
+         Assert (Status.Code = E.Arch_Unsupported_Feature,
+                 "a picture past two hundred to one was not refused: "
+                 & E.Error_Code'Image (Status.Code));
+         T.Free (Rows);
+         Images.Free (Narrow);
+      end;
       Vision.Close (Eyes);
 
       --  Qwen2-VL's merger is not this shape -- no patch bias, no learned
@@ -2815,13 +3031,16 @@ package body Tests.Vision_Cases is
       --  least pixels; five by five is scaled to the window first and
       --  then up; a thousand by twenty rounds to sixteen tall and stands
       --  as fifty to one; six hundred and forty by four hundred and eighty
-      --  over forty frames is cut to the frames' cap; and two thousand
-      --  by nine is refused as past two hundred to one.
+      --  over forty frames is cut to the frames' cap; sixteen hundred by
+      --  eight over six thousand frames is cut below a window tall and
+      --  held to it, as the reference's max; and two thousand by nine is
+      --  refused as past two hundred to one.
       Fits (64, 80, 2, 64, 80);
       Fits (20, 30, 1, 56, 80);
       Fits (5, 5, 3, 40, 40);
       Fits (1000, 20, 2, 1000, 16);
       Fits (640, 480, 40, 256, 192);
+      Fits (1600, 8, 6000, 920, 8);
       Vision.Frames_Fit (Eyes, 2000, 9, 2, Fit_Width, Fit_Height, Status);
       Assert (Status.Code = E.Arch_Unsupported_Feature,
               "frames two hundred to one were not refused");
@@ -3716,7 +3935,9 @@ package body Tests.Vision_Cases is
          end loop;
       end Project_V;
    begin
-      Images.Resample (Picture, Target_W, Target_H, Pixels);
+      --  Bicubic, as the reference processor resizes every MiniCPM-V
+      --  picture (image_processing_minicpmv's slice_image).
+      Images.Resample (Picture, Target_W, Target_H, Pixels, Images.Cubic);
 
       --  Patches, embedded and placed by the learned bank the grid
       --  buckets into.
@@ -4135,6 +4356,15 @@ package body Tests.Vision_Cases is
          Assert (OW = 16 and then OH = 16 and then Count = 0
                  and then GC = 0 and then GR = 0,
                  "a small picture was sliced");
+
+         --  A side past the square but the area within it is the overview
+         --  alone, as the processor's grid reads the area: twenty by ten
+         --  is fit to twenty-four by twelve and not sliced.
+         Vision.Plan_Slices (Eyes, 20, 10, OW, OH, RW, RH, GC, GR, Sl, Count);
+         Assert (OW = 24 and then OH = 12 and then Count = 0
+                 and then GC = 0 and then GR = 0,
+                 "a picture within the square's area was sliced:" & Count'Image
+                 & " slices, overview" & OW'Image & " x" & OH'Image);
 
          Vision.Plan_Slices (Eyes, 40, 24, OW, OH, RW, RH, GC, GR, Sl, Count);
          Assert (OW = 20 and then OH = 12
@@ -4588,7 +4818,9 @@ package body Tests.Vision_Cases is
              when 2 => (2 * I + 1) * G + (2 * J),
              when others => (2 * I + 1) * G + (2 * J + 1));
    begin
-      Images.Resample (Picture, Cols * Patch_M, Lines * Patch_M, Pixels);
+      --  Bicubic, as transformers' MiniCPMV4_6ImageProcessor resizes.
+      Images.Resample
+        (Picture, Cols * Patch_M, Lines * Patch_M, Pixels, Images.Cubic);
       for PY in 0 .. Lines - 1 loop
          for PX in 0 .. Cols - 1 loop
             declare

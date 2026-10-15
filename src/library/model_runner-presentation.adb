@@ -1773,7 +1773,9 @@ package body Model_Runner.Presentation is
    procedure End_Line (Self : in out Standard_Output_Sink) is
       Ignored : Boolean;
    begin
-      if Self.Open and then not Self.Closed then
+      --  On a terminal only: written to a file or a pipe, the model's
+      --  text stays the bytes it wrote, and the notices go elsewhere.
+      if Self.Open and then not Self.Closed and then Self.Terminal then
          Write_Shown (Self, [1 => ASCII.LF], Ignored);
       end if;
       if not Self.Closed then

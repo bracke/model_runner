@@ -1,6 +1,7 @@
 with Ada.Long_Float_Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Kernels;
@@ -478,6 +479,36 @@ package body Model_Runner.Generation is
       is (Token = Pictures.Soft
           or else (Pictures.Video_Marker /= Vocab.No_Token
                    and then Token = Pictures.Video_Marker));
+
+      --  A digest of the picture row the prompt's k-th soft position is
+      --  given, counted from nought: FNV-1a over the row's values' bits,
+      --  never nought. What a committed position is noted with, and what
+      --  a prefix is compared on where its token is a soft one -- every
+      --  picture's soft positions hold the one placeholder token, so two
+      --  pictures asked about the same way were taken for each other.
+      function Row_Digest (Row : Natural) return Interfaces.Unsigned_64 is
+         use type Interfaces.Unsigned_64;
+         function Bits is new Ada.Unchecked_Conversion
+           (N.Real, Interfaces.Unsigned_32);
+         Width : constant N.Element_Count :=
+           N.Element_Count (Settings.Embedding);
+         Hash  : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+         First : N.Element_Count;
+      begin
+         if Pictures.Rows = null then
+            return 0;
+         end if;
+         First := Pictures.Rows.all'First + N.Element_Count (Row) * Width;
+         if First + Width - 1 > Pictures.Rows.all'Last then
+            return 0;
+         end if;
+         for Index in First .. First + Width - 1 loop
+            Hash :=
+              (Hash xor Interfaces.Unsigned_64 (Bits (Pictures.Rows.all (Index))))
+              * 16#100_0000_01B3#;
+         end loop;
+         return (if Hash = 0 then 1 else Hash);
+      end Row_Digest;
 
       Shown : constant String := Written;
 
@@ -1232,6 +1263,26 @@ package body Model_Runner.Generation is
 
             if Marked > 0 then
                declare
+                  --  The entry the k-th marker stands for: an entry writes a
+                  --  marker and one more a crop, as Written_From writes
+                  --  them. The count is the entry's, every one of its
+                  --  markers; read by the marker's own number, a picture
+                  --  with crops lent its later markers the next entries'.
+                  function Entry_Of (Which : Positive) return Natural is
+                     Seen : Natural := 0;
+                  begin
+                     for Index in Pictures.Counts.all'Range loop
+                        Seen := Seen + 1
+                          + (if Pictures.Crops /= null
+                               and then Index in Pictures.Crops.all'Range
+                             then Pictures.Crops.all (Index) else 0);
+                        if Which <= Seen then
+                           return Index;
+                        end if;
+                     end loop;
+                     return 0;
+                  end Entry_Of;
+
                   --  The rows the k-th marker's picture has: the tile's
                   --  own where the set counts them a tile, else its own
                   --  count where the set gives one a picture, else the
@@ -1242,8 +1293,8 @@ package body Model_Runner.Generation is
                         and then Which in Pictures.Tile_Rows.all'Range
                       then Pictures.Tile_Rows.all (Which)
                       elsif Pictures.Counts /= null
-                        and then Which in Pictures.Counts.all'Range
-                      then Pictures.Counts.all (Which)
+                        and then Entry_Of (Which) in Pictures.Counts.all'Range
+                      then Pictures.Counts.all (Entry_Of (Which))
                       else Pictures.Per_Picture);
 
                   Extra  : Natural := 0;
@@ -1338,14 +1389,33 @@ package body Model_Runner.Generation is
          Rewound   : E.Error_Info;
       begin
          if Item.Reuse_Committed_Prefix and then Committed > 0 then
-            while Shared < Committed and then Shared < Prompt_Count
-              and then L.Committed_Token (Session, Shared)
-                       = Tokens.all (Shared + 1)
-              and then not (Item.Pictures_Unverified
-                            and then Is_Soft (Tokens.all (Shared + 1)))
-            loop
-               Shared := Shared + 1;
-            end loop;
+            declare
+               use type Interfaces.Unsigned_64;
+               --  Soft positions passed so far, which is the row the next
+               --  one is given.
+               Soft_Seen : Natural := 0;
+            begin
+               --  A soft position is shared only where the session noted
+               --  the row it was given and it is this prompt's row there:
+               --  the same picture. One with no note -- a session read
+               --  from a file, a turn cancelled while its picture was read
+               --  -- is a picture not known, and reuse stops at it.
+               while Shared < Committed and then Shared < Prompt_Count
+                 and then L.Committed_Token (Session, Shared)
+                          = Tokens.all (Shared + 1)
+                 and then not (Item.Pictures_Unverified
+                               and then Is_Soft (Tokens.all (Shared + 1)))
+                 and then (not Is_Soft (Tokens.all (Shared + 1))
+                           or else (L.Row_Note (Session, Shared) /= 0
+                                    and then L.Row_Note (Session, Shared)
+                                             = Row_Digest (Soft_Seen)))
+               loop
+                  if Is_Soft (Tokens.all (Shared + 1)) then
+                     Soft_Seen := Soft_Seen + 1;
+                  end if;
+                  Shared := Shared + 1;
+               end loop;
+            end;
          end if;
 
          --  All of it read already, and more to read: on from there. A
@@ -1786,6 +1856,23 @@ package body Model_Runner.Generation is
                   exit Prefill_Loop;
                end if;
 
+               --  What rows the batch's soft positions were given, noted
+               --  now they are committed; see Row_Digest.
+               if Pictures.Rows /= null and then Pictures.Soft /= Vocab.No_Token
+               then
+                  declare
+                     Soft : Natural := Natural (Given_Before (Index).First);
+                  begin
+                     for Position in Index .. Last loop
+                        if Is_Soft (Tokens.all (Position)) then
+                           L.Note_Row
+                             (Session, Position - 1, Row_Digest (Soft));
+                           Soft := Soft + 1;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
@@ -1970,6 +2057,19 @@ package body Model_Runner.Generation is
                if Item.Context_Shift = 0 then
                   return;
                end if;
+
+               --  Not through a picture this run holds, noted or not: a
+               --  session read from a file noted none of its rows.
+               for Position in Item.Context_Keep
+                 .. Item.Context_Keep + Item.Context_Shift - 1
+               loop
+                  exit when Position >= L.Position (Session);
+                  if Pictures.Soft /= Vocab.No_Token
+                    and then Is_Soft (L.Committed_Token (Session, Position))
+                  then
+                     return;
+                  end if;
+               end loop;
 
                L.Shift
                  (Session, Source, Item.Context_Keep, Item.Context_Shift,

@@ -767,10 +767,11 @@ package Model_Runner.Presentation is
    --  @return True once closure was observed.
    overriding function Is_Closed (Self : Standard_Output_Sink) return Boolean;
 
-   --  End the line the model's text left open, where it left one: what
-   --  is said beside the text -- a call it made, what the call answered --
-   --  starts a line of its own on a terminal that shows both, not the end
-   --  of the model's last one.
+   --  End the line the model's text left open, where it left one and
+   --  standard output is a terminal: what is said beside the text -- a
+   --  call it made, what the call answered -- starts a line of its own on
+   --  a terminal that shows both, not the end of the model's last one.
+   --  Written to a file or a pipe, the text is left as the model wrote it.
    --
    --  @param Self Sink instance.
    procedure End_Line (Self : in out Standard_Output_Sink);

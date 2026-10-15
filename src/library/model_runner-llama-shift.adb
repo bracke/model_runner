@@ -67,6 +67,24 @@ begin
       return;
    end if;
 
+   --  Nor through a picture: its rows attend to each other as one, and a
+   --  context with part of them taken out holds half a picture the model
+   --  was never shown. A dropped position whose row was a picture's -- one
+   --  the session noted (Note_Row) -- refuses the shift; the reference's
+   --  server turns shifting off where a projector is loaded.
+   if Item.Notes /= null then
+      for Position in Keep .. Keep + Drop - 1 loop
+         if Position in Item.Notes.all'Range
+           and then Interfaces."/=" (Item.Notes.all (Position), 0)
+         then
+            Status := E.Make (E.Arch_Unsupported_Feature);
+            E.Add_Text (Status, "feature", "shift through a picture",
+                        E.Param_Identifier);
+            return;
+         end if;
+      end loop;
+   end if;
+
    Moved := Item.Committed - Keep - Drop;
 
    --  Every layer, every moved position: the key turned back by the angle
@@ -302,6 +320,18 @@ begin
       Item.History.all (Keep + Step) :=
         Item.History.all (Keep + Drop + Step);
    end loop;
+
+   --  And the notes of what rows were given, moved with them: the rows
+   --  are the same rows, at other positions. Those past what moved are
+   --  past the context.
+   if Item.Notes /= null then
+      for Step in 0 .. Moved - 1 loop
+         Item.Notes.all (Keep + Step) := Item.Notes.all (Keep + Drop + Step);
+      end loop;
+      for Index in Keep + Moved .. Item.Notes.all'Last loop
+         Item.Notes.all (Index) := 0;
+      end loop;
+   end if;
 
    --  And the marks, moved with the tokens and turned back by Drop
    --  in every part, as the keys were.

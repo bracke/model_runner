@@ -717,6 +717,11 @@ begin
    end if;
    Settings.Layers := Settings.Layers - Settings.Next_Layers;
 
+   --  Past the stack either way; read only where it drafts.
+   if not Block_Drafts (Settings.Kind) then
+      Settings.Next_Layers := 0;
+   end if;
+
    if Hybrid (Settings.Kind) then
       Containers.Get_Integer
         (Source, Model_Key (Settings.Kind, "full_attention_interval"),

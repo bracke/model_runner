@@ -455,6 +455,7 @@ begin
       end if;
       T.Allocate (Element_Count (Settings.Vocabulary), Item.Logit_Row);
       Item.History := new Token_History (0 .. Capacity - 1);
+      Item.Notes := new Row_Notes'(0 .. Capacity - 1 => 0);
 
       --  And what the block past the stack takes in and what it is
       --  given, on any architecture that carries one: the last

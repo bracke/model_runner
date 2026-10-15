@@ -13843,9 +13843,9 @@ package body Tests.CLI_Cases is
       end;
 
       --  And a line the model's text left open is ended before a call's
-      --  notice is written beside it -- once, and not where the text ended
-      --  its own: the notice was written at the end of the model's
-      --  "</tool_call>" on a terminal that showed both.
+      --  notice only on a terminal, where the two are shown together: off
+      --  one -- this capture -- the model's text stays the bytes it wrote,
+      --  whatever is said beside it.
       declare
          Sink   : Model_Runner.Presentation.Standard_Output_Sink;
          Closed : Boolean;
@@ -13860,9 +13860,9 @@ package body Tests.CLI_Cases is
             Caught : constant String := Captured_Output.Close;
          begin
             if Captured_Output.Took_Effect then
-               Assert (Caught = "</tool_call>" & ASCII.LF & "done" & ASCII.LF,
-                       "an open line was not ended once, or a closed one was "
-                       & "ended again: " & Caught);
+               Assert (Caught = "</tool_call>" & "done" & ASCII.LF,
+                       "a line ended off a terminal changed the model's "
+                       & "text: " & Caught);
             end if;
          end;
       end;

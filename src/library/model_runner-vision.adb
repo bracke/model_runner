@@ -972,6 +972,21 @@ package body Model_Runner.Vision is
          Item.Insert_Layer := Natural (Number);
       end if;
 
+      --  Gemma 3's pooling side, where the file states it: four patches a
+      --  side for every Gemma 3, the reference's default, and another for
+      --  a file that says so -- a small test model does. Held to four, such
+      --  a file's pictures were pooled and counted in rows they do not have.
+      if not Is_Qwen (Item) and then not Is_Minicpm (Item)
+        and then not Is_Minicpm46 (Item)
+      then
+         Containers.Get_Integer
+           (Item.Container, "clip.vision.projector.scale_factor", 1, 64,
+            Number, Local);
+         if E.Is_Ok (Local) then
+            Item.Pool_Side := Positive (Number);
+         end if;
+      end if;
+
       if Item.Size mod Item.Patch /= 0
         or else Item.Width mod Item.Heads /= 0
         or else (not Is_Qwen (Item) and then not Is_Minicpm (Item)
@@ -2603,14 +2618,16 @@ package body Model_Runner.Vision is
          Rows := Best_Rows;
       end Best_Grid;
 
-      --  Slices where a side passes the encoder's; for 4.6, as its own
-      --  processor (transformers' MiniCPMV4_6ImageProcessor) has it, where
-      --  the area does -- a picture of the square's area or less is one
-      --  overview, its shape kept, never a grid of one.
+      --  Slices where the area passes the encoder's square, as every
+      --  version's own processor has it -- 2.5's and 2.6's get_sliced_grid
+      --  (a multiple of one or less is no grid) and transformers'
+      --  MiniCPMV4_6ImageProcessor: a picture of the square's area or less
+      --  is one overview, its shape kept, never a grid. The side rule
+      --  llama.cpp's 2.x preprocessing takes was here for 2.x beside the
+      --  processor's overview: a 1000 by 200 picture got two slices
+      --  neither reference gives it.
       Has_Slices : constant Boolean :=
-        (if Is_Minicpm46 (Item)
-         then Width * Height > Slice_Side * Slice_Side
-         else Width > Slice_Side or else Height > Slice_Side);
+        Width * Height > Slice_Side * Slice_Side;
       OW, OH : Integer;
    begin
       Overview_W := 1;
@@ -3408,8 +3425,10 @@ package body Model_Runner.Vision is
          return;
       end if;
 
-      --  The picture, at the encoder's square, as patch vectors.
-      Model_Runner.Images.Resample (Picture, Target_W, Target_H, Resampled);
+      --  The picture, at the encoder's square, as patch vectors: bicubic,
+      --  as the reference resizes it.
+      Model_Runner.Images.Resample
+        (Picture, Target_W, Target_H, Resampled, Model_Runner.Images.Cubic);
       if Resampled.Pixels = null then
          Release; T.Free (Rows);
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -3861,8 +3880,10 @@ package body Model_Runner.Vision is
          return;
       end if;
 
-      --  The picture at its grid's size, as patch vectors.
-      Model_Runner.Images.Resample (Picture, Target_W, Target_H, Resampled);
+      --  The picture at its grid's size, as patch vectors: bicubic, as
+      --  the reference resizes it.
+      Model_Runner.Images.Resample
+        (Picture, Target_W, Target_H, Resampled, Model_Runner.Images.Cubic);
       if Resampled.Pixels = null then
          Release; T.Free (Rows);
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -4159,7 +4180,8 @@ package body Model_Runner.Vision is
    procedure Fitted
      (Item   : Encoder;
       Width, Height : Positive;
-      Fit_Width, Fit_Height : out Positive)
+      Fit_Width, Fit_Height : out Positive;
+      Status : out E.Error_Info)
    is
       Factor : constant Positive := Item.Patch * Item.Merge;
       Least  : constant Long_Long_Integer :=
@@ -4167,21 +4189,39 @@ package body Model_Runner.Vision is
       Most   : constant Long_Long_Integer :=
         Long_Long_Integer (Item.Most_Rows) * Long_Long_Integer (Factor) ** 2;
 
-      function Rounded (X : N.Wide_Real) return Positive
-      is (Positive'Max (Factor,
-            Positive (Half_Even (X / N.Wide_Real (Factor))) * Factor));
+      --  The first rounding as the reference's: to the nearest multiple,
+      --  nought where a side is under half a window -- which then falls
+      --  short of the least and is scaled up below. Converted to Positive
+      --  first, a side of ten pixels raised rather than being fitted.
+      function Rounded (X : N.Wide_Real) return Natural
+      is (Half_Even (X / N.Wide_Real (Factor)) * Factor);
       function Floored (X : N.Wide_Real) return Positive
-      is (Positive'Max (Factor,
-            Positive (N.Wide_Real'Floor (X / N.Wide_Real (Factor)))
-            * Factor));
+      is (Positive'Max
+            (Factor,
+             Natural (N.Wide_Real'Floor (X / N.Wide_Real (Factor)))
+             * Factor));
       function Ceiled (X : N.Wide_Real) return Positive
-      is (Positive'Max (Factor,
-            Positive (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor)))
-            * Factor));
+      is (Positive'Max
+            (Factor,
+             Natural (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor)))
+             * Factor));
 
-      W : Positive := Rounded (N.Wide_Real (Width));
-      H : Positive := Rounded (N.Wide_Real (Height));
+      W : constant Natural := Rounded (N.Wide_Real (Width));
+      H : constant Natural := Rounded (N.Wide_Real (Height));
    begin
+      Fit_Width := Factor;
+      Fit_Height := Factor;
+      Status := E.Success;
+
+      --  A picture more than two hundred times as long as it is wide is
+      --  refused, as the reference refuses it.
+      if Positive'Max (Width, Height) > 200 * Positive'Min (Width, Height)
+      then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "picture aspect", E.Param_Identifier);
+         return;
+      end if;
+
       if Long_Long_Integer (W) * Long_Long_Integer (H) > Most then
          declare
             Beta : constant N.Wide_Real :=
@@ -4189,22 +4229,25 @@ package body Model_Runner.Vision is
                 (N.Wide_Real (Long_Long_Integer (Width) * Long_Long_Integer (Height))
                  / N.Wide_Real (Most));
          begin
-            W := Floored (N.Wide_Real (Width) / Beta);
-            H := Floored (N.Wide_Real (Height) / Beta);
+            Fit_Width := Floored (N.Wide_Real (Width) / Beta);
+            Fit_Height := Floored (N.Wide_Real (Height) / Beta);
          end;
-      elsif Long_Long_Integer (W) * Long_Long_Integer (H) < Least then
+      elsif Long_Long_Integer (W) * Long_Long_Integer (H) < Least
+        or else W = 0 or else H = 0
+      then
          declare
             Beta : constant N.Wide_Real :=
               Elementary.Sqrt
                 (N.Wide_Real (Least)
                  / N.Wide_Real (Long_Long_Integer (Width) * Long_Long_Integer (Height)));
          begin
-            W := Ceiled (N.Wide_Real (Width) * Beta);
-            H := Ceiled (N.Wide_Real (Height) * Beta);
+            Fit_Width := Ceiled (N.Wide_Real (Width) * Beta);
+            Fit_Height := Ceiled (N.Wide_Real (Height) * Beta);
          end;
+      else
+         Fit_Width := W;
+         Fit_Height := H;
       end if;
-      Fit_Width := W;
-      Fit_Height := H;
    end Fitted;
 
    --  The Qwen encoder over one picture, or over one pair of frames of a
@@ -4395,7 +4438,11 @@ package body Model_Runner.Vision is
          Fit_Width := Pair_Width;
          Fit_Height := Pair_Height;
       else
-         Fitted (Item, Picture.Width, Picture.Height, Fit_Width, Fit_Height);
+         Fitted (Item, Picture.Width, Picture.Height, Fit_Width, Fit_Height,
+                 Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
       Side_X := Element_Count (Fit_Width) / Patch;
       Side_Y := Element_Count (Fit_Height) / Patch;
@@ -4668,15 +4715,18 @@ package body Model_Runner.Vision is
       H : N.Wide_Real := N.Wide_Real (Height);
       W : N.Wide_Real := N.Wide_Real (Width);
 
+      --  Each held to a window at least, the window taken after the
+      --  rounding: converted to Positive first, a frame whose side the
+      --  budget cut below half a window raised rather than fitting.
       function Rounded (X : N.Wide_Real) return Positive
       is (Positive'Max (Factor,
-            Positive (Half_Even (X / N.Wide_Real (Factor))) * Factor));
+            Half_Even (X / N.Wide_Real (Factor)) * Factor));
       function Floored (X : N.Wide_Real) return Positive
       is (Positive'Max (Factor,
-            Positive (N.Wide_Real'Floor (X / N.Wide_Real (Factor))) * Factor));
+            Natural (N.Wide_Real'Floor (X / N.Wide_Real (Factor))) * Factor));
       function Ceiled (X : N.Wide_Real) return Positive
       is (Positive'Max (Factor,
-            Positive (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor))) * Factor));
+            Natural (N.Wide_Real'Ceiling (X / N.Wide_Real (Factor))) * Factor));
 
       --  The frames' count rounded to whole pairs, which is what the
       --  budget is checked against; the scaling is by the count itself.

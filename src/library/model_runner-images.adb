@@ -961,7 +961,7 @@ package body Model_Runner.Images is
          exception
             --  A stack the host will not give is a task that does not
             --  start.
-            when Storage_Error | Tasking_Error =>
+            when others =>
                Free (Output);
                raise;
          end;
@@ -976,6 +976,18 @@ package body Model_Runner.Images is
          Free (Input);
          Free (Result);
          Refuse_Memory (Status, Name);
+
+      --  Anything else the codec raised over the file -- its header read,
+      --  its frame described -- is the file refused, and the decoder and
+      --  the bytes given back: the caller turned it into a status before,
+      --  and what the decoder held stayed held.
+      when others =>
+         if Started then
+            Jpeglib.Decoding.Finalize (Decoder);
+         end if;
+         Free (Input);
+         Free (Result);
+         Refuse (Status, Name, "jpeg");
    end Decode_JPEG;
 
    ---------
