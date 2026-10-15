@@ -181,7 +181,8 @@ package body Model_Runner.CLI.Execute is
       Context_Size  : Natural := 0;
       Cache         : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Halved;
-      Paged         : Boolean := True)
+      Paged         : Boolean := True;
+      Draft_Path    : String := "")
       return Model_Runner.Backend.Backend_Kind
    is
       use type Interfaces.Unsigned_64;
@@ -189,6 +190,7 @@ package body Model_Runner.CLI.Execute is
    begin
       Item.Kind := Opt.Command_Run;
       Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
+      Item.Draft_Path := Model_Runner.Text.To_Bounded (Draft_Path);
       Item.Context_Size := Context_Size;
       Item.Cache := Cache;
       if not Paged then

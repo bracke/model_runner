@@ -3199,7 +3199,8 @@ begin
                     (Option ("--model", ""), Bytes ("--device-memory"), Screen,
                      Context_Size => Whole ("--context-size"),
                      Cache        => Cache_Asked,
-                     Paged        => not Given ("--no-paged")));
+                     Paged        => not Given ("--no-paged"),
+                     Draft_Path   => Option ("--draft-model", "")));
             end;
          end Chosen;
 

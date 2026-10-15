@@ -15060,6 +15060,29 @@ package body Tests.CLI_Cases is
                 (Chosen (512), Model_Runner.Backend.Backend_Device),
               "a dense model whose context the device holds was kept "
               & "off it");
+
+      --  And the draft named beside it: one larger than the device -- a
+      --  sparse file, which takes no disk -- leaves the pair on the
+      --  processor, where the device would have refused the draft.
+      declare
+         Draft : constant String := "obj/wide-context-draft.gguf";
+         Out_File : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Out_File, Ada.Streams.Stream_IO.Out_File, Draft);
+         Ada.Streams.Stream_IO.Set_Index
+           (Out_File, Ada.Streams.Stream_IO.Positive_Count (2 ** 36));
+         Ada.Streams.Stream_IO.Write (Out_File, [1 => 0]);
+         Ada.Streams.Stream_IO.Close (Out_File);
+         Assert (Model_Runner.Backend."="
+                   (Model_Runner.CLI.Execute.Unasked_Backend
+                      (Path, 0, Screen, Context_Size => 512,
+                       Draft_Path => Draft),
+                    Model_Runner.Backend.Backend_CPU),
+                 "a model and a draft the device cannot hold together "
+                 & "were given the device unasked");
+         Ada.Directories.Delete_File (Draft);
+      end;
       Model_Runner.Backend.Device.Close;
       Ada.Directories.Delete_File (Path);
    end The_Unasked_Device_Counts_The_Context;
@@ -15078,7 +15101,7 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Unasked_Device_Counts_The_Context'Access,
          "the device run takes unasked counts the context the load will "
-         & "keep beside a dense model");
+         & "keep beside a dense model, and a draft named beside it");
       Register_Routine
         (T, The_Hub_Is_Read_And_Kept_As_It_Says'Access,
          "the hub's listing is read from each file's own entry, chosen from, "

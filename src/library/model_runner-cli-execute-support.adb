@@ -749,6 +749,12 @@ package body Model_Runner.CLI.Execute.Support is
          Spared : constant Interfaces.Unsigned_64 :=
            (if Adapted then 0 else Seen.Spared);
 
+         --  And a draft named beside it, which the load leaves its file's
+         --  room (Draft_Room): a model and its draft the device would not
+         --  hold together went there, and the draft was refused.
+         Draft : constant Interfaces.Unsigned_64 :=
+           Draft_Room (T.To_String (Item.Draft_Path));
+
          --  The room a dense model's load counts, at the context the run
          --  named or the one the load plans where it named none: weighed
          --  against the budget instead, a model between the two went to
@@ -769,6 +775,7 @@ package body Model_Runner.CLI.Execute.Support is
                   else Natural'Min (Seen.Settings.Context_Length,
                                     L.Planned_Device_Context)),
                  Item.Cache, Session_Paging (On_Device));
+            Room := (if Room > Draft then Room - Draft else 0);
             Takes :=
               Room > 0
               and then (Asked <= Room
@@ -777,13 +784,13 @@ package body Model_Runner.CLI.Execute.Support is
                                  and then Asked - Spared
                                           <= Room - L.Split_Margin));
          else
-            Room := Holds;
+            Room := (if Holds > Draft then Holds - Draft else 0);
             Takes :=
               Weights > 0
-              and then Holds > 0
-              and then (Asked <= Holds
+              and then Room > 0
+              and then (Asked <= Room
                         or else (Spared <= Asked
-                                 and then Asked - Spared <= Holds));
+                                 and then Asked - Spared <= Room));
          end if;
 
          if Takes then

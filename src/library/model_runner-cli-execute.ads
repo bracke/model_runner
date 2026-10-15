@@ -62,6 +62,8 @@ package Model_Runner.CLI.Execute is
    --    room on the device is counted less it.
    --  @param Cache The precision the context is kept in.
    --  @param Paged False where --no-paged is named.
+   --  @param Draft_Path The draft model named, or empty: the device has to
+   --    hold it beside the model.
    --  @return The backend.
    function Unasked_Backend
      (Model_Path    : String;
@@ -70,7 +72,8 @@ package Model_Runner.CLI.Execute is
       Context_Size  : Natural := 0;
       Cache         : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Halved;
-      Paged         : Boolean := True)
+      Paged         : Boolean := True;
+      Draft_Path    : String := "")
       return Model_Runner.Backend.Backend_Kind;
 
    --  The room on the device run leaves beside a model for the draft it was
