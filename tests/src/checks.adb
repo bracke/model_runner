@@ -1944,7 +1944,7 @@ package body Checks is
                         Stop : Natural := From + 2;
                      begin
                         while Stop <= Shown'Last
-                          and then Shown (Stop) not in ' ' | '=' | ']'
+                          and then Shown (Stop) not in ' ' | '=' | ']' | ')'
                         loop
                            Stop := Stop + 1;
                         end loop;

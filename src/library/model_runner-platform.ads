@@ -51,6 +51,19 @@ package Model_Runner.Platform is
    --  @return The token, or an empty string.
    function Hub_Token return String;
 
+   --  The proxy the environment names for HTTPS -- HTTPS_PROXY, or its
+   --  lower-case spelling, or ALL_PROXY -- or an empty string for none.
+   --  Read here, where the environment is reached, for the hub.
+   --
+   --  @return The proxy's URI as given, or an empty string.
+   function Hub_Proxy return String;
+
+   --  The hosts the environment says are reached without the proxy --
+   --  NO_PROXY, or its lower-case spelling -- as given.
+   --
+   --  @return The comma-separated list, or an empty string.
+   function Proxy_Bypass return String;
+
    --  Locale reported by the host, derived from LC_ALL then LANG.
    --
    --  @return Locale identifier, or an empty string when none is set.

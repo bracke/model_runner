@@ -14782,6 +14782,177 @@ package body Tests.Inference_Cases is
       end loop;
    end Jina_Code_Variant_Agrees_With_The_Reference;
 
+   --  The rarer published forms of architectures the engine already reads,
+   --  each crossed with the independent implementation on the processor:
+   --  Falcon-Mamba's gainless time step, B and C norms; GLM4's MROPE on
+   --  text, which pairs NeoX's way; Falcon-40B's second attention norm;
+   --  a Granite mixture's shared expert; MPT's qk_ln; StableLM-2-12B's
+   --  per-head norms; a key-value head count as a per-layer array; and a
+   --  Phi3 that states a window llama.cpp ignores. Each row also checks the
+   --  setting it turns on, so a row that crossed by luck still fails. And
+   --  a DeepSeek2 stating Mistral-Large-3's query temperature is refused
+   --  by name rather than run without it.
+   procedure Rarer_Forms_Agree_With_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 4, 5, 6];
+
+      type Row is record
+         Kind     : Tiny_Model.Fixture_Architecture;
+         Rare     : Boolean := False;
+         Sections : Boolean := False;
+         Window   : Natural := 0;
+         Experts  : Natural := 0;
+         Unit     : Boolean := False;
+         Name     : String (1 .. 12);
+      end record;
+      Rows : constant array (1 .. 8) of Row :=
+        [(Kind => Tiny_Model.Mamba, Unit => True, Name => "falcon-mamba",
+          others => <>),
+         (Kind => Tiny_Model.Glm4, Sections => True, Name => "glm4 mrope  ",
+          others => <>),
+         (Kind => Tiny_Model.Falcon, Rare => True, Name => "falcon-40b  ",
+          others => <>),
+         (Kind => Tiny_Model.Granite, Rare => True, Experts => 4,
+          Name => "granite shex", others => <>),
+         (Kind => Tiny_Model.Mpt, Rare => True, Name => "mpt qk_ln   ",
+          others => <>),
+         (Kind => Tiny_Model.Stablelm, Rare => True, Name => "stablelm-12b",
+          others => <>),
+         (Kind => Tiny_Model.Llama, Rare => True, Name => "kv array    ",
+          others => <>),
+         (Kind => Tiny_Model.Phi3, Window => 2, Name => "phi3 window ",
+          others => <>)];
+
+      Result : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+   begin
+      for Case_Row of Rows loop
+         declare
+            Image : B.Byte_Array_Access;
+         begin
+            Tiny_Model.Build
+              (Image, Kind => Case_Row.Kind, Rare_Form => Case_Row.Rare,
+               Sections => Case_Row.Sections, Window => Case_Row.Window,
+               Experts => Case_Row.Experts,
+               Experts_Used => (if Case_Row.Experts > 0 then 2 else 0),
+               Unit_Ssm_Norms => Case_Row.Unit);
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Under  : Harness (Held'Access);
+               Live   : L.Session;
+               Status : E.Error_Info;
+            begin
+               Start (Under);
+
+               declare
+                  Read : constant L.Configuration := L.Config (Under.Ready);
+                  use type Model_Runner.Kernels.Rotary_Pairing;
+               begin
+                  Assert
+                    ((case Case_Row.Kind is
+                        when Tiny_Model.Mamba => Read.Ssm_Unit_Norms,
+                        when Tiny_Model.Glm4 =>
+                          Read.Pairing = Model_Runner.Kernels.Split,
+                        when Tiny_Model.Falcon => Read.Parallel_Residual,
+                        when Tiny_Model.Granite => Read.Shared_Feed > 0,
+                        when Tiny_Model.Llama =>
+                          Read.KV_Heads = Tiny_Model.KV_Heads,
+                        when Tiny_Model.Phi3 => Read.Window = 0,
+                        when others => True),
+                     Case_Row.Name & ": the setting was not read");
+               end;
+
+               L.Open (Live, Under.Ready, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       Case_Row.Name & ": the session did not open");
+               for Token of Prompt loop
+                  L.Evaluate
+                    (Live, Under.Ready, Token, Result, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          Case_Row.Name & ": evaluation failed: "
+                          & E.Error_Code'Image (Status.Code));
+               end loop;
+               L.Close (Live);
+            end;
+
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Parsed : Containers.Container;
+               Status : E.Error_Info;
+               Second : Reference_Transformer.Model;
+               Loaded, Made : Boolean;
+
+               Tokens   : Reference_Transformer.Token_Vector (Prompt'Range);
+               Expected : Reference_Transformer.Real_Vector
+                 (0 .. Tiny_Model.Vocabulary - 1);
+               Worst : Long_Float := 0.0;
+            begin
+               Containers.Reader.Parse (Parsed, Source, Status => Status);
+               Assert (E.Is_Ok (Status), "the fixture did not parse");
+
+               Reference_Transformer.Load (Second, Parsed, Held, Loaded);
+               Assert (Loaded,
+                       Case_Row.Name & ": the reference did not read it");
+
+               for Index in Prompt'Range loop
+                  Tokens (Index) := Integer (Prompt (Index));
+               end loop;
+
+               Reference_Transformer.Run (Second, Tokens, Expected, Made);
+               Assert (Made, Case_Row.Name & ": the reference made nothing");
+
+               for Index in Expected'Range loop
+                  Worst := Long_Float'Max
+                    (Worst,
+                     abs (Long_Float (Result (N.Element_Count (Index)))
+                          - Expected (Index)));
+               end loop;
+               Assert (Worst < 1.0E-3,
+                       "the engine and the independent implementation "
+                       & "disagree about " & Case_Row.Name & " by"
+                       & Long_Float'Image (Worst));
+
+               Reference_Transformer.Close (Second);
+               Containers.Close (Parsed);
+            end;
+
+            B.Free (Image);
+         end;
+      end loop;
+
+      --  The temperature, refused by name.
+      declare
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Deepseek2, Rare_Form => True,
+            Experts => 4, Experts_Used => 2);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Parsed : Containers.Container;
+            Ready  : L.Model;
+            Local  : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Parsed, Source, Status => Local);
+            Assert (E.Is_Ok (Local), "the deepseek2 fixture did not parse");
+            L.Prepare (Ready, Parsed, Source, Status => Local);
+            Assert (Local.Code = E.Arch_Unsupported_Feature,
+                    "a deepseek2 with a query temperature was prepared: "
+                    & E.Error_Code'Image (Local.Code));
+            L.Close (Ready, Local);
+            Containers.Close (Parsed);
+         end;
+         B.Free (Image);
+      end;
+   end Rarer_Forms_Agree_With_The_Reference;
+
    --  The architecture that attends to nothing, and clamps its gate.
    --
    --  GPT_OSS is the model MXFP4 exists for and the first architecture here
@@ -19771,6 +19942,13 @@ package body Tests.Inference_Cases is
          & "agrees with the independent implementation at every position, "
          & "the text variant beside it, and a file with some of its six "
          & "tensors is refused as a missing tensor");
+      Register_Routine
+        (T, Rarer_Forms_Agree_With_The_Reference'Access,
+         "rarer forms -- Falcon-Mamba's norms, GLM4's sections, "
+         & "Falcon-40B's second norm, a Granite mixture's shared expert, "
+         & "MPT's qk_ln, StableLM-2-12B's head norms, a per-layer key-value "
+         & "count and a Phi3 window -- agree with the independent "
+         & "implementation, and a DeepSeek2 query temperature is refused");
       Register_Routine
         (T, Sinks_And_A_Clamped_Gate'Access,
          "on the device too, a token at a time, as a batch and in bytes, "

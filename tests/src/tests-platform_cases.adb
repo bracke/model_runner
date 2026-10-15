@@ -141,8 +141,9 @@ package body Tests.Platform_Cases is
               and then Now /= Hostkit.Signals.Disposition_Ignore,
               "SIGTERM, which was not ignored, was not taken");
       Signals.Remove;
-      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Hangup, Now)
-              and then Now = Hostkit.Signals.Disposition_Ignore,
+      Assert (Hostkit.Signals.Current_Disposition (Hostkit.Signals.Signal_Hangup, Now),
+              "SIGHUP's disposition could not be read back");
+      Assert (Now = Hostkit.Signals.Disposition_Ignore,
               "SIGHUP was given back as other than ignored");
       Assert (Hostkit.Signals.Set_Disposition
                 (Hostkit.Signals.Signal_Hangup, Hostkit.Signals.Disposition_Default),

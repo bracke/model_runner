@@ -1551,7 +1551,7 @@ package body Benchmarks is
             --  A ratio of times, which is a ratio of rates the other way up.
             IO.Put_Line
               ("  " & Name & Long_Float'Image (Here_Rate / There_Rate)
-               & "x the processor's time on the device"
+               & "x one processor core's time on the device"
                & " (1 is level, below 1 is faster there)");
          end if;
 

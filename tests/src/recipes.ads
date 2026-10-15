@@ -71,8 +71,11 @@ package Recipes is
    --
    --  The rules count tensors of a kind rather than layers: the third
    --  attention-value matrix is the third one seen, and a model that skips
-   --  one skips a number. Kept by the caller because the order matters and
-   --  the order is the file's.
+   --  one skips a number. Kept by the caller because the order matters, and
+   --  the order that matters is llama.cpp's and not the file's: its loader
+   --  sorts the tensors by the layer in their names and then by name, and
+   --  a caller asking Type_For in any other order counts differently. See
+   --  Comes_Before.
    type Progress is record
       Values : Natural := 0;
       Downs  : Natural := 0;
@@ -91,7 +94,72 @@ package Recipes is
       --  Whether the output projection shares the embedding's weights, in
       --  which case the embedding is quantized as the output would be.
       Tied : Boolean := False;
+
+      --  How many matrices the attention-value rules count: every one whose
+      --  name holds attn_v, attn_qkv or attn_kv_b -- llama.cpp's
+      --  n_attention_wv, which is the denominator of the rule that spends
+      --  more bits on some of them.
+      Values : Natural := 0;
    end record;
+
+   --  Whether a tensor's name puts it under the attention-value rules.
+   --
+   --  The fused projection and the key-value one count: llama.cpp's
+   --  category_is_attn_v takes all three, so a model that fuses its
+   --  queries, keys and values has every attn_qkv judged as an attn_v.
+   --
+   --  @param Name The tensor's name.
+   --  @return True for attn_v, attn_qkv and attn_kv_b.
+   function Is_Attention_Value (Name : String) return Boolean;
+
+   --  The order llama.cpp's loader walks a model's tensors in: by the layer
+   --  in the name, a tensor with none before every layer, and then by name.
+   --
+   --  @param Left One tensor's name.
+   --  @param Right Another's.
+   --  @return True when Left comes first.
+   function Comes_Before (Left, Right : String) return Boolean;
+
+   --  Whether llama.cpp quantizes this tensor at all.
+   --
+   --  Its tensor_allows_quantization: only matrices, only names ending in
+   --  "weight", and not the norms, the router, the positional and
+   --  token-type embeddings, the small convolutions and RWKV's mixing
+   --  weights, the relative position bias, the vision tower's patch and
+   --  position embeddings, nor the handful of small per-layer tensors it
+   --  names. A tensor it does not quantize is copied as it stands.
+   --
+   --  @param Name The tensor's name.
+   --  @param Rank How many dimensions it has.
+   --  @return True when it is quantized.
+   function Allows (Name : String; Rank : Positive) return Boolean;
+
+   --  What a tensor is written as when its row will not divide into the
+   --  format's blocks.
+   type Fitted is record
+      Format  : Quantizer.Target := Quantizer.Q8_0;
+
+      --  The fallback could not hold the row either: written as F16.
+      As_Half : Boolean := False;
+
+      --  llama.cpp defines no fallback for the format and stops.
+      Refused : Boolean := False;
+   end record;
+
+   --  llama.cpp's tensor_type_fallback, applied to every quantized tensor
+   --  whether a mixture chose its format or the caller did.
+   --
+   --  A row a 256-wide super-block cannot divide takes a 32-wide format of
+   --  about the bits -- Q2_K and Q3_K Q4_0, Q4_K Q5_0, Q5_K Q5_1, Q6_K
+   --  Q8_0, IQ4_XS IQ4_NL -- and a row not even 32 wide is written F16. A
+   --  32-wide format has no fallback there, which the reference treats as
+   --  an error rather than a choice.
+   --
+   --  @param Wanted The format the tensor was meant to get.
+   --  @param Columns The tensor's first dimension.
+   --  @return What it gets.
+   function Fall_Back
+     (Wanted : Quantizer.Target; Columns : Long_Long_Integer) return Fitted;
 
    --  Whether this model is one the transcribed policy actually covers.
    --
@@ -116,9 +184,10 @@ package Recipes is
    --  @param Name The tensor's name, as the file names it.
    --  @param Model What the model is.
    --  @param Seen How many of each kind have gone before; advanced here.
-   --  @param Columns The tensor's first dimension, for the shapes a
-   --    super-block cannot divide.
-   --  @return The format to write it in.
+   --  @param Columns The tensor's first dimension, for the output
+   --    projection's own rule. A row its format cannot divide is not
+   --    answered here: see Fall_Back.
+   --  @return The format the policy gives it.
    function Type_For
      (Item    : Recipe;
       Name    : String;

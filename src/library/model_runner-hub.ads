@@ -21,11 +21,18 @@ package Model_Runner.Hub is
    --  and the SHA-256 the hub records for it so a whole file can be told
    --  from a corrupt one. Has_Hash is false where the hub gave no digest,
    --  and then the size is all there is to check the file against.
+   --
+   --  Revision is the commit the listing was read at, where the hub said:
+   --  the bytes are fetched from it and not from the branch's head, so a
+   --  repository updated between two runs does not resume one file's old
+   --  bytes with another's new ones. Empty where the hub gave none, and the
+   --  head is read then.
    type Download_File is record
       Name     : Model_Runner.Text.Bounded;
       Size     : Interfaces.Unsigned_64 := 0;
       SHA256   : String (1 .. 64) := [others => '0'];
       Has_Hash : Boolean := False;
+      Revision : Model_Runner.Text.Bounded;
    end record;
 
    --  The files a reference resolves to. A single-file model is one; a
@@ -33,6 +40,116 @@ package Model_Runner.Hub is
    --  first. At most this many shards, which no model reaches.
    Max_Files : constant := 64;
    type File_Set is array (1 .. Max_Files) of Download_File;
+
+   --  A repository's GGUF files as its listing gives them.
+   Max_Listed : constant := 256;
+   type Listing is array (1 .. Max_Listed) of Download_File;
+
+   --  The longest file name a listing's file may have: room is left in a
+   --  bounded name for the owner/repo/ a colliding file is stored under.
+   Max_Name : constant := Model_Runner.Text.Max_Length - 128;
+
+   --  Read the hub's answer about a repository -- /api/models/OWNER/REPO
+   --  with its blobs -- into the GGUF model files it lists.
+   --
+   --  Each file is read from its own entry of the listing's siblings: its
+   --  name, its size, and the SHA-256 its LFS record gives. A file kept in
+   --  the repository itself and not in LFS has no such digest and is
+   --  checked by its size; a digest is never taken from a neighbour's
+   --  entry, which a search of the text near the name did. A vision
+   --  projector (an mmproj file) is no model to run and is left out, as is
+   --  a name that climbs out of the store or is longer than Max_Name. Each
+   --  file carries the commit the listing was read at, the answer's sha.
+   --
+   --  @param Text The answer's body.
+   --  @param Files The model files, in the listing's order.
+   --  @param Count How many.
+   --  @param Ok False where the body is not such an answer.
+   --  @param Reason Why, when Ok is false.
+   procedure Read_Listing
+     (Text   : String;
+      Files  : out Listing;
+      Count  : out Natural;
+      Ok     : out Boolean;
+      Reason : out Model_Runner.Text.Bounded);
+
+   --  Of a repository's files, the one or the shard set whose name carries
+   --  Quant, as Resolve chooses it.
+   --
+   --  @param Listed The repository's model files, from Read_Listing.
+   --  @param Listed_Count How many of Listed are.
+   --  @param Quant The quant asked for.
+   --  @param Repo The repository, for what Reason says.
+   --  @param Files The file, or the shards in order.
+   --  @param Count How many.
+   --  @param Ok True where one file or one whole shard set matched.
+   --  @param Reason Why, when Ok is false.
+   procedure Choose_Quant
+     (Listed       : Listing;
+      Listed_Count : Natural;
+      Quant        : String;
+      Repo         : String;
+      Files        : out File_Set;
+      Count        : out Natural;
+      Ok           : out Boolean;
+      Reason       : out Model_Runner.Text.Bounded);
+
+   --  Of a repository's files, the model that best fits Budget, as Pick
+   --  chooses it: the largest no bigger than it, or the smallest where
+   --  none fits. A shard set is weighed and taken only where all of its
+   --  shards are listed.
+   --
+   --  @param Listed The repository's model files, from Read_Listing.
+   --  @param Listed_Count How many of Listed are.
+   --  @param Budget The bytes a model may be; not zero.
+   --  @param Repo The repository, for what Reason says.
+   --  @param Files The chosen model's file, or shards in order.
+   --  @param Count How many.
+   --  @param Ok True where a model was chosen.
+   --  @param Reason Why none was, or that the smallest was taken.
+   procedure Choose_Fit
+     (Listed       : Listing;
+      Listed_Count : Natural;
+      Budget       : Interfaces.Unsigned_64;
+      Repo         : String;
+      Files        : out File_Set;
+      Count        : out Natural;
+      Ok           : out Boolean;
+      Reason       : out Model_Runner.Text.Bounded);
+
+   --  Where a file of a repository is fetched from: at the commit given,
+   --  or the main branch where none is, each segment of its name
+   --  percent-encoded, so a space, a '#' or a '?' in a name fetches that
+   --  file and not another path.
+   --
+   --  @param Repo The owner/repo.
+   --  @param Revision The commit, or empty for the main branch.
+   --  @param Name The file's name within the repository.
+   --  @return The URL.
+   function File_URL (Repo, Revision, Name : String) return String;
+
+   --  The proxy a request to Host_Name goes through, by the environment's
+   --  convention: Setting (HTTPS_PROXY) unless Bypass (NO_PROXY) names the
+   --  host -- a comma-separated list of names, each matching itself and
+   --  every name ending in "." and it, or "*" for every host.
+   --
+   --  @param Setting The proxy's URI, or empty for none.
+   --  @param Bypass The hosts that are reached directly.
+   --  @param Host_Name The host a request is for.
+   --  @return The proxy's URI, or empty for a direct connection.
+   function Proxy_For (Setting, Bypass, Host_Name : String) return String;
+
+   --  How long a connection may take to be made, and a read to be answered,
+   --  in milliseconds: past them a download fails, and the next run
+   --  resumes it, where it had waited for ever on a link that had gone.
+   --  The free space a download asks for past the bytes it still needs:
+   --  a ranged fetch's chunk of 64 MB is on the disk beside the whole file
+   --  while the chunks are joined, and as much again is left for the file
+   --  system and whatever else is writing.
+   Join_Headroom : constant := 2 * 64 * 1024 * 1024;
+
+   Connect_Timeout_Ms : constant := 30_000;
+   Read_Timeout_Ms    : constant := 60_000;
 
    --  Whether a name is a hub reference: owner/repo:quant, a slash in the
    --  part before the colon so that a Windows drive letter or a time is not
@@ -120,8 +237,13 @@ package Model_Runner.Hub is
    --  from there rather than starting over, which is what makes a
    --  multi-gigabyte model worth trying on a shaky link. Size is the file's
    --  whole size, so a part can be told from a whole; zero where it is not
-   --  known, and then the download is not resumed. HF_TOKEN, where the
-   --  environment carries it, authorizes a gated repository.
+   --  known, and then the whole length is not checked as it arrives.
+   --  HF_TOKEN, where the environment carries it, authorizes a gated
+   --  repository.
+   --
+   --  One run fetches a file at a time: a second asking for the same file
+   --  while the first is under way is told so and fetches nothing, where
+   --  the two had written the same part and its chunks over each other.
    --
    --  The file arrived whole only when its bytes match the hub's SHA-256,
    --  where the hub gave one: a truncated or corrupt download is a failure,

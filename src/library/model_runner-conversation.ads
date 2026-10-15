@@ -127,6 +127,16 @@ package Model_Runner.Conversation is
       Arguments : String;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  A reply with the reasoning it opened and never closed closed: what a
+   --  turn cut off by its token limit leaves. Committed open, the rest of
+   --  the reasoning became the turn's visible words in every later turn,
+   --  where a template that splits a turn at its close found none. A reply
+   --  whose reasoning closes, or that opens with none, comes back as it is.
+   --
+   --  @param Reply The reply as it came.
+   --  @return The reply, its reasoning closed where it was left open.
+   function Closed_Reasoning (Reply : String) return String;
+
    --  Append a model's reply as the turn it is.
    --
    --  A reply that asks for tools is what the model said and then the

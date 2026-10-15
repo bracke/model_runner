@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 116) of Registry_Row :=
+   Registry : constant array (1 .. 117) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -116,6 +116,8 @@ package body Model_Runner.CLI.Options is
        Text ("tool_result_parts")),
       (Text ("--no-normalize"), [Command_Embed => True, others => False],
        Text ("no_normalize")),
+      (Text ("--normalize"), [Command_Embed => True, others => False],
+       Text ("normalize")),
       (Text ("--truncate"), [Command_Embed => True, others => False],
        Text ("truncate")),
       (Text ("--query"), [Command_Embed => True, others => False],
@@ -905,6 +907,7 @@ package body Model_Runner.CLI.Options is
          Flag_Values,
          Flag_Arithmetic,
          Flag_Pooling,
+         Flag_Normalize,
          Flag_Load_Session,
          Flag_Save_Session,
 
@@ -1710,12 +1713,30 @@ package body Model_Runner.CLI.Options is
                      Result.No_Cache := True;
 
                   elsif Name = "--no-normalize" then
+                     --  One setting with --normalize: the second of the
+                     --  two is refused as a repeat.
+                     Mark (Flag_Normalize, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
                      if not Good then
                         return;
                      end if;
                      Result.Normalize := False;
+
+                  elsif Name = "--normalize" then
+                     --  The norm a vector is divided by, as the other
+                     --  runtime's --embd-normalize names it: nought the
+                     --  largest magnitude scaled to sixteen-bit integers,
+                     --  two the Euclidean length, any other the p-norm.
+                     Natural_Value (Flag_Normalize, 0, 16,
+                                    Result.Norm_Power, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Normalize := True;
                   elsif Name = "--truncate" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
@@ -2988,6 +3009,16 @@ package body Model_Runner.CLI.Options is
       if Result.Prompt_Kind = Prompt_Interactive and then Result.Agent then
          Status := E.Make (E.CLI_Option_Combination);
          E.Add_Text (Status, "option", "--agent", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--interactive", E.Param_Identifier);
+         return;
+      end if;
+      --  An interactive session makes room by compacting the conversation,
+      --  not by dropping its oldest positions: --context-shift was taken
+      --  there and never read.
+      if Result.Prompt_Kind = Prompt_Interactive and then Result.Context_Shift /= 0
+      then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--context-shift", E.Param_Identifier);
          E.Add_Text (Status, "other", "--interactive", E.Param_Identifier);
          return;
       end if;

@@ -575,6 +575,18 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Reset then
             Conv.Clear (Messages);
+            --  The conversation starts over as the session started it: with
+            --  the --system message, which a reset had dropped with the rest.
+            if Item.Has_System and then Item.System_Text /= null then
+               declare
+                  Restored : E.Error_Info;
+               begin
+                  Conv.Set_System (Messages, Item.System_Text.all, Restored);
+                  if E.Is_Error (Restored) then
+                     Pres.Report (Screen, Restored);
+                  end if;
+               end;
+            end if;
             L.Reset (Session);
             Model_Runner.CLI.Pictures.Release (Pictures);
             Free_Text (Next_Picture);
@@ -762,7 +774,13 @@ package body Model_Runner.CLI.Interactive is
                   else Line (Asked.First .. Asked.Last));
                Outcome : E.Error_Info;
             begin
-               Conv.Set_System (Messages, Content, Outcome);
+               --  Words that are not UTF-8 are refused here, as a typed
+               --  turn's are: taken in, every turn after failed to tokenize.
+               if not Model_Runner.UTF8.Is_Valid (Content) then
+                  Outcome := E.Make (E.IO_Invalid_UTF8);
+               else
+                  Conv.Set_System (Messages, Content, Outcome);
+               end if;
                if E.Is_Error (Outcome) then
                   Pres.Report (Screen, Outcome);
                else
@@ -890,6 +908,10 @@ package body Model_Runner.CLI.Interactive is
                --  Nothing asked for it. A tool answer before the model has
                --  said anything is an answer to a question nobody put.
                Pres.Put_Note (Screen, "cli.interactive.tool_unasked");
+            elsif not Model_Runner.UTF8.Is_Valid (Line (Asked.First .. Asked.Last))
+            then
+               --  Refused as a typed turn is: see Submit.
+               Pres.Report (Screen, E.Make (E.IO_Invalid_UTF8));
             else
                Take_Turn (Line (Asked.First .. Asked.Last), Conv.Tool_Role);
             end if;
@@ -1049,6 +1071,12 @@ package body Model_Runner.CLI.Interactive is
          Rendered : Text_Access := null;
          Outcome  : E.Error_Info;
          Request  : Gen.Request;
+         --  How many times this turn has had the conversation compacted
+         --  for room: once keeping the last few turns, and once more
+         --  keeping only the one being asked, where the first did not make
+         --  room -- turns shorter than their digest lines are not made any
+         --  shorter by folding them.
+         Compactions : Natural := 0;
       begin
          Turn_Taken := False;
          Turns_Asked := Turns_Asked + 1;
@@ -1083,6 +1111,7 @@ package body Model_Runner.CLI.Interactive is
             return;
          end if;
 
+         <<Rendering>>
          Render (Rendered, Outcome);
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
@@ -1093,7 +1122,9 @@ package body Model_Runner.CLI.Interactive is
             return;
          end if;
 
-         Request.Max_Tokens := Item.Max_Tokens;
+         --  The room a turn of a conversation is given; see Reply_Tokens.
+         --  The plain run's 256 cut a reasoning model off mid-thought.
+         Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
          Request.Sampling := Item.Sampling;
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
@@ -1169,17 +1200,50 @@ package body Model_Runner.CLI.Interactive is
          end;
 
          if Last_Result.Reason = Gen.Runtime_Error then
-            Pres.Report (Screen, Last_Result.Error);
-            --  An unfinished assistant response is not committed, and the
-            --  session is reset so that the next turn re-evaluates the prior
-            --  committed conversation.
-            Conv.Drop_Last (Messages, 1);
-            --  And the pictures it gave, so the next turn does not take them
-            --  for its own: a picture set counts what it holds, not which.
-            Model_Runner.CLI.Pictures.Release (Pictures);
-            L.Reset (Session);
-            Have_Stats := False;
-            return;
+            declare
+               --  A turn the context had no room for: refused before any
+               --  of it was read, or out of room as it answered. Either way
+               --  the session holds what it committed and no more.
+               Out_Of_Room : constant Boolean :=
+                 Last_Result.Error.Code in E.Generation_Prompt_Too_Long
+                                         | E.Generation_Context_Exhausted;
+               Gone : Natural := 0;
+            begin
+               --  The conversation compacted, as a /work agent's is, and the
+               --  turn asked again; twice at most a turn.
+               while Out_Of_Room and then Gone = 0 and then Compactions < 2 loop
+                  Compactions := Compactions + 1;
+                  Conv.Compact
+                    (Messages, Keep_Recent => (if Compactions = 1 then 6 else 1),
+                     Dropped => Gone);
+                  if Gone > 0 then
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.compacted",
+                        [Loc.Named ("value", T.Image (Long_Long_Integer (Gone)))]);
+                     goto Rendering;
+                  end if;
+               end loop;
+
+               Pres.Report (Screen, Last_Result.Error);
+               --  An unfinished assistant response is not committed.
+               Conv.Drop_Last (Messages, 1);
+               --  And the pictures it gave, so the next turn does not take them
+               --  for its own: a picture set counts what it holds, not which.
+               Model_Runner.CLI.Pictures.Release (Pictures);
+               --  The session is read again from the start only where it
+               --  may hold what was not committed: an error of its own, or
+               --  recurrent states a stopped batch may have moved. A turn
+               --  refused for room read nothing, and the next turn's prefix
+               --  reuse keeps what the cache holds -- it cost a thirty
+               --  thousand token conversation read again whole.
+               if not Out_Of_Room
+                 or else L.States_Kept (Session) /= Natural'Last
+               then
+                  L.Reset (Session);
+               end if;
+               Have_Stats := False;
+               return;
+            end;
          end if;
 
          if Last_Result.Reason = Gen.Cancelled then
@@ -1206,6 +1270,14 @@ package body Model_Runner.CLI.Interactive is
          --  said and what it asked for, so that the calls reach the next
          --  turn as the model's own template writes them rather than as the
          --  model happened to spell them.
+         --  A reply the token limit stopped is said to have been: nothing
+         --  else would say the answer was cut.
+         if Last_Result.Reason = Gen.Maximum_Tokens then
+            Pres.Put_Note
+              (Screen, "cli.interactive.reply_cut",
+               [Loc.Named ("value", T.Image (Long_Long_Integer (Request.Max_Tokens)))]);
+         end if;
+
          if Tools /= null and then Model_Runner.Tools.Count (Tools.all) > 0
          then
             declare
@@ -1213,8 +1285,11 @@ package body Model_Runner.CLI.Interactive is
             begin
                --  Read in the shape the model's own format writes calls,
                --  against the tools it was offered, as the agent reads them.
+               --  Reasoning the limit cut off is closed first.
                Conv.Append_Reply
-                 (Messages, Gen.Generated_Text (Last_Result), Outcome,
+                 (Messages,
+                  Conv.Closed_Reasoning (Gen.Generated_Text (Last_Result)),
+                  Outcome,
                   Reading,
                   Syntax  => Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
                   Offered => Tools);
@@ -1225,7 +1300,8 @@ package body Model_Runner.CLI.Interactive is
          else
             Conv.Append
               (Messages, Conv.Assistant_Role,
-               Gen.Generated_Text (Last_Result), Outcome);
+               Conv.Closed_Reasoning (Gen.Generated_Text (Last_Result)),
+               Outcome);
          end if;
 
          if E.Is_Error (Outcome) then

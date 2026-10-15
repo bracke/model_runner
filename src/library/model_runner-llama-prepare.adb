@@ -500,6 +500,22 @@ begin
             Status  => Status);
       end Build_KV_B;
 
+      --  A normalization's gain of one at every element, for a norm the
+      --  file states and carries no weight for; recorded as a decoded
+      --  norm is. Null where the room was not there.
+      procedure Unit_Gain
+        (Width  : Element_Count;
+         Result : out T.Real_Array_Access) is
+      begin
+         T.Allocate (Width, Result);
+         if Result /= null then
+            Result.all := [others => 1.0];
+            Mem.Record_Allocation
+              (Item.Accounting, Mem.Converted_Weights,
+               Interfaces.Unsigned_64 (Width) * 4);
+         end if;
+      end Unit_Gain;
+
       --  One block resolved, of the stack or past it. A procedure
       --  rather than the loop's body so that the blocks past the stack
       --  are resolved by the same words: they are full attention layers
@@ -643,6 +659,42 @@ begin
             if E.Is_Error (Status) then
                return;
             end if;
+
+         --  An MPT converted with qk_ln normalizes the whole of its
+         --  queries and the whole of its keys, centred, each with a gain
+         --  and where stated a shift, as mpt.cpp does. Left unread, such a
+         --  file ran as the plain MPT it is not.
+         elsif Item.Settings.Kind = Mpt
+           and then Containers.Find_Tensor
+                      (Source, Layer_Key (Index, "attn_q_norm.weight")) /= 0
+         then
+            Resolve_Norm
+              (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
+               Wide, Current.Query_Whole_Norm, Status);
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  KV, Current.Key_Whole_Norm, Status);
+            end if;
+            if E.Is_Ok (Status)
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_q_norm.bias")) /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_q_norm.bias"),
+                  Wide, Current.Query_Whole_Norm_Bias, Status);
+            end if;
+            if E.Is_Ok (Status)
+              and then Containers.Find_Tensor
+                         (Source, Layer_Key (Index, "attn_k_norm.bias")) /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.bias"),
+                  KV, Current.Key_Whole_Norm_Bias, Status);
+            end if;
+            if E.Is_Error (Status) then
+               return;
+            end if;
          end if;
 
          --  Gemma2 normalizes what each sublayer produced as well as
@@ -682,6 +734,34 @@ begin
             if E.Is_Error (Status) then
                return;
             end if;
+         end if;
+
+         --  Falcon-40B and -180B normalize attention's input with a norm
+         --  of its own (ln_attn, written attn_norm_2) and the
+         --  feed-forward's with attn_norm (ln_mlp), both of the layer's
+         --  input: the parallel residual GPT-NeoX's is, the feed norm read
+         --  from the input kept. Read as Falcon-7B's one norm, attention
+         --  took the feed-forward's.
+         if Item.Settings.Kind = Falcon
+           and then Containers.Find_Tensor
+                      (Source, Layer_Key (Index, "attn_norm_2.weight")) /= 0
+         then
+            Current.Feed_Norm := Current.Attention_Norm;
+            Current.Feed_Norm_Bias := Current.Attention_Norm_Bias;
+            Current.Attention_Norm := null;
+            Current.Attention_Norm_Bias := null;
+            Resolve_Norm
+              (Item, Source, Layer_Key (Index, "attn_norm_2.weight"),
+               Width, Current.Attention_Norm, Status);
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_norm_2.bias"),
+                  Width, Current.Attention_Norm_Bias, Status);
+            end if;
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Item.Settings.Parallel_Residual := True;
          end if;
 
          if Is_Linear
@@ -836,6 +916,21 @@ begin
                            State, Current.Ssm_C_Norm, Status);
                      end if;
                      if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                  --  Falcon-Mamba's: the same three, with no gain -- a gain
+                  --  of one each, which every path that reads Jamba's
+                  --  already applies, on the processor and on the device.
+                  elsif Item.Settings.Ssm_Unit_Norms then
+                     Unit_Gain (Rank, Current.Ssm_Dt_Norm);
+                     Unit_Gain (State, Current.Ssm_B_Norm);
+                     Unit_Gain (State, Current.Ssm_C_Norm);
+                     if Current.Ssm_Dt_Norm = null
+                       or else Current.Ssm_B_Norm = null
+                       or else Current.Ssm_C_Norm = null
+                     then
+                        Status := E.Make (E.Memory_Allocation_Failed);
                         return;
                      end if;
                   end if;
@@ -1436,26 +1531,6 @@ begin
             end;
          end if;
 
-         --  StableLM's larger sizes normalize each query and key head
-         --  with a centred normalization and a gain of its own a head,
-         --  which is a third kind of head normalization this does not
-         --  compute -- neither the shared-gain root-mean-square one qwen3
-         --  has nor the whole-projection one olmo2 has. A file that
-         --  carries it (the 12B does, the 1.6B does not) is refused by
-         --  name rather than run with the normalization silently dropped.
-         if Item.Settings.Kind = Stablelm
-           and then Containers.Find_Tensor
-                      (Source, Layer_Key (Index, "attn_q_norm.weight"))
-                    /= 0
-         then
-            Status := E.Make (E.Arch_Unsupported_Feature);
-            E.Add_Text
-              (Status, "feature",
-               "stablelm per-head query and key normalization",
-               E.Param_Identifier);
-            return;
-         end if;
-
          --  Qwen3 normalizes each query head and each key head before
          --  the rotation, with one gain per element of a head shared
          --  across the heads. Required for the architectures that have
@@ -1488,7 +1563,10 @@ begin
          --  itself carries none and takes Falcon's plain path, while
          --  Command-R+ carries them. Read together, so a file with one is
          --  not taken for one with the other missing.
-         if Item.Settings.Kind = Command_R
+         --  StableLM's larger sizes (the 12B; the 1.6B carries none) do
+         --  the same as Command-R+: a centred normalization of each head,
+         --  with a gain of its own a head, before the rotation.
+         if Item.Settings.Kind in Command_R | Stablelm
            and then Containers.Find_Tensor
                       (Source, Layer_Key (Index, "attn_q_norm.weight"))
                     /= 0
@@ -1877,42 +1955,68 @@ begin
          end if;
       end if;
 
-      --  A model that carries a scoring head -- cls.output.weight, one row
-      --  down to a relevance score -- is a reranker even where its file
+      --  A model that carries a scoring head -- cls.output.weight, a row or
+      --  a few down to the score -- is a reranker even where its file
       --  forgot to say so with a pooling type, as several published GGUF
       --  conversions do. Read as one, so it scores rather than handing back
-      --  a vector nothing asked for.
+      --  a vector nothing asked for. The head alone says so: a reranker
+      --  with no dense before it (jina-reranker-v1-tiny-en, Qwen3-Reranker)
+      --  is one too.
       if E.Is_Ok (Status)
         and then Item.Settings.Pooling /= Pool_Rank
         and then Containers.Find_Tensor (Source, "cls.output.weight") /= 0
-        and then Containers.Find_Tensor (Source, "cls.weight") /= 0
       then
          Item.Settings.Pooling := Pool_Rank;
       end if;
 
       --  The scoring head of a reranker, where the pooling type asks for
-      --  one: a dense of the embedding width and its bias, then a single
-      --  row down to the score and its bias. Read once a model, beside the
-      --  embedding tensors, so the ranking pass has them in hand.
+      --  one, as the other runtime builds it: a dense of the embedding
+      --  width, its bias and a tanh where the file carries the dense; then
+      --  the rows down to the scores, and their bias where it has one.
+      --  Read once a model, beside the embedding tensors, so the ranking
+      --  pass has them in hand.
       if E.Is_Ok (Status) and then Item.Settings.Pooling = Pool_Rank then
-         Resolve
-           (Item, Source, "cls.weight", Width, Width,
-            Item.Rank_Dense, Status, Repack);
-         if E.Is_Ok (Status) then
-            Resolve_Norm
-              (Item, Source, "cls.bias", Width, Item.Rank_Dense_Bias,
-               Status);
-         end if;
-         if E.Is_Ok (Status) then
+         if Containers.Find_Tensor (Source, "cls.weight") /= 0 then
             Resolve
-              (Item, Source, "cls.output.weight", 1, Width,
-               Item.Rank_Out, Status, Repack);
+              (Item, Source, "cls.weight", Width, Width,
+               Item.Rank_Dense, Status, Repack);
+            if E.Is_Ok (Status)
+              and then Containers.Find_Tensor (Source, "cls.bias") /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, "cls.bias", Width, Item.Rank_Dense_Bias,
+                  Status);
+            end if;
          end if;
-         if E.Is_Ok (Status) then
-            Resolve_Norm
-              (Item, Source, "cls.output.bias", 1, Item.Rank_Out_Bias,
-               Status);
-         end if;
+
+         declare
+            At_Out : constant Natural :=
+              Containers.Find_Tensor (Source, "cls.output.weight");
+            --  Its rows: one for a score, two for Qwen3-Reranker's yes and
+            --  no, as many as the file's classes.
+            Rows : constant Element_Count :=
+              (if At_Out /= 0
+                 and then Containers.Tensor_Rank (Source, At_Out) >= 2
+               then Element_Count
+                      (Containers.Tensor_Dimension (Source, At_Out, 2))
+               else 1);
+         begin
+            --  A file that says it ranks and carries no rows to rank with
+            --  still loads, for what else it is asked; it is refused where
+            --  a score is asked of it (Rank).
+            if E.Is_Ok (Status) and then At_Out /= 0 then
+               Resolve
+                 (Item, Source, "cls.output.weight", Rows, Width,
+                  Item.Rank_Out, Status, Repack);
+            end if;
+            if E.Is_Ok (Status)
+              and then Containers.Find_Tensor (Source, "cls.output.bias") /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, "cls.output.bias", Rows, Item.Rank_Out_Bias,
+                  Status);
+            end if;
+         end;
          if E.Is_Error (Status) then
             Fail (Status);
             return;

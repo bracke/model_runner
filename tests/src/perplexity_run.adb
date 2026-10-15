@@ -545,8 +545,12 @@ package body Perplexity_Run is
                      end if;
 
                      if Comparing then
+                        --  At the chunk's length, as the session under test:
+                        --  opened at the model's own, a 128k model's baseline
+                        --  asked for its whole context every chunk, and a
+                        --  chunk stretched past the trained one overflowed it.
                         L.Open
-                          (Baseline_Live, Base.Engine,
+                          (Baseline_Live, Base.Engine, Context => Chunk,
                            Workers => Where, Status => Status);
                         if E.Is_Error (Status) then
                            Note ("a baseline session would not open");

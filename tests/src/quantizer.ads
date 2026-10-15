@@ -130,15 +130,19 @@ package Quantizer is
    --  attention, and llama.cpp's `--imatrix` is this.
    --
    --  IT IS NOT THE SAME SEARCH WITH A WEIGHT VECTOR ADDED. The reference
-   --  takes a different path for a weighted quantization: the candidate
-   --  window is wider and finer -- thirty-seven steps from -0.9 by 0.05,
-   --  against twenty-one from -1.0 by 0.1 -- and the sub-block scales it
-   --  finds are then fitted by a search of their own rather than divided by
-   --  their largest. Two searches where the plain path has one.
+   --  takes a different path for a weighted quantization in every format
+   --  but Q8_0, each its own `quantize_row_*_impl`: for the k-quants with a
+   --  minimum the candidate window is wider and finer -- thirty-seven steps
+   --  from -0.9 by 0.05, against twenty-one from -1.0 by 0.1 -- and the
+   --  sub-block scales it finds are then fitted by a search of their own
+   --  rather than divided by their largest; Q3_K searches where its plain
+   --  path refines; and Q4_0 to Q5_1 measure each value against the spread
+   --  of its whole row. Q8_0 has no weighted path and is written plainly.
    --
    --  Weights must be as long as one row of the matrix, and are the same for
    --  every row of it: the matrix says what a column is worth, and a column
-   --  is worth that wherever it appears.
+   --  is worth that wherever it appears. Values must be a whole number of
+   --  rows.
    --
    --  @param Values Values to encode, a whole number of blocks of them.
    --  @param Weights One row's worth of importance, repeated per row by the
@@ -149,6 +153,39 @@ package Quantizer is
      (Values  : Real_Array;
       Weights : Real_Array;
       Into    : Target) return Byte_Array;
+
+   --  Whether a matrix changes what a format writes: every one but Q8_0,
+   --  whose reference takes the matrix and does not read it.
+   --
+   --  @param Item The format.
+   --  @return True when Encode_Weighted differs from Encode for it.
+   function Has_Weighted_Path (Item : Target) return Boolean
+   is (Item /= Q8_0);
+
+   --  Encode into a buffer on the heap, for a tensor too large for the
+   --  stack: the same bytes Encode returns.
+   --
+   --  @param Values Values to encode, a whole number of blocks of them.
+   --  @param Into Which format to write.
+   --  @param Result The encoded bytes, indexed from zero; the caller frees
+   --    them.
+   procedure Encode_Into
+     (Values : Real_Array;
+      Into   : Target;
+      Result : out Model_Runner.Bytes.Byte_Array_Access);
+
+   --  Encode_Weighted into a buffer on the heap.
+   --
+   --  @param Values Values to encode, a whole number of rows of them.
+   --  @param Weights One row's worth of importance.
+   --  @param Into Which format to write.
+   --  @param Result The encoded bytes, indexed from zero; the caller frees
+   --    them.
+   procedure Encode_Weighted_Into
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target;
+      Result  : out Model_Runner.Bytes.Byte_Array_Access);
 
    --  What a name says, or a name the caller mistyped.
    --

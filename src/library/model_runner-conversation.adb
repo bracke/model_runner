@@ -4,6 +4,7 @@ with Jsonlib.Parsers;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Conversation is
@@ -616,6 +617,28 @@ package body Model_Runner.Conversation is
    -- Append_Reply --
    -------------------
 
+   ----------------------
+   -- Closed_Reasoning --
+   ----------------------
+
+   function Closed_Reasoning (Reply : String) return String is
+      Lead : Positive := Reply'First;
+   begin
+      if Ada.Strings.Fixed.Index (Reply, "</think>") /= 0 then
+         return Reply;
+      end if;
+      while Lead <= Reply'Last
+        and then Reply (Lead) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+      loop
+         Lead := Lead + 1;
+      end loop;
+      if Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>"
+      then
+         return Reply & ASCII.LF & "</think>";
+      end if;
+      return Reply;
+   end Closed_Reasoning;
+
    procedure Append_Reply
      (Item    : in out History;
       Reply   : String;
@@ -720,10 +743,15 @@ package body Model_Runner.Conversation is
       Content : String;
       Status  : out E.Error_Info)
    is
+      type Messages_Access is access Message_Array;
+      type Calls_Access is access Call_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Message_Array, Messages_Access);
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Call_Array, Calls_Access);
+
       Had_System : constant Boolean := Has_System (Item);
       Count      : constant Natural := Item.Used;
-      Saved      : constant Message_Array := Item.Messages;
-      Asked      : constant Call_Array := Item.Calls;
    begin
       Status := E.Success;
 
@@ -735,10 +763,18 @@ package body Model_Runner.Conversation is
       --  Rebuild the history so that the system message is always first and
       --  the storage pool has no gap where a replaced one used to be. The
       --  existing content is copied out first, because rebuilding overwrites
-      --  the pool from the start.
+      --  the pool from the start -- onto the heap, not the stack: a history
+      --  of sixteen megabytes and its tables, copied onto the task's stack,
+      --  ran past it.
       declare
-         Scratch : constant String := Item.Storage.all (1 .. Item.Filled);
-         First   : constant Positive := (if Had_System then 2 else 1);
+         Scratch_Copy : Storage_Access :=
+           new String'(Item.Storage.all (1 .. Item.Filled));
+         Saved_Copy   : Messages_Access := new Message_Array'(Item.Messages);
+         Asked_Copy   : Calls_Access := new Call_Array'(Item.Calls);
+         Scratch      : String renames Scratch_Copy.all;
+         Saved        : Message_Array renames Saved_Copy.all;
+         Asked        : Call_Array renames Asked_Copy.all;
+         First        : constant Positive := (if Had_System then 2 else 1);
          Calls_Before : constant Natural := Item.Call_Used;
 
          --  A rebuild that cannot finish -- the new text, or what it moves
@@ -753,73 +789,87 @@ package body Model_Runner.Conversation is
             Item.Calls := Asked;
             Item.Call_Used := Calls_Before;
          end Put_Back;
-      begin
-         Item.Used := 0;
-         Item.Filled := 0;
-         Item.Call_Used := 0;
 
-         if Content'Length > 0 then
-            Append (Item, System_Role, Content, Status);
-            if E.Is_Error (Status) then
-               Put_Back;
-               return;
-            end if;
-         end if;
+         procedure Rebuild is
+         begin
+            Item.Used := 0;
+            Item.Filled := 0;
+            Item.Call_Used := 0;
 
-         for Index in First .. Count loop
-            declare
-               Row : Message renames Saved (Index);
-            begin
-               --  A turn that asked for tools and said nothing is still a
-               --  turn, and rebuilding the history must not be where it
-               --  stops being one.
-               Add (Item, Row.Sender,
-                    Scratch (Row.Offset + 1 .. Row.Offset + Row.Length),
-                    Allow_Empty => Row.Calls > 0, Status => Status);
+            if Content'Length > 0 then
+               Append (Item, System_Role, Content, Status);
                if E.Is_Error (Status) then
                   Put_Back;
                   return;
                end if;
+            end if;
 
-               --  Its parts -- a picture -- move with it.
-               if Row.Parts_Length > 0 then
-                  declare
-                     Parts_At : Natural;
-                     Ok       : Boolean;
-                  begin
-                     Store (Item, Scratch (Row.Parts_Offset + 1 .. Row.Parts_Offset + Row.Parts_Length),
-                            Parts_At, Ok);
-                     if not Ok then
-                        Put_Back;
-                        Status := E.Make (E.Conversation_Too_Long);
-                        E.Add_Integer
-                          (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes), E.Param_Bytes);
-                        return;
-                     end if;
-                     Item.Messages (Item.Used).Parts_Offset := Parts_At;
-                     Item.Messages (Item.Used).Parts_Length := Row.Parts_Length;
-                  end;
-               end if;
+            for Index in First .. Count loop
+               declare
+                  Row : Message renames Saved (Index);
+               begin
+                  --  A turn that asked for tools and said nothing is still a
+                  --  turn, and rebuilding the history must not be where it
+                  --  stops being one.
+                  Add (Item, Row.Sender,
+                       Scratch (Row.Offset + 1 .. Row.Offset + Row.Length),
+                       Allow_Empty => Row.Calls > 0, Status => Status);
+                  if E.Is_Error (Status) then
+                     Put_Back;
+                     return;
+                  end if;
 
-               for Which in 0 .. Row.Calls - 1 loop
-                  declare
-                     From : Call_Row renames Asked (Row.First_Call + Which);
-                  begin
-                     Append_Call
-                       (Item,
-                        Scratch (From.Name_Offset + 1
-                                 .. From.Name_Offset + From.Name_Length),
-                        Scratch (From.Args_Offset + 1
-                                 .. From.Args_Offset + From.Args_Length),
-                        Status);
-                     if E.Is_Error (Status) then
-                        Put_Back;
-                        return;
-                     end if;
-                  end;
-               end loop;
-            end;
-         end loop;
+                  --  Its parts -- a picture -- move with it.
+                  if Row.Parts_Length > 0 then
+                     declare
+                        Parts_At : Natural;
+                        Ok       : Boolean;
+                     begin
+                        Store (Item, Scratch (Row.Parts_Offset + 1 .. Row.Parts_Offset + Row.Parts_Length),
+                               Parts_At, Ok);
+                        if not Ok then
+                           Put_Back;
+                           Status := E.Make (E.Conversation_Too_Long);
+                           E.Add_Integer
+                             (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes), E.Param_Bytes);
+                           return;
+                        end if;
+                        Item.Messages (Item.Used).Parts_Offset := Parts_At;
+                        Item.Messages (Item.Used).Parts_Length := Row.Parts_Length;
+                     end;
+                  end if;
+
+                  for Which in 0 .. Row.Calls - 1 loop
+                     declare
+                        From : Call_Row renames Asked (Row.First_Call + Which);
+                     begin
+                        Append_Call
+                          (Item,
+                           Scratch (From.Name_Offset + 1
+                                    .. From.Name_Offset + From.Name_Length),
+                           Scratch (From.Args_Offset + 1
+                                    .. From.Args_Offset + From.Args_Length),
+                           Status);
+                        if E.Is_Error (Status) then
+                           Put_Back;
+                           return;
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end Rebuild;
+      begin
+         Rebuild;
+         Free_Storage (Scratch_Copy);
+         Free (Saved_Copy);
+         Free (Asked_Copy);
+      exception
+         when others =>
+            Free_Storage (Scratch_Copy);
+            Free (Saved_Copy);
+            Free (Asked_Copy);
+            raise;
       end;
    end Set_System;
 
@@ -879,7 +929,13 @@ package body Model_Runner.Conversation is
       D_Len        : Natural := 0;
 
       procedure Add (S : String) is
-         Take : constant Natural := Natural'Min (S'Length, Synopsis_Cap - D_Len);
+         Room : constant Natural := Natural'Min (S'Length, Synopsis_Cap - D_Len);
+         --  Cut short, at a whole character: half of one is not UTF-8, and
+         --  a task carrying it could never be tokenized again.
+         Take : constant Natural :=
+           (if Room = S'Length then Room
+            else Model_Runner.UTF8.Safe_Prefix_Length
+                   (S (S'First .. S'First + Room - 1)));
       begin
          if Take > 0 then
             Digest (D_Len + 1 .. D_Len + Take) := S (S'First .. S'First + Take - 1);
@@ -889,12 +945,16 @@ package body Model_Runner.Conversation is
 
       --  A message's text on one line, blanks collapsed, cut to Cap.
       function One_Line (S : String; Cap : Positive) return String is
-         R          : String (1 .. Natural'Min (S'Length, Cap));
+         R          : String (1 .. Natural'Min (S'Length, Cap)) :=
+           [others => ' '];
          J          : Natural := 0;
          Prev_Space : Boolean := False;
       begin
          for C of S loop
-            exit when J >= R'Length;
+            if J >= R'Length then
+               --  Cut at a whole character, as Add cuts.
+               return R (1 .. Model_Runner.UTF8.Safe_Prefix_Length (R (1 .. J)));
+            end if;
             if C in ' ' | ASCII.LF | ASCII.CR | ASCII.HT then
                if not Prev_Space and then J > 0 then
                   J := J + 1;
@@ -966,17 +1026,29 @@ package body Model_Runner.Conversation is
       if Has_Sys then
          Keep (1) := True;
       end if;
+      --  And a developer's instructions wherever they stand, as the system
+      --  message is kept: they went with the first compaction, and no digest
+      --  line said they had.
+      for I in 1 .. N loop
+         if Item.Messages (I).Sender = Developer_Role then
+            Keep (I) := True;
+         end if;
+      end loop;
       if First_User /= 0 then
          Keep (First_User) := True;
       end if;
 
-      --  The most recent turns, with the boundary pulled back past a leading
-      --  tool turn so a kept result still has its call.
+      --  The most recent turns, with the boundary pulled back to an
+      --  assistant's turn: past a leading tool turn, so a kept result still
+      --  has its call, and past a leading user turn, which would follow the
+      --  kept task with no answer between -- a template that holds the
+      --  roles to alternating refused the conversation whole.
       declare
          Tail_Start : Natural := Natural'Max (1, N - Keep_Recent + 1);
       begin
          while Tail_Start > 1
-           and then Item.Messages (Tail_Start).Sender = Tool_Role
+           and then Item.Messages (Tail_Start).Sender in Tool_Role | User_Role
+           and then Tail_Start > First_User + 1
          loop
             Tail_Start := Tail_Start - 1;
          end loop;
@@ -1068,9 +1140,23 @@ package body Model_Runner.Conversation is
                              Without_Record (Old (Syn_First .. Old'Last)) & Digest (1 .. D_Len);
                            --  Its last Synopsis_Cap characters, then the
                            --  record whole, where there is one and room.
+                           --  Begun at a whole character: the cut skips the
+                           --  rest of one it lands inside.
+                           function Tail_From return Positive is
+                              From : Positive :=
+                                Lines'First
+                                + Natural'Max (0, Lines'Length - Synopsis_Cap);
+                           begin
+                              while From <= Lines'Last
+                                and then Character'Pos (Lines (From)) in 16#80# .. 16#BF#
+                                and then From > Lines'First
+                              loop
+                                 From := From + 1;
+                              end loop;
+                              return From;
+                           end Tail_From;
                            Kept      : constant String :=
-                             Lines (Lines'First
-                                    + Natural'Max (0, Lines'Length - Synopsis_Cap) .. Lines'Last);
+                             Lines (Tail_From .. Lines'Last);
                            Recorded  : constant String :=
                              (if Work_Record = "" then ""
                               else Record_Marker & Work_Record);

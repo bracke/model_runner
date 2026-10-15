@@ -419,6 +419,25 @@ package Tiny_Model is
    --    for the default.
    --  @param Header_Pad Bytes of an extra string in the header, which moves
    --    where the data begins.
+   --  @param Pooling_Type The pooling type the file states, on any
+   --    architecture, or below nought for the fixture's own choice.
+   --  @param Rank_Dense Whether a ranking head has its dense before its
+   --    rows, as a BERT cross-encoder's does; not, a head of one projection.
+   --  @param Rank_Classes Rows of a ranking head: one score, or Qwen3's two.
+   --  @param Rank_Template A reranker's own prompt for a pair, written as
+   --    tokenizer.chat_template.rerank, or empty for none.
+   --  @param Add_Sep_Token What add_sep_token says, on any road: -1
+   --  writes no flag, 0 says no separator, 1 says one.
+   --  @param Add_End_Token What add_eos_token says, beside a road that is
+   --    not WordPiece's.
+   --  @param Unit_Ssm_Norms Whether a Mamba file states its time step, B
+   --    and C normalized with no gain, as Falcon-Mamba's does.
+   --  @param Rare_Form Whether the file takes its architecture's rarer
+   --    published form: Falcon-40B's second attention normalization,
+   --    MPT's qk_ln norms, StableLM-2-12B's per-head norms, a Granite
+   --    mixture's shared expert, Mistral-Large-3's query temperature on
+   --    DeepSeek2, and, for Llama, a key-value head count written as a
+   --    per-layer array.
    --  @param Draft_Block Whether the file carries, past its stack, a block
    --    that drafts the next token, as a Qwen3.5's does, on an architecture
    --    released without one.
@@ -459,6 +478,14 @@ package Tiny_Model is
       Alignment       : Natural := 0;
       Header_Pad      : Natural := 0;
       Template        : String := "";
-      Draft_Block     : Boolean := False);
+      Draft_Block     : Boolean := False;
+      Pooling_Type    : Integer := -1;
+      Rank_Dense      : Boolean := True;
+      Rank_Classes    : Positive := 1;
+      Rank_Template   : String := "";
+      Add_End_Token   : Boolean := False;
+      Add_Sep_Token   : Integer := -1;
+      Unit_Ssm_Norms  : Boolean := False;
+      Rare_Form       : Boolean := False);
 
 end Tiny_Model;

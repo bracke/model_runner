@@ -19,6 +19,7 @@ with Model_Runner.Limits;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tools;
+with Model_Runner.UTF8;
 
 package body Tests.Template_Cases is
 
@@ -2194,9 +2195,11 @@ package body Tests.Template_Cases is
             Conv.Append (Long, Conv.Assistant_Role, "a dog", Status);
             Conv.Append (Long, Conv.User_Role, "and now?", Status);
             Conv.Compact (Long, Keep_Recent => 1, Dropped => Dropped);
-            --  Five turns, one kept and the first carrying the digest: three
-            --  go, two are left.
-            Assert (Dropped = 3 and then Conv.Length (Long) = 2
+            --  Five turns, one kept and the first carrying the digest; the
+            --  kept question is pulled back to the answer before it, so the
+            --  task is not followed by a second user turn: two go, three are
+            --  left.
+            Assert (Dropped = 2 and then Conv.Length (Long) = 3
                     and then Conv."=" (Conv.Sender_At (Long, 1), Conv.User_Role)
                     and then Conv.Parts_At (Long, 1) = Parts,
                     "compaction dropped the parts of the turn that carries its digest:" & Dropped'Image);
@@ -3876,6 +3879,227 @@ package body Tests.Template_Cases is
       Conv.Close (Messages);
    end Compaction_Keeps_The_Shape;
 
+   --  Compaction cuts the turns it folds into the task at whole
+   --  characters: a digest line of Danish cut at its hundredth byte, a
+   --  synopsis past its cap kept from its end, and the task stays UTF-8.
+   --  The tail it keeps leads with no second user turn after the task, and
+   --  a developer's turn, like the system message, is never dropped.
+   procedure Compaction_Keeps_Whole_Characters
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Conv.Role;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Dropped  : Natural;
+      --  "æøå" as its bytes: the source is read as UTF-8, so the literal
+      --  would be one byte a letter.
+      Letters  : constant String :=
+        [Character'Val (16#C3#), Character'Val (16#A6#),
+         Character'Val (16#C3#), Character'Val (16#B8#),
+         Character'Val (16#C3#), Character'Val (16#A5#)];
+      function Repeated (Times : Positive) return String is
+        (if Times = 1 then Letters else Letters & Repeated (Times - 1));
+      Words    : constant String := "x" & Repeated (40);
+   begin
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.System_Role, "Be brief.", Status);
+      Conv.Append (Messages, Conv.Developer_Role, "Answer in Danish.", Status);
+      Conv.Append (Messages, Conv.User_Role, "the task", Status);
+      --  A compaction of twenty rounds, more than the synopsis keeps, and
+      --  then five of a few rounds each: each of those keeps the synopsis
+      --  from its end, cut somewhere inside its oldest lines.
+      for Pass in 1 .. 6 loop
+         for Round in 1 .. (if Pass = 1 then 20 else 1 + Pass) loop
+            Conv.Append
+              (Messages, Conv.Assistant_Role,
+               [1 .. Round mod 3 => 'y'] & Words, Status);
+            Conv.Append
+              (Messages, Conv.User_Role,
+               [1 .. Pass mod 4 => 'z'] & Words, Status);
+         end loop;
+         Assert (E.Is_Ok (Status), "the history would not fill");
+         Conv.Compact (Messages, Keep_Recent => 1, Dropped => Dropped);
+         Assert (Dropped > 0, "compaction dropped nothing");
+
+         Assert (Model_Runner.UTF8.Is_Valid (Conv.Content_At (Messages, 3)),
+                 "compaction cut the task inside a character, pass"
+                 & Pass'Image);
+         Assert (Conv.Sender_At (Messages, 1) = Conv.System_Role
+                 and then Conv.Sender_At (Messages, 2) = Conv.Developer_Role
+                 and then Conv.Content_At (Messages, 2) = "Answer in Danish.",
+                 "compaction dropped the developer's turn");
+         for I in 2 .. Conv.Length (Messages) loop
+            Assert (not (Conv.Sender_At (Messages, I) = Conv.User_Role
+                         and then Conv.Sender_At (Messages, I - 1)
+                                    = Conv.User_Role),
+                    "compaction left two user turns side by side at"
+                    & I'Image);
+         end loop;
+      end loop;
+      Conv.Close (Messages);
+   end Compaction_Keeps_Whole_Characters;
+
+   --  A system message set on a history of megabytes is set: the history
+   --  it rebuilds from is copied to the heap, not the stack.
+   procedure System_Set_On_A_Long_History
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      type Text_Access is access String;
+      procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Long     : Text_Access := new String'(1 .. 12 * 1024 * 1024 => 'a');
+   begin
+      Conv.Open (Messages, Status => Status);
+      Conv.Append (Messages, Conv.User_Role, Long.all, Status);
+      Conv.Append (Messages, Conv.Assistant_Role, "read", Status);
+      Assert (E.Is_Ok (Status), "a history of twelve megabytes would not fill");
+      Conv.Set_System (Messages, "Be brief.", Status);
+      Assert (E.Is_Ok (Status)
+              and then Conv.Length (Messages) = 3
+              and then Conv.Content_At (Messages, 1) = "Be brief."
+              and then Conv.Content_At (Messages, 2)'Length = Long'Length
+              and then Conv.Content_At (Messages, 3) = "read",
+              "a system message set on a long history did not keep it");
+      Free (Long);
+      Conv.Close (Messages);
+   end System_Set_On_A_Long_History;
+
+   --  A reply cut off inside its reasoning is committed with the reasoning
+   --  closed, so the next turn's rendering does not read its own words as
+   --  still thinking; any other reply is committed as it came.
+   procedure Open_Reasoning_Is_Closed
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      LF : constant String := [1 => ASCII.LF];
+   begin
+      Assert (Conv.Closed_Reasoning ("<think>weighing it")
+                = "<think>weighing it" & LF & "</think>",
+              "an open reasoning block was committed open");
+      Assert (Conv.Closed_Reasoning (LF & "  <think>so")
+                = LF & "  <think>so" & LF & "</think>",
+              "an open reasoning block after blanks was committed open");
+      Assert (Conv.Closed_Reasoning ("<think>a</think>b") = "<think>a</think>b",
+              "a closed reasoning block was closed again");
+      Assert (Conv.Closed_Reasoning ("an answer <think>") = "an answer <think>",
+              "a reply that does not open with reasoning was changed");
+      Assert (Conv.Closed_Reasoning ("") = "", "an empty reply was changed");
+   end Open_Reasoning_Is_Closed;
+
+   --  A checkpoint says what it is and which form; one without the line, an
+   --  older form, still loads; a newer form, a role it does not write,
+   --  calls outside an assistant's turn, an answer to no call and words
+   --  that are not UTF-8 are each refused rather than read as some other
+   --  turn; an assistant's turn of parts keeps its calls.
+   procedure Checkpoints_Are_Versioned_And_Checked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      File   : constant String := "versioned-checkpoint.bin";
+      Talk   : Conv.History;
+      Status : E.Error_Info;
+      Loaded : Boolean;
+
+      procedure Write (Text : String) is
+         use Ada.Streams.Stream_IO;
+         F : File_Type;
+      begin
+         Create (F, Out_File, File);
+         String'Write (Stream (F), Text);
+         Close (F);
+      end Write;
+
+      function Read return String is
+         use Ada.Streams.Stream_IO;
+         F : File_Type;
+      begin
+         Open (F, In_File, File);
+         declare
+            S : String (1 .. Natural (Size (F)));
+         begin
+            String'Read (Stream (F), S);
+            Close (F);
+            return S;
+         end;
+      end Read;
+
+      function Loads (Text : String) return E.Error_Code is
+         Into : Conv.History;
+      begin
+         Write (Text);
+         Conv.Open (Into, Status => Status);
+         Model_Runner.CLI.Checkpoint.Load (File, Into, Loaded, Status);
+         Conv.Close (Into);
+         return Status.Code;
+      end Loads;
+
+      Parts : constant String := "[{""type"": ""image""}, {""type"": ""text"", ""text"": ""hi""}]";
+   begin
+      Conv.Open (Talk, Status => Status);
+      Conv.Append (Talk, Conv.User_Role, "hello", Status);
+      Model_Runner.CLI.Checkpoint.Save (File, Talk, Status);
+      Assert (E.Is_Ok (Status), "the conversation would not save");
+      declare
+         Saved : constant String := Read;
+         Line  : constant String := "model_runner-conversation 1" & ASCII.LF;
+      begin
+         Assert (Saved'Length > Line'Length
+                 and then Saved (1 .. Line'Length) = Line,
+                 "a checkpoint was written without its version line: " & Saved);
+      end;
+      Conv.Close (Talk);
+
+      --  Written before there was a version line.
+      Assert (Loads ("1 U5 hello1 0") = E.No_Error and then Loaded,
+              "a checkpoint of the form before versions did not load");
+      Assert (Loads ("model_runner-conversation 0" & ASCII.LF & "1 U5 hello1 0")
+                = E.No_Error and then Loaded,
+              "a checkpoint of version 0 did not load");
+      Assert (Loads ("model_runner-conversation 2" & ASCII.LF & "1 U5 hello1 0")
+                = E.IO_Read_Failed,
+              "a checkpoint of a newer form was read");
+      Assert (Loads ("1 X5 hello1 0") = E.IO_Read_Failed,
+              "a checkpoint of a role it does not write was read");
+      --  The call's two fields here read as a turn of their own where the
+      --  count is not refused.
+      Assert (Loads ("1 U5 hello1 11 U2 hi1 0") = E.IO_Read_Failed,
+              "a checkpoint with calls on a user's turn was read");
+      Assert (Loads ("1 U5 hello1 01 T2 421 0") = E.IO_Read_Failed,
+              "a checkpoint with an answer to no call was read");
+      Assert (Loads ("1 U5 hello1 01 A3 " & Character'Val (16#C3#) & "ab1 0")
+                = E.IO_Invalid_UTF8,
+              "a checkpoint with words that are not UTF-8 was read");
+      Assert (Loads ("1 U5 hello1 01 A0 1 14 calc2 {}1 T2 421 0") = E.No_Error
+                and then Loaded,
+              "a checkpoint of a call and its answer did not load");
+
+      --  An assistant's turn of parts that asks.
+      Conv.Open (Talk, Status => Status);
+      Conv.Append (Talk, Conv.User_Role, "draw", Status);
+      Conv.Append_Parts (Talk, Conv.Assistant_Role, Parts, Status);
+      Assert (E.Is_Ok (Status), "an assistant's turn of parts would not build");
+      Conv.Append_Call (Talk, "calc", "{}", Status);
+      Conv.Append (Talk, Conv.Tool_Role, "42", Status);
+      Assert (E.Is_Ok (Status), "a turn of parts that asks would not build");
+      Model_Runner.CLI.Checkpoint.Save (File, Talk, Status);
+      Conv.Close (Talk);
+      Conv.Open (Talk, Status => Status);
+      Model_Runner.CLI.Checkpoint.Load (File, Talk, Loaded, Status);
+      Assert (E.Is_Ok (Status) and then Loaded
+              and then Conv.Length (Talk) = 3
+              and then Conv.Parts_At (Talk, 2) = Parts
+              and then Conv.Call_Count (Talk, 2) = 1
+              and then Conv.Call_Name (Talk, 2, 1) = "calc"
+              and then Conv.Content_At (Talk, 3) = "42",
+              "an assistant's turn of parts lost its call in a checkpoint: "
+              & E.Error_Code'Image (Status.Code));
+      Conv.Close (Talk);
+      Ada.Directories.Delete_File (File);
+   end Checkpoints_Are_Versioned_And_Checked;
+
    --  A compacted conversation carries the harness's record of the work --
    --  what was changed, what still fails, what was refused -- in the task,
    --  and a later compaction carries the record as it then stands in place
@@ -4239,6 +4463,20 @@ package body Tests.Template_Cases is
         (T, Compaction_Carries_The_Work_Record'Access,
          "a compacted conversation carries the harness's record of the work, "
          & "the record as it stands replacing the last");
+      Register_Routine
+        (T, Compaction_Keeps_Whole_Characters'Access,
+         "compaction cuts at whole characters, keeps the developer's turn "
+         & "and leaves no two user turns side by side");
+      Register_Routine
+        (T, System_Set_On_A_Long_History'Access,
+         "a system message set on a history of megabytes is set");
+      Register_Routine
+        (T, Open_Reasoning_Is_Closed'Access,
+         "a reply cut off inside its reasoning is committed closed");
+      Register_Routine
+        (T, Checkpoints_Are_Versioned_And_Checked'Access,
+         "a checkpoint carries its version and refuses records it does not "
+         & "write");
    end Register_Tests;
 
 end Tests.Template_Cases;

@@ -1,14 +1,13 @@
-with Ada.Calendar.Formatting;
 with Ada.Calendar;
 with Ada.Directories;
 with Ada.Text_IO;
 with Interfaces;
-with Hostkit.Metadata;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Limits;
 with Model_Runner.Platform;
 with Model_Runner.Config;
 with Model_Runner.Hub;
+with Model_Runner.Hub.Store;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 
@@ -119,6 +118,31 @@ package body Model_Runner.CLI.Execute.Acquisition is
          null;
    end Report_Download;
 
+   --  The bytes the chunks of a ranged fetch beside a part already hold:
+   --  had, as the part is, by the next fetch, which keeps the whole ones.
+   function Chunks_Beside (Part : String) return Interfaces.Unsigned_64 is
+      use Ada.Directories;
+      Search : Search_Type;
+      Item   : Directory_Entry_Type;
+      Total  : Interfaces.Unsigned_64 := 0;
+   begin
+      if not Exists (Containing_Directory (Part)) then
+         return 0;
+      end if;
+      Start_Search
+        (Search, Containing_Directory (Part), Simple_Name (Part) & ".range-*",
+         [Ordinary_File => True, others => False]);
+      while More_Entries (Search) loop
+         Get_Next_Entry (Search, Item);
+         Total := Total + Interfaces.Unsigned_64 (Size (Item));
+      end loop;
+      End_Search (Search);
+      return Total;
+   exception
+      when others =>
+         return Total;
+   end Chunks_Beside;
+
    --  Offer to download a model named as a Hugging Face reference the local
    --  search did not find, and, where the user takes the offer, fetch it
    --  into the models directory. A model split into shards is fetched
@@ -139,15 +163,48 @@ package body Model_Runner.CLI.Execute.Acquisition is
       Files : Model_Runner.Hub.File_Set;
       Count : Natural := 0;
       Ok : Boolean;
+      Dir : constant String := Model_Runner.Platform.Models_Directory;
+
+      --  The names the files are kept under within the models directory:
+      --  each its own, or owner/repo/ and it where another repository's
+      --  file has the name (Hub.Store.Place).
+      Locals : Model_Runner.Hub.Store.Local_Names := [others => T.Empty];
 
       function Local (Index : Positive) return String
-      is (Model_Runner.Platform.Models_File
-            (T.To_String (Files (Index).Name)));
+      is (Model_Runner.Platform.Models_File (T.To_String (Locals (Index))));
 
       function Destination return String is (Local (1));
+
+      --  Every file there and whole.
+      function All_Whole return Boolean is
+      begin
+         for I in 1 .. Count loop
+            if not Model_Complete (Files (I), Local (I)) then
+               return False;
+            end if;
+         end loop;
+         return Count > 0;
+      end All_Whole;
    begin
       Fetched := False;
       Where   := Model_Runner.Text.Empty;
+
+      --  A reference fetched before and whole on disk is opened as it is,
+      --  from what the manifest says it was fetched as -- without asking
+      --  the hub, so a model downloaded once runs offline.
+      if Dir /= "" then
+         declare
+            Found : Boolean;
+         begin
+            Model_Runner.Hub.Store.Find (Dir, Named, Repo, Files, Locals, Count, Found);
+            if Found and then All_Whole then
+               Where   := Model_Runner.Text.To_Bounded (Destination);
+               Fetched := True;
+               return;
+            end if;
+            Count := 0;
+         end;
+      end if;
 
       --  A reference names its quant; a bare repository lets the machine's
       --  memory choose one -- two thirds of it, the room a model may take.
@@ -165,28 +222,25 @@ package body Model_Runner.CLI.Execute.Acquisition is
          return;
       end if;
 
-      if Destination = "" then
+      if Dir = "" then
          Pres.Put_Note (Screen, "cli.download.no_directory");
          return;
       end if;
+      for I in 1 .. Count loop
+         Locals (I) := T.To_Bounded
+           (Model_Runner.Hub.Store.Place
+              (Dir, T.To_String (Repo), T.To_String (Files (I).Name)));
+      end loop;
 
       --  Already here whole from an earlier run: every file present and the
       --  right size, so the set is opened by its first without asking or
-      --  downloading again.
-      declare
-         All_Whole : Boolean := True;
-      begin
-         for I in 1 .. Count loop
-            if not Model_Complete (Files (I), Local (I)) then
-               All_Whole := False;
-            end if;
-         end loop;
-         if All_Whole then
-            Where   := Model_Runner.Text.To_Bounded (Destination);
-            Fetched := True;
-            return;
-         end if;
-      end;
+      --  downloading again -- and noted, for the next run to find offline.
+      if All_Whole then
+         Model_Runner.Hub.Store.Note (Dir, Named, T.To_String (Repo), Files, Locals, Count);
+         Where   := Model_Runner.Text.To_Bounded (Destination);
+         Fetched := True;
+         return;
+      end if;
 
       --  Room for what is not yet here, checked before a byte is fetched
       --  rather than found halfway through a write that then stops. What a
@@ -226,7 +280,9 @@ package body Model_Runner.CLI.Execute.Acquisition is
                   On_Disk := Files (I).Size;
                elsif Ada.Directories.Exists (Local (I) & ".part") then
                   On_Disk := Interfaces.Unsigned_64'Min
-                    (Files (I).Size, Interfaces.Unsigned_64 (Ada.Directories.Size (Local (I) & ".part")));
+                    (Files (I).Size,
+                     Interfaces.Unsigned_64 (Ada.Directories.Size (Local (I) & ".part"))
+                     + Chunks_Beside (Local (I) & ".part"));
                end if;
                if Files (I).Size > On_Disk then
                   Needed := Needed + (Files (I).Size - On_Disk);
@@ -234,10 +290,12 @@ package body Model_Runner.CLI.Execute.Acquisition is
             end;
          end loop;
 
-         --  A little headroom over the bytes themselves, for the filesystem
-         --  and for anything else the machine is writing meanwhile.
+         --  Headroom over the bytes themselves: a ranged fetch joins its
+         --  chunks onto the part, so the disk holds the whole file and the
+         --  chunk being added at once, and a little more for the file
+         --  system and anything else the machine is writing meanwhile.
          if Free > 0 and then Needed > 0
-           and then Free < Needed + 64 * 1024 * 1024
+           and then Free < Needed + Model_Runner.Hub.Join_Headroom
          then
             Pres.Put_Note
               (Screen, "cli.download.no_space",
@@ -317,6 +375,7 @@ package body Model_Runner.CLI.Execute.Acquisition is
          end if;
       end loop;
 
+      Model_Runner.Hub.Store.Note (Dir, Named, T.To_String (Repo), Files, Locals, Count);
       Pres.Put_Aside_Marked
         (Screen, "diagnostic.note",
          [Loc.Named ("detail", Pres.Next_Step_Value (Screen, "cli.download.saved",
@@ -361,32 +420,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
       --  Where the weights written in panels are kept between loads, keyed
       --  by the file and what says it is unchanged -- its size and when it
       --  was last written -- unless the caller opted out of caches.
-      function Panel_Path return String is
-      begin
-         if Item.No_Cache or else not Ada.Directories.Exists (Path) then
-            return "";
-         end if;
-         --  And by what the file system says of its contents: its
-         --  modification and status-change times to the nanosecond, its
-         --  size and its file number. Size and modification time alone
-         --  were kept by a copy that keeps times (cp -p, rsync -t), and
-         --  the panels of the file that was there were served.
-         declare
-            Known : Boolean;
-            Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Known);
-         begin
-            return Model_Runner.Platform.Panel_File
-              (Path
-               & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
-               & "|" & Ada.Calendar.Formatting.Image
-                         (Ada.Directories.Modification_Time (Path),
-                          Include_Time_Fraction => True)
-               & (if Known then "|" & Stamp else ""));
-         end;
-      exception
-         when others =>
-            return "";
-      end Panel_Path;
+      function Panel_Path return String
+      is (Panel_Cache_For (Path, Item.No_Cache));
    begin
       --  A model named for the Hugging Face hub and not on disk: the user
       --  is offered its download, and where they take it the fetched file

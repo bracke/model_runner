@@ -5,10 +5,13 @@ with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
+with Ada.Strings.Fixed;
 with AUnit.Assertions;
 
 with Interfaces;
 
+with Imatrix_Run;
+with Quantize_Run;
 with Quantizer;
 with Recipes;
 with IQ_Reference;
@@ -33,6 +36,7 @@ with Model_Runner.Tokenizer;
 with Model_Runner.Llama;
 
 with BPE_Vocabulary;
+with Project_Tools.Files;
 with Tiny_Model;
 with Fixtures;
 with Fuzzing;
@@ -547,7 +551,7 @@ package body Tests.GGUF_Cases is
       use type Quantizer.Target;
 
       Small : constant Recipes.Shape :=
-        (Layers => 22, Grouped => 8, Tied => False);
+        (Layers => 22, Grouped => 8, Tied => False, Values => 22);
 
       --  Every ffn_down of a twenty-two layer model, in the order a file
       --  holds them rather than in the order the layers run.
@@ -603,7 +607,7 @@ package body Tests.GGUF_Cases is
 
          declare
             Shared : constant Recipes.Shape :=
-              (Layers => 22, Grouped => 8, Tied => True);
+              (Layers => 22, Grouped => 8, Tied => True, Values => 22);
          begin
             Assert (Recipes.Type_For
                       (Recipes.Q4_K_M, "token_embd.weight", Shared, Fresh,
@@ -616,19 +620,94 @@ package body Tests.GGUF_Cases is
 
       --  A different mixture, a different rule: Q4_K_S lifts the first four
       --  attention-value matrices and no others, where Q4_K_M lifts the
-      --  ones the layer rule names.
+      --  ones the layer rule names. The first four SEEN: the reference
+      --  counts them, in its loader's order, so the caller asks in that
+      --  order and the count is the rule.
       declare
          Fresh : Recipes.Progress;
       begin
-         Assert (Recipes.Type_For
-                   (Recipes.Q4_K_S, "blk.3.attn_v.weight", Small, Fresh, 2048)
-                 = Quantizer.Q5_K,
-                 "Q4_K_S did not lift the fourth attention-value matrix");
-         Assert (Recipes.Type_For
-                   (Recipes.Q4_K_S, "blk.4.attn_v.weight", Small, Fresh, 2048)
-                 = Quantizer.Q4_K,
-                 "Q4_K_S lifted the fifth attention-value matrix, which it "
-                 & "does not");
+         for Layer in 0 .. 4 loop
+            declare
+               Name : constant String :=
+                 "blk." & Model_Runner.Text.Trim (Natural'Image (Layer))
+                 & ".attn_v.weight";
+               Got  : constant Quantizer.Target :=
+                 Recipes.Type_For (Recipes.Q4_K_S, Name, Small, Fresh, 2048);
+            begin
+               Assert (Got = (if Layer < 4 then Quantizer.Q5_K
+                              else Quantizer.Q4_K),
+                       "Q4_K_S gave " & Name & " "
+                       & Quantizer.Name_Of (Got)
+                       & ", where only the first four attention-value "
+                       & "matrices are lifted");
+            end;
+         end loop;
+      end;
+
+      --  A fused projection IS an attention-value matrix to the reference:
+      --  its category_is_attn_v takes attn_qkv and attn_kv_b, and the
+      --  branch of their own that follows is never reached. Under Q4_K_M
+      --  the rule is over how many there are, not over the layers -- a
+      --  model of eight layers and eight fused projections lifts the first
+      --  and the last, and the ones every third of the rest names.
+      declare
+         Fused : constant Recipes.Shape :=
+           (Layers => 8, Grouped => 1, Tied => False, Values => 8);
+         Walk  : Recipes.Progress;
+         More_Eight : constant array (0 .. 7) of Boolean :=
+           [0 | 3 | 6 | 7 => True, others => False];
+      begin
+         for Layer in 0 .. 7 loop
+            declare
+               Name : constant String :=
+                 "blk." & Model_Runner.Text.Trim (Natural'Image (Layer))
+                 & ".attn_qkv.weight";
+               Got  : constant Quantizer.Target :=
+                 Recipes.Type_For (Recipes.Q4_K_M, Name, Fused, Walk, 2048);
+            begin
+               Assert (Got = (if More_Eight (Layer) then Quantizer.Q6_K
+                              else Quantizer.Q4_K),
+                       Name & " was given " & Quantizer.Name_Of (Got)
+                       & " under Q4_K_M; a fused projection goes through "
+                       & "the attention-value rule");
+            end;
+         end loop;
+      end;
+
+      --  What the reference does not quantize at all, and what it writes
+      --  when a row will not divide into the format's blocks.
+      Assert (not Recipes.Allows ("blk.0.ffn_gate_inp.weight", 2),
+              "the router was quantized");
+      Assert (not Recipes.Allows ("blk.0.ssm_conv1d.weight", 2),
+              "a small convolution was quantized");
+      Assert (not Recipes.Allows ("position_embd.weight", 2),
+              "a positional embedding was quantized");
+      Assert (not Recipes.Allows ("blk.0.attn_norm.weight", 2),
+              "a norm was quantized");
+      Assert (not Recipes.Allows ("blk.0.attn_q.bias", 2),
+              "a tensor not named weight was quantized");
+      Assert (Recipes.Allows ("blk.0.attn_q.weight", 2),
+              "a projection was not quantized");
+
+      declare
+         use type Recipes.Fitted;
+      begin
+         Assert (Recipes.Fall_Back (Quantizer.Q4_K, 896)
+                 = (Format => Quantizer.Q5_0, others => False),
+                 "a Q4_K row of 896 did not fall back to Q5_0");
+         Assert (Recipes.Fall_Back (Quantizer.Q6_K, 896)
+                 = (Format => Quantizer.Q8_0, others => False),
+                 "a Q6_K row of 896 did not fall back to Q8_0");
+         Assert (Recipes.Fall_Back (Quantizer.IQ4_XS, 896)
+                 = (Format => Quantizer.IQ4_NL, others => False),
+                 "an IQ4_XS row of 896 did not fall back to IQ4_NL");
+         Assert (Recipes.Fall_Back (Quantizer.Q2_K, 100).As_Half,
+                 "a row of 100 was not written as F16");
+         Assert (Recipes.Fall_Back (Quantizer.Q8_0, 100).Refused,
+                 "a Q8_0 row of 100 was given a fallback llama.cpp lacks");
+         Assert (Recipes.Fall_Back (Quantizer.Q4_K, 2048)
+                 = (Format => Quantizer.Q4_K, others => False),
+                 "a row that divides fell back");
       end;
 
       --  And a model the transcription does not cover is refused rather
@@ -752,6 +831,487 @@ package body Tests.GGUF_Cases is
                  "a format this cannot write was accepted by name");
       end;
    end The_Block_Formats_Encode_By_Their_Own_Rule;
+
+   --  Every format, with an importance matrix and without, writes the bytes
+   --  ggml writes.
+   --
+   --  The digests below are what `ggml_quantize_chunk` wrote for the same
+   --  two rows of 512 and the same matrix, plain and weighted, through
+   --  libggml-base from llama.cpp at the revision this was transcribed
+   --  from. The values and the weights are small integers over powers of
+   --  two, so binary32 holds them exactly on both sides and the input is
+   --  the same input. A transcription that reads a rule differently --
+   --  a sigma2 taken over the block instead of the row, a scale written as
+   --  one rounding and re-quantized against another -- writes different
+   --  bytes, and a digest is the shortest way to say that it did.
+   --
+   --  Q8_0's two digests are one: the reference has no weighted path for
+   --  it.
+   procedure Every_Format_Writes_What_Ggml_Writes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Rows    : constant := 2;
+      Columns : constant := 512;
+
+      Values  : N.Real_Array (0 .. Rows * Columns - 1);
+      Weights : N.Real_Array (0 .. Columns - 1);
+
+      function Digest (Data : B.Byte_Array) return Interfaces.Unsigned_64 is
+         Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+      begin
+         for Item of Data loop
+            Hash := (Hash xor Interfaces.Unsigned_64 (Item))
+              * 16#0000_0100_0000_01B3#;
+         end loop;
+         return Hash;
+      end Digest;
+
+      type Expected is record
+         Plain, Weighted : Interfaces.Unsigned_64;
+      end record;
+
+      Digests : constant array (Quantizer.Target) of Expected :=
+        [Quantizer.Q8_0   => (16#1D95321DFEA4A989#, 16#1D95321DFEA4A989#),
+         Quantizer.Q4_0   => (16#7F43D8645D07E323#, 16#06B065F2B16A30E2#),
+         Quantizer.Q4_1   => (16#A0FFC0B023C8612C#, 16#0ABD6903CAD513F9#),
+         Quantizer.Q5_0   => (16#F9F2F02967739604#, 16#E56790A27B4C9217#),
+         Quantizer.Q5_1   => (16#884F1D85260EB288#, 16#47E10FC4BE70C6C2#),
+         Quantizer.Q2_K   => (16#91622C2DF73D9384#, 16#BE245D9D45198CAE#),
+         Quantizer.Q3_K   => (16#CEDE5F695AECCA2F#, 16#09DA40EE0F86DC4B#),
+         Quantizer.Q4_K   => (16#A1C3E33CFE38839F#, 16#B4C92B5D27802E6C#),
+         Quantizer.Q5_K   => (16#9EC316628870A77F#, 16#9E7BC8317F33FCB2#),
+         Quantizer.Q6_K   => (16#B441A2714549A93C#, 16#AD17BED5775A7504#),
+         Quantizer.IQ4_NL => (16#4D01438AE8D5D20C#, 16#E2A16B4EAE8A5126#),
+         Quantizer.IQ4_XS => (16#B04D3169931526C6#, 16#8B3A2BC0EA2BB1C4#)];
+   begin
+      for Index in Values'Range loop
+         Values (Index) :=
+           (N.Real (Integer ((Index * 37) mod 101) - 50) / 16.0)
+           * N.Real (1 + Index mod 7) / 8.0;
+      end loop;
+      for Column in Weights'Range loop
+         Weights (Column) := 1.0 + N.Real ((Column * 13) mod 17) / 8.0;
+      end loop;
+
+      for Into in Quantizer.Target loop
+         declare
+            Plain    : constant B.Byte_Array :=
+              Quantizer.Encode (Values, Into);
+            Weighted : constant B.Byte_Array :=
+              Quantizer.Encode_Weighted (Values, Weights, Into);
+         begin
+            Assert (Digest (Plain) = Digests (Into).Plain,
+                    Quantizer.Name_Of (Into)
+                    & " did not write what ggml writes without a matrix");
+            Assert (Digest (Weighted) = Digests (Into).Weighted,
+                    Quantizer.Name_Of (Into)
+                    & " did not write what ggml writes with a matrix");
+         end;
+      end loop;
+   end Every_Format_Writes_What_Ggml_Writes;
+
+   --  A model file quantized writes what llama-quantize writes around the
+   --  tensors: the policy's exclusions and fallbacks, the source's
+   --  alignment followed, every key in the type it was read as, the keys
+   --  that describe the quantizing, and an expert stack weighted an expert
+   --  at a time.
+   procedure Quantizing_A_File_Writes_What_Llama_Writes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Source_Path : constant String := "obj/quantize-source.gguf";
+      Matrix_Path : constant String := "obj/quantize-matrix.gguf";
+      Wrong_Path  : constant String := "obj/quantize-wrong-matrix.gguf";
+      Split_Path  : constant String := "obj/quantize-split.gguf";
+      Out_Path    : constant String := "obj/quantize-out.gguf";
+
+      Query   : constant N.Real_Array := Fixtures.Sequence (96 * 2, 11);
+      Router  : constant N.Real_Array := Fixtures.Sequence (256 * 2, 12);
+      Keys    : constant N.Real_Array := Fixtures.Sequence (256 * 2, 13);
+      Experts : constant N.Real_Array := Fixtures.Sequence (256 * 2 * 2, 14);
+      Norm    : constant N.Real_Array := Fixtures.Sequence (256, 15);
+
+      Key_Sums    : N.Real_Array (0 .. 255);
+      Expert_Sums : N.Real_Array (0 .. 511);
+
+      procedure Save (Path : String; Image : B.Byte_Array) is
+         Handle : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+         for Item of Image loop
+            Ada.Streams.Stream_Element'Write
+              (Ada.Streams.Stream_IO.Stream (Handle),
+               Ada.Streams.Stream_Element (Item));
+         end loop;
+         Ada.Streams.Stream_IO.Close (Handle);
+      end Save;
+
+      --  The source: one of each thing the policy treats differently.
+      procedure Write_Source (Path : String; Split : Boolean) is
+         Maker : Fixtures.Builder;
+         Image : B.Byte_Array_Access;
+      begin
+         Fixtures.Reset (Maker, Alignment => 64);
+         Fixtures.Add_String (Maker, "general.architecture", "llama");
+         Fixtures.Add_U32 (Maker, "general.file_type", 0);
+         Fixtures.Add_Integer (Maker, "fixture.small", G.Value_Int8, -5);
+         Fixtures.Add_Integer (Maker, "fixture.wide", G.Value_UInt16, 60_000);
+         Fixtures.Add_F64 (Maker, "fixture.double", 0.1);
+         Fixtures.Begin_Array (Maker, "fixture.flags", G.Value_Bool, 3);
+         Fixtures.Bool_Element (Maker, True);
+         Fixtures.Bool_Element (Maker, False);
+         Fixtures.Bool_Element (Maker, True);
+         Fixtures.End_Array (Maker);
+         Fixtures.Begin_Array (Maker, "fixture.shorts", G.Value_Int16, 2);
+         Fixtures.Integer_Element (Maker, G.Value_Int16, -2);
+         Fixtures.Integer_Element (Maker, G.Value_Int16, 3);
+         Fixtures.End_Array (Maker);
+         Fixtures.Begin_Array (Maker, "fixture.doubles", G.Value_Float64, 2);
+         Fixtures.F64_Element (Maker, 0.1);
+         Fixtures.F64_Element (Maker, -2.5);
+         Fixtures.End_Array (Maker);
+         if Split then
+            Fixtures.Add_Integer (Maker, "split.no", G.Value_UInt16, 0);
+            Fixtures.Add_Integer (Maker, "split.count", G.Value_UInt16, 2);
+            Fixtures.Add_Integer
+              (Maker, "split.tensors.count", G.Value_Int32, 10);
+         end if;
+
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.attn_q.weight", [96, 2], G.Type_F32,
+            Fixtures.Encode_F32 (Query));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.ffn_gate_inp.weight", [256, 2], G.Type_F32,
+            Fixtures.Encode_F32 (Router));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.attn_k.weight", [256, 2], G.Type_F32,
+            Fixtures.Encode_F32 (Keys));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.ffn_up_exps.weight", [256, 2, 2], G.Type_F32,
+            Fixtures.Encode_F32 (Experts));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.attn_norm.weight", [256], G.Type_F32,
+            Fixtures.Encode_F32 (Norm));
+         Fixtures.Build (Maker, Image);
+         Save (Path, Image.all);
+         B.Free (Image);
+      end Write_Source;
+
+      --  The matrix, as llama-imatrix writes one: a sum and a count for the
+      --  keys, and a sum an expert and a count an expert for the stack.
+      procedure Write_Matrix (Path : String; Key_Width : N.Element_Count) is
+         Maker : Fixtures.Builder;
+         Image : B.Byte_Array_Access;
+      begin
+         Fixtures.Reset (Maker);
+         Fixtures.Add_String (Maker, "general.type", "imatrix");
+         Fixtures.Add_U32 (Maker, "imatrix.chunk_count", 3);
+         Fixtures.Add_U32 (Maker, "imatrix.chunk_size", 512);
+         Fixtures.Begin_Array (Maker, "imatrix.datasets", G.Value_String, 1);
+         Fixtures.String_Element (Maker, "corpus.txt");
+         Fixtures.End_Array (Maker);
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.attn_k.weight.in_sum2", [G.U64 (Key_Width), 1],
+            G.Type_F32, Fixtures.Encode_F32 (Key_Sums (0 .. Key_Width - 1)));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.attn_k.weight.counts", [1, 1], G.Type_F32,
+            Fixtures.Encode_F32 ([0 => 4.0]));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.ffn_up_exps.weight.in_sum2", [256, 2], G.Type_F32,
+            Fixtures.Encode_F32 (Expert_Sums));
+         Fixtures.Add_Tensor
+           (Maker, "blk.0.ffn_up_exps.weight.counts", [1, 2], G.Type_F32,
+            Fixtures.Encode_F32 ([0 => 8.0, 1 => 2.0]));
+         Fixtures.Build (Maker, Image);
+         Save (Path, Image.all);
+         B.Free (Image);
+      end Write_Matrix;
+
+      Result : Quantize_Run.Report;
+   begin
+      for Index in Key_Sums'Range loop
+         Key_Sums (Index) := 1.0 + N.Real (Index mod 9);
+      end loop;
+      for Index in Expert_Sums'Range loop
+         Expert_Sums (Index) := 2.0 + N.Real ((Index * 7) mod 13);
+      end loop;
+
+      Write_Source (Source_Path, Split => False);
+      Write_Matrix (Matrix_Path, 256);
+
+      Quantize_Run.Run
+        (Source_Path, "q4_k", Out_Path, "", Matrix_Path, Result);
+      Assert (Result.Ran,
+              "the fixture was not quantized: "
+              & Result.Detail (1 .. Result.Detail_Up));
+      Assert (Result.Weighted = 2 and then Result.Unweighted = 1,
+              "weighted" & Natural'Image (Result.Weighted)
+              & " and unweighted" & Natural'Image (Result.Unweighted)
+              & ", where the matrix weights the keys and the experts and "
+              & "names nothing else");
+
+      declare
+         Source : Model_Runner.Byte_Sources.Files.File_Source;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+
+         function Format_Of (Name : String) return G.Tensor_Type
+         is (Containers.Tensor_Format
+               (Item, Containers.Find_Tensor (Item, Name)));
+
+         function Bytes_Of (Name : String) return B.Byte_Array is
+            Which : constant Natural := Containers.Find_Tensor (Item, Name);
+            Held  : B.Byte_Array
+              (0 .. B.Byte_Count (Containers.Tensor_Bytes (Item, Which)) - 1);
+            Said  : E.Error_Info;
+         begin
+            Model_Runner.Byte_Sources.Files.Read
+              (Source, B.Byte_Count (Containers.Tensor_Offset (Item, Which)),
+               Held, Said);
+            return Held;
+         end Bytes_Of;
+
+         function Mean (Sums : N.Real_Array; Count : N.Real)
+           return N.Real_Array
+         is
+            Result : N.Real_Array (0 .. Sums'Length - 1);
+         begin
+            for Index in Result'Range loop
+               Result (Index) := Sums (Sums'First + Index) / Count;
+            end loop;
+            return Result;
+         end Mean;
+
+         Whole : Long_Long_Integer;
+         Real  : N.Wide_Real;
+         Flag  : Boolean;
+      begin
+         Model_Runner.Byte_Sources.Files.Open (Source, Out_Path, Status => Status);
+         Assert (E.Is_Ok (Status), "the output did not open");
+         Containers.Reader.Parse (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "the output did not parse: "
+                 & E.Error_Code'Image (Status.Code));
+
+         --  The source's alignment, followed and not merely copied, and the
+         --  last tensor padded to it as every other is.
+         Assert (Containers.Alignment (Item) = 64,
+                 "the source's alignment was not kept");
+         for Which in 1 .. Containers.Tensor_Count (Item) loop
+            Assert (Containers.Tensor_Offset (Item, Which) mod 64 = 0,
+                    Containers.Tensor_Name (Item, Which)
+                    & " does not start on the alignment the file states");
+         end loop;
+         Assert (Containers.File_Size (Item) mod 64 = 0,
+                 "the last tensor was not padded to the alignment");
+
+         --  A row of 96 cannot hold a super-block: Q4_K falls back to
+         --  Q5_0. The router and the norm are not quantized at all.
+         Assert (Format_Of ("blk.0.attn_q.weight") = G.Type_Q5_0,
+                 "a 96-wide Q4_K row did not fall back to Q5_0");
+         Assert (Format_Of ("blk.0.ffn_gate_inp.weight") = G.Type_F32,
+                 "the router was quantized");
+         Assert (Format_Of ("blk.0.attn_norm.weight") = G.Type_F32,
+                 "the norm was quantized");
+
+         --  The keys weighted by their mean, and each expert by its own
+         --  slice over its own count.
+         Assert (Bytes_Of ("blk.0.attn_k.weight")
+                 = Quantizer.Encode_Weighted
+                     (Keys, Mean (Key_Sums, 4.0), Quantizer.Q4_K),
+                 "the keys were not weighted by the matrix's mean");
+         Assert (Bytes_Of ("blk.0.ffn_up_exps.weight")
+                 = Quantizer.Encode_Weighted
+                     (Experts (0 .. 511),
+                      Mean (Expert_Sums (0 .. 255), 8.0), Quantizer.Q4_K)
+                   & Quantizer.Encode_Weighted
+                       (Experts (512 .. 1023),
+                        Mean (Expert_Sums (256 .. 511), 2.0),
+                        Quantizer.Q4_K),
+                 "the experts were not weighted an expert at a time");
+
+         --  Every key the type it was.
+         Assert (Containers.Metadata_Kind
+                   (Item, Containers.Find (Item, "fixture.small"))
+                 = G.Value_Int8,
+                 "a small signed key changed type");
+         Containers.Get_Integer
+           (Item, "fixture.small", -128, 127, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = -5,
+                 "a negative small key did not survive");
+         Assert (Containers.Metadata_Kind
+                   (Item, Containers.Find (Item, "fixture.wide"))
+                 = G.Value_UInt16,
+                 "a sixteen-bit key changed type");
+         Assert (Containers.Metadata_Kind
+                   (Item, Containers.Find (Item, "fixture.double"))
+                 = G.Value_Float64,
+                 "a binary64 key was narrowed");
+         Containers.Get_Float
+           (Item, "fixture.double", -1.0, 1.0, Real, Status);
+         Assert (E.Is_Ok (Status) and then Real = 0.1,
+                 "a binary64 key lost its value");
+         Containers.Get_Boolean_Element (Item, "fixture.flags", 2, Flag, Status);
+         Assert (E.Is_Ok (Status) and then not Flag,
+                 "a flag array did not survive");
+         Assert (Containers.Metadata_Element_Kind
+                   (Item, Containers.Find (Item, "fixture.shorts"))
+                 = G.Value_Int16,
+                 "a sixteen-bit array changed type");
+         Containers.Get_Integer_Element
+           (Item, "fixture.shorts", 1, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = -2,
+                 "a negative array element did not survive");
+         Containers.Get_Float_Element
+           (Item, "fixture.doubles", 1, Real, Status);
+         Assert (E.Is_Ok (Status) and then Real = 0.1,
+                 "a binary64 array was narrowed");
+
+         --  And the keys that describe the quantizing.
+         Containers.Get_Integer
+           (Item, "general.file_type", 0, 1000, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = 15,
+                 "general.file_type is not llama.cpp's number for Q4_K");
+         Containers.Get_Integer
+           (Item, "general.quantization_version", 0, 1000, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = 2,
+                 "no quantization version was written");
+         Assert (Containers.String_Value (Item, "quantize.imatrix.file")
+                 = Matrix_Path,
+                 "the matrix was not recorded");
+         Assert (Containers.String_Value (Item, "quantize.imatrix.dataset")
+                 = "corpus.txt",
+                 "the matrix's corpus was not recorded");
+         Containers.Get_Integer
+           (Item, "quantize.imatrix.entries_count", 0, 1000, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = 2,
+                 "the matrix's entries were not counted");
+         Containers.Get_Integer
+           (Item, "quantize.imatrix.chunks_count", 0, 1000, Whole, Status);
+         Assert (E.Is_Ok (Status) and then Whole = 3,
+                 "the matrix's chunks were not recorded");
+
+         Containers.Close (Item);
+         Model_Runner.Byte_Sources.Files.Close (Source);
+      end;
+
+      --  A matrix the wrong size for a tensor it names is one for another
+      --  model, and llama.cpp stops rather than quantize that tensor
+      --  unweighted without a word.
+      Write_Matrix (Wrong_Path, 128);
+      Quantize_Run.Run
+        (Source_Path, "q4_k", Out_Path, "", Wrong_Path, Result);
+      Assert (not Result.Ran,
+              "a matrix the wrong size for the keys was used anyway");
+
+      --  One file of a split model is not a model.
+      Write_Source (Split_Path, Split => True);
+      Quantize_Run.Run (Split_Path, "q4_k", Out_Path, "", "", Result);
+      Assert (not Result.Ran, "one file of a split model was quantized");
+   end Quantizing_A_File_Writes_What_Llama_Writes;
+
+   --  An importance matrix is collected as llama-imatrix collects one:
+   --  each chunk begun with the model's beginning marker, only the layers'
+   --  matrices, and every one of them.
+   procedure A_Matrix_Is_Collected_As_Llama_Collects_It
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Model_Path : constant String := "obj/imatrix-model.gguf";
+
+      Chunk : constant := 16;
+
+      --  Three corpora of plain 'c's, the second with its first chunk-two
+      --  character changed and the third with one inside chunk two changed.
+      --  The marker and the leading space are the first two positions, so
+      --  character k is position k + 3, and chunk two starts at position
+      --  Chunk + 1.
+      Plain_Text : constant String (1 .. 48) := [others => 'c'];
+
+      procedure Save (Path, Text : String) is
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (Handle, Text);
+         Ada.Text_IO.Close (Handle);
+      end Save;
+
+      --  One corpus path for all three: the file records the corpus's
+      --  name, and the three are to differ only where the text does.
+      procedure Collect (Text, Into : String) is
+         Result : Imatrix_Run.Report;
+      begin
+         Save ("obj/imatrix-corpus.txt", Text);
+         Imatrix_Run.Run
+           (Model_Path, "obj/imatrix-corpus.txt", Chunk => Chunk, Chunks => 2,
+            Threads => 1, Into => Into, Result => Result);
+         Assert (Result.Ran,
+                 "no matrix was collected: "
+                 & Result.Detail (1 .. Result.Detail_Up));
+      end Collect;
+
+      function Image_Of (Path : String) return String
+      is (Project_Tools.Files.Read_Raw_File (Path));
+
+      Changed_Start : String := Plain_Text;
+      Changed_Later : String := Plain_Text;
+   begin
+      Tiny_Model.Write (Model_Path, Room => 64);
+
+      Changed_Start (Chunk - 1) := 'a';
+      Changed_Later (Chunk + 2) := 'a';
+
+      Collect (Plain_Text, "obj/imatrix-plain.gguf");
+      Collect (Changed_Start, "obj/imatrix-start.gguf");
+      Collect (Changed_Later, "obj/imatrix-later.gguf");
+
+      Assert (Image_Of ("obj/imatrix-later.gguf")
+              /= Image_Of ("obj/imatrix-plain.gguf"),
+              "a changed token inside a chunk changed nothing, so the "
+              & "comparison below proves nothing");
+      Assert (Image_Of ("obj/imatrix-start.gguf")
+              = Image_Of ("obj/imatrix-plain.gguf"),
+              "the token a chunk starts with was read; llama-imatrix puts "
+              & "the beginning marker in its place");
+
+      declare
+         Source : Model_Runner.Byte_Sources.Files.File_Source;
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+         Named  : Natural := 0;
+      begin
+         Model_Runner.Byte_Sources.Files.Open
+           (Source, "obj/imatrix-plain.gguf", Status => Status);
+         Containers.Reader.Parse (Item, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the matrix did not parse");
+
+         for Which in 1 .. Containers.Tensor_Count (Item) loop
+            declare
+               Name : constant String := Containers.Tensor_Name (Item, Which);
+            begin
+               Assert (Name'Length > 4
+                       and then Name (Name'First .. Name'First + 3) = "blk.",
+                       Name & " was collected, and only the layers' "
+                       & "matrices are");
+               Named := Named + 1;
+            end;
+         end loop;
+
+         --  Seven matrices a layer, two of them for each: a sum and a
+         --  count. More than a list that stopped early would hold.
+         Assert (Named = 2 * 7 * Tiny_Model.Layers,
+                 Natural'Image (Named / 2) & " matrices collected, where the "
+                 & "model has" & Natural'Image (7 * Tiny_Model.Layers));
+
+         Containers.Close (Item);
+         Model_Runner.Byte_Sources.Files.Close (Source);
+      end;
+   end A_Matrix_Is_Collected_As_Llama_Collects_It;
 
    procedure Claimed_Array_Is_Refused
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -892,15 +1452,39 @@ package body Tests.GGUF_Cases is
    end Excessive_Counts;
 
    --  Truncation at any offset is a structured rejection, never an exception.
+   --
+   --  Any offset short of the last tensor's last byte. The builder pads the
+   --  last tensor to the alignment as llama.cpp's writer does, and a file
+   --  cut inside that padding still holds every byte a tensor names --
+   --  which the reader, like the reference's, accepts.
    procedure Truncation_Is_Structured
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
       Image : B.Byte_Array_Access;
+      Whole : B.Byte_Count := 0;
    begin
       Build_Valid (Image);
 
-      for Length in B.Byte_Count range 0 .. Image.all'Length - 1 loop
+      declare
+         Item   : Containers.Container;
+         Status : E.Error_Info;
+      begin
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "the untruncated file was refused");
+         for Index in 1 .. Containers.Tensor_Count (Item) loop
+            Whole := B.Byte_Count'Max
+              (Whole,
+               B.Byte_Count (Containers.Tensor_Offset (Item, Index)
+                             + Containers.Tensor_Bytes (Item, Index)));
+         end loop;
+         Containers.Close (Item);
+      end;
+
+      Assert (Whole < Image.all'Length,
+              "the last tensor was not padded to the alignment");
+
+      for Length in B.Byte_Count range 0 .. Whole - 1 loop
          declare
             Item   : Containers.Container;
             Status : E.Error_Info;
@@ -3911,6 +4495,128 @@ package body Tests.GGUF_Cases is
    ------------------------------------------------------
    -- Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them --
    ------------------------------------------------------
+
+   --  A reranker's pair is joined as the other runtime joins it where the
+   --  file carries no template (format_prompt_rerank): the file's own
+   --  beginning, end and separator flags over each road's defaults. A BERT
+   --  file as its converter writes it -- begin, end, no separator, its end
+   --  [SEP] -- joins [CLS] q [SEP] d [SEP]: one separator, where a [SEP]
+   --  put beside the end marker gave every BERT cross-encoder two. A BERT
+   --  file stating no flags adds a separator and no end; an XLM-R file all
+   --  three; a RoBERTa byte-pair rule a separator unasked.
+   procedure Pairs_Join_As_The_Other_Runtime_Joins_Them
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Vocab renames Model_Runner.Tokenizer;
+      use type Vocab.Token_Id;
+
+      type Answer is (Absent, Yes, No);
+
+      function Rule
+        (Model : String; Pieces : Positive; Pre : String := "";
+         Add_Begin, Add_End, Add_Sep : Answer := Absent;
+         Bos, Eos, Sep : Integer := -2) return Vocab.Pair_Rule
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Item    : Containers.Container;
+         Status  : E.Error_Info;
+         Words   : Vocab.Vocabulary;
+         procedure Flag (Key : String; Value : Answer) is
+         begin
+            if Value /= Absent then
+               Fixtures.Add_Bool (Builder, Key, Value = Yes);
+            end if;
+         end Flag;
+         procedure Id (Key : String; Value : Integer) is
+         begin
+            if Value >= 0 then
+               Fixtures.Add_U32 (Builder, Key, Interfaces.Unsigned_32 (Value));
+            end if;
+         end Id;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "bert");
+         Fixtures.Add_String (Builder, "tokenizer.ggml.model", Model);
+         if Pre /= "" then
+            Fixtures.Add_String (Builder, "tokenizer.ggml.pre", Pre);
+         end if;
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Pieces);
+         for Index in 0 .. Pieces - 1 loop
+            Fixtures.String_Element
+              (Builder,
+               (if Model = "gpt2" and then Index = 0 then "a"
+                elsif Model = "gpt2" and then Index = 1 then "b"
+                elsif Model = "gpt2" and then Index = 2 then "ab"
+                else "p" & Ada.Strings.Fixed.Trim (Natural'Image (Index),
+                                                   Ada.Strings.Both)));
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Pieces);
+         for Index in 0 .. Pieces - 1 loop
+            Fixtures.Float_Element (Builder, -1.0);
+         end loop;
+         Fixtures.End_Array (Builder);
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Pieces);
+         for Index in 0 .. Pieces - 1 loop
+            Fixtures.Int32_Element (Builder, 1);
+         end loop;
+         Fixtures.End_Array (Builder);
+         if Model = "gpt2" then
+            Fixtures.Begin_Array
+              (Builder, "tokenizer.ggml.merges", G.Value_String, 1);
+            Fixtures.String_Element (Builder, "a b");
+            Fixtures.End_Array (Builder);
+         end if;
+         Flag ("tokenizer.ggml.add_bos_token", Add_Begin);
+         Flag ("tokenizer.ggml.add_eos_token", Add_End);
+         Flag ("tokenizer.ggml.add_sep_token", Add_Sep);
+         Id ("tokenizer.ggml.bos_token_id", Bos);
+         Id ("tokenizer.ggml.eos_token_id", Eos);
+         Id ("tokenizer.ggml.seperator_token_id", Sep);
+         Id ("tokenizer.ggml.unknown_token_id", 0);
+         Fixtures.Build (Builder, Image);
+         Parse_Image (Image.all, Item, Status);
+         Assert (E.Is_Ok (Status), "a vocabulary fixture did not parse");
+         Vocab.Load (Words, Item, Status => Status);
+         Assert (E.Is_Ok (Status),
+                 "a " & Model & " vocabulary did not load: "
+                 & E.Error_Code'Image (Status.Code));
+         Containers.Close (Item);
+         B.Free (Image);
+         return Vocab.Pair_Markers (Words);
+      end Rule;
+
+      Converted : constant Vocab.Pair_Rule :=
+        Rule ("bert", 110, Add_Begin => Yes, Add_End => Yes, Add_Sep => No,
+              Eos => 102);
+      Unflagged : constant Vocab.Pair_Rule := Rule ("bert", 110);
+      Xlmr      : constant Vocab.Pair_Rule :=
+        Rule ("t5", 8, Add_Begin => Yes, Add_End => Yes, Add_Sep => Yes,
+              Bos => 1, Eos => 2, Sep => 2);
+      Roberta   : constant Vocab.Pair_Rule :=
+        Rule ("gpt2", 8, Pre => "roberta-bpe", Bos => 0, Eos => 2, Sep => 2);
+   begin
+      Assert (Converted.Begins and then Converted.Ends
+              and then not Converted.Separates
+              and then Converted.Beginning = 101 and then Converted.Ending = 102,
+              "a converted BERT's pair was not [CLS] q [SEP] d [SEP]");
+      Assert (Unflagged.Begins and then not Unflagged.Ends
+              and then Unflagged.Separates and then Unflagged.Separator = 102,
+              "a BERT stating no flags did not join with a separator alone");
+      Assert (Unflagged.Ending = 102,
+              "a BERT with no end marker of its own did not fall back to "
+              & "its separator");
+      Assert (Xlmr.Begins and then Xlmr.Ends and then Xlmr.Separates
+              and then Xlmr.Ending = 2 and then Xlmr.Separator = 2,
+              "an XLM-R pair was not <s> q </s></s> d </s>");
+      Assert (Roberta.Separates and then not Roberta.Ends,
+              "a RoBERTa byte-pair rule did not separate its pair unasked");
+   end Pairs_Join_As_The_Other_Runtime_Joins_Them;
 
    --  What a vocabulary says about itself beyond its pieces, read as the
    --  other runtime reads it (llama-vocab.cpp), each case against a reader
@@ -9161,6 +9867,10 @@ package body Tests.GGUF_Cases is
          "a WordPiece text is wrapped in its markers whether the file says "
          & "so or not");
       Register_Routine
+        (T, Pairs_Join_As_The_Other_Runtime_Joins_Them'Access,
+         "a reranker's pair is joined by the file's own flags, as the other "
+         & "runtime joins it");
+      Register_Routine
         (T, Tokenizer_Edges_Read_As_The_Other_Runtime_Reads_Them'Access,
          "a vocabulary's strip marks, normalizer, separator, best-path "
          & "pieces and Unicode classes are read as the other runtime reads "
@@ -9189,6 +9899,19 @@ package body Tests.GGUF_Cases is
         (T, The_Block_Formats_Encode_By_Their_Own_Rule'Access,
          "the block formats encode by their own rule, and Q4_0's "
          & "is not Q4_1's");
+      Register_Routine
+        (T, Every_Format_Writes_What_Ggml_Writes'Access,
+         "every format writes what ggml writes, with an importance matrix "
+         & "and without");
+      Register_Routine
+        (T, Quantizing_A_File_Writes_What_Llama_Writes'Access,
+         "a quantized file is what llama-quantize writes around its "
+         & "tensors: exclusions, fallbacks, alignment, key types, and "
+         & "experts weighted one at a time");
+      Register_Routine
+        (T, A_Matrix_Is_Collected_As_Llama_Collects_It'Access,
+         "an importance matrix is collected as llama-imatrix collects one: "
+         & "a marker each chunk, the layers' matrices, all of them");
       Register_Routine
         (T, Claimed_Array_Is_Refused'Access,
          "an array the file claims but does not hold is refused, not "

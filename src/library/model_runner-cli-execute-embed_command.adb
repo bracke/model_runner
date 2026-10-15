@@ -1,4 +1,5 @@
 with Model_Runner.Clocks;
+with Ada.Strings.Fixed;
 with Ada.Unchecked_Deallocation;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -189,12 +190,38 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             --  Which pooling this run uses. The caller's where they named
             --  one; otherwise the model's own, for the architecture that
             --  states it; otherwise the mean, as before.
+            --  A reranker pools as the other runtime pools it: Qwen3's
+            --  last position, the rest their first.
             Pooling : constant Opt.Pooling_Kind :=
               (if Item.Pooling_Named then Item.Pooling
                else (case Settings.Pooling is
-                       when L.Pool_Cls | L.Pool_Rank => Opt.Pool_Cls,
+                       when L.Pool_Cls  => Opt.Pool_Cls,
+                       when L.Pool_Rank =>
+                         (if Settings.Kind in L.Qwen3 then Opt.Pool_Last
+                          else Opt.Pool_Cls),
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));
+
+            --  A reranker's own prompt for a pair, where its file carries
+            --  one (Qwen3-Reranker's): the query and the document written
+            --  into it, read with no markers added; empty for the rest.
+            Rerank_Template : constant String :=
+              Containers.String_Value
+                (Container, "tokenizer.chat_template.rerank");
+
+            --  Text with every Mark in it put by Value, as the other runtime
+            --  writes a pair into a reranker's prompt (string_replace_all).
+            function Fill (Text, Mark, Value : String) return String is
+               At_Mark : constant Natural :=
+                 (if Mark'Length = 0 then 0
+                  else Ada.Strings.Fixed.Index (Text, Mark));
+            begin
+               if At_Mark = 0 then
+                  return Text;
+               end if;
+               return Text (Text'First .. At_Mark - 1) & Value
+                 & Fill (Text (At_Mark + Mark'Length .. Text'Last), Mark, Value);
+            end Fill;
 
             --  Build the query/document pair a reranker scores, into Held
             --  and Count: <s> query </s></s> document </s> for the RoBERTa
@@ -209,13 +236,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                Q_Room   : Token_Room;
                D_Room   : Token_Room;
                Q_Count, D_Count : Natural;
-               Beginning : constant Vocab.Token_Id :=
-                 Vocab.Beginning_Token (Words.all);
-               Ending    : constant Vocab.Token_Id :=
-                 Vocab.End_Token (Words.all);
-               Sep       : constant Vocab.Token_Id :=
-                 (if Vocab.Find (Words.all, "[SEP]") /= Vocab.No_Token
-                  then Vocab.Find (Words.all, "[SEP]") else Ending);
+               Rule : constant Vocab.Pair_Rule := Vocab.Pair_Markers (Words.all);
                K : Natural := 0;
 
                --  A token past the room is refused, not dropped: dropped, it
@@ -253,6 +274,32 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   end loop;
                end Encode_Text;
             begin
+               --  The file's own prompt for a pair, where it has one: the
+               --  two written into it, and the whole read as text, its
+               --  markers by name and none added.
+               if Rerank_Template /= "" then
+                  declare
+                     Filled : constant String :=
+                       Fill (Fill (Rerank_Template, "{query}",
+                                   Item.Query_Text.all),
+                             "{document}", Document);
+                  begin
+                     Encode_Text (Filled, D_Room, D_Count);
+                     if E.Is_Error (Condition) then
+                        Free (D_Room);
+                        return;
+                     end if;
+                     if D_Count > Held'Length then
+                        Free (Held);
+                        Held := new Vocab.Token_Array (1 .. D_Count);
+                     end if;
+                     Held (1 .. D_Count) := D_Room (1 .. D_Count);
+                     Count := D_Count;
+                     Free (D_Room);
+                     return;
+                  end;
+               end if;
+
                Encode_Text (Item.Query_Text.all, Q_Room, Q_Count);
                if E.Is_Error (Condition) then
                   Free (Q_Room);
@@ -273,18 +320,30 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   Held := new Vocab.Token_Array (1 .. Q_Count + D_Count + 6);
                end if;
 
-               if Vocab.Adds_Beginning (Words.all) then
-                  Put (Beginning);
+               --  As the other runtime joins a pair where the file has no
+               --  template for it (format_prompt_rerank), by the file's own
+               --  flags: [CLS] q [SEP] d [SEP] for a BERT, whose end marker
+               --  is its separator -- a [SEP] put beside it as well gave
+               --  every BERT cross-encoder two -- and <s> q </s></s> d </s>
+               --  for XLM-R, which asks for a separator too.
+               if Rule.Begins then
+                  Put (Rule.Beginning);
                end if;
                for I in 1 .. Q_Count loop
                   Put (Q_Room (I));
                end loop;
-               Put (Ending);
-               Put (Sep);
+               if Rule.Ends then
+                  Put (Rule.Ending);
+               end if;
+               if Rule.Separates then
+                  Put (Rule.Separator);
+               end if;
                for I in 1 .. D_Count loop
                   Put (D_Room (I));
                end loop;
-               Put (Ending);
+               if Rule.Ends then
+                  Put (Rule.Ending);
+               end if;
                Count := K;
                Free (Q_Room);
                Free (D_Room);
@@ -295,7 +354,15 @@ package body Model_Runner.CLI.Execute.Embed_Command is
             --  model reads whole texts and was given one; said too long, with
             --  how many and what would take it, where not -- Fits false.
             procedure Fit (Fits : out Boolean) is
-               Most : constant Natural := L.Capacity (Session);
+               --  What the session holds -- or, for a model that reads the
+               --  text whole, what it was trained to read where that is
+               --  less: the evaluator refuses past it, and a --context-size
+               --  above it let --truncate cut to a length it then refused.
+               Most : constant Natural :=
+                 (if Settings.Causal or else Settings.Context_Length = 0
+                  then L.Capacity (Session)
+                  else Natural'Min (L.Capacity (Session),
+                                    Settings.Context_Length));
             begin
                Fits := True;
                if Count > Most and then Most > 0 then
@@ -303,8 +370,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                      declare
                         use type Vocab.Token_Id;
                         Ended : constant Boolean :=
-                          not Settings.Causal
-                          and then Vocab.Adds_End (Words.all)
+                          Vocab.Adds_End (Words.all)
                           and then Held (Count) = Vocab.End_Token (Words.all);
                      begin
                         Pres.Put_Note
@@ -335,6 +401,21 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                end if;
             end Fit;
          begin
+            --  A query beside a model that does not rank changes nothing:
+            --  said, rather than a vector handed back to a caller who asked
+            --  for scores.
+            if Item.Query_Text /= null and then Settings.Pooling /= L.Pool_Rank
+            then
+               Pres.Put_Note (Screen, "cli.note.embed_query_unused");
+            end if;
+
+            --  A file that asks for no pooling asks for a vector a position,
+            --  which this does not write: said, and the mean written.
+            if not Item.Pooling_Named and then Settings.Pooling = L.Pool_None
+            then
+               Pres.Put_Note (Screen, "cli.note.embed_pooling_none");
+            end if;
+
             --  Reranking a query against several documents in one load: where
             --  the prompt is more than one line, each line is a document, each
             --  scored against --query and its score printed in turn. A single
@@ -349,15 +430,33 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   while First <= Prompt.all'Last loop
                      declare
                         Stop : Natural := First;
+                        --  The line's end, before a carriage return a list
+                        --  written with CRLF puts there: read as the
+                        --  document's last character, it moved its score.
+                        Upto : Natural;
                      begin
                         while Stop <= Prompt.all'Last
                           and then Prompt.all (Stop) /= ASCII.LF
                         loop
                            Stop := Stop + 1;
                         end loop;
+                        Upto := Stop - 1;
+                        if Upto >= First and then Prompt.all (Upto) = ASCII.CR
+                        then
+                           Upto := Upto - 1;
+                        end if;
 
-                        if Stop > First then
-                           Encode_Pair (Prompt.all (First .. Stop - 1));
+                        --  An empty line is a document with no text: its
+                        --  score is none, on its own line, so the scores
+                        --  stay one a line beside the lines they score --
+                        --  dropped, every score after it stood a line off.
+                        --  The last line's end is not a document.
+                        if Upto < First then
+                           if Stop <= Prompt.all'Last then
+                              Pres.Put_Line (Screen, "nan");
+                           end if;
+                        else
+                           Encode_Pair (Prompt.all (First .. Upto));
                            if E.Is_Error (Condition) then
                               Free (Held);
                               Fail (Condition);
@@ -400,9 +499,31 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                               end if;
                               Read := Read + Count;
 
-                              --  The CLS position stands for the pair; its
-                              --  state through the head is the score.
-                              Pooled := Room.all (0 .. Width - 1);
+                              --  Pooled as the single pair is, by the one
+                              --  Pooling: its first position for a BERT
+                              --  cross-encoder, its last for Qwen3's.
+                              case Pooling is
+                                 when Opt.Pool_Cls =>
+                                    Pooled := Room.all (0 .. Width - 1);
+                                 when Opt.Pool_Last =>
+                                    Pooled :=
+                                      Room.all
+                                        (N.Element_Count (Count - 1) * Width
+                                         .. N.Element_Count (Count) * Width - 1);
+                                 when Opt.Pool_Mean =>
+                                    Pooled := [others => 0.0];
+                                    for Which in 0 .. N.Element_Count (Count) - 1
+                                    loop
+                                       for Element in Pooled'Range loop
+                                          Pooled (Element) := Pooled (Element)
+                                            + Room.all (Which * Width + Element);
+                                       end loop;
+                                    end loop;
+                                    for Element in Pooled'Range loop
+                                       Pooled (Element) :=
+                                         Pooled (Element) / N.Real (Count);
+                                    end loop;
+                              end case;
                               Free_Reals (Room);
 
                               L.Rank (Session, Prepared, Pooled, Score,
@@ -420,7 +541,12 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                         First := Stop + 1;
                      end;
                   end loop;
+                  Free (Held);
                   Say_Statistics;
+                  --  Closed as the single text's path closes it: returning
+                  --  without, the model's file stayed open in the process,
+                  --  and the next write of it was refused as shared.
+                  Cleanup;
                   return;
                end;
             end if;
@@ -439,18 +565,17 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                   return;
                end if;
             else
-               --  The end marker where the model is one that reads whole texts
-               --  and its file asks for one. Bert is trained with a marker at
-               --  each end and its states are what they are because of them;
-               --  a decoder's embedded text is not a finished utterance and
-               --  takes none, which is what this did for every model before.
-               --  Grown where the normalizer made more of the text than its
-               --  bytes -- a charsmap writes U+FDFA as eighteen characters --
-               --  as the pair's texts are.
+               --  The markers the file asks for, at both ends, on any model,
+               --  as the other runtime adds them: a decoder embedder pooled by
+               --  its last position -- Qwen3-Embedding -- was trained with
+               --  its end marker there, and pooled without it the vector was
+               --  another one. Grown where the normalizer made more of the
+               --  text than its bytes -- a charsmap writes U+FDFA as
+               --  eighteen characters -- as the pair's texts are.
                for Attempt in 1 .. 6 loop
                   Vocab.Encode
                     (Words.all, Prompt.all, Vocab.Adds_Beginning (Words.all),
-                     not Settings.Causal and then Vocab.Adds_End (Words.all),
+                     Vocab.Adds_End (Words.all),
                      Held.all, Count, Condition);
                   exit when not (E.Is_Error (Condition)
                                  and then E."=" (Condition.Code, E.Tokenizer_Buffer_Too_Small));
@@ -597,19 +722,45 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                --  it is. A vector of length zero stays as it is: there is no
                --  direction to scale it to, and dividing would produce
                --  not-a-number where the honest answer is what was computed.
+               --  Divided by its norm, as the other runtime's
+               --  common_embd_normalize divides it: the Euclidean length
+               --  unasked, the largest magnitude scaled to sixteen-bit
+               --  integers for nought, the p-norm for any other p.
                if Item.Normalize then
                   declare
+                     Power : constant Natural := Item.Norm_Power;
                      Total : N.Wide_Real := 0.0;
                   begin
-                     for Element of Pooled loop
-                        Total := Total + N.Wide_Real (Element)
-                          * N.Wide_Real (Element);
-                     end loop;
+                     if Power = 0 then
+                        for Element of Pooled loop
+                           Total := N.Wide_Real'Max
+                             (Total, abs N.Wide_Real (Element));
+                        end loop;
+                        Total := Total / 32_760.0;
+                     elsif Power = 2 then
+                        for Element of Pooled loop
+                           Total := Total + N.Wide_Real (Element)
+                             * N.Wide_Real (Element);
+                        end loop;
+                        Total := N.Sqrt (Total);
+                     else
+                        for Element of Pooled loop
+                           if Element /= 0.0 then
+                              Total := Total
+                                + N.Exp (N.Wide_Real (Power)
+                                         * N.Log (abs N.Wide_Real (Element)));
+                           end if;
+                        end loop;
+                        if Total > 0.0 then
+                           Total := N.Exp (N.Log (Total) / N.Wide_Real (Power));
+                        end if;
+                     end if;
 
+                     --  A vector of length nought stays as it is: there is
+                     --  no direction to scale it to.
                      if Total > 0.0 then
                         declare
-                           Scale : constant N.Real :=
-                             N.Real (1.0 / N.Sqrt (Total));
+                           Scale : constant N.Real := N.Real (1.0 / Total);
                         begin
                            for Element of Pooled loop
                               Element := Element * Scale;
@@ -625,8 +776,14 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                --  exists: what it guards against is a model's own bytes
                --  reaching a terminal, and these are digits, a sign and a
                --  point this program produced from a number.
+               --  At the other runtime's precision: seven decimals, and none
+               --  for the sixteen-bit scaling, whose components are whole.
                for Element of Pooled loop
-                  Pres.Put_Line (Screen, T.Image (Long_Float (Element), 6));
+                  Pres.Put_Line
+                    (Screen,
+                     T.Image (Long_Float (Element),
+                              (if Item.Normalize and then Item.Norm_Power = 0
+                               then 0 else 7)));
                end loop;
             end if;
          end;

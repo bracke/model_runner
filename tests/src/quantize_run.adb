@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 with Ada.Real_Time;
 with Ada.Streams.Stream_IO;
@@ -39,8 +40,8 @@ package body Quantize_Run is
    use type Quantizer.Target;
    use type N.Element_Count;
    use type B.Byte_Array_Access;
-   use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Real_Time.Time;
+   use type Interfaces.Unsigned_16;
 
    -------------
    -- Summary --
@@ -65,7 +66,7 @@ package body Quantize_Run is
            else "," & Natural'Image (Item.Bumped) & " above the base")
         & (if Item.Weighted + Item.Unweighted = 0 then ""
            else "," & Natural'Image (Item.Weighted) & " weighted,"
-                & Natural'Image (Item.Unweighted) & " not named by the "
+                & Natural'Image (Item.Unweighted) & " not weighted by the "
                 & "matrix")
         & (if Item.Bytes_Out = 0 then ""
            else ";" & Long_Long_Integer'Image (Item.Bytes_In)
@@ -91,19 +92,22 @@ package body Quantize_Run is
    -- Read_Matrix --
    -----------------
 
-   --  One tensor's importance, as a vector over its columns.
+   --  One tensor's importance, as a vector over its columns -- and, for a
+   --  tensor of experts, one such vector an expert, laid end to end.
    --
    --  The file holds the sum of the squares of everything that met each
-   --  column and, beside it, how many rows went into that sum. What a
-   --  caller wants is the mean, so the division happens here: llama.cpp
-   --  does the same, and a count of zero is a column nothing reached, which
-   --  is given a weight of one rather than an infinity.
+   --  column and, beside it, how many rows went into that sum: one count
+   --  for a matrix, and one an expert for a stack of them, since each
+   --  expert saw only the rows routed to it. What a caller wants is the
+   --  mean, so the division happens here and slice by slice, each by its
+   --  own count, as common/imatrix-loader does it: a count of zero is an
+   --  expert nothing reached, which is given a weight of one rather than an
+   --  infinity.
    procedure Read_Matrix
      (From   : in out Files.File_Source;
       File   : Containers.Container;
       Sums   : Positive;
       Counts : Positive;
-      Row    : Element_Count;
       Into   : out T.Real_Array_Access;
       Status : out E.Error_Info);
 
@@ -112,59 +116,155 @@ package body Quantize_Run is
       File   : Containers.Container;
       Sums   : Positive;
       Counts : Positive;
-      Row    : Element_Count;
       Into   : out T.Real_Array_Access;
       Status : out E.Error_Info)
    is
-      Raw : B.Byte_Array_Access :=
-        new B.Byte_Array (0 .. B.Byte_Count (Row) * 4 - 1);
-      Tally : B.Byte_Array (0 .. 3) := [others => 0];
-      Ok : Boolean;
+      Wide : constant Element_Count :=
+        Element_Count (Containers.Tensor_Elements (File, Sums));
+      Many : constant Element_Count :=
+        Element_Count (Containers.Tensor_Elements (File, Counts));
+
+      Raw   : B.Byte_Array_Access :=
+        new B.Byte_Array (0 .. B.Byte_Count (Wide) * 4 - 1);
+      Tally : B.Byte_Array_Access :=
+        new B.Byte_Array (0 .. B.Byte_Count (Many) * 4 - 1);
+      Held  : T.Real_Array_Access;
+      Ok    : Boolean;
    begin
       Into := null;
 
       Files.Read
         (From, B.Byte_Count (Containers.Tensor_Offset (File, Sums)),
          Raw.all, Status);
+      if E.Is_Ok (Status) then
+         Files.Read
+           (From, B.Byte_Count (Containers.Tensor_Offset (File, Counts)),
+            Tally.all, Status);
+      end if;
       if E.Is_Error (Status) then
          B.Free (Raw);
+         B.Free (Tally);
          return;
       end if;
 
-      Files.Read
-        (From, B.Byte_Count (Containers.Tensor_Offset (File, Counts)),
-         Tally, Status);
-      if E.Is_Error (Status) then
-         B.Free (Raw);
-         return;
+      T.Allocate (Wide, Into);
+      T.Allocate (Many, Held);
+
+      Q.Decode_Blocks (G.Type_F32, Tally.all, 0, Many, Held.all, Ok);
+      if Ok then
+         Q.Decode_Blocks (G.Type_F32, Raw.all, 0, Wide, Into.all, Ok);
       end if;
 
-      T.Allocate (Row, Into);
-
-      declare
-         Held : T.Real_Array (0 .. 0);
-      begin
-         Q.Decode_Blocks (G.Type_F32, Tally, 0, 1, Held, Ok);
-
-         if not Ok or else Held (0) <= 0.0 then
-            Into.all := [others => 1.0];
-            B.Free (Raw);
-            return;
-         end if;
-
-         Q.Decode_Blocks (G.Type_F32, Raw.all, 0, Row, Into.all, Ok);
-
-         if not Ok then
-            Into.all := [others => 1.0];
-         else
-            for Index in Into.all'Range loop
-               Into.all (Index) := Into.all (Index) / Held (0);
+      if not Ok then
+         Into.all := [others => 1.0];
+      else
+         declare
+            Slice : constant Element_Count := Wide / Many;
+         begin
+            for Which in 0 .. Many - 1 loop
+               for Index in Which * Slice .. (Which + 1) * Slice - 1 loop
+                  Into.all (Into.all'First + Index) :=
+                    (if Held.all (Held.all'First + Which) > 0.0
+                     then Into.all (Into.all'First + Index)
+                          / Held.all (Held.all'First + Which)
+                     else 1.0);
+               end loop;
             end loop;
-         end if;
-      end;
+         end;
+      end if;
 
+      T.Free (Held);
       B.Free (Raw);
+      B.Free (Tally);
    end Read_Matrix;
+
+   --  Bytes to a file a slice at a time, read where they lie: a tensor is
+   --  hundreds of megabytes, and a stream array that size on the stack is
+   --  a storage error.
+   procedure Write_Bytes
+     (Output : Ada.Streams.Stream_IO.File_Type; Data : B.Byte_Array);
+
+   procedure Write_Bytes
+     (Output : Ada.Streams.Stream_IO.File_Type; Data : B.Byte_Array)
+   is
+      Slice   : constant B.Byte_Count := 1024 * 1024;
+      At_Byte : B.Byte_Count := Data'First;
+   begin
+      while At_Byte <= Data'Last loop
+         declare
+            Upto : constant B.Byte_Count :=
+              B.Byte_Count'Min (Data'Last, At_Byte + Slice - 1);
+            Room : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Upto - At_Byte + 1));
+            for Room'Address use Data (At_Byte)'Address;
+            pragma Import (Ada, Room);
+         begin
+            Ada.Streams.Stream_IO.Write (Output, Room);
+            At_Byte := Upto + 1;
+         end;
+      end loop;
+   end Write_Bytes;
+
+   --  The zeros a tensor is followed by.
+   procedure Write_Zeros
+     (Output : Ada.Streams.Stream_IO.File_Type; Count : B.Byte_Count);
+
+   procedure Write_Zeros
+     (Output : Ada.Streams.Stream_IO.File_Type; Count : B.Byte_Count) is
+   begin
+      if Count > 0 then
+         Write_Bytes (Output, B.Byte_Array'(1 .. Count => 0));
+      end if;
+   end Write_Zeros;
+
+   --  The number llama.cpp writes in general.file_type for what was asked:
+   --  its llama_ftype. A pure k-quant is the mixture of the same name with
+   --  the policy turned off, which is what `llama-quantize --pure` writes
+   --  for it.
+   function File_Type_Of
+     (Wanted : Quantizer.Target;
+      Mixed  : Recipes.Recipe;
+      Mixture : Boolean) return Interfaces.Unsigned_32
+   is (if Mixture
+       then (case Mixed is
+                when Recipes.Q2_K_Mix => 10,
+                when Recipes.Q3_K_S => 11,
+                when Recipes.Q3_K_M => 12,
+                when Recipes.Q3_K_L => 13,
+                when Recipes.Q4_K_S => 14,
+                when Recipes.Q4_K_M => 15,
+                when Recipes.Q5_K_S => 16,
+                when Recipes.Q5_K_M => 17)
+       else (case Wanted is
+                when Quantizer.Q4_0 => 2,
+                when Quantizer.Q4_1 => 3,
+                when Quantizer.Q8_0 => 7,
+                when Quantizer.Q5_0 => 8,
+                when Quantizer.Q5_1 => 9,
+                when Quantizer.Q2_K => 10,
+                when Quantizer.Q3_K => 12,
+                when Quantizer.Q4_K => 15,
+                when Quantizer.Q5_K => 17,
+                when Quantizer.Q6_K => 18,
+                when Quantizer.IQ4_NL => 25,
+                when Quantizer.IQ4_XS => 30));
+
+   --  Whether a key is one the writer sets itself rather than copies.
+   --
+   --  The split keys describe the source's files and not the one written;
+   --  the alignment is written by the builder, which then follows it; and
+   --  the file type, the quantization version and an importance matrix's
+   --  record describe the quantizing, which is this one's.
+   function Set_Here (Key : String) return Boolean
+   is (Key = "general.alignment"
+       or else Key = "general.file_type"
+       or else Key = "general.quantization_version"
+       or else Key = "split.no"
+       or else Key = "split.count"
+       or else Key = "split.tensors.count"
+       or else (Key'Length > 17
+                and then Key (Key'First .. Key'First + 16)
+                         = "quantize.imatrix."));
 
    -------------
    -- Compare --
@@ -372,10 +472,12 @@ package body Quantize_Run is
          Have_Weights   : Boolean := False;
 
          Maker  : Fixtures.Builder;
-         Made   : B.Byte_Array_Access := null;
 
          Model_Shape : Recipes.Shape;
          Walked      : Recipes.Progress;
+
+         Output  : Ada.Streams.Stream_IO.File_Type;
+         Writing : Boolean := False;
       begin
          if Matrix /= "" then
             Files.Open (Weights_Source, Matrix, Status => Status);
@@ -400,7 +502,7 @@ package body Quantize_Run is
          if E.Is_Error (Status) then
             Note ("the model would not open: "
                   & E.Error_Code'Image (Status.Code));
-            return;
+            goto Close_Matrix;
          end if;
 
          Containers.Reader.Parse (Item, Source, Status => Status);
@@ -408,7 +510,17 @@ package body Quantize_Run is
             Files.Close (Source);
             Note ("the model would not parse: "
                   & E.Error_Code'Image (Status.Code));
-            return;
+            goto Close_Matrix;
+         end if;
+
+         --  One file of several holds some of the tensors and all of the
+         --  keys that say so; written out alone it would be a model with
+         --  most of itself missing that claimed to be whole.
+         if Containers.Shard_Count (Item) > 1 then
+            Note ("a model split across"
+                  & Natural'Image (Containers.Shard_Count (Item))
+                  & " files; join them first (llama-gguf-split --merge)");
+            goto Give_Up;
          end if;
 
          --  What the policy asks about the model, where a mixture was
@@ -421,9 +533,6 @@ package body Quantize_Run is
                  (if Containers.Has (Item, "general.architecture")
                   then Containers.String_Value (Item, "general.architecture")
                   else "");
-
-               Whole  : Long_Long_Integer;
-               Said   : E.Error_Info;
 
                function Number (Key : String; Default : Natural) return Natural
                is
@@ -445,14 +554,18 @@ package body Quantize_Run is
                  Number (".attention.head_count_kv", Heads);
                Experts  : constant Natural := Number (".expert_count", 0);
 
-               Held : Long_Long_Integer := 0;
+               Held   : Long_Long_Integer := 0;
+               Values : Natural := 0;
             begin
-               pragma Unreferenced (Whole, Said);
-
                for Which in 1 .. Containers.Tensor_Count (Item) loop
                   Held := Held
                     + Long_Long_Integer
                         (Containers.Tensor_Elements (Item, Which));
+                  if Recipes.Is_Attention_Value
+                       (Containers.Tensor_Name (Item, Which))
+                  then
+                     Values := Values + 1;
+                  end if;
                end loop;
 
                if not Recipes.Fits (Kind, Experts, Held) then
@@ -466,15 +579,26 @@ package body Quantize_Run is
                   Grouped =>
                     (if KV_Heads = 0 then 1 else Heads / KV_Heads),
                   Tied    =>
-                    Containers.Find_Tensor (Item, "output.weight") = 0);
+                    Containers.Find_Tensor (Item, "output.weight") = 0,
+                  Values  => Values);
             end;
          end if;
 
-         --  Every metadata entry, in the order the file holds them. A key
-         --  this does not know how to write is a key the output would not
-         --  carry, and a model missing a key it needs is a model that will
-         --  not open -- so an unknown kind stops the run rather than being
-         --  skipped quietly.
+         --  The data section follows the source's alignment where it named
+         --  one, as llama.cpp's writer does: the key is copied and the
+         --  writer then pads to it. Copying the key while padding to the
+         --  default wrote a file whose offsets broke the rule it stated.
+         Fixtures.Reset
+           (Maker,
+            Alignment =>
+              (if Containers.Has (Item, "general.alignment")
+               then Containers.Alignment (Item) else 0));
+
+         --  Every metadata entry, in the order the file holds them, each
+         --  written as the type it was read as. A key this does not know
+         --  how to write is a key the output would not carry, and a model
+         --  missing a key it needs is a model that will not open -- so an
+         --  unknown kind stops the run rather than being skipped quietly.
          for Index in 1 .. Containers.Metadata_Count (Item) loop
             declare
                Key  : constant String := Containers.Metadata_Key (Item, Index);
@@ -486,6 +610,10 @@ package body Quantize_Run is
                Flag  : Boolean;
                Said  : E.Error_Info;
             begin
+               if Set_Here (Key) then
+                  goto Next_Key;
+               end if;
+
                case Kind is
                   when G.Value_String =>
                      Fixtures.Add_String
@@ -501,17 +629,7 @@ package body Quantize_Run is
                         Note ("a metadata number would not read: " & Key);
                         goto Give_Up;
                      end if;
-
-                     if Kind = G.Value_UInt64 or else Kind = G.Value_Int64 then
-                        Fixtures.Add_U64
-                          (Maker, Key, Interfaces.Unsigned_64 (Whole));
-                     elsif Kind = G.Value_Int32 then
-                        Fixtures.Add_I32
-                          (Maker, Key, Interfaces.Integer_32 (Whole));
-                     else
-                        Fixtures.Add_U32
-                          (Maker, Key, Interfaces.Unsigned_32 (Whole));
-                     end if;
+                     Fixtures.Add_Integer (Maker, Key, Kind, Whole);
 
                   when G.Value_Float32 | G.Value_Float64 =>
                      Containers.Get_Float
@@ -521,7 +639,11 @@ package body Quantize_Run is
                         Note ("a metadata number would not read: " & Key);
                         goto Give_Up;
                      end if;
-                     Fixtures.Add_F32 (Maker, Key, N.Real (Real));
+                     if Kind = G.Value_Float64 then
+                        Fixtures.Add_F64 (Maker, Key, Real);
+                     else
+                        Fixtures.Add_F32 (Maker, Key, N.Real (Real));
+                     end if;
 
                   when G.Value_Bool =>
                      Containers.Get_Boolean (Item, Key, Flag, Said);
@@ -583,25 +705,39 @@ package body Quantize_Run is
                                     Note ("a number would not read in " & Key);
                                     goto Give_Up;
                                  end if;
-                                 Fixtures.Float_Element (Maker, N.Real (Real));
+                                 if Of_Kind = G.Value_Float64 then
+                                    Fixtures.F64_Element (Maker, Real);
+                                 else
+                                    Fixtures.Float_Element
+                                      (Maker, N.Real (Real));
+                                 end if;
 
-                              when others =>
+                              when G.Value_Bool =>
+                                 Containers.Get_Boolean_Element
+                                   (Item, Key, Which, Flag, Said);
+                                 if E.Is_Error (Said) then
+                                    Note ("a flag would not read in " & Key);
+                                    goto Give_Up;
+                                 end if;
+                                 Fixtures.Bool_Element (Maker, Flag);
+
+                              when G.Value_UInt8 | G.Value_Int8
+                                 | G.Value_UInt16 | G.Value_Int16
+                                 | G.Value_UInt32 | G.Value_Int32
+                                 | G.Value_UInt64 | G.Value_Int64 =>
                                  Containers.Get_Integer_Element
                                    (Item, Key, Which, Whole, Said);
                                  if E.Is_Error (Said) then
                                     Note ("a number would not read in " & Key);
                                     goto Give_Up;
                                  end if;
+                                 Fixtures.Integer_Element
+                                   (Maker, Of_Kind, Whole);
 
-                                 if Of_Kind = G.Value_UInt64
-                                   or else Of_Kind = G.Value_Int64
-                                 then
-                                    Fixtures.UInt64_Element
-                                      (Maker, Interfaces.Unsigned_64 (Whole));
-                                 else
-                                    Fixtures.Int32_Element
-                                      (Maker, Interfaces.Integer_32 (Whole));
-                                 end if;
+                              when G.Value_Array =>
+                                 Note ("an array of arrays, which this does "
+                                       & "not write: " & Key);
+                                 goto Give_Up;
                            end case;
                         end loop;
 
@@ -609,236 +745,519 @@ package body Quantize_Run is
                      end;
 
                end case;
+
+               <<Next_Key>>
             end;
          end loop;
 
-         --  And every tensor, converted or carried.
-         Result.Tensors := Containers.Tensor_Count (Item);
+         --  And the keys that describe this quantizing: llama.cpp's
+         --  file-type number and quantization version, and where a matrix
+         --  was used, what it was, as llama-quantize records it.
+         Fixtures.Add_U32 (Maker, "general.quantization_version", 2);
+         Fixtures.Add_U32
+           (Maker, "general.file_type",
+            File_Type_Of (Wanted, Mixed, Mixture));
 
-         for Index in 1 .. Result.Tensors loop
+         if Have_Weights then
             declare
-               Name  : constant String := Containers.Tensor_Name (Item, Index);
-               Kind  : constant G.Tensor_Type :=
-                 Containers.Tensor_Format (Item, Index);
-               Rank  : constant Positive := Containers.Tensor_Rank (Item, Index);
-               Count : constant G.U64 :=
-                 Containers.Tensor_Elements (Item, Index);
-               Bytes : constant G.U64 := Containers.Tensor_Bytes (Item, Index);
-               --  Absolute already: Tensor_Offset is from the start of the
-               --  file and not from the data section, which the spec says
-               --  and adding Data_Offset to it does not.
-               At_Byte : constant G.U64 :=
-                 Containers.Tensor_Offset (Item, Index);
-
-               Shape : Fixtures.Dimension_List (1 .. Rank);
-
-               --  A tensor is re-encoded when it is more than a vector and
-               --  its elements fill whole blocks. A norm or a bias is a
-               --  vector and stays what it is, which is what every
-               --  quantized file does with them.
-               --  What this tensor gets: the one format asked for, or
-               --  whatever the mixture says of this tensor in particular.
-               Into_Type : constant Quantizer.Target :=
-                 (if Mixture
-                  then Recipes.Type_For
-                         (Mixed, Name, Model_Shape, Walked,
-                          Long_Long_Integer
-                            (Containers.Tensor_Dimension (Item, Index, 1)))
-                  else Wanted);
-
-               Convert : constant Boolean :=
-                 Rank > 1
-                 and then Count mod G.U64 (Quantizer.Block_Of (Into_Type)) = 0
-                 and then Kind /= Quantizer.Type_Of (Into_Type);
-
-               Raw : B.Byte_Array_Access :=
-                 new B.Byte_Array (0 .. B.Byte_Count (Bytes) - 1);
+               Entries : Natural := 0;
+               Chunks  : Long_Long_Integer := 0;
+               Said    : E.Error_Info;
+               Tail    : constant String := ".in_sum2";
             begin
-               for Which in 1 .. Rank loop
-                  Shape (Which) :=
-                    Containers.Tensor_Dimension (Item, Index, Which);
-               end loop;
-
-               Files.Read
-                 (Source, B.Byte_Count (At_Byte), Raw.all, Status);
-               if E.Is_Error (Status) then
-                  B.Free (Raw);
-                  Note ("a tensor would not read: " & Name & " "
-                        & E.Error_Code'Image (Status.Code));
-                  goto Give_Up;
-               end if;
-
-               Result.Bytes_In := Result.Bytes_In + Long_Long_Integer (Bytes);
-
-               if Convert then
+               for Which in 1 .. Containers.Tensor_Count (Weights_File) loop
                   declare
-                     Values : T.Real_Array_Access;
-                     Ok : Boolean;
+                     Named : constant String :=
+                       Containers.Tensor_Name (Weights_File, Which);
                   begin
-                     T.Allocate (N.Element_Count (Count), Values);
-
-                     --  Blocks and not elements, which is what Decode_Blocks
-                     --  counts: a Q8_0 tensor of a million elements is
-                     --  thirty-one thousand blocks, and asking for a million
-                     --  of them is asking for thirty-two times the tensor.
-                     Q.Decode_Blocks
-                       (Kind, Raw.all, 0,
-                        N.Element_Count (Count)
-                        / N.Element_Count (G.Block_Elements (Kind)),
-                        Values.all, Ok);
-
-                     if not Ok then
-                        T.Free (Values);
-                        B.Free (Raw);
-                        Note ("a tensor would not decode: " & Name);
-                        goto Give_Up;
-                     end if;
-
-                     declare
-                        --  What the matrix says this tensor's columns are
-                        --  worth, if it names it. The sums it holds are
-                        --  over however many rows went through, so they are
-                        --  divided by that count before anything reads
-                        --  them.
-                        Row : constant Element_Count :=
-                          Element_Count
-                            (Containers.Tensor_Dimension (Item, Index, 1));
-
-                        Named : constant Natural :=
-                          (if Have_Weights
-                           then Containers.Find_Tensor
-                                  (Weights_File, Name & ".in_sum2")
-                           else 0);
-
-                        Counted : constant Natural :=
-                          (if Named = 0 then 0
-                           else Containers.Find_Tensor
-                                  (Weights_File, Name & ".counts"));
-
-                        Use_Matrix : constant Boolean :=
-                          Named /= 0 and then Counted /= 0
-                          and then Containers.Tensor_Elements
-                                     (Weights_File, Named) = G.U64 (Row);
-
-                        Heft : T.Real_Array_Access := null;
-                     begin
-                        if Use_Matrix then
-                           Read_Matrix
-                             (Weights_Source, Weights_File, Named, Counted,
-                              Row, Heft, Status);
-
-                           if E.Is_Error (Status) then
-                              T.Free (Values);
-                              B.Free (Raw);
-                              Note ("the matrix would not read for " & Name);
-                              goto Give_Up;
-                           end if;
-                        end if;
-
-                        declare
-                           Written : constant B.Byte_Array :=
-                             (if Heft = null
-                              then Quantizer.Encode (Values.all, Into_Type)
-                              else Quantizer.Encode_Weighted
-                                     (Values.all, Heft.all, Into_Type));
-                        begin
-                           Fixtures.Add_Tensor
-                             (Maker, Name, Shape,
-                              Quantizer.Type_Of (Into_Type), Written);
-                           Result.Bytes_Out :=
-                             Result.Bytes_Out
-                             + Long_Long_Integer (Written'Length);
-                        end;
-
-                        if Heft /= null then
-                           T.Free (Heft);
-                           Result.Weighted := Result.Weighted + 1;
-                        elsif Have_Weights then
-                           Result.Unweighted := Result.Unweighted + 1;
-                        end if;
-                     end;
-
-                     T.Free (Values);
-                     Result.Converted := Result.Converted + 1;
-
-                     if Into_Type /= Wanted then
-                        Result.Bumped := Result.Bumped + 1;
+                     if Named'Length > Tail'Length
+                       and then Named (Named'Last - Tail'Length + 1
+                                       .. Named'Last) = Tail
+                     then
+                        Entries := Entries + 1;
                      end if;
                   end;
-               else
-                  Fixtures.Add_Tensor (Maker, Name, Shape, Kind, Raw.all);
-                  Result.Bytes_Out :=
-                    Result.Bytes_Out + Long_Long_Integer (Bytes);
-                  Result.Copied := Result.Copied + 1;
+               end loop;
+
+               Fixtures.Add_String (Maker, "quantize.imatrix.file", Matrix);
+
+               if Containers.Has (Weights_File, "imatrix.datasets") then
+                  declare
+                     Room : Natural;
+                  begin
+                     Containers.Get_String_Element_Length
+                       (Weights_File, "imatrix.datasets", 1, Room, Said);
+                     if E.Is_Ok (Said) then
+                        declare
+                           Text : String (1 .. Room);
+                           Used : Natural;
+                        begin
+                           Containers.Get_String_Element
+                             (Weights_File, "imatrix.datasets", 1, Text,
+                              Used, Said);
+                           if E.Is_Ok (Said) then
+                              Fixtures.Add_String
+                                (Maker, "quantize.imatrix.dataset",
+                                 Text (1 .. Used));
+                           end if;
+                        end;
+                     end if;
+                  end;
                end if;
 
-               B.Free (Raw);
+               Fixtures.Add_U32
+                 (Maker, "quantize.imatrix.entries_count",
+                  Interfaces.Unsigned_32 (Entries));
+
+               if Containers.Has (Weights_File, "imatrix.chunk_count") then
+                  Containers.Get_Integer
+                    (Weights_File, "imatrix.chunk_count", 0,
+                     Long_Long_Integer (Interfaces.Unsigned_32'Last),
+                     Chunks, Said);
+                  if E.Is_Ok (Said) and then Chunks > 0 then
+                     Fixtures.Add_U32
+                       (Maker, "quantize.imatrix.chunks_count",
+                        Interfaces.Unsigned_32 (Chunks));
+                  end if;
+               end if;
             end;
-         end loop;
+         end if;
 
-         if Into /= "" then
-            Fixtures.Build (Maker, Made);
+         Result.Tensors := Containers.Tensor_Count (Item);
 
-            if Made = null then
-               Note ("the file would not assemble");
+         declare
+            Count : constant Natural := Result.Tensors;
+
+            --  What each tensor becomes, decided before anything is
+            --  written: the head lists every tensor's format and size, and
+            --  it is written first.
+            type Plan is record
+               Format  : Quantizer.Target := Quantizer.Q8_0;
+               As_Half : Boolean := False;
+               Convert : Boolean := False;
+               Bytes   : B.Byte_Count := 0;
+            end record;
+
+            type Plan_List is array (1 .. Count) of Plan;
+            type Plan_List_Access is access Plan_List;
+            procedure Free is new Ada.Unchecked_Deallocation
+              (Plan_List, Plan_List_Access);
+
+            type Order_List is array (1 .. Count) of Natural;
+            type Order_List_Access is access Order_List;
+            procedure Free is new Ada.Unchecked_Deallocation
+              (Order_List, Order_List_Access);
+
+            Plans : Plan_List_Access := new Plan_List;
+            Order : Order_List_Access := new Order_List;
+            Head  : B.Byte_Array_Access := null;
+            Fine  : Boolean := True;
+         begin
+            --  llama.cpp's order, which is what its counters count in: by
+            --  layer, then by name.
+            for Index in 1 .. Count loop
+               Order (Index) := Index;
+            end loop;
+            for Index in 2 .. Count loop
+               declare
+                  Moving : constant Natural := Order (Index);
+                  Name   : constant String :=
+                    Containers.Tensor_Name (Item, Moving);
+                  Place  : Natural := Index;
+               begin
+                  while Place > 1
+                    and then Recipes.Comes_Before
+                               (Name,
+                                Containers.Tensor_Name
+                                  (Item, Order (Place - 1)))
+                  loop
+                     Order (Place) := Order (Place - 1);
+                     Place := Place - 1;
+                  end loop;
+                  Order (Place) := Moving;
+               end;
+            end loop;
+
+            for Step in 1 .. Count loop
+               declare
+                  Index : constant Natural := Order (Step);
+                  Name  : constant String := Containers.Tensor_Name (Item, Index);
+                  Kind  : constant G.Tensor_Type :=
+                    Containers.Tensor_Format (Item, Index);
+                  Rank  : constant Positive :=
+                    Containers.Tensor_Rank (Item, Index);
+                  Elements : constant G.U64 :=
+                    Containers.Tensor_Elements (Item, Index);
+                  Columns : constant Long_Long_Integer :=
+                    Long_Long_Integer
+                      (Containers.Tensor_Dimension (Item, Index, 1));
+
+                  This : Plan renames Plans (Index);
+               begin
+                  This.Bytes :=
+                    B.Byte_Count (Containers.Tensor_Bytes (Item, Index));
+
+                  --  A norm, a bias, a router, a convolution: what
+                  --  llama.cpp leaves as it stands is copied as it stands.
+                  if Recipes.Allows (Name, Rank) then
+                     declare
+                        Chosen : constant Quantizer.Target :=
+                          (if Mixture
+                           then Recipes.Type_For
+                                  (Mixed, Name, Model_Shape, Walked, Columns)
+                           else Wanted);
+
+                        Fitted : constant Recipes.Fitted :=
+                          Recipes.Fall_Back (Chosen, Columns);
+                     begin
+                        if Fitted.Refused then
+                           Note ("rows of" & Long_Long_Integer'Image (Columns)
+                                 & " in " & Name & " do not divide into "
+                                 & Quantizer.Name_Of (Chosen)
+                                 & " blocks, and llama.cpp has no fallback "
+                                 & "for that format either");
+                           Fine := False;
+                           exit;
+                        end if;
+
+                        This.Format := Fitted.Format;
+                        This.As_Half := Fitted.As_Half;
+                        This.Convert :=
+                          (if Fitted.As_Half then Kind /= G.Type_F16
+                           else Kind /= Quantizer.Type_Of (Fitted.Format));
+
+                        if This.Convert then
+                           This.Bytes :=
+                             (if Fitted.As_Half
+                              then B.Byte_Count (Elements) * 2
+                              else B.Byte_Count
+                                     (Elements
+                                      / G.U64 (Quantizer.Block_Of
+                                                 (Fitted.Format)))
+                                   * Quantizer.Bytes_Of (Fitted.Format));
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+
+            if not Fine then
+               Free (Plans);
+               Free (Order);
                goto Give_Up;
             end if;
 
-            declare
-               Output : Ada.Streams.Stream_IO.File_Type;
-            begin
+            --  The head, then the tensors one at a time: the file is never
+            --  held whole, and neither is more than one tensor of it.
+            for Index in 1 .. Count loop
+               declare
+                  Rank  : constant Positive :=
+                    Containers.Tensor_Rank (Item, Index);
+                  Shape : Fixtures.Dimension_List (1 .. Rank);
+               begin
+                  for Which in 1 .. Rank loop
+                     Shape (Which) :=
+                       Containers.Tensor_Dimension (Item, Index, Which);
+                  end loop;
+
+                  Fixtures.Plan_Tensor
+                    (Maker, Containers.Tensor_Name (Item, Index), Shape,
+                     (if not Plans (Index).Convert
+                      then Containers.Tensor_Format (Item, Index)
+                      elsif Plans (Index).As_Half then G.Type_F16
+                      else Quantizer.Type_Of (Plans (Index).Format)),
+                     Plans (Index).Bytes);
+               end;
+            end loop;
+
+            if Into /= "" then
+               Fixtures.Build_Head (Maker, Head);
+               if Head = null then
+                  Free (Plans);
+                  Free (Order);
+                  Note ("the file would not assemble");
+                  goto Give_Up;
+               end if;
+
                Ada.Streams.Stream_IO.Create
                  (Output, Ada.Streams.Stream_IO.Out_File, Into);
+               Writing := True;
+               Write_Bytes (Output, Head.all);
+               B.Free (Head);
+            end if;
 
-               --  A slice at a time. The whole file as one stack array is
-               --  six hundred megabytes of it, which is a storage error and
-               --  was.
+            for Index in 1 .. Count loop
                declare
-                  Slice : constant B.Byte_Count := 1024 * 1024;
-                  At_Byte : B.Byte_Count := 0;
+                  This  : Plan renames Plans (Index);
+                  Name  : constant String := Containers.Tensor_Name (Item, Index);
+                  Kind  : constant G.Tensor_Type :=
+                    Containers.Tensor_Format (Item, Index);
+                  Rank  : constant Positive :=
+                    Containers.Tensor_Rank (Item, Index);
+                  Elements : constant G.U64 :=
+                    Containers.Tensor_Elements (Item, Index);
+                  Bytes : constant G.U64 := Containers.Tensor_Bytes (Item, Index);
+                  --  Absolute already: Tensor_Offset is from the start of
+                  --  the file and not from the data section, which the spec
+                  --  says and adding Data_Offset to it does not.
+                  At_Byte : constant G.U64 :=
+                    Containers.Tensor_Offset (Item, Index);
+
+                  Row : constant Element_Count :=
+                    Element_Count (Containers.Tensor_Dimension (Item, Index, 1));
+
+                  --  The matrices a tensor stacks: one, or one an expert.
+                  Stacked : constant Element_Count :=
+                    (if Rank >= 3
+                     then Element_Count
+                            (Containers.Tensor_Dimension (Item, Index, 3))
+                     else 1);
+
+                  Raw : B.Byte_Array_Access :=
+                    new B.Byte_Array (0 .. B.Byte_Count (Bytes) - 1);
                begin
-                  while At_Byte < Made.all'Length loop
+                  Files.Read
+                    (Source, B.Byte_Count (At_Byte), Raw.all, Status);
+                  if E.Is_Error (Status) then
+                     B.Free (Raw);
+                     Free (Plans);
+                     Free (Order);
+                     Note ("a tensor would not read: " & Name & " "
+                           & E.Error_Code'Image (Status.Code));
+                     goto Give_Up;
+                  end if;
+
+                  Result.Bytes_In := Result.Bytes_In + Long_Long_Integer (Bytes);
+
+                  if not This.Convert then
+                     if Writing then
+                        Write_Bytes (Output, Raw.all);
+                     end if;
+                     Result.Copied := Result.Copied + 1;
+                  else
                      declare
-                        Room : constant B.Byte_Count :=
-                          B.Byte_Count'Min
-                            (Slice, Made.all'Length - At_Byte);
-
-                        Out_Room : Ada.Streams.Stream_Element_Array
-                          (1 .. Ada.Streams.Stream_Element_Offset (Room));
+                        Values : T.Real_Array_Access;
+                        Ok     : Boolean;
                      begin
-                        for Which in Out_Room'Range loop
-                           Out_Room (Which) :=
-                             Ada.Streams.Stream_Element
-                               (Made.all (Made.all'First + At_Byte
-                                          + B.Byte_Count (Which - 1)));
-                        end loop;
-                        Ada.Streams.Stream_IO.Write (Output, Out_Room);
-                        At_Byte := At_Byte + Room;
+                        T.Allocate (N.Element_Count (Elements), Values);
+
+                        --  Blocks and not elements, which is what
+                        --  Decode_Blocks counts: a Q8_0 tensor of a million
+                        --  elements is thirty-one thousand blocks, and asking
+                        --  for a million of them is asking for thirty-two
+                        --  times the tensor.
+                        Q.Decode_Blocks
+                          (Kind, Raw.all, 0,
+                           N.Element_Count (Elements)
+                           / N.Element_Count (G.Block_Elements (Kind)),
+                           Values.all, Ok);
+                        B.Free (Raw);
+
+                        if not Ok then
+                           T.Free (Values);
+                           Free (Plans);
+                           Free (Order);
+                           Note ("a tensor would not decode: " & Name);
+                           goto Give_Up;
+                        end if;
+
+                        if This.As_Half then
+                           declare
+                              Halves : B.Byte_Array_Access :=
+                                new B.Byte_Array
+                                  (0 .. B.Byte_Count (Elements) * 2 - 1);
+                           begin
+                              for Which in Values.all'Range loop
+                                 declare
+                                    Bits : constant Interfaces.Unsigned_16 :=
+                                      Interfaces.Unsigned_16
+                                        (N.To_Half (Values.all (Which)));
+                                    At_Half : constant B.Byte_Count :=
+                                      B.Byte_Count (Which - Values.all'First)
+                                      * 2;
+                                 begin
+                                    Halves.all (At_Half) :=
+                                      B.Byte (Bits and 16#FF#);
+                                    Halves.all (At_Half + 1) :=
+                                      B.Byte (Interfaces.Shift_Right (Bits, 8));
+                                 end;
+                              end loop;
+                              if Writing then
+                                 Write_Bytes (Output, Halves.all);
+                              end if;
+                              B.Free (Halves);
+                           end;
+
+                           if Have_Weights then
+                              Result.Unweighted := Result.Unweighted + 1;
+                           end if;
+                        else
+                           declare
+                              --  What the matrix says this tensor's columns
+                              --  are worth, if it names it: a row's worth,
+                              --  or a row's worth an expert.
+                              Named : constant Natural :=
+                                (if Have_Weights
+                                 then Containers.Find_Tensor
+                                        (Weights_File, Name & ".in_sum2")
+                                 else 0);
+
+                              Counted : constant Natural :=
+                                (if Named = 0 then 0
+                                 else Containers.Find_Tensor
+                                        (Weights_File, Name & ".counts"));
+
+                              Sized : constant Boolean :=
+                                Named /= 0 and then Counted /= 0
+                                and then Containers.Tensor_Elements
+                                           (Weights_File, Named)
+                                         = G.U64 (Row * Stacked)
+                                and then Containers.Tensor_Elements
+                                           (Weights_File, Counted) > 0
+                                and then Containers.Tensor_Elements
+                                           (Weights_File, Named)
+                                         mod Containers.Tensor_Elements
+                                               (Weights_File, Counted) = 0;
+
+                              Heft : T.Real_Array_Access := null;
+
+                              Per_Matrix : constant Element_Count :=
+                                N.Element_Count (Elements) / Stacked;
+                           begin
+                              --  A matrix that names a tensor and is the
+                              --  wrong size for it is a matrix for another
+                              --  model, and llama.cpp stops rather than
+                              --  quantize most of it unweighted unnoticed --
+                              --  all but the embedding, which it lets by.
+                              if Named /= 0 and then not Sized
+                                and then Name /= "token_embd.weight"
+                                and then Name /= "per_layer_token_embd.weight"
+                              then
+                                 T.Free (Values);
+                                 Free (Plans);
+                                 Free (Order);
+                                 Note ("the matrix's entry for " & Name
+                                       & " is not the size of the tensor");
+                                 goto Give_Up;
+                              end if;
+
+                              if Sized then
+                                 Read_Matrix
+                                   (Weights_Source, Weights_File, Named,
+                                    Counted, Heft, Status);
+
+                                 if E.Is_Error (Status) then
+                                    T.Free (Values);
+                                    Free (Plans);
+                                    Free (Order);
+                                    Note ("the matrix would not read for "
+                                          & Name);
+                                    goto Give_Up;
+                                 end if;
+                              end if;
+
+                              --  An expert at a time, each with its own
+                              --  slice of the matrix, as llama.cpp does: the
+                              --  experts saw different rows.
+                              for Expert in 0 .. Stacked - 1 loop
+                                 declare
+                                    From : constant Element_Count :=
+                                      Values.all'First + Expert * Per_Matrix;
+                                    Written : B.Byte_Array_Access;
+                                 begin
+                                    if Heft = null then
+                                       Quantizer.Encode_Into
+                                         (Values.all
+                                            (From .. From + Per_Matrix - 1),
+                                          This.Format, Written);
+                                    else
+                                       Quantizer.Encode_Weighted_Into
+                                         (Values.all
+                                            (From .. From + Per_Matrix - 1),
+                                          Heft.all
+                                            (Heft.all'First + Expert * Row
+                                             .. Heft.all'First
+                                                + (Expert + 1) * Row - 1),
+                                          This.Format, Written);
+                                    end if;
+
+                                    if Writing then
+                                       Write_Bytes (Output, Written.all);
+                                    end if;
+                                    B.Free (Written);
+                                 end;
+                              end loop;
+
+                              --  Weighted only where the matrix changed what
+                              --  was written: Q8_0 takes no matrix.
+                              if Heft /= null
+                                and then Quantizer.Has_Weighted_Path
+                                           (This.Format)
+                              then
+                                 Result.Weighted := Result.Weighted + 1;
+                              elsif Have_Weights then
+                                 Result.Unweighted := Result.Unweighted + 1;
+                              end if;
+
+                              if Heft /= null then
+                                 T.Free (Heft);
+                              end if;
+                           end;
+                        end if;
+
+                        T.Free (Values);
                      end;
-                  end loop;
+
+                     Result.Converted := Result.Converted + 1;
+
+                     if This.As_Half or else This.Format /= Wanted then
+                        Result.Bumped := Result.Bumped + 1;
+                     end if;
+                  end if;
+
+                  if Raw /= null then
+                     B.Free (Raw);
+                  end if;
+
+                  Result.Bytes_Out :=
+                    Result.Bytes_Out + Long_Long_Integer (This.Bytes);
+
+                  if Writing then
+                     Write_Zeros
+                       (Output, Fixtures.Padding_After (Maker, This.Bytes));
+                  end if;
                end;
+            end loop;
 
-               Ada.Streams.Stream_IO.Close (Output);
-            end;
+            Free (Plans);
+            Free (Order);
+         end;
 
-            B.Free (Made);
+         if Writing then
+            Ada.Streams.Stream_IO.Close (Output);
+            Writing := False;
          end if;
 
          Result.Ran := True;
 
          <<Give_Up>>
+         if Writing then
+            Ada.Streams.Stream_IO.Close (Output);
+         end if;
+         Containers.Close (Item);
+         Files.Close (Source);
+
+         <<Close_Matrix>>
          if Have_Weights then
             Containers.Close (Weights_File);
             Files.Close (Weights_Source);
          end if;
-         Containers.Close (Item);
-         Files.Close (Source);
       end;
 
       --  And the comparison, which is a second reading of two files and not
       --  a property of the writing above: it is what says two encoders read
       --  the same rule the same way.
-      if Against /= "" and then Into /= "" then
+      if Against /= "" and then Into /= "" and then Result.Ran then
          Compare (Into, Against, Result);
       end if;
 

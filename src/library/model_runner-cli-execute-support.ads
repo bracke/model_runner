@@ -119,6 +119,23 @@ private package Model_Runner.CLI.Execute.Support is
    function Chosen_Arithmetic
      (Item : Opt.Command; Prepared : L.Model) return L.Arithmetic_Mode;
 
+   --  Tell the backends an arithmetic: the processor's roles that multiply
+   --  as integers, and the device's walks that round -- once, before a
+   --  session opens and anything is dispatched. Run and the tools that
+   --  measure run both say it through here, so the two cannot differ.
+   --
+   --  @param Mode The arithmetic, as Chosen_Arithmetic chose it.
+   procedure Use_Arithmetic (Mode : L.Arithmetic_Mode);
+
+   --  Where a model's panels are kept between loads, keyed by the file and
+   --  what says it is unchanged; empty where caches are refused or the
+   --  file is not there.
+   --
+   --  @param Path The model's file.
+   --  @param No_Cache Whether the command refused caches.
+   --  @return The panel file, or empty.
+   function Panel_Cache_For (Path : String; No_Cache : Boolean) return String;
+
    --  How many processor workers a command runs with.
    --
    --  @param Item The command.

@@ -6,21 +6,24 @@
 --  file into another model file, and nothing held an encoder to the rule the
 --  format is defined by. See Quantizer for what that cost.
 --
---  WHAT IT CONVERTS AND WHAT IT COPIES. A tensor is re-encoded when its
---  element count is a whole number of blocks and it has more than one
---  dimension; everything else is copied as it stands, which is the norms and
---  the biases. That is a rule of this tool and not llama.cpp's policy, which
---  also holds particular tensors -- the output projection, the token
---  embedding -- at a higher precision than the name on the file. A file this
---  writes is therefore the format it says all the way through, and a file
---  llama.cpp writes is not; the two are worth comparing tensor by tensor
---  rather than as wholes, which is what --against does.
+--  WHAT IT CONVERTS AND WHAT IT COPIES. What llama-quantize does, rule for
+--  rule: a tensor its tensor_allows_quantization leaves alone -- a vector,
+--  a norm, the router, a small convolution, a name not ending in "weight"
+--  -- is copied as it stands; every other one gets the format asked for,
+--  or the one a mixture gives it, and then tensor_type_fallback where its
+--  rows will not divide into that format's blocks. A pure format therefore
+--  writes Q5_0 on a 896-wide row asked for as Q4_K, as llama.cpp does with
+--  --pure, and the keys that describe the quantizing are llama.cpp's.
 --
---  THE CHECK IS THE OTHER IMPLEMENTATION. The rule for these five formats is
---  a rule and not a search, so two encoders that read it the same way write
---  the same bytes. `--against` reads a second file and compares the tensors
---  they share, byte for byte, which is a sharper question than any
---  measurement of the result: not "is this good" but "is this the same".
+--  IT IS WRITTEN AS IT GOES. The head first, from a plan of every tensor's
+--  format and size, and then each tensor encoded on the heap and written:
+--  the run holds one tensor, not the file.
+--
+--  THE CHECK IS THE OTHER IMPLEMENTATION. Two encoders that read the rules
+--  the same way write the same bytes, searches and all. `--against` reads a
+--  second file and compares the tensors they share, byte for byte, which is
+--  a sharper question than any measurement of the result: not "is this
+--  good" but "is this the same".
 package Quantize_Run is
 
    --  What one run did.
@@ -35,10 +38,11 @@ package Quantize_Run is
       Converted : Natural := 0;
       Copied    : Natural := 0;
 
-      --  How many of the converted ones the importance matrix named, and
-      --  how many it did not. A matrix that names none of them is a matrix
-      --  for another model, and a run that said nothing about it would look
-      --  like a run that used one.
+      --  How many of the converted ones the importance matrix weighted, and
+      --  how many it did not -- not named, or a format (Q8_0, F16) the
+      --  matrix does not change. A matrix that names none of them is a
+      --  matrix for another model, and a run that said nothing about it
+      --  would look like a run that used one.
       Weighted  : Natural := 0;
       Unweighted : Natural := 0;
 

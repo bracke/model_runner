@@ -66,11 +66,25 @@ package body Restamping is
    ---------
 
    procedure Run
-     (Root  : String;
-      Note  : String;
-      Moved : out Natural;
-      Good  : out Boolean)
+     (Root       : String;
+      Note       : String;
+      Groups     : String;
+      All_Groups : Boolean;
+      Moved      : out Natural;
+      Good       : out Boolean)
    is
+      --  Whether Name is one of the groups named.
+      function Named (Name : String) return Boolean is
+      begin
+         return Ada.Strings.Fixed.Index (" " & Groups & " ", " " & Name & " ")
+                > 0;
+      end Named;
+
+      --  The groups the record holds, to tell a name it does not.
+      Present : Unbounded_String;
+      --  The groups that moved and were not named.
+      Unnamed : Unbounded_String;
+
       Path   : constant String := Root & "/" & Record_Path;
       Found  : Boolean;
       Listing : constant String := Read (Path, Found);
@@ -148,6 +162,7 @@ package body Restamping is
                if Name'Length > 0 and then Name (Name'First) /= '#'
                  and then Word (Line, 3)'Length > 0
                then
+                  Append (Present, " " & Name & " ");
                   loop
                      declare
                         Source : constant String := Word (Line, Which);
@@ -179,7 +194,12 @@ package body Restamping is
                      Which := Which + 1;
                   end loop;
 
-                  if Hex (Sum) /= Known then
+                  if Hex (Sum) /= Known
+                    and then not All_Groups and then not Named (Name)
+                  then
+                     Append (Unnamed, " " & Name);
+                     Append (Written, Line);
+                  elsif Hex (Sum) /= Known then
                      declare
                         At_Known : constant Natural :=
                           Ada.Strings.Fixed.Index
@@ -208,6 +228,48 @@ package body Restamping is
             From := Stop + 1;
          end;
       end loop;
+
+      --  A group named that the record does not hold is a typing slip,
+      --  and the note was meant for something: said, nothing written.
+      declare
+         Start : Natural := 0;
+      begin
+         for Index in Groups'First .. Groups'Last + 1 loop
+            if Index > Groups'Last or else Groups (Index) = ' ' then
+               if Start /= 0
+                 and then Ada.Strings.Fixed.Index
+                            (To_String (Present),
+                             " " & Groups (Start .. Index - 1) & " ") = 0
+               then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     Record_Path & " holds no group "
+                     & Groups (Start .. Index - 1));
+                  Good := False;
+               end if;
+               Start := 0;
+            elsif Start = 0 then
+               Start := Index;
+            end if;
+         end loop;
+      end;
+
+      --  The groups moved and not named are left as they were, and so
+      --  stale: the check goes on failing on them until they are measured
+      --  again or named, with a reason of their own, in a restamp of
+      --  their own.
+      if Length (Unnamed) > 0 then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "moved, not named, left stale:" & To_String (Unnamed)
+            & " -- re-measure them, or restamp them with a reason that "
+            & "holds for them");
+      end if;
+
+      if not Good then
+         Moved := 0;
+         return;
+      end if;
 
       if Moved > 0 then
          declare

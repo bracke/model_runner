@@ -459,6 +459,13 @@ private
       --  softmax, and whether the chosen few are put back on a scale of one.
       Sigmoid_Gate : Boolean := False;
       Renormalize  : Boolean := True;
+      --  Falcon-Mamba's time step, B and C normalized with no gain
+      --  (ssm.dt_b_c_rms), as mamba-base.cpp does where the file says so.
+      Unit_Ssm_Norms : Boolean := False;
+      --  GLM4 stating rope sections with the first two non-zero turns its
+      --  rotation into MROPE (glm4.cpp), which on text positions pairs an
+      --  element with the one half a rotation later, NeoX's way.
+      Split_Pairs : Boolean := False;
 
       --  How many groups the experts are chosen within and how many of
       --  them are kept, nought for none.

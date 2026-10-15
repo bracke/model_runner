@@ -89,11 +89,16 @@ package body Library_Surface is
       --  Planning a session.
       new String'("Finalize_Plan"),
 
+      --  run's unasked decisions, which the speed tool asks too.
+      new String'("Unasked_Arithmetic"),
+      new String'("Unasked_Layout"),
+      new String'("Unasked_Panel_Cache"),
+      new String'("Unasked_Session_Bounds"),
+
       --  Helpers.
       new String'("Equal_Ignore_Case"),
       new String'("Failure_Name"),
       new String'("Has_Controls"),
-      new String'("Host_Name"),
       new String'("In_Range"),
       new String'("Is_NaN"),
       new String'("To_Natural"),

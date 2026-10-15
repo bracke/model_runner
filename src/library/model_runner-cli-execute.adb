@@ -5,6 +5,7 @@ with Hostkit.Durability;
 with Hostkit.Fs;
 with Model_Runner.CLI.Partials;
 
+with Model_Runner.Platform;
 with Model_Runner.Text;
 with Model_Runner.CLI.Execute.Support;
 with Model_Runner.CLI.Execute.Help_Command;
@@ -187,5 +188,60 @@ package body Model_Runner.CLI.Execute is
       end if;
       return Resolved_Backend (Item, Screen).Backend;
    end Unasked_Backend;
+
+   function Unasked_Arithmetic
+     (Named    : String;
+      Prepared : Model_Runner.Llama.Model)
+      return Model_Runner.Llama.Arithmetic_Mode
+   is
+      Item : Opt.Command;
+   begin
+      Item.Kind := Opt.Command_Run;
+      for Mode in Model_Runner.Llama.Arithmetic_Mode loop
+         if Named /= "" and then Model_Runner.Llama.Arithmetic_Name (Mode) = Named
+         then
+            Item.Arithmetic := Mode;
+            Item.Arithmetic_Set := True;
+         end if;
+      end loop;
+      return Chosen_Arithmetic (Item, Prepared);
+   end Unasked_Arithmetic;
+
+   procedure Use_Arithmetic (Mode : Model_Runner.Llama.Arithmetic_Mode) is
+   begin
+      Support.Use_Arithmetic (Mode);
+   end Use_Arithmetic;
+
+   function Unasked_Session_Bounds
+     (Memory_Limit : Interfaces.Unsigned_64 := 0)
+      return Model_Runner.Limits.Session_Limits
+   is
+      Item : Opt.Command;
+   begin
+      Item.Kind := Opt.Command_Run;
+      Item.Memory_Limit := Memory_Limit;
+      return Session_Bounds (Item);
+   end Unasked_Session_Bounds;
+
+   function Unasked_Layout
+     (Model_Path   : String;
+      Backend      : Model_Runner.Backend.Backend_Kind;
+      Memory_Limit : Interfaces.Unsigned_64 := 0)
+      return Model_Runner.Llama.Repack_Mode
+   is
+      Item : Opt.Command;
+   begin
+      Item.Kind := Opt.Command_Run;
+      Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
+      Item.Backend := Backend;
+      Item.Memory_Limit := Memory_Limit;
+      return With_Panels (Item).Repack;
+   end Unasked_Layout;
+
+   function Unasked_Panel_Cache
+     (Model_Path : String;
+      No_Cache   : Boolean := False) return String
+   is (Panel_Cache_For
+         (Model_Runner.Platform.Resolve_Model_Path (Model_Path), No_Cache));
 
 end Model_Runner.CLI.Execute;

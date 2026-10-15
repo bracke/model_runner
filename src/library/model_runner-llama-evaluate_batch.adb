@@ -357,6 +357,10 @@ is
        --  has run: the kernels are there for each piece and untried
        --  together. Held to the host under the device backend until
        --  they are, as Granite is for a different reason.
+       --  A parallel residual (GPT-NeoX's, Falcon-40B's) reads the feed
+       --  norm from the layer's input; the sequence reads it from the
+       --  residual, or has no feed norm at all and reuses attention's.
+       and then not Settings.Parallel_Residual
        and then Settings.Kind not in Glm4 | Starcoder2 | Stablelm | Gptneox | Mpt
                           | Chatglm | Command_R
        and then Settings.Max_Bias = 0.0

@@ -10,11 +10,13 @@ with Host_Load;
 with Ada.Real_Time;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.CLI.Execute;
 with Model_Runner.Backend.Device;
 with Model_Runner.Clocks;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.GGUF.Shards;
+with Model_Runner.Limits;
 with Model_Runner.Output;
 with Model_Runner.Stops;
 with Model_Runner.Text;
@@ -123,6 +125,12 @@ package body Speed_Run is
             end if;
          end loop;
       end loop;
+      --  Of an even count, the two middle values' mean: the upper one alone
+      --  published the slower of two runs -- the first, cold on a device.
+      if Sorted'Length mod 2 = 0 then
+         return (Sorted (Sorted'First + Sorted'Length / 2 - 1)
+                 + Sorted (Sorted'First + Sorted'Length / 2)) / 2;
+      end if;
       return Sorted (Sorted'First + Sorted'Length / 2);
    end Middle;
 
@@ -156,7 +164,10 @@ package body Speed_Run is
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Draft_Adapts : Boolean := False;
       Result      : out Report;
-      Turns       : String := "")
+      Turns       : String := "";
+      Arithmetic  : String := "";
+      Memory_Limit : Interfaces.Unsigned_64 := 0;
+      No_Cache    : Boolean := False)
    is
       use type Model_Runner.Backend.Backend_Kind;
 
@@ -233,9 +244,9 @@ package body Speed_Run is
          --  what the command reads.
          --  Its lines, too, as the command reads them: a line ended the
          --  Windows way is a line without its carriage return.
-         function As_Commanded return String is
+         function As_Commanded (File : String := Prompt_Path) return String is
             Whole : constant String :=
-              Project_Tools.Files.Read_Raw_File (Prompt_Path);
+              Project_Tools.Files.Read_Raw_File (File);
             Kept  : String (1 .. Whole'Length);
             Last  : Natural := 0;
          begin
@@ -291,8 +302,11 @@ package body Speed_Run is
                   List (J - 1) := Names;
                end loop;
             end loop;
+            --  As the command reads a prompt file: without its final line
+            --  separator and its lines' carriage returns. Read raw, every
+            --  turn carried a newline the command never sends.
             return (if Index <= Count
-                    then Project_Tools.Files.Read_Raw_File
+                    then As_Commanded
                            (Ada.Strings.Unbounded.To_String (List (Index)))
                     else "");
          end Turn_File;
@@ -307,6 +321,12 @@ package body Speed_Run is
                return Turn_Prompt (Pass - 1) & ASCII.LF & Turn_File (Pass);
             end if;
          end Turn_Prompt;
+
+         --  The session limits run opens with: half the machine unless a
+         --  limit is named, so a context left to the model's own is halved
+         --  until it fits, as run's is.
+         Bounds : constant Model_Runner.Limits.Session_Limits :=
+           Model_Runner.CLI.Execute.Unasked_Session_Bounds (Memory_Limit);
 
          Shared_Session : aliased L.Session;
          Shared_Draft   : aliased L.Session;
@@ -349,10 +369,15 @@ package body Speed_Run is
             end;
          end if;
 
+         --  As run prepares it: its paging and panel cache, and refused
+         --  for a budget it does not fit unless a budget was named.
          L.Prepare
            (Engine, Container, Source, Repack => Repack, Backend => Backend,
             Threads => Threads, Status => Status, Context => Context,
-            Cache => Cache);
+            Cache => Cache, Paged => Paged,
+            Fit_Required => Device_Bytes = 0,
+            Panel_Cache =>
+              Model_Runner.CLI.Execute.Unasked_Panel_Cache (Path, No_Cache));
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Shards.Close (Source);
@@ -362,6 +387,13 @@ package body Speed_Run is
          end if;
          Result.Load :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
+
+         --  The arithmetic, as run tells the backends once the model is
+         --  prepared: the one named, or the one run takes for this model --
+         --  Gemma 2's mixed one, where this tool measured every model in
+         --  integers and Gemma 2's figures were of a run nobody starts.
+         Model_Runner.CLI.Execute.Use_Arithmetic
+           (Model_Runner.CLI.Execute.Unasked_Arithmetic (Arithmetic, Engine));
 
          --  A draft the run would take unasked: one the model names beside
          --  itself, else one found in the store or beside the model, as
@@ -376,7 +408,8 @@ package body Speed_Run is
                Probe : L.Session;
                Local : E.Error_Info;
             begin
-               L.Open (Probe, Engine, Context => Context, Status => Local, Paged => Paged);
+               L.Open (Probe, Engine, Context => Context, Status => Local, Paged => Paged,
+                       Session_Bounds => Bounds);
                if E.Is_Ok (Local)
                  and then Draft_Policy.Seeks_Store_Draft (Engine, Probe, Asked)
                then
@@ -433,10 +466,17 @@ package body Speed_Run is
                return;
             end if;
 
+            --  As run prepares a draft: exactly as the model, with the
+            --  context, cache and paging its session will hold.
             L.Prepare
               (Draft_Engine, Draft_Container, Draft_Source,
                Repack => Repack, Backend => Backend,
-               Threads => Threads, Status => Status);
+               Threads => Threads, Status => Status,
+               Context => Context, Cache => Cache, Paged => Paged,
+               Fit_Required => Device_Bytes = 0,
+               Panel_Cache =>
+                 Model_Runner.CLI.Execute.Unasked_Panel_Cache
+                   (Draft_Path, No_Cache));
             if E.Is_Error (Status) then
                Say ("the draft would not prepare: "
                     & E.Error_Code'Image (Status.Code));
@@ -520,7 +560,7 @@ package body Speed_Run is
                   if Opening then
                      L.Open (Session, Engine, Context => Context,
                              Workers => Where, Cache => Cache, Status => Local,
-                             Paged => Paged);
+                             Paged => Paged, Session_Bounds => Bounds);
                   end if;
                   if E.Is_Error (Local) then
                      Say ("the session would not open: "
@@ -542,7 +582,8 @@ package body Speed_Run is
                      --  one, and the tool measured drafting short.
                      L.Open (Draft_Session, Draft_Engine, Context => Context,
                              Workers => Where, Cache => Cache,
-                             Status => Local, Paged => Paged);
+                             Status => Local, Paged => Paged,
+                             Session_Bounds => Bounds);
                      exit when E.Is_Error (Local);
                   end if;
 
@@ -696,13 +737,20 @@ package body Speed_Run is
                         & T.Image (Long_Float (Generates (Pass)), 3) & " s");
                   end if;
 
-                  --  In turns, the tokens a turn read: what the median
-                  --  rate is of.
+                  --  In turns, the tokens every turn read and wrote, summed,
+                  --  over the time summed below: a median of turns of other
+                  --  lengths divided into the last turn's tokens was a rate
+                  --  of no turn. Each turn's own is the line above.
                   Result.Prompt :=
                     (if Turning
-                     then Outcome.Prompt_Tokens - Outcome.Reused_Tokens
+                     then (if Pass = 1 then 0 else Result.Prompt)
+                          + Outcome.Prompt_Tokens - Outcome.Reused_Tokens
                      else Outcome.Prompt_Tokens);
-                  Result.Produced := Outcome.Generated_Tokens;
+                  Result.Produced :=
+                    (if Turning
+                     then (if Pass = 1 then 0 else Result.Produced)
+                          + Outcome.Generated_Tokens
+                     else Outcome.Generated_Tokens);
                   Result.Drafted := Outcome.Drafted;
                   Result.Accepted := Outcome.Accepted;
                   Result.Offered_At := Outcome.Offered_At;
@@ -793,7 +841,21 @@ package body Speed_Run is
       Result.Load_After := Host_Load.Now;
       Result.Warm_After := Host_Load.Warmth;
 
-      if Result.Runs = Repeats then
+      if Result.Runs = Repeats and then Turns /= "" then
+         --  Turns are one conversation, not repeats of one run: their sums.
+         Result.Ran := True;
+         Result.Wall := 0.0;
+         Result.Processor := 0.0;
+         Result.Evaluate := 0.0;
+         Result.Generate := 0.0;
+         for Pass in Walls'Range loop
+            Result.Wall := Result.Wall + Walls (Pass);
+            Result.Processor := Result.Processor + Spents (Pass);
+            Result.Evaluate := Result.Evaluate + Evaluates (Pass);
+            Result.Generate := Result.Generate + Generates (Pass);
+         end loop;
+         Say ("measured");
+      elsif Result.Runs = Repeats then
          Result.Ran := True;
          Result.Wall := Middle (Walls);
          Result.Processor := Middle (Spents);

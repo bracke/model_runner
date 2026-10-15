@@ -3303,8 +3303,25 @@ package body Reference_Transformer is
             end loop;
          end;
       else
-         Item.KV_Heads :=
-           Metadata (Source, Prefix (Item) & "attention.head_count_kv", Item.Heads);
+         --  A per-layer array (llama.cpp's get_key_or_arr) where the file
+         --  writes one; the fixtures that do keep every layer equal, so
+         --  the first entry stands for all.
+         declare
+            Value  : Long_Long_Integer := 0;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Integer_Element
+              (Source, Prefix (Item) & "attention.head_count_kv", 1, Value,
+               Status);
+            if Model_Runner.Errors.Is_Ok (Status) and then Value > 0 then
+               Item.KV_Heads := Natural (Value);
+            else
+               Item.KV_Heads :=
+                 Metadata
+                   (Source, Prefix (Item) & "attention.head_count_kv",
+                    Item.Heads);
+            end if;
+         end;
       end if;
       Item.Context := Metadata (Source, Prefix (Item) & "context_length", 0);
 
@@ -3336,6 +3353,12 @@ package body Reference_Transformer is
       --  its file says nothing, as the reference runtime has it.
       if Item.Kind = Gemma2 and then Item.Window = 0 then
          Item.Window := 4_096;
+      end if;
+
+      --  Phi3 attends to everything whatever window its file states:
+      --  phi3.cpp sets swa_type NONE.
+      if Item.Kind = Phi3 then
+         Item.Window := 0;
       end if;
 
       --  Read as floats, because that is what they are: a bound on a score
@@ -3571,6 +3594,32 @@ package body Reference_Transformer is
          Item.Time_Rank :=
            Metadata (Source, Prefix (Item) & "ssm.time_step_rank",
                      (Item.Embedding + 15) / 16);
+      end if;
+      if Item.Kind = Mamba then
+         declare
+            Flag   : Boolean;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Boolean
+              (Source, Prefix (Item) & "ssm.dt_b_c_rms", Flag, Status);
+            Item.Unit_Ssm_Norms := Model_Runner.Errors.Is_Ok (Status) and then Flag;
+         end;
+      end if;
+      if Item.Kind = Glm4 then
+         declare
+            Key    : constant String := Prefix (Item) & "rope.dimension_sections";
+            Length : Natural;
+            First, Second : Long_Long_Integer := 0;
+            Status : Model_Runner.Errors.Error_Info;
+         begin
+            Containers.Get_Array_Length
+              (Source, Key, Model_Runner.GGUF.Value_Int32, Length, Status);
+            if Model_Runner.Errors.Is_Ok (Status) and then Length >= 2 then
+               Containers.Get_Integer_Element (Source, Key, 1, First, Status);
+               Containers.Get_Integer_Element (Source, Key, 2, Second, Status);
+               Item.Split_Pairs := First > 0 and then Second > 0;
+            end if;
+         end;
       end if;
       if Item.Kind = Mamba2 then
          Item.Groups :=
@@ -3936,6 +3985,25 @@ package body Reference_Transformer is
             then
                Current.Attention_Norm_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_norm.bias"), Present);
+               if not Present then
+                  return;
+               end if;
+            end if;
+
+            if Item.Kind = Falcon
+              and then Containers.Find_Tensor
+                         (Source, Layer_Name (Index, "attn_norm_2.weight"))
+                       /= 0
+            then
+               Current.Second_Attention_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_norm_2.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Second_Attention_Norm_Bias :=
+                 Read_Vector (Layer_Name (Index, "attn_norm_2.bias"),
+                              Present);
                if not Present then
                   return;
                end if;
@@ -4364,9 +4432,10 @@ package body Reference_Transformer is
             end if;
 
             --  Command-R+ normalizes its heads under the same names, but
-            --  centred and with a gain a head. Read where present so both
-            --  sizes load.
-            if Item.Kind = Command_R
+            --  centred and with a gain a head; so does StableLM-2-12B
+            --  (stablelm.cpp: LLM_NORM, no bias). Read where present so
+            --  both sizes load.
+            if Item.Kind in Command_R | Stablelm
               and then Containers.Find_Tensor
                          (Source, Layer_Name (Index, "attn_q_norm.weight"))
                        /= 0
@@ -4444,6 +4513,42 @@ package body Reference_Transformer is
                               Present);
                if not Present then
                   return;
+               end if;
+
+            elsif Item.Kind = Mpt
+              and then Containers.Find_Tensor
+                         (Source, Layer_Name (Index, "attn_q_norm.weight"))
+                       /= 0
+            then
+               --  MPT with qk_ln (mpt.cpp): LLM_NORM over the whole of Q
+               --  and of K, each with an optional shift.
+               Current.Query_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Key_Whole_Norm :=
+                 Read_Vector (Layer_Name (Index, "attn_k_norm.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               if Containers.Find_Tensor
+                    (Source, Layer_Name (Index, "attn_q_norm.bias")) /= 0
+               then
+                  Current.Query_Whole_Norm_Bias :=
+                    Read_Vector (Layer_Name (Index, "attn_q_norm.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
+                  Current.Key_Whole_Norm_Bias :=
+                    Read_Vector (Layer_Name (Index, "attn_k_norm.bias"),
+                                 Present);
+                  if not Present then
+                     return;
+                  end if;
                end if;
             end if;
 
@@ -4610,9 +4715,10 @@ package body Reference_Transformer is
                   if not Present then
                      return;
                   end if;
-                  --  The gating row, which DeepSeek2 does not have: its
-                  --  shared experts are added as they are.
-                  if Item.Kind /= Deepseek2 then
+                  --  The gating row, which DeepSeek2 and Granite's
+                  --  mixture (granite.cpp) do not have: their shared
+                  --  experts are added as they are.
+                  if Item.Kind not in Deepseek2 | Granite_MoE then
                      Current.Shared_Router :=
                        Read_Vector
                          (Layer_Name (Index, "ffn_gate_inp_shexp.weight"),
@@ -5278,12 +5384,14 @@ package body Reference_Transformer is
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
                         | Baichuan | Deepseek2
+                       and then not Item.Split_Pairs
                      then Head * Item.Head_Size + Offset + 2 * Pair
                      else Head * Item.Head_Size + Offset + Pair);
                   Odd   : constant Natural :=
                     (if Item.Kind in Llama | Granite | Granite_MoE | Glm4 | Internlm2 | Chatglm
                         | Command_R
                         | Baichuan | Deepseek2
+                       and then not Item.Split_Pairs
                      then Even + 1
                      else Even + Item.Rotary / 2);
                   Left  : constant Long_Float := Vector (Even);
@@ -6281,6 +6389,32 @@ package body Reference_Transformer is
                            end;
                         end if;
 
+                        --  Falcon-Mamba's: each slice by root mean square,
+                        --  no gain, its own epsilon (llama.cpp's build_norm
+                        --  with a null weight).
+                        if Item.Unit_Ssm_Norms then
+                           declare
+                              procedure Unit (First, Count : Natural) is
+                                 Sum : Long_Float := 0.0;
+                                 Inv : Long_Float;
+                              begin
+                                 for I in 0 .. Count - 1 loop
+                                    Sum := Sum + DBC (First + I) ** 2;
+                                 end loop;
+                                 Inv := 1.0
+                                   / Functions.Sqrt
+                                       (Sum / Long_Float (Count) + Item.Epsilon);
+                                 for I in 0 .. Count - 1 loop
+                                    DBC (First + I) := DBC (First + I) * Inv;
+                                 end loop;
+                              end Unit;
+                           begin
+                              Unit (0, Rank);
+                              Unit (Rank, S_Size);
+                              Unit (Rank + S_Size, S_Size);
+                           end;
+                        end if;
+
                         for I in 0 .. Rank - 1 loop
                            DTr (I) := DBC (I);
                         end loop;
@@ -6565,6 +6699,17 @@ package body Reference_Transformer is
                   --  parallel.
                   if Item.Kind in Falcon | Phi2 | Command_R then
                      Held_Norm (0 .. Width - 1) := Normed (0 .. Width - 1);
+                  end if;
+
+                  --  Falcon-40B (falcon.cpp): with attn_norm_2 present,
+                  --  attention reads the input normalized by it, while
+                  --  the feed-forward keeps attn_norm's, held above.
+                  if Item.Kind = Falcon
+                    and then Current.Second_Attention_Norm /= null
+                  then
+                     Normalize_Centred
+                       (State, Current.Second_Attention_Norm.all,
+                        Current.Second_Attention_Norm_Bias, Normed);
                   end if;
                   if Item.Kind = Deepseek2 then
                      declare

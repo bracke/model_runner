@@ -153,6 +153,78 @@ package Fixtures is
       Format     : G.Tensor_Type;
       Data       : B.Byte_Array);
 
+   --  Append a tensor descriptor whose data the caller writes itself.
+   --
+   --  For a file too large to hold: the descriptors are all the head
+   --  needs, Build_Head writes the head, and the caller then writes each
+   --  tensor's bytes in this order, each followed by Padding_After of
+   --  them. A builder that has planned a tensor builds no whole file.
+   --
+   --  @param Item Builder to extend.
+   --  @param Name Tensor name.
+   --  @param Dimensions Dimension lengths.
+   --  @param Format Tensor element format.
+   --  @param Bytes How many bytes of data the tensor will have.
+   procedure Plan_Tensor
+     (Item       : in out Builder;
+      Name       : String;
+      Dimensions : Dimension_List;
+      Format     : G.Tensor_Type;
+      Bytes      : B.Byte_Count);
+
+   --  The head of the file: everything before the data section, padded to
+   --  where the data section starts.
+   --
+   --  @param Item Builder holding the metadata and descriptors.
+   --  @param Result Newly allocated bytes; the caller frees them.
+   procedure Build_Head
+     (Item : in out Builder; Result : out B.Byte_Array_Access);
+
+   --  The zeros that follow a tensor of this many bytes, so that the next
+   --  one -- or the end of the file -- falls on the alignment.
+   --
+   --  @param Item Builder whose alignment applies.
+   --  @param Bytes The tensor's length.
+   --  @return How many zero bytes follow it.
+   function Padding_After
+     (Item : Builder; Bytes : B.Byte_Count) return B.Byte_Count;
+
+   --  Append an integer metadata entry of any integer kind, written at
+   --  that kind's own width.
+   --
+   --  @param Item Builder to extend.
+   --  @param Key Metadata key.
+   --  @param Kind An integer value type.
+   --  @param Value Metadata value; a signed kind takes a negative one.
+   procedure Add_Integer
+     (Item  : in out Builder;
+      Key   : String;
+      Kind  : G.Value_Type;
+      Value : Long_Long_Integer);
+
+   --  Append a binary64 metadata entry.
+   --
+   --  @param Item Builder to extend.
+   --  @param Key Metadata key.
+   --  @param Value Metadata value.
+   procedure Add_F64 (Item : in out Builder; Key : String; Value : N.Wide_Real);
+
+   --  Append one integer element to the open array, at its kind's width.
+   --
+   --  @param Item Builder to extend.
+   --  @param Kind The array's element type.
+   --  @param Value Element value.
+   procedure Integer_Element
+     (Item  : in out Builder;
+      Kind  : G.Value_Type;
+      Value : Long_Long_Integer);
+
+   --  Append one binary64 element to the open array.
+   --
+   --  @param Item Builder to extend.
+   --  @param Value Element value.
+   procedure F64_Element (Item : in out Builder; Value : N.Wide_Real);
+
    --  Assemble the file.
    --
    --  @param Item Builder holding the accumulated content.
@@ -533,6 +605,11 @@ private
       Array_Open     : Boolean := False;
       Marks          : Mark_List;
       Marks_Used     : Natural := 0;
+
+      --  Where the data section ends so far, and whether any tensor was
+      --  only planned rather than added with its data.
+      Data_End       : B.Byte_Count := 0;
+      Planned        : Boolean := False;
    end record;
 
 end Fixtures;

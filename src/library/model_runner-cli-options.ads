@@ -686,6 +686,10 @@ package Model_Runner.CLI.Options is
       --  caller who typed the default.
       Pooling_Named : Boolean := False;
       Normalize  : Boolean := True;
+      --  Which norm, where it is: two the Euclidean length, nought the
+      --  largest magnitude scaled to sixteen-bit integers, any other p the
+      --  p-norm (--normalize).
+      Norm_Power : Natural := 2;
 
       --  Embed the first positions the model reads where the text is
       --  longer, rather than refuse it.
@@ -697,6 +701,30 @@ package Model_Runner.CLI.Options is
       Show_Tensors  : Boolean := False;
       Validate_Only : Boolean := False;
    end record;
+
+   --  The tokens a turn of a conversation may write when --max-tokens
+   --  names none: a reasoning model thinks before it answers, and at the
+   --  plain run's 256 it was cut off mid-thought -- so up to 4096, or a
+   --  quarter of the context where that is less, 1024 at least, and 1024
+   --  where thinking is turned off -- and never more than half the context,
+   --  which a reply of a thousand tokens in a context of five hundred had
+   --  refused every turn for. What --max-tokens names, where it names
+   --  something. One rule for an interactive turn, a /work agent's and run's
+   --  agent, and for the room a context keeps for a reply.
+   --
+   --  @param Item The parsed command.
+   --  @param Capacity Positions the session holds.
+   --  @return The reply's token limit.
+   function Reply_Tokens (Item : Command; Capacity : Natural) return Natural
+   is (if Item.Max_Tokens_Set then Item.Max_Tokens
+       else Natural'Max
+              (1,
+               Natural'Min
+                 (Capacity / 2,
+                  (if Model_Runner.Templates."="
+                        (Item.Thinking, Model_Runner.Templates.Thinking_Off)
+                   then 1024
+                   else Natural'Max (1024, Natural'Min (4096, Capacity / 4))))));
 
    --  Release the heap text a command owns. Idempotent.
    --

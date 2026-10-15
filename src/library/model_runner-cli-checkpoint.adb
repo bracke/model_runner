@@ -10,6 +10,7 @@ with Hostkit.Fs;
 with Model_Runner.CLI.Partials;
 
 with Model_Runner.Text;
+with Model_Runner.UTF8;
 
 package body Model_Runner.CLI.Checkpoint is
 
@@ -17,6 +18,14 @@ package body Model_Runner.CLI.Checkpoint is
    package E renames Model_Runner.Errors;
    package T renames Model_Runner.Text;
    package US renames Ada.Strings.Unbounded;
+
+   --  The first line of a file this writes, then its version: none at all
+   --  is a file written before there was one, version 0, the same records.
+   Header  : constant String := "model_runner-conversation ";
+   Version : constant := 1;
+
+   function Image_Of (Value : Natural) return String
+   is (T.Image (Long_Long_Integer (Value)));
 
    ----------
    -- Save --
@@ -48,6 +57,9 @@ package body Model_Runner.CLI.Checkpoint is
       end LP;
    begin
       Status := E.Success;
+      --  What the file is and which form of it, so that a reader can tell
+      --  one it does not know from a conversation cut short.
+      US.Append (Buf, Header & Image_Of (Version) & ASCII.LF);
       for I in 1 .. Conv.Length (Messages) loop
          declare
             Role  : constant String :=
@@ -151,6 +163,21 @@ package body Model_Runner.CLI.Checkpoint is
       Loaded := False;
       Status := E.Success;
       Open (File, In_File, Path);
+
+      --  No larger than the conversation it could hold, written out: its
+      --  rendering's bound twice over, for the fields' lengths and the
+      --  calls beside it. Read whole otherwise, before anything said it
+      --  was a conversation at all.
+      if Size (File) > Stream_IO.Count
+                         (2 * Conv.Bounds_Of (Messages).Max_Rendered_Bytes
+                          + 1024 * 1024)
+      then
+         Close (File);
+         Status := E.Make (E.IO_Read_Failed);
+         E.Add_Text (Status, "path", Path, E.Param_Path);
+         return;
+      end if;
+
       declare
          type Text_Access is access String;
          procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
@@ -172,6 +199,18 @@ package body Model_Runner.CLI.Checkpoint is
             Said := E.Success;
             declare
                Pos : Natural := 1;
+
+               --  What the turn before was: a tool's answer follows a call
+               --  or another tool's answer, and nothing else.
+               After_Call : Boolean := False;
+
+               --  A record that is no record of this file's: refused, not
+               --  read as some other turn.
+               procedure Refuse (Code : E.Error_Code := E.IO_Read_Failed) is
+               begin
+                  Said := E.Make (Code);
+                  E.Add_Text (Said, "path", Path, E.Param_Path);
+               end Refuse;
 
                --  Read one length-prefixed field; Ok is false when what is there
                --  is not one, which ends the parse.
@@ -204,6 +243,33 @@ package body Model_Runner.CLI.Checkpoint is
                   end;
                end Field;
             begin
+               --  The version line, where there is one.
+               if Natural (Last) >= Header'Length
+                 and then Data (1 .. Header'Length) = Header
+               then
+                  declare
+                     Number : Natural := 0;
+                     Seen   : Boolean := False;
+                  begin
+                     Pos := Header'Length + 1;
+                     while Pos <= Natural (Last) and then Data (Pos) in '0' .. '9'
+                     loop
+                        Number := Number * 10
+                          + (Character'Pos (Data (Pos)) - Character'Pos ('0'));
+                        Pos := Pos + 1;
+                        Seen := True;
+                     end loop;
+                     if not Seen or else Number > Version
+                       or else Pos > Natural (Last) or else Data (Pos) /= ASCII.LF
+                     then
+                        --  A form this does not know, said, not guessed at.
+                        Refuse;
+                        return;
+                     end if;
+                     Pos := Pos + 1;
+                  end;
+               end if;
+
                Read_Messages :
                loop
                   --  Whole only where a record ends and the file with it:
@@ -228,10 +294,36 @@ package body Model_Runner.CLI.Checkpoint is
                            exit Read_Messages;
                      end;
 
+                     --  A role this writes, calls only where an assistant
+                     --  asks for them, an answer only to a call, and every
+                     --  word UTF-8: otherwise not this file's records.
+                     if Role not in "S" | "U" | "A" | "T" | "D"
+                                  | "SP" | "UP" | "AP" | "TP" | "DP"
+                       or else (Calls > 0 and then Role not in "A" | "AP")
+                       or else (Role in "T" | "TP" and then not After_Call)
+                     then
+                        Refuse;
+                        exit Read_Messages;
+                     end if;
+                     if not Model_Runner.UTF8.Is_Valid (Content) then
+                        Refuse (E.IO_Invalid_UTF8);
+                        exit Read_Messages;
+                     end if;
+                     After_Call :=
+                       (Role in "A" | "AP" and then Calls > 0)
+                       or else Role in "T" | "TP";
+
                      if Role = "S" then
                         Conv.Set_System (Into, Content, Said);
-                     elsif Role = "A" and then Calls > 0 then
-                        Conv.Append_Asking (Into, Content, Said);
+                     elsif Role in "A" | "AP" and then Calls > 0 then
+                        --  An assistant's turn that asks, its words or its
+                        --  parts, then each call it makes.
+                        if Role = "AP" then
+                           Conv.Append_Parts
+                             (Into, Conv.Assistant_Role, Content, Said);
+                        else
+                           Conv.Append_Asking (Into, Content, Said);
+                        end if;
                         for C in 1 .. Calls loop
                            declare
                               Ok_Nm, Ok_Ar : Boolean;
@@ -240,6 +332,12 @@ package body Model_Runner.CLI.Checkpoint is
                            begin
                               exit Read_Messages when not
                                 (Ok_Nm and then Ok_Ar);
+                              if not (Model_Runner.UTF8.Is_Valid (Nm)
+                                      and then Model_Runner.UTF8.Is_Valid (Ar))
+                              then
+                                 Refuse (E.IO_Invalid_UTF8);
+                                 exit Read_Messages;
+                              end if;
                               if E.Is_Ok (Said) then
                                  Conv.Append_Call (Into, Nm, Ar, Said);
                               end if;

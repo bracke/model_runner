@@ -10748,42 +10748,68 @@ package body Model_Runner.Llama is
    is
       Width   : constant Element_Count :=
         Element_Count (Source.Settings.Embedding);
+      Classes : constant Element_Count :=
+        (if T.Is_Present (Source.Rank_Out) then Source.Rank_Out.Rows else 1);
       In_Row  : T.Real_Array_Access := new Real_Array'(Pooled);
       Dense   : T.Real_Array_Access := new Real_Array (0 .. Width - 1);
-      Out_Row : T.Real_Array_Access := new Real_Array (0 .. 0);
+      Out_Row : T.Real_Array_Access := new Real_Array (0 .. Classes - 1);
    begin
       Score  := 0.0;
       Status := E.Success;
 
-      if not T.Is_Present (Source.Rank_Dense)
-        or else not T.Is_Present (Source.Rank_Out)
-      then
+      if not T.Is_Present (Source.Rank_Out) then
          Status := E.Make (E.Arch_Missing_Tensor);
       else
-         --  The dense of the pooled state, its bias, and the logistic that
-         --  the classifier a reranker learns puts between its two rows.
-         Product (Item, Source.Rank_Dense, In_Row, Dense, Status);
+         --  The dense of the pooled state, its bias, and the tanh the
+         --  classifier puts between its two rows -- where the file has
+         --  the dense; a head of one projection (jina-reranker-v1-tiny-en,
+         --  Qwen3-Reranker) reads the pooled state itself.
+         if T.Is_Present (Source.Rank_Dense) then
+            Product (Item, Source.Rank_Dense, In_Row, Dense, Status);
 
-         if E.Is_Ok (Status) then
-            if Source.Rank_Dense_Bias /= null then
-               K.Add (Dense.all, Source.Rank_Dense_Bias.all);
+            if E.Is_Ok (Status) then
+               if Source.Rank_Dense_Bias /= null then
+                  K.Add (Dense.all, Source.Rank_Dense_Bias.all);
+               end if;
+
+               for Index in Dense.all'Range loop
+                  Dense.all (Index) :=
+                    Real (N.Tanh (N.Wide_Real (Dense.all (Index))));
+               end loop;
             end if;
+         else
+            Dense.all := In_Row.all;
+         end if;
 
-            for Index in Dense.all'Range loop
-               Dense.all (Index) :=
-                 Real (N.Tanh (N.Wide_Real (Dense.all (Index))));
-            end loop;
-
-            --  And the single row down to the score.
+         --  And the rows down to the scores.
+         if E.Is_Ok (Status) then
             Product (Item, Source.Rank_Out, Dense, Out_Row, Status);
          end if;
 
          if E.Is_Ok (Status) then
-            Score := Out_Row.all (Out_Row.all'First);
             if Source.Rank_Out_Bias /= null then
-               Score := Score
-                 + Source.Rank_Out_Bias.all
-                     (Source.Rank_Out_Bias.all'First);
+               K.Add (Out_Row.all, Source.Rank_Out_Bias.all);
+            end if;
+
+            --  Qwen3's head is its own vocabulary's "yes" and "no" rows,
+            --  and the score the chance of "yes": a softmax over the two,
+            --  as the other runtime takes it for that architecture.
+            if Source.Settings.Kind in Qwen3 and then Classes > 1 then
+               declare
+                  Most : Real := Out_Row.all (0);
+                  Sum  : N.Wide_Real := 0.0;
+               begin
+                  for V of Out_Row.all loop
+                     Most := Real'Max (Most, V);
+                  end loop;
+                  for V of Out_Row.all loop
+                     Sum := Sum + N.Exp (N.Wide_Real (V - Most));
+                  end loop;
+                  Score :=
+                    Real (N.Exp (N.Wide_Real (Out_Row.all (0) - Most)) / Sum);
+               end;
+            else
+               Score := Out_Row.all (0);
             end if;
          end if;
       end if;

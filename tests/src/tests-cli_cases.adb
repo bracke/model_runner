@@ -5,6 +5,7 @@ with Ada.Unchecked_Deallocation;
 with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
+with Hostkit.Locks;
 with Interfaces;
 
 with Model_Runner.Backend;
@@ -25,6 +26,7 @@ with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.Framework;
 with Model_Runner.Hub;
+with Model_Runner.Hub.Store;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Work;
@@ -76,6 +78,7 @@ with Expectations;
 with External_Model;
 with Host_Load;
 with Perplexity_Run;
+with Restamping;
 with Speed_Run;
 with Tiny_Model;
 
@@ -3794,6 +3797,285 @@ package body Tests.CLI_Cases is
       end;
    end Grammar_Constrains_The_Run;
 
+   --  Embedding and reranking read a file as the other runtime reads it:
+   --  a decoder's stated pooling and its end marker, a ranking head of one
+   --  projection or of Qwen3's two rows and its own prompt, a document
+   --  list's empty and CRLF lines, the norms --normalize names, a context
+   --  past what a bert reads, and the notes for a query or a pooling that
+   --  changes nothing.
+   procedure Embedding_Reads_As_The_Other_Runtime
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Model  : constant String := "obj/embed-other-model.gguf";
+      Errors : constant String := "obj/embed-other-errors.txt";
+
+      Last_Errors : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Put (Image : in out Model_Runner.Bytes.Byte_Array_Access) is
+         File : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (File, Ada.Streams.Stream_IO.Out_File, Model);
+         declare
+            Bytes : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+              with Import, Address => Image.all'Address;
+         begin
+            Ada.Streams.Stream_IO.Write (File, Bytes);
+         end;
+         Ada.Streams.Stream_IO.Close (File);
+         Model_Runner.Bytes.Free (Image);
+      end Put;
+
+      --  One embed, its standard error kept in Last_Errors.
+      function Embedded
+        (Prompt : String; A : String := ""; B : String := "";
+         C : String := ""; D : String := ""; X : String := "";
+         Y : String := ""; Z : String := "") return String
+      is
+         use Ada.Text_IO;
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Held   : File_Type;
+      begin
+         Add (Source, "embed");
+         Add (Source, Model);
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         if A /= "" then
+            Add (Source, A);
+         end if;
+         if B /= "" then
+            Add (Source, B);
+         end if;
+         if C /= "" then
+            Add (Source, C);
+         end if;
+         if D /= "" then
+            Add (Source, D);
+         end if;
+         if X /= "" then
+            Add (Source, X);
+         end if;
+         if Y /= "" then
+            Add (Source, Y);
+         end if;
+         if Z /= "" then
+            Add (Source, Z);
+         end if;
+         Create (Held, Out_File, Errors);
+         Set_Error (Held);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Held);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Held);
+         Last_Errors :=
+           Ada.Strings.Unbounded.To_Unbounded_String (Text_Of (Errors));
+         Assert (Status = 0,
+                 "embed " & A & " " & B & " " & C & " ended with status"
+                 & Natural'Image (Status) & ": "
+                 & Ada.Strings.Unbounded.To_String (Last_Errors));
+         return Last_Output;
+      end Embedded;
+
+      function Said (Text : String) return Boolean
+      is (Ada.Strings.Fixed.Index
+            (Ada.Strings.Unbounded.To_String (Last_Errors), Text) > 0);
+
+      function Lines (Text : String) return Natural is
+         Count : Natural := 0;
+      begin
+         for C of Text loop
+            if C = ASCII.LF then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Count;
+      end Lines;
+
+      function First_Line (Text : String) return String is
+         Cut : constant Natural :=
+           Ada.Strings.Fixed.Index (Text, [1 => ASCII.LF]);
+      begin
+         return (if Cut = 0 then Text else Text (Text'First .. Cut - 1));
+      end First_Line;
+
+      Image : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      --  1. A decoder states its pooling: the last position, here, as
+      --  --pooling last pools it, and not the mean every unstated model
+      --  takes. And its end marker where the file asks for one: pooled
+      --  last, the vector is the end marker's.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen3, Room => 64,
+                        Pooling_Type => 3, Add_End_Token => True);
+      Put (Image);
+      declare
+         Stated : constant String := Embedded ("abcabc");
+         Last   : constant String := Embedded ("abcabc", "--pooling", "last");
+         Mean   : constant String := Embedded ("abcabc", "--pooling", "mean");
+      begin
+         Assert (Stated = Last and then Stated /= Mean,
+                 "a decoder that states its pooling was not pooled so");
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen3, Room => 64,
+                           Pooling_Type => 3, Add_End_Token => False);
+         Put (Image);
+         Assert (Embedded ("abcabc") /= Stated,
+                 "a decoder whose file asks for an end marker embedded its "
+                 & "text as one that does not");
+      end;
+
+      --  2. A ranking head of one projection, no dense before it, scores.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Ranking => True,
+                        Rank_Dense => False);
+      Put (Image);
+      declare
+         Score : constant String := Embedded ("ab", "--query", "ba");
+      begin
+         Assert (Lines (Score) = 1 and then Score /= "nan" & ASCII.LF,
+                 "a ranking head of one projection gave <" & Score & ">");
+      end;
+
+      --  3. Qwen3's: its last position, its two rows through a softmax --
+      --  the chance of the first -- and its own prompt; alone and among
+      --  several, the same score.
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen3, Room => 64, Ranking => True,
+         Rank_Dense => False, Rank_Classes => 2, Pooling_Type => 4,
+         Rank_Template => "{query}|{document}");
+      Put (Image);
+      declare
+         One   : constant String := Embedded ("ab", "--query", "ba");
+         Both  : constant String :=
+           Embedded ("ab" & ASCII.LF & "ca", "--query", "ba");
+         Value : constant Long_Float := Long_Float'Value (First_Line (One));
+         Crlf  : constant String :=
+           Embedded ("ab" & ASCII.CR & ASCII.LF & "ca", "--query", "ba");
+      begin
+         Assert (Value > 0.0 and then Value < 1.0,
+                 "a Qwen3 reranker's score was not a chance: " & One);
+         Assert (First_Line (One) = First_Line (Both),
+                 "a Qwen3 pair scored alone, " & One
+                 & ", is not its score among others: " & Both);
+         Assert (First_Line (Crlf) = First_Line (One),
+                 "a CRLF document scored " & First_Line (Crlf)
+                 & " where it scores " & First_Line (One));
+         Assert (Embedded ("ab", "--query", "ba", "--pooling", "last") = One,
+                 "a Qwen3 reranker was not pooled by its last position");
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Qwen3, Room => 64, Ranking => True,
+            Rank_Dense => False, Rank_Classes => 2, Pooling_Type => 4);
+         Put (Image);
+         Assert (Embedded ("ab", "--query", "ba") /= One,
+                 "a reranker's own prompt changed nothing of its score");
+         --  And the chance, not the first row itself: the same row alone,
+         --  a head of one, is its raw score.
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Qwen3, Room => 64, Ranking => True,
+            Rank_Dense => False, Rank_Classes => 1, Pooling_Type => 4,
+            Rank_Template => "{query}|{document}");
+         Put (Image);
+         Assert (Embedded ("ab", "--query", "ba") /= One,
+                 "a Qwen3 reranker's two rows were not taken as a chance");
+      end;
+
+      --  4. A document list's empty line scores none, on its own line, and
+      --  a CRLF list's lines score as the lines do.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Ranking => True);
+      Put (Image);
+      declare
+         Alone  : constant String := Embedded ("ab", "--query", "ba");
+         Gapped : constant String :=
+           Embedded ("ab" & ASCII.LF & ASCII.LF & "ba", "--query", "ba");
+         Crlf   : constant String :=
+           Embedded ("ab" & ASCII.CR & ASCII.LF & "ba", "--query", "ba");
+      begin
+         Assert (Lines (Gapped) = 3
+                 and then Ada.Strings.Fixed.Index
+                            (Gapped, ASCII.LF & "nan" & ASCII.LF) > 0,
+                 "an empty document did not hold its line: <" & Gapped & ">");
+         Assert (First_Line (Crlf) = First_Line (Alone),
+                 "a CRLF document scored " & First_Line (Crlf)
+                 & " where it scores " & First_Line (Alone));
+         --  And the pair joined by the file's flags: a file that says it
+         --  takes no separator is read without one.
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Ranking => True,
+                           Add_Sep_Token => 0);
+         Put (Image);
+         Assert (Embedded ("ab", "--query", "ba") /= Alone,
+                 "a pair whose file asks for no separator was joined with one");
+      end;
+
+      --  5. A query beside a model that does not rank, and a file that
+      --  asks for no pooling, are said.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Bert, Pooling_Type => 0);
+      Put (Image);
+      declare
+         Ignored : constant String := Embedded ("ab", "--query", "ba");
+         pragma Unreferenced (Ignored);
+      begin
+         Assert (Said ("--query is what a reranker scores"),
+                 "a query beside a model that does not rank was not said");
+         Assert (Said ("asks for no pooling"),
+                 "a file asking for no pooling was not said");
+      end;
+
+      --  6. The norms --normalize names: the taxicab length one, and the
+      --  largest magnitude scaled to sixteen-bit integers.
+      declare
+         Taxicab : constant Reals :=
+           Parsed (Embedded ("abcabc", "--normalize", "1"));
+         Scaled  : constant Reals :=
+           Parsed (Embedded ("abcabc", "--normalize", "0"));
+         Total, Most : Long_Float := 0.0;
+      begin
+         for Index in 1 .. Taxicab.Count loop
+            Total := Total + abs Taxicab.Values (Index);
+         end loop;
+         for Index in 1 .. Scaled.Count loop
+            Most := Long_Float'Max (Most, abs Scaled.Values (Index));
+            Assert (Scaled.Values (Index)
+                      = Long_Float'Floor (Scaled.Values (Index) + 0.5),
+                    "a sixteen-bit component was not whole");
+         end loop;
+         Assert (abs (Total - 1.0) < 1.0E-4,
+                 "the taxicab norm left the vector at"
+                 & Long_Float'Image (Total));
+         Assert (abs (Most - 32_760.0) < 1.0,
+                 "the sixteen-bit scaling's largest was"
+                 & Long_Float'Image (Most));
+      end;
+
+      --  7. A context asked past what a bert reads, and a text past both:
+      --  cut to what it reads, not to the context and then refused.
+      --  A stretched rotation lets a context past the trained one open.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Nomic_Bert, Room => 16);
+      Put (Image);
+      declare
+         Cut : constant String :=
+           Embedded ("abcabcabcabcabcabcabcabcabcabcabcabc",
+                     "--context-size", "64", "--truncate", "--rope-scaling",
+                     "linear", "--rope-scale", "4");
+      begin
+         Assert (Lines (Cut) = Tiny_Model.Embedding,
+                 "a text cut to what a bert reads gave <" & Cut & ">");
+      end;
+
+      --  8. A component too large to scale to six decimals is written,
+      --  not raised.
+      Assert (Model_Runner.Text.Image (1.0E14, 6) = "100000000000000.000000",
+              "a large component's image was "
+              & Model_Runner.Text.Image (1.0E14, 6));
+
+      Ada.Directories.Delete_File (Model);
+   end Embedding_Reads_As_The_Other_Runtime;
+
    --  Embedding a text reports the state, not the distribution.
    --
    --  What `run` prints is what the model would say next; what this prints
@@ -4880,6 +5162,25 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Option_Combination, "run m.gguf --agent --prompt hi --draft-model d.gguf");
       Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --max-steps 3");
       Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --compact");
+      --  A session compacts its own conversation when it runs out of room;
+      --  a shift beside it would move the cache under the history it keeps.
+      Expect (E.CLI_Option_Combination, "run m.gguf --interactive --context-shift 16");
+
+      --  A reply's limit, where --max-tokens names none, is never more than
+      --  half the context: a thousand tokens in a context of five hundred
+      --  refused every turn. Named, it is what was named.
+      declare
+         Item : Opt.Command;
+      begin
+         Assert (Opt.Reply_Tokens (Item, 500) = 250
+                 and then Opt.Reply_Tokens (Item, 1) = 1,
+                 "a reply's limit was past half the context:"
+                 & Opt.Reply_Tokens (Item, 500)'Image);
+         Item.Max_Tokens := 7;
+         Item.Max_Tokens_Set := True;
+         Assert (Opt.Reply_Tokens (Item, 500) = 7,
+                 "a reply's limit was not the one --max-tokens named");
+      end;
       --  One setting said two ways is refused, not settled by order.
       Expect (E.CLI_Repeated_Option, "run m.gguf --prompt hi --think --no-think");
       Expect (E.CLI_Repeated_Option, "run m.gguf --prompt hi --paged --no-paged");
@@ -8118,6 +8419,7 @@ package body Tests.CLI_Cases is
                Opt.Normal);
 
             Options.Max_Tokens := 4;
+            Options.Max_Tokens_Set := True;
             Options.Sampling.Temperature := 0.0;
 
             Open (From, In_File, Input);
@@ -8310,7 +8612,11 @@ package body Tests.CLI_Cases is
                    (Said, E.Diagnostic_Code (E.IO_Invalid_UTF8)),
                  "a line that is not UTF-8 was not refused by name: " & Said);
 
-         Assert (Said'Length > Good'Length,
+         --  The good line is a turn, which stops at its four tokens and
+         --  says so; the bad one is no turn at all.
+         Assert (Project_Tools.Text.Contains (Good, "--max-tokens gives it more")
+                 and then not Project_Tools.Text.Contains
+                                (Said, "--max-tokens gives it more"),
                  "a line that is not UTF-8 read the same as one that is, so "
                  & "the loop passed it on rather than refusing it");
       end;
@@ -8463,6 +8769,7 @@ package body Tests.CLI_Cases is
                Opt.Normal);
 
             Options.Max_Tokens := 2;
+            Options.Max_Tokens_Set := True;
             Options.Sampling.Temperature := 0.0;
             Options.Show_Stats := True;
 
@@ -9751,7 +10058,8 @@ package body Tests.CLI_Cases is
 
       --  Run the loop over Lines and return what reached standard error.
       function Conversed
-        (Lines : String; Projector : String := "") return String is
+        (Lines : String; Projector : String := ""; System : String := "")
+         return String is
          Held    : aliased constant B.Byte_Array := Image.all;
          Rig     : Harness (Held'Access);
          Session : L.Session;
@@ -9778,8 +10086,13 @@ package body Tests.CLI_Cases is
             Opt.Normal);
 
          Options.Max_Tokens := 2;
+         Options.Max_Tokens_Set := True;
          Options.Sampling.Temperature := 0.0;
          Options.Projector_Path := Model_Runner.Text.To_Bounded (Projector);
+         if System /= "" then
+            Options.Has_System := True;
+            Options.System_Text := new String'(System);
+         end if;
 
          --  Statistics after every turn, so that a completed turn leaves a
          --  mark on standard error whether or not anything asks for one.
@@ -9993,6 +10306,62 @@ package body Tests.CLI_Cases is
          Assert (not Project_Tools.Text.Contains
                        (Conversed ("/exit" & ASCII.LF), Marker),
                  "leaving immediately still ran a turn");
+      end;
+
+      --  /reset starts the conversation again with the system message it
+      --  was started with, not without one.
+      declare
+         Set : constant String := "set (/system shows how to change it)";
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Conversed ("/reset" & ASCII.LF & "/context" & ASCII.LF
+                               & "/exit" & ASCII.LF,
+                               System => "Be brief."),
+                    Set),
+                 "/reset dropped the system message --system set");
+         Assert (not Project_Tools.Text.Contains
+                       (Conversed ("/reset" & ASCII.LF & "/context" & ASCII.LF
+                                   & "/exit" & ASCII.LF),
+                        Set),
+                 "/reset made up a system message");
+      end;
+
+      --  /system takes UTF-8 only, as a typed turn does. (The loop here
+      --  offers no tools, so /tool, which checks the same way, is not
+      --  reached.)
+      declare
+         Said : constant String :=
+           Conversed ("/system " & Character'Val (16#C3#) & "x"
+                      & ASCII.LF & "/exit" & ASCII.LF);
+      begin
+         Assert (Project_Tools.Text.Contains
+                   (Said, E.Diagnostic_Code (E.IO_Invalid_UTF8)),
+                 "/system took words that are not UTF-8: " & Said);
+      end;
+
+      --  A reply that stops at its limit says so, and what gives it more.
+      Assert (Project_Tools.Text.Contains
+                (Conversed ("hello" & ASCII.LF & ASCII.LF & "/exit" & ASCII.LF),
+                 "--max-tokens gives it more"),
+              "a reply cut at its limit was not said cut");
+
+      --  A conversation past its context is compacted, the oldest turns
+      --  taken into a summary, and the turn that did not fit asked again,
+      --  rather than every turn after refused. Long turns, which their
+      --  digest lines are shorter than, in a context a few of them fill.
+      Tiny_Model.Build (Image, Room => 1024);
+      declare
+         function Turns (Count : Natural) return String is
+           (if Count = 0 then "/exit" & ASCII.LF
+            else "turn" & Count'Image & " " & [1 .. 150 => 'w']
+                 & ASCII.LF & ASCII.LF & Turns (Count - 1));
+         Said : constant String := Conversed (Turns (7));
+      begin
+         Assert (Project_Tools.Text.Contains (Said, "were taken into a summary")
+                 and then not Project_Tools.Text.Contains
+                                (Said, E.Diagnostic_Code (E.Generation_Prompt_Too_Long)),
+                 "a conversation past its context was refused, not compacted: "
+                 & Said);
       end;
    end Interactive_Loop_Runs;
 
@@ -11432,6 +11801,7 @@ package body Tests.CLI_Cases is
                Opt.Verbose);
 
             Options.Max_Tokens := 2;
+            Options.Max_Tokens_Set := True;
             Options.Sampling.Temperature := 0.0;
             Options.Level := Opt.Verbose;
             Options.Show_Stats := True;
@@ -12403,6 +12773,157 @@ package body Tests.CLI_Cases is
                  "a host with no load average was reported as having one");
       end if;
    end The_Speed_Tool_Reads_The_Machine;
+
+   ---------------------------------------
+   -- The_Speed_Tool_Takes_Runs_Arithmetic --
+   ---------------------------------------
+
+   --  `tests speed` tells the backends the arithmetic run would: the one
+   --  named, or where none is, the one run takes for the model -- Gemma 2's
+   --  mixed one. It told every model integers before it had read one, so
+   --  every Gemma 2 figure was of a run nobody starts.
+   procedure The_Speed_Tool_Takes_Runs_Arithmetic
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Backend.CPU.Role_Set;
+      package CPU renames Model_Runner.Backend.CPU;
+      package L renames Model_Runner.Llama;
+
+      Gemma  : constant String := "obj/speed-arith-gemma2.gguf";
+      Llama  : constant String := "obj/speed-arith-llama.gguf";
+      Prompt : constant String := "obj/speed-arith-prompt.txt";
+      Saved  : constant CPU.Role_Set := CPU.Integer_Activation_Roles;
+
+      --  The roles the backend was told by one measurement of Model.
+      function Told (Model : String; Named : String := "")
+        return CPU.Role_Set
+      is
+         Report : Speed_Run.Report;
+      begin
+         CPU.Use_Integer_Activations (CPU.No_Role);
+         Speed_Run.Run
+           (Path        => Model,
+            Prompt_Path => Prompt,
+            Tokens      => 1,
+            Threads     => 1,
+            Batch       => 32,
+            Repack      => L.No_Repack,
+            Repeats     => 1,
+            Result      => Report,
+            Arithmetic  => Named);
+         Assert (Report.Ran,
+                 "the tool would not measure " & Model & ": "
+                 & Speed_Run.Summary (Report));
+         return CPU.Integer_Activation_Roles;
+      end Told;
+   begin
+      Tiny_Model.Write (Gemma, Room => 64, Kind => Tiny_Model.Gemma2);
+      Tiny_Model.Write (Llama, Room => 64);
+      declare
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Prompt);
+         Ada.Text_IO.Put_Line (Handle, "abab");
+         Ada.Text_IO.Close (Handle);
+      end;
+
+      --  The two modes the choice is between are different roles, or the
+      --  rest of this would say nothing.
+      Assert (L.Quantized_Roles (L.Mixed_Activations)
+                /= L.Quantized_Roles (L.Integer_Activations),
+              "the mixed and the integer arithmetic name the same roles");
+      begin
+         Assert (Told (Gemma) = L.Quantized_Roles (L.Mixed_Activations),
+                 "the tool measured Gemma 2 in other than the mixed "
+                 & "arithmetic run takes for it");
+         Assert (Told (Llama) = L.Quantized_Roles (L.Integer_Activations),
+                 "the tool measured a Llama in other than run's integers");
+         Assert (Told (Gemma, "f32") = L.Quantized_Roles (L.Float_Activations),
+                 "the tool measured a named arithmetic as another");
+      exception
+         when others =>
+            CPU.Use_Integer_Activations (Saved);
+            raise;
+      end;
+      CPU.Use_Integer_Activations (Saved);
+   end The_Speed_Tool_Takes_Runs_Arithmetic;
+
+   ---------------------------------------------
+   -- Restamping_Takes_Only_The_Groups_Named --
+   ---------------------------------------------
+
+   --  A restamp records the groups its reason is for and leaves every other
+   --  group as it was: one note re-blessed every group that had moved, and
+   --  a group awaiting its re-measure passed the staleness gate with it,
+   --  nobody deciding so.
+   procedure Restamping_Takes_Only_The_Groups_Named
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Root   : constant String := "obj/restamp-root";
+      Record_File : constant String := Root & "/docs/measured-figures.txt";
+      Stale  : constant String :=
+        "a 0000000000000000 one.txt" & ASCII.LF
+        & "b 0000000000000000 two.txt" & ASCII.LF;
+      Moved  : Natural;
+      Good   : Boolean;
+
+      --  Written raw: through Text_IO, closing added a line end of its
+      --  own after the last, and the record was never the text put.
+      procedure Put (Path, Text : String) is
+         Handle : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (Handle, Ada.Streams.Stream_IO.Out_File, Path);
+         String'Write (Ada.Streams.Stream_IO.Stream (Handle), Text);
+         Ada.Streams.Stream_IO.Close (Handle);
+      end Put;
+
+      function Kept return String is (Text_Of (Record_File));
+   begin
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+      Ada.Directories.Create_Path (Root & "/docs");
+      Put (Root & "/one.txt", "one");
+      Put (Root & "/two.txt", "two");
+      Put (Record_File, Stale);
+
+      --  One group named: it alone recorded anew, the other left stale
+      --  for the check to go on failing on.
+      Restamping.Run (Root, "only a", "a", False, Moved, Good);
+      Assert (Good and then Moved = 1
+              and then Ada.Strings.Fixed.Index (Kept, "# only a") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Kept, "b 0000000000000000 two.txt") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Kept, "a 0000000000000000") = 0,
+              "a restamp naming one group did not record it alone");
+      Put (Record_File, Stale);
+
+      Restamping.Run (Root, "both stand", "a b", False, Moved, Good);
+      Assert (Good and then Moved = 2
+              and then Ada.Strings.Fixed.Index (Kept, "# both stand") > 0
+              and then Ada.Strings.Fixed.Index (Kept, "0000000000000000") = 0,
+              "a restamp naming every moved group did not record them");
+
+      --  And, nothing moved now, a name the record does not hold: a typing
+      --  slip, refused and nothing written, rather than a note for nothing.
+      declare
+         Fresh : constant String := Kept;
+      begin
+         Restamping.Run (Root, "a typo", "a c", False, Moved, Good);
+         Assert (not Good and then Kept = Fresh,
+                 "a restamp naming a group the record does not hold went on");
+      end;
+
+      Put (Record_File, Stale);
+      Restamping.Run (Root, "all of them", "", True, Moved, Good);
+      Assert (Good and then Moved = 2,
+              "a restamp of every group did not record them all");
+      Ada.Directories.Delete_Tree (Root);
+   end Restamping_Takes_Only_The_Groups_Named;
 
    ------------------------------------------
    -- The_Speed_Tool_Runs_What_It_Publishes --
@@ -13956,6 +14477,35 @@ package body Tests.CLI_Cases is
          Assert (Removing ("Q4/inner.gguf") = 0
                  and then not Ada.Directories.Exists (Store & "/Q4/inner.gguf"),
                  "models remove refused a model in a folder of the store");
+         --  And what a download of it left: its part and the part's notes,
+         --  a chunk, its lock -- and the manifest's record of it.
+         declare
+            Files  : Model_Runner.Hub.File_Set;
+            Locals : Model_Runner.Hub.Store.Local_Names;
+         begin
+            Touch (Store & "/fetched.gguf");
+            Touch (Store & "/fetched.gguf.part");
+            Touch (Store & "/fetched.gguf.part.revision");
+            Touch (Store & "/fetched.gguf.part.range-0");
+            Touch (Store & "/fetched.gguf.lock");
+            Files (1).Name := Model_Runner.Text.To_Bounded ("fetched.gguf");
+            Locals (1) := Model_Runner.Text.To_Bounded ("fetched.gguf");
+            Model_Runner.Hub.Store.Note (Store, "o/r:Q", "o/r", Files, Locals, 1);
+            Assert (Removing ("fetched.gguf") = 0
+                    and then not Ada.Directories.Exists (Store & "/fetched.gguf.part")
+                    and then not Ada.Directories.Exists (Store & "/fetched.gguf.part.revision")
+                    and then not Ada.Directories.Exists (Store & "/fetched.gguf.part.range-0")
+                    and then not Ada.Directories.Exists (Store & "/fetched.gguf.lock"),
+                    "models remove left a download's part, chunks or lock behind");
+            Assert (Model_Runner.Hub.Store.Origin (Store, "fetched.gguf") = "",
+                    "models remove left the manifest's record of the model");
+
+            --  A download that never finished is removed by the model's name.
+            Touch (Store & "/stopped.gguf.part");
+            Assert (Removing ("stopped.gguf") = 0
+                    and then not Ada.Directories.Exists (Store & "/stopped.gguf.part"),
+                    "models remove would not take a download that stopped part way");
+         end;
       exception
          when others =>
             if Before = "" then
@@ -13972,6 +14522,253 @@ package body Tests.CLI_Cases is
       end if;
       Ada.Directories.Delete_File (Victim);
    end Models_Remove_Stays_In_The_Store;
+
+   --  What the hub lists is read from each file's own entry, chosen from
+   --  as it should be, fetched from where it should be, and kept where
+   --  another repository's file of the name does not stand.
+   procedure The_Hub_Is_Read_And_Kept_As_It_Says
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Hub renames Model_Runner.Hub;
+      package Store renames Model_Runner.Hub.Store;
+      package MT renames Model_Runner.Text;
+
+      Hash_A : constant String (1 .. 64) := [others => 'a'];
+      Hash_C : constant String (1 .. 64) := [others => 'c'];
+      Rev    : constant String := "0123456789abcdef0123456789abcdef01234567";
+      Long   : constant String (1 .. Hub.Max_Name + 1) := [others => 'n'];
+
+      --  A file kept in the repository itself (no lfs) before one in LFS:
+      --  its digest is none, not the next entry's. A projector, a name
+      --  that climbs, one too long and a non-GGUF are left out.
+      Listing_Text : constant String :=
+        "{""id"":""o/r"",""sha"":""" & Rev & """,""siblings"":["
+        & "{""rfilename"":""m-Q4_K_M.gguf"",""size"":100,""lfs"":{""sha256"":""" & Hash_A & """,""size"":100}},"
+        & "{""rfilename"":""m-Q8_0.gguf"",""size"":300},"
+        & "{""rfilename"":""m-Q6_K.gguf"",""lfs"":{""sha256"":""" & Hash_C & """,""size"":200}},"
+        & "{""rfilename"":""mmproj-m-F16.gguf"",""size"":50},"
+        & "{""rfilename"":""../evil.gguf"",""size"":5},"
+        & "{""rfilename"":""" & Long & ".gguf"",""size"":5},"
+        & "{""rfilename"":""README.md"",""size"":5},"
+        & "{""rfilename"":""big-00001-of-00002.gguf"",""size"":40},"
+        & "{""rfilename"":""big-00002-of-00002.gguf"",""size"":40},"
+        & "{""rfilename"":""half-00001-of-00002.gguf"",""size"":10}"
+        & "]}";
+
+      Listed : Hub.Listing;
+      Count  : Natural;
+      Ok     : Boolean;
+      Reason : MT.Bounded;
+
+      function Named (Which : Positive) return String is
+        (MT.To_String (Listed (Which).Name));
+
+      function Index_Of (Name : String) return Natural is
+      begin
+         for I in 1 .. Count loop
+            if Named (I) = Name then
+               return I;
+            end if;
+         end loop;
+         return 0;
+      end Index_Of;
+   begin
+      --  1. The listing.
+      Hub.Read_Listing (Listing_Text, Listed, Count, Ok, Reason);
+      Assert (Ok, "a listing was not read: " & MT.To_String (Reason));
+      Assert (Count = 6,
+              "the listing kept" & Natural'Image (Count)
+              & " model files, not the six that are models to run");
+      Assert (Index_Of ("mmproj-m-F16.gguf") = 0,
+              "a vision projector was listed as a model");
+      Assert (Index_Of ("m-Q8_0.gguf") /= 0
+              and then not Listed (Index_Of ("m-Q8_0.gguf")).Has_Hash
+              and then Listed (Index_Of ("m-Q8_0.gguf")).Size = 300,
+              "a file with no LFS record took a digest that is not its own");
+      Assert (Listed (Index_Of ("m-Q4_K_M.gguf")).Has_Hash
+              and then Listed (Index_Of ("m-Q4_K_M.gguf")).SHA256 = Hash_A
+              and then Listed (Index_Of ("m-Q6_K.gguf")).SHA256 = Hash_C
+              and then Listed (Index_Of ("m-Q6_K.gguf")).Size = 200,
+              "a file's own digest or size was not read from its own entry");
+      Assert (MT.To_String (Listed (1).Revision) = Rev,
+              "the commit the listing was read at was not carried");
+      Hub.Read_Listing ("<html>404</html>", Listed, Count, Ok, Reason);
+      Assert (not Ok, "a page that is no listing was read as one");
+      Hub.Read_Listing (Listing_Text, Listed, Count, Ok, Reason);
+
+      --  2. Choosing by quant, and by what fits.
+      declare
+         Files : Hub.File_Set;
+         Got   : Natural;
+      begin
+         Hub.Choose_Quant (Listed, Count, "Q6_K", "o/r", Files, Got, Ok, Reason);
+         Assert (Ok and then Got = 1 and then MT.To_String (Files (1).Name) = "m-Q6_K.gguf",
+                 "a named quant was not chosen");
+         Hub.Choose_Quant (Listed, Count, "F16", "o/r", Files, Got, Ok, Reason);
+         Assert (not Ok, "a quant only a projector carries was chosen");
+         Hub.Choose_Quant (Listed, Count, "big", "o/r", Files, Got, Ok, Reason);
+         Assert (Ok and then Got = 2
+                 and then MT.To_String (Files (1).Name) = "big-00001-of-00002.gguf",
+                 "a whole shard set was not chosen in order");
+
+         --  Room for 30 bytes: nothing fits, and the smallest whole model
+         --  is taken -- not the set of which only one shard is listed.
+         Hub.Choose_Fit (Listed, Count, 30, "o/r", Files, Got, Ok, Reason);
+         Assert (Ok and then Got = 2
+                 and then MT.To_String (Files (1).Name) = "big-00001-of-00002.gguf",
+                 "a shard set short of a shard was chosen as the smallest model: "
+                 & MT.To_String (Files (1).Name));
+         Hub.Choose_Fit (Listed, Count, 250, "o/r", Files, Got, Ok, Reason);
+         Assert (Ok and then MT.To_String (Files (1).Name) = "m-Q6_K.gguf",
+                 "the largest model that fits was not chosen");
+      end;
+
+      --  3. Where a file is fetched from.
+      Assert (Hub.File_URL ("o/r", Rev, "a b#c?.gguf")
+                = "https://huggingface.co/o/r/resolve/" & Rev & "/a%20b%23c%3F.gguf",
+              "a file's URL was not pinned to its commit, or its name not "
+              & "encoded: " & Hub.File_URL ("o/r", Rev, "a b#c?.gguf"));
+      Assert (Hub.File_URL ("o/r", "", "Q4/m.gguf")
+                = "https://huggingface.co/o/r/resolve/main/Q4/m.gguf",
+              "a file with no commit was not fetched from the branch");
+
+      --  4. The proxy, by the environment's convention.
+      Assert (Hub.Proxy_For ("http://p:8080", "", "huggingface.co") = "http://p:8080",
+              "a proxy set was not used");
+      Assert (Hub.Proxy_For ("http://p:8080", "localhost, .huggingface.co", "cdn.huggingface.co") = ""
+              and then Hub.Proxy_For ("http://p:8080", "huggingface.co", "huggingface.co") = ""
+              and then Hub.Proxy_For ("http://p:8080", "*", "anything") = "",
+              "a host the bypass names was sent through the proxy");
+      Assert (Hub.Proxy_For ("http://p:8080", "huggingface.co", "nothuggingface.co")
+                = "http://p:8080",
+              "a host that only ends in a bypassed name was reached directly");
+      Assert (Hub.Proxy_For ("", "", "huggingface.co") = "", "no proxy set was used");
+
+      --  5. The store: a name kept as its own until another repository's
+      --  file has it, a reference found offline, and forgotten with it.
+      declare
+         Dir    : constant String := Ada.Directories.Full_Name ("obj/hub-store");
+         Files  : Hub.File_Set;
+         Locals : Store.Local_Names;
+         Repo   : MT.Bounded;
+         Got    : Natural;
+         Found  : Boolean;
+      begin
+         if Ada.Directories.Exists (Dir & "/" & Store.Manifest_Name) then
+            Ada.Directories.Delete_File (Dir & "/" & Store.Manifest_Name);
+         end if;
+         Ada.Directories.Create_Path (Dir);
+         Assert (Store.Place (Dir, "a/x", "m-Q4_K_M.gguf") = "m-Q4_K_M.gguf",
+                 "a file was not kept under its own name in a store with no manifest");
+         Store.Find (Dir, "a/x:Q4_K_M", Repo, Files, Locals, Got, Found);
+         Assert (not Found, "a store with no manifest found a reference");
+
+         Files (1) := Listed (Index_Of ("m-Q4_K_M.gguf"));
+         Locals (1) := MT.To_Bounded ("m-Q4_K_M.gguf");
+         Store.Note (Dir, "a/x:Q4_K_M", "a/x", Files, Locals, 1);
+         Assert (Store.Origin (Dir, "m-Q4_K_M.gguf") = "a/x",
+                 "a kept file's repository was not noted");
+         Assert (Store.Place (Dir, "a/x", "m-Q4_K_M.gguf") = "m-Q4_K_M.gguf",
+                 "a repository's own file was moved from its name");
+         Assert (Store.Place (Dir, "b/y", "m-Q4_K_M.gguf") = "b/y/m-Q4_K_M.gguf",
+                 "another repository's file of the same name was kept over the first's");
+
+         Store.Find (Dir, "a/x:Q4_K_M", Repo, Files, Locals, Got, Found);
+         Assert (Found and then Got = 1 and then MT.To_String (Repo) = "a/x"
+                 and then MT.To_String (Locals (1)) = "m-Q4_K_M.gguf"
+                 and then Files (1).SHA256 = Hash_A and then Files (1).Size = 100
+                 and then MT.To_String (Files (1).Revision) = Rev,
+                 "a reference fetched before was not found as it was fetched");
+
+         Store.Forget (Dir, "m-Q4_K_M.gguf");
+         Store.Find (Dir, "a/x:Q4_K_M", Repo, Files, Locals, Got, Found);
+         Assert (not Found and then Store.Origin (Dir, "m-Q4_K_M.gguf") = "",
+                 "a removed file's record was kept");
+      end;
+
+      --  6. One fetch of a file at a time: another holding its lock -- a
+      --  lock of its own descriptor, as another run's is -- a fetch says so
+      --  and fetches nothing.
+      declare
+         Dest : constant String := Ada.Directories.Full_Name ("obj/hub-locked.gguf");
+         Held : Hostkit.Locks.Lock;
+         Took : constant Hostkit.Locks.Lock_Outcome :=
+           Hostkit.Locks.Acquire (Dest & ".lock", Hostkit.Locks.Lock_Exclusive,
+                                  Wait => False, Item => Held);
+         Fetched : Boolean;
+         File    : constant Hub.Download_File := Listed (Index_Of ("m-Q4_K_M.gguf"));
+      begin
+         if Hostkit.Locks."=" (Took, Hostkit.Locks.Lock_Unsupported) then
+            Ada.Text_IO.Put_Line ("note: no file locks here; one fetch at a time not checked");
+            return;
+         end if;
+         Hub.Fetch ("o/r", File, Dest, Fetched, Reason);
+         Hostkit.Locks.Release (Held);
+         Assert (not Fetched
+                 and then Ada.Strings.Fixed.Index (MT.To_String (Reason), "another run") > 0,
+                 "a fetch went ahead while another run held the file: "
+                 & MT.To_String (Reason));
+      end;
+
+      --  7. A part a join stopped in is cut back to where the join began,
+      --  its chunks kept; a part of another revision is begun again. The
+      --  fetch itself goes nowhere: the proxy named is a closed port here,
+      --  so it fails at once, after what it does to the part beforehand.
+      declare
+         Dest  : constant String := Ada.Directories.Full_Name ("obj/hub-cut.gguf");
+         Part  : constant String := Dest & ".part";
+         Was   : constant String :=
+           (if Ada.Environment_Variables.Exists ("HTTPS_PROXY")
+            then Ada.Environment_Variables.Value ("HTTPS_PROXY") else "");
+         File  : Hub.Download_File := Listed (Index_Of ("m-Q4_K_M.gguf"));
+         Fetched : Boolean;
+         use type Ada.Directories.File_Size;
+
+         procedure Put (Path : String; Text : String) is
+            F : Ada.Streams.Stream_IO.File_Type;
+         begin
+            Ada.Streams.Stream_IO.Create (F, Ada.Streams.Stream_IO.Out_File, Path);
+            String'Write (Ada.Streams.Stream_IO.Stream (F), Text);
+            Ada.Streams.Stream_IO.Close (F);
+         end Put;
+
+         procedure Restore is
+         begin
+            if Was = "" then
+               Ada.Environment_Variables.Clear ("HTTPS_PROXY");
+            else
+               Ada.Environment_Variables.Set ("HTTPS_PROXY", Was);
+            end if;
+         end Restore;
+      begin
+         File.Size := 1000;
+         Ada.Environment_Variables.Set ("HTTPS_PROXY", "http://127.0.0.1:9");
+         Put (Part, [1 .. 700 => 'p']);
+         Put (Part & ".revision", MT.To_String (File.Revision));
+         Put (Part & ".joining", "600");
+         Put (Part & ".range-600", [1 .. 64 => 'r']);
+         Hub.Fetch ("o/r", File, Dest, Fetched, Reason);
+         Assert (not Fetched, "a fetch through a closed proxy said it fetched");
+         Assert (Ada.Directories.Exists (Part)
+                 and then Ada.Directories.Size (Part) = 600
+                 and then not Ada.Directories.Exists (Part & ".joining"),
+                 "a part a join stopped in was not cut back to where it began");
+
+         --  Another revision's part: begun again, not resumed.
+         Put (Part, [1 .. 700 => 'p']);
+         Put (Part & ".revision", "ffff");
+         Hub.Fetch ("o/r", File, Dest, Fetched, Reason);
+         Assert (not Ada.Directories.Exists (Part)
+                 or else Ada.Directories.Size (Part) = 0,
+                 "a part begun at another revision was kept to resume");
+         Restore;
+      exception
+         when others =>
+            Restore;
+            raise;
+      end;
+   end The_Hub_Is_Read_And_Kept_As_It_Says;
 
    --  The prefill cache is keyed by the backend and the repacking asked
    --  as well as the model and its settings: two runs that differ in them
@@ -14283,6 +15080,10 @@ package body Tests.CLI_Cases is
          "the device run takes unasked counts the context the load will "
          & "keep beside a dense model");
       Register_Routine
+        (T, The_Hub_Is_Read_And_Kept_As_It_Says'Access,
+         "the hub's listing is read from each file's own entry, chosen from, "
+         & "fetched at its commit and kept where it is its repository's");
+      Register_Routine
         (T, Models_Remove_Stays_In_The_Store'Access,
          "models remove takes a model of the store by its own name");
       Register_Routine
@@ -14352,6 +15153,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Embedding_Reports_The_State'Access,
          "embedding a text reports the state, not the distribution");
+      Register_Routine
+        (T, Embedding_Reads_As_The_Other_Runtime'Access,
+         "embedding and reranking read a file as the other runtime reads it");
       Register_Routine
         (T, Every_Backend_Can_Be_Named'Access,
          "every backend this build has can be named on the command line");
@@ -14526,6 +15330,14 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
          "the speed tool runs the command it publishes figures for");
+      Register_Routine
+        (T, The_Speed_Tool_Takes_Runs_Arithmetic'Access,
+         "the speed tool tells the backends the arithmetic run takes for "
+         & "the model");
+      Register_Routine
+        (T, Restamping_Takes_Only_The_Groups_Named'Access,
+         "a restamp records only the groups it names, and leaves another "
+         & "that moved stale");
       Register_Routine
         (T, Runs_Report_Which_Backend_Ran'Access,
          "a run and an inspection both say which backend answers and with "

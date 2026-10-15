@@ -4,12 +4,18 @@ with Model_Runner.Errors;
 --  Save and load an agent or interactive conversation, so a run or a session
 --  can be taken up again.
 --
---  The file is a flat length-prefixed encoding: each message is its role
---  ("S", "U", "A" or "T"), its content, its call count, then each call's name
---  and arguments, and every field is written as its byte count, a space, and
---  its bytes. So any content -- a newline, a brace, a whole JSON object --
---  round-trips with no escaping, and a file is rebuilt through the ordinary
---  Conversation append operations, needing no new conversation API.
+--  The file is a line naming it and its version ("model_runner-conversation
+--  1"), then a flat length-prefixed encoding: each message is its role ("S",
+--  "U", "A", "T" or "D", with "P" after it for a turn given as parts), its
+--  content, its call count, then each call's name and arguments, and every
+--  field is written as its byte count, a space, and its bytes. So any content
+--  -- a newline, a brace, a whole JSON object -- round-trips with no escaping,
+--  and a file is rebuilt through the ordinary Conversation append operations,
+--  needing no new conversation API.
+--
+--  A file with no version line is version 0, the same records. One of a later
+--  version, a role it does not write, calls on a turn that cannot make them,
+--  a tool's answer to no call, or words that are not UTF-8, is refused.
 --
 --  This is a CLI concern: it reads and writes a file, which the library below
 --  it never does. Both `run --agent` (checkpoint and resume) and interactive

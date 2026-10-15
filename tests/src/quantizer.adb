@@ -804,18 +804,20 @@ package body Quantizer is
    --  One body rather than two, because a weighted quantization differs
    --  from a plain one in a handful of places and duplicating a hundred
    --  lines of packing to reach them is how the two drift apart.
-   function Encoded
+   --
+   --  Into a buffer the caller holds and has cleared, indexed from zero:
+   --  a tensor is hundreds of megabytes, and a local array that size is a
+   --  stack overflow rather than an encoding.
+   procedure Encoded
      (Values  : Real_Array;
       Heft    : Real_Array;
       Told    : Boolean;
-      Into    : Target) return Byte_Array
+      Into    : Target;
+      Result  : in out Byte_Array)
    is
       Span   : constant Element_Count := Block_Of (Into);
       Width  : constant B.Byte_Count := Bytes_Of (Into);
       Blocks : constant Element_Count := Values'Length / Span;
-
-      Result : Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
-        [others => 0];
    begin
       for Block in 0 .. Blocks - 1 loop
          declare
@@ -1017,11 +1019,15 @@ package body Quantizer is
                      end loop;
 
                      declare
+                        --  The scale as written, which is 1/iscale and not
+                        --  max_scale/-32: the two are a rounding apart, and
+                        --  the reference re-quantizes against the one the
+                        --  file holds.
                         Held_D : constant N.Real :=
                           N.To_Real
                             (N.To_Half
                                (if Signed /= 0.0
-                                then Signed / (-32.0) else 0.0));
+                                then 1.0 / (-32.0 / Signed) else 0.0));
                      begin
                         for Run in 0 .. Integer (Runs) - 1 loop
                            declare
@@ -1330,7 +1336,6 @@ package body Quantizer is
                           + Values (First + Index) * Values (First + Index);
                      end loop;
                      Sigma2 := 2.0 * Squared / N.Real (Span);
-                     pragma Unreferenced (Sigma2);
 
                      for Run in 0 .. Integer (Runs) - 1 loop
                         declare
@@ -1343,11 +1348,24 @@ package body Quantizer is
                         begin
                            --  Unweighted, the value squared is the weight,
                            --  which is what the reference uses where no
-                           --  importance matrix was given.
+                           --  importance matrix was given; weighted, the
+                           --  matrix's say times the value measured
+                           --  against the super-block's spread.
                            for Index in Element_Count range 0 .. 31 loop
                               Weights (Index) :=
-                                Values (At_Run + Index)
-                                * Values (At_Run + Index);
+                                (if Told
+                                 then Heft
+                                        (Heft'First
+                                         + (At_Run - Values'First + Index)
+                                           mod Heft'Length)
+                                      * N.Real
+                                          (N.Sqrt
+                                             (N.Wide_Real
+                                                (Sigma2
+                                                 + Values (At_Run + Index)
+                                                   * Values (At_Run + Index))))
+                                 else Values (At_Run + Index)
+                                      * Values (At_Run + Index));
                            end loop;
 
                            Fit_Table_Run
@@ -2050,50 +2068,480 @@ package body Quantizer is
             end case;
          end;
       end loop;
-
-      return Result;
    end Encoded;
 
-   ------------
-   -- Encode --
-   ------------
+   --  What the matrix says of a position, by its column: the matrix is one
+   --  row long and every row meets the same columns, so a position in the
+   --  whole tensor asks about its column and not about itself.
+   function Say_Of
+     (Weights : Real_Array; Offset : Element_Count) return N.Real
+   is (Weights (Weights'First + Offset mod Weights'Length));
 
-   function Encode (Values : Real_Array; Into : Target) return Byte_Array
-   is (Encoded (Values, Values, False, Into));
+   --  sqrtf, which a binary64 root rounded once to binary32 is exactly.
+   function Root (Item : N.Real) return N.Real
+   is (N.Real (N.Sqrt (N.Wide_Real (Item))));
 
-   ---------------------
-   -- Encode_Weighted --
-   ---------------------
+   --  The two halves of a run of thirty-two into sixteen bytes, and the
+   --  fifth bit of each, where the format has one, into a word of its own
+   --  -- the layout every thirty-two-wide format here shares.
+   procedure Pack_Thirty_Two
+     (Levels  : Level_Run;
+      Result  : in out Byte_Array;
+      Nibbles : B.Byte_Count;
+      Fifth   : B.Byte_Count;
+      Has_Bit : Boolean);
 
-   function Encode_Weighted
+   procedure Pack_Thirty_Two
+     (Levels  : Level_Run;
+      Result  : in out Byte_Array;
+      Nibbles : B.Byte_Count;
+      Fifth   : B.Byte_Count;
+      Has_Bit : Boolean)
+   is
+      High : Interfaces.Unsigned_32 := 0;
+   begin
+      for Index in 0 .. 15 loop
+         declare
+            Low_L  : constant Interfaces.Unsigned_8 :=
+              Interfaces.Unsigned_8 (Levels (Levels'First + Index) mod 256);
+            High_L : constant Interfaces.Unsigned_8 :=
+              Interfaces.Unsigned_8
+                (Levels (Levels'First + Index + 16) mod 256);
+         begin
+            Result (Nibbles + B.Byte_Count (Index)) :=
+              B.Byte ((Low_L and 16#0F#)
+                      or Interfaces.Shift_Left (High_L and 16#0F#, 4));
+
+            High := High
+              or Interfaces.Shift_Left
+                   (Interfaces.Unsigned_32
+                      (Interfaces.Shift_Right (Low_L and 16#10#, 4)),
+                    Index)
+              or Interfaces.Shift_Left
+                   (Interfaces.Unsigned_32
+                      (Interfaces.Shift_Right (High_L and 16#10#, 4)),
+                    Index + 16);
+         end;
+      end loop;
+
+      if Has_Bit then
+         for Byte in 0 .. 3 loop
+            Result (Fifth + B.Byte_Count (Byte)) :=
+              B.Byte (Interfaces.Shift_Right (High, 8 * Byte) and 16#FF#);
+         end loop;
+      end if;
+   end Pack_Thirty_Two;
+
+   --  Q4_0, Q4_1, Q5_0 and Q5_1 with a matrix: quantize_row_q4_0_impl and
+   --  its three siblings. The spread a value is measured against is its
+   --  ROW's, not its block's -- sum_x2 over n_per_row -- and the weight is
+   --  the matrix's say times the root of that spread plus the value's own
+   --  square. The two signed formats then take make_qx_quants' search with
+   --  those weights; the two with a minimum take make_qkx3_quants', the
+   --  window from -0.9 by 0.05 that the k-quants' weighted paths use.
+   procedure Weighted_Legacy
      (Values  : Real_Array;
       Weights : Real_Array;
-      Into    : Target) return Byte_Array
+      Into    : Target;
+      Result  : in out Byte_Array);
+
+   procedure Weighted_Legacy
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target;
+      Result  : in out Byte_Array)
+   is
+      Row    : constant Element_Count := Weights'Length;
+      Width  : constant B.Byte_Count := Bytes_Of (Into);
+      Blocks : constant Element_Count := Values'Length / 32;
+
+      Sigma2 : N.Real := 0.0;
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant Element_Count := Values'First + Block * 32;
+            Column  : constant Element_Count := (Block * 32) mod Row;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Mine   : Real_Array (0 .. 31);
+            Levels : Level_Run (0 .. 31);
+            Scale  : N.Real;
+            Low    : N.Real;
+         begin
+            --  The row's spread, once at the row's start.
+            if Column = 0 then
+               declare
+                  Squared : N.Real := 0.0;
+               begin
+                  for Index in 0 .. Row - 1 loop
+                     Squared := Squared
+                       + Values (First + Index) * Values (First + Index);
+                  end loop;
+                  Sigma2 := Squared / N.Real (Row);
+               end;
+            end if;
+
+            for Index in Element_Count range 0 .. 31 loop
+               Mine (Index) :=
+                 Weights (Weights'First + Column + Index)
+                 * Root (Sigma2
+                         + Values (First + Index) * Values (First + Index));
+            end loop;
+
+            case Into is
+               when Q4_0 | Q5_0 =>
+                  Fit_Run
+                    (Values (First .. First + 31),
+                     (if Into = Q4_0 then 8 else 16), Levels, Scale, Mine,
+                     Told => True);
+                  Put_Half (Result, At_Byte, Scale);
+                  Pack_Thirty_Two
+                    (Levels, Result,
+                     Nibbles => At_Byte + (if Into = Q4_0 then 2 else 6),
+                     Fifth   => At_Byte + 2,
+                     Has_Bit => Into = Q5_0);
+
+               when others =>
+                  Fit_Run_And_Min
+                    (Values (First .. First + 31), Mine,
+                     (if Into = Q4_1 then 15 else 31), Levels, Low, Scale,
+                     From => -0.9, By => 0.05, Steps => 36, Weighed => True);
+                  Put_Half (Result, At_Byte, Scale);
+                  Put_Half (Result, At_Byte + 2, -Low);
+                  Pack_Thirty_Two
+                    (Levels, Result,
+                     Nibbles => At_Byte + (if Into = Q4_1 then 4 else 8),
+                     Fifth   => At_Byte + 4,
+                     Has_Bit => Into = Q5_1);
+            end case;
+         end;
+      end loop;
+   end Weighted_Legacy;
+
+   --  Q2_K with a matrix: quantize_row_q2_K_impl. The super-block's spread
+   --  is sum_x2 over 256 -- once, where the other k-quants double it --
+   --  each run of sixteen is fitted by make_qkx3_quants at three levels,
+   --  and the sixteen scales and sixteen minimums are then fitted by
+   --  make_qp_quants at four bits, each run counted by what its weights add
+   --  up to.
+   procedure Weighted_Q2_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Result  : in out Byte_Array);
+
+   procedure Weighted_Q2_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Result  : in out Byte_Array)
+   is
+      Span   : constant Element_Count := 256;
+      Width  : constant B.Byte_Count := Bytes_Of (Q2_K);
+      Blocks : constant Element_Count := Values'Length / Span;
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant Element_Count := Values'First + Block * Span;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Levels : Level_Run (0 .. 255) := [others => 0];
+            Scales : Real_Array (0 .. 15) := [others => 0.0];
+            Least  : Real_Array (0 .. 15) := [others => 0.0];
+            Sums   : Real_Array (0 .. 15) := [others => 0.0];
+
+            Squared : N.Real := 0.0;
+            Sigma2  : N.Real;
+
+            Steps_S, Steps_M : Level_Run (0 .. 15);
+            Block_D, Block_M : N.Real;
+         begin
+            for Index in Element_Count range 0 .. Span - 1 loop
+               Squared := Squared
+                 + Values (First + Index) * Values (First + Index);
+            end loop;
+            Sigma2 := Squared / N.Real (Span);
+
+            for Run in Element_Count range 0 .. 15 loop
+               declare
+                  At_Run : constant Element_Count := First + Run * 16;
+                  Mine   : Real_Array (0 .. 15);
+                  Here   : Level_Run (0 .. 15);
+                  Fit    : N.Real;
+                  Low    : N.Real;
+               begin
+                  for Index in Element_Count range 0 .. 15 loop
+                     Mine (Index) :=
+                       Say_Of (Weights, Block * Span + Run * 16 + Index)
+                       * Root (Sigma2
+                               + Values (At_Run + Index)
+                                 * Values (At_Run + Index));
+                     Sums (Run) := Sums (Run) + Mine (Index);
+                  end loop;
+
+                  Fit_Run_And_Min
+                    (Values (At_Run .. At_Run + 15), Mine, 3, Here, Low, Fit,
+                     From => -0.9, By => 0.05, Steps => 36, Weighed => True);
+
+                  Scales (Run) := Fit;
+                  Least (Run) := Low;
+                  for Index in Here'Range loop
+                     Levels (Integer (Run) * 16 + Index) := Here (Index);
+                  end loop;
+               end;
+            end loop;
+
+            Fit_Positives (Scales, Sums, 15, Steps_S, Block_D);
+            Fit_Positives (Least, Sums, 15, Steps_M, Block_M);
+
+            Put_Half (Result, At_Byte + 80, Block_D);
+            Put_Half (Result, At_Byte + 82, Block_M);
+
+            declare
+               Held_D : constant N.Real := N.To_Real (N.To_Half (Block_D));
+               Held_M : constant N.Real := N.To_Real (N.To_Half (Block_M));
+            begin
+               for Run in 0 .. 15 loop
+                  declare
+                     Packed : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Unsigned_8 (Steps_S (Run) mod 256)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Unsigned_8 (Steps_M (Run) mod 256),
+                             4);
+                     Apart : constant N.Real :=
+                       Held_D * N.Real (Packed and 16#0F#);
+                     Lift  : constant N.Real :=
+                       Held_M * N.Real (Interfaces.Shift_Right (Packed, 4));
+                  begin
+                     Result (At_Byte + B.Byte_Count (Run)) := B.Byte (Packed);
+
+                     if Apart /= 0.0 then
+                        for Index in 0 .. 15 loop
+                           Levels (Run * 16 + Index) :=
+                             Integer'Max
+                               (0,
+                                Integer'Min
+                                  (3,
+                                   Nearest
+                                     ((Values
+                                         (First
+                                          + Element_Count (Run * 16 + Index))
+                                       + Lift) / Apart)));
+                        end loop;
+                     end if;
+                  end;
+               end loop;
+            end;
+
+            for Group in 0 .. 1 loop
+               for Index in 0 .. 31 loop
+                  Result (At_Byte + 16 + B.Byte_Count (Group * 32 + Index)) :=
+                    B.Byte
+                      (Levels (Group * 128 + Index)
+                       + Levels (Group * 128 + Index + 32) * 4
+                       + Levels (Group * 128 + Index + 64) * 16
+                       + Levels (Group * 128 + Index + 96) * 64);
+               end loop;
+            end loop;
+         end;
+      end loop;
+   end Weighted_Q2_K;
+
+   --  Q3_K with a matrix: quantize_row_q3_K_impl. Where the plain path
+   --  refines each run's levels one at a time, this one searches: each run
+   --  of sixteen by make_qx_quants with the matrix's weights, and the
+   --  sixteen scales by make_qx_quants again, at six bits, weighted by
+   --  what each run's weights add up to.
+   procedure Weighted_Q3_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Result  : in out Byte_Array);
+
+   procedure Weighted_Q3_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Result  : in out Byte_Array)
+   is
+      Span   : constant Element_Count := 256;
+      Width  : constant B.Byte_Count := Bytes_Of (Q3_K);
+      Blocks : constant Element_Count := Values'Length / Span;
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         declare
+            First   : constant Element_Count := Values'First + Block * Span;
+            At_Byte : constant B.Byte_Count := B.Byte_Count (Block) * Width;
+
+            Levels : Level_Run (0 .. 255) := [others => 0];
+            Scales : Real_Array (0 .. 15) := [others => 0.0];
+            Sums   : Real_Array (0 .. 15) := [others => 0.0];
+
+            Squared : N.Real := 0.0;
+            Sigma2  : N.Real;
+
+            Steps   : Level_Run (0 .. 15);
+            Block_D : N.Real;
+
+            Packed : array (0 .. 11) of Interfaces.Unsigned_8 :=
+              [others => 0];
+         begin
+            for Index in Element_Count range 0 .. Span - 1 loop
+               Squared := Squared
+                 + Values (First + Index) * Values (First + Index);
+            end loop;
+            Sigma2 := 2.0 * Squared / N.Real (Span);
+
+            for Run in Element_Count range 0 .. 15 loop
+               declare
+                  At_Run : constant Element_Count := First + Run * 16;
+                  Mine   : Real_Array (0 .. 15);
+                  Here   : Level_Run (0 .. 15);
+                  Fit    : N.Real;
+               begin
+                  for Index in Element_Count range 0 .. 15 loop
+                     Mine (Index) :=
+                       Say_Of (Weights, Block * Span + Run * 16 + Index)
+                       * Root (Sigma2
+                               + Values (At_Run + Index)
+                                 * Values (At_Run + Index));
+                     Sums (Run) := Sums (Run) + Mine (Index);
+                  end loop;
+
+                  Fit_Run
+                    (Values (At_Run .. At_Run + 15), 4, Here, Fit, Mine,
+                     Told => True);
+
+                  Scales (Run) := Fit;
+                  for Index in Here'Range loop
+                     Levels (Integer (Run) * 16 + Index) := Here (Index);
+                  end loop;
+               end;
+            end loop;
+
+            Fit_Run (Scales, 32, Steps, Block_D, Sums, Told => True);
+
+            for Run in 0 .. 15 loop
+               declare
+                  Level : Integer := Steps (Run);
+               begin
+                  if Run < 8 then
+                     Packed (Run) := Packed (Run)
+                       or Interfaces.Unsigned_8 (Level mod 16);
+                  else
+                     Packed (Run - 8) := Packed (Run - 8)
+                       or Interfaces.Shift_Left
+                            (Interfaces.Unsigned_8 (Level mod 16), 4);
+                  end if;
+
+                  Level := Level / 16;
+                  Packed (Run mod 4 + 8) := Packed (Run mod 4 + 8)
+                    or Interfaces.Shift_Left
+                         (Interfaces.Unsigned_8 (Level mod 256),
+                          2 * (Run / 4));
+               end;
+            end loop;
+
+            Put_Half (Result, At_Byte + 108, Block_D);
+            for Which in Packed'Range loop
+               Result (At_Byte + 96 + B.Byte_Count (Which)) :=
+                 B.Byte (Packed (Which));
+            end loop;
+
+            declare
+               Held_D : constant N.Real := N.To_Real (N.To_Half (Block_D));
+            begin
+               for Run in 0 .. 15 loop
+                  declare
+                     Low : constant Interfaces.Unsigned_8 :=
+                       (if Run < 8
+                        then Packed (Run) and 16#0F#
+                        else Interfaces.Shift_Right (Packed (Run - 8), 4));
+                     High : constant Interfaces.Unsigned_8 :=
+                       Interfaces.Shift_Right
+                         (Packed (Run mod 4 + 8), 2 * (Run / 4))
+                       and 3;
+                     Apart : constant N.Real :=
+                       Held_D
+                       * N.Real (Integer (Low) + Integer (High) * 16 - 32);
+                  begin
+                     if Apart /= 0.0 then
+                        for Index in 0 .. 15 loop
+                           Levels (Run * 16 + Index) :=
+                             Integer'Max
+                               (-4,
+                                Integer'Min
+                                  (3,
+                                   Nearest
+                                     (Values
+                                        (First
+                                         + Element_Count (Run * 16 + Index))
+                                      / Apart)))
+                             + 4;
+                        end loop;
+                     end if;
+                  end;
+               end loop;
+            end;
+
+            declare
+               At_Mask : Integer := 0;
+               Bit     : Interfaces.Unsigned_8 := 1;
+            begin
+               for Index in 0 .. 255 loop
+                  if Levels (Index) > 3 then
+                     Result (At_Byte + B.Byte_Count (At_Mask)) :=
+                       B.Byte
+                         (Interfaces.Unsigned_8
+                            (Result (At_Byte + B.Byte_Count (At_Mask)))
+                          or Bit);
+                     Levels (Index) := Levels (Index) - 4;
+                  end if;
+
+                  At_Mask := At_Mask + 1;
+                  if At_Mask = 32 then
+                     At_Mask := 0;
+                     Bit := Interfaces.Shift_Left (Bit, 1);
+                  end if;
+               end loop;
+            end;
+
+            for Group in 0 .. 1 loop
+               for Index in 0 .. 31 loop
+                  Result (At_Byte + 32 + B.Byte_Count (Group * 32 + Index)) :=
+                    B.Byte
+                      (Levels (Group * 128 + Index)
+                       + Levels (Group * 128 + Index + 32) * 4
+                       + Levels (Group * 128 + Index + 64) * 16
+                       + Levels (Group * 128 + Index + 96) * 64);
+               end loop;
+            end loop;
+         end;
+      end loop;
+   end Weighted_Q3_K;
+
+   --  Q4_K and Q5_K with a matrix: quantize_row_q4_K_impl and
+   --  quantize_row_q5_K_impl, which are one rule at fifteen levels and at
+   --  thirty-one.
+   --
+   --  IT IS NOT THE SAME SEARCH WITH A WEIGHT VECTOR ADDED. The candidate
+   --  window is wider and finer -- thirty-seven steps from -0.9 by 0.05,
+   --  against twenty-one from -1.0 by 0.1 -- and the sub-block scales it
+   --  finds are then fitted by a search of their own rather than divided by
+   --  their largest. Two searches where the plain path has one.
+   procedure Weighted_Q4_Q5_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target;
+      Result  : in out Byte_Array);
+
+   procedure Weighted_Q4_Q5_K
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target;
+      Result  : in out Byte_Array)
    is
       Span   : constant Element_Count := Block_Of (Into);
       Width  : constant B.Byte_Count := Bytes_Of (Into);
       Blocks : constant Element_Count := Values'Length / Span;
-
-      Result : Byte_Array (0 .. B.Byte_Count (Blocks) * Width - 1) :=
-        [others => 0];
+      Most   : constant Integer := (if Into = Q4_K then 15 else 31);
    begin
-      --  Q6_K's weighted path is its plain one with the matrix standing in
-      --  for the value squared, so it goes through the same body. Q4_K's is
-      --  a different search and has its own below. Everything else falls
-      --  back to the plain encoding, which is what the reference does for a
-      --  format whose weighted path it has not been given -- and which is
-      --  now true of fewer formats than it was: a mixture spends its extra
-      --  bits in Q6_K, so a file quantized with a matrix and a recipe had
-      --  its most important twenty-one tensors quantized as though there
-      --  were no matrix.
-      if Into = Q6_K then
-         return Encoded (Values, Weights, True, Into);
-      end if;
-
-      if Into /= Q4_K then
-         return Encode (Values, Into);
-      end if;
-
       for Block in 0 .. Blocks - 1 loop
          declare
             First   : constant Element_Count := Values'First + Block * Span;
@@ -2134,27 +2582,18 @@ package body Quantizer is
                begin
                   for Index in Element_Count range 0 .. 31 loop
                      Mine (Index) :=
-                       --  The matrix is one row long and every row of the
-                       --  matrix meets the same columns, so a position in
-                       --  the whole tensor asks the matrix about its column
-                       --  and not about itself.
-                       Weights
-                         (Weights'First
-                          + (Block * Span + Run * 32 + Index)
-                            mod Weights'Length)
-                       * N.Real
-                           (N.Sqrt
-                              (N.Wide_Real
-                                 (Sigma2
-                                  + Values (At_Run + Index)
-                                    * Values (At_Run + Index))));
+                       Say_Of (Weights, Block * Span + Run * 32 + Index)
+                       * Root (Sigma2
+                               + Values (At_Run + Index)
+                                 * Values (At_Run + Index));
                      Sum := Sum + Mine (Index);
                   end loop;
 
                   Heft (Run) := Sum;
 
                   Fit_Run_And_Min
-                    (Values (At_Run .. At_Run + 31), Mine, 15, Here, Low, Fit,
+                    (Values (At_Run .. At_Run + 31), Mine, Most, Here, Low,
+                     Fit,
                      From => -0.9, By => 0.05, Steps => 36, Weighed => True);
 
                   Scales (Run) := Fit;
@@ -2179,9 +2618,11 @@ package body Quantizer is
                for Run in 0 .. Integer (Runs) - 1 loop
                   declare
                      Step_S : constant Interfaces.Unsigned_8 :=
-                       Interfaces.Unsigned_8 (Steps_S (Run) mod 256);
+                       Interfaces.Unsigned_8
+                         (Integer'Min (63, Steps_S (Run)) mod 256);
                      Step_M : constant Interfaces.Unsigned_8 :=
-                       Interfaces.Unsigned_8 (Steps_M (Run) mod 256);
+                       Interfaces.Unsigned_8
+                         (Integer'Min (63, Steps_M (Run)) mod 256);
                   begin
                      if Run < 4 then
                         Packed (Run) := Step_S;
@@ -2246,7 +2687,7 @@ package body Quantizer is
                                    Integer'Max
                                      (0,
                                       Integer'Min
-                                        (15,
+                                        (Most,
                                          Nearest
                                            ((Values
                                                (First
@@ -2260,19 +2701,157 @@ package body Quantizer is
                   end loop;
                end;
 
-               for Pair in 0 .. Integer (Span) / 64 - 1 loop
-                  for Index in 0 .. 31 loop
-                     Result (At_Byte + 16
-                             + B.Byte_Count (Pair * 32 + Index)) :=
-                       B.Byte (Levels (Pair * 64 + Index)
-                               + Levels (Pair * 64 + Index + 32) * 16);
+               if Into = Q4_K then
+                  for Pair in 0 .. Integer (Span) / 64 - 1 loop
+                     for Index in 0 .. 31 loop
+                        Result (At_Byte + 16
+                                + B.Byte_Count (Pair * 32 + Index)) :=
+                          B.Byte (Levels (Pair * 64 + Index)
+                                  + Levels (Pair * 64 + Index + 32) * 16);
+                     end loop;
                   end loop;
-               end loop;
+               else
+                  --  The fifth bit apart, two bits of each of the
+                  --  thirty-two bytes of qh a group of sixty-four.
+                  declare
+                     Low_Bit  : Interfaces.Unsigned_8 := 1;
+                     High_Bit : Interfaces.Unsigned_8 := 2;
+                  begin
+                     for Group in 0 .. Integer (Span) / 64 - 1 loop
+                        for Index in 0 .. 31 loop
+                           declare
+                              A : Integer := Levels (Group * 64 + Index);
+                              C : Integer := Levels (Group * 64 + Index + 32);
+                              At_High : constant B.Byte_Count :=
+                                At_Byte + 16 + B.Byte_Count (Index);
+                           begin
+                              if A > 15 then
+                                 A := A - 16;
+                                 Result (At_High) :=
+                                   B.Byte (Interfaces.Unsigned_8
+                                             (Result (At_High)) or Low_Bit);
+                              end if;
+
+                              if C > 15 then
+                                 C := C - 16;
+                                 Result (At_High) :=
+                                   B.Byte (Interfaces.Unsigned_8
+                                             (Result (At_High)) or High_Bit);
+                              end if;
+
+                              Result (At_Byte + 48
+                                      + B.Byte_Count (Group * 32 + Index)) :=
+                                B.Byte (A + C * 16);
+                           end;
+                        end loop;
+
+                        Low_Bit := Interfaces.Shift_Left (Low_Bit, 2);
+                        High_Bit := Interfaces.Shift_Left (High_Bit, 2);
+                     end loop;
+                  end;
+               end if;
             end;
          end;
       end loop;
+   end Weighted_Q4_Q5_K;
 
-      return Result;
+   --  A buffer for a tensor's encoding, on the heap and cleared.
+   procedure Make_Room
+     (Values : Real_Array;
+      Into   : Target;
+      Result : out Model_Runner.Bytes.Byte_Array_Access);
+
+   procedure Make_Room
+     (Values : Real_Array;
+      Into   : Target;
+      Result : out Model_Runner.Bytes.Byte_Array_Access)
+   is
+      Blocks : constant Element_Count := Values'Length / Block_Of (Into);
+   begin
+      Result :=
+        new Byte_Array (0 .. B.Byte_Count (Blocks) * Bytes_Of (Into) - 1);
+      Result.all := [others => 0];
+   end Make_Room;
+
+   -----------------
+   -- Encode_Into --
+   -----------------
+
+   procedure Encode_Into
+     (Values : Real_Array;
+      Into   : Target;
+      Result : out Model_Runner.Bytes.Byte_Array_Access) is
+   begin
+      Make_Room (Values, Into, Result);
+      Encoded (Values, Values, False, Into, Result.all);
+   end Encode_Into;
+
+   --------------------------
+   -- Encode_Weighted_Into --
+   --------------------------
+
+   procedure Encode_Weighted_Into
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target;
+      Result  : out Model_Runner.Bytes.Byte_Array_Access) is
+   begin
+      Make_Room (Values, Into, Result);
+
+      case Into is
+         --  The one format the reference has no weighted path for:
+         --  quantize_q8_0 takes the matrix and leaves it unused.
+         when Q8_0 =>
+            Encoded (Values, Values, False, Into, Result.all);
+
+         --  These two are their plain search with the matrix standing in
+         --  for the weight the plain one computes, so they go through the
+         --  same body.
+         when Q6_K | IQ4_NL | IQ4_XS =>
+            Encoded (Values, Weights, True, Into, Result.all);
+
+         when Q4_0 | Q4_1 | Q5_0 | Q5_1 =>
+            Weighted_Legacy (Values, Weights, Into, Result.all);
+
+         when Q2_K =>
+            Weighted_Q2_K (Values, Weights, Result.all);
+
+         when Q3_K =>
+            Weighted_Q3_K (Values, Weights, Result.all);
+
+         when Q4_K | Q5_K =>
+            Weighted_Q4_Q5_K (Values, Weights, Into, Result.all);
+      end case;
+   end Encode_Weighted_Into;
+
+   ------------
+   -- Encode --
+   ------------
+
+   function Encode (Values : Real_Array; Into : Target) return Byte_Array is
+      Room : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      Encode_Into (Values, Into, Room);
+      return Result : constant Byte_Array := Room.all do
+         B.Free (Room);
+      end return;
+   end Encode;
+
+   ---------------------
+   -- Encode_Weighted --
+   ---------------------
+
+   function Encode_Weighted
+     (Values  : Real_Array;
+      Weights : Real_Array;
+      Into    : Target) return Byte_Array
+   is
+      Room : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      Encode_Weighted_Into (Values, Weights, Into, Room);
+      return Result : constant Byte_Array := Room.all do
+         B.Free (Room);
+      end return;
    end Encode_Weighted;
 
    -----------

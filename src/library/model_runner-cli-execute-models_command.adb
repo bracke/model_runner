@@ -1,3 +1,4 @@
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
@@ -5,6 +6,7 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
 with Model_Runner.Hub;
+with Model_Runner.Hub.Store;
 with Model_Runner.Platform;
 with Model_Runner.Config;
 
@@ -23,6 +25,14 @@ package body Model_Runner.CLI.Execute.Models_Command is
    --  Picked is true only then. No directory, no model in it, no terminal
    --  to ask at and a blank or out-of-range answer all leave Picked false
    --  so the caller reports a model as missing as before.
+   --  What a download leaves beside a model: its part and the part's
+   --  notes, the note of where a join of its chunks began, its lock.
+   type Suffix_Access is access constant String;
+   Leftover_Suffixes : constant array (Positive range <>) of Suffix_Access :=
+     [new String'(".part"), new String'(".part.sha256"),
+      new String'(".part.revision"), new String'(".part.joining"),
+      new String'(".part.cut"), new String'(".lock")];
+
    procedure Choose_Model
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
@@ -83,7 +93,7 @@ package body Model_Runner.CLI.Execute.Models_Command is
          end if;
       end Add;
 
-      procedure Scan (Base : String; Prefix : String) is
+      procedure Scan (Base : String; Prefix : String; Depth : Natural) is
          Search : Search_Type;
          Found  : Directory_Entry_Type;
       begin
@@ -103,6 +113,22 @@ package body Model_Runner.CLI.Execute.Models_Command is
             end;
          end loop;
          End_Search (Search);
+         if Depth > 0 then
+            Start_Search
+              (Search, Base, "",
+               Filter => [Directory => True, others => False]);
+            while More_Entries (Search) loop
+               Get_Next_Entry (Search, Found);
+               declare
+                  Name : constant String := Simple_Name (Found);
+               begin
+                  if Name /= "." and then Name /= ".." then
+                     Scan (Full_Name (Found), Prefix & Name & "/", Depth - 1);
+                  end if;
+               end;
+            end loop;
+            End_Search (Search);
+         end if;
       exception
          when others =>
             null;
@@ -135,32 +161,10 @@ package body Model_Runner.CLI.Execute.Models_Command is
          return;
       end if;
 
-      Scan (Dir, "");
-
-      --  One level of subdirectories, where a downloaded shard set is laid
-      --  out under a folder of its own.
-      declare
-         Search : Search_Type;
-         Found  : Directory_Entry_Type;
-      begin
-         Start_Search
-           (Search, Dir, "",
-            Filter => [Directory => True, others => False]);
-         while More_Entries (Search) loop
-            Get_Next_Entry (Search, Found);
-            declare
-               Name : constant String := Simple_Name (Found);
-            begin
-               if Name /= "." and then Name /= ".." then
-                  Scan (Full_Name (Found), Name & "/");
-               end if;
-            end;
-         end loop;
-         End_Search (Search);
-      exception
-         when others =>
-            null;
-      end;
+      --  Three levels of subdirectories: a downloaded shard set is laid out
+      --  under a folder of its own, and a file another repository's name
+      --  took is kept under owner/repo/.
+      Scan (Dir, "", 3);
 
       --  Suggestions the settings file adds, before the built-in starters
       --  so a machine's own list leads. Each is `suggest.NAME = reference`,
@@ -348,6 +352,39 @@ package body Model_Runner.CLI.Execute.Models_Command is
       use Ada.Directories;
       Dir : constant String := Model_Runner.Platform.Models_Directory;
 
+      --  A kept file's name within the models directory.
+      function Relative_Of (Path : String) return String is
+        (if Path'Length > Dir'Length + 1
+           and then Path (Path'First .. Path'First + Dir'Length - 1) = Dir
+         then Path (Path'First + Dir'Length + 1 .. Path'Last)
+         else Simple_Name (Path));
+
+      --  The files a download of Path leaves beside it.
+      procedure Remove_Leftovers (Path : String) is
+         Folder : constant String := Containing_Directory (Path);
+         Search : Search_Type;
+         Found  : Directory_Entry_Type;
+         package Names is new Ada.Containers.Indefinite_Vectors (Positive, String);
+         Gone   : Names.Vector;
+      begin
+         for Suffix of Leftover_Suffixes loop
+            if Exists (Path & Suffix.all) then
+               Gone.Append (Path & Suffix.all);
+            end if;
+         end loop;
+         Start_Search
+           (Search, Folder, Simple_Name (Path) & ".part.range-*",
+            [Ordinary_File => True, others => False]);
+         while More_Entries (Search) loop
+            Get_Next_Entry (Search, Found);
+            Gone.Append (Full_Name (Found));
+         end loop;
+         End_Search (Search);
+         for Name of Gone loop
+            Delete_File (Name);
+         end loop;
+      end Remove_Leftovers;
+
       --  Every file of a model whose first is First (a single file, or a
       --  shard set derived from the first shard's name), and their total
       --  size. Missing pieces are skipped, so a broken set still lists.
@@ -381,6 +418,14 @@ package body Model_Runner.CLI.Execute.Models_Command is
                         Delete_File (Path & ".sha256");
                      end if;
                   end if;
+               end if;
+               --  And what a stopped download of it left -- its part, the
+               --  part's chunks and notes, its lock -- many gigabytes that
+               --  nothing listed and nothing else would ever remove; and
+               --  the manifest's record of it.
+               if Delete then
+                  Remove_Leftovers (Path);
+                  Model_Runner.Hub.Store.Forget (Dir, Relative_Of (Path));
                end if;
             exception
                --  A file that would not go -- no permission, a directory by
@@ -426,8 +471,9 @@ package body Model_Runner.CLI.Execute.Models_Command is
                           (Name (Name'Last - 4 .. Name'Last)) = ".gguf"
                and then Model_Runner.Hub.Is_Safe_File_Name (Name));
          begin
-            if not Is_Store_Name or else Path = "" or else not Exists (Path)
-              or else Kind (Path) /= Ordinary_File
+            if not Is_Store_Name or else Path = ""
+              or else (not Exists (Path) and then not Exists (Path & ".part"))
+              or else (Exists (Path) and then Kind (Path) /= Ordinary_File)
             then
                Pres.Put_Note
                  (Screen, "cli.models.not_found",
@@ -476,7 +522,9 @@ package body Model_Runner.CLI.Execute.Models_Command is
                 Loc.Named ("detail", Giga_Bytes (Bytes))]);
          end Consider;
 
-         procedure Scan (Base : String; Prefix : String) is
+         procedure Scan_Folders (Base : String; Prefix : String; Depth : Natural);
+
+         procedure Scan (Base : String; Prefix : String; Depth : Natural) is
             Search : Search_Type;
             Found  : Directory_Entry_Type;
          begin
@@ -492,22 +540,35 @@ package body Model_Runner.CLI.Execute.Models_Command is
                     and then Name (Name'Last - 4 .. Name'Last) = ".gguf"
                   then
                      Consider (Full_Name (Found), Prefix & Name);
+                  elsif Name'Length > 10
+                    and then Name (Name'Last - 9 .. Name'Last) = ".gguf.part"
+                    and then not Exists (Full_Name (Found) (Full_Name (Found)'First .. Full_Name (Found)'Last - 5))
+                  then
+                     --  A download stopped part way, which models remove
+                     --  takes by the model's name.
+                     Pres.Put_Note
+                       (Screen, "cli.models.item",
+                        [Loc.Named ("name", Prefix & Name (Name'First .. Name'Last - 5) & " (partial download)"),
+                         Loc.Named ("detail", Giga_Bytes (Long_Long_Integer (Size (Found))))]);
                   end if;
                end;
             end loop;
             End_Search (Search);
+            Scan_Folders (Base, Prefix, Depth);
          exception
             when others =>
                null;
          end Scan;
-      begin
-         Scan (Dir, "");
-         declare
+
+         procedure Scan_Folders (Base : String; Prefix : String; Depth : Natural) is
             Search : Search_Type;
             Found  : Directory_Entry_Type;
          begin
+            if Depth = 0 then
+               return;
+            end if;
             Start_Search
-              (Search, Dir, "",
+              (Search, Base, "",
                Filter => [Directory => True, others => False]);
             while More_Entries (Search) loop
                Get_Next_Entry (Search, Found);
@@ -515,7 +576,7 @@ package body Model_Runner.CLI.Execute.Models_Command is
                   Name : constant String := Simple_Name (Found);
                begin
                   if Name /= "." and then Name /= ".." then
-                     Scan (Full_Name (Found), Name & "/");
+                     Scan (Full_Name (Found), Prefix & Name & "/", Depth - 1);
                   end if;
                end;
             end loop;
@@ -523,7 +584,11 @@ package body Model_Runner.CLI.Execute.Models_Command is
          exception
             when others =>
                null;
-         end;
+         end Scan_Folders;
+      begin
+         --  A shard set in a folder of its own, and a file another
+         --  repository's name took kept under owner/repo/: three levels.
+         Scan (Dir, "", 3);
 
          if Shown = 0 then
             Pres.Put_Note

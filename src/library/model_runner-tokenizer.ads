@@ -197,6 +197,32 @@ package Model_Runner.Tokenizer is
    --  @return True when add_eos_token was set.
    function Adds_End (Item : Vocabulary) return Boolean;
 
+   --  How a reranker's query and document are joined, as the other runtime
+   --  joins them where the file carries no template for it
+   --  (format_prompt_rerank): the beginning marker where Begins, the
+   --  query, the end marker where Ends, the separator where Separates, the
+   --  document, the end marker where Ends. The three flags are the file's
+   --  add_bos_token, add_eos_token and add_sep_token over each road's own
+   --  defaults -- not Adds_Beginning and Adds_End, which for WordPiece are
+   --  forced on for a single text -- and the end marker falls back to the
+   --  separator where the file names none. A BERT file says begin and end
+   --  and its end is [SEP]: [CLS] q [SEP] d [SEP]. An XLM-R file adds a
+   --  separator: <s> q </s></s> d </s>.
+   type Pair_Rule is record
+      Begins     : Boolean := False;
+      Ends       : Boolean := False;
+      Separates  : Boolean := False;
+      Beginning  : Token_Id := No_Token;
+      Ending     : Token_Id := No_Token;
+      Separator  : Token_Id := No_Token;
+   end record;
+
+   --  The rule a reranker's pair is joined by; see Pair_Rule.
+   --
+   --  @param Item Vocabulary to inspect.
+   --  @return The flags and markers.
+   function Pair_Markers (Item : Vocabulary) return Pair_Rule;
+
    --  Report whether byte fallback tokens are present.
    --
    --  @param Item Vocabulary to inspect.
@@ -518,6 +544,8 @@ private
       Turn_End_Count : Natural := 0;
       Add_Beginning : Boolean := True;
       Add_End       : Boolean := False;
+      --  The joining of a reranker's pair, as the file and its road say.
+      Pair          : Pair_Rule;
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];
       Byte_Fallback : Boolean := False;
       Merges        : Merge_Maps.Map;

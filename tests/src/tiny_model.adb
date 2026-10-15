@@ -84,7 +84,15 @@ package body Tiny_Model is
       Alignment       : Natural := 0;
       Header_Pad      : Natural := 0;
       Template        : String := "";
-      Draft_Block     : Boolean := False)
+      Draft_Block     : Boolean := False;
+      Pooling_Type    : Integer := -1;
+      Rank_Dense      : Boolean := True;
+      Rank_Classes    : Positive := 1;
+      Rank_Template   : String := "";
+      Add_End_Token   : Boolean := False;
+      Add_Sep_Token   : Integer := -1;
+      Unit_Ssm_Norms  : Boolean := False;
+      Rare_Form       : Boolean := False)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -573,6 +581,15 @@ package body Tiny_Model is
                 else Interfaces.Integer_32 (KV_Heads)));
          end loop;
          Fixtures.End_Array (Builder);
+      elsif Rare_Form and then Kind = Llama then
+         --  The same count a layer, as an array: llama.cpp reads either.
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".attention.head_count_kv",
+            Model_Runner.GGUF.Value_Int32, Blocks);
+         for Index in 0 .. Blocks - 1 loop
+            Fixtures.Int32_Element (Builder, Interfaces.Integer_32 (KV_Heads));
+         end loop;
+         Fixtures.End_Array (Builder);
       else
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.head_count_kv",
@@ -661,6 +678,27 @@ package body Tiny_Model is
          Fixtures.End_Array (Builder);
       end if;
 
+      --  Mistral-Large-3's query temperature, which a DeepSeek2 file
+      --  converted from it states.
+      if Rare_Form and then Kind = Deepseek2 then
+         Fixtures.Add_F32
+           (Builder, Prefix & ".attention.temperature_scale", 0.1);
+         Fixtures.Add_U32
+           (Builder, Prefix & ".attention.temperature_length", 8_192);
+      end if;
+
+      --  GLM4's vision-capable conversions state sections, which turn
+      --  its rotation into MROPE; on text that is NeoX's pairing.
+      if Sections and then Kind = Glm4 then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".rope.dimension_sections", G.Value_Int32, 4);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.End_Array (Builder);
+      end if;
+
       --  The hybrid's linear layers: every second block attends in full;
       --  the rest keep a state of State_Width by State_Width a value
       --  head over Linear_Heads key heads and as many value heads, after
@@ -700,6 +738,10 @@ package body Tiny_Model is
            (Builder, Prefix & ".ssm.inner_size",
             Interfaces.Unsigned_32 (2 * Embedding));
          Fixtures.Add_U32 (Builder, Prefix & ".ssm.time_step_rank", 2);
+         --  Falcon-Mamba's form: the time step, B and C normalized, gainless.
+         if Unit_Ssm_Norms then
+            Fixtures.Add_Bool (Builder, Prefix & ".ssm.dt_b_c_rms", True);
+         end if;
       end if;
 
       --  Mamba2's widths: the same small state and short convolution, an
@@ -768,9 +810,11 @@ package body Tiny_Model is
          --  mean. Two answers rather than one, because a reader that pooled
          --  every such model the same way would agree with this fixture
          --  about all of them.
-         Fixtures.Add_U32
-           (Builder, Prefix & ".pooling_type",
-            (if Ranking then 4 elsif Kind = Jina_Bert_V2 then 1 else 2));
+         if Pooling_Type < 0 then
+            Fixtures.Add_U32
+              (Builder, Prefix & ".pooling_type",
+               (if Ranking then 4 elsif Kind = Jina_Bert_V2 then 1 else 2));
+         end if;
 
          --  Stated rather than left to the architecture's name, because a
          --  published file states it and a fixture that did not would let a
@@ -903,7 +947,8 @@ package body Tiny_Model is
          --  through beside the chosen ones. Its width is stated apart, as
          --  the file states it; the same width as an expert here, which is
          --  enough to run the path.
-         if Kind = Qwen35 then
+         if Kind = Qwen35 or else (Rare_Form and then Kind = Granite)
+         then
             Fixtures.Add_U32
               (Builder, Prefix & ".expert_shared_feed_forward_length",
                Interfaces.Unsigned_32 (Expert_Feed));
@@ -1004,6 +1049,21 @@ package body Tiny_Model is
          (if Kind in Bert | Nomic_Bert | Jina_Bert_V2 then "bert"
           elsif Byte_Pair then "gpt2"
           else "llama"));
+
+      --  The pooling type a caller asked the file to state, on whatever
+      --  architecture: an embedding model built on a decoder states one
+      --  as a bert does.
+      if Pooling_Type >= 0 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".pooling_type",
+            Interfaces.Unsigned_32 (Pooling_Type));
+      end if;
+
+      --  A reranker's own prompt for a pair, where asked.
+      if Rank_Template /= "" then
+         Fixtures.Add_String
+           (Builder, "tokenizer.chat_template.rerank", Rank_Template);
+      end if;
 
       --  A minimal template inside the supported subset, so that the
       --  conversation path can be exercised end to end without a real model.
@@ -1237,10 +1297,15 @@ package body Tiny_Model is
       --  anything here. It was caught by a second runtime instead, at a
       --  cosine of 0.994. A fixture that states what no file states is a
       --  fixture that cannot fail the way a file makes you fail.
+      if Add_Sep_Token >= 0 then
+         Fixtures.Add_Bool
+           (Builder, "tokenizer.ggml.add_sep_token", Add_Sep_Token = 1);
+      end if;
       if Kind not in Bert | Nomic_Bert | Jina_Bert_V2 then
          Fixtures.Add_Bool
            (Builder, "tokenizer.ggml.add_bos_token", Adds_Beginning);
-         Fixtures.Add_Bool (Builder, "tokenizer.ggml.add_eos_token", False);
+         Fixtures.Add_Bool
+           (Builder, "tokenizer.ggml.add_eos_token", Add_End_Token);
       end if;
 
       --  LongRoPE's two tables, as far apart as the per-dimension divisors
@@ -1754,6 +1819,33 @@ package body Tiny_Model is
               (Layer_Name (Index, "attn_k_norm.weight"), KV_Heads * Key_Size);
          end if;
 
+         --  StableLM-2-12B's per-head norms, as wide as the projection.
+         if Rare_Form and then Kind = Stablelm then
+            Gain_Of
+              (Layer_Name (Index, "attn_q_norm.weight"), Heads * Key_Size);
+            Gain_Of
+              (Layer_Name (Index, "attn_k_norm.weight"), KV_Heads * Key_Size);
+         end if;
+
+         --  MPT's qk_ln: a centred norm with a shift over the whole of
+         --  each projection.
+         if Rare_Form and then Kind = Mpt then
+            Gain_Of (Layer_Name (Index, "attn_q_norm.weight"),
+                     Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_q_norm.bias"),
+                     Heads * Key_Size);
+            Gain_Of (Layer_Name (Index, "attn_k_norm.weight"),
+                     KV_Heads * Key_Size);
+            Norm_Of (Layer_Name (Index, "attn_k_norm.bias"),
+                     KV_Heads * Key_Size);
+         end if;
+
+         --  Falcon-40B's second normalization, which attention reads.
+         if Rare_Form and then Kind = Falcon then
+            Norm (Layer_Name (Index, "attn_norm_2.weight"));
+            Norm_Of (Layer_Name (Index, "attn_norm_2.bias"), Embedding);
+         end if;
+
          if not Linear_Block (Index) then
             Weight (Layer_Name (Index, "attn_output.weight"),
                     [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
@@ -1917,6 +2009,14 @@ package body Tiny_Model is
                Weight (Layer_Name (Index, "ffn_down_shexp.weight"),
                        [G.U64 (2 * Expert_Feed), G.U64 (Embedding)]);
             end if;
+            if Rare_Form and then Kind = Granite then
+               Weight (Layer_Name (Index, "ffn_gate_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_up_shexp.weight"),
+                       [G.U64 (Embedding), G.U64 (Expert_Feed)]);
+               Weight (Layer_Name (Index, "ffn_down_shexp.weight"),
+                       [G.U64 (Expert_Feed), G.U64 (Embedding)]);
+            end if;
             if Kind = Qwen35 then
                Weight (Layer_Name (Index, "ffn_gate_shexp.weight"),
                        [G.U64 (Embedding), G.U64 (Expert_Feed)]);
@@ -2018,10 +2118,13 @@ package body Tiny_Model is
       --  of the embedding width and its bias, then a single row down to the
       --  score and its bias.
       if Ranking then
-         Weight ("cls.weight", [G.U64 (Embedding), G.U64 (Embedding)]);
-         Norm ("cls.bias");
-         Weight ("cls.output.weight", [G.U64 (Embedding), G.U64 (1)]);
-         Norm_Of ("cls.output.bias", 1);
+         if Rank_Dense then
+            Weight ("cls.weight", [G.U64 (Embedding), G.U64 (Embedding)]);
+            Norm ("cls.bias");
+         end if;
+         Weight ("cls.output.weight",
+                 [G.U64 (Embedding), G.U64 (Rank_Classes)]);
+         Norm_Of ("cls.output.bias", Rank_Classes);
       end if;
 
       --  Phi2's output projection carries a bias, so the last thing this

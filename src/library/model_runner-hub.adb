@@ -1,3 +1,4 @@
+with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
@@ -12,7 +13,18 @@ with Http_Client.Errors;
 with Http_Client.Headers;
 with Http_Client.Requests;
 with Http_Client.Types;
+with Http_Client.Proxies;
+with Http_Client.Responses;
+with Http_Client.Transports.TCP;
 with Http_Client.URI;
+
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+
+with Hostkit.Durability;
+with Hostkit.Fs;
+with Hostkit.Locks;
 
 with Model_Runner.Config;
 with Model_Runner.GGUF.Shards;
@@ -67,100 +79,6 @@ package body Model_Runner.Hub is
       end loop;
       return False;
    end Contains;
-
-   --  The number that follows "size": at or soon after From in Body_Text,
-   --  which the hub's blobs listing puts a few fields past each rfilename.
-   --  Zero when none is close, so a file whose size the API did not give is
-   --  fetched without resume rather than not at all.
-   function Size_After
-     (Body_Text : String; From : Natural) return Interfaces.Unsigned_64
-   is
-      Marker : constant String := """size""";
-      Window : constant Natural :=
-        Natural'Min (Body_Text'Last, From + 300);
-      Cursor : Natural := From;
-   begin
-      while Cursor <= Window - Marker'Length + 1 loop
-         if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
-            declare
-               Scan  : Natural := Cursor + Marker'Length;
-               Value : Interfaces.Unsigned_64 := 0;
-               Any   : Boolean := False;
-            begin
-               while Scan <= Body_Text'Last
-                 and then Body_Text (Scan) not in '0' .. '9'
-                 and then Body_Text (Scan) /= '}'
-               loop
-                  Scan := Scan + 1;
-               end loop;
-               while Scan <= Body_Text'Last
-                 and then Body_Text (Scan) in '0' .. '9'
-               loop
-                  Value := Value * 10
-                    + Interfaces.Unsigned_64
-                        (Character'Pos (Body_Text (Scan)) - Character'Pos ('0'));
-                  Any := True;
-                  Scan := Scan + 1;
-               end loop;
-               if Any then
-                  return Value;
-               end if;
-               return 0;
-            end;
-         end if;
-         Cursor := Cursor + 1;
-      end loop;
-      return 0;
-   end Size_After;
-
-   --  The 64-character SHA-256 the hub's blobs listing puts in each file's
-   --  lfs record, soon after its rfilename. Found is false where none is
-   --  close, and then the file is checked by its size alone.
-   procedure Hash_After
-     (Body_Text : String;
-      From      : Natural;
-      Hash      : out String;
-      Found     : out Boolean)
-   is
-      Marker : constant String := """sha256""";
-      Window : constant Natural :=
-        Natural'Min (Body_Text'Last, From + 400);
-      Cursor : Natural := From;
-   begin
-      Hash  := [others => '0'];
-      Found := False;
-      while Cursor <= Window - Marker'Length + 1 loop
-         if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
-            declare
-               Scan : Natural := Cursor + Marker'Length;
-            begin
-               while Scan <= Body_Text'Last
-                 and then Body_Text (Scan) /= '"'
-               loop
-                  Scan := Scan + 1;
-               end loop;
-               Scan := Scan + 1;
-               declare
-                  Start : constant Natural := Scan;
-               begin
-                  while Scan <= Body_Text'Last
-                    and then Body_Text (Scan) /= '"'
-                  loop
-                     Scan := Scan + 1;
-                  end loop;
-                  if Scan <= Body_Text'Last
-                    and then Scan - Start = Hash'Length
-                  then
-                     Hash  := Body_Text (Start .. Scan - 1);
-                     Found := True;
-                  end if;
-               end;
-               return;
-            end;
-         end if;
-         Cursor := Cursor + 1;
-      end loop;
-   end Hash_After;
 
    -----------------------
    -- Is_Safe_File_Name --
@@ -274,9 +192,74 @@ package body Model_Runner.Hub is
    -- Client_For --
    ----------------
 
-   --  The client's configuration. The hub token is not in it: it goes on
-   --  each request (Request_For), so a gated repository is reached.
-   function Client_For return HC.Client_Configuration is (HC.Default_Client_Configuration);
+   ---------------
+   -- Proxy_For --
+   ---------------
+
+   function Proxy_For (Setting, Bypass, Host_Name : String) return String is
+      Host  : constant String := Ada.Characters.Handling.To_Lower (Host_Name);
+      Start : Positive := Bypass'First;
+
+      --  Whether one entry of the list names the host.
+      function Names (Entry_Text : String) return Boolean is
+         Raw   : constant String := T.Trim (Entry_Text);
+         Bare  : constant String :=
+           Ada.Characters.Handling.To_Lower
+             (if Raw'Length > 0 and then Raw (Raw'First) = '.'
+              then Raw (Raw'First + 1 .. Raw'Last) else Raw);
+      begin
+         if Bare = "" then
+            return False;
+         elsif Bare = "*" then
+            return True;
+         end if;
+         return Host = Bare
+           or else (Host'Length > Bare'Length
+                    and then Host (Host'Last - Bare'Length + 1 .. Host'Last) = Bare
+                    and then Host (Host'Last - Bare'Length) = '.');
+      end Names;
+   begin
+      if Setting = "" then
+         return "";
+      end if;
+      for I in Bypass'First .. Bypass'Last + 1 loop
+         if I > Bypass'Last or else Bypass (I) = ',' then
+            if Names (Bypass (Start .. I - 1)) then
+               return "";
+            end if;
+            Start := I + 1;
+         end if;
+      end loop;
+      return Setting;
+   end Proxy_For;
+
+   --  The client's configuration: a connection made in half a minute and
+   --  every read answered in a minute, or the request fails and the next
+   --  run resumes it -- with none, a link gone under a sleeping laptop held
+   --  the download, and every worker of a ranged one waiting on it, for
+   --  ever. The proxy the environment names, where it names one for the
+   --  hub. The hub token is not in it: it goes on each request
+   --  (Request_For), so a gated repository is reached.
+   procedure Client_For
+     (Config : out HC.Client_Configuration;
+      Status : out HE.Result_Status)
+   is
+      Timeouts : constant Http_Client.Transports.TCP.Timeout_Config :=
+        (Connect => Connect_Timeout_Ms,
+         Read    => Read_Timeout_Ms,
+         Write   => Read_Timeout_Ms);
+      Through : constant String :=
+        Proxy_For (Model_Runner.Platform.Hub_Proxy,
+                   Model_Runner.Platform.Proxy_Bypass, "huggingface.co");
+   begin
+      Config := HC.Default_Client_Configuration;
+      Config.Execution.Timeouts := Timeouts;
+      Config.Execution.TLS.Timeouts := Timeouts;
+      Status := HE.Ok;
+      if Through /= "" then
+         Status := Http_Client.Proxies.Parse (Through, Config.Execution.Proxy);
+      end if;
+   end Client_For;
 
    --  The hub token, where the environment or the settings have one.
    function Token return String is
@@ -316,8 +299,13 @@ package body Model_Runner.Hub is
    function Get (URL : String; Result : out HC.Client_Result) return HE.Result_Status is
       Item    : HC.Client;
       Request : Http_Client.Requests.Request;
-      Status  : HE.Result_Status := HC.Initialize (Item, Client_For);
+      Config  : HC.Client_Configuration;
+      Status  : HE.Result_Status;
    begin
+      Client_For (Config, Status);
+      if HE.Is_Success (Status) then
+         Status := HC.Initialize (Item, Config);
+      end if;
       if HE.Is_Success (Status) then
          Status := Request_For (URL, Http_Client.Headers.Empty, Request);
       end if;
@@ -338,8 +326,13 @@ package body Model_Runner.Hub is
    is
       Item    : HC.Client;
       Request : Http_Client.Requests.Request;
-      Status  : HE.Result_Status := HC.Initialize (Item, Client_For);
+      Config  : HC.Client_Configuration;
+      Status  : HE.Result_Status;
    begin
+      Client_For (Config, Status);
+      if HE.Is_Success (Status) then
+         Status := HC.Initialize (Item, Config);
+      end if;
       if HE.Is_Success (Status) then
          Status := Request_For (URL, Extra, Request);
       end if;
@@ -349,41 +342,227 @@ package body Model_Runner.Hub is
       return Status;
    end Download;
 
-   -------------
-   -- Resolve --
-   -------------
+   --------------
+   -- File_URL --
+   --------------
 
-   procedure Resolve
-     (Reference : String;
-      Repo      : out Model_Runner.Text.Bounded;
-      Files     : out File_Set;
-      Count     : out Natural;
-      Ok        : out Boolean;
-      Reason    : out Model_Runner.Text.Bounded)
+   function File_URL (Repo, Revision, Name : String) return String is
+      Hex : constant String := "0123456789ABCDEF";
+
+      --  A name's bytes, the unreserved and the separators as they are and
+      --  every other one as %XX.
+      function Encoded (Item : String) return String is
+         Result : String (1 .. 3 * Item'Length);
+         Used   : Natural := 0;
+      begin
+         for C of Item loop
+            if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9'
+                   | '-' | '_' | '.' | '~' | '/'
+            then
+               Used := Used + 1;
+               Result (Used) := C;
+            else
+               Result (Used + 1) := '%';
+               Result (Used + 2) := Hex (Character'Pos (C) / 16 + 1);
+               Result (Used + 3) := Hex (Character'Pos (C) mod 16 + 1);
+               Used := Used + 3;
+            end if;
+         end loop;
+         return Result (1 .. Used);
+      end Encoded;
+   begin
+      return Host & "/" & Encoded (Repo) & "/resolve/"
+        & (if Revision = "" then "main" else Encoded (Revision))
+        & "/" & Encoded (Name);
+   end File_URL;
+
+   ------------------
+   -- Read_Listing --
+   ------------------
+
+   procedure Read_Listing
+     (Text   : String;
+      Files  : out Listing;
+      Count  : out Natural;
+      Ok     : out Boolean;
+      Reason : out Model_Runner.Text.Bounded)
    is
-      Quant  : T.Bounded;
-      Result : HC.Client_Result;
-      Status : HE.Result_Status;
+      package J renames Jsonlib.Documents;
+      use type J.Value_Kind;
+      use type J.Node;
 
+      Document : J.Document;
+      Error    : Jsonlib.Errors.Error_Info;
+   begin
+      Files := [others => <>];
+      Count := 0;
+      Ok := False;
+      Reason := T.Empty;
+
+      Jsonlib.Parsers.Parse
+        (Text, Document, Error,
+         (Jsonlib.Parsers.Default_Options with delta
+            Duplicates => Jsonlib.Parsers.Last_Wins));
+      if Jsonlib.Errors.Failed (Error) then
+         Reason := T.To_Bounded ("the hub's answer is not the listing it gives");
+         return;
+      end if;
+
+      declare
+         Root     : constant J.Node := J.Root (Document);
+         Revision : T.Bounded;
+
+         --  A member's text, or "" where it is absent or not text.
+         function Text_Of (Item : J.Node; Named : String) return String is
+         begin
+            if J.Kind (Document, Item) /= J.Object_Value
+              or else not J.Has_Member (Document, Item, Named)
+              or else J.Kind (Document, J.Member (Document, Item, Named))
+                      /= J.String_Value
+            then
+               return "";
+            end if;
+            return J.As_String (Document, J.Member (Document, Item, Named));
+         end Text_Of;
+
+         --  A member's whole number, or zero.
+         function Number_Of (Item : J.Node; Named : String) return Interfaces.Unsigned_64 is
+         begin
+            if J.Kind (Document, Item) /= J.Object_Value
+              or else not J.Has_Member (Document, Item, Named)
+              or else J.Kind (Document, J.Member (Document, Item, Named))
+                      /= J.Integer_Value
+            then
+               return 0;
+            end if;
+            return Interfaces.Unsigned_64'Value
+              (J.Literal (Document, J.Member (Document, Item, Named)));
+         exception
+            when Constraint_Error =>
+               return 0;
+         end Number_Of;
+      begin
+         if J.Kind (Document, Root) /= J.Object_Value
+           or else not J.Has_Member (Document, Root, "siblings")
+           or else J.Kind (Document, J.Member (Document, Root, "siblings"))
+                   /= J.Array_Value
+         then
+            Reason := T.To_Bounded ("the hub's answer lists no files");
+            return;
+         end if;
+
+         declare
+            Sha : constant String := Text_Of (Root, "sha");
+         begin
+            --  A commit is hexadecimal; anything else is not put in a URL.
+            if Sha'Length in 7 .. 64
+              and then (for all C of Sha => C in '0' .. '9' | 'a' .. 'f')
+            then
+               Revision := T.To_Bounded (Sha);
+            end if;
+         end;
+
+         declare
+            Siblings : constant J.Node := J.Member (Document, Root, "siblings");
+         begin
+            for I in 1 .. J.Length (Document, Siblings) loop
+               declare
+                  Entry_Node : constant J.Node := J.Element (Document, Siblings, I);
+                  Name       : constant String := Text_Of (Entry_Node, "rfilename");
+                  LFS        : constant J.Node :=
+                    (if J.Kind (Document, Entry_Node) = J.Object_Value
+                       and then J.Has_Member (Document, Entry_Node, "lfs")
+                     then J.Member (Document, Entry_Node, "lfs")
+                     else Entry_Node);
+                  Has_LFS    : constant Boolean := LFS /= Entry_Node;
+                  Digest     : constant String :=
+                    (if Has_LFS then Text_Of (LFS, "sha256") else "");
+                  Size       : constant Interfaces.Unsigned_64 :=
+                    (if Number_Of (Entry_Node, "size") > 0
+                     then Number_Of (Entry_Node, "size")
+                     elsif Has_LFS then Number_Of (LFS, "size") else 0);
+               begin
+                  if Ends_With (Name, ".gguf")
+                    and then not Contains (Name, "mmproj")
+                    and then Name'Length <= Max_Name
+                    and then Is_Safe_File_Name (Name)
+                    and then Count < Max_Listed
+                  then
+                     Count := Count + 1;
+                     Files (Count) :=
+                       (Name     => T.To_Bounded (Name),
+                        Size     => Size,
+                        SHA256   =>
+                          (if Digest'Length = 64 then Digest else [1 .. 64 => '0']),
+                        Has_Hash => Digest'Length = 64
+                                    and then (for all C of Digest =>
+                                                C in '0' .. '9' | 'a' .. 'f' | 'A' .. 'F'),
+                        Revision => Revision);
+                  end if;
+               end;
+            end loop;
+         end;
+      end;
+      Ok := True;
+   end Read_Listing;
+
+   --  The repository's listing, read over the API: Ok false with a reason
+   --  that names what went wrong -- the hub not reached, a repository it
+   --  will not show without a token, one that is not there.
+   procedure Fetch_Listing
+     (Repo   : String;
+      Files  : out Listing;
+      Count  : out Natural;
+      Ok     : out Boolean;
+      Reason : out Model_Runner.Text.Bounded)
+   is
+      Result : HC.Client_Result;
+      Status : constant HE.Result_Status :=
+        Get (URL => Host & "/api/models/" & Repo & "?blobs=true", Result => Result);
+      Code   : Natural := 0;
+   begin
+      Files := [others => <>];
+      Count := 0;
+      Ok := False;
+      if not HE.Is_Success (Status) then
+         Reason := T.To_Bounded
+           ("could not reach huggingface.co (" & HE.Result_Status'Image (Status) & ")");
+         return;
+      end if;
+      Code := Natural (Http_Client.Responses.Status_Code (Result.Response));
+      if Code in 401 | 403 then
+         Reason := T.To_Bounded
+           ("the hub will not show " & Repo & " (HTTP" & Natural'Image (Code)
+            & "); it may be private or gated -- set HF_TOKEN");
+         return;
+      elsif Code = 404 then
+         Reason := T.To_Bounded ("the hub has no repository " & Repo);
+         return;
+      elsif Code not in 200 .. 299 then
+         Reason := T.To_Bounded
+           ("the hub answered HTTP" & Natural'Image (Code) & " for " & Repo);
+         return;
+      end if;
+      Read_Listing (HC.Response_Text (Result), Files, Count, Ok, Reason);
+   end Fetch_Listing;
+
+   ------------------
+   -- Choose_Quant --
+   ------------------
+
+   procedure Choose_Quant
+     (Listed       : Listing;
+      Listed_Count : Natural;
+      Quant        : String;
+      Repo         : String;
+      Files        : out File_Set;
+      Count        : out Natural;
+      Ok           : out Boolean;
+      Reason       : out Model_Runner.Text.Bounded)
+   is
       Matches : Natural := 0;
 
-      procedure Note_Candidate
-        (Name     : String;
-         Size     : Interfaces.Unsigned_64;
-         Hash     : String;
-         Has_Hash : Boolean) is
-      begin
-         if Matches < Max_Files then
-            Matches := Matches + 1;
-            Files (Matches) :=
-              (Name     => T.To_Bounded (Name),
-               Size     => Size,
-               SHA256   => Hash,
-               Has_Hash => Has_Hash);
-         end if;
-      end Note_Candidate;
-
-      function Listed return String is
+      function Listed_Names return String is
          Room : String (1 .. 400) := [others => ' '];
          Used : Natural := 0;
       begin
@@ -401,7 +580,7 @@ package body Model_Runner.Hub is
             end;
          end loop;
          return Room (1 .. Used);
-      end Listed;
+      end Listed_Names;
 
       --  Shards in order: -00001- sorts before -00002-, so a name sort puts
       --  the first shard first, which is the one the loader opens.
@@ -409,9 +588,7 @@ package body Model_Runner.Hub is
       begin
          for I in 1 .. Matches loop
             for J in I + 1 .. Matches loop
-               if T.To_String (Files (J).Name)
-                 < T.To_String (Files (I).Name)
-               then
+               if T.To_String (Files (J).Name) < T.To_String (Files (I).Name) then
                   declare
                      Swap : constant Download_File := Files (I);
                   begin
@@ -422,83 +599,22 @@ package body Model_Runner.Hub is
             end loop;
          end loop;
       end Sort_By_Name;
-
    begin
+      Files := [others => <>];
       Ok := False;
       Count := 0;
       Reason := T.Empty;
 
-      Split (Reference, Repo, Quant);
-
-      Status := Get
-        (URL           => Host & "/api/models/" & T.To_String (Repo)
-                          & "?blobs=true",
-         Result        => Result);
-
-      if not HE.Is_Success (Status) then
-         Reason := T.To_Bounded
-           ("could not reach huggingface.co (" & HE.Result_Status'Image (Status)
-            & ")");
-         return;
-      end if;
-
-      declare
-         Body_Text : constant String := HC.Response_Text (Result);
-         Marker    : constant String := """rfilename""";
-         Cursor    : Natural := Body_Text'First;
-      begin
-         while Cursor <= Body_Text'Last - Marker'Length + 1 loop
-            if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
-               declare
-                  Scan : Natural := Cursor + Marker'Length;
-               begin
-                  while Scan <= Body_Text'Last
-                    and then Body_Text (Scan) /= '"'
-                  loop
-                     Scan := Scan + 1;
-                  end loop;
-                  Scan := Scan + 1;
-                  declare
-                     Start : constant Natural := Scan;
-                  begin
-                     while Scan <= Body_Text'Last
-                       and then Body_Text (Scan) /= '"'
-                     loop
-                        Scan := Scan + 1;
-                     end loop;
-                     if Scan <= Body_Text'Last then
-                        declare
-                           Name : constant String :=
-                             Body_Text (Start .. Scan - 1);
-                        begin
-                           if Ends_With (Name, ".gguf")
-                             and then Is_Safe_File_Name (Name)
-                             and then Contains (Name, T.To_String (Quant))
-                           then
-                              declare
-                                 Digest : String (1 .. 64);
-                                 Have   : Boolean;
-                              begin
-                                 Hash_After (Body_Text, Scan, Digest, Have);
-                                 Note_Candidate
-                                   (Name, Size_After (Body_Text, Scan),
-                                    Digest, Have);
-                              end;
-                           end if;
-                        end;
-                     end if;
-                     Cursor := Scan + 1;
-                  end;
-               end;
-            else
-               Cursor := Cursor + 1;
-            end if;
-         end loop;
-      end;
+      for I in 1 .. Listed_Count loop
+         if Contains (T.To_String (Listed (I).Name), Quant) and then Matches < Max_Files then
+            Matches := Matches + 1;
+            Files (Matches) := Listed (I);
+         end if;
+      end loop;
 
       if Matches = 0 then
          Reason := T.To_Bounded
-           ("no .gguf file for that quant in " & T.To_String (Repo)
+           ("no .gguf file for that quant in " & Repo
             & " -- the repository or the quant may be wrong");
          return;
       end if;
@@ -545,43 +661,37 @@ package body Model_Runner.Hub is
                else
                   Reason := T.To_Bounded
                     ("the shard set is incomplete or ambiguous; name the "
-                     & "quant more exactly: " & Listed);
+                     & "quant more exactly: " & Listed_Names);
                end if;
             end;
 
          else
             Reason := T.To_Bounded
               ("more than one file matched; name the quant more exactly: "
-               & Listed);
+               & Listed_Names);
          end if;
       end;
-   end Resolve;
+   end Choose_Quant;
 
-   ----------
-   -- Pick --
-   ----------
+   ----------------
+   -- Choose_Fit --
+   ----------------
 
-   procedure Pick
-     (Reference : String;
-      Budget    : Interfaces.Unsigned_64;
-      Repo      : out Model_Runner.Text.Bounded;
-      Files     : out File_Set;
-      Count     : out Natural;
-      Ok        : out Boolean;
-      Reason    : out Model_Runner.Text.Bounded)
+   procedure Choose_Fit
+     (Listed       : Listing;
+      Listed_Count : Natural;
+      Budget       : Interfaces.Unsigned_64;
+      Repo         : String;
+      Files        : out File_Set;
+      Count        : out Natural;
+      Ok           : out Boolean;
+      Reason       : out Model_Runner.Text.Bounded)
    is
-      Result : HC.Client_Result;
-      Status : HE.Result_Status;
-
-      Max_All : constant := 256;
-      All_Files : array (1 .. Max_All) of Download_File;
-      All_N     : Natural := 0;
-
-      --  The index in All_Files of a file of this name, or zero.
+      --  The index in Listed of a file of this name, or zero.
       function Find (Name : String) return Natural is
       begin
-         for I in 1 .. All_N loop
-            if T.To_String (All_Files (I).Name) = Name then
+         for I in 1 .. Listed_Count loop
+            if T.To_String (Listed (I).Name) = Name then
                return I;
             end if;
          end loop;
@@ -589,7 +699,9 @@ package body Model_Runner.Hub is
       end Find;
 
       --  The whole size of the model a representative names -- a single
-      --  file's size, or the sum of a shard set's, the pieces it can find.
+      --  file's size, or the sum of a shard set's -- and zero where a shard
+      --  of the set is not listed: a set short of a shard is no model to
+      --  weigh, and fetched it would be reported saved and fail at load.
       function Group_Total (Rep : String) return Interfaces.Unsigned_64 is
          Total : Interfaces.Unsigned_64 := 0;
          Shards_Count : constant Natural := Shard_Total (Rep);
@@ -598,16 +710,20 @@ package body Model_Runner.Hub is
             declare
                At_Rep : constant Natural := Find (Rep);
             begin
-               return (if At_Rep = 0 then 0 else All_Files (At_Rep).Size);
+               return (if At_Rep = 0 then 0 else Listed (At_Rep).Size);
             end;
+         end if;
+         if Shards_Count > Max_Files then
+            return 0;
          end if;
          for K in 1 .. Shards_Count loop
             declare
                At_K : constant Natural := Find (GS.Shard_Path (Rep, K, Shards_Count));
             begin
-               if At_K /= 0 then
-                  Total := Total + All_Files (At_K).Size;
+               if At_K = 0 then
+                  return 0;
                end if;
+               Total := Total + Listed (At_K).Size;
             end;
          end loop;
          return Total;
@@ -619,103 +735,30 @@ package body Model_Runner.Hub is
       is (not GS.Is_Shard_Name (Name)
           or else Name (Name'Last - 18 .. Name'Last - 14) = "00001");
 
-      Best_Fit   : Natural := 0;
-      Best_Total : Interfaces.Unsigned_64 := 0;
-      Smallest   : Natural := 0;
+      Best_Fit    : Natural := 0;
+      Best_Total  : Interfaces.Unsigned_64 := 0;
+      Smallest    : Natural := 0;
       Small_Total : Interfaces.Unsigned_64 := 0;
-      Chosen     : Natural := 0;
-      None_Fit   : Boolean := False;
+      Chosen      : Natural := 0;
+      None_Fit    : Boolean := False;
    begin
+      Files := [others => <>];
       Ok := False;
       Count := 0;
       Reason := T.Empty;
-      Repo := T.To_Bounded (Reference);
 
-      if Budget = 0 then
-         Reason := T.To_Bounded
-           ("could not read this machine's memory to pick a quant; name one "
-            & "as " & Reference & ":QUANT");
-         return;
-      end if;
-
-      Status := Get
-        (URL           => Host & "/api/models/" & Reference & "?blobs=true",
-         Result        => Result);
-
-      if not HE.Is_Success (Status) then
-         Reason := T.To_Bounded
-           ("could not reach huggingface.co (" & HE.Result_Status'Image (Status)
-            & ")");
-         return;
-      end if;
-
-      declare
-         Body_Text : constant String := HC.Response_Text (Result);
-         Marker    : constant String := """rfilename""";
-         Cursor    : Natural := Body_Text'First;
-      begin
-         while Cursor <= Body_Text'Last - Marker'Length + 1 loop
-            if Body_Text (Cursor .. Cursor + Marker'Length - 1) = Marker then
-               declare
-                  Scan : Natural := Cursor + Marker'Length;
-               begin
-                  while Scan <= Body_Text'Last and then Body_Text (Scan) /= '"'
-                  loop
-                     Scan := Scan + 1;
-                  end loop;
-                  Scan := Scan + 1;
-                  declare
-                     Start : constant Natural := Scan;
-                  begin
-                     while Scan <= Body_Text'Last
-                       and then Body_Text (Scan) /= '"'
-                     loop
-                        Scan := Scan + 1;
-                     end loop;
-                     if Scan <= Body_Text'Last then
-                        declare
-                           Name : constant String :=
-                             Body_Text (Start .. Scan - 1);
-                           Digest : String (1 .. 64);
-                           Have   : Boolean;
-                        begin
-                           if Ends_With (Name, ".gguf")
-                             and then Is_Safe_File_Name (Name)
-                             and then All_N < Max_All
-                           then
-                              Hash_After (Body_Text, Scan, Digest, Have);
-                              All_N := All_N + 1;
-                              All_Files (All_N) :=
-                                (Name     => T.To_Bounded (Name),
-                                 Size     => Size_After (Body_Text, Scan),
-                                 SHA256   => Digest,
-                                 Has_Hash => Have);
-                           end if;
-                        end;
-                     end if;
-                     Cursor := Scan + 1;
-                  end;
-               end;
-            else
-               Cursor := Cursor + 1;
-            end if;
-         end loop;
-      end;
-
-      if All_N = 0 then
-         Reason := T.To_Bounded
-           ("no .gguf file in " & Reference
-            & " -- the repository may be wrong");
+      if Listed_Count = 0 then
+         Reason := T.To_Bounded ("no .gguf file in " & Repo & " -- the repository may be wrong");
          return;
       end if;
 
       --  Weigh each model: the largest that fits the budget, and the
       --  smallest of all as a fallback where none does.
-      for I in 1 .. All_N loop
-         if Is_Representative (T.To_String (All_Files (I).Name)) then
+      for I in 1 .. Listed_Count loop
+         if Is_Representative (T.To_String (Listed (I).Name)) then
             declare
                Total : constant Interfaces.Unsigned_64 :=
-                 Group_Total (T.To_String (All_Files (I).Name));
+                 Group_Total (T.To_String (Listed (I).Name));
             begin
                if Total > 0 then
                   if Total <= Budget
@@ -741,38 +784,25 @@ package body Model_Runner.Hub is
       end if;
 
       if Chosen = 0 then
-         Reason := T.To_Bounded ("no quant to choose from in " & Reference);
+         Reason := T.To_Bounded ("no quant to choose from in " & Repo);
          return;
       end if;
 
       --  The chosen model's files: itself, or its shards in order.
       declare
-         Rep   : constant String := T.To_String (All_Files (Chosen).Name);
+         Rep   : constant String := T.To_String (Listed (Chosen).Name);
          Total : constant Natural := Shard_Total (Rep);
       begin
          if Total <= 1 then
-            Files (1) := All_Files (Chosen);
+            Files (1) := Listed (Chosen);
             Count := 1;
          else
-            Count := 0;
-            for K in 1 .. Natural'Min (Total, Max_Files) loop
-               declare
-                  At_K : constant Natural :=
-                    Find (GS.Shard_Path (Rep, K, Total));
-               begin
-                  if At_K /= 0 then
-                     Count := Count + 1;
-                     Files (Count) := All_Files (At_K);
-                  end if;
-               end;
+            for K in 1 .. Total loop
+               Count := Count + 1;
+               Files (Count) := Listed (Find (GS.Shard_Path (Rep, K, Total)));
             end loop;
          end if;
       end;
-
-      if Count = 0 then
-         Reason := T.To_Bounded ("the chosen quant's files could not be listed");
-         return;
-      end if;
 
       if None_Fit then
          Reason := T.To_Bounded
@@ -780,6 +810,70 @@ package body Model_Runner.Hub is
             & "may be slow or fail");
       end if;
       Ok := True;
+   end Choose_Fit;
+
+   -------------
+   -- Resolve --
+   -------------
+
+   procedure Resolve
+     (Reference : String;
+      Repo      : out Model_Runner.Text.Bounded;
+      Files     : out File_Set;
+      Count     : out Natural;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded)
+   is
+      Quant        : T.Bounded;
+      Listed       : Listing;
+      Listed_Count : Natural;
+   begin
+      Files := [others => <>];
+      Count := 0;
+      Split (Reference, Repo, Quant);
+      Fetch_Listing (T.To_String (Repo), Listed, Listed_Count, Ok, Reason);
+      if not Ok then
+         return;
+      end if;
+      Choose_Quant
+        (Listed, Listed_Count, T.To_String (Quant), T.To_String (Repo),
+         Files, Count, Ok, Reason);
+   end Resolve;
+
+   ----------
+   -- Pick --
+   ----------
+
+   procedure Pick
+     (Reference : String;
+      Budget    : Interfaces.Unsigned_64;
+      Repo      : out Model_Runner.Text.Bounded;
+      Files     : out File_Set;
+      Count     : out Natural;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded)
+   is
+      Listed       : Listing;
+      Listed_Count : Natural;
+   begin
+      Files := [others => <>];
+      Ok := False;
+      Count := 0;
+      Reason := T.Empty;
+      Repo := T.To_Bounded (Reference);
+
+      if Budget = 0 then
+         Reason := T.To_Bounded
+           ("could not read this machine's memory to pick a quant; name one "
+            & "as " & Reference & ":QUANT");
+         return;
+      end if;
+
+      Fetch_Listing (Reference, Listed, Listed_Count, Ok, Reason);
+      if not Ok then
+         return;
+      end if;
+      Choose_Fit (Listed, Listed_Count, Budget, Reference, Files, Count, Ok, Reason);
    end Pick;
 
    -----------
@@ -948,6 +1042,22 @@ package body Model_Runner.Hub is
    package Verified_Files is new Ada.Containers.Indefinite_Vectors (Positive, String);
    Verified : Verified_Files.Vector;
 
+   --  And files read whole and found not to be, by digest, path, size and
+   --  when last written: a multi-gigabyte file of the wrong bytes was read
+   --  whole three times over for one download offer. Changed since, it is
+   --  read again.
+   Mismatched : Verified_Files.Vector;
+
+   function As_Last_Seen (Path : String) return String is
+   begin
+      return Path & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
+        & "|" & Ada.Calendar.Formatting.Image
+                  (Ada.Directories.Modification_Time (Path), Include_Time_Fraction => True);
+   exception
+      when others =>
+         return Path;
+   end As_Last_Seen;
+
    function Is_Whole (File : Download_File; Path : String) return Boolean is
       package Stream_IO renames Ada.Streams.Stream_IO;
       Wanted : constant String := Ada.Characters.Handling.To_Lower (File.SHA256);
@@ -989,13 +1099,99 @@ package body Model_Runner.Hub is
       --  No digest kept, or another's -- a file from before digests were
       --  kept, put there by hand, or a stale note beside the right bytes:
       --  the bytes are read, and kept as known where they are the hub's.
+      if Mismatched.Contains (Wanted & As_Last_Seen (Path)) then
+         return False;
+      end if;
       if File_Digest (Path) = Wanted then
          Record_Digest (Path, Wanted);
          Verified.Append (Key);
          return True;
       end if;
+      Mismatched.Append (Wanted & As_Last_Seen (Path));
       return False;
    end Is_Whole;
+
+   --  Where a join of a part's chunks began, kept beside the part while it
+   --  runs: Path & ".joining", the length the part had.
+   procedure Note_Join_Start (Path : String; Length : Interfaces.Unsigned_64) is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      Note : Stream_IO.File_Type;
+   begin
+      Stream_IO.Create (Note, Stream_IO.Out_File, Path & ".joining");
+      String'Write (Stream_IO.Stream (Note), T.Trim (Interfaces.Unsigned_64'Image (Length)));
+      Stream_IO.Close (Note);
+   end Note_Join_Start;
+
+   procedure Forget_Join_Start (Path : String) is
+   begin
+      if Ada.Directories.Exists (Path & ".joining") then
+         Ada.Directories.Delete_File (Path & ".joining");
+      end if;
+   end Forget_Join_Start;
+
+   --  A part a join stopped in, cut back to where the join began: its
+   --  first bytes copied to a file of their own and that put in its place,
+   --  the chunks it was joining still beside it. A part with no such note
+   --  is left as it is.
+   procedure Cut_Back (Path : String) is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      use Ada.Streams;
+      Note    : Stream_IO.File_Type;
+      Keep    : Interfaces.Unsigned_64 := 0;
+   begin
+      if not Ada.Directories.Exists (Path & ".joining") then
+         return;
+      end if;
+      declare
+         Text : String (1 .. Natural (Ada.Directories.Size (Path & ".joining")));
+      begin
+         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".joining");
+         String'Read (Stream_IO.Stream (Note), Text);
+         Stream_IO.Close (Note);
+         Keep := Interfaces.Unsigned_64'Value (Text);
+      end;
+      if Ada.Directories.Exists (Path)
+        and then Interfaces.Unsigned_64 (Ada.Directories.Size (Path)) > Keep
+      then
+         declare
+            In_File, Out_File : Stream_IO.File_Type;
+            Buffer : Stream_Element_Array (1 .. 1024 * 1024);
+            Last   : Stream_Element_Offset;
+            Left   : Interfaces.Unsigned_64 := Keep;
+         begin
+            Stream_IO.Open (In_File, Stream_IO.In_File, Path);
+            Stream_IO.Create (Out_File, Stream_IO.Out_File, Path & ".cut");
+            while Left > 0 loop
+               declare
+                  Take : constant Stream_Element_Offset :=
+                    Stream_Element_Offset
+                      (Interfaces.Unsigned_64'Min (Left, Buffer'Length));
+               begin
+                  Stream_IO.Read (In_File, Buffer (1 .. Take), Last);
+                  exit when Last < 1;
+                  Stream_IO.Write (Out_File, Buffer (1 .. Last));
+                  Left := Left - Interfaces.Unsigned_64 (Last);
+               end;
+            end loop;
+            Stream_IO.Close (In_File);
+            Stream_IO.Close (Out_File);
+            if not Hostkit.Fs.Replace_File (Path & ".cut", Path) then
+               Ada.Directories.Delete_File (Path & ".cut");
+            end if;
+         end;
+      end if;
+      Ada.Directories.Delete_File (Path & ".joining");
+   exception
+      when others =>
+         --  Not cut: the part is dropped and the chunks with it, which is
+         --  what a fetch did before the note was kept.
+         if Ada.Directories.Exists (Path) then
+            Ada.Directories.Delete_File (Path);
+         end if;
+         if Ada.Directories.Exists (Path & ".joining") then
+            Ada.Directories.Delete_File (Path & ".joining");
+         end if;
+   end Cut_Back;
 
    procedure Fetch_Ranges
      (Repo      : String;
@@ -1011,7 +1207,8 @@ package body Model_Runner.Hub is
          then Interfaces.Unsigned_64 (Ada.Directories.Size (Dest_Path)) else 0);
       Left   : constant Interfaces.Unsigned_64 := File.Size - Have;
       Chunks : constant Natural := Natural ((Left + Chunk_Bytes - 1) / Chunk_Bytes);
-      URL    : constant String := Host & "/" & Repo & "/resolve/main/" & T.To_String (File.Name);
+      URL    : constant String :=
+        File_URL (Repo, T.To_String (File.Revision), T.To_String (File.Name));
 
       function Start_Of (K : Positive) return Interfaces.Unsigned_64 is
         (Have + Interfaces.Unsigned_64 (K - 1) * Chunk_Bytes);
@@ -1141,8 +1338,13 @@ package body Model_Runner.Hub is
                   else
                      Board.Fail
                        (Not_Served => HE.Is_Success (Status) and then Outcome.HTTP_Status_Code /= 206,
-                        Why        => "a range of the file came back with status"
-                                      & Natural'Image (Outcome.HTTP_Status_Code));
+                        Why        =>
+                          (if HE.Is_Success (Status)
+                           then "a range of the file came back with status"
+                                & Natural'Image (Outcome.HTTP_Status_Code)
+                           else "a range of the file could not be fetched ("
+                                & HE.Result_Status'Image (Status)
+                                & "); run it again to resume"));
                   end if;
                end if;
             exception
@@ -1201,7 +1403,13 @@ package body Model_Runner.Hub is
          return;
       end if;
 
-      --  In order onto what the file held, each chunk gone as it is added.
+      --  In order onto what the file held, each chunk gone once all are
+      --  added. Where the join began is kept beside the part first: a join
+      --  stopped part way -- a full disk -- leaves the part past a chunk's
+      --  edge, and the next fetch cuts it back there (Cut_Back) rather than
+      --  taking the length it has for where the chunks begin and deleting
+      --  every chunk still waiting as a stray.
+      Note_Join_Start (Dest_Path, Have);
       declare
          use Ada.Streams;
          Out_File : Stream_IO.File_Type;
@@ -1223,7 +1431,6 @@ package body Model_Runner.Hub is
                   Stream_IO.Write (Out_File, Buffer (1 .. Last));
                end loop;
                Stream_IO.Close (In_File);
-               Ada.Directories.Delete_File (Chunk_Path (K));
             exception
                when others =>
                   if Stream_IO.Is_Open (In_File) then
@@ -1235,23 +1442,33 @@ package body Model_Runner.Hub is
          Stream_IO.Close (Out_File);
       exception
          --  Joined part way -- a full disk, a chunk gone -- the files are
-         --  closed, not left open for the life of the process.
+         --  closed, not left open for the life of the process, and the
+         --  chunks kept for the next fetch, which cuts the part back.
          when others =>
             if Stream_IO.Is_Open (Out_File) then
                Stream_IO.Close (Out_File);
             end if;
-            raise;
+            Reason := T.To_Bounded
+              ("the file's ranges could not be put together -- the disk may be full");
+            Served := True;
+            Ok := False;
+            return;
       end;
+      for K in 1 .. Chunks loop
+         Ada.Directories.Delete_File (Chunk_Path (K));
+      end loop;
+      Forget_Join_Start (Dest_Path);
 
       --  The whole against the hub's digest: a file of the right length
-      --  made of the wrong bytes is removed, not opened.
+      --  made of the wrong bytes is removed, not opened. Its note is the
+      --  whole file's, written once it takes the file's name (Settle); the
+      --  part has none.
       if File.Has_Hash then
          if Ada.Characters.Handling.To_Lower (File.SHA256) /= File_Digest (Dest_Path) then
             Ada.Directories.Delete_File (Dest_Path);
             Reason := T.To_Bounded ("the file's digest is not the one the hub records; it was removed");
             return;
          end if;
-         Record_Digest (Dest_Path, File.SHA256);
       end if;
       if Report /= null then
          Report (File.Size, File.Size);
@@ -1264,13 +1481,59 @@ package body Model_Runner.Hub is
          Reason := T.To_Bounded ("the file's ranges could not be put together");
    end Fetch_Ranges;
 
-   procedure Fetch
+   --  The revision a part was begun at, kept beside it as Part &
+   --  ".revision"; "" where none is kept (a part from before revisions
+   --  were, or a fetch of the branch's head).
+   function Part_Revision (Part : String) return String is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      Note : Stream_IO.File_Type;
+   begin
+      if not Ada.Directories.Exists (Part & ".revision") then
+         return "";
+      end if;
+      declare
+         Text : String (1 .. Natural (Ada.Directories.Size (Part & ".revision")));
+      begin
+         Stream_IO.Open (Note, Stream_IO.In_File, Part & ".revision");
+         String'Read (Stream_IO.Stream (Note), Text);
+         Stream_IO.Close (Note);
+         return Text;
+      end;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (Note) then
+            Stream_IO.Close (Note);
+         end if;
+         return "";
+   end Part_Revision;
+
+   procedure Note_Part_Revision (Part : String; Revision : String) is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      Note : Stream_IO.File_Type;
+   begin
+      if Revision = "" then
+         if Ada.Directories.Exists (Part & ".revision") then
+            Ada.Directories.Delete_File (Part & ".revision");
+         end if;
+         return;
+      end if;
+      Stream_IO.Create (Note, Stream_IO.Out_File, Part & ".revision");
+      String'Write (Stream_IO.Stream (Note), Revision);
+      Stream_IO.Close (Note);
+   exception
+      when others =>
+         if Stream_IO.Is_Open (Note) then
+            Stream_IO.Close (Note);
+         end if;
+   end Note_Part_Revision;
+
+   procedure Fetch_Unlocked
      (Repo      : String;
       File      : Download_File;
       Dest_Path : String;
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded;
-      Report    : Progress_Reporter := null)
+      Report    : Progress_Reporter)
    is
       Part    : constant String := Dest_Path & ".part";
       Outcome : HC.Download_Result;
@@ -1279,12 +1542,29 @@ package body Model_Runner.Hub is
 
       --  The checked part takes the file's name: only now is there a file
       --  at Dest_Path to open or take for done.
+      --  Its bytes are put on the disk first and the name changes in one
+      --  step, the old file replaced: a delete and then a rename left no
+      --  file at the name between the two, and a rename over nothing let a
+      --  power cut bring the name back on an empty file beside its note.
       procedure Settle is
+         Synced : constant Hostkit.Durability.Outcome :=
+           Hostkit.Durability.Sync_File (Part);
+         pragma Unreferenced (Synced);
       begin
-         if Ada.Directories.Exists (Dest_Path) then
-            Ada.Directories.Delete_File (Dest_Path);
+         if not Hostkit.Fs.Replace_File (Part, Dest_Path) then
+            raise Ada.Directories.Use_Error;
          end if;
-         Ada.Directories.Rename (Part, Dest_Path);
+         declare
+            Folder : constant Hostkit.Durability.Outcome :=
+              Hostkit.Durability.Sync_Directory
+                (Ada.Directories.Containing_Directory (Dest_Path));
+            pragma Unreferenced (Folder);
+         begin
+            null;
+         end;
+         if Ada.Directories.Exists (Part & ".revision") then
+            Ada.Directories.Delete_File (Part & ".revision");
+         end if;
          --  The client checked the bytes against the digest; what it was is
          --  kept beside them, so the next run knows the file for this one.
          if File.Has_Hash then
@@ -1300,16 +1580,27 @@ package body Model_Runner.Hub is
       Reason := T.Empty;
 
       --  The directory the file goes in, for the ranges as for one stream;
-      --  a part longer than the file is no part of it -- what it holds past
-      --  the end would never be checked away -- and is begun again; chunks
-      --  a fetch before parts left beside the file itself are dropped.
+      --  a part a join stopped in is cut back to where it began; a part of
+      --  another revision of the file -- the repository changed since it
+      --  was begun -- or longer than the file is no part of it -- what it
+      --  holds past the end would never be checked away -- and is begun
+      --  again; chunks a fetch before parts left beside the file itself
+      --  are dropped.
       begin
          Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Dest_Path));
+         Cut_Back (Part);
+         if Ada.Directories.Exists (Part)
+           and then Part_Revision (Part) /= T.To_String (File.Revision)
+         then
+            Ada.Directories.Delete_File (Part);
+            Remove_Stray_Chunks (Part, 0, 0);
+         end if;
          if File.Size > 0 and then Ada.Directories.Exists (Part)
            and then Interfaces.Unsigned_64 (Ada.Directories.Size (Part)) > File.Size
          then
             Ada.Directories.Delete_File (Part);
          end if;
+         Note_Part_Revision (Part, T.To_String (File.Revision));
          Remove_Stray_Chunks (Dest_Path, 0, 0);
       exception
          when others =>
@@ -1370,7 +1661,7 @@ package body Model_Runner.Hub is
       Options.Progress_Interval_Bytes := 4 * 1024 * 1024;
 
       Status := Download
-        (URL     => Host & "/" & Repo & "/resolve/main/" & T.To_String (File.Name),
+        (URL     => File_URL (Repo, T.To_String (File.Revision), T.To_String (File.Name)),
          Path    => Part,
          Result  => Outcome,
          Options => Options);
@@ -1422,9 +1713,14 @@ package body Model_Runner.Hub is
                & "HF_TOKEN or hf-token in the settings file");
          end if;
       elsif Status = HE.Integrity_Check_Failed then
+         --  Discarded only where it was whole: a short one is a part, kept
+         --  above for the next run to resume.
          Reason := T.To_Bounded
-           ("the download did not match the hub's checksum and was "
-            & "discarded; run it again to fetch it anew");
+           (if Ada.Directories.Exists (Part)
+            then "the download stopped short of the file's size; run it "
+                 & "again to resume from where it left off"
+            else "the download did not match the hub's checksum and was "
+                 & "discarded; run it again to fetch it anew");
       elsif Status = HE.Write_Failed then
          --  The bytes arrived; writing them did not. Resuming will not
          --  help, so this says what will: room, or a writable directory.
@@ -1437,6 +1733,58 @@ package body Model_Runner.Hub is
             & ", HTTP" & Natural'Image (Outcome.HTTP_Status_Code)
             & "); run it again to resume from where it left off");
       end if;
+   end Fetch_Unlocked;
+
+   -----------
+   -- Fetch --
+   -----------
+
+   procedure Fetch
+     (Repo      : String;
+      File      : Download_File;
+      Dest_Path : String;
+      Ok        : out Boolean;
+      Reason    : out Model_Runner.Text.Bounded;
+      Report    : Progress_Reporter := null)
+   is
+      Held : Hostkit.Locks.Lock;
+
+      procedure Release is
+      begin
+         if Hostkit.Locks.Is_Held (Held) then
+            Hostkit.Locks.Release (Held);
+         end if;
+      end Release;
+   begin
+      Ok := False;
+      Reason := T.Empty;
+
+      --  One fetch of a file at a time: a second run pulling the same model
+      --  wrote the same part and the same chunks, and removed the first's
+      --  chunks as strays. The lock is the system's, so a run killed part
+      --  way holds it no longer; a file system with no locks fetches as it
+      --  did.
+      begin
+         Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Dest_Path));
+         if Hostkit.Locks.Acquire
+              (Dest_Path & ".lock", Hostkit.Locks.Lock_Exclusive,
+               Wait => False, Item => Held) in Hostkit.Locks.Lock_Busy
+         then
+            Reason := T.To_Bounded
+              ("another run is fetching " & T.To_String (File.Name)
+               & " now; let it finish first");
+            return;
+         end if;
+      exception
+         when others =>
+            null;
+      end;
+      Fetch_Unlocked (Repo, File, Dest_Path, Ok, Reason, Report);
+      Release;
+   exception
+      when others =>
+         Release;
+         raise;
    end Fetch;
 
 end Model_Runner.Hub;

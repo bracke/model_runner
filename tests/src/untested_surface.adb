@@ -63,7 +63,6 @@ package body Untested_Surface is
       return Name in
          "Accepts"
          | "Add_Frame"
-         | "Add_Integer"
          | "Add_Real"
          | "Answered_Yes"
          | "Answering_Locale"

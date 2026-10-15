@@ -98,6 +98,31 @@ package body Model_Runner.Platform is
       return Environment_Value ("HF_TOKEN");
    end Hub_Token;
 
+   ---------------
+   -- Hub_Proxy --
+   ---------------
+
+   function Hub_Proxy return String is
+      Upper_Name : constant String := Environment_Value ("HTTPS_PROXY");
+      Lower_Name : constant String := Environment_Value ("https_proxy");
+      Every      : constant String := Environment_Value ("ALL_PROXY");
+   begin
+      return (if Upper_Name /= "" then Upper_Name
+              elsif Lower_Name /= "" then Lower_Name
+              else Every);
+   end Hub_Proxy;
+
+   ------------------
+   -- Proxy_Bypass --
+   ------------------
+
+   function Proxy_Bypass return String is
+      Upper_Name : constant String := Environment_Value ("NO_PROXY");
+   begin
+      return (if Upper_Name /= "" then Upper_Name
+              else Environment_Value ("no_proxy"));
+   end Proxy_Bypass;
+
    -----------------
    -- Host_Locale --
    -----------------

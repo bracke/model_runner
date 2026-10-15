@@ -57,7 +57,6 @@ with Model_Runner.Errors;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
-with Model_Runner.Platform.Device.Products;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Generation;
@@ -170,20 +169,16 @@ procedure Tests_Main is
    end Turn_Count;
 
    --  The layout `run` takes when none is named: the panels on the
-   --  processor where they fit, the file's rows otherwise. What a tool
-   --  measuring run's products asks for unasked.
+   --  processor where they fit, the file's rows otherwise -- run's own
+   --  decision, asked. This was a copy of it that weighed a sharded model
+   --  by its first file and ignored a memory limit, and chose panels for a
+   --  model run kept in rows.
    function Unasked_Layout
-     (Model : String; Backend : Model_Runner.Backend.Backend_Kind)
+     (Model        : String;
+      Backend      : Model_Runner.Backend.Backend_Kind;
+      Memory_Limit : Interfaces.Unsigned_64 := 0)
       return Model_Runner.Llama.Repack_Mode
-   is (if Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_CPU)
-         and then Ada.Directories.Exists (Model)
-         and then Model_Runner.Llama.Panels_Unasked
-                    (Interfaces.Unsigned_64 (Ada.Directories.Size (Model)),
-                     Model_Runner.Limits.Default_Model_Limits
-                       .Max_Allocation_Bytes,
-                     Model_Runner.Platform.Available_Memory)
-       then Model_Runner.Llama.To_Rows
-       else Model_Runner.Llama.No_Repack);
+   is (Model_Runner.CLI.Execute.Unasked_Layout (Model, Backend, Memory_Limit));
 
    --  Selected command, defaulting to the mandatory suite.
    function Command return String is
@@ -2225,12 +2220,36 @@ begin
          end Given;
 
          Result : Perplexity_Run.Report;
+
+         --  The rotation's factor, a real number: read as a whole one, 1.5
+         --  was refused, read as nothing, and the run took the unasked
+         --  factor without a word.
+         Scale_Text : constant String := Option ("--rope-scale", "");
+         Scale      : Model_Runner.Numerics.Wide_Real := 0.0;
+         use type Model_Runner.Numerics.Wide_Real;
       begin
          if Option ("--model", "") = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "perplexity: --model is required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             return;
+         end if;
+
+         if Scale_Text /= "" then
+            begin
+               Scale := Model_Runner.Numerics.Wide_Real'Value (Scale_Text);
+            exception
+               when Constraint_Error =>
+                  Scale := -1.0;
+            end;
+            if Scale <= 0.0 then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "perplexity: --rope-scale takes a positive number, not "
+                  & Scale_Text);
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
          end if;
 
          --  The arithmetic, as --arith names it: binary32 unasked, which is
@@ -2257,8 +2276,7 @@ begin
                          (Option ("--model", ""),
                           Backend_Of (Option ("--backend", "cpu"))),
             Stretch => Option ("--rope-scaling", ""),
-            Factor  =>
-              Model_Runner.Numerics.Wide_Real (Number ("--rope-scale", 0)));
+            Factor  => Scale);
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Perplexity_Run.Summary (Result));
@@ -2902,31 +2920,59 @@ begin
 
    elsif Command = "restamp" then
       --  Record the fingerprints that moved under a change that leaves
-      --  the figures true, with the reason; see Restamping.
-      if Ada.Command_Line.Argument_Count not in 2 .. 3 then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error, "usage: tests restamp WHY [ROOT]");
-         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-      else
-         declare
-            Moved : Natural;
-            Good  : Boolean;
-         begin
+      --  the figures true, with the reason -- for the groups named, or
+      --  every one with --all; see Restamping.
+      declare
+         Groups     : Ada.Strings.Unbounded.Unbounded_String;
+         All_Groups : Boolean := False;
+         Root       : Ada.Strings.Unbounded.Unbounded_String :=
+           Ada.Strings.Unbounded.To_Unbounded_String ("..");
+         Index      : Positive := 3;
+         Moved      : Natural;
+         Good       : Boolean;
+      begin
+         while Index <= Ada.Command_Line.Argument_Count loop
+            declare
+               Word : constant String := Ada.Command_Line.Argument (Index);
+            begin
+               if Word = "--all" then
+                  All_Groups := True;
+               elsif Word = "--root"
+                 and then Index < Ada.Command_Line.Argument_Count
+               then
+                  Index := Index + 1;
+                  Root := Ada.Strings.Unbounded.To_Unbounded_String
+                    (Ada.Command_Line.Argument (Index));
+               else
+                  Ada.Strings.Unbounded.Append (Groups, " " & Word);
+               end if;
+            end;
+            Index := Index + 1;
+         end loop;
+
+         if Ada.Command_Line.Argument_Count < 2
+           or else (not All_Groups and then Ada.Strings.Unbounded.Length (Groups) = 0)
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests restamp WHY (GROUP ... | --all) [--root ROOT]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         else
             Restamping.Run
-              (Root =>
-                 (if Ada.Command_Line.Argument_Count = 3
-                  then Ada.Command_Line.Argument (3) else ".."),
-               Note  => Ada.Command_Line.Argument (2),
-               Moved => Moved,
-               Good  => Good);
+              (Root       => Ada.Strings.Unbounded.To_String (Root),
+               Note       => Ada.Command_Line.Argument (2),
+               Groups     => Ada.Strings.Unbounded.To_String (Groups),
+               All_Groups => All_Groups,
+               Moved      => Moved,
+               Good       => Good);
             if not Good then
                Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             else
                Ada.Text_IO.Put_Line
                  ("restamped" & Natural'Image (Moved) & " figure groups");
             end if;
-         end;
-      end if;
+         end if;
+      end;
 
    elsif Command = "shader" then
       --  Turn a compiled shader into the Ada constant the engine hands to a
@@ -3167,22 +3213,10 @@ begin
             return;
          end if;
 
-         --  The arithmetic, told to the backend before anything is
-         --  dispatched. Not a parameter of the run, because what it selects
-         --  is how a product is computed rather than what the run does, and
-         --  the backend states that it must be told once and not part way
-         --  through.
-         Model_Runner.Backend.CPU.Use_Integer_Activations
-           (Roles_Named (Option ("--arith", "int8")));
-
-         --  And the device's walks by the same arithmetic, as `run` sets
-         --  them: a drafted run measured here rounds where `run`'s does.
-         Model_Runner.Backend.Device.Round_Walks
-           (if Option ("--arith", "int8") = "f32"
-            then Model_Runner.Platform.Device.Products.Rounds_None
-            elsif Option ("--arith", "int8") = "mixed"
-            then Model_Runner.Platform.Device.Products.Rounds_Feed_Forward
-            else Model_Runner.Platform.Device.Products.Rounds_Every);
+         --  The arithmetic is told the backends by Speed_Run once the
+         --  model is prepared, as run tells them: what run takes depends
+         --  on the model -- Gemma 2's mixed one -- and this told every model
+         --  integers before it had seen one.
 
          declare
             --  One measurement of one prompt, with every other option as
@@ -3222,7 +3256,8 @@ begin
                      then Mode_Of (Option ("--repack", "none"))
                      else Unasked_Layout
                             (Option ("--model", ""),
-                             Backend_Of (Chosen_Backend))),
+                             Backend_Of (Chosen_Backend),
+                             Bytes ("--memory-limit"))),
 
                   --  The storage the session keeps its context in, named the way
                   --  the command names it: f32, f16, q8 or q4, and by default
@@ -3262,7 +3297,11 @@ begin
                   Draft_Floor => Real_Of (Option ("--draft-floor", "0")),
                   Draft_Adapts => Given ("--draft-adapts"),
                   Result      => Into,
-                  Turns       => Option ("--turns", ""));
+                  Turns       => Option ("--turns", ""),
+                  Arithmetic  =>
+                    (if Given ("--arith") then Option ("--arith", "") else ""),
+                  Memory_Limit => Bytes ("--memory-limit"),
+                  No_Cache    => Given ("--no-cache"));
             end Measure;
 
             Set : constant String := Option ("--prompt-set", "");

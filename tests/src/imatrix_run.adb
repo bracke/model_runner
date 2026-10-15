@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.Real_Time;
 with Ada.Streams.Stream_IO;
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Model_Runner.Backend;
@@ -37,7 +38,7 @@ package body Imatrix_Run is
    use type N.Real;
    use type T.Real_Array_Access;
    use type Ada.Real_Time.Time;
-   use type Ada.Streams.Stream_Element_Offset;
+   use type Model_Runner.GGUF.U64;
 
    --  One matrix's running total: a sum of squares a column, and how many
    --  rows went into them.
@@ -47,15 +48,26 @@ package body Imatrix_Run is
       Rows  : Long_Long_Integer := 0;
    end record;
 
-   Most_Matrices : constant := 512;
+   --  As many as the model has: a list that doubles when it fills. It was
+   --  five hundred and twelve and stopped there without a word, which is
+   --  fewer matrices than a model of seventy-odd layers holds. It starts
+   --  at eight, so that the suite's two-layer fixture already grows it.
+   type Tally_List is array (Positive range <>) of Tally;
+   type Tally_List_Access is access Tally_List;
 
-   type Tally_List is array (1 .. Most_Matrices) of Tally;
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Tally_List, Tally_List_Access);
 
    --  The watcher itself.
    type Collector is limited new L.Watcher with record
-      Held : Tally_List;
+      Held : Tally_List_Access := null;
       Up   : Natural := 0;
    end record;
+
+   --  The fewest rows a product must have to be counted. llama-imatrix
+   --  skips a product of fewer than sixteen -- a decode step, a prompt's
+   --  last few -- so a matrix collected here counts the rows it counts.
+   Fewest_Rows : constant := 16;
 
    overriding procedure Note
      (Item   : in out Collector;
@@ -73,7 +85,14 @@ package body Imatrix_Run is
         (if Rows = 0 then 0 else Values'Length / Rows);
       Slot  : Natural := 0;
    begin
-      if Width = 0 then
+      --  What llama-imatrix collects: the layers' own matrices, met by a
+      --  batch of at least Fewest_Rows. The output projection and a
+      --  product of a row or two are left out there, and so here.
+      if Width = 0
+        or else Rows < Fewest_Rows
+        or else Which'Length < 4
+        or else Which (Which'First .. Which'First + 3) /= "blk."
+      then
          return;
       end if;
 
@@ -85,8 +104,19 @@ package body Imatrix_Run is
       end loop;
 
       if Slot = 0 then
-         if Item.Up = Most_Matrices then
-            return;
+         if Item.Held = null or else Item.Up = Item.Held'Length then
+            declare
+               Grown : constant Tally_List_Access :=
+                 new Tally_List
+                   (1 .. (if Item.Held = null then 8
+                          else 2 * Item.Held'Length));
+            begin
+               if Item.Held /= null then
+                  Grown (1 .. Item.Up) := Item.Held (1 .. Item.Up);
+                  Free (Item.Held);
+               end if;
+               Item.Held := Grown;
+            end;
          end if;
          Item.Up := Item.Up + 1;
          Slot := Item.Up;
@@ -237,9 +267,13 @@ package body Imatrix_Run is
             Where : constant CPU.Pool_Reference :=
               (if Threads = 1 then null else Team'Unchecked_Access);
          begin
+            --  As llama-imatrix reads it: the marker where the vocabulary
+            --  adds one, and every chunk begun with it, below.
             Vocab.Encode
               (L.Vocabulary (Engine).all, Body_Text,
-               Add_Beginning => True, Add_End => False,
+               Add_Beginning =>
+                 Vocab.Adds_Beginning (L.Vocabulary (Engine).all),
+               Add_End => False,
                Target => Held, Last => Last, Status => Status);
 
             if E.Is_Error (Status) or else Last = 0 then
@@ -273,8 +307,19 @@ package body Imatrix_Run is
                      From : constant Natural := (Round - 1) * Chunk + 1;
                      Upto : constant Natural := From + Chunk - 1;
                   begin
+                     --  Each chunk begun as a text is, where the model begins
+                     --  one with a marker: llama-imatrix puts the marker in
+                     --  place of every chunk's first token, and this began
+                     --  only the first with it, whatever the vocabulary said.
+                     if Vocab.Adds_Beginning (L.Vocabulary (Engine).all) then
+                        Held (From) :=
+                          Vocab.Beginning_Token (L.Vocabulary (Engine).all);
+                     end if;
+
+                     --  At the chunk's length rather than the model's own.
                      L.Open
-                       (Live, Engine, Workers => Where, Status => Status);
+                       (Live, Engine, Context => Chunk, Workers => Where,
+                        Status => Status);
                      if E.Is_Error (Status) then
                         Note_It ("a session would not open");
                         exit;
@@ -304,8 +349,6 @@ package body Imatrix_Run is
 
                T.Free (Logits);
             end;
-
-            Result.Matrices := Watching.Up;
 
             if Result.Chunks = 0 or else Watching.Up = 0 then
                Note_It ("nothing was collected");
@@ -342,7 +385,27 @@ package body Imatrix_Run is
 
                      One : constant N.Real_Array (0 .. 0) :=
                        [0 => N.Real (Watching.Held (Index).Rows)];
+
+                     --  A stack of experts is told here as one matrix:
+                     --  the engine names the stack and not the expert a
+                     --  row was routed to, so what it would write is one
+                     --  sum where llama.cpp keeps one an expert, divided
+                     --  by counts that are not each expert's. Left out,
+                     --  the quantizer writes the stack unweighted, which
+                     --  is what it does for any tensor a matrix omits.
+                     Owner : constant Natural :=
+                       Containers.Find_Tensor (Container, Name);
+                     Stack : constant Boolean :=
+                       Owner /= 0
+                       and then Containers.Tensor_Rank (Container, Owner) >= 3
+                       and then Containers.Tensor_Dimension
+                                  (Container, Owner, 3) > 1;
                   begin
+                     if Stack then
+                        goto Next_Matrix;
+                     end if;
+                     Result.Matrices := Result.Matrices + 1;
+
                      Fixtures.Add_Tensor
                        (Maker, Name & ".in_sum2",
                         [1 => Model_Runner.GGUF.U64 (Wide)],
@@ -354,6 +417,7 @@ package body Imatrix_Run is
                         [1 => 1],
                         Model_Runner.GGUF.Type_F32,
                         Fixtures.Encode_F32 (One));
+                     <<Next_Matrix>>
                   end;
                end loop;
 
@@ -370,18 +434,28 @@ package body Imatrix_Run is
                   Ada.Streams.Stream_IO.Create
                     (Output, Ada.Streams.Stream_IO.Out_File, Into);
 
+                  --  A slice at a time, read where it lies: the whole file
+                  --  as one stack array is a storage error for a model of
+                  --  many wide matrices.
                   declare
-                     Room : Ada.Streams.Stream_Element_Array
-                       (1 .. Ada.Streams.Stream_Element_Offset
-                               (Made.all'Length));
+                     Slice   : constant B.Byte_Count := 1024 * 1024;
+                     At_Byte : B.Byte_Count := Made.all'First;
                   begin
-                     for Which in Room'Range loop
-                        Room (Which) :=
-                          Ada.Streams.Stream_Element
-                            (Made.all (Made.all'First
-                                       + B.Byte_Count (Which - 1)));
+                     while At_Byte <= Made.all'Last loop
+                        declare
+                           Upto : constant B.Byte_Count :=
+                             B.Byte_Count'Min
+                               (Made.all'Last, At_Byte + Slice - 1);
+                           Room : Ada.Streams.Stream_Element_Array
+                             (1 .. Ada.Streams.Stream_Element_Offset
+                                     (Upto - At_Byte + 1));
+                           for Room'Address use Made.all (At_Byte)'Address;
+                           pragma Import (Ada, Room);
+                        begin
+                           Ada.Streams.Stream_IO.Write (Output, Room);
+                           At_Byte := Upto + 1;
+                        end;
                      end loop;
-                     Ada.Streams.Stream_IO.Write (Output, Room);
                   end;
 
                   Ada.Streams.Stream_IO.Close (Output);
@@ -397,6 +471,9 @@ package body Imatrix_Run is
                   T.Free (Watching.Held (Index).Sums);
                end if;
             end loop;
+            if Watching.Held /= null then
+               Free (Watching.Held);
+            end if;
 
             --  The workers, before the block that holds them ends. A pool
             --  nobody closes keeps its tasks alive and the block waits for

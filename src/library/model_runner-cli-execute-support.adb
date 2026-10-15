@@ -1,9 +1,12 @@
+with Ada.Calendar.Formatting;
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
+with Hostkit.Metadata;
 with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Quantization;
@@ -441,6 +444,52 @@ package body Model_Runner.CLI.Execute.Support is
          and then L."=" (L.Config (Prepared).Kind, L.Gemma2)
        then L.Mixed_Activations
        else Item.Arithmetic);
+
+   procedure Use_Arithmetic (Mode : L.Arithmetic_Mode) is
+      package Products renames Model_Runner.Platform.Device.Products;
+   begin
+      Model_Runner.Backend.CPU.Use_Integer_Activations
+        (L.Quantized_Roles (Mode));
+
+      --  And the device's check rounds, by the same arithmetic: the run's
+      --  default rounds on the device as it does on the processor, and
+      --  --arith f32 keeps the device's walks in binary32, where a drafted
+      --  run answers exactly what an undrafted one does. See
+      --  Backend.Device.Round_Walks.
+      Model_Runner.Backend.Device.Round_Walks
+        (case Mode is
+           when L.Float_Activations   => Products.Rounds_None,
+           when L.Integer_Activations => Products.Rounds_Every,
+           when L.Mixed_Activations   => Products.Rounds_Feed_Forward);
+   end Use_Arithmetic;
+
+   function Panel_Cache_For (Path : String; No_Cache : Boolean) return String
+   is
+   begin
+      if No_Cache or else not Ada.Directories.Exists (Path) then
+         return "";
+      end if;
+      --  And by what the file system says of its contents: its
+      --  modification and status-change times to the nanosecond, its
+      --  size and its file number. Size and modification time alone
+      --  were kept by a copy that keeps times (cp -p, rsync -t), and
+      --  the panels of the file that was there were served.
+      declare
+         Known : Boolean;
+         Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Known);
+      begin
+         return Model_Runner.Platform.Panel_File
+           (Path
+            & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
+            & "|" & Ada.Calendar.Formatting.Image
+                      (Ada.Directories.Modification_Time (Path),
+                       Include_Time_Fraction => True)
+            & (if Known then "|" & Stamp else ""));
+      end;
+   exception
+      when others =>
+         return "";
+   end Panel_Cache_For;
 
    function Selected_Workers (Item : Opt.Command) return Positive is
       use type Model_Runner.Backend.Backend_Kind;

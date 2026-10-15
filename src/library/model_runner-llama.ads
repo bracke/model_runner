@@ -640,6 +640,13 @@ package Model_Runner.Llama is
       Ssm_Heads       : Natural := 0;
       Head_Dim        : Natural := 0;
 
+      --  Whether Mamba normalizes the time step, B and C its ssm_x makes
+      --  by root mean square before the scan, with no gain of its own:
+      --  Falcon-Mamba states it (ssm.dt_b_c_rms), and carries no norm
+      --  tensors -- Jamba's three norms, which have gains, are the same
+      --  step with weights.
+      Ssm_Unit_Norms  : Boolean := False;
+
       --  RWKV6's shape: the two low ranks its token shift and its decay are
       --  projected through -- data-dependent, a position at a time -- and
       --  how often the block's output is halved to keep the residual from
@@ -1998,10 +2005,13 @@ package Model_Runner.Llama is
       Status : out Model_Runner.Errors.Error_Info);
 
    --  Score a text a reranker has embedded: the pooled state through the
-   --  head the model carries -- a dense and a logistic, then a row down to a
-   --  single number, how relevant the text is to what it was joined to.
+   --  head the model carries, as the other runtime builds it -- a dense and
+   --  a tanh where the file has the dense, then the rows down to the
+   --  scores; for Qwen3 a softmax over its "yes" and "no" rows -- and the
+   --  first of them, how relevant the text is to what it was joined to.
    --  Meaningful only where Config's pooling is Pool_Rank; the products run
-   --  on the session's backend.
+   --  on the session's backend. Arch_Missing_Tensor where the file carries
+   --  no rows to score with.
    --
    --  @param Item   A session of the model.
    --  @param Source The model, which carries the scoring head.

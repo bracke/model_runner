@@ -101,6 +101,7 @@ package body Model_Runner.Tokenizer is
       Item.Whole_First := False;
       Item.Add_Beginning := True;
       Item.Add_End := False;
+      Item.Pair := (others => <>);
       Item.Cutting := Rule_Default;
       Item.Model_Text := Model_Runner.Text.Empty;
 
@@ -210,6 +211,12 @@ package body Model_Runner.Tokenizer is
 
    function Adds_End (Item : Vocabulary) return Boolean
    is (Item.Add_End and then Item.Ending /= No_Token);
+
+   ------------------
+   -- Pair_Markers --
+   ------------------
+
+   function Pair_Markers (Item : Vocabulary) return Pair_Rule is (Item.Pair);
 
    -------------------------
    -- Has_Byte_Fallback --
@@ -1139,6 +1146,73 @@ package body Model_Runner.Tokenizer is
             Status := Scratch;
             return;
          end if;
+
+         --  A reranker's pair, joined as the other runtime joins it: the
+         --  flags as the file and each road's defaults give them (WordPiece
+         --  adds a separator and no end of its own; a byte-pair rule of the
+         --  RoBERTa family adds a separator; unigram an end), before the
+         --  single-text forcing below; the end marker as the file names
+         --  it (none on WordPiece unless it does), the separator likewise
+         --  over WordPiece's [SEP] -- its end marker, in a vocabulary too
+         --  small to hold the 102 a real one uses. See Pair_Rule.
+         declare
+            Pre  : constant String :=
+              Containers.String_Value (Source, "tokenizer.ggml.pre");
+            Said : E.Error_Info;
+
+            function Id_Of (Key : String; Default : Token_Id) return Token_Id
+            is
+               Value : Long_Long_Integer;
+               Local : E.Error_Info;
+            begin
+               Containers.Get_Integer
+                 (Source, Key, Long_Long_Integer (No_Token),
+                  Long_Long_Integer (Count - 1), Value, Local);
+               return (if E.Is_Ok (Local) then Token_Id (Value) else Default);
+            end Id_Of;
+         begin
+            Item.Pair.Begins := Item.Add_Beginning;
+            Item.Pair.Ends :=
+              (case Item.Model is
+                 when Kind_Unigram => True,
+                 when others       => False);
+            Containers.Get_Boolean
+              (Source, "tokenizer.ggml.add_eos_token", Flag, Said);
+            if E.Is_Ok (Said) then
+               Item.Pair.Ends := Flag;
+            end if;
+            Item.Pair.Separates :=
+              Item.Model = Kind_WordPiece
+              or else (Item.Model = Kind_BPE
+                       and then (Pre = "jina-v1-en" or else Pre = "jina-v2-code"
+                                 or else Pre = "roberta-bpe"));
+            Containers.Get_Boolean
+              (Source, "tokenizer.ggml.add_sep_token", Flag, Said);
+            if E.Is_Ok (Said) then
+               Item.Pair.Separates := Flag;
+            elsif Said.Code /= E.GGUF_Missing_Metadata_Key then
+               Status := Said;
+               return;
+            end if;
+            if Item.Model = Kind_RWKV then
+               Item.Pair.Begins := False;
+               Item.Pair.Ends := False;
+            end if;
+
+            Item.Pair.Beginning := Item.Beginning;
+            Item.Pair.Separator :=
+              Id_Of ("tokenizer.ggml.seperator_token_id",
+                     (if Item.Model /= Kind_WordPiece then No_Token
+                      elsif Count > 103 then 102
+                      else Item.Ending));
+            Item.Pair.Ending :=
+              (if Item.Model = Kind_WordPiece
+               then Id_Of ("tokenizer.ggml.eos_token_id", No_Token)
+               else Item.Ending);
+            if Item.Pair.Ending = No_Token then
+               Item.Pair.Ending := Item.Pair.Separator;
+            end if;
+         end;
 
          --  RWKV adds nothing at either end, whatever a file says: its
          --  vocabulary has no beginning or ending to add, as llama.cpp

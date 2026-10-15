@@ -30,6 +30,47 @@ package body Device_Bench is
 
       Rounds : constant := 20;
 
+      --  The median of Rounds timed calls, after one untimed that pays for
+      --  the pipeline's build and the first upload: what the heading says
+      --  is printed. The figure was the mean of the rounds, the cold call
+      --  among them, and divided by every round where a failing shape had
+      --  stopped after one. Ok is False where any call failed, and Spent
+      --  then says nothing.
+      procedure Time_Calls
+        (Call  : not null access procedure
+                   (Round : Positive; Ok : out Boolean);
+         Spent : out Duration;
+         Ok    : out Boolean)
+      is
+         Times : array (1 .. Rounds) of Duration;
+         Began : Ada.Calendar.Time;
+         Held  : Duration;
+      begin
+         Spent := 0.0;
+         Call (1, Ok);
+         if not Ok then
+            return;
+         end if;
+         for Round in Times'Range loop
+            Began := Ada.Calendar.Clock;
+            Call (Round, Ok);
+            Times (Round) := Ada.Calendar.Clock - Began;
+            if not Ok then
+               return;
+            end if;
+         end loop;
+         for I in Times'First + 1 .. Times'Last loop
+            Held := Times (I);
+            for J in reverse Times'First .. I - 1 loop
+               exit when Times (J) <= Held;
+               Times (J + 1) := Times (J);
+               Times (J) := Held;
+            end loop;
+         end loop;
+         --  The lower middle of an even count, as Formats' Median takes it.
+         Spent := Times ((Times'First + Times'Last) / 2);
+      end Time_Calls;
+
       --  Time one shape and say what it cost, per call and per position.
       procedure Take
         (Heads   : Natural;
@@ -80,9 +121,11 @@ package body Device_Bench is
          Got   : constant Values :=
            new N.Real_Array (0 .. N.Element_Count (Span) - 1);
 
-         Started : Ada.Calendar.Time;
-         Spent   : Duration;
-         Ok      : Boolean;
+         Spent    : Duration;
+         Ok       : Boolean;
+         --  Whether every timed attention ran: what the shape's line says,
+         --  not the cache writes' last answer it was read from after them.
+         Attended : Boolean;
 
          --  Two multiply-adds a component of a key, and two a component of a
          --  value, for every head and every position.
@@ -107,22 +150,23 @@ package body Device_Bench is
             return;
          end if;
 
-         Started := Ada.Calendar.Clock;
-
-         for Round in 1 .. Rounds loop
-            Products.Attend_Resident
-              (Engine, Asked.all,
-               Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-               First => 0, Last => Steps - 1,
-               K_Base => 0,
-               V_Base => N.Element_Count (Layers * Kept * Narrow),
-               KV_Width => Narrow, V_Width => Narrow,
-               Group_Size => Sharing,
-               Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
-            exit when not Ok;
-         end loop;
-
-         Spent := (Ada.Calendar.Clock - Started) / Rounds;
+         declare
+            procedure Attend (Round : Positive; Done : out Boolean) is
+               pragma Unreferenced (Round);
+            begin
+               Products.Attend_Resident
+                 (Engine, Asked.all,
+                  Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                  First => 0, Last => Steps - 1,
+                  K_Base => 0,
+                  V_Base => N.Element_Count (Layers * Kept * Narrow),
+                  KV_Width => Narrow, V_Width => Narrow,
+                  Group_Size => Sharing,
+                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Done);
+            end Attend;
+         begin
+            Time_Calls (Attend'Access, Spent, Attended);
+         end;
 
          --  And what writing one position into that cache costs, which is
          --  what a layer does twice a token and what stood between the
@@ -148,9 +192,11 @@ package body Device_Bench is
            ("  heads" & Natural'Image (Heads)
             & ", wide" & Natural'Image (Wide)
             & ", positions" & Natural'Image (Steps)
-            & (if Ok then "" else "  REFUSED")
+            & (if Attended then "" else "  REFUSED")
             & " :" & Duration'Image (Spent) & " s a call, "
-            & Long_Float'Image (Work / Long_Float (Spent) / 1.0E9)
+            & (if Attended and then Spent > 0.0
+               then Long_Float'Image (Work / Long_Float (Spent) / 1.0E9)
+               else " -")
             & " Gflop/s, cache"
             & Natural'Image (Natural (Cache.all'Length) / 256) & " KiB");
       end Take;
@@ -194,7 +240,6 @@ package body Device_Bench is
          Product : constant Values :=
            new N.Real_Array (0 .. N.Element_Count (Rows) - 1);
 
-         Started : Ada.Calendar.Time;
          Spent   : Duration;
          Ok      : Boolean;
          Halted  : Boolean;
@@ -216,36 +261,40 @@ package body Device_Bench is
          --  beside it can be told from what the product costs. A pair timed
          --  without this says only that a matrix of four million weights is
          --  not free.
-         Started := Ada.Calendar.Clock;
-         for Round in 1 .. Rounds loop
-            Products.Multiply
-              (Engine, Weights.all, 0, Products.Values_F32, Rows, Cols,
-               Asked.all, 1, Product.all, Ok, Halted);
-         end loop;
+         declare
+            procedure Multiply (Round : Positive; Done : out Boolean) is
+               pragma Unreferenced (Round);
+            begin
+               Products.Multiply
+                 (Engine, Weights.all, 0, Products.Values_F32, Rows, Cols,
+                  Asked.all, 1, Product.all, Done, Halted);
+            end Multiply;
 
-         Ada.Text_IO.Put_Line
-           ("    the product alone:"
-            & Duration'Image ((Ada.Calendar.Clock - Started) / Rounds)
-            & " s");
+            procedure Pair (Round : Positive; Done : out Boolean) is
+            begin
+               Multiply (Round, Done);
+               if Done then
+                  Products.Attend_Resident
+                    (Engine, Asked.all,
+                     Heads => Heads, Head_Size => Wide, Value_Size => Wide,
+                     Group_Size => Sharing, First => 0,
+                     Last => Steps_Count - 1,
+                     K_Base => 0,
+                     V_Base => N.Element_Count (Layers * Kept * Narrow),
+                     KV_Width => Narrow, V_Width => Narrow,
+                     Scale => 0.125, Cap => 0.0, Target => Got.all,
+                     Ok => Done);
+               end if;
+            end Pair;
 
-         Started := Ada.Calendar.Clock;
-
-         for Round in 1 .. Rounds loop
-            Products.Multiply
-              (Engine, Weights.all, 0, Products.Values_F32, Rows, Cols,
-               Asked.all, 1, Product.all, Ok, Halted);
-
-            Products.Attend_Resident
-              (Engine, Asked.all,
-               Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-               Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-               K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
-               KV_Width => Narrow, V_Width => Narrow,
-               Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
-            exit when not Ok;
-         end loop;
-
-         Spent := (Ada.Calendar.Clock - Started) / Rounds;
+            Alone : Duration;
+         begin
+            Time_Calls (Multiply'Access, Alone, Ok);
+            Ada.Text_IO.Put_Line
+              ("    the product alone:" & Duration'Image (Alone) & " s"
+               & (if Ok then "" else "  REFUSED"));
+            Time_Calls (Pair'Access, Spent, Ok);
+         end;
 
          Ada.Text_IO.Put_Line
            ("    a product and an attention together:"
@@ -473,34 +522,43 @@ package body Device_Bench is
                --  projection down. Four, whatever the grouping does to them.
                Sends : constant := 4;
             begin
-               Started := Ada.Calendar.Clock;
-               for Round in 1 .. Rounds loop
-                  for Each in 1 .. Sends loop
-                     Products.Multiply
-                       (Engine, Weights.all, 0, Products.Values_F32,
-                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
-                  end loop;
-               end loop;
-               Bare := (Ada.Calendar.Clock - Started) / Rounds;
+               declare
+                  procedure Four (Round : Positive; Done : out Boolean) is
+                     pragma Unreferenced (Round);
+                  begin
+                     Done := True;
+                     for Each in 1 .. Sends loop
+                        Products.Multiply
+                          (Engine, Weights.all, 0, Products.Values_F32,
+                           Rows, Cols, Asked.all, 1, Product.all, Done,
+                           Halted);
+                        exit when not Done;
+                     end loop;
+                  end Four;
 
-               Started := Ada.Calendar.Clock;
-               for Round in 1 .. Rounds loop
-                  for Each in 1 .. Sends loop
-                     Products.Multiply
-                       (Engine, Weights.all, 0, Products.Values_F32,
-                        Rows, Cols, Asked.all, 1, Product.all, Ok, Halted);
-                  end loop;
-
-                  Products.Attend_Resident
-                    (Engine, Asked.all,
-                     Heads => Heads, Head_Size => Wide, Value_Size => Wide,
-                     Group_Size => Sharing, First => 0, Last => Steps_Count - 1,
-                     K_Base => 0, V_Base => N.Element_Count (Layers * Kept * Narrow),
-                     KV_Width => Narrow, V_Width => Narrow,
-                     Scale => 0.125, Cap => 0.0, Target => Got.all,
-                     Ok => Ok);
-               end loop;
-               Both := (Ada.Calendar.Clock - Started) / Rounds;
+                  procedure Five (Round : Positive; Done : out Boolean) is
+                  begin
+                     Four (Round, Done);
+                     if Done then
+                        Products.Attend_Resident
+                          (Engine, Asked.all,
+                           Heads => Heads, Head_Size => Wide,
+                           Value_Size => Wide,
+                           Group_Size => Sharing, First => 0,
+                           Last => Steps_Count - 1,
+                           K_Base => 0,
+                           V_Base => N.Element_Count (Layers * Kept * Narrow),
+                           KV_Width => Narrow, V_Width => Narrow,
+                           Scale => 0.125, Cap => 0.0, Target => Got.all,
+                           Ok => Done);
+                     end if;
+                  end Five;
+               begin
+                  Time_Calls (Four'Access, Bare, Ok);
+                  if Ok then
+                     Time_Calls (Five'Access, Both, Ok);
+                  end if;
+               end;
 
                Ada.Text_IO.Put_Line
                  ("    four products" & Duration'Image (Bare)
@@ -514,10 +572,8 @@ package body Device_Bench is
          --  call, as a token does: twenty-two of them, ninety megabytes
          --  apart end to end. Every call above read the first layer's keys,
          --  which after the first is a region already warm.
-         Started := Ada.Calendar.Clock;
-
-         for Round in 1 .. Rounds loop
-            declare
+         declare
+            procedure Walk (Round : Positive; Done : out Boolean) is
                Layer : constant Natural := (Round - 1) mod Layers;
             begin
                Products.Attend_Resident
@@ -528,15 +584,17 @@ package body Device_Bench is
                   V_Base => N.Element_Count (Layers * Kept * Narrow)
                             + N.Element_Count (Layer * Kept * Narrow),
                   KV_Width => Narrow, V_Width => Narrow,
-                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Ok);
-               exit when not Ok;
-            end;
-         end loop;
+                  Scale => 0.125, Cap => 0.0, Target => Got.all, Ok => Done);
+            end Walk;
 
-         Ada.Text_IO.Put_Line
-           ("    attention walking every layer's region:"
-            & Duration'Image ((Ada.Calendar.Clock - Started) / Rounds)
-            & " s a call");
+            Walked : Duration;
+         begin
+            Time_Calls (Walk'Access, Walked, Ok);
+            Ada.Text_IO.Put_Line
+              ("    attention walking every layer's region:"
+               & Duration'Image (Walked) & " s a call"
+               & (if Ok then "" else "  REFUSED"));
+         end;
       end Busy;
 
       --  A whole prompt evaluated the way the batched evaluator evaluates

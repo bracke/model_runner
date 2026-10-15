@@ -49,8 +49,10 @@ with Model_Runner.Tools;
 --  streamed stays visible.
 --
 --  Persistence. The conversation is not written to disk on its own; /save
---  writes it to a file the user names and /load replaces it with one, and
---  nothing else touches the disk.
+--  writes it to a file the user names and /load replaces it with one. The
+--  one other file is the line editor's: inside a project, the lines typed
+--  are kept for recall in .model_runner/runtime/prompt-history, the last
+--  five hundred; outside one they are kept in memory only.
 --
 --  Task safety: the loop runs on the calling task.
 package Model_Runner.CLI.Interactive is

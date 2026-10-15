@@ -285,15 +285,56 @@ begin
    else
       --  Key-value head count is optional; a model that omits it is
       --  multi-head rather than grouped-query.
-      Containers.Get_Integer
-        (Source, Model_Key (Settings.Kind, "attention.head_count_kv"), 1,
-         Long_Long_Integer (Settings.Heads), Number, Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
-      end if;
-      Settings.KV_Heads :=
-        (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
+      --  Or a count a layer, as the reference reads it on every
+      --  architecture: Granite 4.0's dense files (granite-4.0-micro,
+      --  -1b, -350m) are converted from the hybrid's class and keep its
+      --  per-layer list, every entry the same. One count throughout is
+      --  taken; a list that differs from layer to layer describes a shape
+      --  this does not compute, and is refused.
+      declare
+         Key    : constant String :=
+           Model_Key (Settings.Kind, "attention.head_count_kv");
+         Length : Natural := 0;
+         Listed : E.Error_Info;
+         Each   : Long_Long_Integer := 0;
+         Common : Long_Long_Integer := 0;
+      begin
+         Containers.Get_Array_Length
+           (Source, Key, Model_Runner.GGUF.Value_Int32, Length, Listed);
+         if E.Is_Error (Listed) then
+            Containers.Get_Array_Length
+              (Source, Key, Model_Runner.GGUF.Value_UInt32, Length, Listed);
+         end if;
+         if E.Is_Ok (Listed) and then Length > 0 then
+            for Layer in 1 .. Length loop
+               Containers.Get_Integer_Element (Source, Key, Layer, Each, Listed);
+               if E.Is_Error (Listed)
+                 or else Each < 1 or else Each > Long_Long_Integer (Settings.Heads)
+                 or else (Common /= 0 and then Each /= Common)
+               then
+                  Status := E.Make (E.GGUF_Metadata_Out_Of_Range);
+                  E.Add_Text (Status, "key", Key, E.Param_Identifier);
+                  E.Add_Integer (Status, "value", Each);
+                  E.Add_Integer (Status, "minimum", 1);
+                  E.Add_Integer
+                    (Status, "maximum", Long_Long_Integer (Settings.Heads));
+                  return;
+               end if;
+               Common := Each;
+            end loop;
+            Settings.KV_Heads := Natural (Common);
+         else
+            Containers.Get_Integer
+              (Source, Key, 1, Long_Long_Integer (Settings.Heads), Number,
+               Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+               return;
+            end if;
+            Settings.KV_Heads :=
+              (if E.Is_Ok (Local) then Natural (Number) else Settings.Heads);
+         end if;
+      end;
    end if;
 
    --  The floor under a normalization's divisor. An architecture that
@@ -359,33 +400,36 @@ begin
       end;
    end if;
 
-   --  What the file says its states should be pooled with. Read for the
-   --  architecture that states it and left unstated for the rest, which
-   --  is not the same as none: a model that says nothing about pooling
-   --  has not asked for one, and a model that says none has.
+   --  What the file says its states should be pooled with, on whatever
+   --  architecture states it, as the other runtime reads it: an embedding
+   --  model built on a decoder -- Qwen3-Embedding pools its last token --
+   --  says so as a bert does, and read only on the berts its vectors were
+   --  a mean of every position. Left unstated where the file says
+   --  nothing, which is not the same as none: a model that says nothing
+   --  about pooling has not asked for one, and a model that says none has.
    --
-   --  Ranked pooling is a fourth value some files carry. It does not
+   --  Ranked pooling is a fifth value some files carry. It does not
    --  reduce a text to a vector -- it scores one, through a head the
-   --  model carries beside its blocks: the first position's state through
-   --  a dense layer and a logistic, then a row down to a single number.
-   if Normalizes_After (Settings.Kind) then
-      Containers.Get_Integer
-        (Source, Model_Key (Settings.Kind, "pooling_type"), 0, 4, Number,
-         Local);
-      if Present_And_Wrong (Local) then
-         Status := Local;
-         return;
-      end if;
+   --  model carries beside its blocks.
+   Containers.Get_Integer
+     (Source, Model_Key (Settings.Kind, "pooling_type"), 0, 4, Number,
+      Local);
+   if Present_And_Wrong (Local) then
+      Status := Local;
+      return;
+   end if;
 
-      if E.Is_Ok (Local) then
-         case Number is
-            when 0 => Settings.Pooling := Pool_None;
-            when 1 => Settings.Pooling := Pool_Mean;
-            when 2 => Settings.Pooling := Pool_Cls;
-            when 3 => Settings.Pooling := Pool_Last;
-            when others => Settings.Pooling := Pool_Rank;
-         end case;
-      end if;
+   if E.Is_Ok (Local) then
+      case Number is
+         when 0 => Settings.Pooling := Pool_None;
+         when 1 => Settings.Pooling := Pool_Mean;
+         when 2 => Settings.Pooling := Pool_Cls;
+         when 3 => Settings.Pooling := Pool_Last;
+         when others => Settings.Pooling := Pool_Rank;
+      end case;
+   end if;
+
+   if Normalizes_After (Settings.Kind) then
 
       --  A row for each segment a token may belong to. The architecture
       --  states two and the shape is checked against that where the
@@ -791,6 +835,23 @@ begin
       end if;
    end if;
 
+   --  GraniteMoE's shared expert, where the file has one: an ungated block
+   --  beside the routed experts every position, as the reference adds it
+   --  (GraniteMoeShared). Read only for the hybrids, Granite's was left
+   --  out and its every layer answered without it.
+   if Settings.Kind = Granite_MoE and then Settings.Experts > 0 then
+      Containers.Get_Integer
+        (Source,
+         Model_Key (Settings.Kind, "expert_shared_feed_forward_length"),
+         0, Long_Long_Integer (Bounds.Max_Embedding) * 64, Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      Settings.Shared_Feed :=
+        (if E.Is_Ok (Local) then Natural (Number) else 0);
+   end if;
+
    --  Mamba's widths, each with the default the other runtime carries
    --  where the file leaves it out: sixteen states, four convolution
    --  taps, an inner width twice the model's, and a time step of the
@@ -876,6 +937,26 @@ begin
             return;
          end if;
          Settings.Head_Dim := Settings.Inner_Size / Settings.Ssm_Heads;
+      end if;
+
+      --  Falcon-Mamba's normalized time step, B and C: a Mamba file that
+      --  says so is read as the reference reads it (ssm.dt_b_c_rms), where
+      --  left out it ran plain Mamba's arithmetic on weights trained with
+      --  the norms, and answered wrongly with no word of why.
+      if Settings.Kind = Mamba then
+         declare
+            Named : Boolean;
+            Flag  : E.Error_Info;
+         begin
+            Containers.Get_Boolean
+              (Source, Model_Key (Settings.Kind, "ssm.dt_b_c_rms"), Named,
+               Flag);
+            if Present_And_Wrong (Flag) then
+               Status := Flag;
+               return;
+            end if;
+            Settings.Ssm_Unit_Norms := E.Is_Ok (Flag) and then Named;
+         end;
       end if;
    end if;
 
@@ -1145,6 +1226,16 @@ begin
          Window_Stated := True;
          if Natural (Value) < Settings.Context_Length then
             Settings.Window := Natural (Value);
+         end if;
+
+         --  Phi-3's 4k files state a window of 2,047 that the reference
+         --  does not apply: llama.cpp's phi3 sets no window (its
+         --  converters do not state the pattern the window belongs to),
+         --  and this follows that reference, so that a Phi-3 answers past
+         --  two thousand positions as llama.cpp's does. Hugging Face's
+         --  mask would window; the choice is the reference runtime's.
+         if Settings.Kind = Phi3 then
+            Settings.Window := 0;
          end if;
       end;
 
@@ -1679,6 +1770,34 @@ begin
       end;
    end if;
 
+   --  GLM-4 carrying sections -- GLM-4.1V and GLM-4.6V, whose converter
+   --  puts the queries and keys in the split order and writes the
+   --  sections -- is turned by the reference as its multi-part rotation,
+   --  which pairs the halves of a head: the split rotation, a text
+   --  token's parts being equal. Turned interleaved, as a plain GLM-4 is,
+   --  every position was scrambled, text alone as much as a picture.
+   if Settings.Kind = Glm4 then
+      declare
+         Key    : constant String :=
+           Model_Key (Settings.Kind, "rope.dimension_sections");
+         Length : Natural := 0;
+         First, Second : Long_Long_Integer := 0;
+         Found  : E.Error_Info;
+      begin
+         Containers.Get_Array_Length
+           (Source, Key, Model_Runner.GGUF.Value_Int32, Length, Found);
+         if E.Is_Ok (Found) and then Length >= 2 then
+            Containers.Get_Integer_Element (Source, Key, 1, First, Found);
+            if E.Is_Ok (Found) then
+               Containers.Get_Integer_Element (Source, Key, 2, Second, Found);
+            end if;
+            if E.Is_Ok (Found) and then First > 0 and then Second > 0 then
+               Settings.Pairing := K.Split;
+            end if;
+         end if;
+      end;
+   end if;
+
    if Settings.Rotary > Settings.Head_Size
      or else Settings.Rotary mod 2 /= 0
    then
@@ -1746,6 +1865,27 @@ begin
       then
          Reject_Feature ("attention.value_length");
          return;
+      end if;
+
+      --  Mistral-Large-3, converted as DeepSeek2, scales its queries by a
+      --  temperature that grows with the position (Llama 4's), stated as
+      --  a scale and a length; nothing here applies it, so a file stating
+      --  a scale is refused by name rather than run without it.
+      if Settings.Kind = Deepseek2
+        and then States ("attention.temperature_scale")
+      then
+         declare
+            Scale : N.Wide_Real;
+            Local : E.Error_Info;
+         begin
+            Containers.Get_Float
+              (Source, Model_Key (Settings.Kind, "attention.temperature_scale"),
+               N.Wide_Real'First, N.Wide_Real'Last, Scale, Local);
+            if E.Is_Error (Local) or else Scale /= 0.0 then
+               Reject_Feature ("attention.temperature_scale");
+               return;
+            end if;
+         end;
       end if;
    end;
 

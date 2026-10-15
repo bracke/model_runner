@@ -809,16 +809,11 @@ package body Model_Runner.CLI.Project_Commands is
          return;
       end if;
 
-      --  Room for a reply: a reasoning model thinks before it calls, and at
-      --  1024 tokens qwen3-8b was cut off mid-thought; so up to 4096, or a
-      --  quarter of the context where that is less -- 1024 at least, and
-      --  1024 where thinking is turned off. A model that answers sooner
-      --  stops sooner; the run's budget bounds the whole.
+      --  Room for a reply, as every turn of a conversation is given it; see
+      --  Opt.Reply_Tokens. A model that answers sooner stops sooner; the
+      --  run's budget bounds the whole.
       Request.Max_Tokens :=
-        Natural'Max
-          (Self.Item.Max_Tokens,
-           (if Model_Runner.Templates."=" (Self.Item.Thinking, Model_Runner.Templates.Thinking_Off) then 1024
-            else Natural'Max (1024, Natural'Min (4096, L.Capacity (Self.Session.all) / 4))));
+        Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all));
       Request.Sampling := Self.Item.Sampling;
       Request.Seed := Self.Item.Seed;
       Request.Has_Seed := Self.Item.Has_Seed;
@@ -1699,7 +1694,7 @@ package body Model_Runner.CLI.Project_Commands is
                               else Ada.Directories.Simple_Name (Path)),
          Provider       => To_Unbounded_String ("model_runner"),
          Context_Limit  => Positive'Max (1, L.Capacity (Self.Session.all)),
-         Output_Reserve => Natural'Max (Self.Item.Max_Tokens, 1024),
+         Output_Reserve => Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all)),
          Tool_Overhead  =>
            Model_Runner.Framework.Context.Estimate (Offered_Text (null)) + 64,
          Tools          => True,
@@ -1711,7 +1706,7 @@ package body Model_Runner.CLI.Project_Commands is
          Resource_Class => To_Unbounded_String ("local"),
          Profile_Reserve => 0,
          --  This session's model runs the work: its answer's room is kept.
-         Session_Reserve => Natural'Max (Self.Item.Max_Tokens, 1024));
+         Session_Reserve => Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all)));
    end Profile;
 
    package Rs renames Model_Runner.Framework.Results;

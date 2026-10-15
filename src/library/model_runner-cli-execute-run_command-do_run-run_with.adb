@@ -142,23 +142,7 @@ begin
    --  and therefore before anything is dispatched. The backend states
    --  that it must be told once and not part way through a run, which
    --  is why this is here and not a parameter of every product.
-   Model_Runner.Backend.CPU.Use_Integer_Activations
-     (L.Quantized_Roles (Chosen_Arithmetic (Item, Prepared)));
-
-   --  And the device's check rounds, by the same arithmetic: the run's
-   --  default rounds on the device as it does on the processor, and
-   --  --arith f32 keeps the device's walks in binary32, where a drafted
-   --  run answers exactly what an undrafted one does. See
-   --  Backend.Device.Round_Walks.
-   declare
-      package Products renames Model_Runner.Platform.Device.Products;
-   begin
-      Model_Runner.Backend.Device.Round_Walks
-        (case Chosen_Arithmetic (Item, Prepared) is
-           when L.Float_Activations   => Products.Rounds_None,
-           when L.Integer_Activations => Products.Rounds_Every,
-           when L.Mixed_Activations   => Products.Rounds_Feed_Forward);
-   end;
+   Use_Arithmetic (Chosen_Arithmetic (Item, Prepared));
 
    L.Open
      (Session, Prepared, Item.Context_Size,
@@ -951,10 +935,10 @@ begin
          Request.Sampling := Item.Sampling;
          --  An agent's reply holds its reasoning and its call: a reasoning
          --  model spent the plain run's 256 tokens reasoning and was cut off
-         --  inside the call it was writing. As a /work agent's, at least
-         --  1024 unless a length was named.
+         --  inside the call it was writing. As every turn of a conversation
+         --  is given room; see Options.Reply_Tokens.
          Request.Max_Tokens :=
-           (if Item.Max_Tokens_Set then Item.Max_Tokens else Natural'Max (Item.Max_Tokens, 1024));
+           Model_Runner.CLI.Options.Reply_Tokens (Item, L.Capacity (Session));
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
          Request.Batch_Size := Item.Batch_Size;

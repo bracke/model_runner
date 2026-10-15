@@ -193,6 +193,8 @@ package body Fixtures is
       Item.Metadata_Count := 0;
       Item.Tensor_Count := 0;
       Item.Array_Open := False;
+      Item.Planned := False;
+      Item.Data_End := 0;
       Item.Version := Version;
       Item.Alignment := Alignment;
 
@@ -250,6 +252,83 @@ package body Fixtures is
       Put_Header (Item, Key, G.Value_Int32);
       Put (Item.Metadata, B.Put_U32 (Raw));
    end Add_I32;
+
+   --  An integer as Kind lays it out: its own width, two's complement for
+   --  the signed kinds, least significant byte first.
+   function Integer_Bytes
+     (Kind : G.Value_Type; Value : Long_Long_Integer) return B.Byte_Array
+   is
+      Width : constant B.Byte_Count :=
+        (case Kind is
+            when G.Value_UInt8 | G.Value_Int8 => 1,
+            when G.Value_UInt16 | G.Value_Int16 => 2,
+            when G.Value_UInt64 | G.Value_Int64 => 8,
+            when others => 4);
+      Raw : Interfaces.Unsigned_64 :=
+        (if Value >= 0 then Interfaces.Unsigned_64 (Value)
+         else not Interfaces.Unsigned_64 (-(Value + 1)));
+      Result : B.Byte_Array (1 .. Width);
+   begin
+      for Index in Result'Range loop
+         Result (Index) := B.Byte (Raw and 16#FF#);
+         Raw := Interfaces.Shift_Right (Raw, 8);
+      end loop;
+      return Result;
+   end Integer_Bytes;
+
+   --  A binary64 as its bits, least significant byte first.
+   function F64_Bytes (Value : N.Wide_Real) return B.Byte_Array is
+      function Bits is new Ada.Unchecked_Conversion
+        (N.Wide_Real, Interfaces.Unsigned_64);
+   begin
+      return B.Put_U64 (Bits (Value));
+   end F64_Bytes;
+
+   -----------------
+   -- Add_Integer --
+   -----------------
+
+   procedure Add_Integer
+     (Item  : in out Builder;
+      Key   : String;
+      Kind  : G.Value_Type;
+      Value : Long_Long_Integer) is
+   begin
+      Put_Header (Item, Key, Kind);
+      Put (Item.Metadata, Integer_Bytes (Kind, Value));
+   end Add_Integer;
+
+   -------------
+   -- Add_F64 --
+   -------------
+
+   procedure Add_F64 (Item : in out Builder; Key : String; Value : N.Wide_Real)
+   is
+   begin
+      Put_Header (Item, Key, G.Value_Float64);
+      Put (Item.Metadata, F64_Bytes (Value));
+   end Add_F64;
+
+   ---------------------
+   -- Integer_Element --
+   ---------------------
+
+   procedure Integer_Element
+     (Item  : in out Builder;
+      Kind  : G.Value_Type;
+      Value : Long_Long_Integer) is
+   begin
+      Put (Item.Metadata, Integer_Bytes (Kind, Value));
+   end Integer_Element;
+
+   -----------------
+   -- F64_Element --
+   -----------------
+
+   procedure F64_Element (Item : in out Builder; Value : N.Wide_Real) is
+   begin
+      Put (Item.Metadata, F64_Bytes (Value));
+   end F64_Element;
 
    -------------
    -- Add_F32 --
@@ -368,6 +447,7 @@ package body Fixtures is
       if Padding /= B.Byte_Count (Align) then
          Put (Item.Tensor_Data, B.Byte_Array'(1 .. Padding => 0));
       end if;
+      Item.Data_End := Item.Tensor_Data.Used;
 
       Put_String (Item.Descriptors, Name);
       Put (Item.Descriptors, B.Put_U32 (Interfaces.Unsigned_32 (Dimensions'Length)));
@@ -382,8 +462,39 @@ package body Fixtures is
       Put (Item.Descriptors, B.Put_U64 (Interfaces.Unsigned_64 (Item.Tensor_Data.Used)));
 
       Put (Item.Tensor_Data, Data);
+      Item.Data_End := Item.Tensor_Data.Used;
       Item.Tensor_Count := Item.Tensor_Count + 1;
    end Add_Tensor;
+
+   -----------------
+   -- Plan_Tensor --
+   -----------------
+
+   procedure Plan_Tensor
+     (Item       : in out Builder;
+      Name       : String;
+      Dimensions : Dimension_List;
+      Format     : G.Tensor_Type;
+      Bytes      : B.Byte_Count) is
+   begin
+      Item.Planned := True;
+      Item.Data_End := Item.Data_End + Padding_After (Item, Item.Data_End);
+
+      Put_String (Item.Descriptors, Name);
+      Put (Item.Descriptors, B.Put_U32 (Interfaces.Unsigned_32 (Dimensions'Length)));
+      for Axis in Dimensions'Range loop
+         Note (Item, In_Descriptors, Tensor_Extent, Item.Tensor_Count + 1,
+               Axis - Dimensions'First + 1);
+         Put (Item.Descriptors, B.Put_U64 (Dimensions (Axis)));
+      end loop;
+      Note (Item, In_Descriptors, Tensor_Format, Item.Tensor_Count + 1);
+      Put (Item.Descriptors, B.Put_U32 (G.Tensor_Code (Format)));
+      Note (Item, In_Descriptors, Tensor_Offset, Item.Tensor_Count + 1);
+      Put (Item.Descriptors, B.Put_U64 (Interfaces.Unsigned_64 (Item.Data_End)));
+
+      Item.Data_End := Item.Data_End + Bytes;
+      Item.Tensor_Count := Item.Tensor_Count + 1;
+   end Plan_Tensor;
 
    --------------------
    -- Field_Position --
@@ -445,11 +556,22 @@ package body Fixtures is
       Image (Image'First + At_Offset .. Image'First + At_Offset + 7) := Written;
    end Poke_U64;
 
-   -----------
-   -- Build --
-   -----------
+   --  The file's head: magic, counts, metadata and descriptors, and the
+   --  padding that brings the data section to its alignment. Start is
+   --  where the data section begins, which is the head's length; Extra
+   --  zeros are allocated after it.
+   procedure Head_Of
+     (Item   : Builder;
+      Result : out B.Byte_Array_Access;
+      Extra  : B.Byte_Count;
+      Start  : out B.Byte_Count);
 
-   procedure Build (Item : in out Builder; Result : out B.Byte_Array_Access) is
+   procedure Head_Of
+     (Item   : Builder;
+      Result : out B.Byte_Array_Access;
+      Extra  : B.Byte_Count;
+      Start  : out B.Byte_Count)
+   is
       package A renames Model_Runner.Arithmetic;
       Header : Byte_Buffer;
       Align  : constant G.U64 :=
@@ -463,13 +585,13 @@ package body Fixtures is
       declare
          Prefix : constant B.Byte_Count :=
            Header.Used + Item.Metadata.Used + Item.Descriptors.Used;
-         Start  : constant B.Byte_Count :=
+      begin
+         Start :=
            B.Byte_Count
              (A.Value
                 (A.Align_Up (A.To_Checked (Interfaces.Unsigned_64 (Prefix)), Align)));
-         Total  : constant B.Byte_Count := Start + Item.Tensor_Data.Used;
-      begin
-         B.Allocate (Total, Result);
+
+         B.Allocate (Start + Extra, Result);
          Result.all := [others => 0];
          Result.all (1 .. Header.Used) := Header.Data.all (1 .. Header.Used);
 
@@ -483,15 +605,64 @@ package body Fixtures is
               (Header.Used + Item.Metadata.Used + 1 .. Prefix) :=
               Item.Descriptors.Data.all (1 .. Item.Descriptors.Used);
          end if;
-
-         if Item.Tensor_Data.Used > 0 then
-            Result.all (Start + 1 .. Total) :=
-              Item.Tensor_Data.Data.all (1 .. Item.Tensor_Data.Used);
-         end if;
       end;
 
       B.Free (Header.Data);
+   end Head_Of;
+
+   -------------------
+   -- Padding_After --
+   -------------------
+
+   function Padding_After
+     (Item : Builder; Bytes : B.Byte_Count) return B.Byte_Count
+   is
+      Align : constant B.Byte_Count :=
+        B.Byte_Count
+          (if Item.Alignment = 0 then G.Default_Alignment else Item.Alignment);
+   begin
+      return (Align - Bytes mod Align) mod Align;
+   end Padding_After;
+
+   -----------
+   -- Build --
+   -----------
+
+   procedure Build (Item : in out Builder; Result : out B.Byte_Array_Access) is
+      Start : B.Byte_Count;
+   begin
+      --  A builder whose tensors were only planned holds no data to join.
+      if Item.Planned then
+         Result := null;
+         return;
+      end if;
+
+      --  The last tensor is padded to the alignment as every other one is,
+      --  which is what llama.cpp's writer does: the data section is a whole
+      --  number of aligned spans, and a reader that maps it by the span
+      --  does not run off the end of the file.
+      Head_Of
+        (Item, Result,
+         Item.Tensor_Data.Used + Padding_After (Item, Item.Tensor_Data.Used),
+         Start);
+
+      if Item.Tensor_Data.Used > 0 then
+         Result.all (Start + 1 .. Start + Item.Tensor_Data.Used) :=
+           Item.Tensor_Data.Data.all (1 .. Item.Tensor_Data.Used);
+      end if;
    end Build;
+
+   ----------------
+   -- Build_Head --
+   ----------------
+
+   procedure Build_Head
+     (Item : in out Builder; Result : out B.Byte_Array_Access)
+   is
+      Start : B.Byte_Count;
+   begin
+      Head_Of (Item, Result, 0, Start);
+   end Build_Head;
 
    ------------------
    -- Put_Infinity --

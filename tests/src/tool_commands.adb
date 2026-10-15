@@ -40,6 +40,7 @@ package body Tool_Commands is
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
+   Opts_Restamp   : aliased constant String := " --all --root ";
    Opts_Bench     : aliased constant String := " --formats --rounds ";
    Opts_Check     : aliased constant String :=
      " --repository --record-warnings --short ";
@@ -51,7 +52,7 @@ package body Tool_Commands is
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
      & " --draft-lookup --draft-next --draft-floor --draft-adapts"
      & " --kv-cache --repeats --turns"
-     & " --paged --no-paged"
+     & " --paged --no-paged --memory-limit --no-cache"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory --ignore-eos ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
@@ -93,7 +94,7 @@ package body Tool_Commands is
      & " [--kv-cache MODE] [--repeats N] [--turns DIR] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"
-     & " [--device-memory BYTES]";
+     & " [--device-memory BYTES] [--memory-limit BYTES] [--no-cache]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
    Takes_Outside   : aliased constant String :=
      "[--anyway] [--wait MINUTES] -- COMMAND [ARGUMENT ...]";
@@ -115,7 +116,8 @@ package body Tool_Commands is
    Takes_Shader    : aliased constant String :=
      "SOURCE.comp COMPILED.spv [ROOT]";
    Takes_Fixtures  : aliased constant String := "[DIR]";
-   Takes_Restamp   : aliased constant String := "WHY [ROOT]";
+   Takes_Restamp   : aliased constant String :=
+     "WHY (GROUP ... | --all) [--root ROOT]";
    Takes_Package   : aliased constant String := "[ROOT] [INTO]";
    Takes_Pristine  : aliased constant String := "[ROOT]";
    Takes_Schema    : aliased constant String := "SCHEMA";
@@ -317,7 +319,7 @@ package body Tool_Commands is
       (Name_Shader'Access, Takes_Shader'Access, Says_Shader'Access,
        Opts_None'Access),
       (Name_Restamp'Access, Takes_Restamp'Access, Says_Restamp'Access,
-       Opts_None'Access),
+       Opts_Restamp'Access),
       (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access,
        Opts_None'Access),
       (Name_Package'Access, Takes_Package'Access, Says_Package'Access,

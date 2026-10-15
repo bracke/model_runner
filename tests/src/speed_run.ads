@@ -185,6 +185,15 @@ package Speed_Run is
    --    prompt every file so far in their names' order, in one session
    --    that keeps what it read, a line said for each; Repeats is then the
    --    number of turns. Empty, every pass a fresh session.
+   --  @param Arithmetic The arithmetic named (f32, int8, mixed), or empty
+   --    for the one run takes for the model unasked -- told the backends
+   --    once the model is prepared, as run tells them.
+   --  @param Memory_Limit The memory limit named, or nought: run's session
+   --    bounds come from it, and so a context left to the model's own is
+   --    halved as run halves it.
+   --  @param No_Cache Whether run's panel cache is refused: unrefused, a
+   --    model the processor reads in panels loads them from it as run does,
+   --    so the load figure is run's.
    procedure Run
      (Path        : String;
       Prompt_Path : String;
@@ -212,7 +221,10 @@ package Speed_Run is
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
       Draft_Adapts : Boolean := False;
       Result      : out Report;
-      Turns       : String := "");
+      Turns       : String := "";
+      Arithmetic  : String := "";
+      Memory_Limit : Interfaces.Unsigned_64 := 0;
+      No_Cache    : Boolean := False);
 
    --  The digest this tool prints, over any text.
    --

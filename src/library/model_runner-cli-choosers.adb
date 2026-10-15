@@ -728,6 +728,20 @@ package body Model_Runner.CLI.Choosers is
          return "";
    end Line;
 
+   --  Where the last character of Text begins: a backspace takes a
+   --  character back, not a byte -- after "ø" it left a lone lead byte,
+   --  and a line that was not UTF-8.
+   function Last_Character (Text : Unbounded_String) return Positive is
+      At_Byte : Positive := Length (Text);
+   begin
+      while At_Byte > 1
+        and then Character'Pos (Element (Text, At_Byte)) in 16#80# .. 16#BF#
+      loop
+         At_Byte := At_Byte - 1;
+      end loop;
+      return At_Byte;
+   end Last_Character;
+
    ---------
    -- Ask --
    ---------
@@ -783,12 +797,15 @@ package body Model_Runner.CLI.Choosers is
                   exit;
                elsif Key in ASCII.DEL | ASCII.BS then
                   if Length (Typed) > 0 then
-                     Delete (Typed, Length (Typed), Length (Typed));
+                     Delete (Typed, Last_Character (Typed), Length (Typed));
                      Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
                   end if;
                elsif Key >= ' ' then
                   Append (Typed, Key);
-                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, "*");
+                  --  A star a character, as a backspace takes one back.
+                  if Character'Pos (Key) not in 16#80# .. 16#BF# then
+                     Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, "*");
+                  end if;
                end if;
                Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
             end;
@@ -957,7 +974,7 @@ package body Model_Runner.CLI.Choosers is
                exit;
             elsif Key in ASCII.DEL | ASCII.BS then
                if Length (Typed) > 0 then
-                  Delete (Typed, Length (Typed), Length (Typed));
+                  Delete (Typed, Last_Character (Typed), Length (Typed));
                   Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
                end if;
             elsif Key >= ' ' then
@@ -1068,12 +1085,20 @@ package body Model_Runner.CLI.Choosers is
 
    procedure Keep_In_History (Line : String) is
       File : Ada.Text_IO.File_Type;
+      --  The most lines kept for recall: past it, the oldest go.
+      Most : constant := 500;
+      Over : constant Boolean := Natural (History.Length) > Most;
    begin
+      --  Held to its bound whether or not there is a file to keep it in:
+      --  trimmed only where there was, a session outside a project kept
+      --  every line, and every keystroke searched them all.
+      if Over then
+         History.Delete_First (Ada.Containers.Count_Type (Natural (History.Length) - Most));
+      end if;
       if History_File = "" then
          return;
       end if;
-      if Natural (History.Length) > 500 then
-         History.Delete_First (Ada.Containers.Count_Type (Natural (History.Length) - 500));
+      if Over then
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
          for One of History loop
             Ada.Text_IO.Put_Line (File, One);
@@ -1766,7 +1791,10 @@ package body Model_Runner.CLI.Choosers is
       if Outcome /= Entered then
          Pasting := False;
       end if;
+      --  A line of more than 64 KiB -- a paste of a file -- is sent and not
+      --  remembered: recall is for what was typed.
       if Outcome = Entered and then Length (Text) > 0
+        and then Length (Text) <= 64 * 1024
         and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
       then
          History.Append (To_String (Text));

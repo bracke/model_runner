@@ -192,6 +192,22 @@ package body Model_Runner.Text is
          Scale := Scale * 10.0;
       end loop;
 
+      --  Too large to scale to whole units of the last decimal -- an
+      --  unnormalized embedding's component past nine million million at
+      --  six decimals -- and the conversion below raised: the whole part
+      --  alone, its decimals what is left of it, which at that size is
+      --  nothing a binary64 still holds.
+      if Magnitude * Scale > Long_Float (Long_Long_Integer'Last) / 2.0 then
+         declare
+            Sign : constant String := (if Negative then "-" else "");
+            Zeros : constant String (1 .. Decimals) := [others => '0'];
+         begin
+            return Sign
+              & Image (Long_Long_Integer (Long_Float'Floor (Magnitude)))
+              & (if Decimals = 0 then "" else "." & Zeros);
+         end;
+      end if;
+
       Scaled := Long_Float'Floor (Magnitude * Scale + 0.5);
 
       declare
