@@ -1311,6 +1311,19 @@ package body Tests.GGUF_Cases is
          Containers.Close (Item);
          Model_Runner.Byte_Sources.Files.Close (Source);
       end;
+
+      --  Each rule on its own: on the fixture the head meets one row, so
+      --  either rule alone keeps it out and neither is held by the above.
+      Assert (Imatrix_Run.Counted ("blk.0.attn_q.weight", 16),
+              "a layer's matrix met by sixteen rows was left out");
+      Assert (not Imatrix_Run.Counted ("blk.0.attn_q.weight", 15),
+              "a product of fifteen rows was counted; llama-imatrix "
+              & "skips fewer than sixteen");
+      Assert (not Imatrix_Run.Counted ("output.weight", 512),
+              "the output projection was counted; llama-imatrix counts "
+              & "only the layers' matrices");
+      Assert (not Imatrix_Run.Counted ("blk", 512),
+              "a name shorter than the layer prefix was counted");
    end A_Matrix_Is_Collected_As_Llama_Collects_It;
 
    procedure Claimed_Array_Is_Refused

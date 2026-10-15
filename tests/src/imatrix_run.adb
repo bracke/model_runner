@@ -64,10 +64,18 @@ package body Imatrix_Run is
       Up   : Natural := 0;
    end record;
 
-   --  The fewest rows a product must have to be counted. llama-imatrix
-   --  skips a product of fewer than sixteen -- a decode step, a prompt's
-   --  last few -- so a matrix collected here counts the rows it counts.
+   --  The fewest rows a product must have to be counted, as llama-imatrix
+   --  has it.
    Fewest_Rows : constant := 16;
+
+   -------------
+   -- Counted --
+   -------------
+
+   function Counted (Which : String; Rows : Natural) return Boolean
+   is (Rows >= Fewest_Rows
+       and then Which'Length >= 4
+       and then Which (Which'First .. Which'First + 3) = "blk.");
 
    overriding procedure Note
      (Item   : in out Collector;
@@ -85,14 +93,7 @@ package body Imatrix_Run is
         (if Rows = 0 then 0 else Values'Length / Rows);
       Slot  : Natural := 0;
    begin
-      --  What llama-imatrix collects: the layers' own matrices, met by a
-      --  batch of at least Fewest_Rows. The output projection and a
-      --  product of a row or two are left out there, and so here.
-      if Width = 0
-        or else Rows < Fewest_Rows
-        or else Which'Length < 4
-        or else Which (Which'First .. Which'First + 3) /= "blk."
-      then
+      if Width = 0 or else not Counted (Which, Natural (Rows)) then
          return;
       end if;
 

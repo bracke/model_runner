@@ -63,4 +63,14 @@ package Imatrix_Run is
    --  @return The line.
    function Summary (Item : Report) return String;
 
+   --  Whether a product is one llama-imatrix counts: a layer's own matrix,
+   --  met by a batch of at least sixteen rows. The output projection and
+   --  a product of a row or two -- a decode step, a prompt's last few --
+   --  are left out there, and so here.
+   --
+   --  @param Which The matrix's name.
+   --  @param Rows How many rows the product took.
+   --  @return Whether it is counted.
+   function Counted (Which : String; Rows : Natural) return Boolean;
+
 end Imatrix_Run;
