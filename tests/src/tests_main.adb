@@ -2176,7 +2176,10 @@ begin
             Top     => Positive'Value (Option ("--top", "8")),
             Most    => Positive'Value (Option ("--most", "4096")),
             Result  => Result,
-            Round   => Option ("--arith", "int8") = "int8");
+            Round   => Option ("--arith", "int8") = "int8",
+            Check   =>
+              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                 Ada.Command_Line.Argument (Index) = "--check-block"));
          if Result.Failed or else Result.Texts = 0 then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

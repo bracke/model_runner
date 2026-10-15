@@ -199,10 +199,11 @@ package body Tool_Commands is
 
    Takes_Dump_States : aliased constant String :=
      "--model PATH --texts LIST --out PATH [--backend NAME] [--top N]"
-     & " [--most N] [--arith int8|f32]  (int8, run's default, unless f32)";
+     & " [--most N] [--arith int8|f32] [--check-block]"
+     & "  (int8, run's default, unless f32)";
 
    Opts_Dump_States : aliased constant String :=
-     " --model --texts --out --backend --top --most --arith ";
+     " --model --texts --out --backend --top --most --arith --check-block ";
 
    Says_Token_Cross : aliased constant String :=
      "tokenize a corpus with each model, here and with llama-tokenize";

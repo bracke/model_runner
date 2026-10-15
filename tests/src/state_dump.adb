@@ -38,7 +38,8 @@ package body State_Dump is
       Top     : Positive;
       Most    : Positive;
       Result  : out Report;
-      Round   : Boolean := False)
+      Round   : Boolean := False;
+      Check   : Boolean := False)
    is
       Source    : aliased Files.File_Source;
       Container : Containers.Container;
@@ -273,6 +274,55 @@ package body State_Dump is
                            Lo := Hi + 1;
                         end;
                      end loop;
+
+                     --  The engine's own block along the text, each position
+                     --  given the true token and the stack's state, against
+                     --  the model's likeliest token one further on: what a
+                     --  drafting round keeps, without the rounds.
+                     if Check and then not Result.Failed then
+                        declare
+                           Logits : N.Real_Array (0 .. Wide - 1);
+                           State  : N.Real_Array (0 .. Width - 1);
+                           Made   : N.Real_Array (0 .. Width - 1);
+                           Agreed, Asked : Natural := 0;
+                        begin
+                           for P in 0 .. Last - 3 loop
+                              for I in State'Range loop
+                                 State (I) := N.Real
+                                   (Kept (Width * N.Element_Count (P) + I));
+                              end loop;
+                              L.Draft_Next
+                                (Live, Engine, Held (P + 2), State, P,
+                                 Logits, Made, Status);
+                              if E.Is_Error (Status) then
+                                 Say ("dump-states: the block would not run: "
+                                      & E.Error_Code'Image (Status.Code));
+                                 Result.Failed := True;
+                                 exit;
+                              end if;
+                              declare
+                                 Best : N.Element_Count := 0;
+                              begin
+                                 for C in Logits'Range loop
+                                    if Logits (C) > Logits (Best) then
+                                       Best := C;
+                                    end if;
+                                 end loop;
+                                 Asked := Asked + 1;
+                                 if Interfaces."="
+                                      (Interfaces.Integer_32 (Best),
+                                       Top_Ids (N.Element_Count (P + 1)
+                                                * N.Element_Count (Top)))
+                                 then
+                                    Agreed := Agreed + 1;
+                                 end if;
+                              end;
+                           end loop;
+                           Say ("dump-states: " & Path & ": the block agrees"
+                                & Natural'Image (Agreed) & " of"
+                                & Natural'Image (Asked));
+                        end;
+                     end if;
 
                      if not Result.Failed then
                         Interfaces.Integer_32'Write

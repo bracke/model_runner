@@ -38,6 +38,9 @@ package State_Dump is
    --  @param Round Whether the device's walks of a few positions round
    --    their activations to bytes, as run's default arithmetic has them.
    --  @param Result What was done.
+   --  @param Check Whether the model's own block past its stack is run
+   --    along each text, every position given the true token and state,
+   --    and how often its likeliest token is the model's is said.
    procedure Run
      (Model   : String;
       Texts   : String;
@@ -46,6 +49,7 @@ package State_Dump is
       Top     : Positive;
       Most    : Positive;
       Result  : out Report;
-      Round   : Boolean := False);
+      Round   : Boolean := False;
+      Check   : Boolean := False);
 
 end State_Dump;
