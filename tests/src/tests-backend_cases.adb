@@ -1427,7 +1427,12 @@ package body Tests.Backend_Cases is
       --  in clusters, a row each, summed a cluster at a time -- an expert's
       --  way down is 512 wide -- and rows of 256 alone reach only the
       --  smallest cluster.
-      Shapes : constant array (1 .. 15) of Shape :=
+      --
+      --  And batches of 300 and 270: past a whole wide tile by 44 and by
+      --  14, whose ends are taken on the 128-vector tile and the 32-vector
+      --  one in a dispatch of their own, from the vector the wide tiles
+      --  stopped at.
+      Shapes : constant array (1 .. 17) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
@@ -1442,7 +1447,9 @@ package body Tests.Backend_Cases is
          (Tall => 13, Batch => 1, Tiled => False, Across => 1024),
          (Tall => 13, Batch => 3, Tiled => False, Across => 1024),
          (Tall => 13, Batch => 1, Tiled => False, Across => 768),
-         (Tall => 13, Batch => 3, Tiled => False, Across => 768)];
+         (Tall => 13, Batch => 3, Tiled => False, Across => 768),
+         (Tall => 64, Batch => 300, Tiled => True, others => <>),
+         (Tall => 64, Batch => 270, Tiled => True, others => <>)];
 
       --  How far the device and the processor may differ.
       --

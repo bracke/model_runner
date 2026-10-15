@@ -8204,30 +8204,65 @@ package body Model_Runner.Platform.Device.Products is
       --  A narrow tile that the device refused leaves the batch on the wide
       --  one, which is what Whole_Tiles has to agree about -- so the width
       --  below is asked of the same function the room was rounded with.
-      Bind_Pipeline
-        (Item.Buffer, Bind_Point_Compute,
-         Tile_Pipeline (Item, Packing, Count));
-
+      --  A long batch past a whole number of wide tiles by no more than a
+      --  narrower one holds: the wide tiles over the whole of them, and the
+      --  end on the narrower tile in a second dispatch, from the vector
+      --  the first stopped at. Rounded up to a wide tile instead, a batch
+      --  of 513 did the work of 768 -- a qwen3.6 layer's projections half
+      --  as long again as at 512 -- and a long prompt's last batch of a
+      --  few dozen paid a whole wide tile for them.
       declare
-         Shape : aliased Shape_Constants :=
-           (Rows    => C.unsigned (Rows),
-            Columns => C.unsigned (Columns),
-            Count   => C.unsigned (Count),
-            First   => C.unsigned (Into),
-            Packing => C.unsigned (Weight_Packing'Pos (Packing)),
-            Base    => C.unsigned (Base),
-            Joins   => (if Joins then 1 else 0),
-            Table   => C.unsigned (Unit),
-            Stride  => C.unsigned (From),
-            Apart   => C.unsigned (Gate_At),
-            others  => <>);
+         Rest : constant Natural :=
+           (if Widened (Count) then Count mod Wider_Vectors else 0);
+         Split : constant Boolean :=
+           Rest > 0 and then Rest <= Tile_Vectors
+           and then Count > Wider_Vectors
+           and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle;
+         Aligned : constant Natural := Count - (if Split then Rest else 0);
+
+         procedure Run_Tiles
+           (Pipeline : Address; Vectors, Start, Groups : Natural)
+         is
+            Members : Member_Words := [others => 0];
+         begin
+            Members (2) := C.unsigned (Start);
+            Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Pipeline);
+            declare
+               Shape : aliased Shape_Constants :=
+                 (Rows    => C.unsigned (Rows),
+                  Columns => C.unsigned (Columns),
+                  Count   => C.unsigned (Vectors),
+                  First   => C.unsigned (Into),
+                  Packing => C.unsigned (Weight_Packing'Pos (Packing)),
+                  Base    => C.unsigned (Base),
+                  Joins   => (if Joins then 1 else 0),
+                  Table   => C.unsigned (Unit),
+                  Members => Members,
+                  Stride  => C.unsigned (From),
+                  Apart   => C.unsigned (Gate_At),
+                  others  => <>);
+            begin
+               Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                     Product_Bytes, Shape'Address);
+               Dispatch
+                 (Item.Buffer,
+                  C.unsigned ((Rows + Tile_Rows - 1) / Tile_Rows),
+                  C.unsigned (Groups), 1);
+            end;
+         end Run_Tiles;
       begin
-         Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-               Product_Bytes, Shape'Address);
-         Dispatch
-           (Item.Buffer,
-            C.unsigned ((Rows + Tile_Rows - 1) / Tile_Rows),
-            C.unsigned (Room / Tile_Width (Count)), 1);
+         if Split then
+            Run_Tiles
+              (Tile_Pipeline (Item, Packing, Count), Aligned, 0,
+               Aligned / Tile_Width (Count));
+            Run_Tiles
+              (Tile_Pipeline (Item, Packing, Rest), Rest, Aligned,
+               (Rest + Tile_Width (Rest) - 1) / Tile_Width (Rest));
+         else
+            Run_Tiles
+              (Tile_Pipeline (Item, Packing, Count), Count, 0,
+               Room / Tile_Width (Count));
+         end if;
       end;
 
       Bind_Pipeline

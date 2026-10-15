@@ -1694,7 +1694,10 @@ void main() {
     //  the stack. The run's end is what the stores below stop at.
     bool listed = shape.routed >= 2u;
     uint expert = gl_WorkGroupID.z;
-    uint run_at = listed ? lists[shape.members[0] + expert] : 0u;
+    //  A plain product's first vector is members[2]: nought, but for the
+    //  ragged end of a long batch, which the host takes on a narrower tile
+    //  in a dispatch of its own rather than round up to a whole wide one.
+    uint run_at = listed ? lists[shape.members[0] + expert] : shape.members[2];
     uint run_count = listed ? lists[expert] : shape.count;
     uint slice = listed ? expert * shape.stride : 0u;
 

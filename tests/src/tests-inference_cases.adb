@@ -8760,6 +8760,55 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Window_Holds_A_Long_Batch_After_A_Slide;
 
+   --  A mixture's window keeps room for a mixture's batch: a sliding
+   --  layer's cells are its window, the longest batch the model takes and
+   --  a rewind's slack, and a mixture takes a longer batch than any other
+   --  model. Counted for the others' batch of 512, a batch of 2,048 wrote
+   --  over cells it still read, and Mellum's 2,268-token prompt disagreed
+   --  with itself read 512 at a time from position 1,536 on. Here a window
+   --  of eight in a context of 1,200: its cells are the whole context, so
+   --  the plan is the plan of no window at all; counted for 512 they were
+   --  584.
+   procedure A_Mixture_Window_Keeps_Room_For_Its_Batch
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Image    : B.Byte_Array_Access;
+      Parsed   : Containers.Container;
+      Settings : L.Configuration;
+      Status   : E.Error_Info;
+      Windowed, Whole : Model_Runner.Memory.Session_Plan;
+      Context  : constant := 1_200;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Mellum, Room => Context, Experts => 4,
+         Experts_Used => 2, Window => 8);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         L.Read_Config (Parsed, Settings => Settings, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture's configuration was refused");
+         Containers.Close (Parsed);
+      end;
+      B.Free (Image);
+
+      Assert (Settings.Window = 8 and then Settings.Experts > 0,
+              "the fixture is not a windowed mixture");
+      L.Plan_For (Settings, Context, Windowed, Status);
+      Settings.Window := 0;
+      L.Plan_For (Settings, Context, Whole, Status);
+      Assert (Windowed.KV_Cache_Bytes = Whole.KV_Cache_Bytes,
+              "a windowed mixture's cells were not counted for its batch:"
+              & Interfaces.Unsigned_64'Image (Windowed.KV_Cache_Bytes)
+              & " against"
+              & Interfaces.Unsigned_64'Image (Whole.KV_Cache_Bytes));
+   end A_Mixture_Window_Keeps_Room_For_Its_Batch;
+
    --  A paged session on a sliding-window model says, past the ring its
    --  window keeps, what a session in a block says.
    --
@@ -20214,6 +20263,9 @@ package body Tests.Inference_Cases is
         (T, Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late'Access,
          "a paged session that deals its run's pages ahead answers as one "
          & "dealt them a batch at a time");
+      Register_Routine
+        (T, A_Mixture_Window_Keeps_Room_For_Its_Batch'Access,
+         "a mixture's window keeps room for a mixture's batch");
       Register_Routine
         (T, A_Window_Holds_A_Long_Batch_After_A_Slide'Access,
          "a sliding window holds a batch of 488 after it slides, its "

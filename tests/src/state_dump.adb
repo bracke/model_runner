@@ -115,7 +115,7 @@ package body State_Dump is
            N.Element_Count (Settings.Embedding);
          Wide     : constant N.Element_Count :=
            N.Element_Count (Settings.Vocabulary);
-         Batch    : constant Positive := L.Max_Batch;
+         Batch    : constant Positive := L.Batch_Limit (Engine);
 
          States, Every : T.Real_Array_Access;
          Last_Row      : T.Real_Array (0 .. Wide - 1);

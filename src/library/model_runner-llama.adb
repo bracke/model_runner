@@ -26,11 +26,30 @@ package body Model_Runner.Llama is
    --  See Set_Stream_Least.
    Stream_Least : Positive := Stream_Least_Default;
 
+   --  The most positions a batch may hold beside a window: a sliding
+   --  layer's cells are its window and this and the rewind slack, since a
+   --  batch is written whole before anything reads it. A mixture's batch
+   --  is the long one, so its cells are counted for it; any other model's
+   --  windowed batch stays at Max_Batch.
+   function Window_Margin (Settings : Configuration) return Positive
+   is (if Settings.Experts > 0 then Streamed_Batch else Max_Batch);
+
+   --  A mixture whole on the device takes the long batch too: each batch
+   --  walks every expert stack once, and a 533-token prompt cut 512 and
+   --  21 paid a second walk for the 21 -- Mellum 596 -> 665 tokens a
+   --  second, qwen3.6's 2,163 376 -> 445. Never more than a window's
+   --  margin, which the cells were counted for: a batch past it wrote over
+   --  cells the batch still read, and Mellum's 2,268-token prompt
+   --  disagreed from position 1,536 on.
    function Batch_Limit (Item : Model'Class) return Positive
-   is (if Item.Split_Feed and then Item.Settings.Experts = 0
-       then Dense_Streamed_Batch
-       elsif Item.Split_Feed then Streamed_Batch
-       else Max_Batch);
+   is (Positive'Min
+         ((if Item.Split_Feed and then Item.Settings.Experts = 0
+           then Dense_Streamed_Batch
+           elsif Item.Split_Feed then Streamed_Batch
+           elsif Item.Settings.Experts > 0 then Streamed_Batch
+           else Max_Batch),
+          (if Item.Settings.Window > 0 then Window_Margin (Item.Settings)
+           else Positive'Last)));
 
    function Batch_Limit (Item : Model'Class; Depth : Natural) return Positive
    is
@@ -7807,7 +7826,9 @@ package body Model_Runner.Llama is
    is (if Layer < Settings.Layers and then Linear (Settings, Layer) then 0
        elsif Layer < Settings.Layers and then Settings.Window > 0
          and then Slides (Settings, Layer)
-       then Natural'Min (Capacity, Settings.Window + Max_Batch + Rewind_Slack)
+       then Natural'Min
+              (Capacity,
+               Settings.Window + Window_Margin (Settings) + Rewind_Slack)
        else Capacity);
 
    ------------------
