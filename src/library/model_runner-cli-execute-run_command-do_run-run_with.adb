@@ -669,6 +669,7 @@ begin
             Watcher.Checkpoint :=
               US.To_Unbounded_String
                 (T.To_String (Item.Checkpoint_File_Path));
+            Watcher.Text := Sink'Unchecked_Access;
 
             --  In groups, as /work is: the run, then how it came out.
             Pres.Put_Heading (Screen, "cli.work.section.run", Pres.Diagnostic);
@@ -710,6 +711,8 @@ begin
                Answer_Schema =>
                  (if Answer /= null then Answer.all else ""),
                Result     => Loop_Out);
+            --  And the summary on a line of its own, past the answer's.
+            Pres.End_Line (Sink);
 
             Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
             Pres.Put_Heading (Screen, "cli.work.section.outcome", Pres.Diagnostic, Gap => True);

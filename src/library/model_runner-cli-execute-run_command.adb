@@ -80,6 +80,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
         Count      : Natural := 0;
         Checkpoint : US.Unbounded_String;   --  path, or empty for none
         Told_Lost  : Boolean := False;      --  a failed save already said
+        --  Where the model's text goes, so a call it made starts a line of
+        --  its own rather than the end of the text's last; or none.
+        Text       : access Pres.Standard_Output_Sink := null;
      end record;
 
    overriding procedure On_Call
@@ -174,6 +177,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Named     : String;
       Arguments : String) is
    begin
+      if Self.Text /= null then
+         Pres.End_Line (Self.Text.all);
+      end if;
       Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
       if Self.Trace then
          Record_Event
@@ -210,6 +216,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
                 when Tr.Policy          => "refused_by_policy",
                 when Tr.Not_Permitted | Tr.Not_Refused => "refused"));
    begin
+      if Self.Text /= null then
+         Pres.End_Line (Self.Text.all);
+      end if;
       Pres.Put_Tool_Result (Self.Screen.all, Result);
       if Self.Trace then
          Record_Event

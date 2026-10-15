@@ -13842,6 +13842,31 @@ package body Tests.CLI_Cases is
          end;
       end;
 
+      --  And a line the model's text left open is ended before a call's
+      --  notice is written beside it -- once, and not where the text ended
+      --  its own: the notice was written at the end of the model's
+      --  "</tool_call>" on a terminal that showed both.
+      declare
+         Sink   : Model_Runner.Presentation.Standard_Output_Sink;
+         Closed : Boolean;
+      begin
+         Captured_Output.Open ("obj/end-line.txt");
+         Sink.Write ("</tool_call>", Closed);
+         Sink.End_Line;
+         Sink.End_Line;
+         Sink.Write ("done" & ASCII.LF, Closed);
+         Sink.End_Line;
+         declare
+            Caught : constant String := Captured_Output.Close;
+         begin
+            if Captured_Output.Took_Effect then
+               Assert (Caught = "</tool_call>" & ASCII.LF & "done" & ASCII.LF,
+                       "an open line was not ended once, or a closed one was "
+                       & "ended again: " & Caught);
+            end if;
+         end;
+      end;
+
       --  4. Trimming leftovers keeps a file written a moment ago. Each
       --  write's partial is its own (Partials.Beside): one name for the
       --  file alone was shared by two runs saving it, and the second's

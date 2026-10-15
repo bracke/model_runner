@@ -1740,6 +1740,9 @@ package body Model_Runner.Presentation is
       --  check came to read " a Statistics" as a line.
       String'Write
         (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
+      if Item'Length > 0 then
+         Self.Open := Item (Item'Last) /= ASCII.LF;
+      end if;
       Closed := False;
    exception
       --  A broken pipe is an ordinary end, not a failure to report with a
@@ -1762,6 +1765,21 @@ package body Model_Runner.Presentation is
    begin
       Write_Shown (Self, Screen_Text, Closed);
    end Write;
+
+   --------------
+   -- End_Line --
+   --------------
+
+   procedure End_Line (Self : in out Standard_Output_Sink) is
+      Ignored : Boolean;
+   begin
+      if Self.Open and then not Self.Closed then
+         Write_Shown (Self, [1 => ASCII.LF], Ignored);
+      end if;
+      if not Self.Closed then
+         Flush (Self, Ignored);
+      end if;
+   end End_Line;
 
    -----------
    -- Flush --

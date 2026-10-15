@@ -767,6 +767,14 @@ package Model_Runner.Presentation is
    --  @return True once closure was observed.
    overriding function Is_Closed (Self : Standard_Output_Sink) return Boolean;
 
+   --  End the line the model's text left open, where it left one: what
+   --  is said beside the text -- a call it made, what the call answered --
+   --  starts a line of its own on a terminal that shows both, not the end
+   --  of the model's last one.
+   --
+   --  @param Self Sink instance.
+   procedure End_Line (Self : in out Standard_Output_Sink);
+
    --  A progress observer that writes to standard error.
    --
    --  Progress is suppressed on a non-terminal destination unless verbose mode
@@ -808,6 +816,8 @@ private
       Terminal : Boolean := False;
       --  A C2 held back from the last piece, a C1 control perhaps cut.
       Lead     : Boolean := False;
+      --  Whether the last text written left its line open.
+      Open     : Boolean := False;
    end record;
 
    type Progress_Reporter (Owner : access Console)
