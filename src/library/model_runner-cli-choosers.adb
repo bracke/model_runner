@@ -728,19 +728,9 @@ package body Model_Runner.CLI.Choosers is
          return "";
    end Line;
 
-   --  Where the last character of Text begins: a backspace takes a
-   --  character back, not a byte -- after "ø" it left a lone lead byte,
-   --  and a line that was not UTF-8.
-   function Last_Character (Text : Unbounded_String) return Positive is
-      At_Byte : Positive := Length (Text);
-   begin
-      while At_Byte > 1
-        and then Character'Pos (Element (Text, At_Byte)) in 16#80# .. 16#BF#
-      loop
-         At_Byte := At_Byte - 1;
-      end loop;
-      return At_Byte;
-   end Last_Character;
+   --  Where the last character of Text begins; see UTF8.
+   function Last_Character (Text : Unbounded_String) return Positive
+   is (Model_Runner.UTF8.Last_Character_First (To_String (Text)));
 
    ---------
    -- Ask --
@@ -803,7 +793,7 @@ package body Model_Runner.CLI.Choosers is
                elsif Key >= ' ' then
                   Append (Typed, Key);
                   --  A star a character, as a backspace takes one back.
-                  if Character'Pos (Key) not in 16#80# .. 16#BF# then
+                  if Model_Runner.UTF8.Begins_Character (Key) then
                      Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, "*");
                   end if;
                end if;

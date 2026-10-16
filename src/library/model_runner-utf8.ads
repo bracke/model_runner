@@ -49,6 +49,23 @@ package Model_Runner.UTF8 is
    --  @return Number of leading bytes that are safe to emit.
    function Safe_Prefix_Length (Item : String) return Natural;
 
+   --  Where the last character of Item begins: what a backspace takes back,
+   --  a character and not a byte -- after a two-byte character, a byte
+   --  left a lone lead byte and a line that was not UTF-8.
+   --
+   --  @param Item Text, not empty.
+   --  @return Index of the last character's first byte.
+   function Last_Character_First (Item : String) return Positive
+     with Pre => Item'Length > 0;
+
+   --  Whether a byte begins a character: what a hidden prompt shows a star
+   --  for, one a character rather than one a byte.
+   --
+   --  @param Byte A byte of UTF-8.
+   --  @return False for a continuation byte.
+   function Begins_Character (Byte : Character) return Boolean
+   is (Character'Pos (Byte) not in 16#80# .. 16#BF#);
+
    --  Item with every byte that is no part of a well-formed sequence -- a
    --  stray continuation, a sequence cut short, an overlong form -- taken
    --  for U+FFFD, the replacement character, as a reader of UTF-8 shows

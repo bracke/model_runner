@@ -4203,6 +4203,26 @@ package body Tests.Framework_Cases is
                  and then Last = Keys'Last, "the secret was not typed");
       end Type_Secret;
 
+      --  Two two-byte characters and two ASCII ones: a star each.
+      procedure Type_Wide_Secret (Pair : Hostkit.Pty.Pair; Seen : String) is
+         Last : Ada.Streams.Stream_Element_Offset;
+         Word : constant String :=
+           Character'Val (16#C3#) & Character'Val (16#A6#)
+           & Character'Val (16#C3#) & Character'Val (16#B8#)
+           & "ab" & ASCII.CR & ASCII.CR;
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Word'Length);
+         Sent : Hostkit.Descriptors.Transfer_Outcome;
+      begin
+         Assert (Ada.Strings.Fixed.Index (Seen, "Token") > 0,
+                 "the secret was not asked for: " & Seen);
+         for Index in Word'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index)) := Character'Pos (Word (Index));
+         end loop;
+         Sent := Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last);
+         Assert (Hostkit.Descriptors."=" (Sent, Hostkit.Descriptors.Transfer_Ok)
+                 and then Last = Keys'Last, "the secret was not typed");
+      end Type_Wide_Secret;
+
       Words : Hostkit.String_Vectors.Vector;
    begin
       if not Hostkit.Pty.Is_Supported then
@@ -4300,6 +4320,27 @@ package body Tests.Framework_Cases is
                              and then Ada.Strings.Fixed.Index (Said, "*******") > 0
                              and then Dirs.Exists (Project & "/.model_runner")),
                     "a secret was shown as it was typed, or the project not made: " & Said);
+         end;
+
+         --  And one of characters past ASCII: a star a character, where
+         --  every byte had one.
+         declare
+            Wide_Project : constant String :=
+              Dirs.Full_Name (Fresh ("secret-wide-project"));
+            Said : constant String :=
+              Run_On_Terminal (Words, Wide_Project,
+                               "MODEL_RUNNER_CONFIG=" & Home & "/settings.conf",
+                               Type_Wide_Secret'Access);
+            Stars : Natural := 0;
+         begin
+            for C of Said loop
+               if C = '*' then
+                  Stars := Stars + 1;
+               end if;
+            end loop;
+            Assert (Said = "" or else Stars = 4,
+                    "a secret of four characters showed" & Stars'Image
+                    & " stars");
          end;
       end;
    end Terminal_Follows_Resize_And_Hides_Secrets;

@@ -209,8 +209,12 @@ is
 
    --  Whichever of the two a layer is: what the carry from the layer
    --  before asks of the layer after.
+   --  Not while a watcher listens: a layer run whole on the device is one
+   --  submission no product of which tells it anything, and a watched
+   --  token on the device told no expert what it was given.
    function Layer_Fits (L : Layer; Index : Natural) return Boolean
-   is (if Pure_SSM (Settings.Kind)
+   is (if Item.Seen /= null then False
+       elsif Pure_SSM (Settings.Kind)
          or else (Is_Jamba (Settings.Kind) and then Linear (Settings, Index))
        then Mamba2_Fits (Item, L)
        elsif Linear (Settings, Index) then Linear_Layer_Fits (L)
@@ -999,7 +1003,9 @@ begin
             --  An architecture that turns nothing -- GPT-2 learned a
             --  row a position -- hands over an empty table and the
             --  sequence has no turning step.
-            if Device_Held (Item)
+            --  Not while a watcher listens; see Layer_Fits.
+            if Item.Seen = null
+              and then Device_Held (Item)
               and then Element_Count (Settings.Rotary) <= Head_Size
               and then (((Settings.Experts = 0
                           or else Dense_Among_Experts (Current)

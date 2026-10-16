@@ -910,6 +910,94 @@ package body Tests.GGUF_Cases is
                     & " did not write what ggml writes with a matrix");
          end;
       end loop;
+
+      --  And a Q3_K block whose levels move with the scale they are fitted
+      --  against: found by searching for one where fp16 (max / -32) and
+      --  fp16 (1 / iscale) differ and a level falls the other side for it
+      --  (a search of forty million ordinary blocks had found none), and
+      --  held to the digest ggml_quantize_chunk gives it. Fitted against
+      --  max / -32, as the levels were, it wrote other bytes than the file
+      --  says, since the block holds 1 / iscale.
+      declare
+         type Bits is array (0 .. 255) of Interfaces.Unsigned_32;
+         function As_Real is new Ada.Unchecked_Conversion
+           (Interfaces.Unsigned_32, Interfaces.IEEE_Float_32);
+         Found : constant Bits :=
+           [
+         16#BECB021C#, 16#3CB184B5#, 16#3E9B3D13#, 16#BE11C69C#,
+         16#3E8E02BC#, 16#BEAAFF4E#, 16#3DF20E65#, 16#3E0FF770#,
+         16#3ED4ADBD#, 16#BE696280#, 16#BE8BD435#, 16#BCFE545A#,
+         16#BE74EDB2#, 16#3EE49843#, 16#3EE070F8#, 16#BD00E753#,
+         16#BE68CF27#, 16#BE6AC758#, 16#3D95B18D#, 16#BE931F61#,
+         16#BE8CD600#, 16#3C4BEBCC#, 16#BD01559D#, 16#BE635020#,
+         16#BE86FBE3#, 16#BE7C0D66#, 16#3EB755DA#, 16#BECF0C1D#,
+         16#BD3A6CEC#, 16#3E03B23D#, 16#BEB7063D#, 16#BD5A83B8#,
+         16#BE0FEF48#, 16#BD24B5B4#, 16#3EDCDBB6#, 16#BEC46EAF#,
+         16#BDF6B4D4#, 16#3EB1E230#, 16#3EB9C8F3#, 16#BE07688A#,
+         16#3E97DB84#, 16#BE8A3FB9#, 16#3E34ED4B#, 16#3EBDE171#,
+         16#BE81E910#, 16#BE7275C8#, 16#BE9461EB#, 16#3EAB30A0#,
+         16#BD89ED24#, 16#3E1EFC94#, 16#3D571DEC#, 16#3C788B86#,
+         16#BEDC2EE5#, 16#BE6BD231#, 16#3E8C5BE4#, 16#BE2A788C#,
+         16#3E354F08#, 16#BE2DD6D7#, 16#3DC6B86E#, 16#3E0C29BF#,
+         16#3D9C18BE#, 16#3ECBD911#, 16#3EE5A45F#, 16#BE522E92#,
+         16#BEBF8394#, 16#3ECA9073#, 16#3ED56735#, 16#3EC37D25#,
+         16#BECAFF2E#, 16#3EDF150E#, 16#BE137CE0#, 16#3C73A3E3#,
+         16#3ED61A57#, 16#3E35EC48#, 16#3EB3A038#, 16#3DC2F4E1#,
+         16#BD2CA5B1#, 16#BE8DEEF8#, 16#BED55B3D#, 16#BE83D7A7#,
+         16#3D31A4DE#, 16#3DFD1CD6#, 16#BEC4D75A#, 16#3B6F44CA#,
+         16#3EABA06B#, 16#BE032032#, 16#3E89E4CB#, 16#3E535751#,
+         16#3EC8607A#, 16#BEE42713#, 16#BDEED640#, 16#BE71E292#,
+         16#3D5B158D#, 16#BC7DC565#, 16#BC3B2F97#, 16#3EB04516#,
+         16#3EDF872A#, 16#3E57D20B#, 16#3E03337D#, 16#3ECDFFBF#,
+         16#3D7FE5CB#, 16#BE37862C#, 16#3E3BB5C6#, 16#BED9B7A8#,
+         16#BEDB6B2C#, 16#3DE3A64A#, 16#3C71D603#, 16#3E95518E#,
+         16#BEAD1A47#, 16#BE7BDD48#, 16#BD2FED3D#, 16#3EE01B79#,
+         16#3D157493#, 16#3EAAEA22#, 16#3E2FA1EE#, 16#3CD49AE6#,
+         16#3E8927C4#, 16#3E66047A#, 16#BCFCBB88#, 16#BE5D6284#,
+         16#BEDF1D81#, 16#3DC5094E#, 16#3EA1B87E#, 16#BECCCEF6#,
+         16#BE96893F#, 16#3EA4EB27#, 16#3EE39B20#, 16#3EC93929#,
+         16#BE5B609E#, 16#3E367248#, 16#3DB297B1#, 16#BDC3917E#,
+         16#3E70FEE6#, 16#3B43BFD3#, 16#BD34BEA0#, 16#3E688DC5#,
+         16#BDA3D771#, 16#3DC12FC2#, 16#BE24A88A#, 16#3E8B057E#,
+         16#3EB545EF#, 16#3D4FDF16#, 16#BE3AD970#, 16#3E96AE1B#,
+         16#3CA650C7#, 16#3EAEBECB#, 16#3ED4183F#, 16#3EC6897A#,
+         16#3EB3436F#, 16#BC5B118D#, 16#BE42217F#, 16#3EB055E8#,
+         16#3EDA4C4B#, 16#3E165847#, 16#3EE598CE#, 16#BD37A240#,
+         16#3EB6F7E6#, 16#BEC5ED8E#, 16#BC5A603C#, 16#3EAA80BD#,
+         16#3DC4E61A#, 16#BE43DCCD#, 16#3D46E361#, 16#BE2D4F9D#,
+         16#3E114D8D#, 16#3DE9A693#, 16#3E58D508#, 16#3E9B7D20#,
+         16#3EB4151E#, 16#3E019538#, 16#3E806436#, 16#BEB5AD79#,
+         16#BDF2EADB#, 16#3E8C09C2#, 16#3DFC24DC#, 16#BEBE567B#,
+         16#3EB103C8#, 16#3DA6D56D#, 16#BD9163C5#, 16#BEBC316C#,
+         16#3DA71A2C#, 16#BDD26239#, 16#BEE42D70#, 16#3E8E0472#,
+         16#BE8FB4DD#, 16#BECCCBA7#, 16#BE9EB7A2#, 16#3E89CCFB#,
+         16#3EAAF247#, 16#BC1A38F3#, 16#BE8AAD4D#, 16#3D6BE801#,
+         16#BCBC02D0#, 16#BE26D7F6#, 16#BEB22313#, 16#3EC969D2#,
+         16#BE44EE7B#, 16#BE045EA0#, 16#3DB1ACF4#, 16#BD13841D#,
+         16#BEB9B05B#, 16#BEA8386B#, 16#BEDB0B5B#, 16#BEE68B63#,
+         16#BBFDE7A4#, 16#3E434CC7#, 16#3EC56C33#, 16#3CEC6052#,
+         16#3ED097D1#, 16#BE8D8B5D#, 16#BE1D27E9#, 16#3EB150AD#,
+         16#3D81CE27#, 16#BDDA0E0E#, 16#BE9FD289#, 16#BE3DD8C3#,
+         16#3EB4918D#, 16#BEA5811D#, 16#BE665190#, 16#3D1E20C0#,
+         16#BD6D4AB2#, 16#BE1227BF#, 16#BE89BBDD#, 16#BEE2CF4B#,
+         16#3E50870D#, 16#BE2BFEDD#, 16#3E562A44#, 16#3EDF14B9#,
+         16#3E3F6742#, 16#BE61D222#, 16#3ED3A2E8#, 16#BEA75F1E#,
+         16#BEE5DEB1#, 16#BE60489B#, 16#BD2D0C26#, 16#BEA66905#,
+         16#BED2EE23#, 16#3D5E72AC#, 16#3D5CEA21#, 16#BE0EA71C#,
+         16#3CFD654D#, 16#BD74883D#, 16#3E8B372E#, 16#3C45E472#,
+         16#3ED70DB0#, 16#BEA02569#, 16#BE4EBA7F#, 16#3ECC4711#,
+         16#3DAEE568#, 16#BE373C86#, 16#BCDA520A#, 16#3D88CC4C#,
+         16#BE5E0071#, 16#BDC09FC2#, 16#BE0B74C1#, 16#BEC38898#];
+         Block : N.Real_Array (0 .. 255);
+      begin
+         for Index in Block'Range loop
+            Block (Index) := N.Real (As_Real (Found (Integer (Index))));
+         end loop;
+         Assert (Digest (Quantizer.Encode (Block, Quantizer.Q3_K))
+                 = 16#257A96FAFCCA0B76#,
+                 "a Q3_K block's levels were fitted against another scale "
+                 & "than the one it holds");
+      end;
    end Every_Format_Writes_What_Ggml_Writes;
 
    --  A model file quantized writes what llama-quantize writes around the
@@ -7467,6 +7555,27 @@ package body Tests.GGUF_Cases is
               "a truncated three-byte sequence was accepted");
       Assert (not UTF8.Is_Valid (Bytes ([16#E2#, 16#41#, 16#AC#])),
               "a sequence interrupted by ASCII was accepted");
+
+      --  What a backspace takes back is the last character, not the last
+      --  byte; and a hidden prompt shows a star a character.
+      declare
+         Euro : constant String := Bytes ([16#E2#, 16#82#, 16#AC#]);
+         Ae   : constant String := Bytes ([16#C3#, 16#A6#]);
+      begin
+         Assert (UTF8.Last_Character_First ("ab") = 2,
+                 "a backspace after ASCII took more than its byte");
+         Assert (UTF8.Last_Character_First ("a" & Ae) = 2,
+                 "a backspace after a two-byte character took a byte");
+         Assert (UTF8.Last_Character_First (Ae & Euro) = 3,
+                 "a backspace after a three-byte character took a byte");
+         Assert (UTF8.Last_Character_First (Euro) = 1,
+                 "a lone character was not taken back whole");
+         Assert (UTF8.Begins_Character ('a')
+                 and then UTF8.Begins_Character (Ae (Ae'First))
+                 and then not UTF8.Begins_Character (Ae (Ae'Last)),
+                 "a star was counted for a continuation byte, or not for a "
+                 & "character's first");
+      end;
 
       --  A prefix is safe up to a sequence that more bytes could complete,
       --  and no further. This is what keeps a partial character out of the

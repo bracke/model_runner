@@ -5,7 +5,11 @@ with Ada.Unchecked_Deallocation;
 with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
+with Hostkit.Descriptors;
 with Hostkit.Locks;
+with Hostkit.Pty;
+with Hostkit.Spawn;
+with Hostkit;
 with Interfaces;
 
 with Model_Runner.Backend;
@@ -65,6 +69,7 @@ with Model_Runner.Quantization;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
+with Model_Runner.Tools;
 
 with Ada.Calendar;
 with Ada.Directories;
@@ -10058,7 +10063,8 @@ package body Tests.CLI_Cases is
 
       --  Run the loop over Lines and return what reached standard error.
       function Conversed
-        (Lines : String; Projector : String := ""; System : String := "")
+        (Lines : String; Projector : String := ""; System : String := "";
+         Offered : access constant Model_Runner.Tools.Definitions := null)
          return String is
          Held    : aliased constant B.Byte_Array := Image.all;
          Rig     : Harness (Held'Access);
@@ -10108,7 +10114,8 @@ package body Tests.CLI_Cases is
 
             Captured_Output.Open ("obj/loop-answers.txt");
             begin
-               I.Run (Options, Screen, Rig.Ready, Session, null, Status => Status);
+               I.Run (Options, Screen, Rig.Ready, Session, null, Offered,
+                      Status => Status);
             exception
                when others =>
                   declare
@@ -10326,9 +10333,7 @@ package body Tests.CLI_Cases is
                  "/reset made up a system message");
       end;
 
-      --  /system takes UTF-8 only, as a typed turn does. (The loop here
-      --  offers no tools, so /tool, which checks the same way, is not
-      --  reached.)
+      --  /system takes UTF-8 only, as a typed turn does.
       declare
          Said : constant String :=
            Conversed ("/system " & Character'Val (16#C3#) & "x"
@@ -10337,6 +10342,30 @@ package body Tests.CLI_Cases is
          Assert (Project_Tools.Text.Contains
                    (Said, E.Diagnostic_Code (E.IO_Invalid_UTF8)),
                  "/system took words that are not UTF-8: " & Said);
+      end;
+
+      --  And /tool, a tool's answer: offered a tool, and the model having
+      --  said something to answer, words that are not UTF-8 are refused as
+      --  a typed turn's are.
+      declare
+         Offered : aliased Model_Runner.Tools.Definitions;
+         Read    : E.Error_Info;
+      begin
+         Model_Runner.Tools.Read
+           (Offered, "[{""name"": ""weather"", ""description"": ""d""}]", Read);
+         Assert (E.Is_Ok (Read), "the tool was not read");
+         declare
+            Said : constant String :=
+              Conversed ("hello" & ASCII.LF & ASCII.LF
+                         & "/tool " & Character'Val (16#C3#) & "x"
+                         & ASCII.LF & "/exit" & ASCII.LF,
+                         Offered => Offered'Access);
+         begin
+            Assert (Project_Tools.Text.Contains
+                      (Said, E.Diagnostic_Code (E.IO_Invalid_UTF8)),
+                    "/tool took words that are not UTF-8: " & Said);
+         end;
+         Model_Runner.Tools.Close (Offered);
       end;
 
       --  A reply that stops at its limit says so, and what gives it more.
@@ -15190,6 +15219,165 @@ package body Tests.CLI_Cases is
          raise;
    end The_Settings_Model_Stands_In_For_None_Named;
 
+   --  A session's line editor on a terminal, run as a person runs it, and
+   --  read back from the history it keeps: a backspace takes a character
+   --  back, not a byte -- after "o" with a stroke through it, it left a
+   --  lone lead byte; a line of more than 64 KiB, a paste of a file, is
+   --  sent and not remembered; and the history keeps its last 500 lines,
+   --  where a project's file held every one it was ever given.
+   procedure The_Line_Editor_Keeps_Characters_And_Bounds_Its_History
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+
+      Model   : constant String :=
+        Ada.Directories.Full_Name ("obj/editor-model.gguf");
+      Project : constant String := Ada.Directories.Full_Name ("obj/editor-project");
+      History : constant String := Project & "/.model_runner/runtime/prompt-history";
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Long    : constant String (1 .. 70_000) := [others => 'p'];
+
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append
+              (Ada.Strings.Unbounded.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      --  What the session writes, read off and dropped, until it is quiet.
+      procedure Drain (Quiet : Integer := 1500) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+         end loop;
+      end Drain;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. 512);
+         From : Natural := Text'First;
+      begin
+         while From <= Text'Last loop
+            declare
+               Upto : constant Natural := Natural'Min (Text'Last, From + 511);
+               Used : Ada.Streams.Stream_Element_Offset := 0;
+            begin
+               for C of Text (From .. Upto) loop
+                  Used := Used + 1;
+                  Keys (Used) := Character'Pos (C);
+               end loop;
+               Assert (Hostkit.Descriptors."="
+                         (Hostkit.Descriptors.Write
+                            (Pair.To_Child, Keys (1 .. Used), Last),
+                          Hostkit.Descriptors.Transfer_Ok),
+                       "a key was not sent");
+               Drain (20);
+               From := Upto + 1;
+            end;
+         end loop;
+      end Send;
+
+      O_Slash : constant String :=
+        Character'Val (16#C3#) & Character'Val (16#B8#);
+      Ae      : constant String :=
+        Character'Val (16#C3#) & Character'Val (16#A6#);
+      Held    : Ada.Text_IO.File_Type;
+      Lines   : Natural := 0;
+      Kept_Typed, Kept_Long : Boolean := False;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+
+      Tiny_Model.Write (Model, Room => 64);
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project & "/.model_runner/runtime");
+      Ada.Text_IO.Create (Held, Ada.Text_IO.Out_File, History);
+      for Index in 1 .. 600 loop
+         Ada.Text_IO.Put_Line (Held, "old line" & Index'Image);
+      end loop;
+      Ada.Text_IO.Close (Held);
+
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append
+        (Ada.Strings.Unbounded.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory :=
+        Ada.Strings.Unbounded.To_Unbounded_String (Project);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 80))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      declare
+         Words : Hostkit.String_Vectors.Vector;
+      begin
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Model));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String ("--backend"));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String ("cpu"));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String ("--max-tokens"));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String ("1"));
+         Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child)
+                 = Hostkit.Spawn.Spawn_Ok, "the session did not start");
+      end;
+      Hostkit.Pty.Close_Device (Pair);
+      Drain (5000);
+
+      --  A typed line with a backspace after a two-byte character, then a
+      --  paste too long to remember, then out.
+      Send (Ae & O_Slash & ASCII.DEL & "ab" & ASCII.CR);
+      Drain;
+      Send (Long & ASCII.CR);
+      Drain;
+      --  An empty line sends the turn; only then is /exit a command and
+      --  not more of the message.
+      Send ([1 => ASCII.CR]);
+      Drain (5000);
+      Send ("/exit" & ASCII.CR);
+      Drain (3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result),
+              "the session was not waited for");
+      Hostkit.Pty.Close (Pair);
+
+      Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, History);
+      while not Ada.Text_IO.End_Of_File (Held) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (Held);
+         begin
+            Lines := Lines + 1;
+            Kept_Typed := Kept_Typed or else Line = Ae & "ab";
+            Kept_Long := Kept_Long or else Line'Length > 64 * 1024;
+         end;
+      end loop;
+      Ada.Text_IO.Close (Held);
+
+      Assert (Kept_Typed,
+              "the typed line was not kept as typed, a character taken "
+              & "back whole by the backspace");
+      Assert (not Kept_Long, "a paste of more than 64 KiB was remembered");
+      Assert (Lines <= 501,
+              "the history kept" & Lines'Image & " lines, past its 500");
+   end The_Line_Editor_Keeps_Characters_And_Bounds_Its_History;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -15201,6 +15389,9 @@ package body Tests.CLI_Cases is
         (T, A_Named_Draft_Shares_The_Text'Access,
          "a draft named for a model shares its text, not only its count "
          & "of tokens");
+      Register_Routine
+        (T, The_Line_Editor_Keeps_Characters_And_Bounds_Its_History'Access,
+         "the line editor keeps characters whole and bounds its history");
       Register_Routine
         (T, The_Settings_Model_Stands_In_For_None_Named'Access,
          "the settings file's model is the one run takes where none is "

@@ -8760,6 +8760,231 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Window_Holds_A_Long_Batch_After_A_Slide;
 
+   --  A watched mixture tells each expert what it was given on the device
+   --  as on the processor: one token's road on the device lays the chosen
+   --  experts' gated activations end to end and gives each down projection
+   --  its own stretch, and a watcher told the whole activation for each
+   --  would sum the wrong rows. The same tokens, watched on both, every
+   --  expert of every stack: the same sums, to the device's rounding.
+   procedure A_Watched_Mixture_Tells_The_Device_As_The_Processor
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Most : constant := 64;
+      type Sum_Table is array (1 .. Most) of N.Real;
+      type Name_Table is array (1 .. Most) of Model_Runner.Text.Bounded;
+
+      type Counter is limited new L.Watcher with record
+         Names : Name_Table;
+         Sums  : Sum_Table := [others => 0.0];
+         Up    : Natural := 0;
+      end record;
+
+      overriding procedure Note
+        (Item   : in out Counter;
+         Which  : String;
+         Values : N.Real_Array;
+         Rows   : N.Element_Count) is null;
+
+      overriding procedure Note_Expert
+        (Item    : in out Counter;
+         Which   : String;
+         Expert  : Natural;
+         Experts : Positive;
+         Values  : N.Real_Array;
+         Rows    : N.Element_Count);
+
+      overriding procedure Note_Expert
+        (Item    : in out Counter;
+         Which   : String;
+         Expert  : Natural;
+         Experts : Positive;
+         Values  : N.Real_Array;
+         Rows    : N.Element_Count)
+      is
+         pragma Unreferenced (Experts, Rows);
+         Key  : constant String := Which & Natural'Image (Expert);
+         Slot : Natural := 0;
+      begin
+         for Index in 1 .. Item.Up loop
+            if Model_Runner.Text.To_String (Item.Names (Index)) = Key then
+               Slot := Index;
+            end if;
+         end loop;
+         if Slot = 0 and then Item.Up < Most then
+            Item.Up := Item.Up + 1;
+            Slot := Item.Up;
+            Item.Names (Slot) := Model_Runner.Text.To_Bounded (Key);
+         end if;
+         if Slot > 0 then
+            for V of Values loop
+               Item.Sums (Slot) := Item.Sums (Slot) + V * V;
+            end loop;
+         end if;
+      end Note_Expert;
+
+      Image : B.Byte_Array_Access;
+      Ready : Boolean;
+
+      procedure Watched
+        (Backend : Model_Runner.Backend.Backend_Kind; Into : in out Counter)
+      is
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+           (Held'Access);
+         Item   : Containers.Container;
+         Model  : L.Model;
+         Live   : L.Session;
+         Status : E.Error_Info;
+      begin
+         Containers.Reader.Parse (Item, Source, Status => Status);
+         L.Prepare (Model, Item, Source, Backend => Backend, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not prepare");
+         L.Open (Live, Model, 64, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open: "
+                 & E.Error_Code'Image (Status.Code));
+         L.Watch (Live, Into'Unchecked_Access);
+         declare
+            Logits : N.Real_Array
+              (0 .. N.Element_Count (L.Config (Model).Vocabulary) - 1);
+         begin
+            for Token of Vocab.Token_Array'[4, 7, 2, 9] loop
+               L.Evaluate (Live, Model, Token, Logits, Status => Status);
+               Assert (E.Is_Ok (Status), "a watched token failed");
+            end loop;
+         end;
+         L.Watch (Live, null);
+         L.Close (Live);
+         L.Close (Model, Status);
+         Containers.Close (Item);
+      end Watched;
+
+      Host, Device : Counter;
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a watched mixture tells the device as the "
+                            & "processor");
+         return;
+      end if;
+
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Qwen3_MoE, Room => 64, Experts => 4,
+         Experts_Used => 2);
+      Watched (Model_Runner.Backend.Backend_CPU, Host);
+      Watched (Model_Runner.Backend.Backend_Device, Device);
+      B.Free (Image);
+      Model_Runner.Backend.Device.Close;
+
+      Assert (Host.Up > 0, "the processor told no expert anything");
+      Assert (Device.Up = Host.Up,
+              "the device told" & Natural'Image (Device.Up)
+              & " experts what they were given, the processor"
+              & Natural'Image (Host.Up));
+      for Index in 1 .. Host.Up loop
+         declare
+            Key : constant String := Model_Runner.Text.To_String (Host.Names (Index));
+            Found : Boolean := False;
+         begin
+            for Other in 1 .. Device.Up loop
+               if Model_Runner.Text.To_String (Device.Names (Other)) = Key then
+                  Found := True;
+                  Assert (abs (Device.Sums (Other) - Host.Sums (Index))
+                          <= 1.0E-2 * N.Real'Max (1.0, Host.Sums (Index)),
+                          Key & " was told otherwise on the device:"
+                          & N.Real'Image (Device.Sums (Other)) & " against"
+                          & N.Real'Image (Host.Sums (Index)));
+               end if;
+            end loop;
+            Assert (Found, Key & " was told nothing on the device");
+         end;
+      end loop;
+   end A_Watched_Mixture_Tells_The_Device_As_The_Processor;
+
+   --  A dense model split between the device and the processor takes a
+   --  batch of Dense_Streamed_Batch, but never past what a window's cells
+   --  were counted for: beside a window it stays at Max_Batch, where the
+   --  1,024 wrote over cells it still read. Split here by a budget named
+   --  smaller than the fixture; the same fixture without a window shows
+   --  the split took.
+   procedure A_Split_Window_Holds_Its_Batch_To_The_Cells
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+
+      Ready : Boolean;
+
+      --  The batch limit of the fixture, prepared on a device opened with
+      --  Budget; zero where no device opened.
+      function Limit_At
+        (Budget : Interfaces.Unsigned_64; Windowed : Boolean) return Natural
+      is
+         Image  : B.Byte_Array_Access;
+         Result : Natural := 0;
+      begin
+         Model_Runner.Backend.Device.Close;
+         Model_Runner.Backend.Device.Open (Ready, Budget => Budget);
+         if not Ready then
+            return 0;
+         end if;
+         Tiny_Model.Build
+           (Image, Format => Tiny_Model.Q8_0, Room => 2048,
+            Window => (if Windowed then 8 else 0));
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+              (Held'Access);
+            Item   : Containers.Container;
+            Model  : L.Model;
+            Status : E.Error_Info;
+         begin
+            Containers.Reader.Parse (Item, Source, Status => Status);
+            L.Prepare
+              (Model, Item, Source,
+               Backend => Model_Runner.Backend.Backend_Device,
+               Fit_Required => False, Status => Status);
+            if E.Is_Ok (Status) then
+               Result := L.Batch_Limit (Model);
+               L.Close (Model, Status);
+            end if;
+            Containers.Close (Item);
+         end;
+         B.Free (Image);
+         return Result;
+      end Limit_At;
+
+      --  A budget the fixture splits at: more than its front half, less
+      --  than the whole -- searched, since the fixture's size is its own.
+      Budget : Interfaces.Unsigned_64 := 4_096;
+      Split  : Boolean := False;
+   begin
+      if Limit_At (0, False) = 0 then
+         Device_Notes.Skip ("for a split window holds its batch to the cells");
+         return;
+      end if;
+
+      while Budget <= 2 ** 24 and then not Split loop
+         Split := Limit_At (Budget, False) = L.Dense_Streamed_Batch;
+         if not Split then
+            Budget := Budget * 2;
+         end if;
+      end loop;
+      Assert (Split, "no budget split the fixture, so this asks nothing");
+
+      declare
+         Windowed : constant Natural := Limit_At (Budget, True);
+      begin
+         Model_Runner.Backend.Device.Close;
+         Assert (Windowed in 1 .. L.Max_Batch,
+                 "a split dense model beside a window took a batch of"
+                 & Natural'Image (Windowed)
+                 & ", past the cells its window was counted for");
+      end;
+   end A_Split_Window_Holds_Its_Batch_To_The_Cells;
+
    --  A mixture's window keeps room for a mixture's batch: a sliding
    --  layer's cells are its window, the longest batch the model takes and
    --  a rewind's slack, and a mixture takes a longer batch than any other
@@ -20263,6 +20488,13 @@ package body Tests.Inference_Cases is
         (T, Pages_Dealt_Ahead_Answer_As_Pages_Dealt_Late'Access,
          "a paged session that deals its run's pages ahead answers as one "
          & "dealt them a batch at a time");
+      Register_Routine
+        (T, A_Watched_Mixture_Tells_The_Device_As_The_Processor'Access,
+         "a watched mixture tells each expert on the device what the "
+         & "processor tells it");
+      Register_Routine
+        (T, A_Split_Window_Holds_Its_Batch_To_The_Cells'Access,
+         "a split dense model beside a window holds its batch to the cells");
       Register_Routine
         (T, A_Mixture_Window_Keeps_Room_For_Its_Batch'Access,
          "a mixture's window keeps room for a mixture's batch");

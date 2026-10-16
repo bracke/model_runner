@@ -384,4 +384,18 @@ package body Model_Runner.UTF8 is
       return Index - Item'First;
    end Fitting;
 
+   --------------------------
+   -- Last_Character_First --
+   --------------------------
+
+   function Last_Character_First (Item : String) return Positive is
+      At_Byte : Positive := Item'Last;
+   begin
+      while At_Byte > Item'First and then not Begins_Character (Item (At_Byte))
+      loop
+         At_Byte := At_Byte - 1;
+      end loop;
+      return At_Byte;
+   end Last_Character_First;
+
 end Model_Runner.UTF8;
