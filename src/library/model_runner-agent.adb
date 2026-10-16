@@ -46,6 +46,15 @@ package body Model_Runner.Agent is
       Close : constant Natural := Ada.Strings.Fixed.Index (Reply, "</think>");
       First : Positive := (if Close = 0 then Reply'First else Close + 8);
    begin
+      --  A harmony reply's answer is its final channel's message, and a
+      --  reply that wrote on none answered nothing.
+      if Close = 0
+        and then Ada.Strings.Fixed.Index
+                   (Reply, Model_Runner.Tools.Harmony_Channel) > 0
+      then
+         return Model_Runner.Tools.Harmony_Answer (Reply);
+      end if;
+
       if Close = 0 then
          --  Reasoning that never closed is no answer: a delegated task
          --  that stopped mid-thought handed its thinking back as one.

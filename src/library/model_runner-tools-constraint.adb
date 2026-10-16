@@ -819,6 +819,15 @@ package body Model_Runner.Tools.Constraint is
          return;
       end if;
 
+      if Syntax = Model_Runner.Tools.Harmony_Call then
+         --  gpt-oss's harmony form: its calls and its channels are written
+         --  in special tokens the model was trained to place, and held by
+         --  no grammar here -- the reader takes the calls out of whatever
+         --  it wrote.
+         Model_Runner.Grammar.Compile (Into, Free_Text, Status);
+         return;
+      end if;
+
       if Syntax = Model_Runner.Tools.Recipient_JSON then
          --  Functionary's ">>>" recipient form. With no tools offered the
          --  reply is prose; with tools, a tight grammar holds the model to a

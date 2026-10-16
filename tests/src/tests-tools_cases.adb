@@ -3062,6 +3062,146 @@ package body Tests.Tools_Cases is
               "a failure was not answered as its class is");
    end Failures_Are_Recovered_By_Their_Class;
 
+   --  gpt-oss's harmony form: its template recognised, a call read out of
+   --  a message addressed to "functions.NAME" in either place the header
+   --  names it, the reasoning before a call taken as the turn's words, and
+   --  an answer read off the final channel -- the reply's own markers kept
+   --  out of the turn, which the template refuses.
+   procedure Harmony_Calls_Are_Read
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Offer : constant String :=
+        "[{""type"": ""function"", ""function"": {""name"": ""list_directory"", "
+        & """parameters"": {""type"": ""object"", ""properties"": {"
+        & """path"": {""type"": ""string""}}}}}]";
+
+      Defs   : aliased Tools.Definitions;
+      Status : E.Error_Info;
+
+      Call_Reply : constant String :=
+        "<|channel|>analysis<|message|>Look at src first; A < B.<|end|>"
+        & "<|start|>assistant<|channel|>commentary to=functions.list_directory"
+        & " <|constrain|>json<|message|>{""path"": ""src""}";
+      Header_Reply : constant String :=
+        "<|start|>assistant to=functions.list_directory<|channel|>commentary"
+        & " json<|message|>{""path"": "".""}";
+      Answer_Reply : constant String :=
+        "<|channel|>analysis<|message|>Done.<|end|><|start|>assistant"
+        & "<|channel|>final<|message|>status: done" & ASCII.LF
+        & "summary: listed<|return|>";
+
+      function Read (Reply : String) return String is
+         Asked : Tools.Calls;
+         Said  : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Tools.Read_Calls (Asked, Reply, Status, Syntax => Tools.Harmony_Call,
+                           Offered => Defs'Unchecked_Access);
+         if E.Is_Error (Status) then
+            Tools.Close (Asked);
+            return "error " & E.Error_Code'Image (Status.Code);
+         end if;
+         for Index in 1 .. Tools.Count (Asked) loop
+            Ada.Strings.Unbounded.Append
+              (Said, Tools.Called (Asked, Index) & "("
+                     & Tools.Arguments (Asked, Index) & ")");
+         end loop;
+         Tools.Close (Asked);
+         return Ada.Strings.Unbounded.To_String (Said);
+      end Read;
+
+      procedure Same (Got, Wanted, What : String) is
+      begin
+         Assert (Got = Wanted, What & ": [" & Got & "] where [" & Wanted
+                 & "] was meant");
+      end Same;
+   begin
+      Tools.Read (Defs, Offer, Status);
+      Assert (E.Is_Ok (Status), "the offer did not parse");
+
+      declare
+         use Ada.Streams.Stream_IO;
+         File : File_Type;
+      begin
+         Open (File, In_File, "fixtures/gpt-oss-own.jinja");
+         declare
+            Text : String (1 .. Natural (Size (File)));
+            Last : Ada.Streams.Stream_Element_Offset;
+            Raw  : Ada.Streams.Stream_Element_Array
+              (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+         begin
+            Read (File, Raw, Last);
+            for Index in Text'Range loop
+               Text (Index) := Character'Val
+                 (Raw (Ada.Streams.Stream_Element_Offset (Index)));
+            end loop;
+            Same (Model_Runner.Templates.Recognise (Text),
+                  Model_Runner.Templates.Harmony_Shape,
+                  "gpt-oss's own template was not recognised");
+         end;
+         Close (File);
+      end;
+      Assert (Tools."=" (Model_Runner.Templates.Reading_Syntax
+                           (Model_Runner.Templates.Harmony_Shape),
+                         Tools.Harmony_Call),
+              "a harmony template's calls were not read in its syntax");
+
+      Same (Read (Call_Reply), "list_directory({""path"": ""src""})",
+            "a call named on the channel was not read");
+      Same (Read (Header_Reply), "list_directory({""path"": "".""})",
+            "a call named in the header was not read");
+      Same (Read (Answer_Reply), "", "an answer was read as a call");
+      Same (Read ("<|channel|>commentary to=functions.list_directory json"),
+            "error TOOLS_CALL_MALFORMED",
+            "a call cut off before its body was not refused");
+
+      declare
+         First, Last : Natural;
+      begin
+         Tools.Spoken_Span (Call_Reply, Tools.Harmony_Call, First, Last);
+         Same (Call_Reply (First .. Last), "Look at src first; A < B.",
+               "the reasoning before a call was not the turn's words");
+      end;
+
+      Same (Tools.Harmony_Answer (Answer_Reply),
+            "status: done" & ASCII.LF & "summary: listed",
+            "the final channel's message was not the answer");
+      Same (Tools.Harmony_Answer (Call_Reply), "",
+            "a reply that only called answered something");
+      Same (Model_Runner.Agent.Answer_Of (Answer_Reply),
+            "status: done" & ASCII.LF & "summary: listed",
+            "the agent did not take the final channel as the answer");
+
+      --  And a turn appended as the template will read it back: the
+      --  answer alone, the call's reasoning beside its call.
+      declare
+         Talk    : Model_Runner.Conversation.History;
+         Reading : E.Error_Info;
+      begin
+         Model_Runner.Conversation.Open (Talk, Status => Status);
+         Model_Runner.Conversation.Append
+           (Talk, Model_Runner.Conversation.User_Role, "go", Status);
+         Model_Runner.Conversation.Append_Reply
+           (Talk, Call_Reply, Status, Reading, Syntax => Tools.Harmony_Call,
+            Offered => Defs'Unchecked_Access);
+         Same (Model_Runner.Conversation.Content_At (Talk, 2),
+               "Look at src first; A < B.",
+               "a calling turn kept more than its reasoning");
+         Assert (Model_Runner.Conversation.Call_Count (Talk, 2) = 1,
+                 "a calling turn did not carry its call");
+         Model_Runner.Conversation.Append_Reply
+           (Talk, Answer_Reply, Status, Reading, Syntax => Tools.Harmony_Call,
+            Offered => Defs'Unchecked_Access);
+         Same (Model_Runner.Conversation.Content_At (Talk, 3),
+               "status: done" & ASCII.LF & "summary: listed",
+               "an answering turn kept the channels' markers");
+         Model_Runner.Conversation.Close (Talk);
+      end;
+
+      Tools.Close (Defs);
+   end Harmony_Calls_Are_Read;
+
    --  Calls read as each family writes them, round 13 of the review:
    --  a Qwen3-Coder value keeps its indent and is typed by its schema;
    --  Llama 3's "parameters" is read; Mistral's [TOOL_CALLS] and
@@ -3752,6 +3892,10 @@ package body Tests.Tools_Cases is
         (T, Calls_Are_Read_As_Families_Write_Them'Access,
          "calls are read as Qwen3-Coder, Llama 3, Mistral, DeepSeek, MiniCPM "
          & "and Functionary write them, past the reasoning and not in it");
+      Register_Routine
+        (T, Harmony_Calls_Are_Read'Access,
+         "calls are read as gpt-oss's harmony form writes them, and its "
+         & "answer off the final channel");
       Register_Routine
         (T, Recipient_Is_Shaped'Access,
          "Functionary's recipient form is shaped by the call grammar: a "

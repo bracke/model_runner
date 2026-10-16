@@ -130,7 +130,26 @@ package Model_Runner.Tools is
       Python_Code,      --  ```tool_code\nname(a=1)\n```, Gemma's; or open JSON
       Mistral_Call,     --  [TOOL_CALLS]name[ARGS]{"a": 1}, Mistral's own
       DeepSeek_Fenced,  --  DeepSeek R1's: function, the name, a ```json fence
-      DeepSeek_Plain);  --  DeepSeek V3.1's: the name, the object
+      DeepSeek_Plain,   --  DeepSeek V3.1's: the name, the object
+      Harmony_Call);    --  to=functions.name ...<|message|>{"a": 1}, gpt-oss's
+
+   --  gpt-oss's harmony markers: what names a call's recipient in a
+   --  message's header, what opens a message's body, and the channels a
+   --  reply's reasoning and its answer are written on.
+   Harmony_Recipient : constant String := "to=functions.";
+   Harmony_Message   : constant String := "<|message|>";
+   Harmony_Analysis  : constant String := "<|channel|>analysis<|message|>";
+   Harmony_Final     : constant String := "<|channel|>final<|message|>";
+   Harmony_Channel   : constant String := "<|channel|>";
+
+   --  What a harmony reply answers: the body of its last message on the
+   --  final channel, up to the marker that ends it; nothing where it wrote
+   --  on other channels only -- reasoning, or a call -- and the reply
+   --  itself where it is not in the harmony form at all.
+   --
+   --  @param Reply What the model produced.
+   --  @return The answer.
+   function Harmony_Answer (Reply : String) return String;
 
    --  The two characters DeepSeek's markers are written with, as UTF-8:
    --  U+FF5C, the fullwidth vertical line, and U+2581, the lower one-eighth
@@ -256,8 +275,11 @@ package Model_Runner.Tools is
    --  ">>>all" block's body, which is not a prefix -- a reply may open with a
    --  call and carry the words after it -- so this finds that block wherever
    --  it stands and answers its body, the trailing whitespace the template
-   --  re-adds taken off. Last below First is an empty span: a reply that only
-   --  called, whose turn carries the calls and no words.
+   --  re-adds taken off. For gpt-oss's harmony form it is the body of the
+   --  last analysis message before the first call, which is what its
+   --  template renders back before the call. Last below First is an empty
+   --  span: a reply that only called, whose turn carries the calls and no
+   --  words.
    --
    --  @param Reply What the model produced.
    --  @param Syntax The call syntax the reply is in.

@@ -731,6 +731,13 @@ package body Model_Runner.Templates is
         and then Has (Model_Runner.Tools.Mistral_Args)
       then
          return Mistral_Shape;
+      elsif Has (Model_Runner.Tools.Harmony_Channel)
+        and then Has ("to=") and then Has ("functions.")
+      then
+         --  gpt-oss's: a call is a message to "functions.NAME", on a
+         --  channel. Before the turn markers, since its <|start|> and
+         --  <|end|> are the ones Phi3's template shares.
+         return Harmony_Shape;
       elsif Has (Model_Runner.Tools.DeepSeek_Sep) then
          return (if Has ("function" & Model_Runner.Tools.DeepSeek_Sep)
                    or else Has ("tool['type'] + '"
@@ -766,6 +773,7 @@ package body Model_Runner.Templates is
    is (if Name = Mistral_Shape then Model_Runner.Tools.Mistral_Call
        elsif Name = DeepSeek_Shape then Model_Runner.Tools.DeepSeek_Fenced
        elsif Name = DeepSeek_Plain_Shape then Model_Runner.Tools.DeepSeek_Plain
+       elsif Name = Harmony_Shape then Model_Runner.Tools.Harmony_Call
        elsif Name = Format_Name (Format_Qwen3_Coder)
        then Model_Runner.Tools.Qwen_XML
        elsif Name = Format_Name (Format_MiniCPM)

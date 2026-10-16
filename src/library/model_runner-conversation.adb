@@ -687,9 +687,17 @@ package body Model_Runner.Conversation is
         or else Model_Runner.Tools.Count (Asked) = 0
       then
          --  Nothing to take apart, or nothing this can take apart. Either
-         --  way the reply is the turn, exactly as it arrived.
+         --  way the reply is the turn, exactly as it arrived -- but for a
+         --  harmony reply, whose turn is its final message: its template
+         --  refuses a turn that carries the channels' markers.
          Model_Runner.Tools.Close (Asked);
-         Append (Item, Assistant_Role, Reply, Status);
+         if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Harmony_Call)
+         then
+            Append (Item, Assistant_Role,
+                    Model_Runner.Tools.Harmony_Answer (Reply), Status);
+         else
+            Append (Item, Assistant_Role, Reply, Status);
+         end if;
          return;
       end if;
 

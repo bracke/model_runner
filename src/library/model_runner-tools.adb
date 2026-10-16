@@ -401,6 +401,35 @@ package body Model_Runner.Tools is
       return Reply'Length;
    end Spoken_Length;
 
+   --------------------
+   -- Harmony_Answer --
+   --------------------
+
+   function Harmony_Answer (Reply : String) return String is
+      Open : Natural := 0;
+      Shut : Natural;
+   begin
+      if Ada.Strings.Fixed.Index (Reply, Harmony_Channel) = 0 then
+         return Reply;
+      end if;
+
+      for Start in Reply'First .. Reply'Last - Harmony_Final'Length + 1 loop
+         if Reply (Start .. Start + Harmony_Final'Length - 1) = Harmony_Final
+         then
+            Open := Start + Harmony_Final'Length;
+         end if;
+      end loop;
+
+      if Open = 0 then
+         return "";
+      end if;
+
+      --  To the marker that ends the message -- <|end|>, or the <|return|>
+      --  that ends the reply -- where the reply carries one.
+      Shut := Ada.Strings.Fixed.Index (Reply (Open .. Reply'Last), "<|");
+      return Reply (Open .. (if Shut = 0 then Reply'Last else Shut - 1));
+   end Harmony_Answer;
+
    -----------------
    -- Spoken_Span --
    -----------------
@@ -477,6 +506,38 @@ package body Model_Runner.Tools is
                   return;
                end if;
             end loop;
+         end;
+         return;
+      end if;
+
+      if Syntax = Harmony_Call then
+         --  The reasoning before the first call: the last analysis
+         --  message's body that begins before it, to the marker after it.
+         declare
+            Call : constant Natural :=
+              Ada.Strings.Fixed.Index (Reply, Harmony_Recipient);
+            Upto : constant Natural :=
+              (if Call = 0 then Reply'Last else Call - 1);
+            Open : Natural := 0;
+         begin
+            First := Reply'First;
+            Last  := Reply'First - 1;
+            for Start in Reply'First .. Upto - Harmony_Analysis'Length + 1 loop
+               if Reply (Start .. Start + Harmony_Analysis'Length - 1)
+                  = Harmony_Analysis
+               then
+                  Open := Start + Harmony_Analysis'Length;
+               end if;
+            end loop;
+            if Open /= 0 and then Open <= Upto then
+               declare
+                  Shut : constant Natural :=
+                    Ada.Strings.Fixed.Index (Reply (Open .. Upto), "<|");
+               begin
+                  First := Open;
+                  Last  := (if Shut = 0 then Upto else Shut - 1);
+               end;
+            end if;
          end;
          return;
       end if;
@@ -1788,6 +1849,85 @@ package body Model_Runner.Tools is
                end;
             end loop;
          end;
+
+      when Harmony_Call =>
+         --  gpt-oss's harmony form: a call is a message whose header names
+         --  its recipient -- "to=functions.NAME", before the channel or
+         --  after it -- and whose body, after <|message|>, is the
+         --  arguments object, up to the <|call|> that ends generation.
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Marks (Index, Harmony_Recipient) then
+               declare
+                  Name_First : constant Positive :=
+                    Index + Harmony_Recipient'Length;
+                  Name_Last  : Natural := Name_First - 1;
+                  Body_At    : Natural;
+               begin
+                  while Name_Last < Reply'Last
+                    and then Reply (Name_Last + 1)
+                             in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9'
+                              | '_' | '-'
+                  loop
+                     Name_Last := Name_Last + 1;
+                  end loop;
+
+                  Body_At := Ada.Strings.Fixed.Index
+                    (Reply (Name_Last + 1 .. Reply'Last), Harmony_Message);
+
+                  declare
+                     Name : constant String := Reply (Name_First .. Name_Last);
+                  begin
+                     if Name = "" or else Body_At = 0 then
+                        --  A header that stopped before its body is a
+                        --  reply cut off in the middle of a call.
+                        Malformed;
+                        return;
+                     end if;
+
+                     Body_At := Body_At + Harmony_Message'Length;
+
+                     if Offered /= null and then not Offers (Offered.all, Name)
+                     then
+                        Index := Body_At;
+                     else
+                        declare
+                           Open : Natural := Body_At;
+                        begin
+                           while Open <= Reply'Last
+                             and then Reply (Open) in ' ' | ASCII.LF
+                                                    | ASCII.CR | ASCII.HT
+                           loop
+                              Open := Open + 1;
+                           end loop;
+
+                           if Open > Reply'Last or else Reply (Open) /= '{'
+                           then
+                              Store (Name, "{}");
+                              Index := Open;
+                           else
+                              declare
+                                 Shut : constant Natural := Object_End (Open);
+                              begin
+                                 if Shut = 0 then
+                                    Malformed;
+                                    return;
+                                 end if;
+                                 Store_Object (Name, Reply (Open .. Shut));
+                                 Index := Shut + 1;
+                              end;
+                           end if;
+                        end;
+                        if E.Is_Error (Status) then
+                           return;
+                        end if;
+                     end if;
+                  end;
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
 
       when Mistral_Call =>
          --  Mistral's own: [TOOL_CALLS] before each call, the name, [ARGS]

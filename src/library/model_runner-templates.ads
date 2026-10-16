@@ -269,12 +269,16 @@ package Model_Runner.Templates is
    function Recognise (Source : String) return String;
 
    --  The names Recognise gives the call shapes no carried format writes:
-   --  Mistral's, and DeepSeek's two. Syntax_Of reads them; Built_In has no
+   --  Mistral's, DeepSeek's two and harmony's. Syntax_Of reads them; Built_In has no
    --  template for them, and a model's own template is never replaced by
    --  one.
    Mistral_Shape        : constant String := "mistral";
    DeepSeek_Shape       : constant String := "deepseek";
    DeepSeek_Plain_Shape : constant String := "deepseek-v3.1";
+
+   --  And gpt-oss's harmony form, whose calls are messages addressed to a
+   --  function in their header.
+   Harmony_Shape        : constant String := "harmony";
 
    --  The shape a model rendered with a carried format writes tool calls in.
    --
