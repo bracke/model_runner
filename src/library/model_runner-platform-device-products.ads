@@ -3543,6 +3543,8 @@ private
       Narrow_More : System.Address := System.Null_Address;
       Listed_Tile : System.Address := System.Null_Address;
       Listed_Tile_More : System.Address := System.Null_Address;
+      Listed_Tile_Wide : System.Address := System.Null_Address;
+      Listed_Tile_Wide_More : System.Address := System.Null_Address;
 
       --  And the normalization, which is here for the submission it saves
       --  rather than for itself: a layer normalizes twice and the host
@@ -3625,12 +3627,17 @@ private
       Narrow_Line : System.Address := System.Null_Address;
       Narrow_More_Line : System.Address := System.Null_Address;
 
-      --  The wide tile compiled once more at sixty-four vectors a tile,
+      --  The wide tile compiled once more at thirty-two vectors a tile,
       --  for listed products: a run of thirty-two in a tile of a hundred
       --  and twenty-eight is three quarters padding the instruction
       --  multiplies all the same.
       Listed_Line : System.Address := System.Null_Address;
       Listed_More_Line : System.Address := System.Null_Address;
+
+      --  And again at sixty-four, for runs long enough to fill it, in the
+      --  two compilations that are not the low-bit one.
+      Listed_Wide_Line : System.Address := System.Null_Address;
+      Listed_Wide_More_Line : System.Address := System.Null_Address;
 
       --  The tile's LOW_BITS compilation, in the three widths the others
       --  come in, for the twelve low-bit packings; each null leaves those

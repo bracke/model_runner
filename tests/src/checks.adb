@@ -6383,17 +6383,20 @@ package body Checks is
 
             --  The shader states its rows under LISTED first and then
             --  for the rest, and its vectors under NARROW, under LISTED
-            --  and then for the rest, in that order.
+            --  with LISTED_WIDE, under LISTED and then for the rest, in
+            --  that order.
             Listed_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ");
             Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ", Skip => 1);
             Thin_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ");
-            Listed_Said : constant Natural :=
+            Wide_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 1);
-            Vecs_Said : constant Natural :=
+            Listed_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 2);
+            Vecs_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ", Skip => 3);
             Rows_Asked : constant Natural :=
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
@@ -6402,6 +6405,8 @@ package body Checks is
               Number_After (Engine, "Narrow_Vectors : constant := ");
             Listed_Asked : constant Natural :=
               Number_After (Engine, "Listed_Vectors : constant := ");
+            Wide_Asked : constant Natural :=
+              Number_After (Engine, "Listed_Wide_Vectors : constant := ");
             Listed_Rows_Asked : constant Natural :=
               Number_After (Engine, "Listed_Rows    : constant := ");
 
@@ -6416,16 +6421,19 @@ package body Checks is
               or else Rows_Asked = 0 or else Vecs_Asked = 0
               or else Thin_Said = 0 or else Thin_Asked = 0
               or else Listed_Said = 0 or else Listed_Asked = 0
+              or else Wide_Said = 0 or else Wide_Asked = 0
               or else Listed_Rows_Said = 0 or else Listed_Rows_Asked = 0
             then
                Fail ("one of the matrix tile's numbers could not be "
                      & "read: the shader states TILE_R and TILE_V for each "
                      & "of its compilations and the engine states Tile_Rows,"
-                     & " Tile_Vectors, Narrow_Vectors, Listed_Vectors and "
-                     & "Listed_Rows, and this check reads them all as text");
+                     & " Tile_Vectors, Narrow_Vectors, Listed_Vectors, "
+                     & "Listed_Wide_Vectors and Listed_Rows, and this check "
+                     & "reads them all as text");
             elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked
               or else Thin_Said /= Thin_Asked
               or else Listed_Said /= Listed_Asked
+              or else Wide_Said /= Wide_Asked
               or else Listed_Rows_Said /= Listed_Rows_Asked
             then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
@@ -6433,12 +6441,14 @@ package body Checks is
                      & Natural'Image (Vecs_Said) & " vectors, or"
                      & Natural'Image (Thin_Said) & " under NARROW, or"
                      & Natural'Image (Listed_Rows_Said) & " by"
-                     & Natural'Image (Listed_Said) & " under LISTED, and the "
-                     & "engine dispatches for" & Natural'Image (Rows_Asked)
+                     & Natural'Image (Listed_Said) & " under LISTED or"
+                     & Natural'Image (Wide_Said) & " with LISTED_WIDE, and "
+                     & "the engine dispatches for" & Natural'Image (Rows_Asked)
                      & " by" & Natural'Image (Vecs_Asked) & " or"
                      & Natural'Image (Thin_Asked) & " or"
                      & Natural'Image (Listed_Rows_Asked) & " by"
-                     & Natural'Image (Listed_Asked)
+                     & Natural'Image (Listed_Asked) & " or"
+                     & Natural'Image (Wide_Asked)
                      & "; whatever a workgroup does not reach is left "
                      & "uncomputed, which is noise and not an error");
             end if;
@@ -7178,6 +7188,29 @@ package body Checks is
                   & "compile it with -DLISTED -DMORE_FORMATS to "
                   & "matrix_listed_extra.spv, and run 'tests shader' again "
                   & "with every shader named");
+         end if;
+
+         --  And the two again with LISTED_WIDE, for the long runs.
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Wide_Digest
+         then
+            Fail ("the wide listed compilation of "
+                  & "src/shaders/matrix_product.comp is older than the "
+                  & "source; run ./compile-shaders.sh");
+         end if;
+
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest
+                    /= Model_Runner.Shaders.Matrix_Listed_Wide_Extra_Digest
+         then
+            Fail ("the wide listed compilation of "
+                  & "src/shaders/matrix_product.comp for the other nine "
+                  & "formats is older than the source; run "
+                  & "./compile-shaders.sh");
          end if;
       end;
 

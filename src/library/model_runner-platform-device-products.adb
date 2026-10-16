@@ -249,6 +249,18 @@ package body Model_Runner.Platform.Device.Products is
    Listed_Rows    : constant := 64;
    Listed_Step    : constant := 64;
 
+   --  And the tile again at sixty-four vectors, for runs long enough to
+   --  fill it: an expert's weights are decoded once for every tile of its
+   --  run, so a run of sixty decodes half as often. Taken where the runs
+   --  average Listed_Wide_Run or more, as gpt-oss's thirty-two experts
+   --  four at a time make them: its 481-token prompt 280 -> 316 tokens a
+   --  second, its 2,000-token one 302 -> 372, Mellum's sixty-four eight at
+   --  a time 664 -> 674 and 626 -> 658, the answers the same. Not for the
+   --  low-bit formats: Qwen3.6's IQ3_XXS stacks read 2% slower at runs of
+   --  sixteen and the same at sixty-two.
+   Listed_Wide_Vectors : constant := 64;
+   Listed_Wide_Run     : constant := 48;
+
    --  And the narrow tile's width, which the same source compiled with
    --  NARROW declares. A tile costs what its width costs whether the batch
    --  fills it or not, so a batch this size or smaller is given one of
@@ -1379,13 +1391,32 @@ package body Model_Runner.Platform.Device.Products is
        else (if On_Extra (Packing)
              then Item.Extra_Line else Item.Matrix_Line));
 
-   --  The tile a listed product binds: the wide tile's words at sixty-four
+   --  The tile a listed product binds: the wide tile's words at thirty-two
    --  vectors, in the compilation that decodes the format.
    function Listed_Pipeline
      (Item : Engine; Packing : Weight_Packing) return Address
    is (if Packing in Low_Packing then Item.Listed_Low_Line
        elsif On_Extra (Packing) then Item.Listed_More_Line
        else Item.Listed_Line);
+
+   --  And the tile at Listed_Wide_Vectors, where there is one for the
+   --  format: null for the low-bit formats.
+   function Listed_Wide_Pipeline
+     (Item : Engine; Packing : Weight_Packing) return Address
+   is (if Packing in Low_Packing then Null_Handle
+       elsif On_Extra (Packing) then Item.Listed_Wide_More_Line
+       else Item.Listed_Wide_Line);
+
+   --  Whether a listed product of Count positions, Used of Experts each,
+   --  takes the wider tile: where its runs average Listed_Wide_Run.
+   function Listed_Wide
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Count   : Natural;
+      Used    : Natural;
+      Experts : Natural) return Boolean
+   is (Listed_Wide_Pipeline (Item, Packing) /= Null_Handle
+       and then Count * Used >= Listed_Wide_Run * Natural'Max (Experts, 1));
 
    function Uses_Matrix
      (Item    : Engine;
@@ -4024,6 +4055,11 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Matrix_Listed;
             Listed_More : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Matrix_Listed_Extra;
+            Listed_Wide : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Matrix_Listed_Wide;
+            Listed_Wide_More :
+              aliased constant Model_Runner.Shaders.Word_Array :=
+                Model_Runner.Shaders.Matrix_Listed_Wide_Extra;
             Request : aliased Shader_Create_Info;
          begin
             if Create = null then
@@ -4107,6 +4143,26 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Listed_Tile_More := Made;
+                  end if;
+
+                  Request.Size :=
+                    Interfaces.C.size_t (Listed_Wide'Length * 4);
+                  Request.Code := Listed_Wide'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Listed_Tile_Wide := Made;
+                  end if;
+
+                  Request.Size :=
+                    Interfaces.C.size_t (Listed_Wide_More'Length * 4);
+                  Request.Code := Listed_Wide_More'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Listed_Tile_Wide_More := Made;
                   end if;
 
                   declare
@@ -5298,7 +5354,7 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end if;
 
-                  --  And the wide tile at sixty-four vectors, for listed
+                  --  And the wide tile at thirty-two vectors, for listed
                   --  products.
                   if Item.Listed_Tile /= Null_Handle then
                      Request.Stage.Module := Item.Listed_Tile;
@@ -5319,6 +5375,29 @@ package body Model_Runner.Platform.Device.Products is
                                 Made'Access) = 0
                      then
                         Item.Listed_More_Line := Made;
+                     end if;
+                  end if;
+
+                  --  And at Listed_Wide_Vectors, for the long runs.
+                  if Item.Listed_Tile_Wide /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile_Wide;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Wide_Line := Made;
+                     end if;
+                  end if;
+
+                  if Item.Listed_Tile_Wide_More /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile_Wide_More;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Wide_More_Line := Made;
                      end if;
                   end if;
 
@@ -5989,6 +6068,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_Wide_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_Wide_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Wider_Line, "vkDestroyPipeline");
       Give_Back (Item.Wider_More_Line, "vkDestroyPipeline");
@@ -6022,6 +6103,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_More, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile_Wide, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile_Wide_More, "vkDestroyShaderModule");
       Give_Back (Item.Low_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Wider_More, "vkDestroyShaderModule");
@@ -13671,8 +13754,8 @@ package body Model_Runner.Platform.Device.Products is
       --  long enough for the tile at all, and the slice's rows divide
       --  by it. The row kernel walks the runs otherwise.
       --
-      --  The wide tile's words at sixty-four vectors, whatever an expert's
-      --  run: a run of thirty-two in a tile of a hundred and twenty-eight
+      --  The wide tile's words at thirty-two vectors, or at sixty-four
+      --  where the runs are long (Listed_Wide): a run of thirty-two in a tile of a hundred and twenty-eight
       --  is three quarters padding the instruction multiplies all the
       --  same, and the narrow tile of thirty-two -- one subgroup -- read
       --  slower than either, because it decodes a row into the
@@ -17629,6 +17712,11 @@ package body Model_Runner.Platform.Device.Products is
                if Listed_Tiled (Index) and then Barrier /= null then
                   declare
                      Slots  : constant Natural := Listed_Slots (Index);
+                     Wide   : constant Boolean :=
+                       Listed_Wide (Item, This.Packing, Count, This.Used,
+                                    This.Gathers);
+                     Vectors : constant Positive :=
+                       (if Wide then Listed_Wide_Vectors else Listed_Vectors);
                      Halved_Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Columns),
                         Columns => C.unsigned (Slots),
@@ -17677,15 +17765,15 @@ package body Model_Runner.Platform.Device.Products is
 
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,
-                        Listed_Pipeline (Item, This.Packing));
+                        (if Wide then Listed_Wide_Pipeline (Item, This.Packing)
+                         else Listed_Pipeline (Item, This.Packing)));
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
                      Dispatch
                        (Item.Buffer,
                         C.unsigned (This.Each / Listed_Rows),
                         C.unsigned
-                          ((Count + 15 + Listed_Vectors - 1)
-                           / Listed_Vectors),
+                          ((Count + 15 + Vectors - 1) / Vectors),
                         C.unsigned (This.Gathers));
 
                      --  And the short runs, walked as integers over the

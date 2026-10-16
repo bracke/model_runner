@@ -9190,7 +9190,6 @@ package body Tests.Backend_Cases is
       --  A whole Q4_K super-block of columns either way round.
       Width   : constant := 256;
       Feed    : constant := 256;
-      Count   : constant := 40;
 
       Held   : Devices.Inventory;
       Opened : Devices.Context;
@@ -9211,143 +9210,206 @@ package body Tests.Backend_Cases is
         new N.Real_Array (0 .. Experts * Feed * Width - 1);
       Downs  : constant T.Real_Array_Access :=
         new N.Real_Array (0 .. Experts * Width * Feed - 1);
-      Inputs : N.Real_Array (0 .. Count * Width - 1);
 
-      --  What the batch's sequence leaves: the router's scores, the
-      --  routing, the inversion's room, the three listed answers with
-      --  their padding, the combination, and the mix, a position each.
-      Padded : constant Natural := Products.Run_Slots (Experts, Used, Count);
-      Batch_Room : constant N.Element_Count :=
-        N.Element_Count (Count)
-        * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
-                           + 3 * Padded * Feed + Padded * Width + Width);
+      --  The products of one batch of Count positions over each packing,
+      --  against the positions one at a time.
+      procedure At_Count (Count : Positive) is
+         Inputs : N.Real_Array (0 .. N.Element_Count (Count * Width) - 1);
 
-      Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
-      One   : N.Real_Array
-        (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
-        := [others => 0.0];
-
-      --  Run the batch and the positions one at a time over stacks in
-      --  one packing, and say how far apart the mixes are.
-      type Byte_Access is access B.Byte_Array;
-
-      procedure Both (Packing : Products.Weight_Packing; Worst : out N.Real)
-      is
-         use type Products.Weight_Packing;
-
-         Plain : constant Boolean := Packing = Products.Values_F32;
-
-         G_Bytes : constant Byte_Access :=
-           new B.Byte_Array'
-             (if Plain then Fixtures.Encode_F32 (Gates.all)
-              elsif Packing = Products.Packed_Q4_K
-              then Fixtures.Encode_Q4_K (Gates.all)
-              elsif Packing = Products.Packed_Q6_K
-              then Fixtures.Encode_Q6_K (Gates.all)
-              else Fixtures.Encode_Q8_0 (Gates.all));
-         U_Bytes : constant Byte_Access :=
-           new B.Byte_Array'
-             (if Plain then Fixtures.Encode_F32 (Ups.all)
-              elsif Packing = Products.Packed_Q4_K
-              then Fixtures.Encode_Q4_K (Ups.all)
-              elsif Packing = Products.Packed_Q6_K
-              then Fixtures.Encode_Q6_K (Ups.all)
-              else Fixtures.Encode_Q8_0 (Ups.all));
-         D_Bytes : constant Byte_Access :=
-           new B.Byte_Array'
-             (if Plain then Fixtures.Encode_F32 (Downs.all)
-              elsif Packing = Products.Packed_Q4_K
-              then Fixtures.Encode_Q4_K (Downs.all)
-              elsif Packing = Products.Packed_Q6_K
-              then Fixtures.Encode_Q6_K (Downs.all)
-              else Fixtures.Encode_Q8_0 (Downs.all));
-
-         Steps : Products.Sequence;
-
-         At_Mix : constant N.Element_Count :=
+         --  What the batch's sequence leaves: the router's scores, the
+         --  routing, the inversion's room, the three listed answers with
+         --  their padding, the combination, and the mix, a position each.
+         Padded : constant Natural := Products.Run_Slots (Experts, Used, Count);
+         Batch_Room : constant N.Element_Count :=
            N.Element_Count (Count)
            * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
-                              + 3 * Padded * Feed + Padded * Width);
-         One_Mix : constant N.Element_Count :=
-           N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
-                            + Used * Width);
-      begin
-         Worst := 0.0;
+                              + 3 * Padded * Feed + Padded * Width + Width);
 
-         Products.Open_Sequence (Steps);
-         Products.Add_Product
-           (Steps, Router (Router'First)'Address,
-            B.Byte_Count (Router'Length) * 4, 0,
-            Products.Values_F32, Experts, Width, Added, Kept => False);
-         Assert (Added, "the router's product was refused");
-         Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
-         Assert (Added, "the routing step was refused");
-         Products.Add_Invert (Steps, Experts, Used, 2, Added);
-         Assert (Added, "the inversion was refused");
-         Products.Add_Listed_Product
-           (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
-            Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
-            Added, Kept => False, Chained => False);
-         Assert (Added, "the listed gates were refused");
-         Products.Add_Listed_Product
-           (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
-            Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
-            Added, Kept => False, Chained => False);
-         Assert (Added, "the listed ups were refused");
-         Products.Add_Combination (Steps, 0, Added, Kept => False);
-         Assert (Added, "the combination was refused");
-         Products.Add_Listed_Product
-           (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
-            Packing, Experts * Width, Width, Feed, Experts, Used, 3, Count,
-            Added, Kept => False, By_Slot => True);
-         Assert (Added, "the listed downs were refused");
-         Products.Add_Mix (Steps, Width, Used, 7, 3, Added);
-         Assert (Added, "the listed mix was refused");
+         Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
+         One   : N.Real_Array
+           (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
+           := [others => 0.0];
 
-         Products.Run (Engine, Steps, Inputs, Count, Batch, Ok, Halted);
-         Assert (Ok, "the batch's listed mixture was refused");
+         --  Run the batch and the positions one at a time over stacks in
+         --  one packing, and say how far apart the mixes are.
+         type Byte_Access is access B.Byte_Array;
 
-         for Position in 0 .. Count - 1 loop
+         procedure Both (Packing : Products.Weight_Packing; Worst : out N.Real)
+         is
+            use type Products.Weight_Packing;
+
+            Plain : constant Boolean := Packing = Products.Values_F32;
+
+            G_Bytes : constant Byte_Access :=
+              new B.Byte_Array'
+                (if Plain then Fixtures.Encode_F32 (Gates.all)
+                 elsif Packing = Products.Packed_Q4_K
+                 then Fixtures.Encode_Q4_K (Gates.all)
+                 elsif Packing = Products.Packed_Q6_K
+                 then Fixtures.Encode_Q6_K (Gates.all)
+                 elsif Packing = Products.Packed_MXFP4
+                 then Fixtures.Encode_MXFP4 (Gates.all)
+                 else Fixtures.Encode_Q8_0 (Gates.all));
+            U_Bytes : constant Byte_Access :=
+              new B.Byte_Array'
+                (if Plain then Fixtures.Encode_F32 (Ups.all)
+                 elsif Packing = Products.Packed_Q4_K
+                 then Fixtures.Encode_Q4_K (Ups.all)
+                 elsif Packing = Products.Packed_Q6_K
+                 then Fixtures.Encode_Q6_K (Ups.all)
+                 elsif Packing = Products.Packed_MXFP4
+                 then Fixtures.Encode_MXFP4 (Ups.all)
+                 else Fixtures.Encode_Q8_0 (Ups.all));
+            D_Bytes : constant Byte_Access :=
+              new B.Byte_Array'
+                (if Plain then Fixtures.Encode_F32 (Downs.all)
+                 elsif Packing = Products.Packed_Q4_K
+                 then Fixtures.Encode_Q4_K (Downs.all)
+                 elsif Packing = Products.Packed_Q6_K
+                 then Fixtures.Encode_Q6_K (Downs.all)
+                 elsif Packing = Products.Packed_MXFP4
+                 then Fixtures.Encode_MXFP4 (Downs.all)
+                 else Fixtures.Encode_Q8_0 (Downs.all));
+
+            Steps : Products.Sequence;
+
+            At_Mix : constant N.Element_Count :=
+              N.Element_Count (Count)
+              * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+                                 + 3 * Padded * Feed + Padded * Width);
+            One_Mix : constant N.Element_Count :=
+              N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
+                               + Used * Width);
+         begin
+            Worst := 0.0;
+
             Products.Open_Sequence (Steps);
             Products.Add_Product
               (Steps, Router (Router'First)'Address,
                B.Byte_Count (Router'Length) * 4, 0,
                Products.Values_F32, Experts, Width, Added, Kept => False);
+            Assert (Added, "the router's product was refused");
             Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
-            Products.Add_Gathered_Product
+            Assert (Added, "the routing step was refused");
+            Products.Add_Invert (Steps, Experts, Used, 2, Added);
+            Assert (Added, "the inversion was refused");
+            Products.Add_Listed_Product
               (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
-               Packing, Experts * Feed, Feed, Width, [others => 0], Used,
-               Added, Kept => False, Chained => False, Routed => 2);
-            Products.Add_Gathered_Product
+               Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
+               Added, Kept => False, Chained => False);
+            Assert (Added, "the listed gates were refused");
+            Products.Add_Listed_Product
               (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
-               Packing, Experts * Feed, Feed, Width, [others => 0], Used,
-               Added, Kept => False, Chained => False, Routed => 2);
+               Packing, Experts * Feed, Feed, Width, Experts, Used, 3, Count,
+               Added, Kept => False, Chained => False);
+            Assert (Added, "the listed ups were refused");
             Products.Add_Combination (Steps, 0, Added, Kept => False);
-            Products.Add_Gathered_Product
+            Assert (Added, "the combination was refused");
+            Products.Add_Listed_Product
               (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
-               Packing, Experts * Width, Width, Feed, [others => 0], Used,
-               Added, Kept => False, Chained => True, Apart => Feed,
-               Routed => 2);
-            Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
-            Assert (Added, "the gathered mixture was refused");
+               Packing, Experts * Width, Width, Feed, Experts, Used, 3, Count,
+               Added, Kept => False, By_Slot => True);
+            Assert (Added, "the listed downs were refused");
+            Products.Add_Mix (Steps, Width, Used, 7, 3, Added);
+            Assert (Added, "the listed mix was refused");
 
-            Products.Run
-              (Engine, Steps,
-               Inputs (N.Element_Count (Position * Width)
-                       .. N.Element_Count (Position * Width + Width - 1)),
-               1, One, Ok, Halted);
-            Assert (Ok, "the gathered mixture would not run");
+            Products.Run (Engine, Steps, Inputs, Count, Batch, Ok, Halted);
+            Assert (Ok, "the batch's listed mixture was refused");
 
-            for Row in 0 .. Width - 1 loop
-               Worst := N.Real'Max
-                 (Worst,
-                  abs (Batch (At_Mix + N.Element_Count (Position * Width + Row))
-                       - One (One_Mix + N.Element_Count (Row))));
+            for Position in 0 .. Count - 1 loop
+               Products.Open_Sequence (Steps);
+               Products.Add_Product
+                 (Steps, Router (Router'First)'Address,
+                  B.Byte_Count (Router'Length) * 4, 0,
+                  Products.Values_F32, Experts, Width, Added, Kept => False);
+               Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+               Products.Add_Gathered_Product
+                 (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+                  Packing, Experts * Feed, Feed, Width, [others => 0], Used,
+                  Added, Kept => False, Chained => False, Routed => 2);
+               Products.Add_Gathered_Product
+                 (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
+                  Packing, Experts * Feed, Feed, Width, [others => 0], Used,
+                  Added, Kept => False, Chained => False, Routed => 2);
+               Products.Add_Combination (Steps, 0, Added, Kept => False);
+               Products.Add_Gathered_Product
+                 (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+                  Packing, Experts * Width, Width, Feed, [others => 0], Used,
+                  Added, Kept => False, Chained => True, Apart => Feed,
+                  Routed => 2);
+               Products.Add_Mix (Steps, Width, Used, 6, 2, Added);
+               Assert (Added, "the gathered mixture was refused");
+
+               Products.Run
+                 (Engine, Steps,
+                  Inputs (N.Element_Count (Position * Width)
+                          .. N.Element_Count (Position * Width + Width - 1)),
+                  1, One, Ok, Halted);
+               Assert (Ok, "the gathered mixture would not run");
+
+               for Row in 0 .. Width - 1 loop
+                  Worst := N.Real'Max
+                    (Worst,
+                     abs (Batch (At_Mix + N.Element_Count (Position * Width + Row))
+                          - One (One_Mix + N.Element_Count (Row))));
+               end loop;
             end loop;
-         end loop;
-      end Both;
+         end Both;
 
-      Worst : N.Real;
+         Worst : N.Real;
+      begin
+         for Index in Inputs'Range loop
+            Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
+         end loop;
+
+         --  Not to the bit: the router's product goes to the thin kernel
+         --  for a batch of one and to the row kernel for forty, and the two
+         --  associate a score differently, so the shares differ in their
+         --  last bit. The experts' products are the same products.
+         Both (Products.Values_F32, Worst);
+         Assert (Worst < 1.0E-6,
+                 "the listed mixture over binary32 stacks answers"
+                 & N.Real'Image (Worst)
+                 & " away from the positions gathered one at a time, where "
+                 & "the products are the same products, at"
+                 & Natural'Image (Count) & " positions");
+
+         Both (Products.Packed_Q8_0, Worst);
+         Assert (Worst < 2.0E-2,
+                 "the listed mixture over Q8_0 stacks answers"
+                 & N.Real'Image (Worst)
+                 & " away from the positions gathered one at a time"
+                 & " at" & Natural'Image (Count) & " positions");
+
+         --  And Q4_K, which the listed tile decodes a step ahead of its
+         --  products rather than where it stages them.
+         --  2.8E-04 here, and 0.24 with the nibble of the wrong half read.
+         Both (Products.Packed_Q4_K, Worst);
+         Assert (Worst < 5.0E-3,
+                 "the listed mixture over Q4_K stacks answers"
+                 & N.Real'Image (Worst)
+                 & " away from the positions gathered one at a time"
+                 & " at" & Natural'Image (Count) & " positions");
+
+         --  And Q6_K, whose blocks begin two bytes into a word every other
+         --  time: 5.0E-05 here, and 0.32 with the odd blocks read unshifted.
+         Both (Products.Packed_Q6_K, Worst);
+         Assert (Worst < 5.0E-3,
+                 "the listed mixture over Q6_K stacks answers"
+                 & N.Real'Image (Worst)
+                 & " away from the positions gathered one at a time"
+                 & " at" & Natural'Image (Count) & " positions");
+
+         --  And MXFP4, which the listed tile decodes a step ahead in its
+         --  own way, its seventeen-byte blocks beginning at every byte of
+         --  a word in turn.
+         Both (Products.Packed_MXFP4, Worst);
+         Assert (Worst < 5.0E-3,
+                 "the listed mixture over MXFP4 stacks answers"
+                 & N.Real'Image (Worst)
+                 & " away from the positions gathered one at a time"
+                 & " at" & Natural'Image (Count) & " positions");
+      end At_Count;
    begin
       Devices.Open (Held, Found);
 
@@ -9385,43 +9447,12 @@ package body Tests.Backend_Cases is
       for Index in Downs'Range loop
          Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
       end loop;
-      for Index in Inputs'Range loop
-         Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
-      end loop;
 
-      --  Not to the bit: the router's product goes to the thin kernel
-      --  for a batch of one and to the row kernel for forty, and the two
-      --  associate a score differently, so the shares differ in their
-      --  last bit. The experts' products are the same products.
-      Both (Products.Values_F32, Worst);
-      Assert (Worst < 1.0E-6,
-              "the listed mixture over binary32 stacks answers"
-              & N.Real'Image (Worst)
-              & " away from the positions gathered one at a time, where "
-              & "the products are the same products");
-
-      Both (Products.Packed_Q8_0, Worst);
-      Assert (Worst < 2.0E-2,
-              "the listed mixture over Q8_0 stacks answers"
-              & N.Real'Image (Worst)
-              & " away from the positions gathered one at a time");
-
-      --  And Q4_K, which the listed tile decodes a step ahead of its
-      --  products rather than where it stages them.
-      --  2.8E-04 here, and 0.24 with the nibble of the wrong half read.
-      Both (Products.Packed_Q4_K, Worst);
-      Assert (Worst < 5.0E-3,
-              "the listed mixture over Q4_K stacks answers"
-              & N.Real'Image (Worst)
-              & " away from the positions gathered one at a time");
-
-      --  And Q6_K, whose blocks begin two bytes into a word every other
-      --  time: 5.0E-05 here, and 0.32 with the odd blocks read unshifted.
-      Both (Products.Packed_Q6_K, Worst);
-      Assert (Worst < 5.0E-3,
-              "the listed mixture over Q6_K stacks answers"
-              & N.Real'Image (Worst)
-              & " away from the positions gathered one at a time");
+      --  Forty positions, two of four experts each: runs of twenty, on
+      --  the listed tile of thirty-two. A hundred: runs of fifty, past
+      --  Listed_Wide_Run, on the tile of sixty-four.
+      At_Count (40);
+      At_Count (100);
 
       Products.Close (Engine);
       Devices.Close (Opened);

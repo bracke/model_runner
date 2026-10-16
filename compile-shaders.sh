@@ -151,6 +151,8 @@ compile matrix_narrow                matrix_product.comp   vulkan1.3 NARROW
 compile matrix_narrow_extra          matrix_product.comp   vulkan1.3 MORE_FORMATS NARROW
 compile matrix_listed                matrix_product.comp   vulkan1.3 LISTED
 compile matrix_listed_extra          matrix_product.comp   vulkan1.3 MORE_FORMATS LISTED
+compile matrix_listed_wide           matrix_product.comp   vulkan1.3 LISTED LISTED_WIDE
+compile matrix_listed_wide_extra     matrix_product.comp   vulkan1.3 MORE_FORMATS LISTED LISTED_WIDE
 compile matrix_low                   matrix_product.comp   vulkan1.3 LOW_BITS
 compile matrix_narrow_low            matrix_product.comp   vulkan1.3 LOW_BITS NARROW
 compile matrix_listed_low            matrix_product.comp   vulkan1.3 LOW_BITS LISTED

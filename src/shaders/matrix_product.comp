@@ -243,6 +243,11 @@ const uint TILE_R = 64u;
 //  it.
 #ifdef NARROW
 const uint TILE_V = 32u;
+#elif defined(LISTED) && defined(LISTED_WIDE)
+//  And compiled once more at sixty-four, for runs that average past
+//  forty-eight: the weights decoded half as often. The engine's
+//  Listed_Wide_Vectors carries the measurements.
+const uint TILE_V = 64u;
 #elif defined(LISTED)
 const uint TILE_V = 32u;
 #elif !defined(WIDER)
@@ -1613,6 +1618,65 @@ float e8m0_at (uint at) {
     return uintBitsToFloat (e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
 }
 
+#ifdef LISTED
+//  MXFP4's words for one invocation's half of a row in one step, read a
+//  step ahead as Q4_K's are in the other compilation: the five words a
+//  seventeen-byte block lies across, wherever in a word it begins. Read
+//  where they are decoded, a step's loads waited out their latency
+//  between the two barriers with nothing else to do; and decoded by
+//  MXFP4's own arithmetic rather than the six formats' shared chain of
+//  tests. gpt-oss's prompts read 316 -> 477 tokens a second at 481
+//  tokens, 375 -> 522 at 2,000, on the tile of sixty-four.
+void mx_fetch (uint row, uint k0, out uvec4 a, out uint e)
+{
+    uint i = (row + (k0 / 32u) * 17u) >> 2u;
+
+    a = uvec4 (w[i], w[i + 1u], w[i + 2u], w[i + 3u]);
+    e = w[i + 4u];
+}
+
+//  Two words joined and shifted down by a whole number of bytes, eight to
+//  thirty-two bits: the next word alone at thirty-two.
+uint mx_join (uint low, uint high, uint shift) {
+    return shift == 32u ? high : (low >> shift) | (high << (32u - shift));
+}
+
+//  And what the decode does with them: the scale byte where the block
+//  begins, the sixteen bytes of nibbles after it, this half's nibble of
+//  each through the fours.
+void mx_place (uvec4 a, uint e, uint row, uint k0, uint half_of, uint into)
+{
+    uint s = ((row + (k0 / 32u) * 17u) & 3u) * 8u;
+    uint t = s + 8u;
+    uint x = (a.x >> s) & 255u;
+    float scale = uintBitsToFloat (x < 2u ? (0x00200000u << x)
+                                          : ((x - 1u) << 23u));
+    uint turn = half_of * 4u;
+
+    uint q0 = mx_join (a.x, a.y, t) >> turn;
+    uint q1 = mx_join (a.y, a.z, t) >> turn;
+    uint q2 = mx_join (a.z, a.w, t) >> turn;
+    uint q3 = mx_join (a.w, e,   t) >> turn;
+
+    wt[into +  0u] = float16_t (scale * float (FOURS[ q0         & 15u]));
+    wt[into +  1u] = float16_t (scale * float (FOURS[(q0 >>  8u) & 15u]));
+    wt[into +  2u] = float16_t (scale * float (FOURS[(q0 >> 16u) & 15u]));
+    wt[into +  3u] = float16_t (scale * float (FOURS[(q0 >> 24u) & 15u]));
+    wt[into +  4u] = float16_t (scale * float (FOURS[ q1         & 15u]));
+    wt[into +  5u] = float16_t (scale * float (FOURS[(q1 >>  8u) & 15u]));
+    wt[into +  6u] = float16_t (scale * float (FOURS[(q1 >> 16u) & 15u]));
+    wt[into +  7u] = float16_t (scale * float (FOURS[(q1 >> 24u) & 15u]));
+    wt[into +  8u] = float16_t (scale * float (FOURS[ q2         & 15u]));
+    wt[into +  9u] = float16_t (scale * float (FOURS[(q2 >>  8u) & 15u]));
+    wt[into + 10u] = float16_t (scale * float (FOURS[(q2 >> 16u) & 15u]));
+    wt[into + 11u] = float16_t (scale * float (FOURS[(q2 >> 24u) & 15u]));
+    wt[into + 12u] = float16_t (scale * float (FOURS[ q3         & 15u]));
+    wt[into + 13u] = float16_t (scale * float (FOURS[(q3 >>  8u) & 15u]));
+    wt[into + 14u] = float16_t (scale * float (FOURS[(q3 >> 16u) & 15u]));
+    wt[into + 15u] = float16_t (scale * float (FOURS[(q3 >> 24u) & 15u]));
+}
+#endif
+
 //  Whether a format keeps thirty-two elements to a block rather than two
 //  hundred and fifty-six, which decides how a row's length is counted.
 //  MXFP4 is numbered past the super-blocks, so it is named apart.
@@ -1788,6 +1852,27 @@ void main() {
     }
 #endif
 
+#if defined(MORE_FORMATS) && defined(LISTED)
+    //  MXFP4 a step ahead; see mx_fetch.
+    bool mx = shape.format == FMT_MXFP4;
+    uvec4 mx_a[TILE_R / 32u];
+    uint  mx_e[TILE_R / 32u];
+    uint  mx_rows[TILE_R / 32u];
+
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+        mx_rows[it] = shape.base + slice
+                      + min(row0 + r, shape.rows - 1u) * rb;
+    }
+
+    if (mx) {
+        uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
+        for (uint it = 0u; it < TILE_R / 32u; ++it) {
+            mx_fetch (mx_rows[it], k0, mx_a[it], mx_e[it]);
+        }
+    }
+#endif
+
     for (uint kb = 0u; kb < shape.columns; kb += KCH * CHUNKS) {
         barrier();
 
@@ -1803,6 +1888,19 @@ void main() {
                 q4k_place (ahead_h[it], ahead_q[it], k0,
                            chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
                            + half_of * 16u);
+            }
+        } else
+#endif
+#if defined(MORE_FORMATS) && defined(LISTED)
+        if (mx) {
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
+            uint half_of = gl_LocalInvocationID.x & 1u;
+
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+                mx_place (mx_a[it], mx_e[it], mx_rows[it], k0, half_of,
+                          chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
+                          + half_of * 16u);
             }
         } else
 #endif
@@ -2393,6 +2491,14 @@ void main() {
             for (uint it = 0u; it < TILE_R / 32u; ++it) {
                 q4k_fetch (q4k_rows[it], k1, gl_LocalInvocationID.x & 1u,
                            ahead_h[it], ahead_q[it]);
+            }
+        }
+#endif
+#if defined(MORE_FORMATS) && defined(LISTED)
+        if (mx && kb + KCH * CHUNKS < shape.columns) {
+            uint k1 = k0 + KCH * CHUNKS;
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                mx_fetch (mx_rows[it], k1, mx_a[it], mx_e[it]);
             }
         }
 #endif
