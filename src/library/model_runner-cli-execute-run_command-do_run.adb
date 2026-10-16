@@ -73,6 +73,10 @@ is
    Stop_Set  : aliased Model_Runner.Stops.Set;
    Sink      : aliased Pres.Standard_Output_Sink;
 
+   --  And an agent run's, which holds back a call's own text: the call is
+   --  shown in its own line.
+   Agent_Sink : aliased Model_Runner.CLI.Held_Output.Watching_Sink;
+
    --  And gpt-oss's replies through a filter that shows the reasoning and
    --  the answer without the harmony markup and leaves its calls out --
    --  the run reports each call it reads on standard error.

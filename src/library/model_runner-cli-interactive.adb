@@ -26,6 +26,8 @@ with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Output.Harmony;
+with Model_Runner.Output.Reasoning;
+with Model_Runner.Agent;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tensors;
@@ -385,6 +387,10 @@ package body Model_Runner.CLI.Interactive is
       --  And gpt-oss's replies through a filter that shows its reasoning
       --  and answer without the harmony markup.
       Tidied   : aliased Model_Runner.Output.Harmony.Filter
+        (Sink'Unchecked_Access);
+      --  And any other model's think block, left out where --hide-reasoning
+      --  asks for the answer alone.
+      Unthought : aliased Model_Runner.Output.Reasoning.Filter
         (Sink'Unchecked_Access);
       function Harmony return Boolean
       is (Model_Runner.Tools."="
@@ -1170,6 +1176,9 @@ package body Model_Runner.CLI.Interactive is
               Literal => Content_Text'Access);
 
          Gen.Release (Last_Result);
+         Tidied.Answer_Only (Item.Hide_Reasoning);
+         Unthought.Start_Reply
+           (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));
          Gen.Generate
            (Source   => Prepared,
             Session  => Session,
@@ -1179,6 +1188,7 @@ package body Model_Runner.CLI.Interactive is
             Rules    => Rules,
             Sink     =>
               (if Harmony then Tidied'Unchecked_Access
+               elsif Item.Hide_Reasoning then Unthought'Unchecked_Access
                else Sink'Unchecked_Access),
             Observer => null,
             Time     => Clock'Unchecked_Access,

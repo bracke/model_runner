@@ -1,4 +1,5 @@
 with Model_Runner.Output.Harmony;
+with Model_Runner.CLI.Held_Output;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Draft_Policy;
 with Ada.Calendar;
@@ -83,7 +84,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
         Told_Lost  : Boolean := False;      --  a failed save already said
         --  Where the model's text goes, so a call it made starts a line of
         --  its own rather than the end of the text's last; or none.
-        Text       : access Pres.Standard_Output_Sink := null;
+        Text       : access Model_Runner.CLI.Held_Output.Watching_Sink := null;
      end record;
 
    overriding procedure On_Call
@@ -178,8 +179,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Named     : String;
       Arguments : String) is
    begin
+      --  The call's own text, held back as it was written, is not shown:
+      --  the call is, in its own line.
       if Self.Text /= null then
-         Pres.End_Line (Self.Text.all);
+         Model_Runner.CLI.Held_Output.Drop_Held (Self.Text.all);
+         Pres.End_Line (Pres.Standard_Output_Sink (Self.Text.all));
       end if;
       Pres.Put_Tool_Call (Self.Screen.all, Named, Arguments);
       if Self.Trace then
@@ -218,7 +222,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                 when Tr.Not_Permitted | Tr.Not_Refused => "refused"));
    begin
       if Self.Text /= null then
-         Pres.End_Line (Self.Text.all);
+         Pres.End_Line (Pres.Standard_Output_Sink (Self.Text.all));
       end if;
       Pres.Put_Tool_Result (Self.Screen.all, Result);
       if Self.Trace then

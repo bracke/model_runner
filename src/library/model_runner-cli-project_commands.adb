@@ -33,6 +33,7 @@ with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Execution;
+with Model_Runner.CLI.Held_Output;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
@@ -202,38 +203,13 @@ package body Model_Runner.CLI.Project_Commands is
    type Host_Access is access all Wk.Child_Host'Class;
 
    --  What the agent does, shown as it does it and recorded on its
-   --  invocation.
-   --  Generated text written as it comes, and between its pieces the work
-   --  asked after: ended elsewhere -- cancelled from another terminal --
-   --  the turn stops there, not at its next call.
-   type Watching_Sink is limited new Pres.Standard_Output_Sink with record
-      Stop : Model_Runner.Cancellation.Token_Reference := null;
-
-      --  A line that may open a call -- {, ``` or <tool_call> -- held back
-      --  from where it starts: dropped when the call is made, as the call
-      --  is shown in its own line; written out when it was only text.
-      Held          : Unbounded_String;
-      Holding       : Boolean := False;
-      At_Line_Start : Boolean := True;
-
-      --  A helper's run: what it writes is its report, which the agent
-      --  that asked reads and the screen shows as that call's answer.
-      Quiet         : Boolean := False;
-
-      --  Whether standard output shows colour: an answer's JSON coloured.
-      Styled        : Boolean := False;
-   end record;
-
-   --  What was held back was a call: not written.
-   procedure Drop_Held (Self : in out Watching_Sink'Class);
-
-   --  What was held back was text: written now.
-   procedure Release_Held (Self : in out Watching_Sink'Class);
-
-   overriding procedure Write
-     (Self   : in out Watching_Sink;
-      Item   : String;
-      Closed : out Boolean);
+   --  invocation: its text through a sink that holds back what may be a
+   --  call (Held_Output).
+   subtype Watching_Sink is Model_Runner.CLI.Held_Output.Watching_Sink;
+   procedure Drop_Held (Self : in out Watching_Sink'Class)
+     renames Model_Runner.CLI.Held_Output.Drop_Held;
+   procedure Release_Held (Self : in out Watching_Sink'Class)
+     renames Model_Runner.CLI.Held_Output.Release_Held;
 
    --  The entries the state holds for calls that may change it, noted as
    --  started before they ran, by the call's number in the run.
@@ -606,117 +582,6 @@ package body Model_Runner.CLI.Project_Commands is
       Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
       Status    : out Model_Runner.Errors.Error_Info);
 
-   overriding procedure Write
-     (Self   : in out Watching_Sink;
-      Item   : String;
-      Closed : out Boolean)
-   is
-      use type Model_Runner.Cancellation.Token_Reference;
-      From : constant Positive := Item'First;
-   begin
-      Closed := False;
-      if Self.Quiet then
-         if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
-            Self.Stop.Request;
-         end if;
-         return;
-      end if;
-      if Self.Holding then
-         Append (Self.Held, Item);
-      else
-         for Index in Item'Range loop
-            if Self.At_Line_Start and then Item (Index) in '{' | '`' | '<' then
-               if Index > From then
-                  Pres.Standard_Output_Sink (Self).Write (Item (From .. Index - 1), Closed);
-               end if;
-               Self.Holding := True;
-               Self.Held := To_Unbounded_String (Item (Index .. Item'Last));
-               exit;
-            end if;
-            Self.At_Line_Start :=
-              Item (Index) = ASCII.LF or else (Self.At_Line_Start and then Item (Index) in ' ' | ASCII.HT);
-         end loop;
-         if not Self.Holding and then From <= Item'Last then
-            Pres.Standard_Output_Sink (Self).Write (Item (From .. Item'Last), Closed);
-         end if;
-      end if;
-      if Self.Stop /= null and then Model_Runner.Framework.Execution.Work_Withdrawn then
-         Self.Stop.Request;
-      end if;
-   end Write;
-
-   procedure Drop_Held (Self : in out Watching_Sink'Class) is
-   begin
-      Self.Held := Null_Unbounded_String;
-      Self.Holding := False;
-      Self.At_Line_Start := True;
-   end Drop_Held;
-
-   procedure Release_Held (Self : in out Watching_Sink'Class) is
-      Closed : Boolean;
-   begin
-      if Self.Holding and then Self.Held /= Null_Unbounded_String then
-         --  Ended on its own line, as a reply streamed whole would be
-         --  before what the harness says next; a line said over and over
-         --  -- a model gone round -- shown a few times and then counted.
-         declare
-            Shown   : Unbounded_String;
-            Last    : Unbounded_String;
-            Same     : Natural := 0;
-            Skipped  : Natural := 0;
-            In_Fence : Boolean := False;
-
-            procedure Flush_Skipped is
-            begin
-               if Skipped > 0 then
-                  Append (Shown, "... the same line" & Natural'Image (Skipped) & " times more" & ASCII.LF);
-                  Skipped := 0;
-               end if;
-            end Flush_Skipped;
-         begin
-            for Said of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
-               declare
-                  --  The model's line as the screen shows it, its controls
-                  --  written out, before the colour is put on: coloured
-                  --  first, the colour's own sequences were written out
-                  --  with them.
-                  Raw : constant String :=
-                    Pres.Shown (Pres.Standard_Output_Sink (Self), Said);
-                  --  JSON in a fence, or an answer that is JSON whole, coloured
-                  --  as JSON where colour shows.
-                  Fence : constant Boolean :=
-                    Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Left), "```") = 1;
-                  Line  : constant String :=
-                    (if not Self.Styled then Raw
-                     elsif Fence then Raw
-                     elsif In_Fence or else Pres.Looks_Like_JSON (To_String (Self.Held))
-                     then Pres.JSON_Coloured (Raw)
-                     else Raw);
-               begin
-                  if Fence then
-                     In_Fence := not In_Fence;
-                  end if;
-                  if Raw = To_String (Last) then
-                     Same := Same + 1;
-                  else
-                     Flush_Skipped;
-                     Same := 0;
-                     Last := To_Unbounded_String (Raw);
-                  end if;
-                  if Same < 3 then
-                     Append (Shown, Line & ASCII.LF);
-                  else
-                     Skipped := Skipped + 1;
-                  end if;
-               end;
-            end loop;
-            Flush_Skipped;
-            Pres.Standard_Output_Sink (Self).Write_Shown (To_String (Shown), Closed);
-         end;
-      end if;
-      Drop_Held (Self);
-   end Release_Held;
-
    --  One agent's loop, on the session: the root working on its task, or a
    --  child on what it was asked. A root that answers without calling a tool
    --  has changed nothing, whatever its answer says; it is told so and goes
@@ -852,6 +717,7 @@ package body Model_Runner.CLI.Project_Commands is
             Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,
             Thinking    => Self.Item.Thinking,
+            Hide_Reasoning => Self.Item.Hide_Reasoning,
             Approve     => Guard'Unchecked_Access,
             Watch       => Watcher'Unchecked_Access,
             --  Out of context, the oldest turns go and the record of the

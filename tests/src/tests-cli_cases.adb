@@ -27,6 +27,7 @@ with Captured_Output;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Held_Output;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.Framework;
 with Model_Runner.Hub;
@@ -2033,6 +2034,49 @@ package body Tests.CLI_Cases is
       Assert (Devices.Is_Supported or else not Found,
               "the interface answered while reporting itself unsupported");
    end Devices_Are_Reported_Either_Way;
+
+   --  The screen of run --agent and /work holds back what may be a call:
+   --  the call's markup is dropped when the call is made, a think block
+   --  before it is written -- held whole, it went with the call -- and text
+   --  that was no call is written at the end.
+   procedure Held_Output_Drops_Calls_Not_Thoughts
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Sink   : Model_Runner.CLI.Held_Output.Watching_Sink;
+      Closed : Boolean;
+
+      procedure Say (Piece : String) is
+      begin
+         Sink.Write (Piece, Closed);
+      end Say;
+   begin
+      Captured_Output.Open ("obj/held-output.txt");
+      Say ("<");
+      Say ("think>" & ASCII.LF & "Look at calc.ads." & ASCII.LF);
+      Say ("</think>" & ASCII.LF & ASCII.LF);
+      Say ("<tool_call>" & ASCII.LF & "{""name"": ""read_file""}" & ASCII.LF);
+      Say ("</tool_call>");
+      Model_Runner.CLI.Held_Output.Drop_Held (Sink);
+      Say ("{not a call}" & ASCII.LF & "Add and Times.");
+      Model_Runner.CLI.Held_Output.Release_Held (Sink);
+      declare
+         Caught : constant String := Captured_Output.Close;
+         function Has (Part : String) return Boolean is
+           (Ada.Strings.Fixed.Index (Caught, Part) > 0);
+      begin
+         if not Captured_Output.Took_Effect then
+            return;
+         end if;
+         Assert (Has ("<think>" & ASCII.LF & "Look at calc.ads."),
+                 "the think block before the call was not shown: " & Caught);
+         Assert (Has ("</think>"), "the think block's close was not shown: " & Caught);
+         Assert (not Has ("tool_call") and then not Has ("read_file"),
+                 "the call's markup was shown: " & Caught);
+         Assert (Has ("{not a call}") and then Has ("Add and Times."),
+                 "text held as a possible call was not shown: " & Caught);
+      end;
+   end Held_Output_Drops_Calls_Not_Thoughts;
 
    --  A mixture is reported as one, and a dense model is not.
    --
@@ -15514,6 +15558,10 @@ package body Tests.CLI_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Held_Output_Drops_Calls_Not_Thoughts'Access,
+         "the agent's screen drops a call's markup, not the think block "
+         & "before it");
       Register_Routine
         (T, The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking'Access,
          "the prefill cache is keyed by the backend and repacking run, and "

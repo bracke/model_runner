@@ -403,6 +403,9 @@ package Model_Runner.Agent is
    --    and the bare or fenced object a model writes instead, and is left
    --    free where tools are offered.
    --  @param Thinking Whether to ask the template for a thinking block.
+   --  @param Hide_Reasoning Whether each reply is streamed without its
+   --    reasoning: a think block, or a harmony reply's messages before its
+   --    final one -- run --hide-reasoning.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
    --  @param Approve The gate asked before each fresh call runs, or null to
@@ -458,6 +461,7 @@ package Model_Runner.Agent is
         Model_Runner.Tools.Tool_Call_JSON;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
+      Hide_Reasoning : Boolean := False;
       Watch      : Observer_Reference := null;
       Approve    : Approver_Reference := null;
       Max_Retries : Natural := 0;

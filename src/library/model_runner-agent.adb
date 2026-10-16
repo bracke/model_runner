@@ -11,6 +11,7 @@ with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Output.Harmony;
+with Model_Runner.Output.Reasoning;
 with Model_Runner.Tools.Constraint;
 
 package body Model_Runner.Agent is
@@ -132,6 +133,7 @@ package body Model_Runner.Agent is
         Model_Runner.Tools.Tool_Call_JSON;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
+      Hide_Reasoning : Boolean := False;
       Watch      : Observer_Reference := null;
       Approve    : Approver_Reference := null;
       Max_Retries : Natural := 0;
@@ -225,11 +227,16 @@ package body Model_Runner.Agent is
       --  shows its reasoning and answer without the harmony markup, and
       --  its calls not at all -- the run says each call itself.
       Tidied : aliased Model_Runner.Output.Harmony.Filter (Sink);
+      --  And any other model's, its think block left out, where the
+      --  caller asked for the answer alone.
+      Unthought : aliased Model_Runner.Output.Reasoning.Filter (Sink);
       Shown  : constant Model_Runner.Output.Sink_Reference :=
-        (if Model_Runner.Output."/=" (Sink, null)
-           and then Model_Runner.Tools."=" (Read_Syntax,
-                                            Model_Runner.Tools.Harmony_Call)
-         then Tidied'Unchecked_Access else Sink);
+        (if Model_Runner.Output."=" (Sink, null) then Sink
+         elsif Model_Runner.Tools."=" (Read_Syntax,
+                                       Model_Runner.Tools.Harmony_Call)
+         then Tidied'Unchecked_Access
+         elsif Hide_Reasoning then Unthought'Unchecked_Access
+         else Sink);
 
       --  Tokens the run has spent, its own and its children's.
       function Spent return Natural is (Result.Generated_Tokens + Result.Delegated_Tokens);
@@ -352,6 +359,7 @@ package body Model_Runner.Agent is
 
    begin
       Result := (Reason => Answered, others => <>);
+      Tidied.Answer_Only (Hide_Reasoning);
 
       Request.Add_Beginning := False;
       Request.Retain_Text := True;
@@ -476,6 +484,10 @@ package body Model_Runner.Agent is
                   end;
                   goto Generated;
                end if;
+               --  Whether this reply begins in a think block its prompt
+               --  opened, for the answer-alone filter to start inside it.
+               Unthought.Start_Reply
+                 (Inside => Thought_Open ("", Rendered.all));
                Gen.Generate
                  (Source   => Source,
                   Session  => Session,

@@ -653,7 +653,7 @@ begin
             Watcher.Checkpoint :=
               US.To_Unbounded_String
                 (T.To_String (Item.Checkpoint_File_Path));
-            Watcher.Text := Sink'Unchecked_Access;
+            Watcher.Text := Agent_Sink'Unchecked_Access;
 
             --  In groups, as /work is: the run, then how it came out.
             Pres.Put_Heading (Screen, "cli.work.section.run", Pres.Diagnostic);
@@ -666,11 +666,12 @@ begin
                Generation => Request,
                Pictures   => Pictures,
                Stop_Set   => Stop_Set,
-               Sink       => Sink'Unchecked_Access,
+               Sink       => Agent_Sink'Unchecked_Access,
                Time       => Clock'Unchecked_Access,
                Seeds      => Seeds'Unchecked_Access,
                Max_Steps  => Positive'Max (1, Item.Max_Steps),
                Thinking   => Item.Thinking,
+               Hide_Reasoning => Item.Hide_Reasoning,
                Watch      => Watcher'Unchecked_Access,
                Approve    =>
                  (if Item.Confirm_Tools
@@ -695,6 +696,8 @@ begin
                Answer_Schema =>
                  (if Answer /= null then Answer.all else ""),
                Result     => Loop_Out);
+            --  Held back and never a call: the reply's own text, written.
+            Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
             Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
             Pres.Put_Heading (Screen, "cli.work.section.outcome", Pres.Diagnostic, Gap => True);
 
