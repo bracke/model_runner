@@ -1,3 +1,4 @@
+with Model_Runner.Backend;
 --  Collect an importance matrix by running a corpus through the model.
 --
 --  llama.cpp's `llama-imatrix`. For each weight matrix, the sum over the
@@ -48,14 +49,22 @@ package Imatrix_Run is
    --  @param Threads Workers the products are divided across.
    --  @param Into Path to write the matrix to.
    --  @param Result What it did.
+   --  @param Backend Where the model runs: the processor, or the device,
+   --    whose every product a watcher is told of as the processor's.
+   --  @param Process_Output Whether the output projection is collected
+   --    too, over every position's row, as llama-imatrix's
+   --    --process-output has it.
    procedure Run
-     (Path    : String;
-      Text    : String;
-      Chunk   : Positive := 512;
-      Chunks  : Natural := 0;
-      Threads : Positive;
-      Into    : String;
-      Result  : out Report);
+     (Path           : String;
+      Text           : String;
+      Chunk          : Positive := 512;
+      Chunks         : Natural := 0;
+      Threads        : Positive;
+      Into           : String;
+      Result         : out Report;
+      Backend        : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
+      Process_Output : Boolean := False);
 
    --  One line saying what it did.
    --
@@ -71,6 +80,9 @@ package Imatrix_Run is
    --  @param Which The matrix's name.
    --  @param Rows How many rows the product took.
    --  @return Whether it is counted.
-   function Counted (Which : String; Rows : Natural) return Boolean;
+   --  @param Output Whether the output projection is counted too.
+   function Counted
+     (Which : String; Rows : Natural; Output : Boolean := False)
+      return Boolean;
 
 end Imatrix_Run;

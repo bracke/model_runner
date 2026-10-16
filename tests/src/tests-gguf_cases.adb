@@ -16,6 +16,8 @@ with Quantizer;
 with Recipes;
 with IQ_Reference;
 
+with Model_Runner.Backend;
+with Model_Runner.Backend.Device;
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Byte_Sources.Memory;
@@ -1412,6 +1414,11 @@ package body Tests.GGUF_Cases is
               & "only the layers' matrices");
       Assert (not Imatrix_Run.Counted ("blk", 512),
               "a name shorter than the layer prefix was counted");
+      Assert (Imatrix_Run.Counted ("output.weight", 512, Output => True)
+              and then not Imatrix_Run.Counted
+                             ("output.weight", 15, Output => True),
+              "the output projection asked for was not counted as "
+              & "llama-imatrix's --process-output counts it");
    end A_Matrix_Is_Collected_As_Llama_Collects_It;
 
    --  A mixture's experts are collected as llama-imatrix collects them:
@@ -1571,6 +1578,52 @@ package body Tests.GGUF_Cases is
       end loop;
 
       Assert (Stacks > 0, "the fixture has no stacks of experts");
+
+      --  The same collected on the device, the output projection with it:
+      --  every matrix the processor's file has, counted alike, and the
+      --  output projection over every position.
+      declare
+         Device_Into : constant String := "obj/imatrix-mixture-device.gguf";
+         Device_Source : Model_Runner.Byte_Sources.Files.File_Source;
+         Device_Item   : Containers.Container;
+         Awake  : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         Model_Runner.Backend.Device.Close;
+         if Awake then
+            Imatrix_Run.Run
+              (Model_Path, "obj/imatrix-corpus.txt", Chunk => Chunk,
+               Chunks => Chunks, Threads => 2, Into => Device_Into,
+               Result => Result,
+               Backend => Model_Runner.Backend.Backend_Device,
+               Process_Output => True);
+            Model_Runner.Backend.Device.Close;
+            Assert (Result.Ran,
+                    "no matrix was collected on the device: "
+                    & Result.Detail (1 .. Result.Detail_Up));
+            Model_Runner.Byte_Sources.Files.Open
+              (Device_Source, Device_Into, Status => Status);
+            Containers.Reader.Parse (Device_Item, Device_Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the device's matrix did not parse");
+            for Which in 1 .. Containers.Tensor_Count (Item) loop
+               Assert (Containers.Find_Tensor
+                         (Device_Item, Containers.Tensor_Name (Item, Which)) /= 0,
+                       Containers.Tensor_Name (Item, Which)
+                       & " was not collected on the device");
+            end loop;
+            declare
+               Head : constant Natural :=
+                 Containers.Find_Tensor (Device_Item, "output.weight.counts");
+            begin
+               Assert (Head /= 0
+                       and then Containers.Find_Tensor (Item, "output.weight.counts") = 0,
+                       "the output projection was collected unasked, or not "
+                       & "when asked");
+            end;
+            Containers.Close (Device_Item);
+            Model_Runner.Byte_Sources.Files.Close (Device_Source);
+         end if;
+      end;
 
       --  Gate and up read the same rows; down reads what the gate made of
       --  them, which is not the layer's input.

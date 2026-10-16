@@ -268,9 +268,11 @@ is
       end if;
    end Prefetch_Next;
 
-   --  As the token's.
+   --  As the token's; and not while a watcher listens, since a layer run
+   --  whole on the device is one submission no product of which tells it.
    function Linear_Front_Fits (L : Layer) return Boolean
-   is (Linear_Ready
+   is (Item.Seen = null
+       and then Linear_Ready
        and then Item.Delta_State /= null
        and then Item.Conv_State /= null
        and then Model_Runner.Backend.Device.Runs_Linear
@@ -327,7 +329,7 @@ is
    --  arranges them and centred all or none, and a hybrid's attention
    --  layers but not its linear ones.
    function Front_Fits (L : Layer; Index : Natural) return Boolean
-   is (True
+   is (Item.Seen = null
        and then not Linear (Settings, Index)
        and then (not Hybrid (Settings.Kind)
                  or else (Settings.Value_Size = Settings.Head_Size

@@ -2047,7 +2047,11 @@ begin
             Threads => Number ("--threads",
                                Model_Runner.Platform.Core_Count - 1),
             Into    => Option ("--out", ""),
-            Result  => Result);
+            Result  => Result,
+            Backend => Backend_Of (Option ("--backend", "cpu")),
+            Process_Output =>
+              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                 Ada.Command_Line.Argument (Index) = "--process-output"));
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Imatrix_Run.Summary (Result));

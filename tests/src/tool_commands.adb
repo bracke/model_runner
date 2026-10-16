@@ -72,7 +72,8 @@ package body Tool_Commands is
      & " --think --no-think --show-template --show-tokens ";
    Opts_Likeness  : aliased constant String := " --model --names ";
    Opts_Imatrix   : aliased constant String :=
-     " --model --text --chunk --chunks --threads --out ";
+     " --model --text --chunk --chunks --threads --out --backend"
+     & " --process-output ";
    Opts_Quantize  : aliased constant String :=
      " --model --format --out --against --imatrix ";
    Opts_Perplex   : aliased constant String :=
@@ -219,7 +220,7 @@ package body Tool_Commands is
 
    Takes_Imatrix : aliased constant String :=
      "--model PATH --out PATH [--text PATH] [--chunk N] [--chunks N]"
-     & " [--threads N]";
+     & " [--threads N] [--backend cpu|device] [--process-output]";
 
    Says_Quantize : aliased constant String :=
      "write a model out again in another format";

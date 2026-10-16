@@ -4,8 +4,8 @@ with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
-with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
@@ -70,8 +70,9 @@ package body Imatrix_Run is
 
    --  The watcher itself.
    type Collector is limited new L.Watcher with record
-      Held : Tally_List_Access := null;
-      Up   : Natural := 0;
+      Held       : Tally_List_Access := null;
+      Up         : Natural := 0;
+      Output_Too : Boolean := False;
    end record;
 
    --  The fewest rows a product must have to be counted, as llama-imatrix
@@ -82,10 +83,13 @@ package body Imatrix_Run is
    -- Counted --
    -------------
 
-   function Counted (Which : String; Rows : Natural) return Boolean
+   function Counted
+     (Which : String; Rows : Natural; Output : Boolean := False)
+      return Boolean
    is (Rows >= Fewest_Rows
-       and then Which'Length >= 4
-       and then Which (Which'First .. Which'First + 3) = "blk.");
+       and then ((Which'Length >= 4
+                  and then Which (Which'First .. Which'First + 3) = "blk.")
+                 or else (Output and then Which = "output.weight")));
 
    overriding procedure Note
      (Item   : in out Collector;
@@ -173,7 +177,8 @@ package body Imatrix_Run is
         (if Rows = 0 then 0 else Values'Length / Rows);
       Slot  : Natural;
    begin
-      if Width = 0 or else not Counted (Which, Natural (Rows)) then
+      if Width = 0 or else not Counted (Which, Natural (Rows), Item.Output_Too)
+      then
          return;
       end if;
 
@@ -265,14 +270,19 @@ package body Imatrix_Run is
    ---------
 
    procedure Run
-     (Path    : String;
-      Text    : String;
-      Chunk   : Positive := 512;
-      Chunks  : Natural := 0;
-      Threads : Positive;
-      Into    : String;
-      Result  : out Report)
+     (Path           : String;
+      Text           : String;
+      Chunk          : Positive := 512;
+      Chunks         : Natural := 0;
+      Threads        : Positive;
+      Into           : String;
+      Result         : out Report;
+      Backend        : Model_Runner.Backend.Backend_Kind :=
+        Model_Runner.Backend.Backend_CPU;
+      Process_Output : Boolean := False)
    is
+      On_Device : constant Boolean :=
+        Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Device);
       procedure Note_It (Item : String);
 
       procedure Note_It (Item : String) is
@@ -317,6 +327,22 @@ package body Imatrix_Run is
 
          Watching  : aliased Collector;
       begin
+         Watching.Output_Too := Process_Output;
+
+         --  The device is the program's to open before a model is prepared
+         --  on it.
+         if On_Device then
+            declare
+               Awake : Boolean;
+            begin
+               Model_Runner.Backend.Device.Open (Awake);
+               if not Awake then
+                  Note_It ("no device answered");
+                  return;
+               end if;
+            end;
+         end if;
+
          Files.Open (Source, Path, Status => Status);
          if E.Is_Error (Status) then
             Note_It ("the model would not open: "
@@ -333,7 +359,8 @@ package body Imatrix_Run is
          end if;
 
          L.Prepare
-           (Engine, Container, Source, Threads => Threads, Status => Status);
+           (Engine, Container, Source, Backend => Backend, Threads => Threads,
+            Status => Status);
          if E.Is_Error (Status) then
             Containers.Close (Container);
             Files.Close (Source);
@@ -383,10 +410,20 @@ package body Imatrix_Run is
                Settings : constant L.Configuration := L.Config (Engine);
                Logits   : T.Real_Array_Access;
 
+               --  Every position's row, where the output projection is
+               --  collected: the head then meets the chunk's rows, as it
+               --  does where the other runtime scores them all.
+               Every    : T.Real_Array_Access := null;
+
                Live : L.Session;
             begin
                T.Allocate
                  (N.Element_Count (Settings.Vocabulary), Logits);
+               if Process_Output then
+                  T.Allocate
+                    (N.Element_Count (Settings.Vocabulary)
+                     * N.Element_Count (Chunk), Every);
+               end if;
 
                for Round in 1 .. Rounds loop
                   declare
@@ -418,7 +455,7 @@ package body Imatrix_Run is
 
                      L.Evaluate_Batch
                        (Live, Engine, Held (From .. Upto), Logits.all,
-                        Status => Status);
+                        Every => Every, Status => Status);
 
                      L.Watch (Live, null);
                      L.Close (Live);
@@ -434,6 +471,9 @@ package body Imatrix_Run is
                end loop;
 
                T.Free (Logits);
+               if Every /= null then
+                  T.Free (Every);
+               end if;
             end;
 
             if Result.Chunks = 0 or else Watching.Up = 0 then
