@@ -835,6 +835,8 @@ package body Model_Runner.CLI.Execute.Support is
    --  Without them Q2_K, Q3_K and the four-bit lookups run on the
    --  floating-point path: TinyLlama Q2_K generates 12 tokens a second as
    --  stored and 73 in panels.
+   --  Asked to multiply in binary32, a run keeps the file's layout: its
+   --  kernels read that, and the panels only slowly.
    function With_Panels (Item : Opt.Command) return Opt.Command is
       Result : Opt.Command := Item;
       Path   : constant String :=
@@ -846,6 +848,11 @@ package body Model_Runner.CLI.Execute.Support is
         and then L."=" (Item.Repack, L.No_Repack)
         and then not Item.Repack_Asked
         and then T.Is_Empty (Item.Adapter_Path)
+        --  Not for --arith f32: the panels are laid out for the integer
+        --  kernels, and the floating-point path reads them a byte at a
+        --  time -- TinyLlama's twelve tokens 2.00 s against 1.12 as stored
+        --  at Q8_0, 5.51 against 1.42 at Q2_K, the text the same.
+        and then L."/=" (Item.Arithmetic, L.Float_Activations)
         --  The panels are held, the file's pages only cached and given back:
         --  room for the panels and a margin is what it takes; and in one
         --  allocation the bounds allow -- a model past it, qwen3.6-35B's

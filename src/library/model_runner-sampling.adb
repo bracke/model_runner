@@ -1,3 +1,4 @@
+with Ada.Containers.Generic_Sort;
 with Ada.Containers.Generic_Array_Sort;
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
@@ -834,6 +835,160 @@ package body Model_Runner.Sampling is
 
       return Value;
    end Adjusted;
+
+   function Ranking_Logit
+     (Item   : Sampler;
+      Logits : Real_Array;
+      Token  : Token_Id) return Real
+   is (if Token < 0 or else Natural (Token) >= Item.Vocabulary
+         or else (Item.Masked /= null and then Item.Masked.all (Natural (Token)))
+         or else (Item.Stepped /= null
+                  and then Item.Stepped.all (Natural (Token)))
+       then Real'First
+       else Adjusted (Item, Logits, Element_Count (Token)));
+
+   ---------------------------
+   -- Forbid_Outside_Ranked --
+   ---------------------------
+
+   procedure Forbid_Outside_Ranked
+     (Item        : in out Sampler;
+      Logits      : Real_Array;
+      Allowed     : not null access function (Token : Token_Id) return Boolean;
+      Taken_Count : out Natural)
+   is
+      V : constant Natural := Item.Vocabulary;
+      K : constant Positive := Positive'Max (1, Item.Settings.Top_K);
+
+      type Score_Array is array (Natural range <>) of Real;
+      type Index_Array is array (Natural range <>) of Natural;
+      type Flag_Array is array (Natural range <>) of Boolean;
+      type Score_Access is access Score_Array;
+      type Index_Access is access Index_Array;
+      type Flag_Access is access Flag_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Score_Array, Score_Access);
+      procedure Free is new Ada.Unchecked_Deallocation (Index_Array, Index_Access);
+      procedure Free is new Ada.Unchecked_Deallocation (Flag_Array, Flag_Access);
+
+      Score : Score_Access := new Score_Array (0 .. V - 1);
+      Order : Index_Access := new Index_Array (0 .. V - 1);
+      Taken : Flag_Access := new Flag_Array'(0 .. V - 1 => False);
+
+      Live     : Natural := 0;
+      Accepted : Natural := 0;
+      Kth      : Real := Real'First;
+      Checked  : Natural := 0;
+      Upto     : Natural;
+      Done     : Boolean := False;
+
+      --  Better ranked: the higher logit, and the lower token between equals.
+      function Before (A, B : Natural) return Boolean
+      is (Score (A) > Score (B) or else (Score (A) = Score (B) and then A < B));
+
+      --  Order (Lo .. Hi) partly ordered so the best Upto - Lo come first.
+      procedure Select_Best (Lo_In, Hi_In : Natural) is
+         Lo     : Integer := Lo_In;
+         Hi     : Integer := Hi_In;
+         Target : constant Integer := Upto - 1;
+      begin
+         while Lo < Hi loop
+            declare
+               Pivot : constant Natural := Order ((Lo + Hi) / 2);
+               I     : Integer := Lo;
+               J     : Integer := Hi;
+            begin
+               loop
+                  while Before (Order (I), Pivot) loop
+                     I := I + 1;
+                  end loop;
+                  while Before (Pivot, Order (J)) loop
+                     J := J - 1;
+                  end loop;
+                  if I <= J then
+                     declare
+                        Held : constant Natural := Order (I);
+                     begin
+                        Order (I) := Order (J);
+                        Order (J) := Held;
+                     end;
+                     I := I + 1;
+                     J := J - 1;
+                  end if;
+                  exit when I > J;
+               end loop;
+               if Target <= J then
+                  Hi := J;
+               elsif Target >= I then
+                  Lo := I;
+               else
+                  exit;
+               end if;
+            end;
+         end loop;
+      end Select_Best;
+
+      --  Order (Lo .. Hi) sorted, best first.
+      procedure Sort_Best (Lo, Hi : Natural) is
+         function Ranks_Before (Left, Right : Natural) return Boolean
+         is (Before (Order (Left), Order (Right)));
+         procedure Swap (Left, Right : Natural) is
+            Held : constant Natural := Order (Left);
+         begin
+            Order (Left) := Order (Right);
+            Order (Right) := Held;
+         end Swap;
+         procedure Sort is new Ada.Containers.Generic_Sort
+           (Index_Type => Natural, Before => Ranks_Before, Swap => Swap);
+      begin
+         if Hi > Lo then
+            Sort (Lo, Hi);
+         end if;
+      end Sort_Best;
+   begin
+      for Candidate in 0 .. V - 1 loop
+         Score (Candidate) := Ranking_Logit (Item, Logits, Token_Id (Candidate));
+         if Score (Candidate) > Real'First then
+            Order (Live) := Candidate;
+            Live := Live + 1;
+         end if;
+      end loop;
+
+      Upto := Natural'Min (Live, Natural'Max (4 * K, 256));
+      while not Done and then Checked < Live loop
+         Select_Best (Checked, Live - 1);
+         Sort_Best (Checked, Upto - 1);
+         for At_Rank in Checked .. Upto - 1 loop
+            declare
+               Which : constant Natural := Order (At_Rank);
+            begin
+               if Accepted >= K and then Score (Which) < Kth then
+                  Done := True;
+                  exit;
+               end if;
+               if Allowed (Token_Id (Which)) then
+                  Taken (Which) := True;
+                  Accepted := Accepted + 1;
+                  if Accepted = K then
+                     Kth := Score (Which);
+                  end if;
+               end if;
+            end;
+         end loop;
+         Checked := Upto;
+         Upto := Natural'Min (Live, 4 * Upto);
+      end loop;
+
+      for Candidate in 0 .. V - 1 loop
+         if not Taken (Candidate) then
+            Forbid_For_Step (Item, Token_Id (Candidate));
+         end if;
+      end loop;
+
+      Free (Score);
+      Free (Order);
+      Free (Taken);
+      Taken_Count := Accepted;
+   end Forbid_Outside_Ranked;
 
    --  The two passes over the vocabulary, cut into blocks.
    --

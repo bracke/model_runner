@@ -252,7 +252,9 @@ package body Model_Runner.CLI.Execute is
    function Unasked_Layout
      (Model_Path   : String;
       Backend      : Model_Runner.Backend.Backend_Kind;
-      Memory_Limit : Interfaces.Unsigned_64 := 0)
+      Memory_Limit : Interfaces.Unsigned_64 := 0;
+      Arithmetic   : Model_Runner.Llama.Arithmetic_Mode :=
+        Model_Runner.Llama.Integer_Activations)
       return Model_Runner.Llama.Repack_Mode
    is
       Item : Opt.Command;
@@ -261,6 +263,7 @@ package body Model_Runner.CLI.Execute is
       Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
       Item.Backend := Backend;
       Item.Memory_Limit := Memory_Limit;
+      Item.Arithmetic := Arithmetic;
       return With_Panels (Item).Repack;
    end Unasked_Layout;
 

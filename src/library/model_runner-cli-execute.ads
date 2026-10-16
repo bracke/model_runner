@@ -119,11 +119,15 @@ package Model_Runner.CLI.Execute is
    --  @param Model_Path The model, as run would be given it.
    --  @param Backend The backend the run is on.
    --  @param Memory_Limit The limit named, or nought for none.
+   --  @param Arithmetic The arithmetic the run multiplies in: binary32
+   --    keeps the file's rows, which its kernels read.
    --  @return The layout.
    function Unasked_Layout
      (Model_Path   : String;
       Backend      : Model_Runner.Backend.Backend_Kind;
-      Memory_Limit : Interfaces.Unsigned_64 := 0)
+      Memory_Limit : Interfaces.Unsigned_64 := 0;
+      Arithmetic   : Model_Runner.Llama.Arithmetic_Mode :=
+        Model_Runner.Llama.Integer_Activations)
       return Model_Runner.Llama.Repack_Mode;
 
    --  Where run keeps a model's panels between loads; empty where caches

@@ -32,6 +32,7 @@ with Model_Runner.Tools.Registry;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Signals;
 with Model_Runner.Text;
 
 package body Model_Runner.Framework.Work is

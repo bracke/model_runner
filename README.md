@@ -1886,8 +1886,8 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.342 s** -- 0.041 s evaluating the prompt and 0.300 s generating --
-and **1.82 s** of processor time, the median of three runs. Loading the model
+take **0.335 s** -- 0.032 s evaluating the prompt and 0.304 s generating --
+and **1.76 s** of processor time, the median of three runs (2026-10-16). Loading the model
 costs a further **0.092 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -1895,8 +1895,11 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.078 s** for 8.62 s of
-processor time. What that costs is measured and bounded in `### Quantized
+f32`, taken back to back in the same sitting, is **1.116 s** for 8.92 s of
+processor time. It read 2.0 s for a while, unnoticed: a processor run that
+named no layout took the panels, which are laid out for the integer kernels
+and which the floating-point path reads a byte at a time; a run at `--arith
+f32` keeps the file's own layout unasked now, which is what that path reads. What that costs is measured and bounded in `### Quantized
 activations` below, and it is why every figure in this section is worth
 reading twice: once as a time, and once as a statement about which of the two
 arithmetics it was taken in.
@@ -2253,12 +2256,12 @@ tests speed --model MODEL --backend reference --max-tokens 4 --prompt-file tests
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.040 s evaluating the prompt and
-0.100 s generating; `reference` spends 5.796 s and 3.872 s. That is
-**sixty-nine times** the work in total, a hundred and forty-five times on
-the prompt and thirty-nine times on the generation (2026-10-06; it read
-sixty-four, a hundred and thirty-four and thirty-six the sitting before), and the two print the
-same digest.
+`cpu` spends 0.032 s evaluating the prompt and
+0.098 s generating; `reference` spends 5.796 s and 3.911 s. That is
+**seventy-four times** the work in total, a hundred and eighty times on
+the prompt and forty times on the generation (2026-10-16; it read
+sixty-nine, a hundred and forty-five and thirty-nine on 2026-10-06), and the
+two print the same digest.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
 clear that only one side moved: `reference` computes what it always did.
@@ -2371,15 +2374,18 @@ tests speed --model MODEL --backend device --prompt-file tests/fixtures/speed-pr
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.342 s | **0.225 s** |
-| -- evaluating the prompt | 0.040 s | 0.024 s |
-| -- generating | 0.301 s | **0.201 s** |
-| -- processor time | 1.82 s | **0.07 s** |
-| 110-token prompt, one token | 0.351 s | **0.099 s** |
-| -- evaluating the prompt | 0.323 s | **0.080 s** |
-| -- processor time | 2.66 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.335 s | **0.235 s** |
+| -- evaluating the prompt | 0.032 s | 0.022 s |
+| -- generating | 0.304 s | **0.213 s** |
+| -- processor time | 1.76 s | **0.06 s** |
+| 110-token prompt, one token | 0.192 s | **0.080 s** |
+| -- evaluating the prompt | 0.166 s | **0.060 s** |
+| -- processor time | 1.42 s | **0.02 s** |
 
-Every cell was taken again later on 2026-10-06, once a Q8_0 feed-forward's
+Every cell was taken again on 2026-10-16. The processor's 110-token prompt
+reads 0.166 s where it read 0.323 because a processor run takes the panels
+unasked now and that cell was the file's rows; every other cell reads within
+its spread. Every cell was taken again later on 2026-10-06, once a Q8_0 feed-forward's
 gate and up became one step on the device, and read within its spread. Before
 that, every cell was taken again the same day once a device prompt held the
 part's clock up: the device's 110-token prompt 0.083 -> 0.079 s, every other
@@ -7507,10 +7513,15 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **614.5 t/s** | 39.6 t/s |
-| llama.cpp, processor | 388.0 t/s | 39.9 t/s |
-| model_runner, device | **1718.8 t/s** | **58.9 t/s** |
-| llama.cpp, device | 1668.5 t/s | 56.5 t/s |
+| model_runner, processor | **609.1 t/s** | 39.9 t/s |
+| llama.cpp, processor | 366.8 t/s | 39.6 t/s |
+| model_runner, device | **1834.6 t/s** | **58.6 t/s** |
+| llama.cpp, device | 1622.1 t/s | 56.0 t/s |
+
+Taken again on 2026-10-16, both sides in one sitting, each side's processor
+rows and then its device rows alternated so that neither ran on the warmer
+machine; the table it replaces read 614.5, 388.0, 1718.8 and 1668.5 on the
+prompt and 39.6, 39.9, 58.9 and 56.5 generating, and the order is the same.
 
 **The device's short prompt is ahead now, because the program holds the
 part's clock up itself** (2026-10-06; the whole table taken again in one
@@ -7557,17 +7568,17 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **456.4 t/s** | 39.6 t/s |
-| llama.cpp, processor | 312.4 t/s | 39.9 t/s |
-| model_runner, device | **1847.7 t/s** | **58.9 t/s** |
-| llama.cpp, device | 1840.4 t/s | 56.5 t/s |
+| model_runner, processor | **432.4 t/s** | 39.9 t/s |
+| llama.cpp, processor | 286.2 t/s | 39.6 t/s |
+| model_runner, device | **1779.8 t/s** | **58.6 t/s** |
+| llama.cpp, device | 1757.4 t/s | 56.0 t/s |
 
 **The processor's rows are now taken the way `run` takes them, in the
 eight-row layout, and its prompts are ahead.** `run` on the processor
 repacks a model into panels unasked (`### The eight-row weight layout,
 built`), and `llama-bench` takes its own default; these rows were taken as
 the file stores the weights, which is a path a run never takes: 312.5 and
-282.7 t/s that way in the same sitting, against 614.5 and 456.4 in panels --
+282.7 t/s that way in the same sitting, against 614.5 and 456.4 in panels (the tables above are a later sitting) --
 1.58 and 1.46 times llama.cpp's 388.0 and 312.4. The generated token reads
 39.6 against 39.9, and that is two depths set side by side: this program's
 was taken after the 110-token prompt, `llama-bench`'s `tg64` from an empty
@@ -12407,54 +12418,44 @@ All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.342 s | 28 ms a token |
-| the same model at two bits | 1.230 s | 103 ms a token |
-| the first, drafted by the second | 2.774 s | 24 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 0.335 s | 25 ms a token |
+| the same model at two bits | 0.157 s | 11 ms a token |
+| the first, drafted by the second | 0.594 s | 24 proposed, 9 accepted |
 
-The two-bit file is a third of the size on disk and costs nearly three times
-as much per token to run, because what it saves in bytes it spends unpacking
-them -- and because the eight-bit file now multiplies its activations as
-bytes while the two-bit one has no integer kernel and cannot. A smaller file
-is not a faster model, and that alone decides this pair: a draft costing more
-per token than the model it drafts for cannot win at any acceptance rate. The
-gap between the two was twice, then fifteen per cent, then nearly three
-times, then three and a quarter, then three and two thirds, then three and a
-half, then four, then four and a third, then four and a half twice, then
-four, then four and a fifth, then three and nine tenths, then four again,
-then three and seven tenths, then four again, and is three and a half in
-the sitting of 2026-10-06; it does not change the sign either way.
+The two-bit file is a third of the size on disk and now costs well under half
+as much per token to run (2026-10-16, on the processor): its weights are read
+in the eight-row panels a run takes unasked, whose kernels multiply the
+two-bit values as integers. It cost three to four times as much for as long
+as it was read as stored, and the paragraph that stood here said so across
+seventeen sittings -- the gap read twice, fifteen per cent, nearly three
+times, three and a quarter and so on to three and a half on 2026-10-06 --
+and drew its conclusion from that: a draft costing more per token than its
+model cannot win. The conclusion stands for another reason now.
 
 The arithmetic, from the same three figures, in generating time alone so that
 the prompt each run also pays is not counted twice. Six rounds of four
-proposals cost 2.478 s, of which the draft's own twenty-four passes are
-24 × 81.5 ms = 1.96 s, leaving 0.52 s for six checks -- **87 ms to check five
+proposals cost 0.535 s, of which the draft's own twenty-four passes are
+24 × 11.3 ms = 0.27 s, leaving 0.26 s for six checks -- **44 ms to check five
 positions**, against 25 ms for one token generated normally. A batch is one
 pass over the weights and the extra work is the output projection per
 position, which is why five positions cost about two tokens rather than five.
 
-That check read **98 ms** until `### What a format costs the predictions`
-below found the projection being done a position at a time rather than as one
-product over the batch. It is the same five positions and the same weights;
-what changed is how many times the output matrix is read to answer about
-them.
-
-So a round of K proposals costs `K × d + 87 ms` and yields `1 + a` tokens,
+So a round of K proposals costs `K × d + 44 ms` and yields `1 + a` tokens,
 against `(1 + a) × 25 ms` without a draft. At the acceptance measured here,
-about 1.5 of four, a round yields 2.5 tokens worth 63 ms and the check alone
-costs 87 -- so the check alone costs more than the tokens a round is worth,
-and no draft pays at this acceptance whatever it costs a token. The check
-read 57 ms in the sitting before this one (2026-10-06) and 87 here, which is
-the instability the next sentence describes rather than a change: the
-margin was two to one against, then level, and is 1.4 to one against now, which moved the conclusion
-not at all and moved the reason for it a long way. **That
-threshold has read 17, 10, 6, 9, 6, 4, 7 ms a token, nothing at all, 11, 18,
-nothing seven times more, 3.5, nothing again twice, half a millisecond and
-nothing four times more across twenty-five sittings of the same code**, because it is a difference of
-two twelve-token runs and a twelve-token run is a third loading and warm-up.
-The conclusion is stable and the number is not: this draft costs an order of
-magnitude more than any of them. The check got a great
-deal cheaper with the arithmetic -- it was 320 ms -- and so did the model it
-is checking for, which is why the answer is the same as it was.
+nine of twenty-four -- 1.5 of four -- a round yields 2.5 tokens worth 63 ms
+and costs 4 × 11.3 + 44 = 89 ms: **the draft loses by 1.4 to one**, as it
+did when it was the dearer model. The check alone is cheaper than what a
+round yields now (it read 87 ms on 2026-10-06 and 320 before the integer
+arithmetic), so what decides it is the draft's own cost against its
+acceptance: at this acceptance a draft would have to cost under 4.8 ms a
+token to pay, a fifth of the model's own -- and a smaller file of the same
+model, which proposes the same tokens no more often than this one, is
+nowhere near that. **The threshold this measures is a difference of two
+twelve-token runs**, and a twelve-token run is a third loading and warm-up:
+it read 17, 10, 6, 9, 6, 4, 7 ms a token, nothing at all, 11, 18, nothing
+seven times more, 3.5, nothing again twice, half a millisecond and nothing
+four times more across twenty-five sittings of the old layout. The
+conclusion is stable and the number is not.
 
 The drafted run now prints the same digest as the undrafted one --
 `5abff916f9d83ca6` both ways -- which is the guarantee this section opens

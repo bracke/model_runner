@@ -1169,7 +1169,14 @@ begin
       return;
    elsif Interrupted (Ran) then
       Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work was interrupted");
-      Conclude ("blocked", "you stopped its work (Ctrl-C) before it finished", "cancelled");
+      --  Said by what stopped it: the session told to end is not a
+      --  person at the keyboard.
+      Conclude ("blocked",
+                "you stopped its work ("
+                & (if Model_Runner.Platform.Signals.Ending_Asked
+                   then "SIGTERM or SIGHUP" else "Ctrl-C")
+                & ") before it finished",
+                "cancelled");
       return;
    elsif Out_Of_Time (Ran) then
       --  Out of time is not wrong work: the task is set aside, not

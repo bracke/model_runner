@@ -2487,6 +2487,74 @@ package body Tests.Sampling_Cases is
    -- Name --
    ----------
 
+   --  A grammar asked only of the best ranked tokens draws what it draws
+   --  asked of every token: where the chain's first filter is a top-k,
+   --  Forbid_Outside_Ranked leaves the draw that forbidding every token the
+   --  grammar refuses leaves, seed for seed -- with the logits ranked as
+   --  the top-k ranks them, a bias, a recent token's penalty and ties at
+   --  the K-th included.
+   procedure Ranked_Masking_Draws_As_The_Whole_Mask
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Vocabulary : constant := 600;
+      Config : constant S.Configuration :=
+        (Temperature => 0.8, Top_K => 12, Top_P => 0.9, Min_P => 0.02,
+         Repeat_Penalty => 1.3, Repeat_Window => 8, others => <>);
+      Logits : Model_Runner.Numerics.Real_Array
+        (0 .. Model_Runner.Numerics.Element_Count (Vocabulary) - 1);
+      Status : E.Error_Info;
+
+      --  Every third token refused, and the best of all with it.
+      function Allowed (Token : Vocab.Token_Id) return Boolean
+      is (Natural (Token) mod 3 /= 0 and then Natural (Token) /= 7);
+
+      Taken_Count : Natural;
+      Differ : Natural := 0;
+   begin
+      for Index in Logits'Range loop
+         --  Bands of equal logits, so the K-th is tied.
+         Logits (Index) :=
+           Model_Runner.Numerics.Real ((Natural (Index) * 37) mod 23) / 4.0;
+      end loop;
+      Logits (7) := 9.0;
+
+      for Seed in 1 .. 200 loop
+         declare
+            Whole, Ranked : S.Sampler;
+            A, B : Vocab.Token_Id;
+         begin
+            S.Open (Whole, Config, Vocabulary, S.Seed_Value (Seed), Status);
+            S.Open (Ranked, Config, Vocabulary, S.Seed_Value (Seed), Status);
+            S.Bias (Whole, 11, 5.0, Status);
+            S.Bias (Ranked, 11, 5.0, Status);
+            S.Record_Token (Whole, 14);
+            S.Record_Token (Ranked, 14);
+
+            for Candidate in 0 .. Vocabulary - 1 loop
+               if not Allowed (Vocab.Token_Id (Candidate)) then
+                  S.Forbid_For_Step (Whole, Vocab.Token_Id (Candidate));
+               end if;
+            end loop;
+            S.Forbid_Outside_Ranked
+              (Ranked, Logits, Allowed'Access, Taken_Count);
+            Assert (Taken_Count >= Config.Top_K,
+                    "fewer than the top-k were taken:" & Taken_Count'Image);
+
+            S.Sample (Whole, Logits, A, Status);
+            S.Sample (Ranked, Logits, B, Status);
+            if A /= B then
+               Differ := Differ + 1;
+            end if;
+            S.Close (Whole);
+            S.Close (Ranked);
+         end;
+      end loop;
+      Assert (Differ = 0,
+              "the ranked mask drew otherwise than the whole one in"
+              & Differ'Image & " of 200 seeds");
+   end Ranked_Masking_Draws_As_The_Whole_Mask;
+
    --  No repetition penalty unless one is asked for, as llama.cpp has it:
    --  the recent tokens it reads include the prompt's, and at 1.1 a model
    --  told to repeat what a tool had just answered was pushed off it --
@@ -3821,6 +3889,10 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Ranked_Masking_Draws_As_The_Whole_Mask'Access,
+         "a grammar asked only of the best ranked tokens draws what it draws "
+         & "asked of every token");
       Register_Routine
         (T, No_Repetition_Penalty_Unless_Asked'Access,
          "no repetition penalty unless one is asked for");

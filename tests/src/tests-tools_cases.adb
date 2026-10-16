@@ -3173,6 +3173,18 @@ package body Tests.Tools_Cases is
             "status: done" & ASCII.LF & "summary: listed",
             "the agent did not take the final channel as the answer");
 
+      --  And a chat's turn, as the interactive mode keeps it: the final
+      --  message for harmony, the reply with its reasoning closed else.
+      Same (Model_Runner.Conversation.Reply_Turn
+              (Answer_Reply, Tools.Harmony_Call),
+            "status: done" & ASCII.LF & "summary: listed",
+            "a harmony chat turn kept more than its final message");
+      Same (Model_Runner.Conversation.Reply_Turn
+              ("<think>" & ASCII.LF & "hm", Tools.Tool_Call_JSON),
+            Model_Runner.Conversation.Closed_Reasoning
+              ("<think>" & ASCII.LF & "hm"),
+            "another chat turn was not its reply with the reasoning closed");
+
       --  And a turn appended as the template will read it back: the
       --  answer alone, the call's reasoning beside its call.
       declare

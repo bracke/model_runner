@@ -639,6 +639,13 @@ package body Model_Runner.Conversation is
       return Reply;
    end Closed_Reasoning;
 
+   function Reply_Turn
+     (Reply  : String;
+      Syntax : Model_Runner.Tools.Call_Syntax) return String
+   is (if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Harmony_Call)
+       then Model_Runner.Tools.Harmony_Answer (Reply)
+       else Closed_Reasoning (Reply));
+
    procedure Append_Reply
      (Item    : in out History;
       Reply   : String;

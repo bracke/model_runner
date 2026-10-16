@@ -361,6 +361,50 @@ package Model_Runner.Sampling is
    --  @param Token Token to mask until the next release.
    procedure Forbid_For_Step (Item : in out Sampler; Token : Token_Id);
 
+   --  Whether the chain's first filter is a top-k over the adjusted
+   --  logits -- no mirostat before it -- so that a mask a grammar makes
+   --  decides the draw through its K best allowed tokens alone: masking
+   --  the rest of the vocabulary as well changes nothing the chain reads.
+   --
+   --  @param Item Configuration to inspect.
+   --  @return True when the top-k comes first.
+   function Ranks_First (Item : Configuration) return Boolean
+   is (not Is_Greedy (Item) and then Item.Top_K > 0
+       and then Item.Mirostat not in 1 | 2);
+
+   --  The logit the chain ranks a token by: its own with the logit biases,
+   --  the sequence penalty and the repetition penalties applied, as the
+   --  top-k reads it; the lowest value for a token masked or forbidden.
+   --
+   --  @param Item Open sampler.
+   --  @param Logits The step's logits.
+   --  @param Token Token to rank.
+   --  @return Its adjusted logit.
+   function Ranking_Logit
+     (Item   : Sampler;
+      Logits : Real_Array;
+      Token  : Token_Id) return Real;
+
+   --  Forbid for the step every token but the best ranked an allowed set
+   --  holds, where the chain's first filter is a top-k (Ranks_First): the
+   --  tokens taken by Ranking_Logit, best first and the lower token first
+   --  between equals, each asked Allowed, until the top-k's K are taken and
+   --  the next ranks below the K-th -- ties with it taken too, so the top-k
+   --  picks among them as it would have. The draw that follows is the draw
+   --  from every disallowed token forbidden, and only the few at the top
+   --  are asked: a grammar asked of a whole vocabulary of 262,144 tokens
+   --  took seconds a sampled token.
+   --
+   --  @param Item Open sampler.
+   --  @param Logits The step's logits.
+   --  @param Allowed Whether a token may be drawn.
+   --  @param Taken_Count How many were taken; nought when none is allowed.
+   procedure Forbid_Outside_Ranked
+     (Item        : in out Sampler;
+      Logits      : Real_Array;
+      Allowed     : not null access function (Token : Token_Id) return Boolean;
+      Taken_Count : out Natural);
+
    --  Select one token from a logit vector.
    --
    --  The vector holds raw logits: no softmax has been applied by the

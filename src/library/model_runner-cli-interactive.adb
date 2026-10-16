@@ -1319,19 +1319,13 @@ package body Model_Runner.CLI.Interactive is
                   Pres.Report (Screen, Reading);
                end if;
             end;
-         elsif Harmony then
-            --  A harmony turn is its final message: gpt-oss's template
-            --  refuses a turn that carries the channels' markers, so the
-            --  next turn would not render.
-            Conv.Append
-              (Messages, Conv.Assistant_Role,
-               Model_Runner.Tools.Harmony_Answer
-                 (Gen.Generated_Text (Last_Result)),
-               Outcome);
          else
             Conv.Append
               (Messages, Conv.Assistant_Role,
-               Conv.Closed_Reasoning (Gen.Generated_Text (Last_Result)),
+               Conv.Reply_Turn
+                 (Gen.Generated_Text (Last_Result),
+                  Model_Runner.Templates.Syntax_Of
+                    (L.Template_Format (Prepared))),
                Outcome);
          end if;
 

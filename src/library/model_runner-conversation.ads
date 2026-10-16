@@ -137,6 +137,18 @@ package Model_Runner.Conversation is
    --  @return The reply, its reasoning closed where it was left open.
    function Closed_Reasoning (Reply : String) return String;
 
+   --  What a chat's turn holds of a reply that called nothing: a harmony
+   --  reply's final message -- gpt-oss's template refuses a turn that
+   --  carries the channels' markers, so the next turn would not render --
+   --  and any other reply with its reasoning closed (Closed_Reasoning).
+   --
+   --  @param Reply The reply as it came.
+   --  @param Syntax The call syntax the model writes in.
+   --  @return The turn's text.
+   function Reply_Turn
+     (Reply  : String;
+      Syntax : Model_Runner.Tools.Call_Syntax) return String;
+
    --  Append a model's reply as the turn it is.
    --
    --  A reply that asks for tools is what the model said and then the

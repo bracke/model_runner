@@ -147,6 +147,20 @@ package body Model_Runner.Agent is
       Carry      : Memory_Reference := null;
       Result     : out Outcome)
    is
+      --  The shape the model's calls are read in: the caller's, unless it
+      --  left the JSON default and the model's own template writes another
+      --  -- a helper run with the default on a gpt-oss, Gemma or
+      --  Qwen3-Coder model read none of its calls and ended with no answer.
+      Own_Syntax : constant Model_Runner.Tools.Call_Syntax :=
+        Model_Runner.Templates.Reading_Syntax
+          (Model_Runner.Llama.Template_Format (Source));
+      Read_Syntax : constant Model_Runner.Tools.Call_Syntax :=
+        (if Tool_Syntax in Model_Runner.Tools.Tool_Call_JSON
+                         | Model_Runner.Tools.Open_JSON
+           and then Own_Syntax not in Model_Runner.Tools.Tool_Call_JSON
+                                    | Model_Runner.Tools.Open_JSON
+         then Own_Syntax else Tool_Syntax);
+
       Words : constant access constant Vocab.Vocabulary :=
         L.Vocabulary (Source);
 
@@ -178,7 +192,7 @@ package body Model_Runner.Agent is
       --  since an answer is the same JSON whichever syntax the calls take.
       Constrain : constant Boolean :=
         (Have_Tools or else Answer_Schema /= "")
-        and then (Tool_Syntax /= Model_Runner.Tools.Open_JSON
+        and then (Read_Syntax /= Model_Runner.Tools.Open_JSON
                   or else not Have_Tools);
 
       --  The grammar, compiled once: the tools do not change between steps,
@@ -213,7 +227,7 @@ package body Model_Runner.Agent is
       Tidied : aliased Model_Runner.Output.Harmony.Filter (Sink);
       Shown  : constant Model_Runner.Output.Sink_Reference :=
         (if Model_Runner.Output."/=" (Sink, null)
-           and then Model_Runner.Tools."=" (Tool_Syntax,
+           and then Model_Runner.Tools."=" (Read_Syntax,
                                             Model_Runner.Tools.Harmony_Call)
          then Tidied'Unchecked_Access else Sink);
 
@@ -298,7 +312,7 @@ package body Model_Runner.Agent is
               (Trimmed'Length >= Mark'Length
                and then Trimmed (Trimmed'Last - Mark'Length + 1 .. Trimmed'Last) = Mark);
          begin
-            case Tool_Syntax is
+            case Read_Syntax is
                when Model_Runner.Tools.Function_XML => return Ends ("</function>");
                when Model_Runner.Tools.Tool_Call_JSON | Model_Runner.Tools.Qwen_XML =>
                   return Ends ("</tool_call>");
@@ -351,7 +365,7 @@ package body Model_Runner.Agent is
          Model_Runner.Tools.Constraint.Compile_Call_Grammar
            (Offered, Rules_Grammar, Result.Error,
             Answer_Schema => Answer_Schema,
-            Syntax        => Tool_Syntax);
+            Syntax        => Read_Syntax);
          if E.Is_Error (Result.Error) then
             Result.Reason := Grammar_Failed;
             return;
@@ -591,7 +605,7 @@ package body Model_Runner.Agent is
             if Have_Tools then
                Conv.Append_Reply
                  (Messages, Reply_Text, Status, Reading,
-                  Syntax => Tool_Syntax, Offered => Offered'Unchecked_Access);
+                  Syntax => Read_Syntax, Offered => Offered'Unchecked_Access);
             else
                Conv.Append
                  (Messages, Conv.Assistant_Role,
@@ -649,7 +663,7 @@ package body Model_Runner.Agent is
             end;
          end if;
          if E.Is_Error (Reading)
-           and then Model_Runner.Tools."/=" (Tool_Syntax, Model_Runner.Tools.Open_JSON)
+           and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
            and then Result.Steps < Max_Steps
            and then Recovery_For (Class_Of (Reading), Compact, Retries_Left, Chances_Left)

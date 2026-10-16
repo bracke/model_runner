@@ -15078,6 +15078,36 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Other);
    end A_Named_Draft_Shares_The_Text;
 
+   --  The layout a processor run takes unasked: the panels at the integer
+   --  arithmetic, and the file's own rows at --arith f32, whose kernels
+   --  read those -- the panels read a byte at a time made TinyLlama's
+   --  twelve tokens 2.00 s against 1.12 at Q8_0 and 5.51 against 1.42 at
+   --  Q2_K, the text the same.
+   procedure Binary32_Keeps_The_Files_Layout
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Path : constant String := Tiny_Model.Suite_Fixture;
+      use type Model_Runner.Llama.Repack_Mode;
+   begin
+      Tiny_Model.Write_Suite_Fixture;
+      Assert (Model_Runner.CLI.Execute.Unasked_Layout
+                (Path, Model_Runner.Backend.Backend_CPU)
+              = Model_Runner.Llama.To_Rows,
+              "a processor run at the integer arithmetic did not take the "
+              & "panels unasked");
+      Assert (Model_Runner.CLI.Execute.Unasked_Layout
+                (Path, Model_Runner.Backend.Backend_CPU,
+                 Arithmetic => Model_Runner.Llama.Float_Activations)
+              = Model_Runner.Llama.No_Repack,
+              "a processor run at --arith f32 took the panels unasked");
+      Assert (Model_Runner.CLI.Execute.Unasked_Layout
+                (Path, Model_Runner.Backend.Backend_CPU,
+                 Arithmetic => Model_Runner.Llama.Mixed_Activations)
+              = Model_Runner.Llama.To_Rows,
+              "a processor run at --arith mixed did not take the panels");
+   end Binary32_Keeps_The_Files_Layout;
+
    --  The device run takes unasked is the one whose load will hold the
    --  model: a dense model's matrices weighed against the room the load
    --  counts -- the device's heaps less the context at the length the run
@@ -15441,6 +15471,9 @@ package body Tests.CLI_Cases is
         (T, The_Settings_Model_Stands_In_For_None_Named'Access,
          "the settings file's model is the one run takes where none is "
          & "named");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Binary32_Keeps_The_Files_Layout'Access,
+         "a processor run at --arith f32 keeps the file's layout unasked");
       Register_Routine
         (T, The_Unasked_Device_Counts_The_Context'Access,
          "the device run takes unasked counts the context the load will "

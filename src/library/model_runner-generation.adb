@@ -545,6 +545,35 @@ package body Model_Runner.Generation is
           elsif Vocab.Text_Of (Spelt, Which) = "" then False
           else Model_Runner.Grammar.Accepts
                  (Rules.all, Shape, Vocab.Text_Of (Spelt, Which)));
+
+      --  Which first bytes the grammar can take where it stands, asked of
+      --  each byte once a step (First_Bytes): a token's text is taken only
+      --  where its first byte is, so a token the grammar refuses at its
+      --  first byte is refused without walking it -- most of a vocabulary
+      --  where the grammar is in the middle of a word it spells out.
+      First_Ok : array (Character) of Boolean := [others => True];
+
+      procedure First_Bytes is
+      begin
+         for C in Character loop
+            First_Ok (C) := Model_Runner.Grammar.Accepts (Rules.all, Shape, [1 => C]);
+         end loop;
+      end First_Bytes;
+
+      --  Grammar_Takes, screened by the first byte.
+      function Screened_Takes (Which : Token_Id) return Boolean is
+      begin
+         if Vocab.Ends_Generation (Words.all, Which) then
+            return Model_Runner.Grammar.Is_Complete (Rules.all, Shape);
+         end if;
+         declare
+            Text : constant String := Vocab.Text_Of (Spelt, Which);
+         begin
+            return Text /= ""
+              and then First_Ok (Text (Text'First))
+              and then Model_Runner.Grammar.Accepts (Rules.all, Shape, Text);
+         end;
+      end Screened_Takes;
       Logits  : T.Real_Array_Access := null;
       Tokens  : Token_Buffer := null;
 
@@ -2842,6 +2871,35 @@ package body Model_Runner.Generation is
                      end if;
 
                      if not Chosen then
+                        First_Bytes;
+                     end if;
+                     if not Chosen and then S.Ranks_First (Item.Sampling) then
+                        --  The chain's first filter is a top-k, so the
+                        --  draw is decided by the K best tokens the grammar
+                        --  allows and the rest need not be asked: the
+                        --  tokens are taken by the logit the top-k ranks
+                        --  them by, best first, each asked of the grammar,
+                        --  until K are taken and the next ranks below the
+                        --  K-th -- ties with it taken too, so the top-k
+                        --  picks among them as it would have -- and every
+                        --  other token is forbidden for the step. The draw
+                        --  is the one the whole vocabulary filtered gives.
+                        --  Filtered whole, a sampled call took seconds a
+                        --  token on a 262,144-token vocabulary, and /work's
+                        --  tasks ran out of their time.
+                        declare
+                           Accepted : Natural;
+                        begin
+                           S.Forbid_Outside_Ranked
+                             (Sampler, Logits.all, Screened_Takes'Access, Accepted);
+                           if Accepted = 0 then
+                              Conclude
+                                (Runtime_Error,
+                                 E.Make (E.Grammar_Rejected_Every_Token));
+                              exit Decode_Loop;
+                           end if;
+                        end;
+                     elsif not Chosen then
                         declare
                            Allowed : Natural := 0;
                         begin
@@ -2850,7 +2908,7 @@ package body Model_Runner.Generation is
                                  Which : constant Token_Id :=
                                    Token_Id (Candidate);
                               begin
-                                 if Grammar_Takes (Which) then
+                                 if Screened_Takes (Which) then
                                     Allowed := Allowed + 1;
                                  else
                                     S.Forbid_For_Step (Sampler, Which);

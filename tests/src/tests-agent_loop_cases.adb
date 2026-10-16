@@ -1,6 +1,7 @@
 with AUnit.Test_Cases;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -338,12 +339,114 @@ package body Tests.Agent_Loop_Cases is
       Ada.Directories.Delete_Tree (Dir);
    end Loop_Keeps_To_Its_Rules;
 
+   --  A loop not told its model's call syntax reads the model's own: the
+   --  tiny model under gpt-oss's template, a reply written in harmony and
+   --  the syntax left at its default. run --agent's helpers were run so,
+   --  read their calls as JSON, made none on a gpt-oss, Gemma or
+   --  Qwen3-Coder model and ended with no answer.
+   procedure An_Unnamed_Syntax_Is_The_Models_Own
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      function Template_Text return String is
+         Held : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Open
+           (Held, Ada.Streams.Stream_IO.In_File, "fixtures/gpt-oss-own.jinja");
+         declare
+            Room : String (1 .. Natural (Ada.Streams.Stream_IO.Size (Held)));
+         begin
+            String'Read (Ada.Streams.Stream_IO.Stream (Held), Room);
+            Ada.Streams.Stream_IO.Close (Held);
+            return Room;
+         end;
+      end Template_Text;
+
+      Harmony  : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Tiny_Model.Build (Harmony, Template => Template_Text);
+
+      declare
+         Under    : Harness (Harmony);
+         Session  : L.Session;
+         Messages : Conv.History;
+         Offered  : Model_Runner.Tools.Definitions;
+         Runner   : Model_Runner.Tools.Builtin.Instance;
+         Stop     : Model_Runner.Stops.Set;
+         Request  : Model_Runner.Generation.Request;
+         Clock    : aliased Model_Runner.Clocks.System_Clock;
+         Seeds    : aliased Model_Runner.Entropy.Host_Source;
+         Status   : E.Error_Info;
+         Replies  : aliased Script;
+         Seen     : aliased Recorder;
+         Ended    : Ag.Outcome;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse
+           (Under.Parsed, Under.Source, Status => Status);
+         L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         L.Open (Session, Under.Ready, Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "work", Status);
+         Model_Runner.Tools.Read
+           (Offered,
+            Model_Runner.Tools.Registry.Offered
+              ([Model_Runner.Tools.Registry.Write_Files => True, others => False]),
+            Status);
+         Model_Runner.Stops.Open (Stop);
+         Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+         Request.Max_Tokens := 64;
+
+         Replies.Replies.Append
+           ("<|channel|>analysis<|message|>Write it.<|end|><|start|>assistant"
+            & "<|channel|>commentary to=functions.write_file <|constrain|>json"
+            & "<|message|>{""path"": ""h.txt"", ""content"": ""one""}");
+         Replies.Replies.Append ("<|channel|>final<|message|>written");
+
+         Ag.Run
+           (Source     => Under.Ready,
+            Session    => Session,
+            Messages   => Messages,
+            Offered    => Offered,
+            Executor   => Runner,
+            Generation => Request,
+            Stop_Set   => Stop,
+            Sink       => null,
+            Time       => Clock'Unchecked_Access,
+            Seeds      => Seeds'Unchecked_Access,
+            Max_Steps  => 4,
+            Watch      => Seen'Unchecked_Access,
+            Script     => Replies'Unchecked_Access,
+            Result     => Ended);
+
+         Assert (Natural (Seen.Results.Length) = 1
+                 and then Ada.Directories.Exists (Dir & "/h.txt"),
+                 "a harmony call was not read with the syntax unnamed:"
+                 & Seen.Results.Length'Image & " calls");
+         Assert (Ended.Reason = Ag.Answered,
+                 "the run did not end on the final channel's answer: "
+                 & Ended.Reason'Image);
+         Conv.Close (Messages);
+         Model_Runner.Tools.Close (Offered);
+         L.Close (Session);
+      end;
+      Model_Runner.Bytes.Free (Harmony);
+   end An_Unnamed_Syntax_Is_The_Models_Own;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
         (T, Loop_Keeps_To_Its_Rules'Access,
          "a reply's calls are noted, refused as repeats and approved as the loop's rules say");
+      Register_Routine
+        (T, An_Unnamed_Syntax_Is_The_Models_Own'Access,
+         "a loop not told its model's call syntax reads the model's own");
    end Register_Tests;
 
 end Tests.Agent_Loop_Cases;

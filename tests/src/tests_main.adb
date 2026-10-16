@@ -176,9 +176,13 @@ procedure Tests_Main is
    function Unasked_Layout
      (Model        : String;
       Backend      : Model_Runner.Backend.Backend_Kind;
-      Memory_Limit : Interfaces.Unsigned_64 := 0)
+      Memory_Limit : Interfaces.Unsigned_64 := 0;
+      Exact        : Boolean := False)
       return Model_Runner.Llama.Repack_Mode
-   is (Model_Runner.CLI.Execute.Unasked_Layout (Model, Backend, Memory_Limit));
+   is (Model_Runner.CLI.Execute.Unasked_Layout
+         (Model, Backend, Memory_Limit,
+          (if Exact then Model_Runner.Llama.Float_Activations
+           else Model_Runner.Llama.Integer_Activations)));
 
    --  Selected command, defaulting to the mandatory suite.
    function Command return String is
@@ -3265,7 +3269,9 @@ begin
                      else Unasked_Layout
                             (Option ("--model", ""),
                              Backend_Of (Chosen_Backend),
-                             Bytes ("--memory-limit"))),
+                             Bytes ("--memory-limit"),
+                             Exact => Given ("--arith")
+                                      and then Option ("--arith", "") = "f32")),
 
                   --  The storage the session keeps its context in, named the way
                   --  the command names it: f32, f16, q8 or q4, and by default
