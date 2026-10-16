@@ -904,10 +904,11 @@ package body Model_Runner.Conversation is
    -------------
 
    procedure Compact
-     (Item        : in out History;
-      Keep_Recent : Natural;
-      Dropped     : out Natural;
-      Work_Record : String := "")
+     (Item          : in out History;
+      Keep_Recent   : Natural;
+      Dropped       : out Natural;
+      Work_Record   : String := "";
+      Synopsis_Room : Positive := Default_Synopsis)
    is
       N : constant Natural := Item.Used;
       Has_Sys : constant Boolean :=
@@ -920,7 +921,8 @@ package body Model_Runner.Conversation is
       --  even as its oldest turns go. It is bounded and carried forward: each
       --  compaction adds to it and keeps only the most recent Synopsis_Cap
       --  characters, so it can never grow the task without limit.
-      Synopsis_Cap : constant := 2560;
+      Synopsis_Cap : constant Positive :=
+        Positive'Max (Least_Synopsis, Synopsis_Room);
       Marker       : constant String :=
         ASCII.LF & ASCII.LF & "[earlier turns this run, compacted:]" & ASCII.LF;
       Record_Marker : constant String :=

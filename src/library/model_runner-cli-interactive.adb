@@ -1213,9 +1213,20 @@ package body Model_Runner.CLI.Interactive is
                --  turn asked again; twice at most a turn.
                while Out_Of_Room and then Gone = 0 and then Compactions < 2 loop
                   Compactions := Compactions + 1;
+                  --  A synopsis the context has room for: at most half
+                  --  as many characters as it has positions, and an
+                  --  eighth the second time -- the default's 2,560 filled
+                  --  a context of a few hundred alone.
                   Conv.Compact
                     (Messages, Keep_Recent => (if Compactions = 1 then 6 else 1),
-                     Dropped => Gone);
+                     Dropped => Gone,
+                     Synopsis_Room =>
+                       Positive'Max
+                         (Conv.Least_Synopsis,
+                          Natural'Min
+                            (Conv.Default_Synopsis,
+                             L.Capacity (Session)
+                             / (if Compactions = 1 then 2 else 8))));
                   if Gone > 0 then
                      Pres.Put_Note
                        (Screen, "cli.interactive.compacted",

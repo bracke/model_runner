@@ -192,6 +192,12 @@ package Model_Runner.Conversation is
    --  @param Count Number of trailing messages to remove.
    procedure Drop_Last (Item : in out History; Count : Natural);
 
+   --  The characters a compaction's synopsis keeps unless asked for fewer,
+   --  and the fewest it keeps: enough for a line, so that a synopsis
+   --  carried from an earlier compaction is cut too.
+   Default_Synopsis : constant := 2560;
+   Least_Synopsis   : constant := 64;
+
    --  Drop the oldest turns to make room, keeping the shape a model can
    --  still read.
    --
@@ -221,11 +227,16 @@ package Model_Runner.Conversation is
    --  @param Keep_Recent How many of the most recent turns to keep whole.
    --  @param Dropped How many turns were removed; zero when nothing could be.
    --  @param Work_Record The harness's record of the work, or "" for none.
+   --  @param Synopsis_Room The most characters the synopsis keeps: a
+   --    context of a few hundred positions has no room for the default's,
+   --    which filled it on its own and refused the turn the compaction was
+   --    for. At least Least_Synopsis.
    procedure Compact
-     (Item        : in out History;
-      Keep_Recent : Natural;
-      Dropped     : out Natural;
-      Work_Record : String := "");
+     (Item          : in out History;
+      Keep_Recent   : Natural;
+      Dropped       : out Natural;
+      Work_Record   : String := "";
+      Synopsis_Room : Positive := Default_Synopsis);
 
    --  Number of messages.
    --

@@ -10363,6 +10363,26 @@ package body Tests.CLI_Cases is
                  "a conversation past its context was refused, not compacted: "
                  & Said);
       end;
+
+      --  And in a context of a few hundred positions, which a synopsis of
+      --  the default's 2,560 characters filled on its own: the turn that
+      --  compacted was refused all the same, and every turn after it.
+      Tiny_Model.Build (Image, Room => 256);
+      declare
+         function Turns (Count : Natural) return String is
+           (if Count = 0 then "/exit" & ASCII.LF
+            else "turn" & Count'Image & " " & [1 .. 40 => 'w']
+                 & ASCII.LF & ASCII.LF & Turns (Count - 1));
+         Said : constant String := Conversed (Turns (12));
+      begin
+         Assert (Project_Tools.Text.Contains (Said, "were taken into a summary")
+                 and then not Project_Tools.Text.Contains
+                                (Said, E.Diagnostic_Code (E.Generation_Prompt_Too_Long))
+                 and then not Project_Tools.Text.Contains
+                                (Said, E.Diagnostic_Code (E.Generation_Context_Exhausted)),
+                 "a small context's compaction left no room for the turn: "
+                 & Said);
+      end;
    end Interactive_Loop_Runs;
 
    --  Interactive reads a line of input as the command it is.
