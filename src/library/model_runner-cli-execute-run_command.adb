@@ -655,6 +655,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
         --  none. And how many helpers the run has made, to tell them apart.
         Watcher : access Agent_Watch := null;
         Helpers : Natural := 0;
+
+        --  The run's thinking choice, which its helpers are given too.
+        Thinking : Model_Runner.Templates.Thinking_Choice :=
+          Model_Runner.Templates.Thinking_Unstated;
      end record;
 
    overriding procedure Run_Sub
@@ -790,6 +794,13 @@ package body Model_Runner.CLI.Execute.Run_Command is
                         Max_Seconds      => Seconds,
                         Max_Total_Tokens => Tokens,
                         Compact          => True,
+                        --  In the shape the model writes its calls, as the
+                        --  run's own loop reads them: read as JSON, a
+                        --  helper on any other format's model made none.
+                        Tool_Syntax      =>
+                          Model_Runner.Templates.Reading_Syntax
+                            (L.Template_Format (Self.Src.all)),
+                        Thinking         => Self.Thinking,
                         Result           => Loop_Out);
                   end;
 

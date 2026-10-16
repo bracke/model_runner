@@ -2487,6 +2487,22 @@ package body Tests.Sampling_Cases is
    -- Name --
    ----------
 
+   --  No repetition penalty unless one is asked for, as llama.cpp has it:
+   --  the recent tokens it reads include the prompt's, and at 1.1 a model
+   --  told to repeat what a tool had just answered was pushed off it --
+   --  gpt-oss's delegating /work tasks came back in gibberish in two runs
+   --  of five.
+   procedure No_Repetition_Penalty_Unless_Asked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Default : constant S.Configuration := (others => <>);
+   begin
+      Assert (Default.Repeat_Penalty = 1.0,
+              "the default repetition penalty is"
+              & Model_Runner.Numerics.Real'Image (Default.Repeat_Penalty));
+   end No_Repetition_Penalty_Unless_Asked;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -3805,6 +3821,9 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, No_Repetition_Penalty_Unless_Asked'Access,
+         "no repetition penalty unless one is asked for");
       Register_Routine
         (T, The_Chain_Runs_As_Llama_Runs_It'Access,
          "the filters read the step's own probabilities, each the shares the "

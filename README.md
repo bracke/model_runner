@@ -12559,7 +12559,7 @@ samples several positions before it emits any of them -- so every row of a
 batch was scored against the history as it stood when the round began, where
 a run of single tokens would have scored each against the tokens before it.
 The drafted text therefore diverged from the undrafted text whenever a
-penalty was on, which the command turns on by default at 1.1. The guarantee
+penalty was on, which the command then turned on by default at 1.1. The guarantee
 this pair of sections opens with held only at `--repeat-penalty 1.0`.
 
 It was found by a lookup drafting for a model quoting itself, and it is fixed

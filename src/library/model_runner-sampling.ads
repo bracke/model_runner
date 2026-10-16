@@ -95,8 +95,13 @@ package Model_Runner.Sampling is
       Top_A : Real := 0.0;
 
       --  Divide the logits of recently produced tokens by this value when they
-      --  are positive and multiply when they are negative. One disables it.
-      Repeat_Penalty : Real := 1.1;
+      --  are positive and multiply when they are negative. One disables it,
+      --  and is the default, as llama.cpp's is: the recent tokens include the
+      --  prompt's, and at 1.1 a model told to repeat what a tool just
+      --  answered -- a path, a name, a channel's marker -- was pushed off it.
+      --  gpt-oss's /work tasks that delegated came back in gibberish in two
+      --  runs of five that way, and in none of four without it.
+      Repeat_Penalty : Real := 1.0;
 
       --  How many of the most recent tokens the penalty considers.
       Repeat_Window : Natural := 64;

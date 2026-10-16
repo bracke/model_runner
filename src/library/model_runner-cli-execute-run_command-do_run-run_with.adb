@@ -1097,6 +1097,7 @@ begin
             Delegate_Runner.Leases.Open (Sub_Ready);
             Delegate_Runner.Ready := Sub_Ready;
             Delegate_Runner.Max_Depth := Item.Delegate_Depth;
+            Delegate_Runner.Thinking := Item.Thinking;
             Delegate_Runner.Watcher := Watcher'Unchecked_Access;
             if Sub_Ready >= 1 and then Item.Delegate_Depth >= 1 then
                Built_Runner.Use_Delegator

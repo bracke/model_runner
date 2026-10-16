@@ -45,7 +45,7 @@ option takes:
 | `temperature`  | `--temperature`      | `0.7`          |
 | `top-k`        | `--top-k`            | `40`           |
 | `top-p`        | `--top-p`            | `0.95`         |
-| `repeat-penalty` | `--repeat-penalty` | `1.1`          |
+| `repeat-penalty` | `--repeat-penalty` | `1.0`          |
 | `paged`        | `--paged`/`--no-paged` | `true` / `false` |
 
 A true/false value becomes the option's `--flag` or `--no-flag`. Any option
