@@ -1696,7 +1696,13 @@ begin
                Stop_Set => Stop_Set,
                Rules    =>
                  (if Rules_Ready then Rules'Unchecked_Access else null),
-               Sink     => Sink'Unchecked_Access,
+               Sink     =>
+                 (if Model_Runner.Tools."="
+                       (Model_Runner.Templates.Reading_Syntax
+                          (L.Template_Format (Prepared)),
+                        Model_Runner.Tools.Harmony_Call)
+                  then Tidied'Unchecked_Access
+                  else Sink'Unchecked_Access),
                Observer => Reporter'Unchecked_Access,
                Time     => Clock'Unchecked_Access,
                Seeds    => Seeds'Unchecked_Access,

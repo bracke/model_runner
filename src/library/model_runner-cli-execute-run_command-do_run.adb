@@ -72,6 +72,12 @@ is
 
    Stop_Set  : aliased Model_Runner.Stops.Set;
    Sink      : aliased Pres.Standard_Output_Sink;
+
+   --  And gpt-oss's replies through a filter that shows the reasoning and
+   --  the answer without the harmony markup and leaves its calls out --
+   --  the run reports each call it reads on standard error.
+   Tidied    : aliased Model_Runner.Output.Harmony.Filter
+     (Sink'Unchecked_Access);
    Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
    Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
    Told_File : aliased Pres.Logprob_File_Reporter;

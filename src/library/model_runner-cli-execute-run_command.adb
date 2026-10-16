@@ -1,3 +1,4 @@
+with Model_Runner.Output.Harmony;
 with Model_Runner.Draft_Policy;
 with Ada.Calendar;
 with Ada.Directories;
