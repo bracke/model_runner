@@ -1377,11 +1377,14 @@ void decode16(uint format, uint row, uint col, out float v[16]) {
         uint scales = byte_at(at + 74u + sub);
         float db = unpackHalf2x16(u16_at(at)).x
                    * (0.5 + float(l < 2u ? (scales & 15u) : (scales >> 4u))) * 0.25;
+        //  The two lanes' indices and signs a halfword each, not a byte:
+        //  each load a lane saves is one the tile waits on.
+        uint quads = u16_at(at + 2u + 4u * sub + l);
+        uint signs = u16_at(at + 34u + 4u * sub + l);
         for (uint t = 0u; t < 2u; ++t) {
-            uint lane = 4u * sub + l + t;
-            uint g = byte_at(at + 2u + lane) | (((tops >> (2u * (l + t))) & 3u) << 8u);
+            uint g = ((quads >> (8u * t)) & 255u) | (((tops >> (2u * (l + t))) & 3u) << 8u);
             signed8(IQ2S_GRID[2u * g], IQ2S_GRID[2u * g + 1u],
-                    byte_at(at + 34u + lane), db, v, 8u * t);
+                    (signs >> (8u * t)) & 255u, db, v, 8u * t);
         }
     } else if (format == FMT_IQ3_XXS) {
         uint aux = u32_at(at + 66u + 4u * sub);
@@ -1396,12 +1399,13 @@ void decode16(uint format, uint row, uint col, out float v[16]) {
         uint scales = byte_at(at + 106u + sub / 2u);
         float db = unpackHalf2x16(u16_at(at)).x
                    * float(1u + 2u * (sub % 2u == 0u ? (scales & 15u) : (scales >> 4u)));
+        uint signs = u16_at(at + 74u + 4u * sub + l);
         for (uint t = 0u; t < 2u; ++t) {
             uint k = l + t;
-            uint q = at + 2u + 8u * sub + 2u * k;
-            signed8(IQ3S_GRID[byte_at(q)      | (((high >> (2u * k)) & 1u) << 8u)],
-                    IQ3S_GRID[byte_at(q + 1u) | (((high >> (2u * k + 1u)) & 1u) << 8u)],
-                    byte_at(at + 74u + 4u * sub + k), db, v, 8u * t);
+            uint q = u16_at(at + 2u + 8u * sub + 2u * k);
+            signed8(IQ3S_GRID[(q & 255u) | (((high >> (2u * k)) & 1u) << 8u)],
+                    IQ3S_GRID[(q >> 8u)  | (((high >> (2u * k + 1u)) & 1u) << 8u)],
+                    (signs >> (8u * t)) & 255u, db, v, 8u * t);
         }
     } else if (format == FMT_IQ1_S) {
         uint high = u16_at(at + 34u + 2u * sub);
@@ -2089,8 +2093,14 @@ void main() {
                 uint at = row + (k0 / 256u) * 136u;
                 uint sub = (k0 / 32u) & 7u;
 
-                float d = half_at (at);
-                uint high = byte_at (at + 2u) | (byte_at (at + 3u) << 8u);
+                //  The scale and the high bits, one word where the block
+                //  starts on one.
+                uint head = (at & 3u) == 0u ? w[at >> 2u]
+                            : (byte_at (at) | (byte_at (at + 1u) << 8u)
+                               | (byte_at (at + 2u) << 16u)
+                               | (byte_at (at + 3u) << 24u));
+                float d = unpackHalf2x16 (head).x;
+                uint high = head >> 16u;
 
                 uint nibble = (sub & 1u) == 0u
                               ? (byte_at (at + 4u + sub / 2u) & 15u)
