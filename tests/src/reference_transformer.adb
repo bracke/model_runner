@@ -4388,6 +4388,7 @@ package body Reference_Transformer is
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
             if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
+                          | GPT_OSS
             then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);
@@ -4600,7 +4601,7 @@ package body Reference_Transformer is
                  Read_Vector
                    (Layer_Name
                       (Index,
-                       (if Item.Kind in Qwen35 | Qwen35_MoE
+                       (if Item.Kind in Qwen35 | Qwen35_MoE | GPT_OSS
                         then "post_attention_norm.weight"
                         else "ffn_norm.weight")),
                     Present);

@@ -483,6 +483,19 @@ package body Tiny_Model is
             Fixtures.Encode_F32 (Values));
       end Norm_Of;
 
+      --  A small table of Rows rows of Width, drawn as Norm_Of draws.
+      procedure Rows_Of (Name : String; Width, Rows : Positive) is
+         Values : N.Real_Array (0 .. N.Element_Count (Width * Rows) - 1);
+         Drawn  : constant N.Real_Array := Next (Values'Length);
+      begin
+         for Index in Values'Range loop
+            Values (Index) := Drawn (Index) * 0.125;
+         end loop;
+         Fixtures.Add_Tensor
+           (Builder, Name, [G.U64 (Width), G.U64 (Rows)], G.Type_F32,
+            Fixtures.Encode_F32 (Values));
+      end Rows_Of;
+
       Prefix : constant String :=
         (case Kind is
            when Llama     => "llama",
@@ -1746,7 +1759,11 @@ package body Tiny_Model is
          end if;
          --  Qwen2 carries a bias beside each projection; Llama has none.
          --  Bert carries the same three, written the same way.
+         --  And gpt-oss, as llama.cpp's converter writes it: the fixture
+         --  wrote none, and an engine that read none passed it while the
+         --  published file answered nonsense.
          if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
+                  | GPT_OSS
            and then not Omit_Biases
          then
             Norm_Of (Layer_Name (Index, "attn_q.bias"), Heads * Key_Size);
@@ -1928,7 +1945,7 @@ package body Tiny_Model is
             --  Named for what it follows by the hybrid, for what it
             --  precedes by the rest; the same normalization.
             Norm (Layer_Name (Index,
-                              (if Kind = Qwen35
+                              (if Kind in Qwen35 | GPT_OSS
                                then "post_attention_norm.weight"
                                else "ffn_norm.weight")));
 
@@ -1986,14 +2003,15 @@ package body Tiny_Model is
 
             --  And the biases GPT_OSS carries on all of them, laid out the
             --  way the weights are: every expert's in one tensor.
+            --  A row an expert, as llama.cpp's converter writes them.
             if Kind = GPT_OSS then
                Norm_Of (Layer_Name (Index, "ffn_gate_inp.bias"), Experts);
-               Norm_Of (Layer_Name (Index, "ffn_gate_exps.bias"),
-                        Expert_Feed * Experts);
-               Norm_Of (Layer_Name (Index, "ffn_up_exps.bias"),
-                        Expert_Feed * Experts);
-               Norm_Of (Layer_Name (Index, "ffn_down_exps.bias"),
-                        Embedding * Experts);
+               Rows_Of (Layer_Name (Index, "ffn_gate_exps.bias"),
+                        Expert_Feed, Experts);
+               Rows_Of (Layer_Name (Index, "ffn_up_exps.bias"),
+                        Expert_Feed, Experts);
+               Rows_Of (Layer_Name (Index, "ffn_down_exps.bias"),
+                        Embedding, Experts);
             end if;
             --  The shared expert: the same gate-up-down block an expert
             --  is, and a row that gates its answer against the input. Every

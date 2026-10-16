@@ -862,6 +862,24 @@ package body Tests.Platform_Cases is
       return AUnit.Format ("the platform layer");
    end Name;
 
+   --  Which build is running, for what a saved state is keyed by: there,
+   --  and the same within one process. A cache keyed without it was read
+   --  back by the next build, and a fixed engine answered from the states
+   --  the broken one had saved.
+   procedure The_Program_Says_Which_Build_It_Is
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Stamp : constant String := Model_Runner.Platform.Program_Stamp;
+   begin
+      Assert (Stamp /= "", "the running program gave no stamp");
+      Assert (Model_Runner.Platform.Program_Stamp = Stamp,
+              "the running program's stamp changed within the process");
+      Assert (Model_Runner.Platform.Cache_File ("k|" & Stamp)
+              /= Model_Runner.Platform.Cache_File ("k|other"),
+              "a cache keyed by the stamp is the cache of another build");
+   end The_Program_Says_Which_Build_It_Is;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -869,6 +887,9 @@ package body Tests.Platform_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, The_Program_Says_Which_Build_It_Is'Access,
+         "the running program says which build it is");
       Register_Routine
         (T, A_Process_Leaving_Its_Handler_Installed_Ends'Access,
          "a process that ends with its interrupt handling installed ends");

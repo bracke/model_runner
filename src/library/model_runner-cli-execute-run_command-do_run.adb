@@ -38,7 +38,9 @@ is
               & "|" & Item.Context_Size'Image
               & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic)
               & "|" & Model_Runner.Backend.Backend_Kind'Image (Item.Backend)
-              & "|" & L.Repack_Mode'Image (Item.Repack))
+              & "|" & L.Repack_Mode'Image (Item.Repack)
+              --  And the build that saved it: see Program_Stamp.
+              & "|" & Model_Runner.Platform.Program_Stamp)
       else "");
    Load_Path : constant String :=
      (if not T.Is_Empty (Item.Load_Session)

@@ -906,4 +906,23 @@ package body Model_Runner.Platform is
          return Processor_Count;
    end Core_Count;
 
+   -------------------
+   -- Program_Stamp --
+   -------------------
+
+   function Program_Stamp return String is
+      Path : constant String := Hostkit.Fs.Own_Executable;
+   begin
+      if Path = "" or else not Ada.Directories.Exists (Path) then
+         return "";
+      end if;
+      return Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
+        & "@" & Ada.Calendar.Formatting.Image
+                  (Ada.Directories.Modification_Time (Path),
+                   Include_Time_Fraction => True);
+   exception
+      when others =>
+         return "";
+   end Program_Stamp;
+
 end Model_Runner.Platform;

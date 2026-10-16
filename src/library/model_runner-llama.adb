@@ -1178,6 +1178,24 @@ package body Model_Runner.Llama is
 
       Gates, Ups, Downs : T.View;
 
+      --  An expert stack's biases, every expert's run of Each end to end:
+      --  one vector as an earlier conversion wrote them, or a row an
+      --  expert, as llama.cpp's converter writes them -- the same numbers
+      --  in the same order, and the file ggml-org publishes was refused
+      --  for the shape.
+      procedure Resolve_Bias
+        (Suffix : String; Each : Element_Count; Into : out T.Real_Array_Access)
+      is
+         Name  : constant String := Layer_Key (Index, Suffix);
+         Found : constant Natural := Containers.Find_Tensor (Source, Name);
+      begin
+         if Found /= 0 and then Containers.Tensor_Rank (Source, Found) = 2 then
+            Resolve_Table (Item, Source, Name, Count, Each, Into, Status);
+         else
+            Resolve_Norm (Item, Source, Name, Each * Count, Into, Status);
+         end if;
+      end Resolve_Bias;
+
    begin
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"),
@@ -1220,23 +1238,20 @@ package body Model_Runner.Llama is
             return;
          end if;
 
-         Resolve_Norm
-           (Item, Source, Layer_Key (Index, "ffn_gate_exps.bias"),
-            Feed * Count, Current.Expert_Gate_Bias, Status);
+         Resolve_Bias
+           ("ffn_gate_exps.bias", Feed, Current.Expert_Gate_Bias);
          if E.Is_Error (Status) then
             return;
          end if;
 
-         Resolve_Norm
-           (Item, Source, Layer_Key (Index, "ffn_up_exps.bias"),
-            Feed * Count, Current.Expert_Up_Bias, Status);
+         Resolve_Bias
+           ("ffn_up_exps.bias", Feed, Current.Expert_Up_Bias);
          if E.Is_Error (Status) then
             return;
          end if;
 
-         Resolve_Norm
-           (Item, Source, Layer_Key (Index, "ffn_down_exps.bias"),
-            Width * Count, Current.Expert_Down_Bias, Status);
+         Resolve_Bias
+           ("ffn_down_exps.bias", Width, Current.Expert_Down_Bias);
          if E.Is_Error (Status) then
             return;
          end if;

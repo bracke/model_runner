@@ -1485,7 +1485,9 @@ begin
          --  it rather than required. Read all three where the first is
          --  present, so a file with some is not read as one with a bias
          --  or two missing.
-         if Item.Settings.Kind in Glm4 | Stablelm
+         --  And gpt-oss, which carries all three: unread, its queries
+         --  went unbiased and the published file answered nonsense.
+         if Item.Settings.Kind in Glm4 | Stablelm | GPT_OSS
            and then Containers.Find_Tensor
                       (Source, Layer_Key (Index, "attn_q.bias")) /= 0
          then
@@ -1645,10 +1647,20 @@ begin
             --  feed-forward for what it follows rather than what it
             --  precedes; it is the same normalization in the same
             --  place.
+            --  And gpt-oss as llama.cpp's converter writes it, whose
+            --  normalization before the mixture is post_attention_norm
+            --  too; an earlier conversion named it ffn_norm, and the file
+            --  ggml-org publishes was refused for a tensor it has under
+            --  the other name.
             Resolve_Norm
               (Item, Source,
                Layer_Key (Index,
                           (if Hybrid (Item.Settings.Kind)
+                             or else (Item.Settings.Kind = GPT_OSS
+                                      and then Containers.Find_Tensor
+                                                 (Source,
+                                                  Layer_Key (Index, "ffn_norm.weight"))
+                                               = 0)
                            then "post_attention_norm.weight"
                            else "ffn_norm.weight")),
                Width, Current.Feed_Norm, Status);
