@@ -76,7 +76,6 @@ package body Library_Surface is
       --  what it read, so the operation stays.
       new String'("Hidden_State"),
       new String'("Has_Template"),
-      new String'("Is_Closed"),
       new String'("Is_Loaded"),
       new String'("Is_Normal"),
       new String'("Seed_Used"),

@@ -10,6 +10,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Output.Harmony;
 with Model_Runner.Tools.Constraint;
 
 package body Model_Runner.Agent is
@@ -205,6 +206,16 @@ package body Model_Runner.Agent is
       Deadline : constant Ada.Real_Time.Time :=
         (if Timing then Ada.Real_Time."+" (Ada.Real_Time.Clock, Ada.Real_Time.To_Time_Span (Max_Seconds))
          else Ada.Real_Time.Time_Last);
+
+      --  What the replies are streamed to: gpt-oss's through a filter that
+      --  shows its reasoning and answer without the harmony markup, and
+      --  its calls not at all -- the run says each call itself.
+      Tidied : aliased Model_Runner.Output.Harmony.Filter (Sink);
+      Shown  : constant Model_Runner.Output.Sink_Reference :=
+        (if Model_Runner.Output."/=" (Sink, null)
+           and then Model_Runner.Tools."=" (Tool_Syntax,
+                                            Model_Runner.Tools.Harmony_Call)
+         then Tidied'Unchecked_Access else Sink);
 
       --  Tokens the run has spent, its own and its children's.
       function Spent return Natural is (Result.Generated_Tokens + Result.Delegated_Tokens);
@@ -458,7 +469,7 @@ package body Model_Runner.Agent is
                   Item     => Request,
                   Stop_Set => Stop_Set,
                   Rules    => Rules,
-                  Sink     => Sink,
+                  Sink     => Shown,
                   Observer => null,
                   Time     => Time,
                   Seeds    => Seeds,
@@ -488,7 +499,7 @@ package body Model_Runner.Agent is
                         Item     => Request,
                         Stop_Set => Stop_Set,
                         Rules    => Rules,
-                        Sink     => Sink,
+                        Sink     => Shown,
                         Observer => null,
                         Time     => Time,
                         Seeds    => Seeds,

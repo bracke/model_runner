@@ -60,6 +60,7 @@ with Model_Runner.Generation;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Output;
+with Model_Runner.Output.Harmony;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Backend.Device;
@@ -14023,6 +14024,50 @@ package body Tests.CLI_Cases is
 
    ---------------------------------------------
    -- Beginning_Marker_Follows_The_Vocabulary --
+
+   --  gpt-oss's reply shown as text: its reasoning and answer without the
+   --  harmony markup, a call's header and arguments not at all, a '<' in
+   --  the text kept, and markers split across fragments read whole.
+   procedure Harmony_Replies_Are_Shown_As_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Screen : aliased Capture_Sink;
+      Tidy   : Model_Runner.Output.Harmony.Filter (Screen'Unchecked_Access);
+      Closed : Boolean;
+
+      Reply : constant String :=
+        "<|channel|>analysis<|message|>Check A < B first.<|end|>"
+        & "<|start|>assistant<|channel|>commentary to=functions.edit_file "
+        & "<|constrain|>json<|message|>{""path"": ""a<b""}<|call|>"
+        & "<|channel|>final<|message|>status: done<|return|>";
+      Wanted : constant String :=
+        "Check A < B first." & ASCII.LF & "status: done" & ASCII.LF;
+      At_Char : Positive := Reply'First;
+   begin
+      while At_Char <= Reply'Last loop
+         Tidy.Write
+           (Reply (At_Char .. Natural'Min (At_Char + 2, Reply'Last)), Closed);
+         At_Char := At_Char + 3;
+      end loop;
+      Tidy.Flush (Closed);
+      Assert (Screen.Data (1 .. Screen.Used) = Wanted,
+              "a harmony reply was shown as [" & Screen.Data (1 .. Screen.Used)
+              & "]");
+
+      --  And a reply in no harmony form at all, shown when it ends.
+      Screen.Used := 0;
+      declare
+         Plain : Model_Runner.Output.Harmony.Filter
+           (Screen'Unchecked_Access);
+      begin
+         Plain.Write ("just text", Closed);
+         Plain.Flush (Closed);
+         Assert (Screen.Data (1 .. Screen.Used) = "just text",
+                 "a reply with no markup was held back");
+      end;
+   end Harmony_Replies_Are_Shown_As_Text;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -15642,6 +15687,10 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Thermometer_Reads_Or_Not'Access,
          "the thermometer reads degrees, or says it has none");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Harmony_Replies_Are_Shown_As_Text'Access,
+         "a harmony reply is shown as its reasoning and answer, its calls "
+         & "and markers left out");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Device_Memory_Reaches_The_Device'Access,
          "--device-memory decides where the weights are, and says so");
