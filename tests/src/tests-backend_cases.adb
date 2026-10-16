@@ -4387,6 +4387,201 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Gathered_Mixture_Says_What_The_Host_Says;
 
+   ----------------------------------------------------
+   -- A_Biased_MXFP4_Pair_Says_What_Its_Steps_Say --
+   ----------------------------------------------------
+
+   --  gpt-oss's gate and up gathered as one step: the two MXFP4 stacks in
+   --  one region, each with its expert biases -- a binary32 a row -- just
+   --  before it, as its files lay them out, and the clamped gate between
+   --  them. The pair answers what the two gathers, the two biasing steps
+   --  and the combination answer, to the bit. The region's rows are
+   --  thirty-four bytes, so the biases lie off a word's start on the
+   --  device as well as in the bytes.
+   procedure A_Biased_MXFP4_Pair_Says_What_Its_Steps_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 64;
+      Feed    : constant := 32;
+      Stack   : constant := Experts * Feed;
+      Alpha   : constant N.Real := 1.702;
+      Limit   : constant N.Real := 0.6;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Gates  : N.Real_Array (0 .. Stack * Width - 1);
+      Ups    : N.Real_Array (0 .. Stack * Width - 1);
+      Gate_Bias : N.Real_Array (0 .. Stack - 1);
+      Up_Bias   : N.Real_Array (0 .. Stack - 1);
+      Input  : N.Real_Array (0 .. Width - 1);
+      --  What the arms read: a step's answer, as the layer's normalized
+      --  activation is -- here the input again, through the identity.
+      Identity : N.Real_Array (0 .. Width * Width - 1) := [others => 0.0];
+
+      Row_Bytes  : constant B.Byte_Count :=
+        Products.Pair_Row_Bytes (Products.Packed_MXFP4, Width);
+      Gate_Bytes : constant B.Byte_Count := Row_Bytes * Stack;
+      Lead       : constant Natural := 4 * Stack;
+      --  The up's biases right after the gate's rows, its rows after them.
+      Pair_At    : constant B.Byte_Count := Gate_Bytes + B.Byte_Count (Lead);
+      Pad        : constant Natural :=
+        Products.Pair_Pad (Pair_At, Stack, Width, Products.Packed_MXFP4, Lead);
+      Region     : B.Byte_Array
+        (1 .. B.Byte_Count (Pad) + Pair_At + Gate_Bytes) := [others => 0];
+      Gate_At    : constant B.Byte_Count := B.Byte_Count (Pad);
+
+      Fused   : N.Real_Array
+        (0 .. Width + Experts + 2 * Used + Used * Feed - 1)
+        := [others => 0.0];
+      Stepped : N.Real_Array
+        (0 .. Width + Experts + 2 * Used + 5 * Used * Feed - 1)
+        := [others => 0.0];
+      Steps : Products.Sequence;
+
+      procedure Put_Reals (Values : N.Real_Array; At_Byte : B.Byte_Count) is
+         Bytes : constant B.Byte_Array := Fixtures.Encode_F32 (Values);
+      begin
+         Region (Region'First + At_Byte
+                 .. Region'First + At_Byte + Bytes'Length - 1) := Bytes;
+      end Put_Reals;
+
+      procedure Front is
+      begin
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Identity (Identity'First)'Address,
+            B.Byte_Count (Identity'Length) * 4, 0, Products.Values_F32,
+            Width, Width, Added, Kept => False);
+         Assert (Added, "the identity was refused");
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address,
+            B.Byte_Count (Router'Length) * 4, 0, Products.Values_F32,
+            Experts, Width, Added, Kept => False);
+         Assert (Added, "the router's product was refused");
+         Products.Add_Route (Steps, Experts, Used, Added);
+         Assert (Added, "the routing step was refused");
+      end Front;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a biased MXFP4 pair says what its steps say");
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a biased MXFP4 pair says what its steps say");
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Router'Range loop
+         Router (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Gates'Range loop
+         Gates (Index) := N.Real (Index mod 7) / 7.0 - 0.5;
+         Ups (Index) := N.Real ((Index * 3) mod 5) / 5.0 - 0.4;
+      end loop;
+      for Index in Gate_Bias'Range loop
+         Gate_Bias (Index) := N.Real (Index mod 3) / 3.0 - 0.3;
+         Up_Bias (Index) := N.Real ((Index * 5) mod 7) / 7.0 - 0.5;
+      end loop;
+      for Index in Input'Range loop
+         Input (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+      end loop;
+      for Row in 0 .. Width - 1 loop
+         Identity (N.Element_Count (Row * Width + Row)) := 1.0;
+      end loop;
+
+      Put_Reals (Gate_Bias, Gate_At - B.Byte_Count (Lead));
+      declare
+         G : constant B.Byte_Array := Fixtures.Encode_MXFP4 (Gates);
+         U : constant B.Byte_Array := Fixtures.Encode_MXFP4 (Ups);
+      begin
+         Region (Region'First + Gate_At .. Region'First + Gate_At + G'Length - 1)
+           := G;
+         Put_Reals (Up_Bias, Gate_At + Gate_Bytes);
+         Region (Region'First + Gate_At + Pair_At
+                 .. Region'First + Gate_At + Pair_At + U'Length - 1) := U;
+      end;
+
+      --  As one step.
+      Front;
+      Products.Add_Gathered_Pair
+        (Steps, Region (Region'First)'Address, Region'Length, 0, Pair_At,
+         Products.Packed_MXFP4, Stack, Feed, Width, Used, 3, Added,
+         Key => Region (Region'First + Gate_At)'Address,
+         From_Step => 1, Unit => 3, Lead => Lead, Gate_Bias_Back => Lead,
+         Up_Bias_At => Natural (Pair_At) - Lead,
+         Alpha => Alpha, Limit => Limit);
+      Assert (Added, "the biased MXFP4 pair was refused");
+      Products.Run (Engine, Steps, Input, 1, Fused, Ok, Halted);
+      Assert (Ok, "the pair would not run");
+
+      --  And as the steps it stands for.
+      Front;
+      Products.Add_Gathered_Product
+        (Steps, Region (Region'First)'Address, Region'Length, Gate_At,
+         Products.Packed_MXFP4, Stack, Feed, Width, [others => 0], Used,
+         Added, Kept => False, Chained => True, From_Step => 1, Routed => 3);
+      Assert (Added, "the gathered gates were refused");
+      Products.Add_Gathered_Product
+        (Steps, Region (Region'First)'Address, Region'Length,
+         Gate_At + Pair_At, Products.Packed_MXFP4, Stack, Feed, Width,
+         [others => 0], Used, Added, Kept => False, Chained => True,
+         From_Step => 1, Routed => 3);
+      Assert (Added, "the gathered ups were refused");
+      Products.Add_Bias
+        (Steps, Gate_Bias (Gate_Bias'First)'Address,
+         B.Byte_Count (Gate_Bias'Length) * 4, 0, Experts, Feed, 4, 3, Added,
+         Kept => False);
+      Assert (Added, "the gate biases were refused");
+      Products.Add_Bias
+        (Steps, Up_Bias (Up_Bias'First)'Address,
+         B.Byte_Count (Up_Bias'Length) * 4, 0, Experts, Feed, 5, 3, Added,
+         Kept => False);
+      Assert (Added, "the up biases were refused");
+      Products.Add_Combination
+        (Steps, 3, Added, Alpha => Alpha, Limit => Limit);
+      Assert (Added, "the combination was refused");
+      Products.Run (Engine, Steps, Input, 1, Stepped, Ok, Halted);
+      Assert (Ok, "the steps would not run");
+
+      declare
+         Worst : N.Real := 0.0;
+         One   : constant N.Element_Count :=
+           N.Element_Count (Width + Experts + 2 * Used);
+         Made  : constant N.Element_Count := One + N.Element_Count (4 * Used * Feed);
+      begin
+         for K in 0 .. N.Element_Count (Used * Feed) - 1 loop
+            Worst := N.Real'Max (Worst, abs (Fused (One + K) - Stepped (Made + K)));
+         end loop;
+         Assert (Worst = 0.0,
+                 "the biased MXFP4 pair answers" & N.Real'Image (Worst)
+                 & " away from its steps");
+         Assert (abs Fused (One) + abs Fused (One + 1) > 0.0,
+                 "the pair answered zeroes");
+      end;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Biased_MXFP4_Pair_Says_What_Its_Steps_Say;
+
    -------------------------------------------------
    -- A_Mixture_Keeps_Its_Expert_Biases_On_The_Device --
    -------------------------------------------------
@@ -12148,6 +12343,10 @@ package body Tests.Backend_Cases is
         (T, Device_Gives_Back_What_It_Cannot_Hold'Access,
          "a device with less memory than the matrices need gives back the "
          & "one wanted longest ago and keeps computing");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Biased_MXFP4_Pair_Says_What_Its_Steps_Say'Access,
+         "gpt-oss's gate and up gathered as one step, biases and the "
+         & "clamped gate in it, say what its steps say");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Gathered_Mixture_Says_What_The_Host_Says'Access,
          "a mixture's second half as one sequence -- routed, gathered out "

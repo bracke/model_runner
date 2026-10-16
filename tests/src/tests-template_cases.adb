@@ -1532,6 +1532,58 @@ package body Tests.Template_Cases is
       return Found;
    end Partial_Left;
 
+   --  gpt-oss's reasoning effort answered by the thinking choice: low for
+   --  --no-think, high for --think, and its own medium where nothing was
+   --  said.
+   procedure Reasoning_Effort_Follows_The_Thinking_Choice
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Held   : Ada.Streams.Stream_IO.File_Type;
+      Item   : Tmpl.Compiled;
+      Talk   : Conv.History;
+      Status : E.Error_Info;
+
+      function Rendered (Choice : Tmpl.Thinking_Choice) return String is
+         Room : String (1 .. 16_384);
+         Used : Natural;
+         St   : E.Error_Info;
+      begin
+         Tmpl.Render (Item, Talk, "", "", True, Room, Used, St,
+                      Thinking => Choice);
+         Assert (E.Is_Ok (St), "gpt-oss's template did not render");
+         return Room (1 .. Used);
+      end Rendered;
+
+      function Has (Whole, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Whole, Part) > 0);
+   begin
+      Ada.Streams.Stream_IO.Open
+        (Held, Ada.Streams.Stream_IO.In_File, "fixtures/gpt-oss-own.jinja");
+      declare
+         Source : String
+           (1 .. Natural (Ada.Streams.Stream_IO.Size (Held)));
+      begin
+         String'Read (Ada.Streams.Stream_IO.Stream (Held), Source);
+         Ada.Streams.Stream_IO.Close (Held);
+         Tmpl.Compile (Item, Source, Status => Status);
+      end;
+      Assert (E.Is_Ok (Status), "gpt-oss's template did not compile");
+
+      Conv.Open (Talk, Status => Status);
+      Conv.Append (Talk, Conv.User_Role, "hi", Status);
+
+      Assert (Has (Rendered (Tmpl.Thinking_Unstated), "Reasoning: medium"),
+              "a caller who said nothing did not get the model's own effort");
+      Assert (Has (Rendered (Tmpl.Thinking_Off), "Reasoning: low"),
+              "thinking off did not ask for low effort");
+      Assert (Has (Rendered (Tmpl.Thinking_On), "Reasoning: high"),
+              "thinking on did not ask for high effort");
+
+      Conv.Close (Talk);
+      Tmpl.Close (Item);
+   end Reasoning_Effort_Follows_The_Thinking_Choice;
+
    procedure Carried_Formats_Match_The_Models_Own_Templates
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4397,6 +4449,9 @@ package body Tests.Template_Cases is
         (T, Language_Semantics_Match_Jinja'Access,
          "loops, comparisons, filters' arguments, '~', the generation flag, "
          & "line breaks and strings render as jinja2 renders them");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Reasoning_Effort_Follows_The_Thinking_Choice'Access,
+         "gpt-oss's reasoning effort follows the thinking choice");
       Register_Routine
         (T, Carried_Formats_Match_The_Models_Own_Templates'Access,
          "the carried qwen3-coder, minicpm and gemma formats render the "

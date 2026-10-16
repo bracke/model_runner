@@ -871,6 +871,15 @@ package Model_Runner.Platform.Device.Products is
       Count   : Natural;
       Columns : Natural) return Boolean;
 
+   --  Bytes one row of a gated pair's matrices holds, in their format.
+   --
+   --  @param Packing Q4_K, Q8_0 or MXFP4.
+   --  @param Columns Elements a row holds.
+   --  @return The row's bytes.
+   function Pair_Row_Bytes
+     (Packing : Weight_Packing;
+      Columns : Natural) return Model_Runner.Bytes.Byte_Count;
+
    --  The rows a gate and up region holds, ending at the up's last
    --  row, the up's beginning Pair_At bytes past the gate's: what
    --  Add_Gated_Pair uploads, and what the two plain products name as
@@ -881,13 +890,16 @@ package Model_Runner.Platform.Device.Products is
    --  @param Pair_At Bytes from the gate's first row to the up's.
    --  @param Rows Rows each matrix holds.
    --  @param Columns Elements a row holds.
-   --  @param Packing The two matrices' format, Q4_K or Q8_0.
+   --  @param Packing The two matrices' format, Q4_K, Q8_0 or MXFP4.
+   --  @param Lead Bytes before the gate's first row the region must hold
+   --    as well: a mixture's gate biases, where they lie just before it.
    --  @return The region's rows, rounded up.
    function Pair_Rows
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
       Columns : Natural;
-      Packing : Weight_Packing := Packed_Q4_K) return Natural;
+      Packing : Weight_Packing := Packed_Q4_K;
+      Lead    : Natural := 0) return Natural;
 
    --  How far before the gate's first row the region Pair_Rows counts
    --  begins, in bytes: what rounding it to whole rows from the up's end
@@ -896,13 +908,15 @@ package Model_Runner.Platform.Device.Products is
    --  @param Pair_At Bytes from the gate's first row to the up's.
    --  @param Rows Rows each matrix holds.
    --  @param Columns Elements a row holds.
-   --  @param Packing The two matrices' format, Q4_K or Q8_0.
+   --  @param Packing The two matrices' format, Q4_K, Q8_0 or MXFP4.
+   --  @param Lead As Pair_Rows takes it: the pad is at least this.
    --  @return Bytes the region begins before the gate.
    function Pair_Pad
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
       Columns : Natural;
-      Packing : Weight_Packing := Packed_Q4_K) return Natural;
+      Packing : Weight_Packing := Packed_Q4_K;
+      Lead    : Natural := 0) return Natural;
 
    --  Name a feed-forward's gate and up projections as one step, with the
    --  unit on the gate and the two multiplied -- what two
@@ -974,7 +988,17 @@ package Model_Runner.Platform.Device.Products is
    --  @param From_Step Step whose answer is the activation, or zero for the
    --    step before this one.
    --  @param Unit The unit on the gate, numbered as Add_Combination numbers
-   --    it: nought for the sigmoid-weighted one, one for the Gaussian.
+   --    it: nought for the sigmoid-weighted one, one for the Gaussian, and
+   --    for MXFP4 stacks three, gpt-oss's clamped gate, at Alpha and Limit.
+   --  @param Lead Bytes before the gate's rows the region holds, as
+   --    Pair_Rows takes them.
+   --  @param Gate_Bias_Back Where the gate's expert biases lie, in bytes
+   --    before its first row, or zero for none: binary32, an expert's
+   --    Each together, added to the gate's answer before the unit.
+   --  @param Up_Bias_At And the up's, in bytes past the gate's first row,
+   --    or zero for none. MXFP4 stacks only.
+   --  @param Alpha The clamped gate's slope.
+   --  @param Limit And its limit.
    procedure Add_Gathered_Pair
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -991,7 +1015,12 @@ package Model_Runner.Platform.Device.Products is
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
       From_Step : Natural := 0;
-      Unit      : Natural := 0);
+      Unit      : Natural := 0;
+      Lead      : Natural := 0;
+      Gate_Bias_Back : Natural := 0;
+      Up_Bias_At     : Natural := 0;
+      Alpha     : Model_Runner.Numerics.Real := 0.0;
+      Limit     : Model_Runner.Numerics.Real := 0.0);
 
    --  Whether the routing steps of the model now open leave the chosen
    --  experts' shares as the softmax gave them, rather than putting them
@@ -3769,6 +3798,11 @@ private
       NL_Wave_Line   : System.Address := System.Null_Address;
       MX_Wave_Shader : System.Address := System.Null_Address;
       MX_Wave_Line   : System.Address := System.Null_Address;
+
+      --  And MXFP4's gathered gate and up at once, for one position: a
+      --  mixture's two arms, their biases and its unit as one step.
+      MX_Glu_Shader : System.Address := System.Null_Address;
+      MX_Glu_Line   : System.Address := System.Null_Address;
       XS_Wave_Shader : System.Address := System.Null_Address;
       XS_Wave_Line   : System.Address := System.Null_Address;
 
@@ -4450,6 +4484,12 @@ private
       --  up, Rows wide.
       Glu     : Boolean := False;
       Pair_At : Natural := 0;
+
+      --  A gathered pair's expert biases, where it carries them: the
+      --  gate's in bytes before its first row, the up's past it; zero for
+      --  none.
+      Gate_Bias_Back : Natural := 0;
+      Up_Bias_At     : Natural := 0;
 
       --  A product whose matrix is uploaded as part of a larger region --
       --  a feed-forward's gate and up as one, which the gated pair and the

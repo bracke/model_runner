@@ -72,6 +72,7 @@ package body Model_Runner.Templates is
       --  The unseen cost was thirty-two names shared between two templates.
       Item.Name_Used := 0;
       Item.Thinking_Slot := 0;
+      Item.Effort_Slot := 0;
       Item.Tools_Slot := 0;
       Item.Call_Slot := 0;
       Item.Message_Slot := 0;

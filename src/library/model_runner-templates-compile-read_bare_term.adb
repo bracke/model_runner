@@ -990,6 +990,17 @@ begin
                Item.Thinking_Slot := Result.Offset;
             end if;
 
+         elsif Word = "reasoning_effort" then
+            --  gpt-oss's way of saying it: how long to reason, low,
+            --  medium or high, where the others say whether to at all.
+            Result.Kind := Term_Variable;
+            Result.Offset := Slot_Of (Word);
+            if Result.Offset = 0 then
+               Result := Refused (Word);
+            else
+               Item.Effort_Slot := Result.Offset;
+            end if;
+
          elsif Word = "loop.previtem" or else Word = "loop.nextitem"
            or else Model_Runner.Text.Starts_With (Word, "loop.previtem.")
            or else Model_Runner.Text.Starts_With (Word, "loop.nextitem.")

@@ -25,6 +25,7 @@ with Model_Runner.Platform.Signals.Waiting;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
+with Model_Runner.Output.Harmony;
 with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tensors;
@@ -381,6 +382,14 @@ package body Model_Runner.CLI.Interactive is
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
          Asked_For'Unchecked_Access, Cancel, Worker_Notes'Unchecked_Access);
       Sink     : aliased Pres.Standard_Output_Sink;
+      --  And gpt-oss's replies through a filter that shows its reasoning
+      --  and answer without the harmony markup.
+      Tidied   : aliased Model_Runner.Output.Harmony.Filter
+        (Sink'Unchecked_Access);
+      function Harmony return Boolean
+      is (Model_Runner.Tools."="
+            (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
+             Model_Runner.Tools.Harmony_Call));
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
 
@@ -1168,7 +1177,9 @@ package body Model_Runner.CLI.Interactive is
             Item     => Request,
             Stop_Set => Stop_Set,
             Rules    => Rules,
-            Sink     => Sink'Unchecked_Access,
+            Sink     =>
+              (if Harmony then Tidied'Unchecked_Access
+               else Sink'Unchecked_Access),
             Observer => null,
             Time     => Clock'Unchecked_Access,
             Seeds    => Seeds'Unchecked_Access,
@@ -1308,6 +1319,15 @@ package body Model_Runner.CLI.Interactive is
                   Pres.Report (Screen, Reading);
                end if;
             end;
+         elsif Harmony then
+            --  A harmony turn is its final message: gpt-oss's template
+            --  refuses a turn that carries the channels' markers, so the
+            --  next turn would not render.
+            Conv.Append
+              (Messages, Conv.Assistant_Role,
+               Model_Runner.Tools.Harmony_Answer
+                 (Gen.Generated_Text (Last_Result)),
+               Outcome);
          else
             Conv.Append
               (Messages, Conv.Assistant_Role,

@@ -132,6 +132,7 @@ compile_dots row_product_wave_q8_0_v4_dots_glu row_product_wave_low.comp vulkan1
 compile row_product_wave_iq4_nl       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_NL MANY_ROWS=8u
 compile row_product_wave_iq4_xs       row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS MANY_ROWS=8u
 compile row_product_wave_mxfp4        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u MXFP4 MANY_ROWS=8u
+compile row_product_wave_mxfp4_glu    row_product_wave_low.comp vulkan1.1 NUM_ROWS=1u MXFP4 GLU
 compile_dots row_product_wave_iq4_nl_dots row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_NL MANY_ROWS=8u DOTS
 compile_dots row_product_wave_iq4_xs_dots row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u IQ4_XS MANY_ROWS=8u DOTS
 compile_dots row_product_wave_mxfp4_dots  row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u MXFP4 MANY_ROWS=8u DOTS

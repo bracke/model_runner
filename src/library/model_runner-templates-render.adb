@@ -4215,6 +4215,10 @@ begin
          Offset => (if Thinking = Thinking_On then 1 else 0),
          others => <>);
    end if;
+   if Item.Effort_Slot /= 0 and then Thinking /= Thinking_Unstated then
+      Assign_Text (Item.Effort_Slot,
+                   (if Thinking = Thinking_On then "high" else "low"));
+   end if;
 
    --  A flat instruction list with jumps. Rendering recurses in one
    --  place only, a macro call, and that is bounded by the nesting

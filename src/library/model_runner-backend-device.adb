@@ -569,12 +569,25 @@ package body Model_Runner.Backend.Device is
       Ready := True;
    end Open;
 
+   --  What Bias_There found, an array at a place in a file a row, kept
+   --  while the models it was asked for are open: every model's going
+   --  forgets it, since an array freed and another made at its address
+   --  is not the array that was compared.
+   type Bias_Answer is record
+      Held  : System.Address := System.Null_Address;
+      File  : System.Address := System.Null_Address;
+      There : Boolean := False;
+   end record;
+   Bias_Answers : array (1 .. 512) of Bias_Answer;
+   Bias_Answered : Natural := 0;
+
    -----------
    -- Close --
    -----------
 
    procedure Close is
    begin
+      Bias_Answered := 0;
       Products.Close_Keeper;
       Devices.Close (Keeping);
       Keeper_Asked := False;
@@ -748,6 +761,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Forget_Model (Ticket : in out Natural) is
    begin
+      Bias_Answered := 0;
       if Ready_Now and then Models_Noted > 0
         and then Ticket / Most_Models = Opening + 1
       then
@@ -1020,6 +1034,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Forget_Matrices is
    begin
+      Bias_Answered := 0;
       if Products.Is_Ready (Engine) then
          Products.Forget_Matrices (Engine);
       end if;
@@ -1127,11 +1142,17 @@ package body Model_Runner.Backend.Device is
           + System.Storage_Elements.Integer_Address (Offset)));
 
    --  Where a mixture's gate and up stacks lie as one region, as a gated
-   --  pair reads them: Q4_K, the up stack after the gate's a short way on.
-   --  Every step that reads either stack, and the load that holds them,
-   --  names the region when there is one, so the device keeps it once.
+   --  pair reads them: Q4_K or MXFP4, the up stack after the gate's a
+   --  short way on. Every step that reads either stack, and the load that
+   --  holds them, names the region when there is one, so the device keeps
+   --  it once. An MXFP4 region begins a binary32 a row before the gate:
+   --  gpt-oss's files put each stack's expert biases -- one a row --
+   --  just before it, so the region holds both arms' biases where they
+   --  lie, and its pair adds them (Pair_Biases).
    type Stack_Pair is record
       Paired  : Boolean := False;
+      Packing : Products.Weight_Packing := Products.Packed_Q4_K;
+      Lead    : Natural := 0;
       Start   : Model_Runner.Bytes.Byte_Count := 0;
       Pair_At : Model_Runner.Bytes.Byte_Count := 0;
       Rows    : Natural := 0;
@@ -1148,7 +1169,7 @@ package body Model_Runner.Backend.Device is
       Packing_Of (Gates.Format, Gate_P, Gate_Known);
       Packing_Of (Ups.Format, Up_P, Up_Known);
       if not Gate_Known or else not Up_Known
-        or else Gate_P /= Products.Packed_Q4_K
+        or else Gate_P not in Products.Packed_Q4_K | Products.Packed_MXFP4
         or else Up_P /= Gate_P
         or else Gates.Base = System.Null_Address
         or else Gates.Base /= Ups.Base
@@ -1157,15 +1178,19 @@ package body Model_Runner.Backend.Device is
         or else Gates.Columns /= Ups.Columns
         or else Gates.Rows = 0
         or else Gates.Columns = 0
-        or else Gates.Columns mod 256 /= 0
+        or else Gates.Columns
+                mod (if Gate_P = Products.Packed_MXFP4 then 32 else 256) /= 0
       then
          return (others => <>);
       end if;
 
       declare
          Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
-           Model_Runner.Bytes.Byte_Count (Gates.Columns / 256) * 144
+           Products.Pair_Row_Bytes (Gate_P, Natural (Gates.Columns))
            * Model_Runner.Bytes.Byte_Count (Gates.Rows);
+         Lead : constant Natural :=
+           (if Gate_P = Products.Packed_MXFP4 then 4 * Natural (Gates.Rows)
+            else 0);
       begin
          --  And the region within a gigabyte: the kernels count its bytes
          --  in 32-bit words from its base, the up's slices past the gate's.
@@ -1181,34 +1206,107 @@ package body Model_Runner.Backend.Device is
               Ups.Offset - Gates.Offset;
             Pad : constant Natural :=
               Products.Pair_Pad
-                (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns));
+                (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns),
+                 Gate_P, Lead);
          begin
             --  Nor where the load held either alone, the region not
             --  fitting: then the steps name the stacks as they were held.
             if Gates.Offset < Model_Runner.Bytes.Byte_Count (Pad)
               or else Products.Holds
                         (Engine, At_Offset (Gates.Base, Gates.Offset),
-                         Products.Packed_Q4_K, Natural (Gates.Rows),
+                         Gate_P, Natural (Gates.Rows),
                          Natural (Gates.Columns))
               or else Products.Holds
                         (Engine, At_Offset (Ups.Base, Ups.Offset),
-                         Products.Packed_Q4_K, Natural (Ups.Rows),
+                         Gate_P, Natural (Ups.Rows),
                          Natural (Ups.Columns))
             then
                return (others => <>);
             end if;
             return
               (Paired  => True,
+               Packing => Gate_P,
+               Lead    => Lead,
                Start   => Gates.Offset - Model_Runner.Bytes.Byte_Count (Pad),
                Pair_At => Pair_At,
                Rows    =>
                  Products.Pair_Rows
-                   (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns)),
+                   (Pair_At, Natural (Gates.Rows), Natural (Gates.Columns),
+                    Gate_P, Lead),
                Pad     => Pad,
                Key     => At_Offset (Gates.Base, Gates.Offset));
          end;
       end;
    end Pair_Of;
+
+   --  Whether a mixture's expert biases lie where an MXFP4 pair's region
+   --  holds them: each stack's a binary32 a row, just before it in the
+   --  file, which is how gpt-oss's files lay them out. The load reads them
+   --  into arrays of their own, so what is asked is whether the file's
+   --  bytes there are the arrays' -- asked once an array, and the answer
+   --  kept: a layer's biases are the same arrays for as long as the model
+   --  is open. Anything else is added by steps of its own.
+
+   function Bias_There
+     (Bias  : Model_Runner.Tensors.Real_Array_Access;
+      Stack : T.View;
+      Lead  : Natural) return Boolean
+   is
+      Bytes : constant Model_Runner.Bytes.Byte_Count :=
+        Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4;
+      Where : constant System.Address := Bias.all (Bias.all'First)'Address;
+   begin
+      for Index in 1 .. Bias_Answered loop
+         if Bias_Answers (Index).Held = Where
+           and then Bias_Answers (Index).File
+                    = At_Offset (Stack.Base, Stack.Offset)
+         then
+            return Bias_Answers (Index).There;
+         end if;
+      end loop;
+
+      declare
+         There : Boolean := False;
+      begin
+         if Bytes = Model_Runner.Bytes.Byte_Count (Lead)
+           and then Stack.Offset >= Bytes
+         then
+            declare
+               Mine : Model_Runner.Bytes.Byte_Array (1 .. Bytes)
+                 with Import, Address => Where;
+               File : Model_Runner.Bytes.Byte_Array (1 .. Bytes)
+                 with Import,
+                      Address => At_Offset (Stack.Base, Stack.Offset - Bytes);
+            begin
+               There := Model_Runner.Bytes."=" (Mine, File);
+            end;
+         end if;
+         if Bias_Answered < Bias_Answers'Last then
+            Bias_Answered := Bias_Answered + 1;
+            Bias_Answers (Bias_Answered) :=
+              (Held => Where, File => At_Offset (Stack.Base, Stack.Offset),
+               There => There);
+         end if;
+         return There;
+      end;
+   end Bias_There;
+
+   function Pair_Biases
+     (Pair     : Stack_Pair;
+      Gates    : T.View;
+      Ups      : T.View;
+      Gate_Bias : Model_Runner.Tensors.Real_Array_Access;
+      Up_Bias   : Model_Runner.Tensors.Real_Array_Access) return Boolean
+   is
+      use type Products.Weight_Packing;
+   begin
+      return Pair.Paired
+        and then Pair.Packing = Products.Packed_MXFP4
+        and then Pair.Lead > 0
+        and then Gate_Bias /= null and then Up_Bias /= null
+        and then Bias_There (Gate_Bias, Gates, Pair.Lead)
+        and then Bias_There (Up_Bias, Ups, Pair.Lead);
+   end Pair_Biases;
 
    --  Why a product that did not run did not run.
    --
@@ -2621,7 +2719,7 @@ package body Model_Runner.Backend.Device is
       end if;
       if Pair.Paired then
          Products.Prefetch
-           (Engine, Gate.Base, Gate.Span, Pair.Start, Products.Packed_Q4_K,
+           (Engine, Gate.Base, Gate.Span, Pair.Start, Pair.Packing,
             Pair.Rows, Natural (Gate.Columns), Pair.Key);
       else
          One (Gate);
@@ -4563,21 +4661,37 @@ package body Model_Runner.Backend.Device is
                end;
             else
                if Pair.Paired
-                 and then Unit in 0 | 1
-                 and then Model_Runner.Numerics."=" (Alpha, 0.0)
-                 and then Model_Runner.Numerics."=" (Limit, 0.0)
-                 and then Gate_Bias = null and then Up_Bias = null
+                 and then
+                   ((Unit in 0 | 1
+                     and then Model_Runner.Numerics."=" (Alpha, 0.0)
+                     and then Model_Runner.Numerics."=" (Limit, 0.0))
+                    or else (Products."=" (Pair.Packing,
+                                          Products.Packed_MXFP4)
+                             and then Unit = 3))
+                 and then
+                   ((Gate_Bias = null and then Up_Bias = null)
+                    or else Pair_Biases (Pair, Gate_Stack, Up_Stack,
+                                         Gate_Bias, Up_Bias))
                  and then Products.Pairs_Gate
                             (Engine, Gate_P, 1, Natural (Width))
                then
                   --  The two arms and the unit between them as one step: the
-                  --  combination and the barrier before it go.
+                  --  combination and the barrier before it go -- and for
+                  --  gpt-oss's pair the two biasing steps too, the biases
+                  --  read where the region holds them.
                   Products.Add_Gathered_Pair
                     (Steps, Gate_Stack.Base, Gate_Stack.Span, Pair.Start,
                      Pair.Pair_At, Gate_P, Natural (Gate_Stack.Rows), Feed,
                      Natural (Width), Used, Step_Route, Added,
                      Key => Pair.Key, Kept => False,
-                     From_Step => Step_Norm_Feed, Unit => Unit);
+                     From_Step => Step_Norm_Feed, Unit => Unit,
+                     Lead => Pair.Lead,
+                     Gate_Bias_Back =>
+                       (if Gate_Bias = null then 0 else Pair.Lead),
+                     Up_Bias_At =>
+                       (if Up_Bias = null then 0
+                        else Natural (Pair.Pair_At) - Pair.Lead),
+                     Alpha => Alpha, Limit => Limit);
 
                   --  Refused, nothing was added: the two gathers below.
                   Fused_Pair := Added;
@@ -6468,7 +6582,7 @@ package body Model_Runner.Backend.Device is
            with Import, Address => Gates.Base;
       begin
          Products.Hold
-           (Engine, Storage, Pair.Start, Products.Packed_Q4_K,
+           (Engine, Storage, Pair.Start, Pair.Packing,
             Pair.Rows, Natural (Gates.Columns), Key => Pair.Key, Ok => Ok);
       end;
 

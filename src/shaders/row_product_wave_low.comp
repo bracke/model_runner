@@ -98,6 +98,39 @@ float gaussian(float x) {
 float gate_unit(float x) {
     return shape.table == 1u ? gaussian(x) : sigmoid_weighted(x);
 }
+
+//  The two arms made one: the unit on the gate times the up -- and for
+//  gpt-oss's pair, the expert biases added to both arms first and its
+//  clamped gate, table word three, as bias.comp and combine.comp make
+//  them in that order: both arms held at the limit, the gate through the
+//  logistic at its slope, the up raised by one. The biases' bytes are
+//  members[1] and members[2] less one, nought for none; the slope and the
+//  limit members[3] and members[4] by their bits.
+//  A binary32 at any byte: the region is put on the device from where
+//  whole rows of it begin, which need not be a word's start.
+float f32_at(uint b) {
+    uint i = b >> 2u;
+    uint s = (b & 3u) * 8u;
+    return uintBitsToFloat (s == 0u ? w[i]
+                                    : (w[i] >> s) | (w[i + 1u] << (32u - s)));
+}
+
+float glu_made(float gate, float up, uint expert, uint row) {
+    if (shape.members[1] != 0u) {
+        gate += f32_at (shape.members[1] - 1u + (expert * shape.rows + row) * 4u);
+    }
+    if (shape.members[2] != 0u) {
+        up += f32_at (shape.members[2] - 1u + (expert * shape.rows + row) * 4u);
+    }
+    if (shape.table == 3u) {
+        float alpha = uintBitsToFloat (shape.members[3]);
+        float limit = uintBitsToFloat (shape.members[4]);
+        float x = min (gate, limit);
+        float y = max (-limit, min (up, limit));
+        return x / (1.0 + exp (-alpha * x)) * (y + 1.0);
+    }
+    return gate_unit(gate) * up;
+}
 #else
 #define ACC NUM_ROWS
 #endif
@@ -3688,9 +3721,20 @@ void main_one() {
         if (i * 256u + (itid / 2u) * 32u < shape.columns) {
             uint xg = (from_base + i * 256u) >> 2u;
 
-            for (uint r = 0u; r < NUM_ROWS; ++r) {
+            for (uint r = 0u; r < ACC; ++r) {
+#ifdef GLU
+                //  The gate's rows and the up's, the up's the joins word
+                //  past them for a mixture's pair, each summed as the
+                //  plain kernel sums a row.
+                uint row = min(first_row + r % NUM_ROWS, shape.rows - 1u);
+                uint pair = shape.routed != 0u ? shape.joins : shape.stride;
+                uint at = shape.base + (shape.routed != 0u ? slice : 0u)
+                          + (r >= NUM_ROWS ? pair : 0u)
+                          + row * span + i * BLOCK_BYTES;
+#else
                 uint row = min(first_row + r, shape.rows - 1u);
                 uint at = shape.base + slice + row * span + i * BLOCK_BYTES;
+#endif
                 float unused;
                 temp[r] += lane_dot_own(at, itid, xg, unused);
             }
@@ -3749,7 +3793,14 @@ void main_one() {
         uint row = first_row + (short_rows ? r * IN_FLIGHT + ix : r);
 
         if ((short_rows ? itid == 0u : tid == 0u) && row < shape.rows) {
+#ifdef OWN_ACTIVATIONS
+            //  A gathered pair writes each member's answer where a gather
+            //  does; a feed-forward's pair is one member.
+            y[member * shape.rows * shape.count + shape.first * shape.rows + row]
+              = glu_made(gate, up, which, row);
+#else
             y[shape.first * shape.rows + row] = gate_unit(gate) * up;
+#endif
         }
     }
     return;

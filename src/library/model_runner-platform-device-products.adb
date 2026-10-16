@@ -3344,6 +3344,8 @@ package body Model_Runner.Platform.Device.Products is
                     Item.NL_Wave_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4,
                     Item.MX_Wave_Shader);
+            Module (Model_Runner.Shaders.Low.Row_Product_Wave_Mxfp4_Glu,
+                    Item.MX_Glu_Shader);
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Iq4_Xs,
                     Item.XS_Wave_Shader);
             --  And their walks as integers, where the device has the dot.
@@ -4546,6 +4548,11 @@ package body Model_Runner.Platform.Device.Products is
                if Item.MX_Wave_Shader /= Null_Handle then
                   Request.Stage.Module := Item.MX_Wave_Shader;
                   Line (Low_Wave_Lanes, 1, Item.MX_Wave_Line);
+               end if;
+
+               if Item.MX_Glu_Shader /= Null_Handle then
+                  Request.Stage.Module := Item.MX_Glu_Shader;
+                  Line (Low_Wave_Lanes, 1, Item.MX_Glu_Line);
                end if;
 
                if Item.XS_Wave_Shader /= Null_Handle then
@@ -6023,6 +6030,7 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Line, "vkDestroyPipeline");
       Give_Back (Item.MX_Wave_Line, "vkDestroyPipeline");
+      Give_Back (Item.MX_Glu_Line, "vkDestroyPipeline");
       Give_Back (Item.XS_Wave_Line, "vkDestroyPipeline");
       for Packing in Weight_Packing loop
          for Count in Many_Count loop
@@ -6195,6 +6203,7 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.NL_Wave_Shader, "vkDestroyShaderModule");
       Give_Back (Item.MX_Wave_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.MX_Glu_Shader, "vkDestroyShaderModule");
       Give_Back (Item.XS_Wave_Shader, "vkDestroyShaderModule");
       for Packing in Weight_Packing loop
          Give_Back (Item.Dots_Wave_Shaders (Packing), "vkDestroyShaderModule");
@@ -12048,6 +12057,28 @@ package body Model_Runner.Platform.Device.Products is
    -- Pairs_Gate --
    ----------------
 
+   --  The words an MXFP4 pair's dispatch is told beside its shape: where
+   --  its biases lie on the device, in bytes and plus one, nought for
+   --  none, and the clamped gate's slope and limit by their bits. Base is
+   --  where its gate's rows begin there.
+   function Pair_Words
+     (This : Step;
+      Base : Interfaces.Unsigned_64) return Member_Words
+   is
+   begin
+      return
+        [1 => (if This.Gate_Bias_Back = 0 then 0
+               else C.unsigned
+                      (Base - Interfaces.Unsigned_64 (This.Gate_Bias_Back)
+                       + 1)),
+         2 => (if This.Up_Bias_At = 0 then 0
+               else C.unsigned
+                      (Base + Interfaces.Unsigned_64 (This.Up_Bias_At) + 1)),
+         3 => Float_Bits (C.C_float (This.Alpha)),
+         4 => Float_Bits (C.C_float (This.Limit)),
+         others => 0];
+   end Pair_Words;
+
    function Pairs_Gate
      (Item    : Engine;
       Packing : Weight_Packing;
@@ -12063,6 +12094,13 @@ package body Model_Runner.Platform.Device.Products is
                   (Count in Many_Count
                    and then Item.Glu_Many_Lines (Count) /= Null_Handle
                    and then Waved (Item, Packing, Count))))
+       or else
+       --  MXFP4's for one position: a mixture's gathered pair.
+       (Packing = Packed_MXFP4
+        and then Columns mod 32 = 0
+        and then Count = 1
+        and then Item.MX_Glu_Line /= Null_Handle
+        and then Waved (Item, Packing, Count))
        or else
        (Packing = Packed_Q8_0
         and then Columns mod 32 = 0
@@ -12082,6 +12120,8 @@ package body Model_Runner.Platform.Device.Products is
       Columns : Natural) return Model_Runner.Bytes.Byte_Count
    is (if Packing = Packed_Q8_0
        then Model_Runner.Bytes.Byte_Count (Columns / 32) * 34
+       elsif Packing = Packed_MXFP4
+       then Model_Runner.Bytes.Byte_Count (Columns / 32) * 17
        else Model_Runner.Bytes.Byte_Count (Columns / 256) * 144);
 
    ---------------
@@ -12092,7 +12132,8 @@ package body Model_Runner.Platform.Device.Products is
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
       Columns : Natural;
-      Packing : Weight_Packing := Packed_Q4_K) return Natural
+      Packing : Weight_Packing := Packed_Q4_K;
+      Lead    : Natural := 0) return Natural
    is
       Wide : constant Model_Runner.Bytes.Byte_Count :=
         Pair_Row_Bytes (Packing, Columns);
@@ -12101,7 +12142,8 @@ package body Model_Runner.Platform.Device.Products is
          return 0;
       end if;
       return Natural
-        ((Pair_At + Model_Runner.Bytes.Byte_Count (Rows) * Wide + Wide - 1)
+        ((Model_Runner.Bytes.Byte_Count (Lead) + Pair_At
+          + Model_Runner.Bytes.Byte_Count (Rows) * Wide + Wide - 1)
          / Wide);
    end Pair_Rows;
 
@@ -12113,14 +12155,15 @@ package body Model_Runner.Platform.Device.Products is
      (Pair_At : Model_Runner.Bytes.Byte_Count;
       Rows    : Natural;
       Columns : Natural;
-      Packing : Weight_Packing := Packed_Q4_K) return Natural
+      Packing : Weight_Packing := Packed_Q4_K;
+      Lead    : Natural := 0) return Natural
    is
       Wide : constant Model_Runner.Bytes.Byte_Count :=
         Pair_Row_Bytes (Packing, Columns);
    begin
       return Natural
         (Model_Runner.Bytes.Byte_Count
-           (Pair_Rows (Pair_At, Rows, Columns, Packing))
+           (Pair_Rows (Pair_At, Rows, Columns, Packing, Lead))
          * Wide
          - Pair_At - Model_Runner.Bytes.Byte_Count (Rows) * Wide);
    end Pair_Pad;
@@ -12207,7 +12250,12 @@ package body Model_Runner.Platform.Device.Products is
       Key       : System.Address := System.Null_Address;
       Kept      : Boolean := True;
       From_Step : Natural := 0;
-      Unit      : Natural := 0)
+      Unit      : Natural := 0;
+      Lead      : Natural := 0;
+      Gate_Bias_Back : Natural := 0;
+      Up_Bias_At     : Natural := 0;
+      Alpha     : Model_Runner.Numerics.Real := 0.0;
+      Limit     : Model_Runner.Numerics.Real := 0.0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -12215,15 +12263,20 @@ package body Model_Runner.Platform.Device.Products is
       --  Bytes a row holds.
       Wide : constant Model_Runner.Bytes.Byte_Count :=
         Pair_Row_Bytes (Packing, Columns);
+
+      MX : constant Boolean := Packing = Packed_MXFP4;
    begin
       Added := False;
       if Steps.Held = 0
         or else Steps.Held = Sequence_Limit
         or else Base = System.Null_Address
-        or else Packing /= Packed_Q4_K
-        or else Unit > 1
+        or else Packing not in Packed_Q4_K | Packed_MXFP4
+        or else (if MX then Unit not in 0 | 1 | 3 else Unit > 1)
+        or else (not MX and then (Lead > 0 or else Gate_Bias_Back > 0
+                                  or else Up_Bias_At > 0))
+        or else Gate_Bias_Back > Lead
         or else Columns = 0
-        or else Columns mod 256 /= 0
+        or else Columns mod (if MX then 32 else 256) /= 0
         or else Each = 0
         or else Stack < Each
         or else Count > Max_Gather
@@ -12236,7 +12289,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Pair_At > Model_Runner.Bytes.Byte_Count (Natural'Last / 2)
         or else Span < At_Byte
                        + Model_Runner.Bytes.Byte_Count
-                           (Pair_Pad (Pair_At, Stack, Columns, Packing))
+                           (Pair_Pad (Pair_At, Stack, Columns, Packing, Lead))
                        + Pair_At
                        + Model_Runner.Bytes.Byte_Count (Stack) * Wide
       then
@@ -12254,8 +12307,10 @@ package body Model_Runner.Platform.Device.Products is
          Blends => False, Unit => Unit, Attends => False,
          Glu => True, Pair_At => Natural (Pair_At),
          Gathers => Count, Each => Each, Routed => Routed,
-         Stack => Pair_Rows (Pair_At, Stack, Columns, Packing),
-         Region_At => Pair_Pad (Pair_At, Stack, Columns, Packing),
+         Stack => Pair_Rows (Pair_At, Stack, Columns, Packing, Lead),
+         Region_At => Pair_Pad (Pair_At, Stack, Columns, Packing, Lead),
+         Gate_Bias_Back => Gate_Bias_Back, Up_Bias_At => Up_Bias_At,
+         Alpha => Alpha, Limit => Limit,
          others => <>);
       Added := True;
    end Add_Gathered_Pair;
@@ -12301,7 +12356,7 @@ package body Model_Runner.Platform.Device.Products is
         or else Stack < Each
         or else (Apart > 0 and then Apart /= Columns)
         or else (Region_At /= 0
-                 and then (Packing /= Packed_Q4_K
+                 and then (Packing not in Packed_Q4_K | Packed_MXFP4
                            or else Model_Runner.Bytes.Byte_Count (Region_At)
                                    >= Model_Runner.Bytes.Byte_Count (Stack)
                                       * Pair_Row_Bytes (Packing, Columns)))
@@ -12503,7 +12558,7 @@ package body Model_Runner.Platform.Device.Products is
                 > Model_Runner.Bytes.Byte_Count (Stack)
                   * Pair_Row_Bytes (Packing, Columns)
         or else (Region_At /= 0
-                 and then Packing not in Packed_Q4_K | Packed_Q8_0)
+                 and then Packing not in Packed_Q4_K | Packed_Q8_0 | Packed_MXFP4)
         or else (Chained
                  and then (Source not in 1 .. Steps.Held
                            or else Steps.Items (Source).Rows /= Wanted))
@@ -17487,6 +17542,7 @@ package body Model_Runner.Platform.Device.Products is
                   declare
                      One  : constant Boolean := Count = 1;
                      Q8   : constant Boolean := This.Packing = Packed_Q8_0;
+                     MX   : constant Boolean := This.Packing = Packed_MXFP4;
                      Short : constant Boolean :=
                        Q8 and then Q8_Short (Item, This.Packing, Count,
                                              This.Columns);
@@ -17504,6 +17560,7 @@ package body Model_Runner.Platform.Device.Products is
                        and then not Gathered;
                      Line : constant Address :=
                        (if Rounds then Glu_Dots_Line (This.Packing, This.Columns)
+                        elsif MX then Item.MX_Glu_Line
                         elsif not Q8
                         then (if One then Item.Glu_Line
                               else Item.Glu_Many_Lines (Count))
@@ -17527,7 +17584,12 @@ package body Model_Runner.Platform.Device.Products is
                         Joins   =>
                           (if Gathered then C.unsigned (This.Pair_At) else 0),
                         Table   => C.unsigned (This.Unit),
-                        Members => [others => 0],
+                        --  MXFP4's pair: where its biases lie, in bytes
+                        --  and plus one, nought for none, and the clamped
+                        --  gate's slope and limit by their bits.
+                        Members =>
+                          (if MX then Pair_Words (This, Places (Index).Base)
+                           else [others => 0]),
                         Stride  =>
                           (if Gathered then C.unsigned (Slice_Bytes (Index))
                            else C.unsigned (This.Pair_At)),

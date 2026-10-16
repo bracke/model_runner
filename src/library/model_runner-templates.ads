@@ -1116,6 +1116,12 @@ private
       --  about reasoning spends no slot on it.
       Thinking_Slot : Natural := 0;
 
+      --  And where gpt-oss's reasoning_effort lives, which the same choice
+      --  answers: low where reasoning is turned off, high where it is
+      --  asked for -- gpt-oss reasons whatever it is told, and this is how
+      --  much.
+      Effort_Slot : Natural := 0;
+
       --  And where the name the tools arrive under lives. Zero says the
       --  template never asks about tools, which is what tells a caller with
       --  tools that this model has nowhere to put them.

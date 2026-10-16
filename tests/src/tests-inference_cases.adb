@@ -7867,6 +7867,119 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Slid_Window_Rewinds_To_The_Front;
 
+   --------------------------------------------------------
+   -- A_Window_Read_Again_From_A_Shared_Front_Reads_Alike --
+   --------------------------------------------------------
+
+   --  A session that read a long text and is then asked another that
+   --  shares only its front -- an agent's own conversation after a helper
+   --  ran on the same session -- is rewound as far as its windows reach
+   --  and reads the rest. What it then says is what a session that read
+   --  only the second text says, on the processor and on the device, for
+   --  gpt-oss's sixteen-position window alternating with full layers.
+   procedure A_Window_Read_Again_From_A_Shared_Front_Reads_Alike
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image  : B.Byte_Array_Access;
+      Front  : constant := 1400;
+      First_Text  : Vocab.Token_Array (1 .. Front + 100);
+      Second_Text : Vocab.Token_Array (1 .. Front + 60);
+      Awake  : Boolean;
+   begin
+      for Index in First_Text'Range loop
+         First_Text (Index) :=
+           Vocab.Token_Id ((Index * 7 + Index / 3) mod Tiny_Model.Vocabulary);
+      end loop;
+      for Index in Second_Text'Range loop
+         Second_Text (Index) :=
+           (if Index <= Front then First_Text (Index)
+            else Vocab.Token_Id ((Index * 11 + 5) mod Tiny_Model.Vocabulary));
+      end loop;
+      Model_Runner.Backend.Device.Open (Awake);
+
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.GPT_OSS, Window => 16, Room => 2048);
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+
+         --  A text read in batches of at most 256, as a run reads one.
+         procedure Read
+           (Live   : in out L.Session;
+            Source : L.Model'Class;
+            Text   : Vocab.Token_Array;
+            Last   : out Logit_Vector;
+            Status : out E.Error_Info)
+         is
+            From : Positive := Text'First;
+         begin
+            Status := E.Success;
+            while From <= Text'Last and then E.Is_Ok (Status) loop
+               L.Evaluate_Batch
+                 (Live, Source, Text (From .. Positive'Min (Text'Last, From + 255)),
+                  Last, Status => Status);
+               From := From + 256;
+            end loop;
+         end Read;
+
+         procedure Compare (Backend : Model_Runner.Backend.Backend_Kind) is
+            Under  : Harness (Held'Access);
+            Able   : Boolean;
+            Again, Fresh : L.Session;
+            Status : E.Error_Info;
+            Again_Last, Fresh_Last : Logit_Vector;
+            Back   : Natural;
+            Worst  : Long_Float := 0.0;
+         begin
+            Start (Under, Backend, Able);
+            if not Able then
+               return;
+            end if;
+
+            L.Open (Again, Under.Ready, 2048, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            Read (Again, Under.Ready, First_Text, Again_Last, Status);
+            Assert (E.Is_Ok (Status), "the first text was not read");
+
+            --  As a generation reuses what the two share: back to where
+            --  the session can be rewound at or before the front, or to
+            --  nothing.
+            Back := L.Rewind_Point (Again, Front);
+            if Back > 0 then
+               L.Rewind (Again, Back, Status);
+               Assert (E.Is_Ok (Status), "the rewind the session offered failed");
+            else
+               L.Reset (Again);
+            end if;
+            Read (Again, Under.Ready, Second_Text (Back + 1 .. Second_Text'Last),
+                  Again_Last, Status);
+            Assert (E.Is_Ok (Status), "the second text was not read");
+
+            L.Open (Fresh, Under.Ready, 2048, Status => Status);
+            Read (Fresh, Under.Ready, Second_Text, Fresh_Last, Status);
+            Assert (E.Is_Ok (Status), "the fresh session did not read");
+
+            for Index in Fresh_Last'Range loop
+               Worst := Long_Float'Max
+                 (Worst, abs (Long_Float (Fresh_Last (Index) - Again_Last (Index))));
+            end loop;
+            Assert (Worst < 1.0E-3,
+                    "read again from" & Natural'Image (Back) & " on "
+                    & Model_Runner.Backend.Backend_Kind'Image (Backend)
+                    & ", the session answers" & Long_Float'Image (Worst)
+                    & " away from a fresh one");
+            L.Close (Again);
+            L.Close (Fresh);
+         end Compare;
+      begin
+         Compare (Model_Runner.Backend.Backend_CPU);
+         if Awake then
+            Compare (Model_Runner.Backend.Backend_Device);
+         end if;
+      end;
+      B.Free (Image);
+   end A_Window_Read_Again_From_A_Shared_Front_Reads_Alike;
+
    --  Every model that keeps a state -- Mamba, Mamba2, RWKV6, Jamba --
    --  saves it and reads it back to the same next answer, and an empty
    --  session saves too; the one with attention beside its state refuses
@@ -20555,6 +20668,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Short_Draft_Does_Not_End_The_Run'Access,
          "a draft with less room than the target stops reading, and the run says what the target says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Window_Read_Again_From_A_Shared_Front_Reads_Alike'Access,
+         "a windowed session read again from the front it shares with "
+         & "another text answers as a fresh one does");
       Register_Routine
         (T, A_Slid_Window_Rewinds_To_The_Front'Access,
          "a rewind into what a sliding window let go is refused, and one to the front starts it again");
