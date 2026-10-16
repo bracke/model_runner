@@ -855,7 +855,8 @@ package body Model_Runner.Sampling is
      (Item        : in out Sampler;
       Logits      : Real_Array;
       Allowed     : not null access function (Token : Token_Id) return Boolean;
-      Taken_Count : out Natural)
+      Taken_Count : out Natural;
+      Possible    : access function (Token : Token_Id) return Boolean := null)
    is
       V : constant Natural := Item.Vocabulary;
       K : constant Positive := Positive'Max (1, Item.Settings.Top_K);
@@ -946,7 +947,10 @@ package body Model_Runner.Sampling is
       end Sort_Best;
    begin
       for Candidate in 0 .. V - 1 loop
-         Score (Candidate) := Ranking_Logit (Item, Logits, Token_Id (Candidate));
+         Score (Candidate) :=
+           (if Possible /= null and then not Possible (Token_Id (Candidate))
+            then Real'First
+            else Ranking_Logit (Item, Logits, Token_Id (Candidate)));
          if Score (Candidate) > Real'First then
             Order (Live) := Candidate;
             Live := Live + 1;

@@ -46,7 +46,12 @@ package body Model_Runner.Output.Harmony is
                Self.Where :=
                  (if Ada.Strings.Fixed.Index
                        (Self.Held (1 .. Self.Used), "to=") > 0
-                  then Hiding else Showing);
+                  then Hiding
+                  elsif Self.Only_Final
+                    and then Ada.Strings.Fixed.Index
+                               (Self.Held (1 .. Self.Used), "final") = 0
+                  then Hiding
+                  else Showing);
                Self.Used := 0;
             elsif Self.Used = Self.Held'Length then
                Self.Where := Showing;
@@ -90,6 +95,11 @@ package body Model_Runner.Output.Harmony is
             end if;
       end case;
    end Take;
+
+   procedure Answer_Only (Self : in out Filter; On : Boolean) is
+   begin
+      Self.Only_Final := On;
+   end Answer_Only;
 
    overriding procedure Write
      (Self   : in out Filter;

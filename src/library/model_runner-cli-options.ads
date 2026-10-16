@@ -315,6 +315,10 @@ package Model_Runner.CLI.Options is
       Thinking : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
 
+      --  Whether the reply is shown without its reasoning: a think block's
+      --  text, or a harmony reply's messages before its final one.
+      Hide_Reasoning : Boolean := False;
+
       --  A chat format named on the command line, replacing the model's own.
       --  Empty means the model's template is used.
       Chat_Template : Model_Runner.Text.Bounded;

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 117) of Registry_Row :=
+   Registry : constant array (1 .. 118) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
@@ -58,6 +58,8 @@ package body Model_Runner.CLI.Options is
        Text ("think")),
       (Text ("--no-think"), [Command_Run => True, others => False],
        Text ("no_think")),
+      (Text ("--hide-reasoning"), [Command_Run => True, others => False],
+       Text ("hide_reasoning")),
       (Text ("--repack"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("repack")),
@@ -1744,6 +1746,14 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Truncate := True;
+
+                  elsif Name = "--hide-reasoning" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Hide_Reasoning := True;
 
                   elsif Name = "--raw" then
                      No_Value (Name, Value_Present,

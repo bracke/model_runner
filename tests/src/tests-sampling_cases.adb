@@ -2492,7 +2492,8 @@ package body Tests.Sampling_Cases is
    --  Forbid_Outside_Ranked leaves the draw that forbidding every token the
    --  grammar refuses leaves, seed for seed -- with the logits ranked as
    --  the top-k ranks them, a bias, a recent token's penalty and ties at
-   --  the K-th included.
+   --  the K-th included, and with a screen asked before the ranking or
+   --  without one.
    procedure Ranked_Masking_Draws_As_The_Whole_Mask
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -2508,6 +2509,10 @@ package body Tests.Sampling_Cases is
       --  Every third token refused, and the best of all with it.
       function Allowed (Token : Vocab.Token_Id) return Boolean
       is (Natural (Token) mod 3 /= 0 and then Natural (Token) /= 7);
+
+      --  A screen that refuses only what Allowed refuses -- every third.
+      function Possible (Token : Vocab.Token_Id) return Boolean
+      is (Natural (Token) mod 3 /= 0);
 
       Taken_Count : Natural;
       Differ : Natural := 0;
@@ -2537,7 +2542,8 @@ package body Tests.Sampling_Cases is
                end if;
             end loop;
             S.Forbid_Outside_Ranked
-              (Ranked, Logits, Allowed'Access, Taken_Count);
+              (Ranked, Logits, Allowed'Access, Taken_Count,
+               Possible => (if Seed mod 2 = 0 then Possible'Access else null));
             Assert (Taken_Count >= Config.Top_K,
                     "fewer than the top-k were taken:" & Taken_Count'Image);
 

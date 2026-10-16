@@ -1689,6 +1689,11 @@ begin
             --  otherwise leave the previous run's text behind, once
             --  per prompt, for as many prompts as were given.
             Gen.Release (Outcome);
+            --  Whether the reply begins in a think block its prompt
+            --  opened, for --hide-reasoning to leave out from its start.
+            Unthought.Start_Reply
+              (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));
+            Tidied.Answer_Only (Item.Hide_Reasoning);
             Gen.Generate
               (Source   => Prepared,
                Session  => Session,
@@ -1703,6 +1708,7 @@ begin
                           (L.Template_Format (Prepared)),
                         Model_Runner.Tools.Harmony_Call)
                   then Tidied'Unchecked_Access
+                  elsif Item.Hide_Reasoning then Unthought'Unchecked_Access
                   else Sink'Unchecked_Access),
                Observer => Reporter'Unchecked_Access,
                Time     => Clock'Unchecked_Access,

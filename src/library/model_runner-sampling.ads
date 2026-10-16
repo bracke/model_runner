@@ -399,11 +399,16 @@ package Model_Runner.Sampling is
    --  @param Logits The step's logits.
    --  @param Allowed Whether a token may be drawn.
    --  @param Taken_Count How many were taken; nought when none is allowed.
+   --  @param Possible A cheap screen asked of every token before any is
+   --    ranked, false only for a token Allowed would refuse -- one whose
+   --    first byte cannot follow: such a token is not ranked at all, so a
+   --    grammar that allows a few tokens ranks a few. Null for none.
    procedure Forbid_Outside_Ranked
      (Item        : in out Sampler;
       Logits      : Real_Array;
       Allowed     : not null access function (Token : Token_Id) return Boolean;
-      Taken_Count : out Natural);
+      Taken_Count : out Natural;
+      Possible    : access function (Token : Token_Id) return Boolean := null);
 
    --  Select one token from a logit vector.
    --

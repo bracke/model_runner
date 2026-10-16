@@ -78,6 +78,11 @@ is
    --  the run reports each call it reads on standard error.
    Tidied    : aliased Model_Runner.Output.Harmony.Filter
      (Sink'Unchecked_Access);
+
+   --  And any other model's, where --hide-reasoning leaves its think block
+   --  out.
+   Unthought : aliased Model_Runner.Output.Reasoning.Filter
+     (Sink'Unchecked_Access);
    Reporter  : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
    Told      : aliased Pres.Logprob_Reporter (Screen'Unchecked_Access);
    Told_File : aliased Pres.Logprob_File_Reporter;

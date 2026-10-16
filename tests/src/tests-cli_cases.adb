@@ -61,6 +61,7 @@ with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Output.Harmony;
+with Model_Runner.Output.Reasoning;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Backend.Device;
@@ -14068,6 +14069,63 @@ package body Tests.CLI_Cases is
       end;
    end Harmony_Replies_Are_Shown_As_Text;
 
+   --  --hide-reasoning: a harmony reply shown as its final message alone,
+   --  and a think block left out -- one the reply opens and one its prompt
+   --  opened -- with markers split across fragments and a '<' that opens
+   --  none kept.
+   procedure Reasoning_Is_Hidden_When_Asked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Screen : aliased Capture_Sink;
+      Closed : Boolean;
+
+      procedure Feed (Into : in out Model_Runner.Output.Sink'Class; Text : String) is
+         At_Char : Positive := Text'First;
+      begin
+         while At_Char <= Text'Last loop
+            Into.Write (Text (At_Char .. Natural'Min (At_Char + 2, Text'Last)), Closed);
+            At_Char := At_Char + 3;
+         end loop;
+         Into.Flush (Closed);
+      end Feed;
+
+      function Shown return String is (Screen.Data (1 .. Screen.Used));
+   begin
+      declare
+         Tidy : Model_Runner.Output.Harmony.Filter (Screen'Unchecked_Access);
+      begin
+         Tidy.Answer_Only (True);
+         Feed (Tidy, "<|channel|>analysis<|message|>Think A < B.<|end|>"
+                     & "<|start|>assistant<|channel|>final<|message|>Copenhagen.<|return|>");
+         Assert (Shown = "Copenhagen." & ASCII.LF,
+                 "a harmony reply's reasoning was shown: [" & Shown & "]");
+      end;
+
+      Screen.Used := 0;
+      declare
+         Unthought : Model_Runner.Output.Reasoning.Filter (Screen'Unchecked_Access);
+      begin
+         Unthought.Start_Reply (Inside => False);
+         Feed (Unthought, "<think>" & ASCII.LF & "is a < b?" & ASCII.LF & "</think>"
+                          & ASCII.LF & ASCII.LF & "Yes, a <b> holds.");
+         Assert (Shown = "Yes, a <b> holds.",
+                 "a think block was shown: [" & Shown & "]");
+
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => True);
+         Feed (Unthought, "opened by the prompt" & ASCII.LF & "</think>" & ASCII.LF & "Done.");
+         Assert (Shown = "Done.",
+                 "a block the prompt opened was shown: [" & Shown & "]");
+
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => False);
+         Feed (Unthought, "No reasoning here, <thin> stays.");
+         Assert (Shown = "No reasoning here, <thin> stays.",
+                 "a reply with no block lost text: [" & Shown & "]");
+      end;
+   end Reasoning_Is_Hidden_When_Asked;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -15720,6 +15778,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Thermometer_Reads_Or_Not'Access,
          "the thermometer reads degrees, or says it has none");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Reasoning_Is_Hidden_When_Asked'Access,
+         "--hide-reasoning shows a reply's answer without its reasoning");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "

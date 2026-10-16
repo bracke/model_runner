@@ -17,6 +17,13 @@ package Model_Runner.Output.Harmony is
    --  The filter, writing what it shows to Target.
    type Filter (Target : Sink_Reference) is limited new Sink with private;
 
+   --  Show the final channel's messages alone, the reasoning left out --
+   --  run --hide-reasoning. Off, every message but a call's is shown.
+   --
+   --  @param Self Filter.
+   --  @param On Whether only the answer is shown.
+   procedure Answer_Only (Self : in out Filter; On : Boolean);
+
    --  Take a fragment of the reply, showing what is not markup.
    --
    --  @param Self Filter.
@@ -54,6 +61,7 @@ private
       Held  : String (1 .. Header_Room);
       Used  : Natural := 0;
       Shut  : Boolean := False;
+      Only_Final : Boolean := False;
    end record;
 
 end Model_Runner.Output.Harmony;

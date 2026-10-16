@@ -560,6 +560,45 @@ package body Model_Runner.Generation is
          end loop;
       end First_Bytes;
 
+      --  Each token's first byte, read once a generation where a grammar
+      --  is asked of them, and whether it spells anything: what Possible
+      --  screens a token by without reading its text again a step.
+      type Byte_Array is array (Natural range <>) of Character;
+      type Byte_Access is access Byte_Array;
+      type Spell_Array is array (Natural range <>) of Boolean;
+      type Spell_Access is access Spell_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Byte_Array, Byte_Access);
+      procedure Free is new Ada.Unchecked_Deallocation (Spell_Array, Spell_Access);
+      First_Of : Byte_Access := null;
+      Spells   : Spell_Access := null;
+      Ending   : Spell_Access := null;
+
+      procedure Learn_First_Of is
+      begin
+         if First_Of /= null then
+            return;
+         end if;
+         First_Of := new Byte_Array (0 .. Settings.Vocabulary - 1);
+         Spells := new Spell_Array (0 .. Settings.Vocabulary - 1);
+         Ending := new Spell_Array (0 .. Settings.Vocabulary - 1);
+         for Index in First_Of'Range loop
+            declare
+               Text : constant String := Vocab.Text_Of (Spelt, Token_Id (Index));
+            begin
+               Ending (Index) := Vocab.Ends_Generation (Words.all, Token_Id (Index));
+               Spells (Index) := Text /= "";
+               First_Of (Index) := (if Text = "" then ' ' else Text (Text'First));
+            end;
+         end loop;
+      end Learn_First_Of;
+
+      --  False only where Screened_Takes would refuse: a token that spells
+      --  nothing, or one whose first byte the grammar cannot take here.
+      function Possible (Which : Token_Id) return Boolean
+      is (Ending (Natural (Which))
+          or else (Spells (Natural (Which))
+                   and then First_Ok (First_Of (Natural (Which)))));
+
       --  Grammar_Takes, screened by the first byte.
       function Screened_Takes (Which : Token_Id) return Boolean is
       begin
@@ -893,6 +932,9 @@ package body Model_Runner.Generation is
 
       procedure Cleanup is
       begin
+         Free (First_Of);
+         Free (Spells);
+         Free (Ending);
          T.Free (Logits);
          T.Free (Every);
          T.Free (Opened);
@@ -2872,6 +2914,7 @@ package body Model_Runner.Generation is
 
                      if not Chosen then
                         First_Bytes;
+                        Learn_First_Of;
                      end if;
                      if not Chosen and then S.Ranks_First (Item.Sampling) then
                         --  The chain's first filter is a top-k, so the
@@ -2891,7 +2934,8 @@ package body Model_Runner.Generation is
                            Accepted : Natural;
                         begin
                            S.Forbid_Outside_Ranked
-                             (Sampler, Logits.all, Screened_Takes'Access, Accepted);
+                             (Sampler, Logits.all, Screened_Takes'Access, Accepted,
+                              Possible => Possible'Access);
                            if Accepted = 0 then
                               Conclude
                                 (Runtime_Error,
