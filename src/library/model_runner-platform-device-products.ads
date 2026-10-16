@@ -3149,6 +3149,14 @@ package Model_Runner.Platform.Device.Products is
    --  @return Count of such copies since the engine opened.
    function Streamed_Copies (Item : Engine) return Natural;
 
+   --  How many times a weight was copied to the device since it opened:
+   --  once a matrix for a model the device holds, and again only for what
+   --  is streamed.
+   --
+   --  @param Item Engine.
+   --  @return Count of copies.
+   function Weight_Copies (Item : Engine) return Natural;
+
    --  How many bytes of context the device is holding.
    --
    --  Zero when the device holds none, which is a different thing from
@@ -3961,6 +3969,7 @@ private
       Clock      : Interfaces.Unsigned_64 := 0;
       Released   : Natural := 0;
       Streamed   : Natural := 0;
+      Copies     : Natural := 0;
 
       --  How many of the resident matrices are the host's own memory rather
       --  than a copy of it.

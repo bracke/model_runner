@@ -1058,6 +1058,18 @@ package body Model_Runner.Tokenizer is
             end Keep_Marked;
 
             Declared : Token_Id;
+
+            --  The harmony format's <|end|> ends a message, not the
+            --  reply: gpt-oss writes its analysis, <|end|>, and then the
+            --  answer, ended by <|return|> or by <|call|> for a tool. Taken
+            --  as the end, every gpt-oss answer stopped after its thinking.
+            --  A vocabulary carrying the pair is harmony's, as llama.cpp
+            --  tells it (and solar-open's, with <|calls|> and <|flush|>).
+            Harmony : constant Boolean :=
+              (Find (Item, "<|return|>") /= No_Token
+               and then Find (Item, "<|call|>") /= No_Token)
+              or else (Find (Item, "<|calls|>") /= No_Token
+                       and then Find (Item, "<|flush|>") /= No_Token);
          begin
             Declared := No_Token;
             Special ("tokenizer.ggml.eot_token_id", Declared, Refused);
@@ -1075,7 +1087,14 @@ package body Model_Runner.Tokenizer is
 
             Keep_Marked ("<|im_end|>");
             Keep_Marked ("<|eot_id|>");
-            Keep_Marked ("<|end|>");
+            if Harmony then
+               Keep_Marked ("<|return|>");
+               Keep_Marked ("<|call|>");
+               Keep_Marked ("<|calls|>");
+               Keep_Marked ("<|flush|>");
+            else
+               Keep_Marked ("<|end|>");
+            end if;
             Keep_Marked ("<end_of_turn>");
             Keep_Marked ("<|endoftext|>");
             Keep_Marked ("<|eom_id|>");

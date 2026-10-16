@@ -810,6 +810,9 @@ package body Model_Runner.Backend.Device is
    function Streamed_Copies return Natural
    is (Products.Streamed_Copies (Engine));
 
+   function Weight_Copies return Natural
+   is (if Ready_Now then Products.Weight_Copies (Engine) else 0);
+
    ----------------
    -- Hold_Clock --
    ----------------

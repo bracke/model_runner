@@ -4387,6 +4387,142 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Gathered_Mixture_Says_What_The_Host_Says;
 
+   -------------------------------------------------
+   -- A_Mixture_Keeps_Its_Expert_Biases_On_The_Device --
+   -------------------------------------------------
+
+   --  An expert stack's biases, read through the routing as the stacks
+   --  are, are kept though the stacks may stream: run twice, the second
+   --  run copies the three stacks again -- small and in f32, they stream
+   --  -- and no bias. Streamed with the stacks the biases were copied
+   --  again every layer of every token, which was gpt-oss's 26.5 MB a
+   --  token.
+   procedure A_Mixture_Keeps_Its_Expert_Biases_On_The_Device
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 32;
+      Feed    : constant := 16;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Router    : N.Real_Array (0 .. Experts * Width - 1) := [others => 0.1];
+      Gates     : N.Real_Array (0 .. Experts * Feed * Width - 1)
+        := [others => 0.01];
+      Ups       : N.Real_Array (0 .. Experts * Feed * Width - 1)
+        := [others => 0.02];
+      Downs     : N.Real_Array (0 .. Experts * Width * Feed - 1)
+        := [others => 0.03];
+      Gate_Bias : N.Real_Array (0 .. Experts * Feed - 1) := [others => 0.1];
+      Up_Bias   : N.Real_Array (0 .. Experts * Feed - 1) := [others => 0.2];
+      Down_Bias : N.Real_Array (0 .. Experts * Width - 1) := [others => 0.3];
+      Input     : constant N.Real_Array (0 .. Width - 1) := [others => 0.5];
+      Landing   : N.Real_Array
+        (0 .. Experts + 2 * Used + 5 * Used * Feed + 2 * Used * Width
+              + Width - 1)
+        := [others => 0.0];
+
+      Steps  : Products.Sequence;
+      Copies : Natural;
+
+      function Bytes_Of (Values : N.Real_Array)
+        return Model_Runner.Bytes.Byte_Count
+      is (Model_Runner.Bytes.Byte_Count (Values'Length) * 4);
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a mixture keeps its expert biases");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a mixture keeps its expert biases");
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Router (Router'First)'Address, Bytes_Of (Router), 0,
+         Products.Values_F32, Experts, Width, Added,
+         Key => Router'Address);
+      Assert (Added, "the router's product was refused");
+      Products.Add_Route (Steps, Experts, Used, Added);
+      Assert (Added, "the routing step was refused");
+      Products.Add_Gathered_Product
+        (Steps, Gates (Gates'First)'Address, Bytes_Of (Gates), 0,
+         Products.Values_F32, Experts * Feed, Feed, Width,
+         [others => 0], Used, Added, Key => Gates'Address,
+         Chained => False, Routed => 2);
+      Assert (Added, "the gathered gates were refused");
+      Products.Add_Gathered_Product
+        (Steps, Ups (Ups'First)'Address, Bytes_Of (Ups), 0,
+         Products.Values_F32, Experts * Feed, Feed, Width,
+         [others => 0], Used, Added, Key => Ups'Address,
+         Chained => False, Routed => 2);
+      Assert (Added, "the gathered ups were refused");
+      Products.Add_Bias
+        (Steps, Gate_Bias (Gate_Bias'First)'Address, Bytes_Of (Gate_Bias),
+         0, Experts, Feed, 3, 2, Added,
+         Key => Gate_Bias'Address);
+      Assert (Added, "the gate biases were refused");
+      Products.Add_Bias
+        (Steps, Up_Bias (Up_Bias'First)'Address, Bytes_Of (Up_Bias),
+         0, Experts, Feed, 4, 2, Added,
+         Key => Up_Bias'Address);
+      Assert (Added, "the up biases were refused");
+      Products.Add_Combination (Steps, 0, Added);
+      Assert (Added, "the combination was refused");
+      Products.Add_Gathered_Product
+        (Steps, Downs (Downs'First)'Address, Bytes_Of (Downs), 0,
+         Products.Values_F32, Experts * Width, Width, Feed,
+         [others => 0], Used, Added, Key => Downs'Address,
+         Chained => True, Apart => Feed,
+         Routed => 2);
+      Assert (Added, "the gathered downs were refused");
+      Products.Add_Bias
+        (Steps, Down_Bias (Down_Bias'First)'Address, Bytes_Of (Down_Bias),
+         0, Experts, Width, 8, 2, Added,
+         Key => Down_Bias'Address);
+      Assert (Added, "the down biases were refused");
+      Products.Add_Mix (Steps, Width, Used, 9, 2, Added);
+      Assert (Added, "the mixing step was refused");
+
+      Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
+      Assert (Ok, "the mixture was refused");
+      Copies := Products.Weight_Copies (Engine);
+      Assert (Copies > 0, "the first run copied no weight");
+
+      Products.Run (Engine, Steps, Input, 1, Landing, Ok, Halted);
+      Assert (Ok, "the mixture was refused the second time");
+      Assert (Products.Weight_Copies (Engine) - Copies <= 3,
+              "the second run copied"
+              & Natural'Image (Products.Weight_Copies (Engine) - Copies)
+              & " weights again, where only the three stacks stream");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Mixture_Keeps_Its_Expert_Biases_On_The_Device;
+
    -----------------------------------------
    -- A_Projection_Bias_Is_Added_Where_It_Lies --
    -----------------------------------------
@@ -11985,6 +12121,9 @@ package body Tests.Backend_Cases is
         (T, A_Gathered_Mixture_Says_What_The_Host_Says'Access,
          "a mixture's second half as one sequence -- routed, gathered out "
          & "of its stacks and summed by shares -- says what the host says");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Mixture_Keeps_Its_Expert_Biases_On_The_Device'Access,
+         "a mixture keeps its expert biases on the device");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Packed_Rows_Multiply_As_The_Pool_Multiplies'Access,
          "a batch packed once and read by members multiplies as the pool "

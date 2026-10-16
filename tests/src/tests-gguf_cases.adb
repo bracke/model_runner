@@ -4225,13 +4225,17 @@ package body Tests.GGUF_Cases is
 
       --  0 <unk>, 1 </s>, 2 <|im_end|> user-defined, 3 hello, 4 <|end|>
       --  as a normal token, 5 <|eot_id|> control, 6 <EOT> control.
-      procedure Write_Tokens is
+      --  And with Harmony, 7 <|return|> and 8 <|call|> control: the
+      --  harmony format's, where <|end|> ends a message and not the reply.
+      procedure Write_Tokens (Harmony : Boolean := False) is
+         Count : constant := 7;
       begin
          Fixtures.Reset (Builder);
          Fixtures.Add_String (Builder, "general.architecture", "llama");
          Fixtures.Add_String (Builder, "tokenizer.ggml.model", "llama");
          Fixtures.Begin_Array
-           (Builder, "tokenizer.ggml.tokens", G.Value_String, 7);
+           (Builder, "tokenizer.ggml.tokens", G.Value_String,
+            (if Harmony then Count + 2 else Count));
          Fixtures.String_Element (Builder, "<unk>");
          Fixtures.String_Element (Builder, "</s>");
          Fixtures.String_Element (Builder, "<|im_end|>");
@@ -4239,9 +4243,14 @@ package body Tests.GGUF_Cases is
          Fixtures.String_Element (Builder, "<|end|>");
          Fixtures.String_Element (Builder, "<|eot_id|>");
          Fixtures.String_Element (Builder, "<EOT>");
+         if Harmony then
+            Fixtures.String_Element (Builder, "<|return|>");
+            Fixtures.String_Element (Builder, "<|call|>");
+         end if;
          Fixtures.End_Array (Builder);
          Fixtures.Begin_Array
-           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, 7);
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32,
+            (if Harmony then Count + 2 else Count));
          Fixtures.Int32_Element (Builder, 2);
          Fixtures.Int32_Element (Builder, 3);
          Fixtures.Int32_Element (Builder, 4);
@@ -4249,6 +4258,10 @@ package body Tests.GGUF_Cases is
          Fixtures.Int32_Element (Builder, 1);
          Fixtures.Int32_Element (Builder, 3);
          Fixtures.Int32_Element (Builder, 3);
+         if Harmony then
+            Fixtures.Int32_Element (Builder, 3);
+            Fixtures.Int32_Element (Builder, 3);
+         end if;
          Fixtures.End_Array (Builder);
          Fixtures.Add_U32 (Builder, "tokenizer.ggml.bos_token_id", 0);
          Fixtures.Add_U32 (Builder, "tokenizer.ggml.eos_token_id", 1);
@@ -4293,6 +4306,18 @@ package body Tests.GGUF_Cases is
               "the unknown token does not end generation");
       Assert (not Vocab.Ends_Generation (Words, Vocab.No_Token),
               "no token is not an end");
+      Vocab.Close (Words);
+
+      --  Harmony's: <|end|> ends a message, and gpt-oss writes its answer
+      --  after the analysis it ends; <|return|> and <|call|> end the reply.
+      Write_Tokens (Harmony => True);
+      Load;
+      Assert (not Vocab.Ends_Generation (Words, 4),
+              "<|end|> ended generation in a harmony vocabulary, so every "
+              & "answer stopped after its analysis");
+      Assert (Vocab.Ends_Generation (Words, 7)
+              and then Vocab.Ends_Generation (Words, 8),
+              "<|return|> or <|call|> did not end a harmony reply");
       Vocab.Close (Words);
 
       --  And every token's text, decoded once into a table, is what

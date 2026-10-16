@@ -6866,6 +6866,8 @@ package body Model_Runner.Platform.Device.Products is
 
    function Streamed_Copies (Item : Engine) return Natural is (Item.Streamed);
 
+   function Weight_Copies (Item : Engine) return Natural is (Item.Copies);
+
    function Holds
      (Item    : Engine;
       Key     : System.Address;
@@ -7507,6 +7509,7 @@ package body Model_Runner.Platform.Device.Products is
             --  the cache would not have kept them. A matrix streamed, or
             --  borrowed for one call, is read again; the cache may answer
             --  that, and a read past it would ask the drive every time.
+            Item.Copies := Item.Copies + 1;
             Write_Bytes
               (Weight_Mapped,
                Weights (Weights'First + At_Byte
@@ -14696,12 +14699,19 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).Buffer, Places (Index).Memory,
                Places (Index).Base, Places (Index).Borrowed, Good, This.Key,
                Pinned => Pinned,
-               Stream => This.Gathers > 0 or else This.Listed
-                         or else This.Streams,
+               --  Not a bias, though a gathered one follows the experts
+               --  chosen: an expert stack's biases are a few hundred
+               --  kilobytes the device keeps, and streamed with the stacks
+               --  they were copied again every layer of every token --
+               --  gpt-oss's 26.5 MB a token, the device waiting on it.
+               Stream => not This.Biases
+                         and then (This.Gathers > 0 or else This.Listed
+                                   or else This.Streams),
                Mapped => Places (Index).Mapped,
                Tier => Places (Index).Tier);
             Places (Index).Streamed :=
               Places (Index).Borrowed
+              and then not This.Biases
               and then (This.Gathers > 0 or else This.Listed
                         or else This.Streams);
             if Places (Index).Streamed then
