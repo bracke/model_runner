@@ -10914,7 +10914,7 @@ package body Model_Runner.Llama is
    --  failure. Row is the session's own or the caller's: the head writes
    --  straight into the caller's where it can, a copy of the vocabulary
    --  fewer on that stretch.
-   procedure Evaluate_Token
+   procedure Evaluate_Token_Body
      (Item   : in out Session;
       Source : Model'Class;
       Token  : Token_Id;
@@ -10923,6 +10923,78 @@ package body Model_Runner.Llama is
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Status : out E.Error_Info)
    is separate;
+
+   --  The most positions a call of a split mixture runs on the processor
+   --  whole: a generated token, and a drafted round's few.
+   Host_Call_Most : constant Element_Count := 4;
+
+   --  Whether a call of Count positions runs on the processor whole rather
+   --  than as the split's two halves.
+   --
+   --  A mixture split between the two (Split_Feed) runs each layer's front
+   --  half on the device and its experts on the processor, which for a
+   --  token is two hand-overs a layer for work the processor does as fast
+   --  itself: Qwen3-30B-A3B Q4_K_M generated 17.4 tokens a second split and
+   --  19.6 on the processor alone, where its prompt read 302 a second split
+   --  and 93 alone. So a token and a round's few go to the processor whole,
+   --  attending over the host's copy of the cache, and a prompt to the
+   --  split. Not a hybrid: Qwen3.6's linear layers are what the device
+   --  saves it, 17.5 split against 14.3 alone.
+   function On_Host_Here
+     (Item : Session; Source : Model'Class; Count : Element_Count)
+      return Boolean
+   is (Source.Split_Feed
+       and then Source.Settings.Experts > 0
+       and then not Hybrid (Source.Settings.Kind)
+       and then Count <= Host_Call_Most
+       and then Item.Paged
+       and then Item.Held in Exact | Halved
+       and then Workers_CPU."/=" (Item.Team, null)
+       and then Model_Runner.Backend."="
+                  (Source.Able.Kind, Model_Runner.Backend.Backend_Device));
+
+   --  Make the host's copy of the cache the one a call on the processor
+   --  reads: what the device wrote and still owes read back, and the
+   --  pages given up, so the next pass on the device takes them again and
+   --  writes the committed cache into them from the host's copy -- the
+   --  positions written here with it -- as it does for a session turned
+   --  out and come back. False where the copy could not be brought up to
+   --  date; the call then runs on the split as before.
+   procedure Enter_Host (Item : in out Session; Ok : out Boolean) is
+   begin
+      Settle_Cache (Item, Ok);
+      if Ok and then Item.Paged_In then
+         Release_Session_Pages (Item'Unchecked_Access);
+      end if;
+   end Enter_Host;
+
+   --  Evaluate_Token_Body, on the processor whole where On_Host_Here says.
+   procedure Evaluate_Token
+     (Item   : in out Session;
+      Source : Model'Class;
+      Token  : Token_Id;
+      Row    : T.Real_Array_Access;
+      Asked  : Element_Count;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is
+      Was    : constant Boolean := Item.Host_Feed;
+      Hosted : Boolean := False;
+   begin
+      if On_Host_Here (Item, Source, 1) then
+         Enter_Host (Item, Hosted);
+      end if;
+      Item.On_Host := Hosted;
+      Item.Host_Feed := Was or else Hosted;
+      Evaluate_Token_Body (Item, Source, Token, Row, Asked, Cancel, Status);
+      Item.On_Host := False;
+      Item.Host_Feed := Was;
+   exception
+      when others =>
+         Item.On_Host := False;
+         Item.Host_Feed := Was;
+         raise;
+   end Evaluate_Token;
 
    --------------
    -- Evaluate --
@@ -10969,7 +11041,7 @@ package body Model_Runner.Llama is
    -- Evaluate_Batch --
    ---------------------
 
-   procedure Evaluate_Batch
+   procedure Evaluate_Batch_Body
      (Item   : in out Session;
       Source : Model'Class;
       Tokens : Model_Runner.Tokenizer.Token_Array;
@@ -10980,6 +11052,39 @@ package body Model_Runner.Llama is
       Given  : Given_Rows := No_Given_Rows;
       Status : out E.Error_Info)
    is separate;
+
+   --  Evaluate_Batch_Body, on the processor whole where On_Host_Here says:
+   --  a drafted round's few positions, which on the split would take the
+   --  device's pages back after every token given them up.
+   procedure Evaluate_Batch
+     (Item   : in out Session;
+      Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      Logits : out Real_Array;
+      States : T.Real_Array_Access := null;
+      Every  : T.Real_Array_Access := null;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Given  : Given_Rows := No_Given_Rows;
+      Status : out E.Error_Info)
+   is
+      Was    : constant Boolean := Item.Host_Feed;
+      Hosted : Boolean := False;
+   begin
+      if On_Host_Here (Item, Source, Element_Count (Tokens'Length)) then
+         Enter_Host (Item, Hosted);
+      end if;
+      Item.On_Host := Hosted;
+      Item.Host_Feed := Was or else Hosted;
+      Evaluate_Batch_Body
+        (Item, Source, Tokens, Logits, States, Every, Cancel, Given, Status);
+      Item.On_Host := False;
+      Item.Host_Feed := Was;
+   exception
+      when others =>
+         Item.On_Host := False;
+         Item.Host_Feed := Was;
+         raise;
+   end Evaluate_Batch;
 
    ----------
    -- Rank --

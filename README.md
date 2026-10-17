@@ -92,7 +92,12 @@ option always wins.
   device may hold -- its own memory and the share of system memory it can map,
   leaving room for the rest of the machine -- and on the processor otherwise.
   A mixture whose experts do not fit but whose other layers do runs those
-  layers on the device and its experts on the processor; a dense model that
+  layers on the device and its experts on the processor for a prompt, and a
+  generated token -- or a drafted round's few -- on the processor whole, its
+  attention over the host's copy of the cache: two hand-overs a layer cost a
+  token more than the processor takes for the layers itself (Qwen3-30B-A3B
+  Q4_K_M 17.4 tokens a second split, 19.0 so, its prompt 299 a second either
+  way). Not a hybrid, whose linear layers the device runs faster; a dense model that
   does not fit keeps the gate, up and down of enough of its top layers on the
   processor, in panels, for the rest to fit. The room such a model takes on
   the device is counted -- the device's memory less its context, a hybrid's

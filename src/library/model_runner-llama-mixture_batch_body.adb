@@ -273,6 +273,7 @@ begin
      and then Current.Select_Bias = null
      and then not Grouped (Settings)
      and then Item.Owner.all.Split_Feed
+     and then not Item.On_Host
      and then Model_Runner.Backend."="
                 (Item.Owner.Able.Kind,
                  Model_Runner.Backend.Backend_Device)

@@ -1,5 +1,5 @@
 separate (Model_Runner.Llama)
-procedure Evaluate_Batch
+procedure Evaluate_Batch_Body
   (Item   : in out Session;
    Source : Model'Class;
    Tokens : Model_Runner.Tokenizer.Token_Array;
@@ -1269,6 +1269,7 @@ begin
          if Model_Runner.Backend."="
               (Item.Owner.Able.Kind,
                Model_Runner.Backend.Backend_Device)
+           and then not Item.On_Host
            and then Is_Linear
            and then (Linear_Layer_Fits (Current)
                      or else (Split_Here (Current)
@@ -1441,6 +1442,7 @@ begin
          if Model_Runner.Backend."="
               (Item.Owner.Able.Kind,
                Model_Runner.Backend.Backend_Device)
+           and then not Item.On_Host
            and then not Is_Linear
            and then ((Current.Attention_Norm /= null
                       and then Current.Attention_Norm_Bias = null
@@ -2967,9 +2969,11 @@ begin
 
          <<Mamba_Done_Batch>>
 
-         --  What became of this layer, for the run's report.
+         --  What became of this layer, for the run's report; not a call
+         --  on the processor whole, which the device was not handed back.
          if Model_Runner.Backend."="
               (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+           and then not Item.On_Host
          then
             Model_Runner.Backend.Device.Note_Layer
               (Went_Whole, Asked, Cache => No_Block or else Blockless,
@@ -3299,4 +3303,4 @@ exception
       E.Add_Frame (Status, "llama.evaluate_batch");
       E.Add_Frame
         (Status, Ada.Exceptions.Exception_Name (Occurrence));
-end Evaluate_Batch;
+end Evaluate_Batch_Body;

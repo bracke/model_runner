@@ -1,5 +1,5 @@
 separate (Model_Runner.Llama)
-procedure Evaluate_Token
+procedure Evaluate_Token_Body
   (Item   : in out Session;
    Source : Model'Class;
    Token  : Token_Id;
@@ -790,6 +790,7 @@ begin
             if Model_Runner.Backend."="
                  (Item.Owner.Able.Kind,
                   Model_Runner.Backend.Backend_Device)
+              and then not Item.On_Host
               and then (Linear_Layer_Fits (Current)
                         or else (Split_Here (Current)
                                  and then Linear_Front_Fits (Current)))
@@ -1005,6 +1006,7 @@ begin
             --  sequence has no turning step.
             --  Not while a watcher listens; see Layer_Fits.
             if Item.Seen = null
+              and then not Item.On_Host
               and then Device_Held (Item)
               and then Element_Count (Settings.Rotary) <= Head_Size
               and then (((Settings.Experts = 0
@@ -1866,9 +1868,11 @@ begin
 
          --  What became of this layer, for the run's report: the whole
          --  of it over as one sequence, or not -- and, where the device
-         --  was asked and said no, what it said no to.
+         --  was asked and said no, what it said no to. Not a call on the
+         --  processor whole, which the device was not handed back.
          if Model_Runner.Backend."="
               (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+           and then not Item.On_Host
          then
             Model_Runner.Backend.Device.Note_Layer
               (Went_Whole, Asked, Cache => No_Block,
@@ -2049,4 +2053,4 @@ exception
       Item.Current := Failed;
       Status := E.Make (E.Internal_Invariant_Violated);
       E.Add_Frame (Status, "llama.evaluate");
-end Evaluate_Token;
+end Evaluate_Token_Body;

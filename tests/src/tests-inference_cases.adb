@@ -3967,8 +3967,13 @@ package body Tests.Inference_Cases is
          Answer  : out N.Real_Array;
          Refusal : out E.Error_Code;
          Cache   : L.Cache_Precision := L.Exact;
-         Team    : Model_Runner.Backend.CPU.Pool_Reference := null)
+         Team    : Model_Runner.Backend.CPU.Pool_Reference := null;
+         Paged   : Boolean := False;
+         Then_One : Boolean := False)
       is
+         --  Then_One: every batch of Chunk followed by one position on its
+         --  own, the road a generated token takes, so the two take turns.
+
          --  Read where it lies: a copy on the stack is past the stack for a
          --  mixture of sixty-four experts at the deep widths.
          Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source
@@ -3993,7 +3998,7 @@ package body Tests.Inference_Cases is
          end if;
 
          L.Open (Session, Model, Context => Room, Cache => Cache,
-                 Workers => Team, Status => Status);
+                 Workers => Team, Status => Status, Paged => Paged);
          Assert (E.Is_Ok (Status),
                  "a session did not open on "
                  & Model_Runner.Backend.Backend_Name (Backend) & ": "
@@ -4018,6 +4023,16 @@ package body Tests.Inference_Cases is
                        & Model_Runner.Backend.Backend_Name (Backend) & ": "
                        & E.Error_Code'Image (Status.Code));
                From := Upto + 1;
+
+               if Then_One and then From <= Length then
+                  L.Evaluate
+                    (Session, Model, Tokens (From), Answer, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "a position did not evaluate on "
+                          & Model_Runner.Backend.Backend_Name (Backend) & ": "
+                          & E.Error_Code'Image (Status.Code));
+                  From := From + 1;
+               end if;
             end;
          end loop;
 
@@ -4378,10 +4393,23 @@ package body Tests.Inference_Cases is
                --  batch as short as the fixture's is the pool's unless told
                --  otherwise. And four at a time, as a drafted round's check
                --  goes, whose front half routes its positions on the device.
-               for Arm in reverse 1 .. 4 loop
+               --  And with the cache in pages, as a run holds it, where a
+               --  mixture with no linear layers runs a token and a round's
+               --  few on the processor whole (On_Host_Here): four at a
+               --  time, and batches of fifteen taking turns with a position
+               --  alone -- each batch takes the device's pages back and
+               --  writes the positions the processor added into them, and
+               --  each position after it reads them back first.
+               for Arm in reverse 1 .. 6 loop
                   declare
                      Chunk : constant Positive :=
-                       (if Arm = 1 then 1 elsif Arm = 4 then 4 else Length);
+                       (case Arm is
+                          when 1 => 1,
+                          when 4 | 6 => 4,
+                          when 5 => 15,
+                          when others => Length);
+                     Whole_Host : constant Boolean :=
+                       Arm = 6 and then Tiny_Model."=" (Kind, Tiny_Model.Qwen3);
                   begin
                      Model_Runner.Backend.Device.Close;
                      Model_Runner.Backend.Device.Open
@@ -4393,12 +4421,22 @@ package body Tests.Inference_Cases is
                      Logits_On
                        (Image, Model_Runner.Backend.Backend_Device,
                         Chunk, Device, Why,
-                        Team => Team'Unchecked_Access);
+                        Team => Team'Unchecked_Access,
+                        Paged => Arm >= 5, Then_One => Arm = 5);
                      L.Set_Stream_Least (L.Stream_Least_Default);
                      Assert (Why = E.No_Error,
                              "the device refused " & Name & ": "
                              & E.Error_Code'Image (Why));
-                     if Arm = 3 then
+                     if Whole_Host then
+                        Assert (Model_Runner.Backend.Device.Layers_Split = 0
+                                and then Model_Runner.Backend.Device.Layers_Handed = 0,
+                                Name & " four at a time in pages went to the"
+                                & " device:"
+                                & Model_Runner.Backend.Device.Layers_Split'Image
+                                & " split and"
+                                & Model_Runner.Backend.Device.Layers_Handed'Image
+                                & " handed back");
+                     elsif Arm = 3 then
                         Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
                                 "no layer of " & Name & " streamed its stacks,"
                                 & Model_Runner.Backend.Device.Layers_Split'Image
@@ -4406,7 +4444,9 @@ package body Tests.Inference_Cases is
                                 & Model_Runner.Backend.Device.Layers_Handed'Image
                                 & " handed back");
                      else
-                        Assert (Model_Runner.Backend.Device.Layers_Split > 0,
+                        Assert (Model_Runner.Backend.Device.Layers_Split > 0
+                                and then (Arm < 5
+                                          or else Model_Runner.Backend.Device.Layers_Handed = 0),
                                 "no layer of " & Name & " ran split, of"
                                 & Model_Runner.Backend.Device.Layers_Whole'Image
                                 & " whole and"
@@ -4421,6 +4461,9 @@ package body Tests.Inference_Cases is
                      Assert (Worst <= Tolerance,
                              "on " & Name
                              & (case Arm is
+                                   when 6 => " four at a time in pages",
+                                   when 5 => " in pages, batches and positions"
+                                             & " taking turns",
                                    when 4 => " four positions at a time",
                                    when 3 => " with its stacks streamed",
                                    when 2 => " in one batch",

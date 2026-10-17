@@ -3476,6 +3476,11 @@ private
       --  while a split dense model's layer runs whose gate, up and down
       --  the processor holds (Layer.Host_Feed).
       Host_Feed  : Boolean := False;
+
+      --  Whether this call runs on the processor whole, its attention and
+      --  its head as well as its feed-forward: a token or a round of a
+      --  split mixture's (On_Host_Here), its cache the host's copy.
+      On_Host    : Boolean := False;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  How the cache is cut up, one entry a layer.
