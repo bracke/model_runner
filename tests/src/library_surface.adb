@@ -175,6 +175,11 @@ package body Library_Surface is
       --  lowers it so a fixture's short batch takes the streamed road.
       new String'("Set_Stream_Least"),
 
+      --  How deep into its context a split mixture's token runs on the
+      --  processor. The engine's own default is the one a run wants; a test
+      --  lowers it so a fixture's reply crosses it.
+      new String'("Set_Host_Depth_Most"),
+
       --  Where a hybrid's checkpoint went. The engine does not ask: it
       --  rewinds to it wherever it is; a test asks so that a device that
       --  ran no linear layer is told apart from a copy that worked.

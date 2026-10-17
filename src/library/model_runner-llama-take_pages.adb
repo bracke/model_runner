@@ -88,12 +88,22 @@ begin
                              * Item.Owner.Settings.Value_Size);
    KV_Width := Page_Row (Item.all) - V_Width;
 
+   --  Positions a call on the processor wrote while the session kept its
+   --  pages are owed to them (Device_Behind). A note at or past what is
+   --  committed -- a round rolled back below it -- owes nothing and goes
+   --  now, before this pass's own positions could be taken for the
+   --  processor's; one that owes is cleared once they are written, below.
+   if Item.Device_Behind >= Item.Committed then
+      Item.Device_Behind := Natural'Last;
+   end if;
+
    --  Already reaching this position, which every layer's ask but the
    --  first of a token does: the pages are all dealt, so there is no
    --  layer to walk, no reserve to grow and nothing to write. Stamped
    --  above still, so a page turned out elsewhere is the one nobody has
    --  read for longest.
    if Item.Paged_In
+     and then Item.Device_Behind = Natural'Last
      and then Upto <= Element_Count (Item.Paged_Upto)
      and then Tables_Of = Item
      and then Tables_Front = Pages_Taken + Pages_Taken_Second
@@ -419,6 +429,30 @@ begin
             Give_Up;
             return;
          end if;
+      end;
+
+   --  What a call on the processor added since, into pages the session
+   --  kept: from the first position they lack to the last committed. A
+   --  write refused leaves them partly written, so they are given up and
+   --  taken whole at the next pass.
+   elsif Item.Device_Behind < Item.Committed then
+      declare
+         Written : Boolean := True;
+      begin
+         for Layer in Item.Page_Count.all'Range loop
+            if not Linear (Item.Owner.Settings, Layer) then
+               Write_Pages_Layer
+                 (Item.all, Layer, KV_Width, V_Width,
+                  Element_Count (Item.Committed), Written,
+                  From => Element_Count (Item.Device_Behind));
+               exit when not Written;
+            end if;
+         end loop;
+         if not Written then
+            Release_Session_Pages (Item);
+            return;
+         end if;
+         Item.Device_Behind := Natural'Last;
       end;
    end if;
 

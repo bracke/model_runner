@@ -3969,10 +3969,18 @@ package body Tests.Inference_Cases is
          Cache   : L.Cache_Precision := L.Exact;
          Team    : Model_Runner.Backend.CPU.Pool_Reference := null;
          Paged   : Boolean := False;
-         Then_One : Boolean := False)
+         Then_One : Boolean := False;
+         Ones_After : Boolean := False;
+         Rewound : Boolean := False)
       is
          --  Then_One: every batch of Chunk followed by one position on its
          --  own, the road a generated token takes, so the two take turns.
+         --  Ones_After: the first batch of Chunk, and every position after
+         --  it on its own, as a prompt and its reply go.
+         --  Rewound: thirty read, the last fifteen of them other tokens, as
+         --  a draft turned down is; taken back to fifteen, the next five read
+         --  a position at a time and the rest in batches of Chunk -- the
+         --  first of which reaches no further than the thirty did.
 
          --  Read where it lies: a copy on the stack is past the stack for a
          --  mixture of sixty-four experts at the deep widths.
@@ -4004,13 +4012,33 @@ package body Tests.Inference_Cases is
                  & Model_Runner.Backend.Backend_Name (Backend) & ": "
                  & E.Error_Code'Image (Status.Code));
 
+         if Rewound then
+            L.Evaluate_Batch
+              (Session, Model,
+               Model_Runner.Tokenizer."&"
+                 (Tokens (1 .. 15), Tokens (Length - 14 .. Length)),
+               Answer, Status => Status);
+            Assert (E.Is_Ok (Status), "the first thirty did not evaluate");
+            L.Rewind (Session, 15, Status);
+            Assert (E.Is_Ok (Status), "the session did not rewind");
+            for Which in 16 .. 20 loop
+               L.Evaluate
+                 (Session, Model, Tokens (Which), Answer, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "a position after the rewind did not evaluate");
+            end loop;
+            From := 21;
+         end if;
+
          while From <= Length loop
             declare
-               Upto : constant Positive := Positive'Min (From + Chunk - 1, Length);
+               Upto : constant Positive :=
+                 (if Ones_After and then From > 1 then From
+                  else Positive'Min (From + Chunk - 1, Length));
             begin
                --  A position at a time takes the road a generated token
                --  takes, which is not the batch's with one position in it.
-               if Chunk = 1 then
+               if Chunk = 1 or else (Ones_After and then From > 1) then
                   L.Evaluate
                     (Session, Model, Tokens (From), Answer, Status => Status);
                else
@@ -4400,13 +4428,30 @@ package body Tests.Inference_Cases is
                --  alone -- each batch takes the device's pages back and
                --  writes the positions the processor added into them, and
                --  each position after it reads them back first.
-               for Arm in reverse 1 .. 6 loop
+               --  And a prompt of fifteen and its reply a position at a
+               --  time across the depth past which the processor's
+               --  attention is the slower (Set_Host_Depth_Most, sixty
+               --  here): the first position past it goes to the split and
+               --  writes into the device's pages the forty-five the
+               --  processor added.
+               --  And a rewind before the processor's positions, as a drafted
+               --  round turned down or a turn's reply dropped leaves one:
+               --  the batch after them reaches no further than pages already
+               --  dealt, and is written the owed positions all the same.
+               --  Not a hybrid, which rewinds to a kept state and keeps to
+               --  the split.
+               for Arm in reverse 1 .. 8 loop
+                  if Arm = 8 and then Tiny_Model."=" (Kind, Tiny_Model.Qwen35)
+                  then
+                     goto Next_Arm;
+                  end if;
                   declare
                      Chunk : constant Positive :=
                        (case Arm is
                           when 1 => 1,
                           when 4 | 6 => 4,
-                          when 5 => 15,
+                          when 5 | 7 => 15,
+                          when 8 => 5,
                           when others => Length);
                      Whole_Host : constant Boolean :=
                        Arm = 6 and then Tiny_Model."=" (Kind, Tiny_Model.Qwen3);
@@ -4418,12 +4463,17 @@ package body Tests.Inference_Cases is
                      if Arm = 3 then
                         L.Set_Stream_Least (1);
                      end if;
+                     if Arm = 7 then
+                        L.Set_Host_Depth_Most (60);
+                     end if;
                      Logits_On
                        (Image, Model_Runner.Backend.Backend_Device,
                         Chunk, Device, Why,
                         Team => Team'Unchecked_Access,
-                        Paged => Arm >= 5, Then_One => Arm = 5);
+                        Paged => Arm >= 5, Then_One => Arm = 5,
+                        Ones_After => Arm = 7, Rewound => Arm = 8);
                      L.Set_Stream_Least (L.Stream_Least_Default);
+                     L.Set_Host_Depth_Most (L.Host_Depth_Most_Default);
                      Assert (Why = E.No_Error,
                              "the device refused " & Name & ": "
                              & E.Error_Code'Image (Why));
@@ -4461,6 +4511,10 @@ package body Tests.Inference_Cases is
                      Assert (Worst <= Tolerance,
                              "on " & Name
                              & (case Arm is
+                                   when 8 => " in pages, read again past a"
+                                             & " rewind",
+                                   when 7 => " in pages, its reply crossing"
+                                             & " the processor's depth",
                                    when 6 => " four at a time in pages",
                                    when 5 => " in pages, batches and positions"
                                              & " taking turns",
@@ -4471,6 +4525,7 @@ package body Tests.Inference_Cases is
                              & " the device's logits differ from the "
                              & "processor's by " & N.Real'Image (Worst));
                   end;
+                  <<Next_Arm>>
                end loop;
                B.Free (Image);
             end;
@@ -4481,8 +4536,11 @@ package body Tests.Inference_Cases is
       exception
          --  A failed assertion leaves by here, and a pool left open waits
          --  at the end of its scope for workers that never finish: the
-         --  test would hang where it should report.
+         --  test would hang where it should report. And the two lengths
+         --  an arm changes, put back for the cases after this one.
          when others =>
+            L.Set_Stream_Least (L.Stream_Least_Default);
+            L.Set_Host_Depth_Most (L.Host_Depth_Most_Default);
             Model_Runner.Backend.CPU.Close (Team);
             Model_Runner.Backend.Device.Close;
             Model_Runner.Backend.Device.Open (Awake);

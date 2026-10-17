@@ -1502,6 +1502,19 @@ package Model_Runner.Llama is
    --  @param Positions The fewest positions a streamed batch holds.
    procedure Set_Stream_Least (Positions : Positive);
 
+   --  How deep into its context a split mixture's token or round runs on
+   --  the processor whole: the processor's attention grows with the
+   --  positions behind a token, the device's far slower. Qwen3-30B-A3B
+   --  Q4_K_M generated 19.0 tokens a second on the processor and 17.4 split
+   --  about 550 positions in, 16.9 and 16.7 at 1,617, 12.0 and 14.7 at
+   --  4,679, 7.2 and 13.3 at 8,315.
+   Host_Depth_Most_Default : constant := 1_536;
+
+   --  Change it, for the run: a test crosses it inside a fixture's prompt.
+   --
+   --  @param Positions The most positions a call on the processor reaches.
+   procedure Set_Host_Depth_Most (Positions : Natural);
+
    --  The session's worker pool, as something that can be handed to a
    --  package that must not know what a pool is.
    --
@@ -3481,6 +3494,12 @@ private
       --  its head as well as its feed-forward: a token or a round of a
       --  split mixture's (On_Host_Here), its cache the host's copy.
       On_Host    : Boolean := False;
+
+      --  The first position whose keys and values the device's pages lack,
+      --  written by a call on the processor while the session kept them;
+      --  Natural'Last where they lack none. The next pass on the device
+      --  writes the positions from here on into them (Take_Pages).
+      Device_Behind : Natural := Natural'Last;
       Logit_Row  : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  How the cache is cut up, one entry a layer.

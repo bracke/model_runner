@@ -26,6 +26,9 @@ package body Model_Runner.Llama is
    --  See Set_Stream_Least.
    Stream_Least : Positive := Stream_Least_Default;
 
+   --  See Set_Host_Depth_Most.
+   Host_Depth_Most : Natural := Host_Depth_Most_Default;
+
    --  The most positions a batch may hold beside a window: a sliding
    --  layer's cells are its window and this and the rewind slack, since a
    --  batch is written whole before anything reads it. A mixture's batch
@@ -88,6 +91,11 @@ package body Model_Runner.Llama is
    begin
       Stream_Least := Positions;
    end Set_Stream_Least;
+
+   procedure Set_Host_Depth_Most (Positions : Natural) is
+   begin
+      Host_Depth_Most := Positions;
+   end Set_Host_Depth_Most;
 
    use type Model_Runner.Tokenizer.Token_Id;
    use type Model_Runner.Numerics.Element_Count;
@@ -5153,7 +5161,8 @@ package body Model_Runner.Llama is
    --  it is given them, as Write_Block does for a block. Position P of the
    --  layer sits at cell P - Origin, in page (cell / Page_Positions) at
    --  (cell mod Page_Positions) inside it, the keys at the page's front
-   --  and the values a run of keys in.
+   --  and the values a run of keys in. From the position From on, where
+   --  the pages hold the ones before it already.
    --  A run of a session's host keys or values into the device's cache
    --  and back, in whichever storage the host keeps them: binary32 as it
    --  is, or halves through binary32, which the device takes and gives
@@ -5247,9 +5256,11 @@ package body Model_Runner.Llama is
       KV_Width : Element_Count;
       V_Width  : Element_Count;
       Upto     : Element_Count;
-      Written  : out Boolean)
+      Written  : out Boolean;
+      From     : Element_Count := 0)
    is
       Cells : constant Element_Count := Cell_Of (Item, Layer, Upto);
+      Start : constant Element_Count := Cell_Of (Item, Layer, From);
       First : constant Element_Count := Item.Page_First.all (Layer);
 
       Keys_Base : constant Element_Count := Keys_At (Item, Layer);
@@ -5260,26 +5271,33 @@ package body Model_Runner.Llama is
       --  A layer that holds no cell of the committed range -- a window
       --  layer whose origin has caught up with the position it is asked
       --  about -- writes nothing rather than counting from cell minus one.
-      if Cells = 0 then
+      if Cells <= Start then
          return;
       end if;
 
-      for Page in 0 .. Natural (Cells - 1) / Page_Positions loop
+      for Page in Natural (Start) / Page_Positions
+                  .. Natural (Cells - 1) / Page_Positions
+      loop
          declare
-            Low  : constant Element_Count :=
+            Front : constant Element_Count :=
               Element_Count (Page) * Element_Count (Page_Positions);
-            Span : constant Element_Count :=
-              Element_Count'Min (Element_Count (Page_Positions), Cells - Low);
-            Base : constant Element_Count :=
+            Low   : constant Element_Count := Element_Count'Max (Front, Start);
+            Into  : constant Element_Count := Low - Front;
+            Span  : constant Element_Count :=
+              Element_Count'Min (Front + Element_Count (Page_Positions), Cells)
+              - Low;
+            Base  : constant Element_Count :=
               Item.Pages.all (Natural (First) + Page);
          begin
             Put_Host_Rows
-              (Item, Base, Keys_Base + Low * KV_Width, Span * KV_Width,
-               Keys => True, Ok => Written);
+              (Item, Base + Into * KV_Width, Keys_Base + Low * KV_Width,
+               Span * KV_Width, Keys => True, Ok => Written);
 
             if Written then
                Put_Host_Rows
-                 (Item, Base + Element_Count (Page_Positions) * KV_Width,
+                 (Item,
+                  Base + Element_Count (Page_Positions) * KV_Width
+                  + Into * V_Width,
                   Vals_Base + Low * V_Width, Span * V_Width,
                   Keys => False, Ok => Written);
             end if;
@@ -5555,6 +5573,9 @@ package body Model_Runner.Llama is
       Item.Page_Count.all := [others => 0];
       Item.Paged_In := False;
       Item.Paged_Upto := 0;
+
+      --  Taken again, the pages are written whole from the host's copy.
+      Item.Device_Behind := Natural'Last;
 
       Item.Second_From := Natural'Last;
 
@@ -8483,6 +8504,7 @@ package body Model_Runner.Llama is
       --  them -- a perplexity's every chunk past the first read as noise.
       Item.Owed_Count := 0;
       Item.Owed_At := 0;
+      Item.Device_Behind := Natural'Last;
       Item.Turned := False;
       Item.Check_Slot := False;
 
@@ -9138,8 +9160,9 @@ package body Model_Runner.Llama is
       Item.Skipped_Count := 0;
 
       --  A context dropped is a context nothing will read, so the
-      --  device owes the host nothing for it.
+      --  device owes the host nothing for it, nor the host the device.
       Item.Owed_Count := 0;
+      Item.Device_Behind := Natural'Last;
 
       --  Only the logical contents are invalidated. The cache and scratch
       --  buffers stay allocated so that a reset costs nothing and the next
@@ -10936,9 +10959,9 @@ package body Model_Runner.Llama is
    --  token is two hand-overs a layer for work the processor does as fast
    --  itself: Qwen3-30B-A3B Q4_K_M generated 17.4 tokens a second split and
    --  19.6 on the processor alone, where its prompt read 302 a second split
-   --  and 93 alone. So a token and a round's few go to the processor whole,
-   --  attending over the host's copy of the cache, and a prompt to the
-   --  split. Not a hybrid: Qwen3.6's linear layers are what the device
+   --  and 93 alone. So a token and a round's few go to the processor whole
+   --  while the context is short (Host_Depth_Most), attending over the
+   --  host's copy of the cache, and a prompt to the split. Not a hybrid: Qwen3.6's linear layers are what the device
    --  saves it, 17.5 split against 14.3 alone.
    function On_Host_Here
      (Item : Session; Source : Model'Class; Count : Element_Count)
@@ -10947,6 +10970,8 @@ package body Model_Runner.Llama is
        and then Source.Settings.Experts > 0
        and then not Hybrid (Source.Settings.Kind)
        and then Count <= Host_Call_Most
+       and then Element_Count (Item.Committed) + Count
+                <= Element_Count (Host_Depth_Most)
        and then Item.Paged
        and then Item.Held in Exact | Halved
        and then Workers_CPU."/=" (Item.Team, null)
@@ -10954,17 +10979,18 @@ package body Model_Runner.Llama is
                   (Source.Able.Kind, Model_Runner.Backend.Backend_Device));
 
    --  Make the host's copy of the cache the one a call on the processor
-   --  reads: what the device wrote and still owes read back, and the
-   --  pages given up, so the next pass on the device takes them again and
-   --  writes the committed cache into them from the host's copy -- the
-   --  positions written here with it -- as it does for a session turned
-   --  out and come back. False where the copy could not be brought up to
-   --  date; the call then runs on the split as before.
+   --  reads: what the device wrote and still owes read back, and where the
+   --  session keeps its pages, the position this call writes from noted as
+   --  one they lack, so the next pass on the device writes what the
+   --  processor added and no more (Device_Behind). Given up and written
+   --  whole again instead, Qwen3-30B-A3B's 15,805 positions read a turn of
+   --  ten tokens in 1.9 s, against 1.3 kept. False where the copy could not be
+   --  brought up to date; the call then runs on the split as before.
    procedure Enter_Host (Item : in out Session; Ok : out Boolean) is
    begin
       Settle_Cache (Item, Ok);
       if Ok and then Item.Paged_In then
-         Release_Session_Pages (Item'Unchecked_Access);
+         Item.Device_Behind := Natural'Min (Item.Device_Behind, Item.Committed);
       end if;
    end Enter_Host;
 
