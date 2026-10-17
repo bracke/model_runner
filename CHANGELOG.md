@@ -7,6 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **tests agent-trial keeps the screen:** what the session showed, beside the session it kept (`.trial-screen.txt`), so a display option -- --hide-reasoning in /work, here on qwen3.5-4b: the calls and their answers and no reasoning -- is checked by what a person would have read.
 - **tests device-bench --tiles [--vectors N]:** every format's prompt tile, 16384 by 2048 against N vectors (128 unless said) -- the low-bit formats too, which the full run's eight left out; fewer vectors, as an expert's run has, and the decode is more of the time.
 - **run --hide-reasoning:** the answer alone, the reasoning before it left out -- a think block, one the reply opens or one its prompt opened, and a harmony reply's messages before its final one (Output.Reasoning, Output.Harmony's answer-only mode). gpt-oss-20b and qwen3.5-4b answer "The capital of Denmark is Copenhagen." and nothing else.
 - **--hide-reasoning for run --agent, the interactive chat and /work:** each turn's reasoning left out as plain run leaves it out -- a think block, or a harmony reply's messages before its final one -- the calls and their answers still shown. qwen3.5-4b on run --agent shows the call line, its result and "The functions declared in calc.ads are: Add and Times." and nothing else.
@@ -299,6 +300,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **/work and run --agent showed a think block's close twice:** a reasoning tag met at a line's start in a piece of its own was written by the release that let it through and again with the rest of the piece -- "</think></think>" after every turn's reasoning on qwen3.5-4b (since 44172408). Written once now.
 - **--hide-reasoning said nothing when the limit came first:** a reply whose reasoning took every token it was allowed showed nothing at all -- plain run printed an empty answer, the chat only its usual "stopped at its limit". Both now say the reply reached its limit while still reasoning, before any answer (Output.Reasoning and Output.Harmony's Showed_Nothing).
 - **run --agent showed a call's raw markup:** the `<tool_call>` text a model wrote went to the screen before the call line said it again; run --agent now holds back a line that may be a call as /work does (Held_Output, shared by both).
 - **A think block before a call went with it:** the screen held back a line from a `<` at its start as a possible call, so a reply that opened `<think>` was held whole and dropped with the call that followed; a reasoning tag is now written as it comes.

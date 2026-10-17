@@ -2071,6 +2071,9 @@ package body Tests.CLI_Cases is
          Assert (Has ("<think>" & ASCII.LF & "Look at calc.ads."),
                  "the think block before the call was not shown: " & Caught);
          Assert (Has ("</think>"), "the think block's close was not shown: " & Caught);
+         Assert (Ada.Strings.Fixed.Count (Caught, "</think>") = 1
+                 and then Ada.Strings.Fixed.Count (Caught, "<think>") = 1,
+                 "a reasoning tag was shown more than once: " & Caught);
          Assert (not Has ("tool_call") and then not Has ("read_file"),
                  "the call's markup was shown: " & Caught);
          Assert (Has ("{not a call}") and then Has ("Add and Times."),

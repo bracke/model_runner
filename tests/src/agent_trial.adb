@@ -534,6 +534,23 @@ package body Agent_Trial is
                         null;
                      end;
                      Hostkit.Pty.Close (Pair);
+
+                     --  What the screen showed, kept beside the session: what
+                     --  the person driving it would have read -- whether a
+                     --  display option such as --hide-reasoning did its part
+                     --  is a question about this, not about the records.
+                     declare
+                        Shown : Ada.Text_IO.File_Type;
+                     begin
+                        Ada.Text_IO.Create
+                          (Shown, Ada.Text_IO.Out_File, Root & "/.trial-screen.txt");
+                        Ada.Text_IO.Put (Shown, Plain (To_String (Seen)));
+                        Ada.Text_IO.Close (Shown);
+                     exception
+                        when others =>
+                           null;
+                     end;
+
                      declare
                         Ignored : constant Boolean := Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Ended);
                      begin

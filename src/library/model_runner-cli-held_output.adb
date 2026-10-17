@@ -41,7 +41,7 @@ package body Model_Runner.CLI.Held_Output is
       Closed : out Boolean)
    is
       use type Model_Runner.Cancellation.Token_Reference;
-      From : constant Positive := Item'First;
+      From : Positive := Item'First;
    begin
       Closed := False;
       if Self.Quiet then
@@ -61,7 +61,10 @@ package body Model_Runner.CLI.Held_Output is
                end if;
                Self.Holding := True;
                Self.Held := To_Unbounded_String (Item (Index .. Item'Last));
+               --  A reasoning tag after all: it and what followed it were
+               --  written by the release, so none of this piece is left.
                Release_Thought_Tag (Self, Closed);
+               From := Item'Last + 1;
                exit;
             end if;
             Self.At_Line_Start :=
