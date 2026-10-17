@@ -1,3 +1,4 @@
+with Device_Clock;
 with Ada.Calendar;
 with Ada.Text_IO;
 
@@ -843,6 +844,7 @@ package body Device_Bench is
                   Started := Ada.Calendar.Clock;
 
                   loop
+                     Products.Keep_Clock;
                      Products.Multiply
                        (Engine, Weights.all, 0, Which.Packing, Rows,
                         Columns, Asked.all, Vectors, Got.all, Ok, Halted,
@@ -873,9 +875,13 @@ package body Device_Bench is
 
                      --  And, asked for with --tiles, what the device's own
                      --  clock said the product took: a sequence of the one
-                     --  product, stamped, the best of five -- the copies in
-                     --  and out the figure above carries left out.
+                     --  product, stamped, the best over 0.4 s of passes --
+                     --  the copies in and out the figure above carries left
+                     --  out -- and what the part's clock and power held over
+                     --  those passes, since a product that runs longer than
+                     --  a few milliseconds may run at a lower clock.
                      Device_Us : Float := 0.0;
+                     Held      : Device_Clock.Reading;
                   begin
                      if Tiles_Only then
                         declare
@@ -894,20 +900,32 @@ package body Device_Bench is
                               Key => Weights.all (Weights.all'First)'Address);
                            Products.Time_Steps (Engine, True, Stamped);
                            if Added and then Stamped then
-                              for Pass in 1 .. 5 loop
-                                 Products.Run
-                                   (Engine, Order, Asked.all, Vectors, Got.all,
-                                    Fine, Stopped);
-                                 exit when not Fine;
-                                 declare
-                                    Said : constant Products.Timeline :=
-                                      Products.Last_Timeline (Engine);
-                                 begin
-                                    if Said.Held > 0 and then Said.Steps (1) > 0.0 then
-                                       Best := Float'Min (Best, Said.Steps (1));
-                                    end if;
-                                 end;
-                              end loop;
+                              declare
+                                 Watch : Device_Clock.Watcher;
+                                 From  : constant Ada.Calendar.Time :=
+                                   Ada.Calendar.Clock;
+                              begin
+                                 Watch.Start (Device_Clock.Offered);
+                                 for Pass in 1 .. 10_000 loop
+                                    Products.Keep_Clock;
+                                    Products.Run
+                                      (Engine, Order, Asked.all, Vectors, Got.all,
+                                       Fine, Stopped);
+                                    exit when not Fine;
+                                    declare
+                                       Said : constant Products.Timeline :=
+                                         Products.Last_Timeline (Engine);
+                                    begin
+                                       if Said.Held > 0 and then Said.Steps (1) > 0.0 then
+                                          Best := Float'Min (Best, Said.Steps (1));
+                                       end if;
+                                    end;
+                                    exit when Pass >= 5
+                                      and then Ada.Calendar."-"
+                                                 (Ada.Calendar.Clock, From) >= 0.4;
+                                 end loop;
+                                 Watch.Stop (Held);
+                              end;
                               if Best < Float'Last then
                                  Device_Us := Best;
                               end if;
@@ -930,7 +948,7 @@ package body Device_Bench is
                                 & Natural'Image
                                     (Natural (2.0 * Float (Rows) * Float (Columns)
                                               * Float (Vectors) / Device_Us / 1.0E3))
-                                & " Gflop/s"
+                                & " Gflop/s" & Device_Clock.Shown (Held)
                            else ""));
                   end;
                else
@@ -1510,14 +1528,32 @@ package body Device_Bench is
             & " vectors, by format:");
          --  Each product copies its vectors in and its answers out, and
          --  the first figure is that whole call; the device's own clock is
-         --  said beside it. Past 128 vectors the device's time grows faster
-         --  than the work -- Q4_K 1.58 ms at 128, 5.38 at 256 and 10.5 at
-         --  512, with the wider tile or without it -- which the copies do
-         --  not explain.
+         --  said beside it.
+         --
+         --  And the part's clock is held up as a prompt holds it
+         --  (Backend.Device.Hold_Clock): past 128 vectors the copies between
+         --  products left the part idle long enough that it dropped to its
+         --  lowest state, 800 MHz of 2700, and Q4_K read 1.34 ms on the
+         --  device at 128 and 5.34 at 256 -- where a real prompt of 2,000
+         --  tokens holds 1,878.
          Ada.Text_IO.Put_Line
            ("  (the first figure is the whole call, the vectors copied in and"
-            & " the answers out; ""on the device"" is the device's own clock)");
-         Grains;
+            & " the answers out; ""on the device"" is the device's own clock,"
+            & " the part's clock held up)");
+         declare
+            Keeping : Devices.Context;
+            Kept    : Boolean;
+         begin
+            Devices.Open (Keeping, Held, 1, Kept);
+            if Kept then
+               Products.Open_Keeper (Keeping, Kept);
+            end if;
+            Grains;
+            if Kept then
+               Products.Close_Keeper;
+            end if;
+            Devices.Close (Keeping);
+         end;
          Products.Close (Engine);
          Devices.Close (Opened);
          Devices.Close (Held);

@@ -11840,6 +11840,24 @@ package body Tests.Framework_Cases is
                Ask ("required", "", Ran => Round);
                Assert (not Retry, "a child that went round was run again");
             end;
+            --  And one whose lineage cannot be read is not run again, and
+            --  the parent is told why in the error's own words: told by a
+            --  field the error may not have, it read "It is not run again: "
+            --  and nothing after.
+            Ask ("required", Child_Fails, "AG-999999");
+            if E.Is_Ok (Parent_Status) then
+               declare
+                  Told : constant String := To_String (Parent_Told);
+                  At_Said : constant Natural :=
+                    Ada.Strings.Fixed.Index (Told, "It is not run again: ");
+               begin
+                  Assert (not Retry, "a child whose lineage was unreadable was run again");
+                  Assert (At_Said > 0
+                          and then Ada.Strings.Fixed.Index
+                                     (Told (At_Said .. Told'Last), "MR-") > 0,
+                          "the parent was not told why a child is not run again: " & Told);
+               end;
+            end if;
          when Fails_Then_Good =>
             Ask ("required", Child_Fails);
             Ask ("required", Child_Done, To_String (Id));
@@ -12790,11 +12808,12 @@ package body Tests.Framework_Cases is
                  "the call did not record what it could use: " & R.Get (Root_Call, "tool_policy"));
       end;
 
-      --  Two runs of one child, and one that went round, not run again.
+      --  Two runs of one child, one that went round, and one whose
+      --  lineage could not be read, not run again.
       Work (Fails_Twice);
       Assert (To_String (Done.Final_State) = "blocked"
               and then Contains (To_String (Done.Reason), "failed")
-              and then Natural (Done.Children.Length) = 3,
+              and then Natural (Done.Children.Length) = 4,
               "a required child that failed twice did not hold its parent: "
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
 

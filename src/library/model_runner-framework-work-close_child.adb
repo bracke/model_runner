@@ -153,7 +153,10 @@ begin
             then ASCII.LF & Invocations.Claim (Said, "findings") else "")
          & (if Retry then ASCII.LF & "It is run once more." else "")
          & (if E.Is_Error (Lineage_Status)
-            then ASCII.LF & "It is not run again: " & E.Text_Of (Lineage_Status, "detail") & "."
+            --  In the error's own words: its detail alone was nothing at
+            --  all for an error that has none -- a helper whose own record
+            --  could not be read, "It is not run again: ." after a stop.
+            then ASCII.LF & "It is not run again: " & Why_Of (Lineage_Status) & "."
             else ""));
    end;
 end Close_Child;
