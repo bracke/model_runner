@@ -1432,7 +1432,12 @@ package body Tests.Backend_Cases is
       --  14, whose ends are taken on the 128-vector tile and the 32-vector
       --  one in a dispatch of their own, from the vector the wide tiles
       --  stopped at.
-      Shapes : constant array (1 .. 17) of Shape :=
+      --
+      --  And rows of 1024 at batches of 20 and 40: the 32-vector tile and
+      --  the 128-vector one over several super-blocks a row, where a scale
+      --  kept from one block to the next (Q6_K's are read once a block)
+      --  would be used for the wrong one; a row of one block cannot tell.
+      Shapes : constant array (1 .. 19) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
@@ -1449,7 +1454,9 @@ package body Tests.Backend_Cases is
          (Tall => 13, Batch => 1, Tiled => False, Across => 768),
          (Tall => 13, Batch => 3, Tiled => False, Across => 768),
          (Tall => 64, Batch => 300, Tiled => True, others => <>),
-         (Tall => 64, Batch => 270, Tiled => True, others => <>)];
+         (Tall => 64, Batch => 270, Tiled => True, others => <>),
+         (Tall => 64, Batch => 20, Tiled => True, Across => 1024),
+         (Tall => 64, Batch => 40, Tiled => True, Across => 1024)];
 
       --  How far the device and the processor may differ.
       --

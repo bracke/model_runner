@@ -1868,6 +1868,27 @@ void main() {
                        ahead_h[it], ahead_q[it]);
         }
     }
+
+    //  Q6_K's scales, a block's sixteen and its own, read once a block
+    //  rather than once a step: they sit at the far end of the block from
+    //  the quants, and reading them every step was most of the narrow
+    //  tile's Q6_K time -- 3.1 ms a 16384 by 2048 product at thirty-two
+    //  vectors, 1.8 with the scales constant, Q5_K beside it 1.7. Read a
+    //  step ahead instead they cost the same: it was the reads, not the
+    //  wait on them. Only the narrow tile's: in the wider ones, which every
+    //  format runs through, the twelve registers cost a long qwen3-8b
+    //  prompt a tenth (330 -> 297 tokens a second).
+#ifdef NARROW
+    uint  q6k_block[TILE_R / 32u];
+    uvec4 q6k_scales[TILE_R / 32u];
+    float q6k_d[TILE_R / 32u];
+
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        q6k_block[it] = 0xFFFFFFFFu;
+        q6k_scales[it] = uvec4(0u);
+        q6k_d[it] = 0.0;
+    }
+#endif
 #endif
 
 #if defined(MORE_FORMATS) && defined(LISTED)
@@ -2454,9 +2475,24 @@ void main() {
                 uint side = here >> 2u;
                 uint run  = here & 3u;
 
+#ifdef NARROW
+                uint it = rr / 32u;
+                if (q6k_block[it] != k0 / 256u) {
+                    q6k_block[it] = k0 / 256u;
+                    uint s0, s1, s2, s3;
+                    four_words (at + 192u, s0, s1, s2, s3);
+                    q6k_scales[it] = uvec4(s0, s1, s2, s3);
+                    q6k_d[it] = half_at(at + 208u);
+                }
+                uint scale_at = side * 8u + run * 2u + half_of;
+                float step = q6k_d[it] * float (bitfieldExtract
+                  (int (q6k_scales[it][scale_at >> 2u]),
+                   int (8u * (scale_at & 3u)), 8));
+#else
                 float d = half_at(at + 208u);
                 float step = d * float
                   (signed_at (at + 192u + side * 8u + run * 2u + half_of));
+#endif
 
                 //  The low nibbles of this run, and the byte holding two
                 //  high bits for each of the four runs the same nibble
