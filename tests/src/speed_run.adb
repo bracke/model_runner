@@ -484,14 +484,13 @@ package body Speed_Run is
                return;
             end if;
 
-            --  Its head at four bits, as the command takes it: a proposal
-            --  is checked token by token, so this changes how many are kept
-            --  and never what is written. A head that will not go stays as
-            --  the file has it.
+            --  Lightened as the command lightens it (Lighten_Draft): a
+            --  proposal is checked token by token, so this changes how many
+            --  are kept and never what is written.
             declare
                Lighter : E.Error_Info;
             begin
-               L.Lighten_Head (Draft_Engine, Threads, Lighter);
+               L.Lighten_Draft (Draft_Engine, Threads, Lighter);
             end;
 
             Drafting := True;

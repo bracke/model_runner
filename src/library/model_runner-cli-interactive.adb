@@ -1304,9 +1304,16 @@ package body Model_Runner.CLI.Interactive is
          --  model happened to spell them.
          --  A reply the token limit stopped is said to have been: nothing
          --  else would say the answer was cut.
+         --  With the reasoning left out, one stopped before its answer
+         --  showed nothing, which is said as such.
          if Last_Result.Reason = Gen.Maximum_Tokens then
             Pres.Put_Note
-              (Screen, "cli.interactive.reply_cut",
+              (Screen,
+               (if Item.Hide_Reasoning
+                  and then (if Harmony then Tidied.Showed_Nothing
+                            else Unthought.Showed_Nothing)
+                then "cli.run.reasoning_cut"
+                else "cli.interactive.reply_cut"),
                [Loc.Named ("value", T.Image (Long_Long_Integer (Request.Max_Tokens)))]);
          end if;
 

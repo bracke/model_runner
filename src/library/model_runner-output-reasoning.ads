@@ -17,6 +17,14 @@ package Model_Runner.Output.Reasoning is
    --  @param Inside Whether the reply begins inside a think block.
    procedure Start_Reply (Self : in out Filter; Inside : Boolean);
 
+   --  Whether nothing of the reply has been shown since it began: all of
+   --  it so far reasoning, where the reasoning is left out -- a reply the
+   --  token limit stopped there has no answer to show.
+   --
+   --  @param Self Filter.
+   --  @return True when nothing has reached Target.
+   function Showed_Nothing (Self : Filter) return Boolean;
+
    --  Take a fragment of the reply, showing what is not reasoning.
    --
    --  @param Self Filter.
@@ -49,6 +57,7 @@ private
       Held    : String (1 .. 8);
       Used    : Natural := 0;
       Shut    : Boolean := False;
+      Shown   : Boolean := False;
    end record;
 
 end Model_Runner.Output.Reasoning;

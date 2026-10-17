@@ -14144,6 +14144,17 @@ package body Tests.CLI_Cases is
                      & "<|start|>assistant<|channel|>final<|message|>Copenhagen.<|return|>");
          Assert (Shown = "Copenhagen." & ASCII.LF,
                  "a harmony reply's reasoning was shown: [" & Shown & "]");
+         Assert (not Tidy.Showed_Nothing,
+                 "a harmony reply that showed its answer said it showed none");
+
+         --  A reply the limit stopped in its reasoning has shown nothing,
+         --  which the run says as such.
+         Screen.Used := 0;
+         Tidy.Answer_Only (True);
+         Feed (Tidy, "<|channel|>analysis<|message|>Still thinking");
+         Assert (Tidy.Showed_Nothing and then Shown = "",
+                 "a harmony reply cut in its reasoning showed something: ["
+                 & Shown & "]");
       end;
 
       Screen.Used := 0;
@@ -14161,6 +14172,15 @@ package body Tests.CLI_Cases is
          Feed (Unthought, "opened by the prompt" & ASCII.LF & "</think>" & ASCII.LF & "Done.");
          Assert (Shown = "Done.",
                  "a block the prompt opened was shown: [" & Shown & "]");
+         Assert (not Unthought.Showed_Nothing,
+                 "a reply that showed its answer said it showed none");
+
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => True);
+         Feed (Unthought, "still reasoning when the limit came");
+         Assert (Unthought.Showed_Nothing and then Shown = "",
+                 "a reply cut in its reasoning showed something: ["
+                 & Shown & "]");
 
          Screen.Used := 0;
          Unthought.Start_Reply (Inside => False);

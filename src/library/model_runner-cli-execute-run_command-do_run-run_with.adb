@@ -265,15 +265,15 @@ begin
             return;
          end if;
 
-         --  A draft's head at four bits: what it proposes is
-         --  checked token by token, so this changes how many are
-         --  taken and never what the run writes. A head that will
-         --  not go is left as the file has it.
+         --  A draft's head at four bits and its eight-bit layers at
+         --  five: what it proposes is checked token by token, so this
+         --  changes how many are taken and never what the run writes.
+         --  What will not go is left as the file has it.
          if E.Is_Ok (Condition) then
             declare
                Lighter : E.Error_Info;
             begin
-               L.Lighten_Head
+               L.Lighten_Draft
                  (Draft_Model,
                   Model_Runner.Platform.Core_Count, Lighter);
             end;
@@ -1757,6 +1757,23 @@ begin
       if Outcome.Reason = Gen.Cancelled then
          Fail (E.Make (E.Generation_Cancelled));
          return;
+      end if;
+
+      --  With the reasoning left out, a reply the limit stopped before its
+      --  answer showed nothing at all; that is said rather than left as an
+      --  empty answer.
+      if Item.Hide_Reasoning
+        and then Outcome.Reason = Gen.Maximum_Tokens
+        and then (if Model_Runner.Tools."="
+                       (Model_Runner.Templates.Reading_Syntax
+                          (L.Template_Format (Prepared)),
+                        Model_Runner.Tools.Harmony_Call)
+                  then Tidied.Showed_Nothing
+                  else Unthought.Showed_Nothing)
+      then
+         Pres.Put_Note
+           (Screen, "cli.run.reasoning_cut",
+            [Loc.Named ("value", T.Image (Long_Long_Integer (Item.Max_Tokens)))]);
       end if;
 
       --  What the reply asked for, read out of it and shown. The

@@ -2461,6 +2461,65 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Lightened_Head_Reads_Nearly_The_Same;
 
+   --  A draft's eight-bit layers written again at five bits read nearly
+   --  what the file's did: a token's logits move, and by less than a
+   --  tenth of their largest -- where a fifth bit in the wrong place, a
+   --  scale off by its sign or nibbles in the wrong halves would move
+   --  them by as much as they are. Asked twice, the second changes
+   --  nothing.
+   procedure Lightened_Layers_Read_Nearly_The_Same
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Before, After, Again : Logit_Vector;
+         Largest, Moved : N.Real := 0.0;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+         L.Evaluate (Live, Under.Ready, 4, Before, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed before");
+         L.Close (Live);
+
+         L.Lighten_Layers (Under.Ready, 2, Status);
+         Assert (E.Is_Ok (Status), "the layers would not lighten");
+
+         L.Open (Live, Under.Ready, Status => Status);
+         L.Evaluate (Live, Under.Ready, 4, After, Status => Status);
+         Assert (E.Is_Ok (Status), "evaluation failed after");
+         L.Close (Live);
+
+         L.Lighten_Layers (Under.Ready, 2, Status);
+         L.Open (Live, Under.Ready, Status => Status);
+         L.Evaluate (Live, Under.Ready, 4, Again, Status => Status);
+         L.Close (Live);
+         Assert (N."=" (After, Again), "a second lightening changed something");
+
+         for Index in Before'Range loop
+            Largest := N.Real'Max (Largest, abs Before (Index));
+            Moved := N.Real'Max (Moved, abs (After (Index) - Before (Index)));
+         end loop;
+
+         Assert (Largest > 0.0, "the logits were all zero");
+         Assert (Moved > 0.0, "five bits read exactly as eight");
+         Assert (Moved <= 0.1 * Largest,
+                 "the logits moved" & N.Real'Image (Moved)
+                 & " against a largest of" & N.Real'Image (Largest));
+      end;
+
+      B.Free (Image);
+   end Lightened_Layers_Read_Nearly_The_Same;
+
    --  The logits written where the caller keeps them are the logits the
    --  array form hands back, to the bit, token after token; and a row the
    --  form cannot fill -- none, or one of another length -- is refused as
@@ -20522,6 +20581,10 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, A_Lightened_Head_Reads_Nearly_The_Same'Access,
          "a draft's head written again at four bits reads nearly the same");
+      Register_Routine
+        (T, Lightened_Layers_Read_Nearly_The_Same'Access,
+         "a draft's eight-bit layers written again at five bits read "
+         & "nearly the same");
       Register_Routine
         (T, Logits_Written_In_Place_Are_The_Logits'Access,
          "the logits written where the caller keeps them are the logits");

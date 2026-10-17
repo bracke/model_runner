@@ -10,6 +10,7 @@ package body Model_Runner.Output.Harmony is
       if Text'Length > 0 and then not Self.Shut then
          Emit (Self.Target, Text, Closed);
          Self.Shut := Self.Shut or else Closed;
+         Self.Shown := True;
       end if;
    end Show;
 
@@ -99,7 +100,10 @@ package body Model_Runner.Output.Harmony is
    procedure Answer_Only (Self : in out Filter; On : Boolean) is
    begin
       Self.Only_Final := On;
+      Self.Shown := False;
    end Answer_Only;
+
+   function Showed_Nothing (Self : Filter) return Boolean is (not Self.Shown);
 
    overriding procedure Write
      (Self   : in out Filter;

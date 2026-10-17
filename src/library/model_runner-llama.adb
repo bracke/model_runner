@@ -400,6 +400,8 @@ package body Model_Runner.Llama is
 
    procedure Deallocate_Layers is
      new Ada.Unchecked_Deallocation (Layer_Array, Layer_Array_Access);
+   procedure Free_Light_List is
+     new Ada.Unchecked_Deallocation (Light_List, Light_List_Access);
 
    procedure Deallocate_Experts is
      new Ada.Unchecked_Deallocation (Expert_Array, Expert_Array_Access);
@@ -2090,21 +2092,30 @@ package body Model_Runner.Llama is
    --  low nibbles and the last in the high. Room is null where Head's
    --  width is not whole blocks or its format is already four bits or
    --  fewer, and on any failure.
+   --
+   --  Or, with Five, the legacy five-bit kind, as ggml's reference
+   --  encoder writes it: the scale the value of largest magnitude over
+   --  minus sixteen, each weight the nearest of thirty-two steps, its low
+   --  four bits in a nibble and the fifth gathered into a word before them
+   --  -- from eight bits only, where it is the smaller.
    procedure Encode_Four_Bits
      (Accounting : in out Model_Runner.Memory.Account;
       Head       : T.View;
       Rows       : Element_Count;
       Threads    : Positive;
       Room       : out B.Byte_Array_Access;
-      Status     : out E.Error_Info)
+      Status     : out E.Error_Info;
+      Five       : Boolean := False)
    is
       use type Model_Runner.GGUF.Tensor_Type;
       use type Interfaces.Unsigned_16;
+      use type Interfaces.Unsigned_32;
 
       --  The legacy four-bit block: a binary16 scale and thirty-two
-      --  nibbles, eighteen bytes.
+      --  nibbles, eighteen bytes; the five-bit one has the fifth bits'
+      --  word between, twenty-two.
       Block_Width : constant := 32;
-      Block_Bytes : constant := 18;
+      Block_Bytes : constant B.Byte_Count := (if Five then 22 else 18);
 
       Blocks : constant Element_Count := Head.Columns / Block_Width;
       Row_Bytes : constant B.Byte_Count := B.Byte_Count (Blocks) * Block_Bytes;
@@ -2116,6 +2127,7 @@ package body Model_Runner.Llama is
       if Rows = 0
         or else Rows > Head.Rows
         or else Head.Columns mod Block_Width /= 0
+        or else (Five and then Head.Format /= Model_Runner.GGUF.Type_Q8_0)
         or else Head.Format not in Model_Runner.GGUF.Type_F32
                                  | Model_Runner.GGUF.Type_F16
                                  | Model_Runner.GGUF.Type_BF16
@@ -2193,21 +2205,26 @@ package body Model_Runner.Llama is
                      end loop;
 
                      declare
-                        Scale   : constant Real := Signed / (-8.0);
+                        Scale   : constant Real :=
+                          Signed / (if Five then -16.0 else -8.0);
                         Inverse : constant Real :=
                           (if Scale /= 0.0 then 1.0 / Scale else 0.0);
                         Bits    : constant Interfaces.Unsigned_16 :=
                           Interfaces.Unsigned_16 (N.To_Half (Scale));
+                        Top     : constant Integer := (if Five then 31 else 15);
+                        Centre  : constant Real := (if Five then 16.5 else 8.5);
+                        Quants  : constant B.Byte_Count := (if Five then 6 else 2);
+                        Fifths  : Interfaces.Unsigned_32 := 0;
 
                         function Step (Value : Real) return B.Byte is
                           (B.Byte
                              (Integer'Min
-                                (15,
+                                (Top,
                                  Integer'Max
                                    (0,
                                     Integer
                                       (Real'Truncation
-                                         (Value * Inverse + 8.5))))));
+                                         (Value * Inverse + Centre))))));
                      begin
                         Target (At_Byte) :=
                           B.Byte (Bits and 16#FF#);
@@ -2215,12 +2232,33 @@ package body Model_Runner.Llama is
                           B.Byte (Interfaces.Shift_Right (Bits, 8));
 
                         for J in 0 .. 15 loop
-                           Target (At_Byte + 2 + B.Byte_Count (J)) :=
-                             Step (Row (From + Element_Count (J)))
-                             or Interfaces.Shift_Left
-                                  (Step (Row (From + Element_Count (J) + 16)),
-                                   4);
+                           declare
+                              Low  : constant B.Byte :=
+                                Step (Row (From + Element_Count (J)));
+                              High : constant B.Byte :=
+                                Step (Row (From + Element_Count (J) + 16));
+                           begin
+                              Target (At_Byte + Quants + B.Byte_Count (J)) :=
+                                (Low and 16#0F#)
+                                or Interfaces.Shift_Left (High and 16#0F#, 4);
+                              Fifths := Fifths
+                                or Interfaces.Shift_Left
+                                     (Interfaces.Unsigned_32
+                                        (Interfaces.Shift_Right (Low, 4)), J)
+                                or Interfaces.Shift_Left
+                                     (Interfaces.Unsigned_32
+                                        (Interfaces.Shift_Right (High, 4)),
+                                      J + 16);
+                           end;
                         end loop;
+
+                        if Five then
+                           for K in 0 .. 3 loop
+                              Target (At_Byte + 2 + B.Byte_Count (K)) :=
+                                B.Byte (Interfaces.Shift_Right (Fifths, 8 * K)
+                                        and 16#FF#);
+                           end loop;
+                        end if;
                      end;
                   end;
                end loop;
@@ -2278,7 +2316,9 @@ package body Model_Runner.Llama is
    --  the empty view where it wrote none.
    function Four_Bit_View
      (Room : B.Byte_Array_Access; Rows, Columns : Element_Count;
-      Role : T.Weight_Role) return T.View
+      Role : T.Weight_Role;
+      Format : Model_Runner.GGUF.Tensor_Type := Model_Runner.GGUF.Type_Q4_0)
+      return T.View
    is
       Fresh  : T.View;
       Status : E.Error_Info;
@@ -2288,7 +2328,7 @@ package body Model_Runner.Llama is
       end if;
 
       T.Make
-        (Format  => Model_Runner.GGUF.Type_Q4_0,
+        (Format  => Format,
          Rows    => Rows,
          Columns => Columns,
          Data    => Room,
@@ -2406,6 +2446,80 @@ package body Model_Runner.Llama is
          Lighten (Layer.Next_Proj);
       end loop;
    end Lighten_Next_Block;
+
+   -------------------
+   -- Lighten_Draft --
+   -------------------
+
+   procedure Lighten_Draft
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      Layers : E.Error_Info;
+   begin
+      Lighten_Head (Item, Threads, Status);
+      Lighten_Layers (Item, Threads, Layers);
+      if E.Is_Ok (Status) then
+         Status := Layers;
+      end if;
+   end Lighten_Draft;
+
+   --------------------
+   -- Lighten_Layers --
+   --------------------
+
+   procedure Lighten_Layers
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out E.Error_Info)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      Per_Layer : constant := 7;
+      Used : Natural := 0;
+
+      procedure Lighten (View : in out T.View);
+
+      procedure Lighten (View : in out T.View) is
+         Local : E.Error_Info;
+      begin
+         if View.Format /= Model_Runner.GGUF.Type_Q8_0
+           or else Used = Item.Layers_Light'Last
+         then
+            return;
+         end if;
+
+         Encode_Four_Bits
+           (Item.Accounting, View, View.Rows, Threads,
+            Item.Layers_Light (Used + 1), Local, Five => True);
+         if Item.Layers_Light (Used + 1) /= null then
+            Used := Used + 1;
+            View := Four_Bit_View
+              (Item.Layers_Light (Used), View.Rows, View.Columns, View.Role,
+               Model_Runner.GGUF.Type_Q5_0);
+         elsif E.Is_Error (Local) then
+            Status := Local;
+         end if;
+      end Lighten;
+   begin
+      Status := E.Success;
+      if Item.Layers = null or else Item.Layers_Light /= null then
+         return;
+      end if;
+
+      Item.Layers_Light :=
+        new Light_List (1 .. Per_Layer * Item.Layers.all'Length);
+
+      for Layer of Item.Layers.all loop
+         Lighten (Layer.Query);
+         Lighten (Layer.Key);
+         Lighten (Layer.Value);
+         Lighten (Layer.Attention_Out);
+         Lighten (Layer.Gate);
+         Lighten (Layer.Up);
+         Lighten (Layer.Down);
+      end loop;
+   end Lighten_Layers;
 
    ---------------------
    -- Warm_Host_Pages --
@@ -7475,6 +7589,17 @@ package body Model_Runner.Llama is
             B.Free (Bytes);
          end if;
       end loop;
+      if Item.Layers_Light /= null then
+         for Bytes of Item.Layers_Light.all loop
+            if Bytes /= null then
+               Mem.Record_Release
+                 (Item.Accounting, Mem.Converted_Weights,
+                  Interfaces.Unsigned_64 (Bytes.all'Length));
+               B.Free (Bytes);
+            end if;
+         end loop;
+         Free_Light_List (Item.Layers_Light);
+      end if;
       Item.Draft_Head := T.Empty_View;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;

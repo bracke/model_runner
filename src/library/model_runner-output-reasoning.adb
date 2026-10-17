@@ -6,6 +6,7 @@ package body Model_Runner.Output.Reasoning is
       if Text'Length > 0 and then not Self.Shut then
          Emit (Self.Target, Text, Closed);
          Self.Shut := Self.Shut or else Closed;
+         Self.Shown := True;
       end if;
    end Show;
 
@@ -59,7 +60,10 @@ package body Model_Runner.Output.Reasoning is
       Self.Hidden := Inside;
       Self.Leading := False;
       Self.Used := 0;
+      Self.Shown := False;
    end Start_Reply;
+
+   function Showed_Nothing (Self : Filter) return Boolean is (not Self.Shown);
 
    overriding procedure Write
      (Self   : in out Filter;

@@ -24,6 +24,14 @@ package Model_Runner.Output.Harmony is
    --  @param On Whether only the answer is shown.
    procedure Answer_Only (Self : in out Filter; On : Boolean);
 
+   --  Whether nothing of the reply has been shown since Answer_Only began it: all of
+   --  it so far reasoning, where the reasoning is left out -- a reply the
+   --  token limit stopped there has no answer to show.
+   --
+   --  @param Self Filter.
+   --  @return True when nothing has reached Target.
+   function Showed_Nothing (Self : Filter) return Boolean;
+
    --  Take a fragment of the reply, showing what is not markup.
    --
    --  @param Self Filter.
@@ -62,6 +70,7 @@ private
       Used  : Natural := 0;
       Shut  : Boolean := False;
       Only_Final : Boolean := False;
+      Shown : Boolean := False;
    end record;
 
 end Model_Runner.Output.Harmony;

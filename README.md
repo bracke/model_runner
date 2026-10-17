@@ -12375,6 +12375,14 @@ and says which it drafts with. `steelman-14b-r6-Q4_K_M.gguf.draft` holding
 `qwen2.gguf` drafts Steelman with Qwen2-0.5B where the search would find
 Qwen2.5-Coder-0.5B.
 
+**A draft is read lighter than its file.** A model that only drafts has its
+output head written again at four bits and its eight-bit layer matrices at
+five (Q5_0, as llama-quantize writes them) when it loads: what it proposes is
+checked token by token, so this changes how many proposals are kept and
+never what the run writes. Steelman-14B with its trained 0.5B draft, Q8_0 on
+disk: 20.3 -> 21.1 tokens a second over the Ada prompts below, 83.3 per cent
+of proposals kept against 83.6; at four bits the layers kept 81.7 and lost.
+
 **A drafter is judged over a set of prompts.** `tests speed --prompt-set DIR`
 measures every `.txt` prompt in the folder, in the order of their names, prints
 each one's line, and pools them: tokens a second over all of them, proposals

@@ -1037,6 +1037,40 @@ package Model_Runner.Llama is
       Threads : Positive := 1;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  Everything a model that only drafts is lightened by: its head at
+   --  four bits (Lighten_Head) and its eight-bit layers at five
+   --  (Lighten_Layers). One call, which the run command and the tool that
+   --  measures it both make, so the two never draft with different
+   --  copies.
+   --
+   --  @param Item Prepared model, used only to draft.
+   --  @param Threads Workers to encode with.
+   --  @param Status Success, or the first reason a copy could not be
+   --    made; what could not be lightened is the file's own.
+   procedure Lighten_Draft
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Write a draft model's eight-bit layer matrices again at five bits.
+   --
+   --  A draft's token is a read of its matrices, and what it proposes the
+   --  model it drafts for checks token by token: five bits change how many
+   --  proposals are kept and never what the run writes. Steelman-14B's
+   --  trained 0.5B draft read so (as llama-quantize writes Q5_0 from its
+   --  Q8_0 file): 20.97 tokens a second against 20.29, 83.3 per cent of
+   --  proposals kept against 83.6; at four bits it kept 81.7. Matrices of
+   --  any other format are left as they are.
+   --
+   --  @param Item Prepared model, used only to draft.
+   --  @param Threads Workers to encode with.
+   --  @param Status Success, or why a copy could not be made; that matrix
+   --    is then the file's own.
+   procedure Lighten_Layers
+     (Item    : in out Model;
+      Threads : Positive := 1;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Write the rows of the output head a draft from the block past the
    --  stack reads again at four bits, for that draft alone.
    --
@@ -2853,6 +2887,9 @@ private
 
    --  Room for the block past the stack's re-encoded matrices.
    type Light_Bytes is array (1 .. 32) of Model_Runner.Bytes.Byte_Array_Access;
+   type Light_List is
+     array (Positive range <>) of Model_Runner.Bytes.Byte_Array_Access;
+   type Light_List_Access is access Light_List;
    type Layer_Array_Access is access Layer_Array;
 
    --  A matrix's name against where its bytes begin, for a watcher to ask
@@ -2942,6 +2979,10 @@ private
       --  The block past the stack's matrices at four bits, where the run
       --  asked for them; see Lighten_Next_Block.
       Next_Light : Light_Bytes := [others => null];
+
+      --  The stack's eight-bit matrices at five bits, for a model that
+      --  only drafts; see Lighten_Layers.
+      Layers_Light : Light_List_Access := null;
 
       --  What every resolved matrix is called, against where it lives.
       --
