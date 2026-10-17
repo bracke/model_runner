@@ -692,6 +692,77 @@ package body Model_Runner.Framework.Work is
       return To_String (Result);
    end Raw_Why_Of;
 
+   --  A path as a report writes it, read as the path: spaces, tabs and
+   --  no-break spaces about it, a mark of code or emphasis round it, a
+   --  note after it -- `src/a.adb`, **src/a.adb**, src/a.adb (new) -- and
+   --  ./ before it taken off; the words for none read as none, however
+   --  written. A note is only cut where the whole is no file changed
+   --  (Known) or there under Place: docs/Notes (draft).md is a name, not
+   --  docs/Notes and a note. The root's report and a helper's are read so.
+   function Path_Claimed
+     (Line : String; Known : Name_Lists.Vector; Place : String) return String
+   is
+      No_Break : constant String := Character'Val (16#C2#) & Character'Val (16#A0#);
+      function Trimmed (Text : String) return String is
+         First : Natural := Text'First;
+         Last  : Natural := Text'Last;
+      begin
+         loop
+            if First <= Last and then Text (First) in ' ' | ASCII.HT then
+               First := First + 1;
+            elsif First + 1 <= Last and then Text (First .. First + 1) = No_Break then
+               First := First + 2;
+            elsif Last >= First and then Text (Last) in ' ' | ASCII.HT then
+               Last := Last - 1;
+            elsif Last - 1 >= First and then Text (Last - 1 .. Last) = No_Break then
+               Last := Last - 2;
+            else
+               exit;
+            end if;
+         end loop;
+         return Text (First .. Last);
+      end Trimmed;
+      function Unwrapped (Text : String) return String is
+      begin
+         for Mark of Name_Lists.Vector'(["**", "`", "*", """", "'"]) loop
+            if Text'Length > 2 * Mark'Length
+              and then Text (Text'First .. Text'First + Mark'Length - 1) = Mark
+              and then Text (Text'Last - Mark'Length + 1 .. Text'Last) = Mark
+            then
+               return Unwrapped (Trimmed (Text (Text'First + Mark'Length .. Text'Last - Mark'Length)));
+            end if;
+         end loop;
+         return Text;
+      end Unwrapped;
+      function Without_Dot (Path : String) return String is
+        (if Path'Length > 2 and then Path (Path'First .. Path'First + 1) = "./"
+         then Path (Path'First + 2 .. Path'Last) else Path);
+      Whole : constant String := Without_Dot (Unwrapped (Trimmed (Line)));
+      Bare  : constant String := Unwrapped (Trimmed (Line));
+      Note  : constant Natural := Ada.Strings.Fixed.Index (Bare, " (");
+      Dash  : constant Natural := Ada.Strings.Fixed.Index (Bare, " " & Character'Val (16#E2#) & Character'Val (16#80#)
+                                                                & Character'Val (16#94#) & " ");
+      Cut   : constant Natural :=
+        (if Note > 0 and then (Dash = 0 or else Note < Dash) then Note else Dash);
+      Path  : constant String := Unwrapped (Trimmed (if Cut > 0 then Bare (Bare'First .. Cut - 1) else Bare));
+      Plain : constant String := Without_Dot (Path);
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Plain);
+   begin
+      if Lower in "" | "-" | "none" | "none." | "nothing" | "nothing." | "n/a" | "(none)" then
+         return "";
+      elsif Cut > 0 and then Whole /= ""
+        and then (for all C of Whole => C >= ' ')
+        and then (Known.Contains (Whole)
+                  or else Ada.Directories.Exists (Hostkit.Fs.Join (Place, Whole)))
+      then
+         return Whole;
+      end if;
+      return Plain;
+   exception
+      when others =>
+         return Plain;
+   end Path_Claimed;
+
    --  The words a condition is said in -- the catalog's English, which the
    --  records a person reads later are kept in -- and its code, for looking
    --  it up.

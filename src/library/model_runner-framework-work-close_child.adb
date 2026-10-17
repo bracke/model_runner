@@ -74,6 +74,41 @@ begin
                   Why := Held_Back;
                end if;
             end;
+
+            --  And a file it says it changed that is not there is a claim
+            --  the files refute, as the root's is: refused now, so the
+            --  parent hears it while it can still do the part, not when
+            --  its own answer repeats the claim at the end. A helper said
+            --  it had written docs/calc.md having called nothing at all.
+            if Good then
+               declare
+                  Place : constant String :=
+                    (if Host.Apart then To_String (Host.Tree)
+                     else Ada.Directories.Containing_Directory
+                            (Stores.Root (Host.Item.all)));
+                  Missing : Unbounded_String;
+               begin
+                  for Line of Lines_Of (Invocations.Claim (Said, "changed_files")) loop
+                     declare
+                        Path : constant String := Path_Claimed (Line, Host.Edited, Place);
+                     begin
+                        if Path /= ""
+                          and then not Host.Edited.Contains (Path)
+                          and then ((for some C of Path => C < ' ')
+                                    or else not Ada.Directories.Exists
+                                                  (Hostkit.Fs.Join (Place, Path)))
+                        then
+                           Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ")
+                                            & Path);
+                        end if;
+                     end;
+                  end loop;
+                  if Missing /= Null_Unbounded_String then
+                     Good := False;
+                     Why := "it says it changed " & Missing & ", which is not there";
+                  end if;
+               end;
+            end if;
          end if;
       end if;
 

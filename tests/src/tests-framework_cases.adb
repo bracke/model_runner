@@ -11864,6 +11864,17 @@ package body Tests.Framework_Cases is
          when Optional_Fails =>
             Ask ("optional", Child_Fails);
             Assert (not Retry, "an optional child was run again");
+            --  And one that says it is done and changed a file it never
+            --  wrote, which is not there: refused when it closes, as the
+            --  root's answer is, and the parent told why.
+            Ask ("optional", "status: done" & LF & "summary: wrote the notes"
+                 & LF & "changed_files: docs/nowhere.md");
+            Assert (Ada.Strings.Fixed.Index
+                      (To_String (Parent_Told),
+                       "it says it changed docs/nowhere.md, which is not there") > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Parent_Told), "failed") > 0,
+                    "a child's claim of a file that is not there was taken: "
+                    & Code_Of (Parent_Status) & " " & To_String (Parent_Told));
          when Left_Open =>
             Ask ("required", Child_Done, Close => False);
          when Checks_First =>
