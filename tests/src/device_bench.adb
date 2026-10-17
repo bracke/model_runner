@@ -1455,6 +1455,12 @@ package body Device_Bench is
          Ada.Text_IO.Put_Line
            ("  16384 by 2048 at" & Positive'Image (Tile_Vectors)
             & " vectors, by format:");
+         --  Each product copies its vectors in and its answers out, which
+         --  past a tile's worth is most of the time: Q4_K read 2.3 ms at
+         --  128 and 9.4 at 256, with the wider tile or without it.
+         Ada.Text_IO.Put_Line
+           ("  (each product's time includes copying the vectors in and the"
+            & " answers out; past 128 vectors that is most of it)");
          Grains;
          Products.Close (Engine);
          Devices.Close (Opened);
