@@ -1142,6 +1142,14 @@ package body Model_Runner.Tools.Editing is
       Unread_Folders : Natural := 0;
       First_Unread   : U.Unbounded_String;
 
+      --  Files whose name is the pattern, the first few: a search for a
+      --  file's name finds no file that holds it, and "no file holds that"
+      --  was read as no such file -- gemma-3-4b looked for the
+      --  docs/Add_Times.md its helper had just written that way, and took
+      --  it to be missing.
+      Named      : U.Unbounded_String;
+      Named_Seen : Natural := 0;
+
       procedure Unread (Path : String; Folder : Boolean) is
       begin
          if Folder then
@@ -1181,6 +1189,10 @@ package body Model_Runner.Tools.Editing is
                elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
                   Walk (Full);
                elsif Ada.Directories.Kind (Found) = Ada.Directories.Ordinary_File then
+                  if (Name = Pattern or else Full = Pattern) and then Named_Seen < 3 then
+                     Named_Seen := Named_Seen + 1;
+                     U.Append (Named, (if Named_Seen = 1 then "" else ", ") & Full);
+                  end if;
                   declare
                      Held   : U.Unbounded_String;
                      Status : E.Error_Info;
@@ -1233,6 +1245,10 @@ package body Model_Runner.Tools.Editing is
                          & U.To_String (First_Unread) & " the first)");
             end if;
          end;
+      elsif Hits = 0 and then Named_Seen > 0 then
+         Result.Text := U.To_Unbounded_String
+           ("no file under " & Folder & " holds that text, but there is a file of that name: "
+            & U.To_String (Named));
       elsif Hits = 0 then
          Result.Text := U.To_Unbounded_String ("no file under " & Folder & " holds that");
       elsif Result.Truncated then

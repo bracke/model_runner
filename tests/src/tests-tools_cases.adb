@@ -793,6 +793,13 @@ package body Tests.Tools_Cases is
               "a search of a file did not give the lines that hold it");
       Assert (Has (Ed.Search_Code (Dir, "Twice"), "calc.adb:6:"),
               "a search of a tree did not give path and line");
+      --  A search for a file's name that no file holds says the file is
+      --  there: "no file holds that" was read as no such file.
+      Assert (Has (Ed.Search_Code (Dir, "calc.adb"), "there is a file of that name")
+              and then Has (Ed.Search_Code (Dir, "calc.adb"), "calc.adb")
+              and then not Has (Ed.Search_Code (Dir, "nowhere.md"), "of that name"),
+              "a search for a file's name did not say the file is there: "
+              & Ada.Strings.Unbounded.To_String (Ed.Search_Code (Dir, "calc.adb").Text));
 
       --  Too large to read whole, and not text: said, not read.
       declare
