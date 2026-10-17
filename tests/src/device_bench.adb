@@ -870,7 +870,52 @@ package body Device_Bench is
 
                      Feed : constant Long_Float :=
                        Long_Float (Room) / Each / 1.0E9;
+
+                     --  And, asked for with --tiles, what the device's own
+                     --  clock said the product took: a sequence of the one
+                     --  product, stamped, the best of five -- the copies in
+                     --  and out the figure above carries left out.
+                     Device_Us : Float := 0.0;
                   begin
+                     if Tiles_Only then
+                        declare
+                           Order   : Products.Sequence;
+                           Added   : Boolean;
+                           Stamped : Boolean;
+                           Fine    : Boolean;
+                           Stopped : Boolean;
+                           Best    : Float := Float'Last;
+                        begin
+                           Products.Open_Sequence (Order);
+                           Products.Add_Product
+                             (Order, Weights.all'Address,
+                              Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
+                              Which.Packing, Rows, Columns, Added,
+                              Key => Weights.all (Weights.all'First)'Address);
+                           Products.Time_Steps (Engine, True, Stamped);
+                           if Added and then Stamped then
+                              for Pass in 1 .. 5 loop
+                                 Products.Run
+                                   (Engine, Order, Asked.all, Vectors, Got.all,
+                                    Fine, Stopped);
+                                 exit when not Fine;
+                                 declare
+                                    Said : constant Products.Timeline :=
+                                      Products.Last_Timeline (Engine);
+                                 begin
+                                    if Said.Held > 0 and then Said.Steps (1) > 0.0 then
+                                       Best := Float'Min (Best, Said.Steps (1));
+                                    end if;
+                                 end;
+                              end loop;
+                              if Best < Float'Last then
+                                 Device_Us := Best;
+                              end if;
+                           end if;
+                           Products.Time_Steps (Engine, False, Stamped);
+                        end;
+                     end if;
+
                      Ada.Text_IO.Put_Line
                        ("    " & Which.Name
                         & Duration'Image (Duration (Each)) & " s,"
@@ -878,7 +923,15 @@ package body Device_Bench is
                         & Long_Float'Image (Feed) & " GB/s,"
                         & Model_Runner.Bytes.Byte_Count'Image
                             (Room / 1_048_576)
-                        & " MiB of weights");
+                        & " MiB of weights"
+                        & (if Device_Us > 0.0
+                           then "; on the device" & Natural'Image (Natural (Device_Us))
+                                & " us, "
+                                & Natural'Image
+                                    (Natural (2.0 * Float (Rows) * Float (Columns)
+                                              * Float (Vectors) / Device_Us / 1.0E3))
+                                & " Gflop/s"
+                           else ""));
                   end;
                else
                   Ada.Text_IO.Put_Line
@@ -1455,12 +1508,15 @@ package body Device_Bench is
          Ada.Text_IO.Put_Line
            ("  16384 by 2048 at" & Positive'Image (Tile_Vectors)
             & " vectors, by format:");
-         --  Each product copies its vectors in and its answers out, which
-         --  past a tile's worth is most of the time: Q4_K read 2.3 ms at
-         --  128 and 9.4 at 256, with the wider tile or without it.
+         --  Each product copies its vectors in and its answers out, and
+         --  the first figure is that whole call; the device's own clock is
+         --  said beside it. Past 128 vectors the device's time grows faster
+         --  than the work -- Q4_K 1.58 ms at 128, 5.38 at 256 and 10.5 at
+         --  512, with the wider tile or without it -- which the copies do
+         --  not explain.
          Ada.Text_IO.Put_Line
-           ("  (each product's time includes copying the vectors in and the"
-            & " answers out; past 128 vectors that is most of it)");
+           ("  (the first figure is the whole call, the vectors copied in and"
+            & " the answers out; ""on the device"" is the device's own clock)");
          Grains;
          Products.Close (Engine);
          Devices.Close (Opened);
