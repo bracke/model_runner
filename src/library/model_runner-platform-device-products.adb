@@ -814,11 +814,11 @@ package body Model_Runner.Platform.Device.Products is
        --  The bundles of four and eight read four at a time and nothing
        --  else, on the engine's word that every base and width allows
        --  it; a cache that does not goes to the pair, a word at a time.
-       elsif Fours_Fit (Head_Size, Value_Size, K_Base, V_Base,
-                        KV_Width, V_Width)
-         and then Item.Eight_Bundle_Line /= Null_Handle
-         and then Group_Size mod Wide_Bundle = 0
-       then Wide_Bundle
+       --  Four where it divides the group, eight's too, as a token out of
+       --  the copy takes them (Halved_Bundle): gpt-oss-20b's attention a
+       --  layer over the cache proper 150.9 -> 140.2 us at 2,071
+       --  positions and 58.8 -> 54.2 at 481; Qwen3.6-35B-A3B level at
+       --  2,163 and 74 -> 72 at 513.
        elsif Fours_Fit (Head_Size, Value_Size, K_Base, V_Base,
                         KV_Width, V_Width)
          and then Item.Exact_Bundle_Line /= Null_Handle
@@ -877,12 +877,6 @@ package body Model_Runner.Platform.Device.Products is
                when Whole_Lines'Range =>
                  Item.Whole_Halved_Line (Group_Size),
                when others      => Item.Halved_Line)
-       elsif not Rounding
-         and then Exact_Bundle
-                    (Item, Positions, Head_Size, Value_Size, Group_Size,
-                     K_Base, V_Base, KV_Width, V_Width, Span)
-                  = Wide_Bundle
-       then Item.Eight_Bundle_Line
        elsif not Rounding
          and then Exact_Bundle
                     (Item, Positions, Head_Size, Value_Size, Group_Size,
@@ -5065,12 +5059,13 @@ package body Model_Runner.Platform.Device.Products is
                Item.Exact_Bundle_Line := Made;
             end if;
 
-            --  And the same words at a bundle of eight, told through the
-            --  shader's second specialization constant.
+            --  And the same words at the width of each whole group four
+            --  does not divide, told through the shader's second
+            --  specialization constant.
             declare
                Which  : aliased Specialization_Entry :=
                  (Which => 1, At_Was => 0, Span => 4);
-               Value  : aliased C.unsigned := Wide_Bundle;
+               Value  : aliased C.unsigned := 0;
                Told   : aliased Specialization_Info;
             begin
                Told.Count := 1;
@@ -5079,14 +5074,6 @@ package body Model_Runner.Platform.Device.Products is
                Told.Values := Value'Address;
                Request.Stage.Specialized := Told'Address;
 
-               if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                          Null_Handle, Made'Access) = 0
-               then
-                  Item.Eight_Bundle_Line := Made;
-               end if;
-
-               --  And at the width of each whole group neither four nor
-               --  eight divides.
                for Width in Whole_Lines'Range loop
                   Value := C.unsigned (Width);
 
@@ -6056,7 +6043,6 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Unpack_Line, "vkDestroyPipeline");
       Give_Back (Item.Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Exact_Bundle_Line, "vkDestroyPipeline");
-      Give_Back (Item.Eight_Bundle_Line, "vkDestroyPipeline");
       Give_Back (Item.Pair_Bundle_Line, "vkDestroyPipeline");
       for Line of Item.Whole_Bundle_Line loop
          Give_Back (Line, "vkDestroyPipeline");

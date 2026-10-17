@@ -99,11 +99,6 @@ package Model_Runner.Platform.Device.Products is
    --  served as well as one whose group is eight.
    Head_Bundle : constant := 4;
 
-   --  And the wider bundle the exact kernel is also made at, for a model
-   --  whose group is eight: its keys and values cross once a layer
-   --  rather than twice.
-   Wide_Bundle : constant := 8;
-
    --  And the narrowest, a pair, for a group of two or of any even size
    --  the others do not take -- Gemma's, whose heads of 256 are past what
    --  the four-at-a-time path lays out. It reads a word at a time, so it
@@ -3637,7 +3632,6 @@ private
       Halved_Line : System.Address := System.Null_Address;
       Bundle_Line : System.Address := System.Null_Address;
       Exact_Bundle_Line : System.Address := System.Null_Address;
-      Eight_Bundle_Line : System.Address := System.Null_Address;
       Pair_Bundle_Line  : System.Address := System.Null_Address;
       Whole_Bundle_Line : Whole_Lines := [others => System.Null_Address];
 
