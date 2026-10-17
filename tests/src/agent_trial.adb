@@ -390,6 +390,8 @@ package body Agent_Trial is
                      Child   : Hostkit.Spawn.Process_Handle;
                      Ended   : Hostkit.Spawn.Status;
                      Seen    : Unbounded_String;
+                     --  What the screen showed wrongly, said with the outcome.
+                     Display_Faults : Unbounded_String;
                      Began   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
@@ -551,6 +553,32 @@ package body Agent_Trial is
                            null;
                      end;
 
+                     --  And what is wrong with it, said with the outcome: a
+                     --  person reads the screen, and no test in the process
+                     --  reaches the screen a model's work writes.
+                     declare
+                        Screen : constant String := Plain (To_String (Seen));
+                        Record_At : constant Natural :=
+                          Ada.Strings.Fixed.Index
+                            (Screen, "the work as the harness recorded it");
+                        procedure Fault (Text : String) is
+                        begin
+                           Append (Display_Faults, "  display: " & Text & ASCII.LF);
+                        end Fault;
+                     begin
+                        if Record_At > Screen'First
+                          and then Screen (Record_At - 1) /= ASCII.LF
+                        then
+                           Fault ("the harness's record ran on from the line before it");
+                        end if;
+                        if Ada.Strings.Fixed.Index (Screen, "</think></think>") > 0 then
+                           Fault ("a think block's close was shown twice");
+                        end if;
+                        if Ada.Strings.Fixed.Index (Screen, "<tool_call>") > 0 then
+                           Fault ("a call's raw markup was shown");
+                        end if;
+                     end;
+
                      declare
                         Ignored : constant Boolean := Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Ended);
                      begin
@@ -710,7 +738,9 @@ package body Agent_Trial is
                               & (if Length (Used) = 0 then "" else " (" & To_String (Used) & ")")
                               & LF & "  " & (if Length (Figures) = 0 then "(no work figures)" else To_String (Figures))
                               & LF & "  changed: " & (if Length (Said) = 0 then "nothing" else To_String (Said))
-                              & LF & "  session kept in " & Root);
+                              & LF & "  session kept in " & Root
+                              & (if Length (Display_Faults) = 0 then ""
+                                 else LF & To_String (Display_Faults)));
                         end;
                      end;
                      --  The session as it went, for a reader who wants all of it.

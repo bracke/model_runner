@@ -9951,7 +9951,9 @@ package body Tests.Backend_Cases is
    --  with a halved cache reads it on the device, against the same
    --  attention over the cache proper. Sixty-four components a head and
    --  seven hundred positions, so the cache is sliced; groups of four and
-   --  of eight, which are the two bundles a token out of the copy takes.
+   --  of eight, both of which a token out of the copy reads in bundles of
+   --  four -- a group of eight as two, the second of which reads the
+   --  group's keys from four heads in.
    --  The copy keeps the keys and values to eleven bits, so the two are
    --  held to a tolerance of the copy's making, not the bit.
    --

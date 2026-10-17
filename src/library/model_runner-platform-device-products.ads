@@ -3641,10 +3641,6 @@ private
       Pair_Bundle_Line  : System.Address := System.Null_Address;
       Whole_Bundle_Line : Whole_Lines := [others => System.Null_Address];
 
-      --  The half-precision bundle at eight heads, for a token attending
-      --  out of the copy, and whether a token does.
-      Eight_Halved_Line : System.Address := System.Null_Address;
-
       --  And at a whole group of five, six or seven, as the exact bundle
       --  has: a group neither four nor eight divides read its keys and
       --  values once a head out of the copy.

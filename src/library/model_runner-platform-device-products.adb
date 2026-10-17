@@ -743,19 +743,25 @@ package body Model_Runner.Platform.Device.Products is
        and then not (Item.Tile_Line /= Null_Handle
                      and then Positions >= Query_Block));
 
-   --  How wide a bundle a token attending out of the copy takes: eight,
-   --  four, or nought for the plain half-precision kernel, a head a
-   --  workgroup. Nought too over a short cache, as the exact bundle
+   --  How wide a bundle a token attending out of the copy takes: four,
+   --  a whole group of five to seven, or nought for the plain
+   --  half-precision kernel, a head a workgroup. Nought too over a short cache, as the exact bundle
    --  decides it: a bundle pays where there is enough cache to read,
    --  and at seventy positions a head a workgroup reads 13 us where the
    --  bundle of eight reads 25.
+   --
+   --  Four, and no longer eight where the group divides by eight: a group
+   --  of eight read as two bundles crosses its keys and values twice, but
+   --  the second crossing comes out of the cache and twice the workgroups
+   --  keep the part busier. A token's attention a layer, four against
+   --  eight: gpt-oss-20b 39.9 against 43.0 us at 481 positions and 94.3
+   --  against 105.2 at 2,071; Qwen3.6-35B-A3B 79 against 105 at 513 and
+   --  197 against 227 at 2,163. A head a workgroup was slower again at
+   --  depth, 139.5 and 257.
    function Halved_Bundle
      (Item : Engine; Group_Size : Natural; Span : Natural) return Natural
    is (if Span < Bundle_Least
        then 0
-       elsif Item.Eight_Halved_Line /= Null_Handle
-         and then Group_Size mod Wide_Bundle = 0
-       then Wide_Bundle
        elsif Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then Head_Bundle
@@ -867,7 +873,6 @@ package body Model_Runner.Platform.Device.Products is
        elsif not Rounding
          and then Token_By_Halves (Item, Positions, Head_Size, Value_Size)
        then (case Halved_Bundle (Item, Group_Size, Span) is
-               when Wide_Bundle => Item.Eight_Halved_Line,
                when Head_Bundle => Item.Bundle_Line,
                when Whole_Lines'Range =>
                  Item.Whole_Halved_Line (Group_Size),
@@ -5021,12 +5026,12 @@ package body Model_Runner.Platform.Device.Products is
                Item.Bundle_Line := Made;
             end if;
 
-            --  And the same words at a bundle of eight, as the exact
-            --  bundle has, for a token attending out of the copy.
+            --  And the same words at the width of each whole group four
+            --  does not divide, for a token attending out of the copy.
             declare
                Which  : aliased Specialization_Entry :=
                  (Which => 1, At_Was => 0, Span => 4);
-               Value  : aliased C.unsigned := Wide_Bundle;
+               Value  : aliased C.unsigned := 0;
                Told   : aliased Specialization_Info;
             begin
                Told.Count := 1;
@@ -5035,14 +5040,6 @@ package body Model_Runner.Platform.Device.Products is
                Told.Values := Value'Address;
                Request.Stage.Specialized := Told'Address;
 
-               if Create (Item.Logical, Null_Handle, 1, Request'Address,
-                          Null_Handle, Made'Access) = 0
-               then
-                  Item.Eight_Halved_Line := Made;
-               end if;
-
-               --  And at the width of each whole group neither four nor
-               --  eight divides.
                for Width in Whole_Lines'Range loop
                   Value := C.unsigned (Width);
 
@@ -6064,7 +6061,6 @@ package body Model_Runner.Platform.Device.Products is
       for Line of Item.Whole_Bundle_Line loop
          Give_Back (Line, "vkDestroyPipeline");
       end loop;
-      Give_Back (Item.Eight_Halved_Line, "vkDestroyPipeline");
       for Line of Item.Whole_Halved_Line loop
          Give_Back (Line, "vkDestroyPipeline");
       end loop;

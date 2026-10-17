@@ -730,8 +730,11 @@ package body Model_Runner.CLI.Project_Commands is
             --  and ran out of the work's time after seven.
             Think_Budget => Request.Max_Tokens / 2,
             Result      => Outcome);
-         --  Held back and never a call: the reply's own text, written.
+         --  Held back and never a call: the reply's own text, written --
+         --  and its last line ended, which the record said beside it ran
+         --  into: "changed_files: docs/calc.mdthe work as the harness...".
          Release_Held (Sink);
+         Pres.End_Line (Pres.Standard_Output_Sink (Sink));
          Calls := Calls + Outcome.Calls;
          Steps_Taken := Steps_Taken + Outcome.Steps;
          All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;
