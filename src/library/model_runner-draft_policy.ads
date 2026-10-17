@@ -17,7 +17,10 @@ package Model_Runner.Draft_Policy is
    --  Proposals a round: three from the block, four where a split dense
    --  model streams its feed-forward for every check, three from a draft
    --  model found in the store (Steelman-14B with Qwen2.5-Coder-0.5B, 12.75
-   --  tokens a second against 12.0, 11.8 and 11.3 for four, five and six).
+   --  tokens a second against 12.0, 11.8 and 11.3 for four, five and six;
+   --  with its distilled draft, which keeps 87% of three, rounds adapting
+   --  from three, four and five read 20.6, 20.5 and 20.6 -- the adapting
+   --  finds the length -- against 19.6, 20.0 and 20.5 held at those).
    Next_Draft_Tokens       : constant := 3;
    Split_Next_Draft_Tokens : constant := 4;
    Store_Draft_Tokens      : constant := 3;
