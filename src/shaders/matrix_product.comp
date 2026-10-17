@@ -1340,8 +1340,19 @@ void iq1_8(uint index, float dl, float shift, inout float v[16], uint o) {
 const float FOURS4[16] = float[16](0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0,
                                    0.0, -1.0, -2.0, -3.0, -4.0, -6.0, -8.0, -12.0);
 
-//  Sixteen weights of a row, one after another from column col, into v.
-void decode16(uint format, uint row, uint col, out float v[16]) {
+#ifdef NARROW
+//  IQ3_S's block-wide bytes -- its scale, the eight bytes of ninth bits
+//  and the four of sub-block scales at the block's far end -- held for
+//  each of an invocation's row slots and read again only when the block
+//  changes, as Q6_K's and Q3_K's are in the narrow tiles: the one
+//  subgroup waited on them every step.
+uint  iq3s_block[TILE_R / 32u];
+uvec4 iq3s_held[TILE_R / 32u];
+#endif
+
+//  Sixteen weights of a row, one after another from column col, into v;
+//  slot is which of the invocation's rows it is.
+void decode16(uint format, uint row, uint col, uint slot, out float v[16]) {
     uint elems = low_elements(format);
     uint at = row + (col / elems) * low_bytes(format);
     uint within = col % elems;
@@ -1395,10 +1406,23 @@ void decode16(uint format, uint row, uint col, out float v[16]) {
                     ksign((aux >> (7u * (l + t))) & 127u), db, v, 8u * t);
         }
     } else if (format == FMT_IQ3_S) {
+#ifdef NARROW
+        if (iq3s_block[slot] != at) {
+            iq3s_block[slot] = at;
+            iq3s_held[slot] = uvec4(u16_at(at), u32_at(at + 66u),
+                                    u32_at(at + 70u), u32_at(at + 106u));
+        }
+        uvec4 held = iq3s_held[slot];
+        uint high = ((sub < 4u ? held.y : held.z) >> (8u * (sub & 3u))) & 255u;
+        uint scales = (held.w >> (8u * (sub / 2u))) & 255u;
+        float db = unpackHalf2x16(held.x).x
+                   * float(1u + 2u * (sub % 2u == 0u ? (scales & 15u) : (scales >> 4u)));
+#else
         uint high = byte_at(at + 66u + sub);
         uint scales = byte_at(at + 106u + sub / 2u);
         float db = unpackHalf2x16(u16_at(at)).x
                    * float(1u + 2u * (sub % 2u == 0u ? (scales & 15u) : (scales >> 4u)));
+#endif
         uint signs = u16_at(at + 74u + 4u * sub + l);
         for (uint t = 0u; t < 2u; ++t) {
             uint k = l + t;
@@ -1767,6 +1791,19 @@ int q3k_scale (uint at, uint which) {
     return int (low) + 16 * int (top) - 32;
 }
 
+//  The same from a block's sixteen bytes at 96 held in registers -- the
+//  twelve of scales and the half-precision scale after them.
+int q3k_scale_held (uvec4 held, uint which) {
+    uint j    = which & 3u;
+    uint tier = which >> 2u;
+    uint at   = (tier & 1u) * 4u + j;
+    uint low  = ((held[at >> 2u] >> (8u * (at & 3u)))
+                 >> ((tier >> 1u) * 4u)) & 15u;
+    uint top  = ((held[2u] >> (8u * j)) >> (2u * tier)) & 3u;
+
+    return int (low) + 16 * int (top) - 32;
+}
+
 #endif
 
 void main() {
@@ -1912,6 +1949,25 @@ void main() {
     }
 #endif
 
+#if defined(LOW_BITS) && defined(NARROW)
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        iq3s_block[it] = 0xFFFFFFFFu;
+        iq3s_held[it] = uvec4(0u);
+    }
+#endif
+#if defined(MORE_FORMATS) && defined(NARROW)
+    //  Q3_K's scales, read once a block in the narrow tile, as Q6_K's are
+    //  in the first compilation and for the same reason: they sit at the
+    //  block's far end, and the one subgroup waited on them every step.
+    uint  q3k_block[TILE_R / 32u];
+    uvec4 q3k_held[TILE_R / 32u];
+
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        q3k_block[it] = 0xFFFFFFFFu;
+        q3k_held[it] = uvec4(0u);
+    }
+#endif
+
     for (uint kb = 0u; kb < shape.columns; kb += KCH * CHUNKS) {
         barrier();
 
@@ -1966,7 +2022,7 @@ void main() {
                 //  The low-bit formats: sixteen weights decoded by the
                 //  format's own arithmetic, as the row product has it.
                 float v[16];
-                decode16 (shape.format, row, k0 + half_of * 16u, v);
+                decode16 (shape.format, row, k0 + half_of * 16u, rr / 32u, v);
                 for (uint j = 0u; j < 16u; ++j) {
                     wt[into + j] = float16_t (v[j]);
                 }
@@ -1993,23 +2049,40 @@ void main() {
 
                 uint at = row + (k0 / 32u) * block_bytes (fmt);
 
-                float scale = fmt == FMT_MXFP4 ? e8m0_at (at) : half_at (at);
-                float lowest = (fmt == FMT_Q4_1 || fmt == FMT_Q5_1)
-                               ? half_at (at + 2u) : 0.0;
+                //  The block's first eight bytes as two words -- the
+                //  scale, the minimum and the fifth bits, whichever the
+                //  format has -- where they were read a byte at a time,
+                //  ten loads for Q5_1. A block of these starts on an even
+                //  byte; MXFP4's, seventeen long, on any, and it reads its
+                //  one byte of scale as before.
+                float scale, lowest = 0.0;
+                uint fifths = 0u;
+                if (fmt == FMT_MXFP4) {
+                    scale = e8m0_at (at);
+                } else {
+                    uint i = at >> 2u;
+                    uint a0 = w[i], a1 = w[i + 1u];
+                    uint h0 = a0, h1 = a1;
+                    if ((at & 2u) != 0u) {
+                        uint a2 = w[i + 2u];
+                        h0 = (a0 >> 16u) | (a1 << 16u);
+                        h1 = (a1 >> 16u) | (a2 << 16u);
+                    }
+                    scale = unpackHalf2x16 (h0).x;
+                    if (fmt == FMT_Q4_1 || fmt == FMT_Q5_1) {
+                        lowest = unpackHalf2x16 (h0 >> 16u).x;
+                    }
+                    //  The fifth bits, read as one number. Bit j belongs
+                    //  to element j and bit j + 16 to element j + 16, so
+                    //  this invocation wants sixteen consecutive bits.
+                    if (fmt == FMT_Q5_0) {
+                        fifths = ((h0 >> 16u) | (h1 << 16u)) >> (half_of * 16u);
+                    } else if (fmt == FMT_Q5_1) {
+                        fifths = h1 >> (half_of * 16u);
+                    }
+                }
                 float bias = fmt == FMT_Q4_0 ? 8.0
                              : (fmt == FMT_Q5_0 ? 16.0 : 0.0);
-
-                //  The fifth bits, read as one number. Bit j belongs to
-                //  element j and bit j + 16 to element j + 16, so this
-                //  invocation wants sixteen consecutive bits of it.
-                uint fifths = 0u;
-                if (fmt == FMT_Q5_0 || fmt == FMT_Q5_1) {
-                    uint f = at + (fmt == FMT_Q5_0 ? 2u : 4u);
-                    fifths = byte_at (f) | (byte_at (f + 1u) << 8u)
-                             | (byte_at (f + 2u) << 16u)
-                             | (byte_at (f + 3u) << 24u);
-                    fifths = fifths >> (half_of * 16u);
-                }
 
                 uint p0, p1, p2, p3;
                 four_words (at + quants_at, p0, p1, p2, p3);
@@ -2017,54 +2090,77 @@ void main() {
                 uint levelled = fmt == FMT_IQ4_NL ? LEVELS_TABLE
                                 : (fmt == FMT_MXFP4 ? FOURS_TABLE : NO_TABLE);
 
-                wt[into +  0u] = float16_t (scale * nibble_value
-                    (p0, turn +  0u,  0u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  1u] = float16_t (scale * nibble_value
-                    (p0, turn +  8u,  1u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  2u] = float16_t (scale * nibble_value
-                    (p0, turn + 16u,  2u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  3u] = float16_t (scale * nibble_value
-                    (p0, turn + 24u,  3u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  4u] = float16_t (scale * nibble_value
-                    (p1, turn +  0u,  4u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  5u] = float16_t (scale * nibble_value
-                    (p1, turn +  8u,  5u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  6u] = float16_t (scale * nibble_value
-                    (p1, turn + 16u,  6u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  7u] = float16_t (scale * nibble_value
-                    (p1, turn + 24u,  7u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  8u] = float16_t (scale * nibble_value
-                    (p2, turn +  0u,  8u, fifths, levelled, bias)
-                    + lowest);
-                wt[into +  9u] = float16_t (scale * nibble_value
-                    (p2, turn +  8u,  9u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 10u] = float16_t (scale * nibble_value
-                    (p2, turn + 16u, 10u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 11u] = float16_t (scale * nibble_value
-                    (p2, turn + 24u, 11u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 12u] = float16_t (scale * nibble_value
-                    (p3, turn +  0u, 12u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 13u] = float16_t (scale * nibble_value
-                    (p3, turn +  8u, 13u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 14u] = float16_t (scale * nibble_value
-                    (p3, turn + 16u, 14u, fifths, levelled, bias)
-                    + lowest);
-                wt[into + 15u] = float16_t (scale * nibble_value
-                    (p3, turn + 24u, 15u, fifths, levelled, bias)
-                    + lowest);
+                if (levelled == NO_TABLE) {
+                    //  Four values a word, as Q4_K builds them: the nibbles
+                    //  masked at once, each one's fifth bit moved to bit
+                    //  four of its byte, the four bytes unpacked together
+                    //  and the bias, scale and minimum applied as a vector.
+                    //  One at a time, Q5_0's experts on Mellum were a
+                    //  quarter slower than its Q8_0 ones.
+                    uvec4 words = uvec4 (p0, p1, p2, p3);
+                    for (uint j = 0u; j < 4u; ++j) {
+                        uint f4 = (fifths >> (4u * j)) & 15u;
+                        uint q = ((words[j] >> turn) & 0x0F0F0F0Fu)
+                                 | (((f4 & 1u) | ((f4 & 2u) << 7u)
+                                     | ((f4 & 4u) << 14u)
+                                     | ((f4 & 8u) << 21u)) << 4u);
+                        f16vec4 v = f16vec4 (scale * (vec4 (unpack8 (q))
+                                                      - bias) + lowest);
+                        wt[into + 4u * j]      = v.x;
+                        wt[into + 4u * j + 1u] = v.y;
+                        wt[into + 4u * j + 2u] = v.z;
+                        wt[into + 4u * j + 3u] = v.w;
+                    }
+                } else {
+                    wt[into +  0u] = float16_t (scale * nibble_value
+                        (p0, turn +  0u,  0u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  1u] = float16_t (scale * nibble_value
+                        (p0, turn +  8u,  1u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  2u] = float16_t (scale * nibble_value
+                        (p0, turn + 16u,  2u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  3u] = float16_t (scale * nibble_value
+                        (p0, turn + 24u,  3u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  4u] = float16_t (scale * nibble_value
+                        (p1, turn +  0u,  4u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  5u] = float16_t (scale * nibble_value
+                        (p1, turn +  8u,  5u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  6u] = float16_t (scale * nibble_value
+                        (p1, turn + 16u,  6u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  7u] = float16_t (scale * nibble_value
+                        (p1, turn + 24u,  7u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  8u] = float16_t (scale * nibble_value
+                        (p2, turn +  0u,  8u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into +  9u] = float16_t (scale * nibble_value
+                        (p2, turn +  8u,  9u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 10u] = float16_t (scale * nibble_value
+                        (p2, turn + 16u, 10u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 11u] = float16_t (scale * nibble_value
+                        (p2, turn + 24u, 11u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 12u] = float16_t (scale * nibble_value
+                        (p3, turn +  0u, 12u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 13u] = float16_t (scale * nibble_value
+                        (p3, turn +  8u, 13u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 14u] = float16_t (scale * nibble_value
+                        (p3, turn + 16u, 14u, fifths, levelled, bias)
+                        + lowest);
+                    wt[into + 15u] = float16_t (scale * nibble_value
+                        (p3, turn + 24u, 15u, fifths, levelled, bias)
+                        + lowest);
+                }
             } else if (shape.format == FMT_Q2_K) {
                 //  Two bits an element, sixteen sub-blocks of sixteen, and
                 //  a four-bit scale and a four-bit minimum sharing a byte
@@ -2191,10 +2287,24 @@ void main() {
                 uint side = here >> 2u;
                 uint group = here & 3u;
 
+#ifdef NARROW
+                uint it = rr / 32u;
+                if (q3k_block[it] != k0 / 256u) {
+                    q3k_block[it] = k0 / 256u;
+                    uint s0, s1, s2, s3;
+                    four_words (at + 96u, s0, s1, s2, s3);
+                    q3k_held[it] = uvec4 (s0, s1, s2, s3);
+                }
+                float factor = unpackHalf2x16 (q3k_held[it].w).x
+                               * float (q3k_scale_held (q3k_held[it],
+                                                        side * 8u + group * 2u
+                                                        + half_of));
+#else
                 float factor = half_at (at + 108u)
                                * float (q3k_scale (at + 96u,
                                                    side * 8u + group * 2u
                                                    + half_of));
+#endif
 
                 uint p0, p1, p2, p3;
                 four_words (at + 32u + side * 32u + half_of * 16u,
