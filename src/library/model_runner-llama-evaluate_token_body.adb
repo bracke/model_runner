@@ -379,25 +379,93 @@ is
             Settings.Max_Bias, Share.Upto, Share.Sinks,
             From, To, Item.Score_Room,
             Item.Scores.all, Item.Attention.all, Fine);
-      elsif Item.Held = Exact then
-         Blend_Exact
-           (Item.Query.all, Item.Keys.all, Item.Values.all,
-            Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
-            Value_Size, Element_Count (Settings.Group_Size),
-            Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
-            Settings.Max_Bias, Share.Upto, Share.Sinks,
-            From, To, Item.Score_Room,
-            Item.Scores.all, Item.Attention.all, Fine);
       else
-         Blend_Halved
-           (Item.Query.all, Item.Half_Keys.all,
-            Item.Half_Values.all,
-            Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
-            Value_Size, Element_Count (Settings.Group_Size),
-            Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
-            Settings.Max_Bias, Share.Upto, Share.Sinks,
-            From, To, Item.Score_Room,
-            Item.Scores.all, Item.Attention.all, Fine);
+         --  The heads of a group read the same keys and values, so a run
+         --  of four or eight of them goes through the block a batch's
+         --  four positions take, its rows the heads, each key and value
+         --  read and converted once for the run rather than once a head:
+         --  Qwen3-30B-A3B's eight heads a group at 15,805 positions
+         --  generated at 3.3 tokens a second a head at a time. Not where a
+         --  head's own slope or sink would be given to the whole run, and
+         --  only the shapes the batch takes the block for: values a whole
+         --  number of sixteens wide, and a binary32 cache's heads not
+         --  sixty-four, which Blend_Exact sums otherwise.
+         declare
+            Group_Size : constant Element_Count :=
+              Element_Count (Settings.Group_Size);
+            Blocks     : constant Boolean :=
+              Settings.Max_Bias = 0.0
+              and then Share.Sinks = null
+              and then Value_Size mod 16 = 0
+              and then (Item.Held = Halved or else Head_Size /= 64);
+            Same       : constant Cell_Quad := [others => Share.Upto];
+            Earliest   : constant Cell_Quad := [others => Share.Earliest];
+            Head       : Element_Count := From;
+            Size       : Natural;
+         begin
+            while Head <= To and then Fine loop
+               Size :=
+                 (if not Blocks then 1
+                  elsif Head mod Group_Size + 8 <= Group_Size
+                    and then Head + 7 <= To
+                  then 8
+                  elsif Head mod Group_Size + 4 <= Group_Size
+                    and then Head + 3 <= To
+                  then 4
+                  else 1);
+
+               if Size > 1 and then Item.Held = Exact then
+                  Blend_Exact_Four
+                    (Size, Item.Query.all, Item.Query.all'First, Head_Size,
+                     Item.Keys.all, Item.Values.all,
+                     Share.Base, Share.V_Base, KV_Width, V_Width,
+                     Head_Size, Value_Size, Group_Size, Heads,
+                     Earliest, Same, Same, Scale, Settings.Attention_Cap,
+                     Settings.Max_Bias, null, Head, Head,
+                     Item.Score_Room,
+                     Item.Scores.all
+                       (Item.Scores.all'First + Head * Item.Score_Room
+                        .. Item.Scores.all'Last),
+                     Item.Attention.all, Item.Attention.all'First,
+                     Value_Size, Fine);
+               elsif Size > 1 then
+                  Blend_Halved_Four
+                    (Size, Item.Query.all, Item.Query.all'First, Head_Size,
+                     Item.Half_Keys.all, Item.Half_Values.all,
+                     Share.Base, Share.V_Base, KV_Width, V_Width,
+                     Head_Size, Value_Size, Group_Size, Heads,
+                     Earliest, Same, Same, Scale, Settings.Attention_Cap,
+                     Settings.Max_Bias, null, Head, Head,
+                     Item.Score_Room,
+                     Item.Scores.all
+                       (Item.Scores.all'First + Head * Item.Score_Room
+                        .. Item.Scores.all'Last),
+                     Item.Attention.all, Item.Attention.all'First,
+                     Value_Size, Fine);
+               elsif Item.Held = Exact then
+                  Blend_Exact
+                    (Item.Query.all, Item.Keys.all, Item.Values.all,
+                     Share.Base, Share.V_Base, KV_Width, V_Width, Heads,
+                     Head_Size, Value_Size, Group_Size,
+                     Share.Earliest, Share.Upto, Scale,
+                     Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
+                     Share.Sinks, Head, Head, Item.Score_Room,
+                     Item.Scores.all, Item.Attention.all, Fine);
+               else
+                  Blend_Halved
+                    (Item.Query.all, Item.Half_Keys.all,
+                     Item.Half_Values.all,
+                     Share.Base, Share.V_Base, KV_Width, V_Width, Heads,
+                     Head_Size, Value_Size, Group_Size,
+                     Share.Earliest, Share.Upto, Scale,
+                     Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
+                     Share.Sinks, Head, Head, Item.Score_Room,
+                     Item.Scores.all, Item.Attention.all, Fine);
+               end if;
+
+               Head := Head + Element_Count (Size);
+            end loop;
+         end;
       end if;
 
       --  Only ever set false, by any share that could not finish, and
