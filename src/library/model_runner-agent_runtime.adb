@@ -1,3 +1,5 @@
+with Ada.Directories;
+with Ada.Strings.Fixed;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Schemas;
@@ -98,6 +100,80 @@ package body Model_Runner.Agent_Runtime is
       end loop;
       return To_String (Result);
    end Unwritten;
+
+   ----------------------
+   -- Named_But_Absent --
+   ----------------------
+
+   function Named_But_Absent (Task_Text : String; Base : String := "") return String is
+      Result : Unbounded_String;
+      Seen   : Paths.Vector;
+      First  : Natural := Task_Text'First;
+
+      function Is_Path (Word : String) return Boolean is
+         Dot : constant Natural :=
+           Ada.Strings.Fixed.Index (Word, ".", Ada.Strings.Backward);
+      begin
+         if Word'Length < 3 or else Word (Word'First) = '/'
+           or else Ada.Strings.Fixed.Index (Word, "://") > 0
+           or else (for some C of Word => C < ' ' or else C in '<' | '>' | '|' | '*' | '?')
+         then
+            return False;
+         elsif Ada.Strings.Fixed.Index (Word, "/") > 0 then
+            return True;
+         end if;
+         --  name.ext: a short extension of letters and digits after a name.
+         return Dot > Word'First and then Dot < Word'Last
+           and then Word'Last - Dot <= 5
+           and then (for all C of Word (Dot + 1 .. Word'Last) =>
+                       C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9')
+           and then (for some C of Word (Dot + 1 .. Word'Last) =>
+                       C in 'a' .. 'z' | 'A' .. 'Z');
+      end Is_Path;
+
+      procedure Take (Raw : String) is
+         From : Natural := Raw'First;
+         To   : Natural := Raw'Last;
+      begin
+         while From <= To and then Raw (From) in '"' | ''' | '`' | '(' | '[' | '*' loop
+            From := From + 1;
+         end loop;
+         while To >= From
+           and then Raw (To) in '"' | ''' | '`' | ')' | ']' | '*' | ',' | '.' | ';' | ':' | '!' | '?'
+         loop
+            To := To - 1;
+         end loop;
+         if From <= To then
+            declare
+               Word : constant String := Raw (From .. To);
+               Here : constant String := (if Base = "" then Word else Base & "/" & Word);
+            begin
+               if Is_Path (Word) and then not Seen.Contains (Word)
+                 and then not Ada.Directories.Exists (Here)
+               then
+                  Seen.Append (Word);
+                  Append (Result, (if Length (Result) = 0 then "" else ", ") & Word);
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end if;
+      end Take;
+   begin
+      for Index in Task_Text'Range loop
+         if Task_Text (Index) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+            if Index > First then
+               Take (Task_Text (First .. Index - 1));
+            end if;
+            First := Index + 1;
+         end if;
+      end loop;
+      if First <= Task_Text'Last then
+         Take (Task_Text (First .. Task_Text'Last));
+      end if;
+      return To_String (Result);
+   end Named_But_Absent;
 
    ------------------
    -- Helper_Rules --

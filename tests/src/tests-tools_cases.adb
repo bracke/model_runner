@@ -1081,6 +1081,19 @@ package body Tests.Tools_Cases is
                     & Rt.Unwritten (Outputs, Before, Tree));
             Ada.Directories.Delete_Tree (Tree);
          end;
+         --  What a task's words name that is not there: the note a parent
+         --  that named no outputs is given. A path or a name.ext, its
+         --  quotes and closing stop off, each once; one there, an address,
+         --  a version number and plain words are not named.
+         declare
+            Said : constant String :=
+              Rt.Named_But_Absent
+                ("Write `docs/never.md` (from src/never.adb) and NOTES.txt, docs/never.md again;"
+                 & " see https://example.org/x.md and version 2.5, and alire.toml.");
+         begin
+            Assert (Said = "docs/never.md, src/never.adb, NOTES.txt",
+                    "the paths a task names that are not there were not read as they are: " & Said);
+         end;
          --  A list argument is read as the list it is, and one written as
          --  a string is not taken for one.
          declare

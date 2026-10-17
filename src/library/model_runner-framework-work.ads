@@ -489,7 +489,9 @@ package Model_Runner.Framework.Work is
       Check_For_It,   --  Said done with no check run: the harness runs them.
       Ask_To_Mend,    --  Its report cannot be taken: handed back once.
       Ask_To_Report,  --  Repeating a write already made: asked for its report.
-      Ask_To_Call,    --  A root that answered without a call: told nothing changed.
+      --  A root that answered without a call, or a helper that said done
+      --  without one: told nothing changed.
+      Ask_To_Call,
       Finish);        --  Its answer stands.
 
    --  How a round ended, as the loop decides on it.

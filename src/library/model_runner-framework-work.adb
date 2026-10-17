@@ -1103,11 +1103,13 @@ package body Model_Runner.Framework.Work is
    --  Whether a root's answer reports its work done, read as the harness
    --  reads every report -- lines or JSON alike -- not by its text: a
    --  done said in JSON is done as surely as one said in a line.
-   function Says_Done (Answer : String) return Boolean is
+   function Says_Done (Answer : String; Root : Boolean := True) return Boolean is
       Said : Invocations.Claims;
       Held : E.Error_Info;
    begin
-      Invocations.Hold (Invocations.Work_Claim, Answer, Said, Held);
+      --  Read as its own kind of report: a helper's is held to the child
+      --  result contract, not the root's.
+      Invocations.Hold ((if Root then Invocations.Work_Claim else Child_Claim), Answer, Said, Held);
       return Ada.Characters.Handling.To_Lower (Invocations.Claim (Said, "status")) = "done";
    end Says_Done;
 
@@ -1146,6 +1148,14 @@ package body Model_Runner.Framework.Work is
         and then not State.Asked_To_Report
       then
          return Ask_To_Report;
+      --  A helper that says it is done having called nothing at all is
+      --  told so once, as a root that answered without a call is: gemma-
+      --  3-4b's helper said it had written docs/calc.md and had made no
+      --  call, and its parent's task failed for the file at the end.
+      elsif not State.Root and then State.Answered and then State.Calls = 0
+        and then State.Round < Rounds and then Says_Done (Said, Root => False)
+      then
+         return Ask_To_Call;
       elsif State.Calls > 0 or else State.Round = 3 or else not State.Root or else not State.Answered then
          return Finish;
       else

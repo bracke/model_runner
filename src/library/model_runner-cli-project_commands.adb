@@ -1086,6 +1086,23 @@ package body Model_Runner.CLI.Project_Commands is
       --  parent's budget as it goes, not only after.
       Ended.Tokens := Spent;
 
+      --  None named, nothing was checked: said so, with what the task's
+      --  words name that is not there, for the parent to act on -- a
+      --  parent asked for docs/calc.md with no outputs, its helper said it
+      --  had written it having called nothing, and the task failed for it
+      --  at the end. Not a failure: outputs are what delegate lists.
+      if Named_Outputs.Is_Empty then
+         declare
+            Absent : constant String := Rt.Named_But_Absent (Asked, Self.Base);
+         begin
+            if Absent /= "" then
+               Append (Told, ASCII.LF & "(no outputs were named, so the harness checked nothing"
+                             & " the helper wrote; the task names " & Absent
+                             & ", which is not there)");
+            end if;
+         end;
+      end if;
+
       --  The outputs it was to write, checked: written where their content
       --  is not what it was, and the call failed where one is not.
       if not Named_Outputs.Is_Empty then

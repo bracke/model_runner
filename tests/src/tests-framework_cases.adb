@@ -5770,6 +5770,24 @@ package body Tests.Framework_Cases is
          Assert (Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False)) = Wk.Ask_To_Call
                  and then Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False, Round => 3)) = Wk.Finish,
                  "a root that answered without a call was not told so, or told on its last round");
+         --  And a helper that says it is done having called nothing is told
+         --  so once, in its first round; one that called, or did not say
+         --  done, or is on its last round, is not.
+         declare
+            Helper_Done : constant Unbounded_String :=
+              To_Unbounded_String ("status: done" & LF & "summary: wrote docs/calc.md");
+            Helper : constant Wk.Round_State :=
+              (Worked with delta Root => False, Calls => 0, Answer => Helper_Done);
+         begin
+            Assert (Wk.Next_Step (Helper) = Wk.Ask_To_Call,
+                    "a helper that said done without a call was not told nothing changed");
+            Assert (Wk.Next_Step ((Helper with delta Calls => 1)) = Wk.Finish
+                    and then Wk.Next_Step ((Helper with delta Round => 2)) = Wk.Finish
+                    and then Wk.Next_Step
+                               ((Helper with delta Answer => To_Unbounded_String
+                                   ("status: failed" & LF & "summary: could not"))) = Wk.Finish,
+                    "a helper that called, was on its last round, or did not say done was told nothing changed");
+         end;
       end;
    end Invocations_Are_Recorded;
 

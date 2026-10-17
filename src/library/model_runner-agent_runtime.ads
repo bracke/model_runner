@@ -74,6 +74,17 @@ package Model_Runner.Agent_Runtime is
    --  @return Them, comma-separated; "" when every one was written.
    function Unwritten (Of_Files : Paths.Vector; Before : Paths.Vector; Base : String := "") return String;
 
+   --  The paths a task's words name that are not there in Base: what a
+   --  parent that named no outputs is told after its helper ran, since
+   --  nothing it wrote was checked. Never a contract -- outputs are only
+   --  what delegate lists -- but a note: a word with a slash in it or a
+   --  name.ext, its quotes and closing punctuation off, and no address.
+   --
+   --  @param Task_Text The task as delegate gave it.
+   --  @param Base The tree the helper wrote in.
+   --  @return Them, comma-separated, each once; "" when none.
+   function Named_But_Absent (Task_Text : String; Base : String := "") return String;
+
    --  How a helper works and reports, wherever it was made: do what it is
    --  asked and nothing more, change files only with the tools that change
    --  them, and end with the report lines its parent reads.
