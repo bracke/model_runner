@@ -393,6 +393,14 @@ package body Agent_Trial is
                      --  What the screen showed wrongly, said with the outcome.
                      Display_Faults : Unbounded_String;
                      Began   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                     --  When the screen last grew, and whether a stall was
+                     --  written down: a session that shows nothing for five
+                     --  minutes has every thread's wait recorded beside it,
+                     --  once, as the one stall seen (a helper silent 28
+                     --  minutes, 2026-10-16) was recorded by hand -- and by
+                     --  then its run had been written over.
+                     Grew    : Ada.Calendar.Time := Ada.Calendar.Clock;
+                     Stalled : Boolean := False;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
 
@@ -402,6 +410,66 @@ package body Agent_Trial is
                            Spawned.Environment.Append (To_Unbounded_String (String'(Variable & "=" & Value)));
                         end if;
                      end Keep_Variable;
+
+                     --  Every thread of the session: its name, its state and
+                     --  what it waits in, from the host's process files where
+                     --  it keeps them, into a file beside the session's folder.
+                     procedure Note_Stall is
+                        use Ada.Directories;
+                        Tasks_At : constant String :=
+                          "/proc/" & Ada.Strings.Fixed.Trim
+                            (Integer'Image (Hostkit.Spawn.Process_Id (Child)),
+                             Ada.Strings.Both) & "/task";
+                        Out_File : Ada.Text_IO.File_Type;
+                        Search   : Search_Type;
+                        Item     : Directory_Entry_Type;
+
+                        function First_Line (Path : String) return String is
+                           F : Ada.Text_IO.File_Type;
+                        begin
+                           Ada.Text_IO.Open (F, Ada.Text_IO.In_File, Path);
+                           declare
+                              Line : constant String := Ada.Text_IO.Get_Line (F);
+                           begin
+                              Ada.Text_IO.Close (F);
+                              return Line;
+                           end;
+                        exception
+                           when others =>
+                              return "?";
+                        end First_Line;
+                     begin
+                        Stalled := True;
+                        Append (Display_Faults,
+                                "  display: the session showed nothing for five minutes;"
+                                & " its threads' waits are in " & Root & "-stall.txt" & ASCII.LF);
+                        if not Exists (Tasks_At) then
+                           return;
+                        end if;
+                        --  Beside the project, not in it: written in it, it was a
+                        --  file the work had changed, and the task failed for it.
+                        Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "-stall.txt");
+                        Start_Search (Search, Tasks_At, "", [Directory => True, others => False]);
+                        while More_Entries (Search) loop
+                           Get_Next_Entry (Search, Item);
+                           declare
+                              Id : constant String := Simple_Name (Item);
+                              At_Task : constant String := Tasks_At & "/" & Id;
+                           begin
+                              if Id /= "." and then Id /= ".." then
+                                 Ada.Text_IO.Put_Line
+                                   (Out_File, Id & " " & First_Line (At_Task & "/comm")
+                                    & " wchan=" & First_Line (At_Task & "/wchan")
+                                    & " stat=" & First_Line (At_Task & "/stat"));
+                              end if;
+                           end;
+                        end loop;
+                        End_Search (Search);
+                        Ada.Text_IO.Close (Out_File);
+                     exception
+                        when others =>
+                           null;
+                     end Note_Stall;
 
                      --  Read what arrives until Text has, after From, or the
                      --  seconds are up.
@@ -423,6 +491,9 @@ package body Agent_Trial is
                               for Byte of Buffer (Buffer'First .. Last) loop
                                  Append (Seen, Character'Val (Byte));
                               end loop;
+                              Grew := Ada.Calendar.Clock;
+                           elsif not Stalled and then Ada.Calendar.Clock - Grew > 300.0 then
+                              Note_Stall;
                            end if;
                         end loop;
                         return False;
