@@ -41,7 +41,7 @@ package body Tool_Commands is
 
    Opts_None      : aliased constant String := " ";
    Opts_Restamp   : aliased constant String := " --all --root ";
-   Opts_Bench     : aliased constant String := " --formats --rounds ";
+   Opts_Bench     : aliased constant String := " --formats --rounds --tiles --vectors ";
    Opts_Check     : aliased constant String :=
      " --repository --record-warnings --short ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
@@ -125,7 +125,7 @@ package body Tool_Commands is
    Takes_Session   : aliased constant String := "/COMMAND [WORDS]";
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
-   Takes_Bench     : aliased constant String := "[--formats] [--rounds N]";
+   Takes_Bench     : aliased constant String := "[--formats] [--rounds N] [--tiles] [--vectors N]";
    Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
 
    Says_Probe : aliased constant String :=
@@ -142,7 +142,8 @@ package body Tool_Commands is
      "what one attention call costs on a device, at several shapes, with the"
      & " arithmetic done beside the seconds taken, and every format's"
      & " product at one, four and eight vectors, each the median of its"
-     & " rounds";
+     & " rounds; with --tiles, every format's prompt tile at --vectors"
+     & " vectors (128)";
    Says_Slow : aliased constant String :=
      "where the suite's time goes: each case on its own, or one test named"
      & " by the prefix AUnit's filter understands";

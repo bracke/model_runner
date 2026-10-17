@@ -18,7 +18,9 @@ package body Device_Bench is
 
    procedure Report
      (Formats_Only  : Boolean := False;
-      Format_Rounds : Positive := 5)
+      Format_Rounds : Positive := 5;
+      Tiles_Only    : Boolean := False;
+      Tile_Vectors  : Positive := 128)
    is
       use type Ada.Calendar.Time;
 
@@ -751,7 +753,7 @@ package body Device_Bench is
 
          Rows    : constant := 16384;
          Columns : constant := 2048;
-         Vectors : constant := 128;
+         Vectors : constant Positive := Tile_Vectors;
          Seconds : constant Duration := 0.40;
 
          type Grain is record
@@ -761,20 +763,47 @@ package body Device_Bench is
             Bytes    : Positive;
          end record;
 
-         Table : constant array (1 .. 8) of Grain :=
-           [("f16   ", Products.Values_F16,    1,   2),
-            ("bf16  ", Products.Values_BF16,   1,   2),
-            ("q8_0  ", Products.Packed_Q8_0,  32,  34),
-            ("q6_k  ", Products.Packed_Q6_K, 256, 210),
-            ("q5_k  ", Products.Packed_Q5_K, 256, 176),
-            ("q4_k  ", Products.Packed_Q4_K, 256, 144),
-            ("q4_0  ", Products.Packed_Q4_0,  32,  18),
-            ("q2_k  ", Products.Packed_Q2_K, 256,  84)];
+         --  The full run's eight, and with --tiles every format: the
+         --  low-bit ones each decode a tile in their own arithmetic.
+         type Grains_List is array (Positive range <>) of Grain;
+
+         Every : constant Grains_List (1 .. 28) :=
+           [("f16   ", Products.Values_F16,      1,   2),
+            ("bf16  ", Products.Values_BF16,     1,   2),
+            ("q8_0  ", Products.Packed_Q8_0,    32,  34),
+            ("q6_k  ", Products.Packed_Q6_K,   256, 210),
+            ("q5_k  ", Products.Packed_Q5_K,   256, 176),
+            ("q4_k  ", Products.Packed_Q4_K,   256, 144),
+            ("q4_0  ", Products.Packed_Q4_0,    32,  18),
+            ("q2_k  ", Products.Packed_Q2_K,   256,  84),
+            ("f32   ", Products.Values_F32,      1,   4),
+            ("q4_1  ", Products.Packed_Q4_1,    32,  20),
+            ("q5_0  ", Products.Packed_Q5_0,    32,  22),
+            ("q5_1  ", Products.Packed_Q5_1,    32,  24),
+            ("iq4_nl", Products.Packed_IQ4_NL,  32,  18),
+            ("q3_k  ", Products.Packed_Q3_K,   256, 110),
+            ("iq4_xs", Products.Packed_IQ4_XS, 256, 136),
+            ("mxfp4 ", Products.Packed_MXFP4,   32,  17),
+            ("iq3_s ", Products.Packed_IQ3_S,  256, 110),
+            ("iq2xxs", Products.Packed_IQ2_XXS, 256, 66),
+            ("iq2_xs", Products.Packed_IQ2_XS, 256,  74),
+            ("iq2_s ", Products.Packed_IQ2_S,  256,  82),
+            ("iq3xxs", Products.Packed_IQ3_XXS, 256, 98),
+            ("iq1_s ", Products.Packed_IQ1_S,  256,  50),
+            ("iq1_m ", Products.Packed_IQ1_M,  256,  56),
+            ("tq1_0 ", Products.Packed_TQ1_0,  256,  54),
+            ("tq2_0 ", Products.Packed_TQ2_0,  256,  66),
+            ("q1_0  ", Products.Packed_Q1_0,   128,  18),
+            ("q2_0  ", Products.Packed_Q2_0,    64,  18),
+            ("nvfp4 ", Products.Packed_NVFP4,   64,  36)];
+
+         Table : constant Grains_List :=
+           (if Tiles_Only then Every else Every (1 .. 8));
 
          Asked : constant Values :=
-           new N.Real_Array (0 .. N.Element_Count (Columns) * Vectors - 1);
+           new N.Real_Array (0 .. N.Element_Count (Columns) * N.Element_Count (Vectors) - 1);
          Got   : constant Values :=
-           new N.Real_Array (0 .. N.Element_Count (Rows) * Vectors - 1);
+           new N.Real_Array (0 .. N.Element_Count (Rows) * N.Element_Count (Vectors) - 1);
       begin
          Asked.all := [others => 0.25];
 
@@ -1418,6 +1447,17 @@ package body Device_Bench is
 
       if not Ready then
          Ada.Text_IO.Put_Line ("no device here");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      if Tiles_Only then
+         Ada.Text_IO.Put_Line
+           ("  16384 by 2048 at" & Positive'Image (Tile_Vectors)
+            & " vectors, by format:");
+         Grains;
+         Products.Close (Engine);
+         Devices.Close (Opened);
          Devices.Close (Held);
          return;
       end if;

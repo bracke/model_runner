@@ -245,8 +245,9 @@ package Model_Runner.Platform.Device.Products is
    --  The low-bit packings, which the row product decodes in a compilation
    --  of their own (row_product.comp built with LOW_BITS): a branch costs
    --  every format beside it registers whether taken or not, so the sixteen
-   --  above keep their words and these twelve take a pipeline apart. None
-   --  has a tile; a batch in one goes to the row product.
+   --  above keep their words and these twelve take a pipeline apart. Their
+   --  batches take tiles of their own as well, matrix_product.comp built
+   --  with LOW_BITS (Shaders.Low_Tiles).
    subtype Low_Packing is Weight_Packing range Packed_IQ3_S .. Packed_NVFP4;
 
    --  One handle for each low-bit packing.

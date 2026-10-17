@@ -2826,27 +2826,36 @@ begin
    elsif Command = "device-bench" then
       --  Where an attention call's time goes, before another kernel is
       --  written on a guess about it; or with --formats, only every
-      --  format's product, each cell the median of --rounds rounds.
+      --  format's product, each cell the median of --rounds rounds; or with
+      --  --tiles, only every format's prompt tile, at --vectors vectors.
       declare
-         Rounds : Positive := 5;
+         Rounds  : Positive := 5;
+         Vectors : Positive := 128;
       begin
          for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
-            if Ada.Command_Line.Argument (Index) = "--rounds" then
-               begin
+            begin
+               if Ada.Command_Line.Argument (Index) = "--rounds" then
                   Rounds :=
                     Positive'Value (Ada.Command_Line.Argument (Index + 1));
-               exception
-                  when Constraint_Error =>
-                     null;
-               end;
-            end if;
+               elsif Ada.Command_Line.Argument (Index) = "--vectors" then
+                  Vectors :=
+                    Positive'Value (Ada.Command_Line.Argument (Index + 1));
+               end if;
+            exception
+               when Constraint_Error =>
+                  null;
+            end;
          end loop;
 
          Device_Bench.Report
            (Formats_Only =>
               (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
                  Ada.Command_Line.Argument (Index) = "--formats"),
-            Format_Rounds => Rounds);
+            Format_Rounds => Rounds,
+            Tiles_Only =>
+              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                 Ada.Command_Line.Argument (Index) = "--tiles"),
+            Tile_Vectors => Vectors);
       end;
 
    elsif Command = "fixture-likeness" then

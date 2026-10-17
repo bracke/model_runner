@@ -22,8 +22,15 @@ package Device_Bench is
    --    kernel change for a format is judged on.
    --  @param Format_Rounds Rounds over every format and width, each cell
    --    said as the median of its rounds.
+   --  @param Tiles_Only Only every format's prompt tile, a hundred and
+   --    twenty-eight vectors against one shape, which is what a change to a
+   --    tile's decode is judged on.
+   --  @param Tile_Vectors The vectors a tile product takes: fewer, as an
+   --    expert's run has, and the decode is more of its time.
    procedure Report
      (Formats_Only  : Boolean := False;
-      Format_Rounds : Positive := 5);
+      Format_Rounds : Positive := 5;
+      Tiles_Only    : Boolean := False;
+      Tile_Vectors  : Positive := 128);
 
 end Device_Bench;
