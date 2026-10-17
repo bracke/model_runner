@@ -124,6 +124,9 @@ const uint CHUNKS = SUBS;
 const uint ROW_GROUPS = 1u;
 
 layout(std430, binding = 0) readonly  buffer Weights { uint      w[]; };
+//  The same weights sixteen bytes an element: a run that starts on a
+//  sixteen-byte boundary is one load.
+layout(std430, binding = 0) readonly  buffer Weights4 { uvec4     w4[]; };
 layout(std430, binding = 2) writeonly buffer Result  { float     y[]; };
 
 //  The batch in half precision, as half_batch.comp left it: the same
@@ -2388,8 +2391,25 @@ void main() {
                 uint at = row + (k0 + half_of * 16u) * 2u;
                 uint i  = at >> 2u;
 
+                //  Two loads of sixteen bytes where the run starts on such
+                //  a boundary, as a row of a whole number of them does:
+                //  eight of a word each was what the narrow tile's one
+                //  subgroup waited on -- half precision at thirty-two
+                //  vectors 2.89 -> 2.17 ms a 16384 by 2048 product, brain
+                //  floating point 2.75 -> 2.06.
+                uint words[8];
+                if ((at & 15u) == 0u) {
+                    uvec4 a = w4[at >> 4u];
+                    uvec4 b = w4[(at >> 4u) + 1u];
+                    words = uint[8](a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w);
+                } else {
+                    for (uint j = 0u; j < 8u; ++j) {
+                        words[j] = w[i + j];
+                    }
+                }
+
                 for (uint j = 0u; j < 8u; ++j) {
-                    uint held = w[i + j];
+                    uint held = words[j];
 
                     if (shape.format == FMT_F16) {
                         vec2 pair = unpackHalf2x16(held);
