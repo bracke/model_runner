@@ -319,6 +319,15 @@ package Model_Runner.Agent is
    --  @return True where it keeps to the limit; none does, unless it says.
    function Keeps_To_Limit (Self : Reply_Script) return Boolean is (False);
 
+   --  The tokens of context a step has for its reply, where a script that
+   --  keeps to the limit says: a generation asking past what is left of
+   --  them fails as a full context does -- the room left and the prompt
+   --  said -- and the reply is given again when the step is tried again.
+   --
+   --  @param Self The script.
+   --  @return The room; Natural'Last for as much as is asked.
+   function Room (Self : Reply_Script) return Natural is (Natural'Last);
+
    --  A reference to a script of replies.
    type Script_Reference is access all Reply_Script'Class;
 

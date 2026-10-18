@@ -306,6 +306,11 @@ package body Model_Runner.Agent is
       --  reply: what a generation it was cut at did not take.
       Script_Rest : U.Unbounded_String;
 
+      --  The whole of the reply the script is giving, and the reply to give
+      --  again where a generation of it failed for room.
+      Script_Whole : U.Unbounded_String;
+      Script_Again : U.Unbounded_String;
+
       --  The most a thought may take where the step's room is less than
       --  its budget and an answer after it: the budget less the answer's
       --  room, until compaction makes room again.
@@ -484,13 +489,34 @@ package body Model_Runner.Agent is
                --  bytes a token, stopped at the limit where it was longer --
                --  the rest kept for what the reply is asked for after -- and
                --  shown as it comes.
-               procedure Take_Scripted is
+               procedure Take_Scripted (Given : Natural := 0; New_Prompt : Natural := 0) is
                   Rest  : constant String := U.To_String (Script_Rest);
                   Most  : constant Natural := Request.Max_Tokens * 4;
                   Taken : constant String :=
                     (if Rest'Length > Most then Rest (Rest'First .. Rest'First + Most - 1) else Rest);
                   Shown_Closed : Boolean;
+                  Room  : constant Natural := Script.Room;
                begin
+                  --  Past the room the step has, after what it has taken:
+                  --  refused as a full context is, the reply given again.
+                  if Room /= Natural'Last
+                    and then New_Prompt + Request.Max_Tokens > Room - Natural'Min (Room, Given)
+                  then
+                     declare
+                        Status : E.Error_Info := E.Make (E.Generation_Context_Exhausted);
+                     begin
+                        E.Add_Integer (Status, "prompt", Long_Long_Integer (New_Prompt), E.Param_Tokens);
+                        E.Add_Integer (Status, "requested", Long_Long_Integer (Request.Max_Tokens), E.Param_Tokens);
+                        E.Add_Integer (Status, "available", Long_Long_Integer (Room - Natural'Min (Room, Given)),
+                                       E.Param_Tokens);
+                        Script_Again := Script_Whole;
+                        Last_Result :=
+                          (Reason => Gen.Runtime_Error, Error => Status,
+                           Text   => new Model_Runner.Bytes.Byte_Array'(Model_Runner.Bytes.To_Bytes ("")),
+                           others => <>);
+                        return;
+                     end;
+                  end if;
                   Script_Rest := U.To_Unbounded_String (Rest (Rest'First + Taken'Length .. Rest'Last));
                   Model_Runner.Output.Emit (Shown, Taken, Shown_Closed);
                   Last_Result :=
@@ -530,7 +556,13 @@ package body Model_Runner.Agent is
                Unthought.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all));
                if Script /= null then
-                  Script_Rest := U.To_Unbounded_String (Script.Next_Reply);
+                  if U.Length (Script_Again) > 0 then
+                     Script_Rest := Script_Again;
+                     Script_Again := U.Null_Unbounded_String;
+                  else
+                     Script_Rest := U.To_Unbounded_String (Script.Next_Reply);
+                  end if;
+                  Script_Whole := Script_Rest;
                   Take_Scripted;
                else
                   Gen.Generate
@@ -598,7 +630,9 @@ package body Model_Runner.Agent is
                      Request.Hold_Back := Request.Hold_Back + U.Length (Thought_Before);
                      Gen.Release (Last_Result);
                      if Script /= null then
-                        Take_Scripted;
+                        Take_Scripted
+                          (Given      => Thought_Tokens,
+                           New_Prompt => (if Was_Open then (Closing'Length + 3) / 4 else 0));
                      else
                         Gen.Generate
                           (Source   => Source,

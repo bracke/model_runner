@@ -84,9 +84,13 @@ package body Tests.Agent_Loop_Cases is
 
       --  Whether its replies are held to each generation's limit.
       Keeps   : Boolean := False;
+
+      --  The context a step has for its reply.
+      Room_Of : Natural := Natural'Last;
    end record;
 
    overriding function Keeps_To_Limit (Self : Script) return Boolean is (Self.Keeps);
+   overriding function Room (Self : Script) return Natural is (Self.Room_Of);
 
    overriding function Cut_Off (Self : Script) return Boolean is (Self.Cut_At > 0 and then Self.Next - 1 = Self.Cut_At);
 
@@ -189,7 +193,9 @@ package body Tests.Agent_Loop_Cases is
       Carry    : Ag.Memory_Reference := null;
       Approver : Ag.Approver_Reference := null;
       Budget   : Natural := 0;
-      Shown    : Model_Runner.Output.Sink_Reference := null)
+      Shown    : Model_Runner.Output.Sink_Reference := null;
+      Reply    : Positive := 64;
+      Compact  : Boolean := False)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -219,7 +225,7 @@ package body Tests.Agent_Loop_Cases is
       Assert (E.Is_Ok (Status), "the built-in tools did not read");
       Model_Runner.Stops.Open (Stop);
       Runner.Set_Base (Ada.Directories.Full_Name (Dir));
-      Request.Max_Tokens := 64;
+      Request.Max_Tokens := Reply;
       Ag.Run
         (Source     => Under.Ready,
          Session    => Session,
@@ -234,6 +240,7 @@ package body Tests.Agent_Loop_Cases is
          Max_Steps  => 24,
          Thinking   => (if Budget > 0 then Model_Runner.Templates.Thinking_On else Model_Runner.Templates.Thinking_Off),
          Think_Budget => Budget,
+         Compact    => Compact,
          Watch      => Seen'Unchecked_Access,
          Approve    => Approver,
          Script     => Replies'Unchecked_Access,
@@ -312,6 +319,23 @@ package body Tests.Agent_Loop_Cases is
                  and then Ada.Directories.Exists (Dir & "/closed.txt"),
                  "a call cut at the thought's budget, its thought closed, was not asked for after:"
                  & Ended.Thoughts_Closed'Image & Seen.Cut_Offs'Image & Seen.Results.Length'Image);
+      end;
+
+      --  A thought that takes the room its reply needed after it: the step
+      --  is tried again with the thought held short, and the call after it
+      --  has its room -- where the task failed with the context full.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<think>" & [1 .. 2_100 => 'a'] & "</think>" & Write ("room.txt", "z"));
+         Replies.Keeps := True;
+         Replies.Room_Of := 900;
+         Run (Replies, Seen, Ended, Budget => 512, Reply => 1_024, Compact => True);
+         Assert (Natural (Seen.Results.Length) = 1 and then Ada.Directories.Exists (Dir & "/room.txt"),
+                 "a step whose thought took its reply's room was not tried again with a shorter one:"
+                 & Seen.Results.Length'Image & " " & Ended.Reason'Image);
       end;
 
       --  A file put back as an earlier write left it is said to be.
