@@ -32,6 +32,7 @@ with AUnit.Test_Filters;
 with Tests.Suite;
 with Checks;
 with Agent_Trial;
+with Knowledge_Bench;
 with Conformance;
 with Conformance.Parts;
 with Fixture_Mutation;
@@ -2763,6 +2764,31 @@ begin
          end if;
 
          Ada.Text_IO.Put_Line (Room (1 .. Last));
+      end;
+
+   elsif Command = "knowledge-bench" then
+      --  What the knowledge layer costs as a project grows: a project made
+      --  for it, and its operations timed.
+      declare
+         function Count (Name : String; Default : Positive) return Positive is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  declare
+                     Text : constant String := Ada.Command_Line.Argument (Index + 1);
+                  begin
+                     if Text'Length in 1 .. 6 and then (for all C of Text => C in '0' .. '9')
+                       and then Natural'Value (Text) >= 1
+                     then
+                        return Natural'Value (Text);
+                     end if;
+                  end;
+               end if;
+            end loop;
+            return Default;
+         end Count;
+      begin
+         Knowledge_Bench.Run (Count ("--tasks", 400), Count ("--files", 400), Count ("--observations", 200));
       end;
 
    elsif Command = "probe" then

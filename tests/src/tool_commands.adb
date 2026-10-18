@@ -36,10 +36,12 @@ package body Tool_Commands is
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
    Name_Probe          : aliased constant String := "probe";
+   Name_Knowledge      : aliased constant String := "knowledge-bench";
 
    Nothing : aliased constant String := "";
 
    Opts_None      : aliased constant String := " ";
+   Opts_Knowledge : aliased constant String := " --tasks --files --observations ";
    Opts_Restamp   : aliased constant String := " --all --root ";
    Opts_Bench     : aliased constant String := " --formats --rounds --tiles --vectors ";
    Opts_Check     : aliased constant String :=
@@ -128,7 +130,10 @@ package body Tool_Commands is
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "[--formats] [--rounds N] [--tiles] [--vectors N]";
    Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
+   Takes_Knowledge : aliased constant String := "[--tasks N] [--files N] [--observations N]";
 
+   Says_Knowledge : aliased constant String :=
+     "time what the knowledge layer costs on a project of many tasks, files and observations";
    Says_Probe : aliased constant String :=
      "a process for the suite to watch from outside: one that ends with its"
      & " interrupt handling still installed, or one that says how many"
@@ -278,7 +283,7 @@ package body Tool_Commands is
      " --mmproj --image --frames --fps --threads --device --dump --expect"
      & " --repeats ";
 
-   Held : constant array (1 .. 34) of Command :=
+   Held : constant array (1 .. 35) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -345,7 +350,9 @@ package body Tool_Commands is
       (Name_Agent_Trial'Access, Takes_Trial'Access,
        Says_Trial'Access, Opts_Trial'Access),
       (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
-       Opts_None'Access)];
+       Opts_None'Access),
+      (Name_Knowledge'Access, Takes_Knowledge'Access, Says_Knowledge'Access,
+       Opts_Knowledge'Access)];
 
    -----------
    -- Count --
