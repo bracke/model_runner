@@ -11,7 +11,10 @@ package body Untested_Surface is
    --  says what it should do, which is what would tell a wrong answer from
    --  an answer nobody looked at.
    --
-   --  Asked of the host. Answered_Yes and Typed_Line wait for a person
+   --  Asked of the host. Confirmed_Line and Edited_Line, as Answered_Yes
+   --  and Typed_Line, wait for a person at the terminal; Started_Below is
+   --  where the session was started, which a test would have to change
+   --  under every other case running. Answered_Yes and Typed_Line wait for a person
    --  at the terminal the suite is run from: called here, they would hold
    --  the run until someone typed. Release_Terminal_Mode says what to
    --  put back when the program is told
@@ -60,13 +63,18 @@ package body Untested_Surface is
    --  hold what it gives. Delete_If_Present and Make_Directory are Files',
    --  the state's own writes, which every test that keeps a record runs.
    --
+   --  Private to the command line. Execute.Support and Execute.Acquisition
+   --  decide how a run runs -- its backend, workers, arithmetic, paging,
+   --  panels, rotation, bounds, the model an alias names -- and every run
+   --  command's test goes through them; being private, no test names them.
+   --
    --  Not yet looked at. Until 2026-10-18 the check saw no function at all
    --  -- "   function " is a character shorter than "   procedure ", and was
    --  held to the same thirteen -- and these are the functions it found
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (98 of them, from Action_Name on, after Remembered, in the list.)
+   --  (72 of them, from Action_Name on, after Remembered, in the list.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -143,23 +151,28 @@ package body Untested_Surface is
          | "Delete_If_Present"
          | "Make_Directory"
          | "Asked_Rotation"
+         | "Chosen_Arithmetic"
+         | "Model_Bounds"
+         | "Panel_Cache_For"
+         | "Resolved_Backend"
+         | "Selected_Workers"
+         | "Session_Paging"
+         | "With_Panels"
+         | "Resolve_Alias"
+         | "Confirmed_Line"
+         | "Edited_Line"
+         | "Started_Below"
          | "Attends_Packed_Heads"
          | "Attention_Head_Room"
          | "Available_Memory"
          | "Block_Drafts"
-         | "Bounds_Of"
          | "Byte_Sign_Ones_Address"
          | "Cache_Bound"
          | "Cache_Bytes_For"
          | "Carry_Lost"
-         | "Chosen_Arithmetic"
-         | "Coloured_Commands"
          | "Config_File"
-         | "Confirmed_Line"
          | "Decodes_Dearly"
          | "Device_Context"
-         | "Dismissed_Issues"
-         | "Edited_Line"
          | "Entry_Point"
          | "Feed_Width"
          | "Float_Shares"
@@ -182,30 +195,19 @@ package body Untested_Surface is
          | "Is_RWKV"
          | "Is_Stalled"
          | "Last_Refusal"
-         | "Last_Refusals"
-         | "Model_Bounds"
          | "Models_File"
          | "Normalizes_After"
          | "Offset_Signs_Address"
          | "Offset_Words_Address"
          | "One_State_Slot"
-         | "Open_Issues"
          | "Packs_Vectors"
-         | "Panel_Cache_For"
          | "Panel_Row_Bytes"
          | "Panels_Unasked"
          | "Physical_Memory"
-         | "Picture_Marker"
-         | "Picture_Tokens"
          | "Plain_Memory_Kinds"
-         | "Prompt_Of_Parts"
          | "Proxy_Bypass"
          | "Pure_SSM"
          | "Queues"
-         | "Ranking_Logit"
-         | "Refused_Outside"
-         | "Resolve_Alias"
-         | "Resolved_Backend"
          | "Resolve_Model_Path"
          | "Resolve_Session_Path"
          | "Room_Beside"
@@ -215,31 +217,23 @@ package body Untested_Surface is
          | "Search_Path"
          | "Second_Kind"
          | "Second_Memory_Bytes"
-         | "Selected_Workers"
-         | "Session_Paging"
          | "Sessions_Directory"
          | "Shares_Host"
          | "Shares_Memory"
          | "Sign_Ones_Address"
          | "Sign_Shuffle_Address"
-         | "Started_Below"
          | "Storage_Limit"
          | "Stores_Pair"
-         | "Styles_Answers"
          | "Submissions"
          | "Takes_Few_Together"
          | "Takes_Host_Memory"
          | "Tiled_Products"
          | "Token_Bytes"
-         | "Typed_During_Work"
          | "Unsupported_Reason"
          | "Untiled_Products"
          | "User_Templates_Directory"
-         | "Waiting_On_It"
          | "Wanted_Tile"
-         | "Weights_Mapped"
-         | "With_Panels"
-         | "Written_Since";
+         | "Weights_Mapped";
    end Is_Untested;
 
    -----------

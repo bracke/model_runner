@@ -111,9 +111,15 @@ package body Tests.Sampling_Cases is
       Assert (E.Is_Ok (Status), "sampler did not reopen");
 
       Logits := [others => 1.0];
+      --  A token is ranked by its own logit where nothing adjusts it, and
+      --  by the lowest there is once it is forbidden.
+      Assert (S.Ranking_Logit (Sampler, Logits, Vocab.Token_Id (0)) = 1.0,
+              "a token was not ranked by its own logit");
       for Token_Index in 0 .. Vocabulary - 1 loop
          S.Forbid (Sampler, Vocab.Token_Id (Token_Index));
       end loop;
+      Assert (S.Ranking_Logit (Sampler, Logits, Vocab.Token_Id (0)) < 0.0,
+              "a forbidden token was ranked as though it could be drawn");
 
       S.Sample (Sampler, Logits, Token, Status);
       Assert (Status.Code = E.Sampling_No_Candidates,

@@ -57,6 +57,7 @@ with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
+with Model_Runner.CLI.Tasks;
 with Model_Runner.Framework.Views;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
@@ -9445,6 +9446,30 @@ package body Tests.Framework_Cases is
       begin
          Assert (Planned.Context_Limit <= 4096 and then Planned.Output_Reserve >= 3000,
                  "a session's model was not held to the lower room and the larger reserve");
+      end;
+
+      --  A task another waits on says so; the session's agent alone has
+      --  refusals to say; no issue is kept, so none is open or dismissed;
+      --  and nothing was typed during a /work that was never run.
+      declare
+         Later : Unbounded_String;
+         Agent : constant Scripted_Agent :=
+           (File => Null_Unbounded_String, Answer => Null_Unbounded_String, Broken => False);
+      begin
+         Tk.Create (Store, Change, Fields ("Later", "analysis", "depends_on", To_String (Id)), "user", "", Later,
+                    Status);
+         S.Commit (Store, Change, Status);
+         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.Tasks.Waiting_On_It (Store, To_String (Id)),
+                                          To_String (Later)) > 0
+                 and then Model_Runner.CLI.Tasks.Waiting_On_It (Store, To_String (Later)) = "",
+                 "what waits on a task was not said, or something was said to wait on one nothing waits on");
+         Assert (Model_Runner.CLI.Project_Commands.Last_Refusals (Agent) = ""
+                 and then not Model_Runner.CLI.Project_Commands.Refused_Outside (Agent),
+                 "an agent not the session's was given refusals");
+         Assert (Model_Runner.CLI.Project_Commands.Open_Issues (Store).Is_Empty
+                 and then Model_Runner.CLI.Project_Commands.Dismissed_Issues (Store).Is_Empty
+                 and then not Model_Runner.CLI.Project_Commands.Typed_During_Work,
+                 "issues, or typing during work, were said where there are none");
       end;
 
       --  The units a file declares.

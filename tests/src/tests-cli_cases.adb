@@ -19,6 +19,7 @@ with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.CLI.Driver;
 with Model_Runner.CLI.Execute;
+with Model_Runner.CLI.Pictures;
 with Model_Runner.CLI.Partials;
 
 with Ada.Strings.Unbounded;
@@ -15578,6 +15579,71 @@ package body Tests.CLI_Cases is
               "the history kept" & Lines'Image & " lines, past its 500");
    end The_Line_Editor_Keeps_Characters_And_Bounds_Its_History;
 
+   --  Helpers of the command line, as their documentation says.
+   procedure Command_Line_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Seer    : Model_Runner.CLI.Pictures.Seer;
+      Held    : Model_Runner.Conversation.History;
+      Status  : E.Error_Info;
+      Path    : constant String := Ada.Directories.Full_Name ("obj/written-since.txt");
+   begin
+      --  A console that styles nothing styles no answer, and colours no
+      --  command.
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Opt.Normal);
+      Assert (not Model_Runner.Presentation.Styles_Answers (Screen)
+              and then Model_Runner.Presentation.Coloured_Commands (Screen, "/work TASK-1") = "/work TASK-1",
+              "a console that styles nothing styled an answer or a command");
+
+      --  A seer not open has no picture's marker and no tokens of one.
+      Assert (Model_Runner.CLI.Pictures.Picture_Marker (Seer) = ""
+              and then Model_Runner.CLI.Pictures.Picture_Tokens (Seer)'Length = 0,
+              "a seer not open gave a picture's marker or tokens");
+
+      --  A history keeps the bounds it was opened with; a message's parts
+      --  run together with each picture's marker where it stands.
+      Model_Runner.Conversation.Open (Held, Model_Runner.Limits.Default_Session_Limits, Status);
+      Assert (E.Is_Ok (Status) and then Model_Runner.Limits."="
+                (Model_Runner.Conversation.Bounds_Of (Held), Model_Runner.Limits.Default_Session_Limits),
+              "a history did not keep its bounds");
+      Model_Runner.Conversation.Close (Held);
+      Assert (Model_Runner.Conversation.Prompt_Of_Parts
+                ("[{""type"": ""text"", ""text"": ""look ""}, {""type"": ""image"", ""path"": ""a.png""}]",
+                 "<image>", "<video>") = "look <image>",
+              "a message's parts did not run together with the picture's marker: "
+              & Model_Runner.Conversation.Prompt_Of_Parts
+                  ("[{""type"": ""text"", ""text"": ""look ""}, {""type"": ""image"", ""path"": ""a.png""}]",
+                   "<image>", "<video>"));
+
+      --  A file source knows it was written since it was opened, the same
+      --  size or not.
+      declare
+         File   : Ada.Text_IO.File_Type;
+         Source : Model_Runner.Byte_Sources.Files.File_Source;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, "one");
+         Ada.Text_IO.Close (File);
+         Model_Runner.Byte_Sources.Files.Open (Source, Path, Status => Status);
+         Assert (E.Is_Ok (Status) and then not Model_Runner.Byte_Sources.Files.Written_Since (Source),
+                 "a file just opened was said written since");
+         delay 0.05;
+         --  Its own handle, apart from the source's.
+         Ada.Text_IO.Open (File, Ada.Text_IO.Out_File, Path, Form => "shared=no");
+         Ada.Text_IO.Put (File, "two");
+         Ada.Text_IO.Close (File);
+         Assert (Model_Runner.Byte_Sources.Files.Written_Since (Source),
+                 "a file written the same size since it was opened was not said so");
+         Model_Runner.Byte_Sources.Files.Close (Source);
+      end;
+   end Command_Line_Helpers_Answer_As_Said;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -15928,6 +15994,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Hub_Names_Stay_Inside'Access,
          "a file the hub lists is written only where its name stays inside the models directory");
+      Register_Routine
+        (T, Command_Line_Helpers_Answer_As_Said'Access,
+         "the command line's helpers answer as their documentation says");
    end Register_Tests;
 
 end Tests.CLI_Cases;
