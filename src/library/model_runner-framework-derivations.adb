@@ -4,6 +4,7 @@ with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 
+with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
@@ -830,6 +831,20 @@ package body Model_Runner.Framework.Derivations is
          if not Same then
             Records.Set_Revision (Value, Next_Revision (Item, Change, Key));
             Stores.Put (Change, Derivations_Area, Key, Value);
+         end if;
+         --  Made, not met again: an event, for what follows it to act on.
+         if not Found then
+            declare
+               Event : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Events.Emit (Item, Change, Events.Derived_Artifact_Created, Key,
+                            To_String (Spec.Kind) & " of " & To_String (Spec.Subject) & " by "
+                            & To_String (Spec.Algorithm) & "/" & To_String (Spec.Version),
+                            Event, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end;
          end if;
       end;
 

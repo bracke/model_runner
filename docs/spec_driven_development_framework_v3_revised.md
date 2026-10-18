@@ -3769,6 +3769,8 @@ A context's retrieval -- the candidate items a context may hold, before any is f
 
 Budgeted rendering SHALL NOT be part of that derivation: the same retrieval is fitted afresh to each model's room.
 
+A derivation kept for the first time SHALL be recorded as a Derived_Artifact_Created event; one found kept and used again SHALL NOT.
+
 ---
 
 # 120. Observations
@@ -3796,6 +3798,8 @@ An agent at work SHALL be able to record an observation through a narrow tool, k
 The harness SHALL record a failure pattern when a task's checks fail again as they failed before; a first failure SHALL NOT be recorded as one.
 
 Dismissed and superseded observations MAY be let go after the project's retention.observation_days, each left as a tombstone that still names what it was; active and promoted observations SHALL be kept.
+
+An observation that says nearly what an active one says -- the same kind, a file in common where both name files, and most of the same words -- SHALL be kept as its own, naming the other, and SHALL NOT be told to an agent beside it.
 
 ---
 

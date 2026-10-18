@@ -4283,6 +4283,18 @@ package body Model_Runner.CLI.Tasks is
                    To_String (Model_Runner.Framework.Context.Included_At
                                 (Built, Index).Id))]);
          end loop;
+         --  What it was chosen from, and what was learned that it told and
+         --  did not tell, and why.
+         if Model_Runner.Framework.Context.Retrieval (Built) /= "" then
+            Pres.Put_Message (Screen, "cli.task.context_retrieval",
+                              [Loc.Named ("name", Model_Runner.Framework.Context.Retrieval (Built))]);
+         end if;
+         for Line of Model_Runner.Framework.Context.Knowledge (Built) loop
+            Pres.Put_Message (Screen, "cli.task.context_knowledge", [Loc.Named ("detail", Line)]);
+         end loop;
+         for Line of Model_Runner.Framework.Context.Knowledge_Left (Built) loop
+            Pres.Put_Message (Screen, "cli.task.context_knowledge_left", [Loc.Named ("detail", Line)]);
+         end loop;
          --  The whole of it, as the agent reads it, with --verbose.
          if Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose) then
             Pres.Put_Line (Screen, Model_Runner.Framework.Context.Rendered (Built));

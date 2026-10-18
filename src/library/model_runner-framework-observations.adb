@@ -184,6 +184,7 @@ package body Model_Runner.Framework.Observations is
             then Natural'Value (Count) else 1);
       end;
       Result.Superseded_By := To_Unbounded_String (Records.Get (Value, "superseded_by"));
+      Result.Similar_To := To_Unbounded_String (Records.Get (Value, "similar_to"));
       Result.Promoted_To := To_Unbounded_String (Records.Get (Value, "promoted_to"));
       Result.Reason := To_Unbounded_String (Records.Get (Value, "reason"));
       Result.Retired := To_Unbounded_String (Records.Get (Value, "retired"));
@@ -228,6 +229,7 @@ package body Model_Runner.Framework.Observations is
       Set ("seen_at", To_String (Value.Seen_At));
       Set ("occurrences", Image (Value.Occurrences));
       Set ("superseded_by", To_String (Value.Superseded_By));
+      Set ("similar_to", To_String (Value.Similar_To));
       Set ("promoted_to", To_String (Value.Promoted_To));
       Set ("reason", To_String (Value.Reason));
       Set ("retired", To_String (Value.Retired));
@@ -329,6 +331,53 @@ package body Model_Runner.Framework.Observations is
    ------------------------
    -- Record_Observation --
    ------------------------
+
+   -----------------
+   -- Nearly_Same --
+   -----------------
+
+   function Nearly_Same (Left, Right : Observation) return Boolean is
+
+      --  The words of three letters or more, lower case, once each.
+      function Words_Of (Text : String) return Name_Lists.Vector is
+         Found : Name_Lists.Vector;
+         Start : Natural := 0;
+         Plain : constant String := Lower (Text);
+      begin
+         for Index in Plain'First .. Plain'Last + 1 loop
+            if Index <= Plain'Last and then Plain (Index) in 'a' .. 'z' | '0' .. '9' | '_' then
+               if Start = 0 then
+                  Start := Index;
+               end if;
+            elsif Start /= 0 then
+               if Index - Start >= 3 and then not Found.Contains (Plain (Start .. Index - 1)) then
+                  Found.Append (Plain (Start .. Index - 1));
+               end if;
+               Start := 0;
+            end if;
+         end loop;
+         return Found;
+      end Words_Of;
+
+      Ours   : constant Name_Lists.Vector := Words_Of (To_String (Left.Summary));
+      Theirs : constant Name_Lists.Vector := Words_Of (To_String (Right.Summary));
+      Shared : Natural := 0;
+   begin
+      if Left.Kind /= Right.Kind
+        or else (not Left.Files.Is_Empty and then not Right.Files.Is_Empty
+                 and then not (for some Path of Left.Files => Right.Files.Contains (Path)))
+      then
+         return False;
+      end if;
+      for Word of Ours loop
+         if Theirs.Contains (Word) then
+            Shared := Shared + 1;
+         end if;
+      end loop;
+      --  Shared over all the words there are, at least three in five.
+      return Shared >= 3
+        and then 5 * Shared >= 3 * (Natural (Ours.Length) + Natural (Theirs.Length) - Shared);
+   end Nearly_Same;
 
    procedure Record_Observation
      (Item   : Stores.Store;
@@ -516,6 +565,20 @@ package body Model_Runner.Framework.Observations is
                end if;
             end;
          end if;
+         --  One that says nearly the same, still active: named, so the two
+         --  are not told side by side.
+         for Name of List (Item) loop
+            declare
+               Other : Observation;
+               Got   : E.Error_Info;
+            begin
+               Observations.Read (Item, Name, Other, Got);
+               if E.Is_Ok (Got) and then Other.Status = Active and then Nearly_Same (Value, Other) then
+                  Value.Similar_To := To_Unbounded_String (Name);
+                  exit;
+               end if;
+            end;
+         end loop;
          Stores.Put (Change, Observations_Area, To_String (Id), To_Record (Value, Claim));
          declare
             Event : Unbounded_String;

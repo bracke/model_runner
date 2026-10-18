@@ -144,6 +144,8 @@ package body Model_Runner.Framework.Views is
                                        then Code (To_String (Value.Superseded_By)) else ""));
          Line (Into, "promoted to", (if Length (Value.Promoted_To) > 0
                                      then Code (To_String (Value.Promoted_To)) else ""));
+         Line (Into, "similar to", (if Length (Value.Similar_To) > 0
+                                    then Code (To_String (Value.Similar_To)) else ""));
          Line (Into, "why", (if Length (Value.Reason) > 0 then Code (To_String (Value.Reason)) else ""));
          if Standing = Obs.Applicable then
             Applies := Applies + 1;

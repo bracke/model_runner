@@ -7365,6 +7365,7 @@ package body Tests.Framework_Cases is
         (File => Null_Unbounded_String, Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
          Broken => False);
       Said    : Ada.Text_IO.File_Type;
+      Heard   : constant String := Dirs.Full_Name (Root) & "-said.txt";
    begin
       Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
       Model_Runner.Presentation.Open
@@ -7373,7 +7374,9 @@ package body Tests.Framework_Cases is
           Input_Is_Terminal  => False, Colour_Suppressed => True),
          Model_Runner.CLI.Options.Normal);
       Dirs.Set_Directory (Root);
-      Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "said.txt");
+      --  Beside the project, not in it: a file being written in the tree is
+      --  one its graph cannot read.
+      Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, Heard);
       Ada.Text_IO.Set_Output (Said);
       Ada.Text_IO.Set_Error (Said);
       for Line of Lines loop
@@ -7383,7 +7386,7 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
       Ada.Text_IO.Close (Said);
       Dirs.Set_Directory (Before);
-      return Read_Whole (Root & "/said.txt");
+      return Read_Whole (Heard);
    exception
       when others =>
          Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
@@ -7764,6 +7767,31 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status), "the context was not kept: " & Code_Of (Status));
       Assert (S.Exists (Store, Model_Runner.Framework.Derivations_Area, Cx.Retrieval (First)),
               "keeping the context did not keep its retrieval");
+
+      --  Made once, an event once: kept again, none.
+      declare
+         package Ev renames Model_Runner.Framework.Events;
+
+         function Made return Natural is
+            All_Of : constant Ev.Event_List := Ev.Since (Store, 0);
+            Found  : Natural := 0;
+         begin
+            for Index in 1 .. Ev.Length (All_Of) loop
+               if Ev."=" (Ev.Element (All_Of, Index).Kind, Ev.Derived_Artifact_Created)
+                 and then To_String (Ev.Element (All_Of, Index).Subject) = Cx.Retrieval (First)
+               then
+                  Found := Found + 1;
+               end if;
+            end loop;
+            return Found;
+         end Made;
+      begin
+         Assert (Made = 1, "keeping a retrieval did not say it was made, once:" & Natural'Image (Made));
+         Change := S.No_Changes;
+         Cx.Keep (Store, Change, Again, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Made = 1, "keeping it again said it was made again");
+      end;
       Dv.Forget;
       Counts;
       Build (Wide, Again);
@@ -7854,8 +7882,124 @@ package body Tests.Framework_Cases is
          Assert (Worked_Out and then Cx.Retrieval (Again) /= Was,
                  "a retrieval was used again under another confinement");
       end;
-      S.Close (Store);
+
+      --  /task context says what it was chosen from, and what was learned
+      --  that it told.
+      declare
+         Root : constant String := Fresh_Root (Store);
+      begin
+         S.Close (Store);
+         declare
+            Said : constant String := Command_Output (Root, ["/task context " & To_String (Id)]);
+         begin
+            Assert (Ada.Strings.Fixed.Index (Said, "what it may hold: DRV-") > 0
+                    and then Ada.Strings.Fixed.Index (Said, "told: OBS-001@") > 0,
+                    "/task context did not say its retrieval and what it told: " & Said);
+         end;
+      end;
    end Retrieval_Is_Derived;
+
+   procedure Retrieval_Key_Sees_Hand_Edits (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Built  : Cx.Built;
+      Wide   : constant Cx.Model_Profile :=
+        (Id => To_Unbounded_String ("wide"), Context_Limit => 60_000, Output_Reserve => 512, others => <>);
+      Long_Ago : constant Long_Long_Integer := 1_700_000_000;
+   begin
+      Task_Project (Store, "retrieval-hand-edit");
+      Tk.Create (Store, Change, Fields ("Mend the parser", "implementation", "component", "parser"), "user", "",
+                 Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the task was not made: " & Code_Of (Status));
+      --  Its times long ago, as they will be put back after the edit; and
+      --  old enough that what the key read of each record is remembered.
+      declare
+         Ignored : Boolean;
+      begin
+         Ignored := Hostkit.Metadata.Set_File_Times (S.Root (Store) & "/tasks/" & To_String (Id) & ".rec",
+                                                     Long_Ago, Long_Ago);
+      end;
+      delay 2.5;
+      Cx.Build (Store, To_String (Id), Wide, Built, Status);
+      declare
+         First : constant String := Cx.Retrieval (Built);
+         Path  : constant String := S.Root (Store) & "/tasks/" & To_String (Id) & ".rec";
+         Text  : String := Read_Whole (Path);
+         At_It : constant Natural := Ada.Strings.Fixed.Index (Text, "created_by 4" & LF & "user") + 13;
+         Ignored : Boolean;
+      begin
+         Cx.Build (Store, To_String (Id), Wide, Built, Status);
+         Assert (Cx.Retrieval (Built) = First and then First /= "", "the same state did not name the same retrieval");
+         --  Edited by hand, the same size, its times put back: the key
+         --  reads it again, whatever it remembered.
+         Text (At_It .. At_It + 3) := "hand";
+         Put_File (Path, Text);
+         Ignored := Hostkit.Metadata.Set_File_Times (Path, Long_Ago, Long_Ago);
+         Cx.Build (Store, To_String (Id), Wide, Built, Status);
+         Assert (Cx.Retrieval (Built) /= First, "a record edited by hand was taken as it was remembered");
+      end;
+      S.Close (Store);
+   end Retrieval_Key_Sees_Hand_Edits;
+
+   procedure Work_Reuses_Its_Retrieval (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      --  /work on a fresh project, in place or in a workspace: how many
+      --  retrievals it worked out and how many it used again.
+      procedure Run (Leaf, Isolation : String; Computed, Reused : out Natural) is
+         Store  : S.Store;
+         Change : S.Transaction;
+         Status : E.Error_Info;
+         Id     : Unbounded_String;
+         Root   : Unbounded_String;
+         Was_Computed, Was_Reused : Natural;
+      begin
+         Task_Project
+           (Store, Leaf,
+            "set execution.allowed = test" & LF
+            & "profile checks = exists: test -f src/hello.adb" & LF
+            & "scalar verification.default = checks" & LF
+            & "scalar work.isolation = " & Isolation & LF
+            & "scalar work.backend = copy" & LF);
+         Dirs.Create_Path (Fresh_Root (Store) & "/src");
+         Put_File (Fresh_Root (Store) & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+         Tk.Create (Store, Change, Fields ("Greet in src/hello.adb", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the task was not made: " & Code_Of (Status));
+         Root := To_Unbounded_String (Fresh_Root (Store));
+         S.Close (Store);
+         Dv.Forget;
+         Was_Computed := Dv.Computed (Cx.Retrieval_Kind);
+         Was_Reused := Dv.Reused (Cx.Retrieval_Kind);
+         declare
+            Said : constant String := Command_Output (To_String (Root), ["/work " & To_String (Id)]);
+         begin
+            Computed := Dv.Computed (Cx.Retrieval_Kind) - Was_Computed;
+            Reused := Dv.Reused (Cx.Retrieval_Kind) - Was_Reused;
+            Assert (Computed + Reused >= 2, Isolation & ": /work did not build its context twice: " & Said);
+         end;
+      end Run;
+
+      Computed, Reused : Natural;
+   begin
+      --  The context checked to fit before the run and the one the run is
+      --  given are one retrieval, in place and in a workspace alike: the
+      --  workspace's files are the project's, wherever they are.
+      Run ("work-retrieval", "project", Computed, Reused);
+      Assert (Computed = 1 and then Reused >= 1,
+              "in place, /work worked its retrieval out" & Natural'Image (Computed) & " times, used it again"
+              & Natural'Image (Reused));
+      Run ("work-retrieval-apart", "workspace", Computed, Reused);
+      Assert (Computed = 1 and then Reused >= 1,
+              "in a workspace, /work worked its retrieval out" & Natural'Image (Computed)
+              & " times, used it again" & Natural'Image (Reused));
+   end Work_Reuses_Its_Retrieval;
 
    --  The tests a change calls for come from derivations: the same change
    --  is chosen for once, a changed file or a new version chooses again, and
@@ -8389,6 +8533,73 @@ package body Tests.Framework_Cases is
    --  warm, the cold not at all, what may no longer hold said so, nothing
    --  that only repeats what is given, and what governs before all of it --
    --  each considered recorded in the context's manifest.
+   procedure Near_Observations_Told_Once (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Mine   : Unbounded_String;
+      First, Again, Other, Elsewhere : Unbounded_String;
+      Fresh  : Boolean;
+      Built  : Cx.Built;
+      Wide   : constant Cx.Model_Profile :=
+        (Id => To_Unbounded_String ("wide"), Context_Limit => 60_000, Output_Reserve => 512, others => <>);
+
+      procedure Keep (Said : Ob.Draft; Into : out Unbounded_String) is
+      begin
+         Change := S.No_Changes;
+         Ob.Record_Observation (Store, Change, Said, Origin_Of (To_String (Mine), "1", "AG-1"), Into, Fresh, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Fresh, "an observation was not kept: " & Code_Of (Status));
+      end Keep;
+
+      function Kept (Id : Unbounded_String) return Ob.Observation is
+         Value : Ob.Observation;
+      begin
+         Ob.Read (Store, To_String (Id), Value, Status);
+         return Value;
+      end Kept;
+   begin
+      Task_Project (Store, "near-observations");
+      Tk.Create (Store, Change, Fields ("Mine", "implementation", "component", "parser"), "user", "", Mine, Status);
+      S.Commit (Store, Change, Status);
+      Keep (Draft_Of (Ob.Finding, "The parser drops a trailing comma after a name"), First);
+      Keep (Draft_Of (Ob.Finding, "after a name, the parser drops the trailing comma"), Again);
+      Keep (Draft_Of (Ob.Finding, "the parser reads a comma before a name twice"), Other);
+      Keep (Draft_Of (Ob.Implementation_Note, "The parser drops a trailing comma after a name, by design"),
+            Elsewhere);
+      Assert (Kept (Again).Similar_To = First,
+              "a finding worded otherwise was not taken as nearly the same: " & To_String (Kept (Again).Similar_To));
+      Assert (Kept (Other).Similar_To = "" and then Kept (Elsewhere).Similar_To = ""
+              and then Kept (First).Similar_To = "",
+              "a finding saying something else, or of another kind, was taken as nearly the same");
+
+      Cx.Build (Store, To_String (Mine), Wide, Built, Status);
+      Assert (E.Is_Ok (Status), "the context was not built: " & Code_Of (Status));
+      Assert ((for some Line of Cx.Knowledge (Built) => Ada.Strings.Fixed.Index (Line, To_String (First) & "@") = 1)
+              and then (for some Line of Cx.Knowledge (Built) =>
+                          Ada.Strings.Fixed.Index (Line, To_String (Other) & "@") = 1)
+              and then (for some Line of Cx.Knowledge_Left (Built) =>
+                          Ada.Strings.Fixed.Index (Line, To_String (Again) & "@") = 1
+                          and then Ada.Strings.Fixed.Index (Line, "says nearly what " & To_String (First)) > 0),
+              "nearly the same finding was told twice, or the other not told: " & Joined (Cx.Knowledge (Built))
+              & " / " & Joined (Cx.Knowledge_Left (Built)));
+      declare
+         Root : constant String := Fresh_Root (Store);
+      begin
+         S.Close (Store);
+         declare
+            Said : constant String :=
+              Command_Output (Root, ["/obs record finding the trailing comma after a name is dropped by the parser",
+                                     "/obs " & To_String (Again)]);
+         begin
+            Assert (Ada.Strings.Fixed.Index (Said, "OBS-005 says nearly what OBS-001 says") > 0
+                    and then Ada.Strings.Fixed.Index (Said, "says nearly what OBS-001 says; told once") > 0,
+                    "/obs did not say a finding is nearly another: " & Said);
+         end;
+      end;
+   end Near_Observations_Told_Once;
+
    procedure Knowledge_Is_Told (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Store  : S.Store;
@@ -15735,6 +15946,12 @@ package body Tests.Framework_Cases is
         (T, Retrieval_Is_Derived'Access,
          "a context's retrieval is kept and used again for every room, and worked out again when what it read changes");
       Register_Routine
+        (T, Retrieval_Key_Sees_Hand_Edits'Access,
+         "a retrieval's key reads again a record changed by hand, whatever it remembered");
+      Register_Routine
+        (T, Work_Reuses_Its_Retrieval'Access,
+         "/work checks its context and runs on the one retrieval, in place and in a workspace");
+      Register_Routine
         (T, Selection_Is_Derived'Access,
          "a change's tests are chosen once through kept derivations, and the evidence names them");
       Register_Routine
@@ -15749,6 +15966,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Knowledge_Saves_Work'Access,
          "what one task's agent found saves the next its looking, the outcome the same");
+      Register_Routine
+        (T, Near_Observations_Told_Once'Access,
+         "a finding worded otherwise is kept as nearly another, and the two are told once");
       Register_Routine
         (T, Observations_At_The_Command_Line'Access,
          "/obs lists, shows, records, dismisses, supersedes and promotes observations");

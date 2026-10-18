@@ -188,6 +188,7 @@ package body Model_Runner.Framework.Schemas is
           Rule ("symbols", Text_Field, False),
           Rule ("configuration", Text_Field, False),
           Rule ("superseded_by", Text_Field, False),
+          Rule ("similar_to", Text_Field, False),
           Rule ("promoted_to", Text_Field, False),
           Rule ("reason", Text_Field, False),
           Rule ("retired", Text_Field, False)]),

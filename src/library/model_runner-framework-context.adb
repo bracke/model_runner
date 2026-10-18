@@ -1,9 +1,13 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Strings.Maps;
 
 with Hostkit.Fs;
+with Hostkit.Metadata;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
@@ -300,6 +304,108 @@ package body Model_Runner.Framework.Context is
       return Found;
    end Named_Words;
 
+   --  What a file gave the last time a retrieval's key read it -- its
+   --  print, the fields of a state, the files of an observation -- held
+   --  with the file's stamp, and given again while the stamp is the same
+   --  and old enough to trust: the key reads a project's records each time
+   --  a context is built, and most of them have not changed.
+   package Remembered_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
+   --  The most held before all are let go.
+   Remembered_Most : constant := 50_000;
+
+   protected Read_Memory is
+      procedure Get (Key, Stamp : String; Value : out Unbounded_String; Found : out Boolean);
+      procedure Put (Key, Stamp, Value : String);
+   private
+      Held : Remembered_Maps.Map;
+   end Read_Memory;
+
+   protected body Read_Memory is
+      procedure Get (Key, Stamp : String; Value : out Unbounded_String; Found : out Boolean) is
+         Position : constant Remembered_Maps.Cursor := Held.Find (Key);
+      begin
+         Found := False;
+         Value := Null_Unbounded_String;
+         if Remembered_Maps.Has_Element (Position) then
+            declare
+               Kept : constant String := Remembered_Maps.Element (Position);
+               Cut  : constant Natural := Ada.Strings.Fixed.Index (Kept, [1 => ASCII.NUL]);
+            begin
+               if Cut > 0 and then Kept (Kept'First .. Cut - 1) = Stamp then
+                  Value := To_Unbounded_String (Kept (Cut + 1 .. Kept'Last));
+                  Found := True;
+               end if;
+            end;
+         end if;
+      end Get;
+
+      procedure Put (Key, Stamp, Value : String) is
+      begin
+         if Natural (Held.Length) >= Remembered_Most then
+            Held.Clear;
+         end if;
+         Held.Include (Key, Stamp & ASCII.NUL & Value);
+      end Put;
+   end Read_Memory;
+
+   --  What reading a file gives, from memory where its stamp says it is
+   --  as it was, else read and remembered. Its stamp is taken before it is
+   --  read, so a change while it is read is a stamp that differs next time.
+   --  What could not be read -- a value starting with "!" -- is not held.
+   --  A file's stamp, one look at it: its size and its modification and
+   --  change times to the nanosecond; "" where the host gives no such
+   --  times, or where they are within two seconds of now -- two writes of
+   --  one size in one kernel tick share them -- and what it holds must be
+   --  read again.
+   function Trusted_Stamp (Full : String) return String is
+      use type Hostkit.Metadata.Identity_Field;
+      Now : constant Long_Long_Integer :=
+        Long_Long_Integer (Ada.Calendar."-" (Ada.Calendar.Clock, Ada.Calendar.Time_Of (1970, 1, 1)));
+      Was : constant Hostkit.Metadata.Entry_Revision := Hostkit.Metadata.Entry_Revision_Of (Full);
+      function Image (Field : Hostkit.Metadata.Identity_Field) return String
+      is (Ada.Strings.Fixed.Trim (Hostkit.Metadata.Identity_Field'Image (Field), Ada.Strings.Both));
+   begin
+      if not Was.Available
+        or else Was.Changed_Seconds = 0
+        or else Now - Long_Long_Integer (Hostkit.Metadata.Identity_Field'Max
+                                           (Was.Modified_Seconds, Was.Changed_Seconds)) < 2
+      then
+         return "";
+      end if;
+      return Image (Was.Size) & ":" & Image (Was.Modified_Seconds) & "." & Image (Was.Modified_Nanoseconds)
+        & ":" & Image (Was.Changed_Seconds) & "." & Image (Was.Changed_Nanoseconds);
+   exception
+      when others =>
+         return "";
+   end Trusted_Stamp;
+
+   function Remembered
+     (Kind, Full : String;
+      Work       : not null access function return String) return String
+   is
+      Stamp : constant String := Trusted_Stamp (Full);
+      Value : Unbounded_String;
+      Found : Boolean := False;
+   begin
+      if Stamp /= "" then
+         Read_Memory.Get (Kind & ":" & Full, Stamp, Value, Found);
+         if Found then
+            return To_String (Value);
+         end if;
+      end if;
+      declare
+         Fresh : constant String := Work.all;
+      begin
+         if Stamp /= "" and then (Fresh'Length = 0 or else Fresh (Fresh'First) /= '!')
+         then
+            Read_Memory.Put (Kind & ":" & Full, Stamp, Fresh);
+         end if;
+         return Fresh;
+      end;
+   end Remembered;
+
    --  Everything a context's retrieval reads, as a derivation: the task
    --  and every record of the state it can reach, the tree's files, the
    --  files the task names wherever they are, the files its observations
@@ -320,13 +426,20 @@ package body Model_Runner.Framework.Context is
 
       --  A record's bytes as they are kept.
       procedure Depend_Record (Where : Area; Name : String) is
-         Text   : Unbounded_String;
-         Status : E.Error_Info;
+         Full : constant String := Stores.Root (Item) & "/" & Directory_Name (Where) & "/" & Name & ".rec";
+
+         function Print return String is
+            Text   : Unbounded_String;
+            Status : E.Error_Info;
+         begin
+            Files.Read_Text (Full, Text, Status);
+            return (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else "!");
+         end Print;
+
+         Got : constant String := Remembered ("record", Full, Print'Access);
       begin
-         Files.Read_Text (Stores.Root (Item) & "/" & Directory_Name (Where) & "/" & Name & ".rec", Text, Status);
          Dv.Depend (Spec, Dv.Input, "record", Directory_Name (Where) & "/" & Name,
-                    (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else ""),
-                    (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
+                    (if Got = "!" then "" else Got), (if Got = "!" then Dv.Unreadable else Dv.Present));
       end Depend_Record;
 
       --  Of a task's runtime state only what the retrieval reads, so that
@@ -341,13 +454,32 @@ package body Model_Runner.Framework.Context is
            (if Id = Task_Id
             then ["last_result", "current_verification", "current_failure", "blocking_reasons", "changed_files"]
             else ["state"]);
+
+         --  Each field's print, a line each; "!" where it will not read.
+         function Prints return String is
+            Text : Unbounded_String;
+         begin
+            Stores.Read (Item, Tasks_Area, Id & ".state", State, Status);
+            if E.Is_Error (Status) then
+               return "!";
+            end if;
+            for Field of Fields loop
+               Append (Text, Fingerprint (Records.Get (State, Field)) & ASCII.LF);
+            end loop;
+            return To_String (Text);
+         end Prints;
+
+         Got : constant String :=
+           Remembered ((if Id = Task_Id then "own_state" else "state"),
+                       Stores.Root (Item) & "/" & Directory_Name (Tasks_Area) & "/" & Id & ".state.rec",
+                       Prints'Access);
+         Got_Prints : constant Name_Lists.Vector := Lines_Of (Got);
       begin
-         Stores.Read (Item, Tasks_Area, Id & ".state", State, Status);
-         for Field of Fields loop
-            if E.Is_Ok (Status) then
-               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Field, Fingerprint (Records.Get (State, Field)));
+         for Index in 1 .. Natural (Fields.Length) loop
+            if Got = "!" or else Natural (Got_Prints.Length) /= Natural (Fields.Length) then
+               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Fields (Index), "", Dv.Unreadable);
             else
-               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Field, "", Dv.Unreadable);
+               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Fields (Index), Got_Prints (Index));
             end if;
          end loop;
       end Depend_State;
@@ -356,17 +488,26 @@ package body Model_Runner.Framework.Context is
       --  or absent.
       procedure Depend_File (Kind, Root, Path : String) is
          Full   : constant String := Hostkit.Fs.Join (Root, Path);
-         Print  : Unbounded_String;
-         Status : E.Error_Info;
+
+         function Print return String is
+            Got    : Unbounded_String;
+            Status : E.Error_Info;
+         begin
+            Files.Print_Of (Full, Got, Status);
+            return (if E.Is_Ok (Status) then To_String (Got) else "!");
+         end Print;
       begin
          if not Ada.Directories.Exists (Full) then
             Dv.Depend (Spec, Dv.Input, Kind, Path, "", Dv.Absent);
          elsif Ada.Directories."/=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File) then
             Dv.Depend (Spec, Dv.Input, Kind, Path, "not a file");
          else
-            Files.Print_Of (Full, Print, Status);
-            Dv.Depend (Spec, Dv.Input, Kind, Path, To_String (Print),
-                       (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
+            declare
+               Got : constant String := Remembered ("file", Full, Print'Access);
+            begin
+               Dv.Depend (Spec, Dv.Input, Kind, Path, (if Got = "!" then "" else Got),
+                          (if Got = "!" then Dv.Unreadable else Dv.Present));
+            end;
          end if;
       exception
          when others =>
@@ -388,7 +529,9 @@ package body Model_Runner.Framework.Context is
       --  which rules it is told.
       Dv.Depend (Spec, Dv.Environment, "sandbox", "process", Fingerprint (Permissions.Sandbox_Text));
       Dv.Depend (Spec, Dv.Input, "task", "id", Task_Id);
-      Dv.Depend (Spec, Dv.Input, "tree", "path", Tree);
+      --  Not the tree's path: a workspace holding the project's files is
+      --  offered what the project is, and its files, not where they are,
+      --  are what the retrieval rests on.
 
       --  The tree's files, as its graph reads them.
       Dv.Depend (Spec, Dv.Input, "repository_reader", "repository", Repository.Reader_Version);
@@ -438,12 +581,29 @@ package body Model_Runner.Framework.Context is
       --  says whether each still applies.
       for Id of Observations.List (Item) loop
          declare
-            Value  : Observations.Observation;
-            Status : E.Error_Info;
-         begin
-            Observations.Read (Item, Id, Value, Status);
-            if E.Is_Ok (Status) then
+            function Files_Of return String is
+               Value  : Observations.Observation;
+               Status : E.Error_Info;
+               Text   : Unbounded_String;
+            begin
+               Observations.Read (Item, Id, Value, Status);
+               if E.Is_Error (Status) then
+                  return "!";
+               end if;
                for Path of Value.Files loop
+                  Append (Text, Path & ASCII.LF);
+               end loop;
+               return To_String (Text);
+            end Files_Of;
+
+            Got : constant String :=
+              Remembered ("observed", Stores.Root (Item) & "/" & Directory_Name (Observations_Area) & "/" & Id
+                                      & ".rec", Files_Of'Access);
+         begin
+            --  One that will not read is its record's to say, and the
+            --  record's print does.
+            if Got /= "!" then
+               for Path of Lines_Of (Got) loop
                   Depend_File ("observed", Tree_Of (Item, ""), Path);
                end loop;
             end if;
@@ -457,13 +617,21 @@ package body Model_Runner.Framework.Context is
       begin
          for Name of Stores.Names (Item, Verification_Area) loop
             declare
-               Got    : Unbounded_String;
-               Status : E.Error_Info;
+               Full : constant String :=
+                 Stores.Root (Item) & "/" & Directory_Name (Verification_Area) & "/" & Name & ".rec";
+
+               function Print return String is
+                  Got    : Unbounded_String;
+                  Status : E.Error_Info;
+               begin
+                  Files.Read_Text (Full, Got, Status);
+                  return (if E.Is_Ok (Status) then Fingerprint (To_String (Got)) else "!");
+               end Print;
+
+               Got : constant String := Remembered ("record", Full, Print'Access);
             begin
-               Files.Read_Text (Stores.Root (Item) & "/" & Directory_Name (Verification_Area) & "/" & Name
-                                & ".rec", Got, Status);
-               Read := Read and then E.Is_Ok (Status);
-               Append (Text, Name & Tab & Fingerprint (To_String (Got)) & ASCII.LF);
+               Read := Read and then Got /= "!";
+               Append (Text, Name & Tab & Got & ASCII.LF);
             end;
          end loop;
          Dv.Depend (Spec, Dv.Input, "evidence", "verification", Fingerprint (To_String (Text)),
@@ -1412,6 +1580,9 @@ package body Model_Runner.Framework.Context is
             Left  : Name_Lists.Vector;
             Found : constant Observations.Considered_Vectors.Vector :=
               Observations.Relevant (Item, Task_Id, Left);
+
+            --  Those told so far, and what each was kept as nearly the same as.
+            Told, Told_Near : Name_Lists.Vector;
          begin
             for One of Found loop
                declare
@@ -1419,6 +1590,7 @@ package body Model_Runner.Framework.Context is
                   Shown : Observations.Observation;
                   Read  : E.Error_Info;
                   Said  : Unbounded_String;
+                  Near  : Unbounded_String;
                begin
                   Observations.Read (Item, To_String (One.Id), Shown, Read);
                   declare
@@ -1453,9 +1625,23 @@ package body Model_Runner.Framework.Context is
                         end if;
                      end loop;
                   end;
+                  --  One that says nearly what one told says, either way
+                  --  round: told once, the hotter first.
+                  for Index in 1 .. Natural (Told.Length) loop
+                     if Near = Null_Unbounded_String
+                       and then (To_String (Shown.Similar_To) = Told (Index)
+                                 or else Told_Near (Index) = To_String (One.Id))
+                     then
+                        Near := To_Unbounded_String (Told (Index));
+                     end if;
+                  end loop;
                   if Said /= Null_Unbounded_String then
                      Result.Knowledge_Left.Append (Id & ": says only what " & To_String (Said) & " says");
+                  elsif Near /= Null_Unbounded_String then
+                     Result.Knowledge_Left.Append (Id & ": says nearly what " & To_String (Near) & " says");
                   else
+                     Told.Append (To_String (One.Id));
+                     Told_Near.Append (To_String (Shown.Similar_To));
                      Offer (Id, "observation",
                             (if Observations."=" (One.Heat, Observations.Hot) then High else Normal),
                             To_String (One.Text));
@@ -1543,6 +1729,12 @@ package body Model_Runner.Framework.Context is
             end if;
             if not Held and then Found.Standing /= Derivations.Input_Unavailable then
                Derivations.Recall (Item, Spec, Text, Held);
+               --  Held only by this process: left to be kept with the
+               --  context, as when it was worked out.
+               if Held then
+                  Derivations.Add (Result.Derived, Spec, To_String (Text),
+                                   "what a context for " & Task_Id & " may hold");
+               end if;
             end if;
          end if;
          if Held and then Decode (To_String (Text), Candidates, File_Revisions, Result) then

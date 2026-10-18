@@ -87,7 +87,11 @@ package Model_Runner.Framework.Events is
       Observation_Recorded,
       Observation_Superseded,
       Observation_Dismissed,
-      Observation_Promoted);
+      Observation_Promoted,
+
+      --  A derivation worked out and kept for the first time (Derivations):
+      --  one found kept and used again is no event.
+      Derived_Artifact_Created);
 
    --  One event, as read back.
    type Event is record

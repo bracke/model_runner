@@ -131,6 +131,13 @@ package Model_Runner.Framework.Observations is
       Promoted_To   : Ada.Strings.Unbounded.Unbounded_String;
       Reason        : Ada.Strings.Unbounded.Unbounded_String;
 
+      --  An active observation it says nearly the same as, when it was
+      --  first kept: the same kind, about the same files where both name
+      --  any, and most of the same words. A claim worded otherwise is not
+      --  merged into it -- what it says may differ -- but is not told
+      --  beside it either.
+      Similar_To    : Ada.Strings.Unbounded.Unbounded_String;
+
       --  Why its text is gone, where retention let it go: the setting, and
       --  when. A record that names it finds it retired, not missing.
       Retired       : Ada.Strings.Unbounded.Unbounded_String;
@@ -160,6 +167,16 @@ package Model_Runner.Framework.Observations is
    --  @param Standing The standing.
    --  @return As stale.
    function Word (Standing : Applicability) return String;
+
+   --  Whether two observations say nearly the same: the same kind, about
+   --  at least one file in common where both name files, and of the words
+   --  of three letters or more in their summaries, at least three shared
+   --  and at least three in five of all of them.
+   --
+   --  @param Left One observation.
+   --  @param Right The other.
+   --  @return True when they do.
+   function Nearly_Same (Left, Right : Observation) return Boolean;
 
    --  The longest summary an observation keeps.
    Summary_Most : constant := 600;

@@ -154,6 +154,9 @@ procedure Route_Knowledge is
          if not Value.Symbols.Is_Empty then
             Field ("symbols", Joined_Names (Value.Symbols));
          end if;
+         if Length (Value.Similar_To) > 0 then
+            Field ("similar", "says nearly what " & To_String (Value.Similar_To) & " says; told once with it");
+         end if;
          Pres.Put_Note (Screen, "cli.obs.not_authoritative", [Loc.Named ("name", Id)]);
       end;
    end Showing;
@@ -201,6 +204,21 @@ procedure Route_Knowledge is
               (Store, Change, Said, (Producer => Ob.User_Producer, others => <>), Made, Fresh, Status);
             Commit_Then ((if Fresh then "cli.obs.recorded" else "cli.obs.seen_again"),
                          [Loc.Named ("name", To_String (Made))]);
+            --  Kept, and nearly what another says: said, with how to make
+            --  the two one.
+            declare
+               Kept : Ob.Observation;
+               Read : E.Error_Info;
+            begin
+               if Fresh and then E.Is_Ok (Status) then
+                  Ob.Read (Store, To_String (Made), Kept, Read);
+                  if E.Is_Ok (Read) and then Length (Kept.Similar_To) > 0 then
+                     Pres.Put_Note (Screen, "cli.obs.similar",
+                                    [Loc.Named ("name", To_String (Made)),
+                                     Loc.Named ("value", To_String (Kept.Similar_To))]);
+                  end if;
+               end if;
+            end;
          end;
       elsif Verb = "dismiss" then
          Ob.Dismiss (Store, Change, Id,

@@ -81,8 +81,18 @@ begin
             else "the project's state could not keep it"));
       return;
    end if;
-   Report := To_Unbounded_String
-     ((if Fresh then "kept as " else "seen before; counted again on ") & To_String (Id)
-      & " -- an observation of " & To_String (Host.Task_Id)
-      & ", told to later work on it; it changes nothing about the task");
+   declare
+      Kept : Observations.Observation;
+      Read : E.Error_Info;
+   begin
+      if Fresh then
+         Observations.Read (Host.Item.all, To_String (Id), Kept, Read);
+      end if;
+      Report := To_Unbounded_String
+        ((if Fresh then "kept as " else "seen before; counted again on ") & To_String (Id)
+         & (if Fresh and then E.Is_Ok (Read) and then Length (Kept.Similar_To) > 0
+            then " (nearly what " & To_String (Kept.Similar_To) & " says)" else "")
+         & " -- an observation of " & To_String (Host.Task_Id)
+         & ", told to later work on it; it changes nothing about the task");
+   end;
 end Record_Observation;
