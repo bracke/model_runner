@@ -884,6 +884,70 @@ package body Tests.Platform_Cases is
    -- Register_Tests --
    --------------------
 
+   --  What the environment says, as the platform reads it: each variable
+   --  set for the question and put back after.
+   procedure The_Environment_Is_Read_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Env renames Ada.Environment_Variables;
+      package P renames Model_Runner.Platform;
+      use type Interfaces.Unsigned_64;
+
+      --  An answer with a variable set to a value, the variable as it was
+      --  put back.
+      function With_Set (Name, Value : String; Ask : not null access function return String) return String is
+         Had : constant Boolean := Env.Exists (Name);
+         Was : constant String := (if Had then Env.Value (Name) else "");
+      begin
+         Env.Set (Name, Value);
+         declare
+            Said : constant String := Ask.all;
+         begin
+            if Had then
+               Env.Set (Name, Was);
+            else
+               Env.Clear (Name);
+            end if;
+            return Said;
+         end;
+      end With_Set;
+
+      function Token return String is (P.Hub_Token);
+      function Proxy return String is (P.Hub_Proxy);
+      function Bypass return String is (P.Proxy_Bypass);
+      function Config return String is (P.Config_File);
+      function Templates return String is (P.User_Templates_Directory);
+      function Sessions return String is (P.Sessions_Directory);
+      function Session_Path return String is (P.Resolve_Session_Path ("chat", For_Saving => True));
+   begin
+      AUnit.Assertions.Assert (With_Set ("HF_TOKEN", "hf_x", Token'Access) = "hf_x", "the hub's token was not read");
+      AUnit.Assertions.Assert (With_Set ("HTTPS_PROXY", "http://proxy:3128", Proxy'Access) = "http://proxy:3128",
+                               "the proxy was not read");
+      AUnit.Assertions.Assert (With_Set ("NO_PROXY", "localhost", Bypass'Access) = "localhost",
+                               "the hosts bypassing the proxy were not read");
+      AUnit.Assertions.Assert (With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Config'Access) = "/tmp/mr/config",
+                               "the settings file's override was not taken");
+      AUnit.Assertions.Assert
+        (With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Templates'Access) = "/tmp/mr/templates",
+         "the user's templates were not beside the settings file: "
+         & With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Templates'Access));
+      AUnit.Assertions.Assert (With_Set ("MODEL_RUNNER_SESSIONS", "/tmp/mr-sessions", Sessions'Access)
+                                 = "/tmp/mr-sessions",
+                               "the sessions directory's override was not taken");
+      AUnit.Assertions.Assert
+        (Ada.Strings.Fixed.Index (With_Set ("MODEL_RUNNER_SESSIONS", "/tmp/mr-sessions", Session_Path'Access),
+                                  "/tmp/mr-sessions/") = 1,
+         "a session named without a path was not placed in the sessions directory");
+      AUnit.Assertions.Assert (P.Search_Path = (if Env.Exists ("PATH") then Env.Value ("PATH") else ""),
+                               "the search path was not the environment's");
+      AUnit.Assertions.Assert (P.Resolve_Model_Path ("no/such/model.gguf") = "no/such/model.gguf",
+                               "a model path nowhere was not left as typed");
+      AUnit.Assertions.Assert (P.Models_File ("a.gguf") = ""
+                               or else Ada.Strings.Fixed.Index (P.Models_File ("a.gguf"), "/a.gguf") > 0,
+                               "a downloaded model was not placed by its name");
+      AUnit.Assertions.Assert (P.Physical_Memory = 0 or else P.Available_Memory <= P.Physical_Memory,
+                               "more memory was available than the machine has");
+   end The_Environment_Is_Read_As_Said;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -935,6 +999,9 @@ package body Tests.Platform_Cases is
       Register_Routine
         (T, The_Low_Power_Wait_Is_Asked_Of_The_Processor'Access,
          "the low-power wait is asked of the processor, not assumed");
+      Register_Routine
+        (T, The_Environment_Is_Read_As_Said'Access,
+         "what the environment says is read as the platform says it reads it");
    end Register_Tests;
 
 end Tests.Platform_Cases;

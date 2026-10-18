@@ -74,7 +74,7 @@ package body Untested_Surface is
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (72 of them, from Action_Name on, after Remembered, in the list.)
+   --  (60 of them, the last in the list, after Started_Below.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -164,13 +164,11 @@ package body Untested_Surface is
          | "Started_Below"
          | "Attends_Packed_Heads"
          | "Attention_Head_Room"
-         | "Available_Memory"
          | "Block_Drafts"
          | "Byte_Sign_Ones_Address"
          | "Cache_Bound"
          | "Cache_Bytes_For"
          | "Carry_Lost"
-         | "Config_File"
          | "Decodes_Dearly"
          | "Device_Context"
          | "Entry_Point"
@@ -183,8 +181,6 @@ package body Untested_Surface is
          | "Has_Subgroup_Arithmetic"
          | "Heap_Budget"
          | "Host_Alignment"
-         | "Hub_Proxy"
-         | "Hub_Token"
          | "Integer_Shares"
          | "IQ1M_Scales_Address"
          | "Is_Grid"
@@ -195,7 +191,6 @@ package body Untested_Surface is
          | "Is_RWKV"
          | "Is_Stalled"
          | "Last_Refusal"
-         | "Models_File"
          | "Normalizes_After"
          | "Offset_Signs_Address"
          | "Offset_Words_Address"
@@ -203,21 +198,15 @@ package body Untested_Surface is
          | "Packs_Vectors"
          | "Panel_Row_Bytes"
          | "Panels_Unasked"
-         | "Physical_Memory"
          | "Plain_Memory_Kinds"
-         | "Proxy_Bypass"
          | "Pure_SSM"
          | "Queues"
-         | "Resolve_Model_Path"
-         | "Resolve_Session_Path"
          | "Room_Beside"
          | "Run_Capabilities"
          | "Runs_Linear"
          | "Scale_Shuffle_Address"
-         | "Search_Path"
          | "Second_Kind"
          | "Second_Memory_Bytes"
-         | "Sessions_Directory"
          | "Shares_Host"
          | "Shares_Memory"
          | "Sign_Ones_Address"
@@ -231,7 +220,6 @@ package body Untested_Surface is
          | "Token_Bytes"
          | "Unsupported_Reason"
          | "Untiled_Products"
-         | "User_Templates_Directory"
          | "Wanted_Tile"
          | "Weights_Mapped";
    end Is_Untested;
