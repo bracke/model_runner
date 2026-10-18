@@ -7782,6 +7782,35 @@ package body Tests.Framework_Cases is
       Assert (Worked_Out and then Cx.Rendered (Again) = Cx.Rendered (First),
               "a damaged retrieval was used, or not worked out again");
 
+      --  The task moved on: its state record rewritten, nothing the
+      --  retrieval reads changed, and so the same retrieval.
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Id)) = "accepted",
+              "the task was not accepted: " & Code_Of (Status));
+      Counts;
+      Build (Wide, Again);
+      Assert (Used_Again and then Cx.Retrieval (Again) = Cx.Retrieval (First),
+              "the task's moving on made another retrieval");
+
+      --  What its state says of an attempt is read, and so is another.
+      declare
+         State : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", State, Status);
+         R.Set (State, "current_failure", "the build stopped at parser.adb:1");
+         R.Set_Revision (State, R.Revision (State) + 1);
+         Change := S.No_Changes;
+         S.Put (Change, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", State);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the state was not written: " & Code_Of (Status));
+         Counts;
+         Build (Wide, Again);
+         Assert (Worked_Out and then Cx.Retrieval (Again) /= Cx.Retrieval (First)
+                 and then Ada.Strings.Fixed.Index (Cx.Rendered (Again), "the build stopped at parser.adb:1") > 0,
+                 "an attempt's failure did not make another retrieval");
+      end;
+
       --  A file the task names changed: another retrieval, the file as it is.
       Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is --  mended" & LF & "end Parser;" & LF);
       Counts;

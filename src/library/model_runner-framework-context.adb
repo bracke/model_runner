@@ -329,6 +329,29 @@ package body Model_Runner.Framework.Context is
                     (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
       end Depend_Record;
 
+      --  Of a task's runtime state only what the retrieval reads, so that
+      --  the task moving on -- started, its generation raised, leased --
+      --  leaves it standing: of the task itself what an earlier attempt
+      --  left and the files its work touched, of any other its state word,
+      --  which a part's whole lists its parts by.
+      procedure Depend_State (Id : String) is
+         State  : Records.Item;
+         Status : E.Error_Info;
+         Fields : constant Name_Lists.Vector :=
+           (if Id = Task_Id
+            then ["last_result", "current_verification", "current_failure", "blocking_reasons", "changed_files"]
+            else ["state"]);
+      begin
+         Stores.Read (Item, Tasks_Area, Id & ".state", State, Status);
+         for Field of Fields loop
+            if E.Is_Ok (Status) then
+               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Field, Fingerprint (Records.Get (State, Field)));
+            else
+               Dv.Depend (Spec, Dv.Input, "task_state", Id & "." & Field, "", Dv.Unreadable);
+            end if;
+         end loop;
+      end Depend_State;
+
       --  A file by its path below a root: its print, a directory said so,
       --  or absent.
       procedure Depend_File (Kind, Root, Path : String) is
@@ -399,7 +422,13 @@ package body Model_Runner.Framework.Context is
          for Name of Stores.Names (Item, Where) loop
             --  Not the counters names are numbered by: every commit moves
             --  them, and nothing told rests on them.
-            if not (Where = Project_Area and then Name = "counters") then
+            if Where = Project_Area and then Name = "counters" then
+               null;
+            elsif Where = Tasks_Area and then Name'Length > 6
+              and then Name (Name'Last - 5 .. Name'Last) = ".state"
+            then
+               Depend_State (Name (Name'First .. Name'Last - 6));
+            else
                Depend_Record (Where, Name);
             end if;
          end loop;
