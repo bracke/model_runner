@@ -3801,6 +3801,10 @@ The harness SHALL record, as observations of its own: checks that failed and the
 
 Dismissed and superseded observations MAY be let go after the project's retention.observation_days, each left as a tombstone that still names what it was; active and promoted observations SHALL be kept.
 
+An observation that no longer applies and has not been seen again for the project's retention.stale_days SHALL be dismissed, saying why; a harness's note of where work was done SHALL be superseded by a later one about the same files.
+
+Where a task's attempt failed its checks, the files it changed SHALL be kept, so that the fix observation of a later attempt that passes can say what changed between them.
+
 An observation that says nearly what an active one says -- the same kind, a file in common where both name files, and most of the same words -- SHALL be kept as its own, naming the other, and SHALL NOT be told to an agent beside it.
 
 ---
