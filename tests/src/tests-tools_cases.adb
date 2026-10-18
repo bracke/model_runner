@@ -36,6 +36,12 @@ with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
+with Model_Runner.Framework;
+with Model_Runner.CLI.Options;
+with Model_Runner.Drafts;
+with Model_Runner.Video;
+with Model_Runner.Text;
+with Model_Runner.Tools.Text_Util;
 
 package body Tests.Tools_Cases is
 
@@ -3812,6 +3818,55 @@ package body Tests.Tools_Cases is
       Check ([Inner'Access, Other'Access], "a<bcd>", Exact => False);
    end Excluding_Takes_What_Holds_No_Literal;
 
+   --  Small helpers that answer as their documentation says: what the
+   --  surface check found named by no test once it saw functions.
+   procedure Small_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Util renames Model_Runner.Tools.Text_Util;
+      package Opt renames Model_Runner.CLI.Options;
+      LF   : constant Character := ASCII.LF;
+      Defs : Tools.Definitions;
+      Status : E.Error_Info;
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      Assert (Util.Collapse_Blanks ("  a " & ASCII.HT & " b" & LF & " ") = "a b",
+              "blanks were not collapsed: [" & Util.Collapse_Blanks ("  a " & ASCII.HT & " b" & LF & " ") & "]");
+      Assert (Has (Util.Strip_Tags ("<p>fish &amp; chips</p><p>peas</p>"), "fish & chips")
+              and then Has (Util.Strip_Tags ("<p>fish &amp; chips</p><p>peas</p>"), "chips peas"),
+              "tags were not taken out, or entities not resolved: "
+              & Util.Strip_Tags ("<p>fish &amp; chips</p><p>peas</p>"));
+      Assert (Util.To_Valid_Utf8 ("ok" & Character'Val (16#FF#)) = "ok ", "an ill-formed byte was kept");
+      Assert (Model_Runner.Text.JSON_Quoted ("a""b\" & LF) = """a\""b\\\n""",
+              "a string was not quoted as JSON: " & Model_Runner.Text.JSON_Quoted ("a""b\" & LF));
+      Assert (Model_Runner.UTF8.Code_Point_Columns (65) = 1
+              and then Model_Runner.UTF8.Code_Point_Columns (16#0301#) = 0
+              and then Model_Runner.UTF8.Code_Point_Columns (16#4E00#) = 2,
+              "a code point was given the wrong width");
+      Assert (Has (Model_Runner.Tools.Schemas.Definition
+                     ("count", "count", [Model_Runner.Tools.Schemas.Whole_Number ("n")]), """integer"""),
+              "a whole-number parameter was not an integer");
+      Tools.Read (Defs, Builtin.Definitions_Text, Status);
+      Assert (E.Is_Ok (Status) and then Tools.Tool_Name (Defs, 1) /= ""
+              and then Tools.Tool_Name (Defs, Tools.Count (Defs) + 1) = "",
+              "a tool's name was not given, or one past the last was");
+      Assert (Tools.Spoken_Length ("just words") = 10, "a reply with no call was not spoken whole");
+      Assert (Tools.Controls_Escaped ("{""a"": ""x" & LF & "y""}") = "{""a"": ""x\ny""}",
+              "a raw line end in a string was not escaped: " & Tools.Controls_Escaped ("{""a"": ""x" & LF & "y""}"));
+      Assert (Model_Runner.Video.Half_Even (2.5) = 2 and then Model_Runner.Video.Half_Even (3.5) = 4
+              and then Model_Runner.Video.Half_Even (2.4) = 2,
+              "a half was not rounded to the even");
+      Assert (Model_Runner.Drafts.Alike_Enough (0, 100) and then not Model_Runner.Drafts.Alike_Enough (100, 100),
+              "a draft's likeness was misjudged");
+      for Kind in Opt.Pooling_Kind loop
+         Assert (Has (Opt.Pooling_Names, Opt.Pooling_Word (Kind)), "a pooling was not named");
+      end loop;
+      Assert (Opt.Cache_Names /= "" and then Opt.Value_Names /= "" and then Has (Opt.Arithmetic_Names, "f32"),
+              "the names a caller may give were not said");
+      Assert (Model_Runner.Framework.Timestamp_After (60) > Model_Runner.Framework.Timestamp,
+              "a moment ahead was not later than now");
+   end Small_Helpers_Answer_As_Said;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -3947,6 +4002,9 @@ package body Tests.Tools_Cases is
         (T, Retrieve_Ranks_The_Folder'Access,
          "retrieve ranks a folder tree's passages against a query, descends "
          & "into subfolders, and finds nothing for words in no file");
+      Register_Routine
+        (T, Small_Helpers_Answer_As_Said'Access,
+         "small helpers answer as their documentation says");
    end Register_Tests;
 
 end Tests.Tools_Cases;
