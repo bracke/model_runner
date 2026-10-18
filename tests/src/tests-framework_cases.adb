@@ -9479,6 +9479,41 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end More_Helpers_Answer_As_Said;
 
+   procedure Findings_Come_Before_Notes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      A, B, C, Found, Noted : Unbounded_String;
+      Fresh  : Boolean;
+      Left   : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      Task_Project (Store, "findings-first", "scalar knowledge.max_warm = 1" & LF);
+      Tk.Create (Store, Change, Fields ("A", "implementation", "component", "calc"), "user", "", A, Status);
+      Tk.Create (Store, Change, Fields ("B", "implementation", "component", "calc"), "user", "", B, Status);
+      Tk.Create (Store, Change, Fields ("C", "implementation", "component", "calc"), "user", "", C, Status);
+      S.Commit (Store, Change, Status);
+      --  A fix found first, then a note of where later work was done.
+      Change := S.No_Changes;
+      Ob.Record_Observation (Store, Change, Draft_Of (Ob.Finding, "Add overflows unless it is guarded both ways"),
+                             Origin_Of (To_String (A), "1", "AG-1"), Found, Fresh, Status);
+      S.Commit (Store, Change, Status);
+      delay 1.1;
+      Change := S.No_Changes;
+      Ob.Record_Observation (Store, Change, Draft_Of (Ob.Implementation_Note, "B was done by changing calc.adb"),
+                             Origin_Of (To_String (B), "1", "AG-1"), Noted, Fresh, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Told : constant Ob.Considered_Vectors.Vector := Ob.Relevant (Store, To_String (C), Left);
+      begin
+         Assert (Natural (Told.Length) = 1 and then Told.First_Element.Id = Found
+                 and then (for some Line of Left => Ada.Strings.Fixed.Index (Line, To_String (Noted)) = 1),
+                 "a note of where work was done took the one place before what was found: "
+                 & (if Told.Is_Empty then "none" else To_String (Told.First_Element.Id)));
+      end;
+      S.Close (Store);
+   end Findings_Come_Before_Notes;
+
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Store  : aliased S.Store;
@@ -16687,6 +16722,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, Findings_Come_Before_Notes'Access,
+         "what was found is told before a note of where work was done, whichever is newer");
       Register_Routine
         (T, More_Helpers_Answer_As_Said'Access,
          "more of the framework's helpers answer as their documentation says");

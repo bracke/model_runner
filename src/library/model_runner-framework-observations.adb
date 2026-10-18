@@ -1065,6 +1065,7 @@ package body Model_Runner.Framework.Observations is
                            Standing => Standing,
                            Reason   => Reason,
                            Seen_At  => Value.Seen_At,
+                           Kind     => Value.Kind,
                            Text     => To_Unbounded_String
                              (Told (Value, Standing, To_String (Why), Heat, To_String (Reason))));
                      begin
@@ -1080,12 +1081,18 @@ package body Model_Runner.Framework.Observations is
          end;
       end loop;
 
-      --  The most recently seen first; by number among the same moment.
+      --  What was found before notes of where work was done -- a fix, a
+      --  failure, a constraint says what the next attempt can use; that
+      --  work was done in a file, only where to look -- then the most
+      --  recently seen first, and by number among the same moment. Notes
+      --  first by being newest took the places a trial's fixes needed.
       declare
          function Newer (Left, Right : Considered) return Boolean
-         is (Left.Seen_At > Right.Seen_At
-             or else (Left.Seen_At = Right.Seen_At and then Left.Id /= Right.Id
-                      and then Later (To_String (Right.Id), To_String (Left.Id))));
+         is ((Left.Kind /= Implementation_Note and then Right.Kind = Implementation_Note)
+             or else ((Left.Kind = Implementation_Note) = (Right.Kind = Implementation_Note)
+                      and then (Left.Seen_At > Right.Seen_At
+                                or else (Left.Seen_At = Right.Seen_At and then Left.Id /= Right.Id
+                                         and then Later (To_String (Right.Id), To_String (Left.Id))))));
          package By_Seen is new Considered_Vectors.Generic_Sorting (Newer);
          Max_Hot  : constant Natural := Count_Of (Scalar (Item, "knowledge.max_hot"), 5);
          Max_Warm : constant Natural := Count_Of (Scalar (Item, "knowledge.max_warm"), 5);

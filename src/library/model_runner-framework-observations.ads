@@ -355,8 +355,13 @@ package Model_Runner.Framework.Observations is
       --  authoritative, its standing said where it does not apply.
       Text      : Ada.Strings.Unbounded.Unbounded_String;
 
-      --  When it was last seen: the most recent are offered first.
+      --  When it was last seen: the most recent are offered first, after
+      --  what was found -- a note of where work was done is offered after
+      --  the findings, the failures and their fixes.
       Seen_At   : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  What it is of.
+      Kind      : Observation_Kind := Finding;
    end record;
 
    package Considered_Vectors is new Ada.Containers.Vectors (Positive, Considered);
