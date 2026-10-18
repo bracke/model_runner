@@ -512,14 +512,15 @@ package body Agent_Trial is
                      --  What the screen showed wrongly, said with the outcome.
                      Display_Faults : Unbounded_String;
                      Began   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-                     --  When the screen last grew, and whether a stall was
+                     --  When the screen last grew, and how often a stall was
                      --  written down: a session that shows nothing for five
                      --  minutes has every thread's wait recorded beside it,
-                     --  once, as the one stall seen (a helper silent 28
-                     --  minutes, 2026-10-16) was recorded by hand -- and by
+                     --  and again at fifteen, so the two say whether anything
+                     --  moved -- as the one stall seen (a helper silent 28
+                     --  minutes, 2026-10-16) was recorded by hand, and by
                      --  then its run had been written over.
                      Grew    : Ada.Calendar.Time := Ada.Calendar.Clock;
-                     Stalled : Boolean := False;
+                     Stalls  : Natural := 0;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
 
@@ -530,9 +531,12 @@ package body Agent_Trial is
                         end if;
                      end Keep_Variable;
 
-                     --  Every thread of the session: its name, its state and
-                     --  what it waits in, from the host's process files where
-                     --  it keeps them, into a file beside the session's folder.
+                     --  Every thread of the session: its name, its state,
+                     --  what it waits in and the call it is in -- whose first
+                     --  argument names the descriptor a read waits on -- and
+                     --  what each descriptor is, from the host's process
+                     --  files where it keeps them, into a file beside the
+                     --  session's folder.
                      procedure Note_Stall is
                         use Ada.Directories;
                         Tasks_At : constant String :=
@@ -558,16 +562,23 @@ package body Agent_Trial is
                               return "?";
                         end First_Line;
                      begin
-                        Stalled := True;
-                        Append (Display_Faults,
-                                "  display: the session showed nothing for five minutes;"
-                                & " its threads' waits are in " & Root & "-stall.txt" & ASCII.LF);
+                        Stalls := Stalls + 1;
+                        if Stalls = 1 then
+                           Append (Display_Faults,
+                                   "  display: the session showed nothing for five minutes;"
+                                   & " its threads' waits are in " & Root & "-stall.txt" & ASCII.LF);
+                        end if;
                         if not Exists (Tasks_At) then
                            return;
                         end if;
                         --  Beside the project, not in it: written in it, it was a
                         --  file the work had changed, and the task failed for it.
-                        Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "-stall.txt");
+                        Ada.Text_IO.Create
+                          (Out_File, Ada.Text_IO.Out_File,
+                           Root & "-stall"
+                           & (if Stalls = 1 then ""
+                              else "-" & Ada.Strings.Fixed.Trim (Natural'Image (Stalls), Ada.Strings.Both))
+                           & ".txt");
                         Start_Search (Search, Tasks_At, "", [Directory => True, others => False]);
                         while More_Entries (Search) loop
                            Get_Next_Entry (Search, Item);
@@ -579,11 +590,33 @@ package body Agent_Trial is
                                  Ada.Text_IO.Put_Line
                                    (Out_File, Id & " " & First_Line (At_Task & "/comm")
                                     & " wchan=" & First_Line (At_Task & "/wchan")
+                                    & " syscall=" & First_Line (At_Task & "/syscall")
                                     & " stat=" & First_Line (At_Task & "/stat"));
                               end if;
                            end;
                         end loop;
                         End_Search (Search);
+                        declare
+                           Fds_At : constant String := Containing_Directory (Tasks_At) & "/fd";
+                        begin
+                           if Exists (Fds_At) then
+                              Start_Search (Search, Fds_At, "");
+                              while More_Entries (Search) loop
+                                 Get_Next_Entry (Search, Item);
+                                 declare
+                                    Fd     : constant String := Simple_Name (Item);
+                                    Target : Unbounded_String;
+                                 begin
+                                    if Fd /= "." and then Fd /= ".."
+                                      and then Hostkit.Fs.Read_Link_Target (Fds_At & "/" & Fd, Target)
+                                    then
+                                       Ada.Text_IO.Put_Line (Out_File, "fd " & Fd & " " & To_String (Target));
+                                    end if;
+                                 end;
+                              end loop;
+                              End_Search (Search);
+                           end if;
+                        end;
                         Ada.Text_IO.Close (Out_File);
                      exception
                         when others =>
@@ -611,7 +644,9 @@ package body Agent_Trial is
                                  Append (Seen, Character'Val (Byte));
                               end loop;
                               Grew := Ada.Calendar.Clock;
-                           elsif not Stalled and then Ada.Calendar.Clock - Grew > 300.0 then
+                           elsif (Stalls = 0 and then Ada.Calendar.Clock - Grew > 300.0)
+                             or else (Stalls = 1 and then Ada.Calendar.Clock - Grew > 900.0)
+                           then
                               Note_Stall;
                            end if;
                         end loop;

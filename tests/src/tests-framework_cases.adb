@@ -9587,7 +9587,7 @@ package body Tests.Framework_Cases is
          end;
       end loop;
       Assert (Ada.Strings.Fixed.Index
-                (To_String (Fixed.Summary), "the checks of checks failed at exists and again: ") = 1
+                (To_String (Fixed.Summary), "the checks failed at exists and again: ") = 1
               and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "(style) space required") > 0
               and then Ada.Strings.Fixed.Index
                          (To_String (Fixed.Summary), "-- src/hello.adb: - raise Program_Error; | + null;") > 0
@@ -9601,7 +9601,7 @@ package body Tests.Framework_Cases is
               and then Refused.Files.Is_Empty and then Refused.Task_Id = First,
               "a refused call was not recorded as a constraint: " & To_String (Refused.Summary));
       Assert (Ada.Strings.Fixed.Index (To_String (Noted.Summary), To_String (First) & " (Greet) was done by changing"
-                                       & " src/hello.adb; the checks of checks passed") = 1
+                                       & " src/hello.adb; the checks passed") = 1
               and then Natural (Noted.Evidence.Length) = 1,
               "the completed work was not recorded: " & To_String (Noted.Summary));
 
@@ -9659,6 +9659,41 @@ package body Tests.Framework_Cases is
                     One.Id = Fixed.Id and then Ob."=" (One.Heat, Ob.Hot)
                     and then To_String (One.Reason) = "about src/hello.adb, which this task names"),
                  "a fix of a file the task names was not hot: " & Joined (Left));
+         --  Where work was done, its file no longer as the work left it:
+         --  not told at all.
+         Assert ((for some Line of Left =>
+                    Ada.Strings.Fixed.Index (Line, To_String (Noted.Id) & ": cold, a note of where work was done, and "
+                                                   & "src/hello.adb changed") = 1),
+                 "a note of work no longer there was told: " & Joined (Left));
+      end;
+
+      --  The same failure mended in a second task: proposed, once, as a
+      --  candidate decision that would govern the work -- not one yet.
+      Wk.Execute (Store, To_String (Second), Mending_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "complete",
+              "the second task did not complete: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      declare
+         Proposed : Natural := 0;
+      begin
+         for Id of Nt.List (Store, Nt.Decision) loop
+            declare
+               Held : Nt.Entity;
+            begin
+               Nt.Read (Store, Nt.Decision, Id, Held, Status);
+               if Ada.Strings.Fixed.Index
+                    (To_String (Held.Text),
+                     "Work SHALL leave the checks passing the first time: the checks failed at exists and again: "
+                     & "src/hello.adb: (style) space required.") = 1
+               then
+                  Proposed := Proposed + 1;
+                  Assert (To_String (Held.State) = "candidate"
+                          and then Ada.Strings.Fixed.Index (To_String (Held.Text), To_String (First)) > 0
+                          and then Ada.Strings.Fixed.Index (To_String (Held.Text), To_String (Second)) > 0,
+                          "the lesson was not proposed as a candidate naming both tasks: " & To_String (Held.Text));
+               end if;
+            end;
+         end loop;
+         Assert (Proposed = 1, "a failure mended in two tasks was proposed" & Natural'Image (Proposed) & " times");
       end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;

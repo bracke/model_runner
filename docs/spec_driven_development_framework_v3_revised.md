@@ -3805,6 +3805,8 @@ An observation that no longer applies and has not been seen again for the projec
 
 Where a task's attempt failed its checks, the files it changed SHALL be kept, so that the fix observation of a later attempt that passes can say what changed between them.
 
+Where checks failed alike and were mended in two tasks or more, the harness SHALL propose, once, a candidate decision saying what the checks hold work to, naming the tasks and the observations; it SHALL NOT propose it again once it was decided, and the observations SHALL stay as they were until a person or the policy accepts it.
+
 An observation that says nearly what an active one says -- the same kind, a file in common where both name files, and most of the same words -- SHALL be kept as its own, naming the other, and SHALL NOT be told to an agent beside it.
 
 ---
@@ -3838,6 +3840,8 @@ Observation retrieval SHALL be bounded (knowledge.max_hot, knowledge.max_warm) a
 An observation that only repeats what the context already holds SHALL NOT consume context twice.
 
 The context manifest SHALL record each observation considered: offered, with its temperature, applicability and reason, or not offered, with why.
+
+A harness's note of where work was done whose files are no longer as that work left them SHALL be cold.
 
 ---
 

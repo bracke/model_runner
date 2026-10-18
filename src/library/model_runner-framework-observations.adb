@@ -1133,6 +1133,7 @@ package body Model_Runner.Framework.Observations is
             Value : Observation;
             Got   : E.Error_Info;
             Held  : Records.Item;
+            Moved : Unbounded_String;
          begin
             Read_Record (Item, Id, Held, Value, Got);
             if E.Is_Error (Got) then
@@ -1147,6 +1148,13 @@ package body Model_Runner.Framework.Observations is
                        & ", which says it with authority"
                      elsif Value.Status = Superseded then " by " & To_String (Value.Superseded_By)
                      else ""));
+            elsif Value.Kind = Implementation_Note and then Value.Producer = Harness_Producer
+              and then Applicability_Of (Item, Value, Moved) = Stale
+            then
+               --  The harness's note of where work was done, its files no
+               --  longer as that work left them -- gone back, or worked on
+               --  since: it says where nothing now is.
+               Excluded.Append (Id & ": cold, a note of where work was done, and " & To_String (Moved));
             else
                declare
                   Heat   : Temperature := Cold;
@@ -1334,6 +1342,12 @@ package body Model_Runner.Framework.Observations is
       end loop;
       return "";
    end Last_Said;
+
+   --  A profile's checks as a claim says them: the checks of quick, and
+   --  the checks where the profile is called checks -- not the checks of
+   --  checks.
+   function Checks_Said (Profile : String) return String
+   is (if Profile in "" | "checks" then "the checks" else "the checks of " & Profile);
 
    --  The required checks a verification failed, by their labels, in
    --  the order they ran.
@@ -1528,6 +1542,95 @@ package body Model_Runner.Framework.Observations is
       return (if Length (Said) = 0 then "" else Path & ": " & To_String (Said));
    end Change_Said;
 
+   --------------------
+   -- Propose_Lesson --
+   --------------------
+
+   --  What failed and was mended in two tasks or more, the same each time,
+   --  is a convention of the project's checks more than a finding of one
+   --  task's: proposed as a decision, a candidate, once -- a person, or the
+   --  policy, makes it one that governs the work, and an observation stays
+   --  what it was until then. Not again once it was rejected.
+   procedure Propose_Lesson
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Task_Id  : String;
+      Lesson   : String;
+      Kept     : String;
+      Fixed_By : String;
+      Status   : out E.Error_Info)
+   is
+      Provenance : constant String := "observation lesson " & Fingerprint (Lesson);
+      Head       : constant String := Lesson & ", and passed after changes to ";
+      Tasks_Seen : Name_Lists.Vector;
+      Seen_In    : Name_Lists.Vector;
+      Component  : Unbounded_String;
+      Decision   : Unbounded_String;
+   begin
+      Status := E.Success;
+      if Intent.Find_By_Provenance (Item, Intent.Decision, Provenance) /= "" then
+         return;
+      end if;
+      Tasks_Seen.Append (Task_Id);
+      Seen_In.Append (Kept);
+      for Other of List (Item) loop
+         declare
+            Value : Observation;
+            Got   : E.Error_Info;
+            Said  : Unbounded_String;
+         begin
+            Read (Item, Other, Value, Got);
+            Said := Value.Summary;
+            if E.Is_Ok (Got) and then Value.Kind = Failure_Pattern
+              and then Value.Producer = Harness_Producer and then Value.Status = Active
+              and then Length (Value.Task_Id) > 0
+              and then Length (Said) >= Natural'Min (Head'Length, Summary_Most)
+              and then Slice (Said, 1, Natural'Min (Head'Length, Summary_Most))
+                       = Head (Head'First .. Head'First + Natural'Min (Head'Length, Summary_Most) - 1)
+            then
+               --  Every task it was seen in: the same fix said the same
+               --  way is one observation, seen again.
+               for Line of Value.Sightings loop
+                  declare
+                     Seen : constant String :=
+                       (if Ada.Strings.Fixed.Index (Line, " ") > 0
+                        then Line (Line'First .. Ada.Strings.Fixed.Index (Line, " ") - 1) else Line);
+                  begin
+                     if Seen /= "" and then not Tasks_Seen.Contains (Seen) then
+                        Tasks_Seen.Append (Seen);
+                     end if;
+                  end;
+               end loop;
+               if not Tasks_Seen.Contains (To_String (Value.Task_Id)) then
+                  Tasks_Seen.Append (To_String (Value.Task_Id));
+               end if;
+               if not Seen_In.Contains (Other) then
+                  Seen_In.Append (Other);
+               end if;
+               if Length (Component) = 0 then
+                  Component := Value.Component;
+               end if;
+            end if;
+         end;
+      end loop;
+      if Natural (Tasks_Seen.Length) < 2 then
+         return;
+      end if;
+      Intent.Propose
+        (Item, Change, Intent.Decision, "",
+         "What the checks hold every change to",
+         "Work SHALL leave the checks passing the first time: " & Lesson & "."
+         & " It failed so in " & Listed (Tasks_Seen) & " and passed after the change"
+         & (if Fixed_By = "" then ""
+             elsif Fixed_By'Length > Summary_Most
+             then " -- " & Fixed_By (Fixed_By'First .. Fixed_By'First + Summary_Most - 1)
+             else " -- " & Fixed_By)
+         & " (" & Listed (Seen_In) & ").",
+         "", "harness", Provenance,
+         (if Length (Component) > 0 then To_String (Component) else "project"),
+         Decision, Status);
+   end Propose_Lesson;
+
    -----------------
    -- Observe_Fix --
    -----------------
@@ -1606,15 +1709,19 @@ package body Model_Runner.Framework.Observations is
               (if Length (Message) > 0
                then (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message)
                elsif Check /= "" then Last_Said (Item, Earlier, Check) else "");
+            Lesson : constant String :=
+              Checks_Said (Records.Get (Earlier, "profile")) & " failed"
+              & (if Check /= "" then " at " & Listed (Failed) else "")
+              & (if Said /= "" then ": " & Said else "");
          begin
             Keep_Harness
               (Item, Change, Failure_Pattern,
-               "the checks of " & Records.Get (Earlier, "profile") & " failed"
-               & (if Check /= "" then " at " & Listed (Failed) else "")
-               & (if Said /= "" then ": " & Said else "")
-               & ", and passed after changes to " & Listed (Changed)
+               Lesson & ", and passed after changes to " & Listed (Changed)
                & (if Fixed_By /= "" then " -- " & Fixed_By else ""),
                Files_Of, [To_String (Before), Evidence], From, Id, Status);
+            if E.Is_Ok (Status) and then Length (Id) > 0 then
+               Propose_Lesson (Item, Change, Task_Id, Lesson, To_String (Id), Fixed_By, Status);
+            end if;
          end;
       end;
    end Observe_Fix;
@@ -1675,7 +1782,7 @@ package body Model_Runner.Framework.Observations is
             Task_Id & " (" & One_Line (Records.Get (Defined, "title")) & ") was done by changing "
             & Listed (Changed)
             & (if E.Is_Ok (Kept_Read) and then Records.Get (Value, "passed") = "true"
-               then "; the checks of " & Records.Get (Value, "profile") & " passed" else ""),
+               then "; " & Checks_Said (Records.Get (Value, "profile")) & " passed" else ""),
             Changed, (if E.Is_Ok (Kept_Read) then Name_Lists.To_Vector (Evidence, 1) else Name_Lists.Empty_Vector),
             From, Id, Status);
       end;
@@ -1756,7 +1863,7 @@ package body Model_Runner.Framework.Observations is
                      begin
                         Said.Kind := Failure_Pattern;
                         Said.Summary := To_Unbounded_String
-                          ("the checks of " & Records.Get (Value, "profile") & " fail again as they failed before: "
+                          (Checks_Said (Records.Get (Value, "profile")) & " fail again as they failed before: "
                            & (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message));
                         if Length (Said.Summary) > Summary_Most then
                            Said.Summary := Unbounded_Slice (Said.Summary, 1, Summary_Most);
