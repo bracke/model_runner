@@ -298,6 +298,14 @@ package body Model_Runner.Agent is
       Thought_Before : U.Unbounded_String;
       Thought_Tokens : Natural := 0;
 
+      --  The most a thought may take where the step's room is less than
+      --  its budget and an answer after it: the budget less the answer's
+      --  room, until compaction makes room again.
+      Thought_Cap : Natural := Natural'Last;
+
+      --  What a reply needs after its thought to make a call or answer in.
+      Answer_Room : constant := 384;
+
       --  The reply as a whole: what came before a closed thought, and what
       --  the generation after it said.
       function Reply_Text return String
@@ -457,13 +465,14 @@ package body Model_Runner.Agent is
                --  asked for after. qwen3-8b thought 3,000 tokens before
                --  each call and made seven calls in twenty minutes.
                Full     : constant Natural := Request.Max_Tokens;
+               Budget   : constant Natural := Natural'Min (Think_Budget, Thought_Cap);
                Budgeted : constant Boolean :=
-                 Think_Budget > 0 and then Think_Budget < Full
+                 Budget > 0 and then Budget < Full
                  and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off);
                Closing  : String renames Thought_Closing;
             begin
                if Budgeted then
-                  Request.Max_Tokens := Think_Budget;
+                  Request.Max_Tokens := Budget;
                end if;
                Gen.Release (Last_Result);
                Thought_Before := U.Null_Unbounded_String;
@@ -573,6 +582,7 @@ package body Model_Runner.Agent is
                         Result.Compactions := Result.Compactions + 1;
                         --  Room made: the reply may be as long as asked again.
                         Reply_Cap := Natural'Last;
+                        Thought_Cap := Natural'Last;
                         goto Next_Iteration;
                      end if;
                      --  Nothing old left to drop: the reply made to fit what
@@ -587,8 +597,25 @@ package body Model_Runner.Agent is
                                    then Natural'Value (Text) else 0);
                         end Number;
                         Room : constant Integer := Number ("available") - Number ("prompt");
+
+                        --  Out of room after a thought closed at its budget:
+                        --  the thought took the room the answer needed. The
+                        --  step's room was what is left and what the thought
+                        --  took; tried again with a thought that leaves the
+                        --  answer its room -- a qwen3.5-4b task failed with
+                        --  120 tokens left after a thought of 1,024.
+                        Step_Room : constant Integer := Number ("available") + Thought_Tokens;
+
+                        --  Less what the closing itself costs.
+                        Slack     : constant := 16;
                      begin
-                        if Room >= 256 and then Room < Request.Max_Tokens then
+                        if Thought_Tokens > 0 and then Step_Room - Slack - Answer_Room >= 128
+                          and then Step_Room - Slack - Answer_Room < Thought_Tokens
+                        then
+                           Reply_Cap := Step_Room - Slack;
+                           Thought_Cap := Reply_Cap - Answer_Room;
+                           goto Next_Iteration;
+                        elsif Room >= 256 and then Room < Request.Max_Tokens then
                            Reply_Cap := Room;
                            goto Next_Iteration;
                         end if;
