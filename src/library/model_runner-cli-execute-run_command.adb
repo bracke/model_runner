@@ -101,6 +101,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Ended     : Model_Runner.Tools.Runner.Call_Outcome);
 
    overriding procedure On_Step (Self : in out Agent_Watch);
+   overriding procedure On_Cut_Off (Self : in out Agent_Watch);
    overriding procedure On_Turn
      (Self  : in out Agent_Watch;
       Step  : Positive;
@@ -112,6 +113,12 @@ package body Model_Runner.CLI.Execute.Run_Command is
    begin
       return Raw (Raw'First + 1 .. Raw'Last);
    end Number;
+
+   --  Cut off before it called or answered: said, as /work says it.
+   overriding procedure On_Cut_Off (Self : in out Agent_Watch) is
+   begin
+      Pres.Put_Note (Self.Screen.all, "cli.agent.cut_off");
+   end On_Cut_Off;
 
    overriding procedure On_Step (Self : in out Agent_Watch) is
    begin

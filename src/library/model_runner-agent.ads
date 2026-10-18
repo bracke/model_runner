@@ -232,6 +232,14 @@ package Model_Runner.Agent is
    --  @param Self The observer.
    procedure On_Step (Self : in out Observer) is null;
 
+   --  A reply that reached its length limit before it called or answered:
+   --  what it began -- a call cut short among it -- is none, and the model
+   --  is told to go on. Said where it happens: shown, a half-written call
+   --  read as one the harness had failed to take.
+   --
+   --  @param Self The watcher.
+   procedure On_Cut_Off (Self : in out Observer) is null;
+
    --  A reference to whatever is watching the loop.
    type Observer_Reference is access all Observer'Class;
 
@@ -291,6 +299,14 @@ package Model_Runner.Agent is
    --  @param Self The script.
    --  @return The reply's text, as a model would have written it.
    function Next_Reply (Self : in out Reply_Script) return String is abstract;
+
+   --  Whether the reply just given stopped at its length limit, as a
+   --  model's cut short does: what the loop does with one -- tells the
+   --  model to go on, and says so -- held to a script too.
+   --
+   --  @param Self The script.
+   --  @return True where it was cut short; none is, unless a script says.
+   function Cut_Off (Self : Reply_Script) return Boolean is (False);
 
    --  A reference to a script of replies.
    type Script_Reference is access all Reply_Script'Class;

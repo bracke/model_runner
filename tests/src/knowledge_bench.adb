@@ -10,6 +10,7 @@ with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Derivations;
 with Model_Runner.Framework.Observations;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Templates;
@@ -104,6 +105,25 @@ package body Knowledge_Bench is
          Cx.Build (Store, To_String (First), Model, Made, Status);
       end Worked_Out;
 
+      procedure Graph_Now is
+         Graph : constant Model_Runner.Framework.Repository.Graph := Model_Runner.Framework.Repository.Now (Store);
+         pragma Unreferenced (Graph);
+      begin
+         null;
+      end Graph_Now;
+
+      procedure Graph_Loaded is
+         Graph : Model_Runner.Framework.Repository.Graph;
+      begin
+         Model_Runner.Framework.Repository.Load (Store, Graph, Status);
+      end Graph_Loaded;
+
+      procedure Configuration is
+         Value : Model_Runner.Framework.Records.Item;
+      begin
+         Cf.Read (Store, Value, Status);
+      end Configuration;
+
       procedure Pages is
       begin
          Model_Runner.Framework.Views.Refresh (Store);
@@ -191,6 +211,9 @@ package body Knowledge_Bench is
       Ada.Text_IO.Put_Line ("  context, retrieval worked out:      " & Millis (Best (Worked_Out'Access)));
       Built_Again;
       Ada.Text_IO.Put_Line ("  context, retrieval used again:      " & Millis (Best (Built_Again'Access)));
+      Ada.Text_IO.Put_Line ("    of it, the configuration read:     " & Millis (Best (Configuration'Access)));
+      Ada.Text_IO.Put_Line ("    of it, the graph kept, loaded:     " & Millis (Best (Graph_Loaded'Access)));
+      Ada.Text_IO.Put_Line ("    of it, the graph brought up:       " & Millis (Best (Graph_Now'Access)));
       Ada.Text_IO.Put_Line ("  recording an observation, average:  " & Millis (Recording));
       Pages;
       Ada.Text_IO.Put_Line ("  pages made again, nothing changed:  " & Millis (Best (Pages'Access)));

@@ -294,25 +294,48 @@ package body Model_Runner.Framework.Observations is
    --  A file's print as an observation keeps it: its fingerprint, "-" for
    --  one not there, "?" for one that would not read.
    function Print_Of (Root, Path : String) return String is
-      Print  : Unbounded_String;
-      Status : E.Error_Info;
+      --  Read where its stamp has moved, remembered where it has not: the
+      --  page of what was learned and every context ask this of each file
+      --  every observation names.
+      function Read_Print return String is
+         Print  : Unbounded_String;
+         Status : E.Error_Info;
+      begin
+         Files.Print_Of (Root & "/" & Path, Print, Status);
+         return (if E.Is_Ok (Status) then To_String (Print) else "!");
+      end Read_Print;
    begin
       if not Ada.Directories.Exists (Root & "/" & Path) then
          return "-";
       end if;
-      Files.Print_Of (Root & "/" & Path, Print, Status);
-      return (if E.Is_Ok (Status) then To_String (Print) else "?");
+      declare
+         Print : constant String := Read_Memory.Remembered ("file", Root & "/" & Path, Read_Print'Access);
+      begin
+         return (if Print = "!" then "?" else Print);
+      end;
    exception
       when others =>
          return "?";
    end Print_Of;
 
    function Configuration_Print (Item : Stores.Store) return String is
+      --  Read where the configuration's record has moved, remembered where
+      --  it has not: asked of every observation whether it still applies,
+      --  the configuration was read through once an observation.
+      function Read_Print return String is
+      begin
+         return Records.Get (Configurations.Required (Item), "configuration_fingerprint");
+      exception
+         when Configurations.Configuration_Unavailable =>
+            return "!";
+      end Read_Print;
+
+      Print : constant String :=
+        Read_Memory.Remembered
+          ("configuration_print", Stores.Root (Item) & "/" & Directory_Name (Config_Area) & "/resolved.rec",
+           Read_Print'Access);
    begin
-      return Records.Get (Configurations.Required (Item), "configuration_fingerprint");
-   exception
-      when Configurations.Configuration_Unavailable =>
-         return "?";
+      return (if Print = "!" then "?" else Print);
    end Configuration_Print;
 
    function Sighting_Of (From : Origin) return String is

@@ -77,7 +77,12 @@ package body Tests.Agent_Loop_Cases is
       Next    : Positive := 1;
       Hook_At : Natural := 0;
       Hook    : access procedure := null;
+
+      --  The reply, by number, that stops at its length limit; none at 0.
+      Cut_At  : Natural := 0;
    end record;
+
+   overriding function Cut_Off (Self : Script) return Boolean is (Self.Cut_At > 0 and then Self.Next - 1 = Self.Cut_At);
 
    overriding function Next_Reply (Self : in out Script) return String is
    begin
@@ -91,8 +96,11 @@ package body Tests.Agent_Loop_Cases is
 
    --  What each call answered, in order.
    type Recorder is new Ag.Observer with record
-      Results : Text_Lists.Vector;
+      Results  : Text_Lists.Vector;
+      Cut_Offs : Natural := 0;
    end record;
+
+   overriding procedure On_Cut_Off (Self : in out Recorder);
 
    overriding procedure On_Call
      (Self : in out Recorder; Call : Ag.Invocation; Named : String; Arguments : String) is null;
@@ -141,6 +149,11 @@ package body Tests.Agent_Loop_Cases is
    end record;
 
    Image : Model_Runner.Bytes.Byte_Array_Access;
+
+   overriding procedure On_Cut_Off (Self : in out Recorder) is
+   begin
+      Self.Cut_Offs := Self.Cut_Offs + 1;
+   end On_Cut_Off;
 
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
@@ -216,6 +229,24 @@ package body Tests.Agent_Loop_Cases is
       if Image = null then
          Tiny_Model.Build (Image);
       end if;
+
+      --  A reply cut short mid-call is no call: the watcher is told, the
+      --  model is told to go on, and its next reply's call runs.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         --  Cut where not even its tool's name can be read: no call at all.
+         Replies.Replies.Append ("<tool_call>{""na");
+         Replies.Replies.Append (Write ("cut.txt", "whole"));
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Seen.Cut_Offs = 1 and then Natural (Seen.Results.Length) = 1
+                 and then Ada.Directories.Exists (Dir & "/cut.txt"),
+                 "a reply cut short mid-call was not said, or its call was taken:" & Seen.Cut_Offs'Image
+                 & Seen.Results.Length'Image);
+      end;
 
       --  A file put back as an earlier write left it is said to be.
       declare

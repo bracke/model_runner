@@ -736,7 +736,17 @@ package body Agent_Trial is
                         if Ada.Strings.Fixed.Index (Screen, "</think></think>") > 0 then
                            Fault ("a think block's close was shown twice");
                         end if;
-                        if Ada.Strings.Fixed.Index (Screen, "<tool_call>") > 0 then
+                        --  Raw markup the screen then says was a reply cut off
+                        --  at its length limit is what the model wrote, and no
+                        --  call: said as that, not as a fault.
+                        if Ada.Strings.Fixed.Index (Screen, "<tool_call>") > 0
+                          and then not (for all At_It in Screen'Range =>
+                                          At_It + 10 > Screen'Last
+                                          or else Screen (At_It .. At_It + 10) /= "<tool_call>"
+                                          or else Ada.Strings.Fixed.Index
+                                                    (Screen (At_It .. Natural'Min (Screen'Last, At_It + 8_000)),
+                                                     "reached its length limit before it finished") > 0)
+                        then
                            Fault ("a call's raw markup was shown");
                         end if;
                      end;

@@ -1,6 +1,8 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Strings.Maps;
 
 with Hostkit.Fs;
@@ -27,6 +29,10 @@ package body Model_Runner.Framework.Context is
    use type Derivations.Currentness;
 
    package E renames Model_Runner.Errors;
+
+   --  Names to what each stands for.
+   package Remembered_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
    --  What every context starts with: how the harness expects to be
    --  answered, whatever the project.
@@ -652,7 +658,10 @@ package body Model_Runner.Framework.Context is
      (Candidates : Item_Vectors.Vector;
       Task_Id    : String;
       Result     : in out Built;
-      Status     : in out Model_Runner.Errors.Error_Info) is
+      Status     : in out Model_Runner.Errors.Error_Info)
+   is
+      --  The prints of what went in, in its order.
+      Included_Prints : Name_Lists.Vector;
    begin
       --  Budget: mandatory whatever it costs, the rest by priority while
       --  it fits, the same text once.
@@ -664,13 +673,22 @@ package body Model_Runner.Framework.Context is
          Seen_From : Name_Lists.Vector;
          Chosen    : array (1 .. Natural (Candidates.Length)) of Boolean :=
            [others => False];
+
+         --  Each candidate's print and cost, worked out once: asked for at
+         --  every rank, a file's text was read through four times.
+         Prints    : Name_Lists.Vector;
+         Costs     : array (1 .. Natural (Candidates.Length)) of Natural := [others => 0];
       begin
+         for Index in 1 .. Natural (Candidates.Length) loop
+            Prints.Append (Fingerprint (To_String (Candidates (Index).Text)));
+            Costs (Index) := Estimate (To_String (Candidates (Index).Text)) + Section_Overhead;
+         end loop;
          for Rank in Priority loop
             for Index in 1 .. Natural (Candidates.Length) loop
                declare
                   Next  : Context.Item renames Candidates (Index);
-                  Print : constant String := Fingerprint (To_String (Next.Text));
-                  Cost  : constant Natural := Estimate (To_String (Next.Text)) + Section_Overhead;
+                  Print : constant String := Prints (Index);
+                  Cost  : constant Natural := Costs (Index);
                begin
                   if Next.Rank = Rank then
                      if Seen.Contains (Print) then
@@ -744,7 +762,7 @@ package body Model_Runner.Framework.Context is
                   exit;
                end if;
                declare
-                  Cost : constant Natural := Estimate (To_String (Candidates (Drop).Text)) + Section_Overhead;
+                  Cost : constant Natural := Costs (Drop);
                begin
                   Chosen (Drop) := False;
                   Result.Cost := Result.Cost - Cost;
@@ -759,6 +777,7 @@ package body Model_Runner.Framework.Context is
          for Index in 1 .. Natural (Candidates.Length) loop
             if Chosen (Index) then
                Result.Included.Append (Candidates (Index));
+               Included_Prints.Append (Prints (Index));
             end if;
          end loop;
       end;
@@ -772,9 +791,9 @@ package body Model_Runner.Framework.Context is
                  & Image (Result.Model.Output_Reserve) & "|" & Image (Result.Config_Revision)
                  & "|" & To_String (Result.Config_Fingerprint) & "|"
                  & Boolean'Image (Result.Semantic) & ASCII.LF);
-         for Next of Result.Included loop
-            Append (Text, "+" & To_String (Next.Id) & " "
-                    & Fingerprint (To_String (Next.Text)) & ASCII.LF);
+         for Index in 1 .. Natural (Result.Included.Length) loop
+            Append (Text, "+" & To_String (Result.Included (Index).Id) & " "
+                    & Included_Prints (Index) & ASCII.LF);
          end loop;
          if Result.Instructions /= Null_Unbounded_String then
             Append (Text, "+instructions " & Fingerprint (To_String (Result.Instructions))
@@ -794,6 +813,7 @@ package body Model_Runner.Framework.Context is
          end loop;
          Result.Print := To_Unbounded_String (Fingerprint (To_String (Text)));
       end;
+
    end Settle;
 
    -----------
@@ -1660,18 +1680,29 @@ package body Model_Runner.Framework.Context is
       end;
 
       Settle (Candidates, Task_Id, Result, Status);
-      --  The files it shows, at the revisions they were read at.
-      for Shown of Result.Included loop
+      --  The files it shows, at the revisions they were read at: each
+      --  revision found by its item's name, once -- matched against every
+      --  revision for every item, a component of 400 files took 160,000
+      --  searches here.
+      declare
+         Revision_Of : Remembered_Maps.Map;
+      begin
          for Held of File_Revisions loop
             declare
                Tab : constant Natural := Ada.Strings.Fixed.Index (Held, [1 => ASCII.HT]);
             begin
-               if Held (Held'First .. Tab - 1) = To_String (Shown.Id) then
-                  Result.Sources.Append (Held (Held'First + 5 .. Held'Last));
+               if not Revision_Of.Contains (Held (Held'First .. Tab - 1)) then
+                  Revision_Of.Insert (Held (Held'First .. Tab - 1), Held (Held'First + 5 .. Held'Last));
                end if;
             end;
          end loop;
-      end loop;
+         for Shown of Result.Included loop
+            if Revision_Of.Contains (To_String (Shown.Id)) then
+               Result.Sources.Append (Revision_Of (To_String (Shown.Id)));
+            end if;
+         end loop;
+      end;
+
    end Build;
 
    -----------------

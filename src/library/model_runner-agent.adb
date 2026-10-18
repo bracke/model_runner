@@ -484,7 +484,7 @@ package body Model_Runner.Agent is
                      Said : constant String := Script.Next_Reply;
                   begin
                      Last_Result :=
-                       (Reason           => Gen.End_Of_Sequence,
+                       (Reason           => (if Script.Cut_Off then Gen.Maximum_Tokens else Gen.End_Of_Sequence),
                         Generated_Tokens => Natural'Max (1, Said'Length / 4),
                         Text             => new Model_Runner.Bytes.Byte_Array'
                                               (Model_Runner.Bytes.To_Bytes (Said)),
@@ -710,7 +710,12 @@ package body Model_Runner.Agent is
                end if;
             end;
          end if;
+         --  Not where the reply stopped at its length limit inside what it
+         --  began: that call is cut short, not malformed, and is told so as
+         --  a reply cut short is -- told to write it again in the format, a
+         --  model wrote it again as long, and was cut again.
          if E.Is_Error (Reading)
+           and then not (Last_Result.Reason = Gen.Maximum_Tokens and then not Closes_Call (Reply_Text))
            and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
            and then Result.Steps < Max_Steps
@@ -769,6 +774,9 @@ package body Model_Runner.Agent is
                      & " no answer in it. Go on: make your next tool call, or give your answer -- and"
                      & " think less before it.", Told);
                   if E.Is_Ok (Told) then
+                     if Watch /= null then
+                        Watch.On_Cut_Off;
+                     end if;
                      goto Next_Iteration;
                   end if;
                end;

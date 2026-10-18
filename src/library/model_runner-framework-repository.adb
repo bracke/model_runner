@@ -53,16 +53,43 @@ package body Model_Runner.Framework.Repository is
    --  A file's size and when it last changed, as seconds since the epoch.
    function Stamp_Of (Full : String) return String is
       use type Ada.Calendar.Time;
-      Seconds : constant Duration :=
-        Dirs.Modification_Time (Full) - Ada.Calendar.Time_Of (1970, 1, 1);
+      --  The file system's own change record, to the nanosecond, where the
+      --  host keeps one (statx): size and whole seconds alone kept the old
+      --  content of a file rewritten the same size within the second it was
+      --  last read in -- the agent's own tools already stamp so.
+      Fine    : Boolean;
+      Changed : constant String := Hostkit.Metadata.Change_Stamp (Full, Fine);
+
+      --  The words of the record: its modification time, its change time,
+      --  its size and its file number, a space between.
+      function Word (Which : Positive) return String is
+         Count : Natural := 0;
+         Start : Natural := 0;
+      begin
+         for Index in Changed'Range loop
+            if Changed (Index) /= ' ' and then (Index = Changed'First or else Changed (Index - 1) = ' ') then
+               Count := Count + 1;
+               Start := Index;
+            end if;
+            if Count = Which and then Changed (Index) /= ' '
+              and then (Index = Changed'Last or else Changed (Index + 1) = ' ')
+            then
+               return Changed (Start .. Index);
+            end if;
+         end loop;
+         return "";
+      end Word;
    begin
-      --  And the file system's own change record, to the nanosecond, where
-      --  the host keeps one (statx): size and whole seconds alone kept the
-      --  old content of a file rewritten the same size within the second
-      --  it was last read in -- the agent's own tools already stamp so.
+      --  One look where the record says it all: its size, and its whole
+      --  seconds -- what a stamp leads with -- are in it. Each file a scan
+      --  walks was looked at three times for its stamp.
+      if Fine and then Word (3) /= "" and then Ada.Strings.Fixed.Index (Word (1), ".") > 1 then
+         return Word (3) & ":" & Word (1) (Word (1)'First .. Ada.Strings.Fixed.Index (Word (1), ".") - 1)
+           & ":" & Changed;
+      end if;
       declare
-         Fine    : Boolean;
-         Changed : constant String := Hostkit.Metadata.Change_Stamp (Full, Fine);
+         Seconds : constant Duration :=
+           Dirs.Modification_Time (Full) - Ada.Calendar.Time_Of (1970, 1, 1);
       begin
          return Ada.Strings.Fixed.Trim (Dirs.File_Size'Image (Dirs.Size (Full)), Ada.Strings.Both)
            & ":" & Ada.Strings.Fixed.Trim (Long_Long_Integer'Image (Long_Long_Integer (Seconds)),
@@ -1449,15 +1476,20 @@ package body Model_Runner.Framework.Repository is
                Full     : constant String := Hostkit.Fs.Join (Directory, Name);
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
+               --  Asked once, each asking a look at the file -- and asked
+               --  here, in the statements, so a file gone as it is asked of
+               --  is this entry's to say, not its directory's.
+               Kind     : Dirs.File_Kind;
             begin
-               if Dirs.Kind (Full) = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
+               Kind := Dirs.Kind (Full);
+               if Kind = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
                   --  A link to a directory is not followed, as version
                   --  control does not follow one: it may lead out of the
                   --  project, or back into it without end.
                   Result.Unread.Append (Relative & ": " & Link_Not_Followed);
-               elsif Dirs.Kind (Full) = Dirs.Directory then
+               elsif Kind = Dirs.Directory then
                   Walk (Full, Relative);
-               elsif Dirs.Kind (Full) = Dirs.Ordinary_File then
+               elsif Kind = Dirs.Ordinary_File then
                   declare
                      Text   : Unbounded_String;
                      Status : E.Error_Info;
@@ -1581,12 +1613,17 @@ package body Model_Runner.Framework.Repository is
                Full     : constant String := Hostkit.Fs.Join (Directory, Name);
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
+               --  Asked once, each asking a look at the file -- and asked
+               --  here, in the statements, so a file gone as it is asked of
+               --  is this entry's to say, not its directory's.
+               Kind     : Dirs.File_Kind;
             begin
-               if Dirs.Kind (Full) = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
+               Kind := Dirs.Kind (Full);
+               if Kind = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
                   Result.Unread.Append (Relative & ": " & Link_Not_Followed);
-               elsif Dirs.Kind (Full) = Dirs.Directory then
+               elsif Kind = Dirs.Directory then
                   Walk (Full, Relative);
-               elsif Dirs.Kind (Full) = Dirs.Ordinary_File then
+               elsif Kind = Dirs.Ordinary_File then
                   Now_Paths.Append (Relative);
                   Now_Stamps.Append (Stamp_Of (Full));
                end if;

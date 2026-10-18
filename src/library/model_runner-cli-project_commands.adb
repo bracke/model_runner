@@ -291,6 +291,8 @@ package body Model_Runner.CLI.Project_Commands is
       Step  : Positive;
       Calls : Positive);
 
+   overriding procedure On_Cut_Off (Self : in out Watch);
+
    overriding procedure On_Call
      (Self      : in out Watch;
       Call      : Model_Runner.Agent.Invocation;
@@ -342,6 +344,13 @@ package body Model_Runner.CLI.Project_Commands is
          Pres.Put_Note (Self.Screen.all, "cli.agent.calls_at_once");
       end if;
    end On_Turn;
+
+   --  Cut off before it called or answered: said, so what the screen
+   --  shows of a call begun is not taken for one the harness dropped.
+   overriding procedure On_Cut_Off (Self : in out Watch) is
+   begin
+      Pres.Put_Note (Self.Screen.all, "cli.agent.cut_off");
+   end On_Cut_Off;
 
    overriding procedure On_Call
      (Self      : in out Watch;

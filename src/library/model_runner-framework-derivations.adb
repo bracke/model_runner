@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
+with Model_Runner.Framework.Read_Memory;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
@@ -1055,25 +1056,57 @@ package body Model_Runner.Framework.Derivations is
 
    function Kept (Item : Stores.Store) return Name_Lists.Vector is
       Lines : Name_Lists.Vector;
+
+      --  The latest of each kind and subject, asked once each.
+      Heads : Name_Lists.Vector;
+      Head_Keys : Name_Lists.Vector;
    begin
       for Name of Stores.Names (Item, Derivations_Area) loop
          if not Starts (Name, "head-") then
             declare
-               Value  : Records.Item;
-               Spec   : Specification;
-               Status : E.Error_Info;
+               --  What it says of itself, its key checked against what it
+               --  was made from -- remembered against its record's stamp,
+               --  where the page of derivations read and checked every one
+               --  each time it was made again.
+               function Read_Line return String is
+                  Value  : Records.Item;
+                  Spec   : Specification;
+                  Status : E.Error_Info;
+               begin
+                  Read_Kept (Item, Name, Value, Spec, Status);
+                  if E.Is_Error (Status) then
+                     return "!";
+                  end if;
+                  return To_String (Spec.Kind) & Tab & To_String (Spec.Subject) & Tab
+                    & To_String (Spec.Algorithm) & "/" & To_String (Spec.Version) & Tab
+                    & Records.Get (Value, "created_at") & Tab & Records.Get (Value, "result");
+               end Read_Line;
+
+               Said : constant String :=
+                 Read_Memory.Remembered
+                   ("derivation_line",
+                    Stores.Root (Item) & "/" & Directory_Name (Derivations_Area) & "/" & Name & ".rec",
+                    Read_Line'Access);
             begin
-               Read_Kept (Item, Name, Value, Spec, Status);
-               if E.Is_Error (Status) then
+               if Said = "!" then
                   Lines.Append (Name & Tab & "-" & Tab & "-" & Tab & "-" & Tab & "-" & Tab & "-" & Tab
                                 & "damaged");
                else
-                  Lines.Append
-                    (Name & Tab & To_String (Spec.Kind) & Tab & To_String (Spec.Subject) & Tab
-                     & To_String (Spec.Algorithm) & "/" & To_String (Spec.Version) & Tab
-                     & Records.Get (Value, "created_at") & Tab & Records.Get (Value, "result") & Tab
-                     & (if Latest (Item, To_String (Spec.Kind), To_String (Spec.Subject)) = Name
-                        then "latest" else "earlier"));
+                  declare
+                     Tab_1 : constant Natural := Ada.Strings.Fixed.Index (Said, [1 => Tab]);
+                     Tab_2 : constant Natural := Ada.Strings.Fixed.Index (Said (Tab_1 + 1 .. Said'Last), [1 => Tab]);
+                     Head  : constant String := Said (Said'First .. Tab_1 - 1) & Tab & Said (Tab_1 + 1 .. Tab_2 - 1);
+                     At_It : constant Natural := Heads.Find_Index (Head);
+                  begin
+                     if At_It = Name_Lists.No_Index then
+                        Heads.Append (Head);
+                        Head_Keys.Append
+                          (Latest (Item, Said (Said'First .. Tab_1 - 1), Said (Tab_1 + 1 .. Tab_2 - 1)));
+                     end if;
+                     Lines.Append
+                       (Name & Tab & Said & Tab
+                        & (if Head_Keys (Heads.Find_Index (Head)) = Name then "latest" else "earlier"));
+                  end;
                end if;
             end;
          end if;
