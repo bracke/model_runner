@@ -39,10 +39,29 @@ package body Agent_Trial is
       Notes  : Unbounded_String;
       Tested : Boolean;
       Styled : Boolean;
+
+      --  Whether the project holds a convention its checks keep and the
+      --  task does not say: every file its work changes begins with the
+      --  license line. A first attempt misses it, a check's error says it,
+      --  and the same holds for every attempt after -- what one run learns
+      --  the next can use, which no other task here offers.
+      Convention : Boolean;
    end record;
 
-   function T (Name, Kind, Notes : String; Tested, Styled : Boolean := False) return Trial_Task is
-     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled));
+   function T (Name, Kind, Notes : String; Tested, Styled, Convention : Boolean := False) return Trial_Task is
+     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled,
+       Convention));
+
+   --  The edit, said without holding the work to Add alone: a project's
+   --  convention reaches past what a task names, and told to change only
+   --  Add, Mellum took the license line its check asked for as a breach,
+   --  and ran out of time between the two.
+   Convention_Notes : constant String :=
+     "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
+     & " Integer'First when it would overflow below, instead of raising.";
+
+   --  The line the convention asks for.
+   License_Line : constant String := "--  SPDX-License-Identifier: MIT";
 
    Edit_Notes : constant String :=
      "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
@@ -51,7 +70,7 @@ package body Agent_Trial is
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 4) of Trial_Task :=
+   Tasks : constant array (1 .. 5) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -63,11 +82,14 @@ package body Agent_Trial is
          & " there, and report."),
       --  The edit again, its build held to the style rules: run only when
       --  asked by name, being the edit's own measure of what is learned.
-      T ("styled", "implementation", Edit_Notes, Tested => True, Styled => True)];
+      T ("styled", "implementation", Edit_Notes, Tested => True, Styled => True),
+      --  The edit again, in a project with a convention: run only when
+      --  named, the measure of what is learned once and used again.
+      T ("convention", "implementation", Convention_Notes, Tested => True, Convention => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
-   procedure Make_Project (Root : String; Tested : Boolean) is
+   procedure Make_Project (Root : String; Tested : Boolean; Convention : Boolean := False) is
       procedure Put (Name, Text : String) is
          File : Ada.Text_IO.File_Type;
       begin
@@ -143,6 +165,18 @@ package body Agent_Trial is
       Ada.Directories.Create_Path (Root & "/obj");
       Put ("obj/.gitkeep", "");
       Put (".gitignore", "obj/*" & LF & "!obj/.gitkeep" & LF);
+      --  The convention's check: each source file changed since the trial's
+      --  start begins with the license line, or it says which and how.
+      if Convention then
+         Put ("check_header.sh",
+              "for f in $(git diff --name-only trial-start -- src); do" & LF
+              & "  if [ ""$(head -n 1 ""$f"")"" != """ & License_Line & """ ]; then" & LF
+              & "    echo ""$f:1:1: error: a file the work changes must begin with the line '"
+              & License_Line & "'""" & LF
+              & "    exit 1" & LF
+              & "  fi" & LF
+              & "done" & LF);
+      end if;
       Git ("init -q");
       Git ("add -A");
       Git ("commit -qm start");
@@ -209,13 +243,15 @@ package body Agent_Trial is
      (if Styled then " -f -gnatyy -gnatwae" else "");
 
    function Check_Line
-     (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False)
+     (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False;
+      Convention : Boolean := False)
       return String is
      (if Tested
-      then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
+      then "/reconfigure add set.execution.allowed gnatmake obj/test_add" & (if Convention then " sh" else "") & " "
            & "profile.checks=""build: gnatmake -q" & Style_Words (Styled) & " -D obj -aIsrc src/main.adb -o obj/main;"
            & " test: gnatmake -q" & Style_Words (Styled)
-           & " -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
+           & " -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"
+           & (if Convention then "; header: sh check_header.sh" else "") & """"
            & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes"
       else "/reconfigure add set.execution.allowed gnatmake "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"""
@@ -461,7 +497,9 @@ package body Agent_Trial is
             declare
                One : Trial_Task renames Tasks (Which);
             begin
-               if Chosen (Only, To_String (One.Name)) and then (Only /= "" or else not One.Styled) then
+               if Chosen (Only, To_String (One.Name))
+                 and then (Only /= "" or else not (One.Styled or else One.Convention))
+               then
                   declare
                      Name    : constant String := To_String (One.Name);
                      Root    : constant String := Ada.Directories.Full_Name ("obj/agent-trial-" & Name);
@@ -632,7 +670,7 @@ package body Agent_Trial is
                      if Carried then
                         Reset_Sources (Root);
                      else
-                        Make_Project (Root, One.Tested);
+                        Make_Project (Root, One.Tested, One.Convention);
                      end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
@@ -698,7 +736,8 @@ package body Agent_Trial is
                                 or else (Wait_For ("initialized", 30.0)
                                          and then (Hostkit.Process.Locate ("gnatmake") = ""
                                                    or else (Send_Then
-                                                              (Check_Line (One.Tested, Apart, Knowledge, One.Styled))
+                                                              (Check_Line (One.Tested, Apart, Knowledge,
+                                                                           One.Styled, One.Convention))
                                                             and then Wait_For ("is now revision", 30.0))))
                               then
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
