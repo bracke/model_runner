@@ -138,7 +138,32 @@ package body Agent_Trial is
       Git ("init -q");
       Git ("add -A");
       Git ("commit -qm start");
+      Git ("tag trial-start");
    end Make_Project;
+
+   --  A project kept from an earlier run, its sources put back as they were
+   --  made -- whatever the work changed or committed -- and its state kept.
+   procedure Reset_Sources (Root : String) is
+      procedure Git (Words : String) is
+         Line    : Hostkit.String_Vectors.Vector;
+         Start   : Positive := Words'First;
+         Ignored : Hostkit.Process.Process_Outcome;
+      begin
+         Line.Append (To_Unbounded_String ("-C"));
+         Line.Append (To_Unbounded_String (Root));
+         for Index in Words'First .. Words'Last + 1 loop
+            if Index > Words'Last or else Words (Index) = ' ' then
+               Line.Append (To_Unbounded_String (Words (Start .. Index - 1)));
+               Start := Index + 1;
+            end if;
+         end loop;
+         Ignored := Hostkit.Process.Run_Captured
+           ("git", Line, Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Hostkit.Fs.Null_Device);
+      end Git;
+   begin
+      Git ("reset -q --hard trial-start");
+      Git ("clean -fdq -e .model_runner");
+   end Reset_Sources;
 
    --  The project's checks, where a compiler is here: the program built,
    --  bound and linked, and Add's test built and run. /init's own is the
@@ -238,7 +263,8 @@ package body Agent_Trial is
       Clean     : out Boolean;
       Repeats   : Positive := 1;
       Apart     : Boolean := False;
-      Knowledge : Boolean := True)
+      Knowledge : Boolean := True;
+      Carry     : Boolean := False)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -343,6 +369,7 @@ package body Agent_Trial is
          Ada.Text_IO.Put_Line
            (File, Now & HT & Build & HT & Ada.Directories.Simple_Name (Model) & HT & Task_Name & HT
             & (if Apart then "workspace" else "project") & (if Knowledge then "" else ", knowledge off")
+            & (if Carry then ", carried" else "")
             & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed);
@@ -530,8 +557,35 @@ package body Agent_Trial is
 
                      Words  : Hostkit.String_Vectors.Vector;
                      Worked : Boolean := False;
+
+                     --  Kept from the run before, where runs carry their
+                     --  state: no /init, and the task the next one made.
+                     Carried : constant Boolean :=
+                       Carry and then Round > 1 and then Ada.Directories.Exists (Root & "/.model_runner");
+                     Task_Id : Unbounded_String := To_Unbounded_String ("TASK-001");
+
+                     --  The task the session last said it made.
+                     function Made_Task return String is
+                        Text  : constant String := Plain (To_String (Seen));
+                        Mark  : constant String := "created TASK-";
+                        At_It : constant Natural :=
+                          Ada.Strings.Fixed.Index (Text, Mark, Going => Ada.Strings.Backward);
+                        Last  : Natural := At_It + Mark'Length - 1;
+                     begin
+                        if At_It = 0 then
+                           return "TASK-001";
+                        end if;
+                        while Last < Text'Last and then Text (Last + 1) in '0' .. '9' | 'A' .. 'Z' | '-' loop
+                           Last := Last + 1;
+                        end loop;
+                        return Text (At_It + 8 .. Last);
+                     end Made_Task;
                   begin
-                     Make_Project (Root, One.Tested);
+                     if Carried then
+                        Reset_Sources (Root);
+                     else
+                        Make_Project (Root, One.Tested);
+                     end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
                         Clean := False;
@@ -576,24 +630,32 @@ package body Agent_Trial is
 
                      --  The session, as a person would drive it.
                      if Wait_For ("Interactive mode", 300.0) then
-                        Send ("/init");
-                        if Wait_For ("Select project type", 30.0) then
-                           Send ("");
-                           if Wait_For ("as planned", 30.0) then
+                        if not Carried then
+                           Send ("/init");
+                        end if;
+                        if Carried or else Wait_For ("Select project type", 30.0) then
+                           if not Carried then
                               Send ("");
-                              if Wait_For ("initialized", 30.0)
-                                and then (Hostkit.Process.Locate ("gnatmake") = ""
-                                          or else (Send_Then (Check_Line (One.Tested, Apart, Knowledge))
-                                                   and then Wait_For ("is now revision", 30.0)))
+                           end if;
+                           if Carried or else Wait_For ("as planned", 30.0) then
+                              if not Carried then
+                                 Send ("");
+                              end if;
+                              if Carried
+                                or else (Wait_For ("initialized", 30.0)
+                                         and then (Hostkit.Process.Locate ("gnatmake") = ""
+                                                   or else (Send_Then (Check_Line (One.Tested, Apart, Knowledge))
+                                                            and then Wait_For ("is now revision", 30.0))))
                               then
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
                                        & (if To_String (One.Kind) = "implementation"
                                           then " component=" & Project else "")
                                        & " notes=" & To_String (One.Notes));
                                  if Wait_For ("created TASK-", 30.0) then
-                                    Send ("/accept TASK-001");
+                                    Task_Id := To_Unbounded_String (Made_Task);
+                                    Send ("/accept " & To_String (Task_Id));
                                     if Wait_For ("ready", 30.0) then
-                                       Send ("/work TASK-001");
+                                       Send ("/work " & To_String (Task_Id));
                                        Worked := Wait_For ("How it came out", 1800.0);
                                        declare
                                           Ignored : constant Boolean := Wait_For ("> ", 20.0);

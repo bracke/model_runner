@@ -33,6 +33,11 @@ package Agent_Trial is
    --    later work (--knowledge off turns it off): the same tasks run both
    --    ways set the work figures -- calls before the first change, whole
    --    reads, observations kept -- side by side.
+   --  @param Carry Whether a task's later runs keep its project (--carry
+   --    on): its sources put back as they were made, its state -- what
+   --    earlier runs learned -- kept, and the task made anew in it; so a
+   --    second run can be told what the first found, which a project made
+   --    afresh each time never is.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -41,6 +46,7 @@ package Agent_Trial is
       Clean     : out Boolean;
       Repeats   : Positive := 1;
       Apart     : Boolean := False;
-      Knowledge : Boolean := True);
+      Knowledge : Boolean := True;
+      Carry     : Boolean := False);
 
 end Agent_Trial;

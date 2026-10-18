@@ -47,7 +47,7 @@ package body Tool_Commands is
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Conform   : aliased constant String := " --arith --part --short ";
    Opts_Trial     : aliased constant String :=
-     " --model --program --task --options --repeats --isolation --knowledge ";
+     " --model --program --task --options --repeats --isolation --knowledge --carry ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --prompt-set --max-tokens --threads --batch-size --repack"
      & " --backend --arith --repeat-penalty --draft-model --draft-tokens"
@@ -87,7 +87,7 @@ package body Tool_Commands is
    Takes_Conform   : aliased constant String := "[--arith MODE] [--part K/N [--short]]";
    Takes_Trial     : aliased constant String :=
      "--model PATH [--program PATH] [--task edit|find|delegate[,...]] [--options ""OPTIONS""] [--repeats N]"
-     & " [--isolation workspace] [--knowledge off]";
+     & " [--isolation workspace] [--knowledge off] [--carry on]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"
      & " [--threads N] [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"
