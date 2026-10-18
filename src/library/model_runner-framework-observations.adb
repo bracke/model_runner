@@ -1271,6 +1271,8 @@ package body Model_Runner.Framework.Observations is
             end if;
          exception
             when others =>
+               --  A file the host will not let be read is not kept: what
+               --  is said of the fix is then said without it.
                null;
          end;
       end loop;
@@ -1306,6 +1308,8 @@ package body Model_Runner.Framework.Observations is
                   end;
                exception
                   when others =>
+                     --  A file the host will not let be read now says no
+                     --  change: the fix is said without it.
                      null;
                end;
             end if;

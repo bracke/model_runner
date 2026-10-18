@@ -327,6 +327,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The surface check sees functions:** every public operation a test names, or a reason it names none -- but "   function " was held to the thirteen characters of "   procedure ", so the check asked for two spaces after function and never saw one. It does now: fifteen functions on the untested list were named by tests and came off, the knowledge layer's new ones are named by a test of their own, and the 186 found untested are on the list as a group not yet looked at, each to come off as a test names it.
 - **A thought that takes the answer's room is held shorter, not the task failed:** where the reply after a thought closed at its budget no longer fits and nothing old is left to drop, the step is tried again with the thought held to what leaves the answer 384 tokens -- a qwen3.5-4b task failed "a prompt of 3 tokens plus 1024 generated tokens exceeds the 120 that remain" after nine closed thoughts.
 - **A thought closed at its budget is shown closed:** the closing the harness gives the model was not given the screen, which took what came after for more thought and showed a call's opening markup -- `<tool_call>` -- before the call; Mellum2.1's runs showed it in a third of them.
 - **A refused call is kept as a constraint wherever it is recorded,** from the call's own answer -- `/etc/hosts is outside the project` -- not only where the session watched it.

@@ -7843,12 +7843,15 @@ package body Checks is
                if (Index = Text'First
                    or else Text (Index - 1) = Character'Val (10))
                  and then Index + 12 <= Text'Last
-                 and then (Text (Index .. Index + 12) = "   function  "
+                 --  "   function " is a character shorter than "   procedure ":
+                 --  held to the same thirteen, it asked for two spaces after
+                 --  function, and no function was ever checked.
+                 and then (Text (Index .. Index + 11) = "   function "
                            or else Text (Index .. Index + 12)
                                    = "   procedure ")
                then
                   declare
-                     From : Natural := Index + 12;
+                     From : Natural := Index + 11;
                      Stop : Natural;
                   begin
                      while From <= Text'Last and then Text (From) = ' ' loop

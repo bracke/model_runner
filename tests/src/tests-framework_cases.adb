@@ -9097,6 +9097,57 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Observations_Do_Not_Pile_Up;
 
+   procedure Changes_And_Likeness_Are_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Pm renames Model_Runner.Framework.Permissions;
+      Root : constant String := Fresh ("changes-said");
+      Was  : Model_Runner.Framework.Name_Lists.Vector;
+      One, Two : Ob.Observation;
+      Status : E.Error_Info;
+   begin
+      --  The lines a change took out and put in, in order, blank lines and
+      --  indentation aside.
+      Assert (Ob.Change_Said ("a.adb", "x;" & LF & "   y;" & LF & LF, "x;" & LF & "z;" & LF) = "a.adb: - y; | + z;",
+              "a change was not said as its lines: " & Ob.Change_Said ("a.adb", "x;" & LF & "   y;" & LF, "x;" & LF
+                                                                         & "z;" & LF));
+      Assert (Ob.Change_Said ("a.adb", "x;" & LF, "   x;" & LF) = "", "a change of indentation alone was said");
+
+      --  What a failed attempt left, kept and set beside the files as they
+      --  are now.
+      Put_File (Root & "/a.adb", "x;" & LF & "y;" & LF);
+      Was.Append ("a.adb");
+      Was.Append ("gone.adb");
+      declare
+         Said : constant String := Ob.Files_Said (Root, Was);
+      begin
+         Put_File (Root & "/a.adb", "x;" & LF & "z;" & LF);
+         Assert (Ob.Change_Since (Root, Said) = "a.adb: - y; | + z;",
+                 "the change since the files were kept was not said: " & Ob.Change_Since (Root, Said));
+         Assert (Ob.Change_Since (Root, "not what Files_Said keeps") = "", "a text that is no snapshot was read");
+      end;
+
+      --  Nearly the same: the same kind and most of the same words.
+      One.Kind := Ob.Finding;
+      One.Summary := To_Unbounded_String ("the parser drops a trailing comma after a name");
+      Two := One;
+      Two.Summary := To_Unbounded_String ("after a name the parser drops the trailing comma");
+      Assert (Ob.Nearly_Same (One, Two), "a finding worded otherwise was not nearly the same");
+      Two.Kind := Ob.Tool_Behavior;
+      Assert (not Ob.Nearly_Same (One, Two), "findings of two kinds were nearly the same");
+
+      --  The confinement as written, what a derivation names it by.
+      Pm.Set_Sandbox ("read_source", Status);
+      Assert (E.Is_Ok (Status), "the confinement was not set: " & Code_Of (Status));
+      declare
+         Confined : constant String := Pm.Sandbox_Text;
+      begin
+         Pm.Set_Sandbox ("", Status);
+         Assert (E.Is_Ok (Status), "the confinement was not lifted: " & Code_Of (Status));
+         Assert (Confined /= Pm.Sandbox_Text and then Ada.Strings.Fixed.Index (Confined, "read_source") > 0,
+                 "the confinement was not said as it was written");
+      end;
+   end Changes_And_Likeness_Are_Said;
+
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Store  : aliased S.Store;
@@ -16305,6 +16356,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, Changes_And_Likeness_Are_Said'Access,
+         "a change is said as its lines, against what a failed attempt left, and findings alike are told apart");
       Register_Routine
         (T, Observations_Do_Not_Pile_Up'Access,
          "later work supersedes what was said of the same files, and the stale and unseen are dismissed");
