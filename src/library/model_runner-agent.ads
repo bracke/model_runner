@@ -451,8 +451,10 @@ package Model_Runner.Agent is
    --  @param Pictures The pictures the task shows, or none: the same rows
    --    stand behind the prompt's markers at every step.
    --  @param Think_Budget The tokens a reply may think for before its
-   --    thought is closed for it and the rest of the reply is asked for:
-   --    a reasoning model spent minutes a call thinking. 0 for no bound.
+   --    thought is closed for it and the reply is asked for after it, with
+   --    the whole of a reply's room again -- less only where the context is
+   --    short of room or the run's budget near spent: a reasoning model
+   --    spent minutes a call thinking. 0 for no bound.
    --  @param Script Replies to take in place of generating them, or null.
    --  @param Carry What an earlier run on this conversation held of its
    --    calls, carried on and added to; null for a run that starts afresh.

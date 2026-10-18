@@ -531,7 +531,22 @@ package body Model_Runner.Agent is
                   declare
                      Continued : constant String := Rendered.all & U.To_String (Thought_Before);
                   begin
-                     Request.Max_Tokens := Full - Thought_Tokens;
+                     --  The whole reply's room again after its thought, not
+                     --  what the thought left: a thought at its budget left
+                     --  half, and a call that rewrote a function ran out in
+                     --  its middle -- Mellum's, cut where its new text was,
+                     --  shown as markup with no call. What remains where the
+                     --  context is short of room (Reply_Cap set), and never
+                     --  past what the run has left to spend.
+                     Request.Max_Tokens :=
+                       (if Reply_Cap = Natural'Last then Full else Full - Thought_Tokens);
+                     if Max_Total_Tokens > 0 then
+                        Request.Max_Tokens :=
+                          Natural'Max
+                            (1, Natural'Min
+                                  (Request.Max_Tokens,
+                                   Max_Total_Tokens - Natural'Min (Max_Total_Tokens, Spent + Thought_Tokens)));
+                     end if;
                      --  The whole reply so far is the turn's, not the
                      --  conversation's: held back with its opening.
                      Request.Hold_Back := Request.Hold_Back + U.Length (Thought_Before);
