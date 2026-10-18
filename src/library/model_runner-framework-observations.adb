@@ -11,6 +11,7 @@ with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Read_Memory;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
@@ -334,6 +335,70 @@ package body Model_Runner.Framework.Observations is
    -- Record_Observation --
    ------------------------
 
+   --  What a scan of every observation asks of each -- its claim, state,
+   --  kind, summary and files -- read from its record, or remembered
+   --  against the record's stamp: recording one matched it against every
+   --  other twice, and the cost of a recording grew with all of them.
+   procedure Brief_Of
+     (Item     : Stores.Store;
+      Name     : String;
+      Value    : out Observation;
+      Claim    : out Unbounded_String;
+      Readable : out Boolean)
+   is
+      function Read_Brief return String is
+         Held : Records.Item;
+         Got  : E.Error_Info;
+      begin
+         Stores.Read (Item, Observations_Area, Name, Held, Got);
+         if E.Is_Error (Got) then
+            return "!";
+         end if;
+         declare
+            Whole : constant Observation := From_Record (Held);
+            Paths : Unbounded_String;
+         begin
+            for Path of Whole.Files loop
+               Append (Paths, Path & LF);
+            end loop;
+            return Derivations.Coded (Records.Get (Held, "claim")) & Tab & Word (Whole.Status) & Tab
+              & Word (Whole.Kind) & Tab & Derivations.Coded (To_String (Whole.Summary)) & Tab
+              & Derivations.Coded (To_String (Paths));
+         end;
+      end Read_Brief;
+
+      Said : constant String :=
+        Read_Memory.Remembered
+          ("observation_brief", Stores.Root (Item) & "/" & Directory_Name (Observations_Area) & "/" & Name & ".rec",
+           Read_Brief'Access);
+   begin
+      Value := (others => <>);
+      Claim := Null_Unbounded_String;
+      Readable := Said /= "!";
+      if not Readable then
+         return;
+      end if;
+      declare
+         Fields : constant Name_Lists.Vector := Derivations.Fields_Of (Said);
+         Found  : Boolean;
+      begin
+         if Natural (Fields.Length) /= 5 then
+            Readable := False;
+            return;
+         end if;
+         Claim := To_Unbounded_String (Fields (1));
+         for One in Lifecycle loop
+            if Word (One) = Fields (2) then
+               Value.Status := One;
+            end if;
+         end loop;
+         Kind_Of (Fields (3), Value.Kind, Found);
+         Value.Summary := To_Unbounded_String (Fields (4));
+         Value.Files := Lines_Of (Fields (5));
+         Value.Id := To_Unbounded_String (Name);
+      end;
+   end Brief_Of;
+
    -----------------
    -- Nearly_Same --
    -----------------
@@ -485,11 +550,17 @@ package body Model_Runner.Framework.Observations is
          end loop;
          if Length (Known) = 0 then
             for Name of List (Item) loop
-               Stores.Read (Item, Observations_Area, Name, Held, Read);
-               if E.Is_Ok (Read) and then Records.Get (Held, "claim") = Claim then
-                  Known := To_Unbounded_String (Name);
-                  exit;
-               end if;
+               declare
+                  Brief      : Observation;
+                  Kept_Claim : Unbounded_String;
+                  Readable   : Boolean;
+               begin
+                  Brief_Of (Item, Name, Brief, Kept_Claim, Readable);
+                  if Readable and then Kept_Claim = Claim then
+                     Known := To_Unbounded_String (Name);
+                     exit;
+                  end if;
+               end;
             end loop;
          end if;
 
@@ -571,11 +642,12 @@ package body Model_Runner.Framework.Observations is
          --  are not told side by side.
          for Name of List (Item) loop
             declare
-               Other : Observation;
-               Got   : E.Error_Info;
+               Other      : Observation;
+               Kept_Claim : Unbounded_String;
+               Readable   : Boolean;
             begin
-               Observations.Read (Item, Name, Other, Got);
-               if E.Is_Ok (Got) and then Other.Status = Active and then Nearly_Same (Value, Other) then
+               Brief_Of (Item, Name, Other, Kept_Claim, Readable);
+               if Readable and then Other.Status = Active and then Nearly_Same (Value, Other) then
                   Value.Similar_To := To_Unbounded_String (Name);
                   exit;
                end if;

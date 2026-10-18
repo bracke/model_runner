@@ -8601,6 +8601,9 @@ package body Tests.Framework_Cases is
          Root : constant String := Fresh_Root (Store);
       begin
          S.Close (Store);
+         --  Old enough that what is read of each is remembered: the match
+         --  is made from memory, and finds the same.
+         delay 2.5;
          declare
             Said : constant String :=
               Command_Output (Root, ["/obs record finding the trailing comma after a name is dropped by the parser",
