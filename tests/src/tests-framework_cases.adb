@@ -9556,7 +9556,7 @@ package body Tests.Framework_Cases is
       Task_Project
         (Store, "harness-records",
          "set execution.allowed = sh" & LF
-         & "profile checks = exists: sh check.sh" & LF
+         & "profile checks = exists: sh check.sh; again: sh check.sh" & LF
          & "scalar verification.default = checks" & LF);
       --  A check that says why it fails, as a build does.
       Put_File (Fresh_Root (Store) & "/check.sh",
@@ -9586,7 +9586,8 @@ package body Tests.Framework_Cases is
             end case;
          end;
       end loop;
-      Assert (Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "the checks of checks failed at exists: ") = 1
+      Assert (Ada.Strings.Fixed.Index
+                (To_String (Fixed.Summary), "the checks of checks failed at exists and again: ") = 1
               and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "(style) space required") > 0
               and then Ada.Strings.Fixed.Index
                          (To_String (Fixed.Summary), "-- src/hello.adb: - raise Program_Error; | + null;") > 0

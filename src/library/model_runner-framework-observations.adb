@@ -1335,8 +1335,10 @@ package body Model_Runner.Framework.Observations is
       return "";
    end Last_Said;
 
-   --  The first required check a verification failed, by its label; "".
-   function Failed_Check (Value : Records.Item) return String is
+   --  The required checks a verification failed, by their labels, in
+   --  the order they ran.
+   function Failed_Checks (Value : Records.Item) return Name_Lists.Vector is
+      Found : Name_Lists.Vector;
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
          declare
@@ -1356,14 +1358,14 @@ package body Model_Runner.Framework.Observations is
                      end if;
                   end loop;
                   if Natural (Fields.Length) >= 6 and then Fields (5) /= "passed" and then Fields (6) = "required" then
-                     return Fields (1);
+                     Found.Append (Fields (1));
                   end if;
                end;
             end if;
          end;
       end loop;
-      return "";
-   end Failed_Check;
+      return Found;
+   end Failed_Checks;
 
    --  Names as a sentence lists them: a, b and c.
    function Listed (Names : Name_Lists.Vector) return String is
@@ -1578,7 +1580,7 @@ package body Model_Runner.Framework.Observations is
             return;
          end if;
          First_Error (Item, To_String (Before), File, Message);
-         if Length (Message) = 0 and then Failed_Check (Earlier) = "" then
+         if Length (Message) = 0 and then Failed_Checks (Earlier).Is_Empty then
             return;
          end if;
          --  A compiler names a file as it was given it: calc.adb for
@@ -1596,7 +1598,10 @@ package body Model_Runner.Framework.Observations is
             Files_Of.Append (Path);
          end loop;
          declare
-            Check : constant String := Failed_Check (Earlier);
+            --  Each that failed: the error said may be another's than the
+            --  first that failed.
+            Failed : constant Name_Lists.Vector := Failed_Checks (Earlier);
+            Check  : constant String := (if Failed.Is_Empty then "" else Failed.First_Element);
             Said  : constant String :=
               (if Length (Message) > 0
                then (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message)
@@ -1605,7 +1610,7 @@ package body Model_Runner.Framework.Observations is
             Keep_Harness
               (Item, Change, Failure_Pattern,
                "the checks of " & Records.Get (Earlier, "profile") & " failed"
-               & (if Check /= "" then " at " & Check else "")
+               & (if Check /= "" then " at " & Listed (Failed) else "")
                & (if Said /= "" then ": " & Said else "")
                & ", and passed after changes to " & Listed (Changed)
                & (if Fixed_By /= "" then " -- " & Fixed_By else ""),
