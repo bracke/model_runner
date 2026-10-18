@@ -79,7 +79,7 @@ package body Untested_Surface is
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (31 of them, the last in the list, after Sign_Shuffle_Address.)
+   --  (30 of them, the last in the list, after Sign_Shuffle_Address.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -191,7 +191,6 @@ package body Untested_Surface is
          | "Host_Alignment"
          | "Integer_Shares"
          | "Is_Stalled"
-         | "Last_Refusal"
          | "Plain_Memory_Kinds"
          | "Queues"
          | "Room_Beside"
