@@ -1,3 +1,4 @@
+with Model_Runner.Quantization.Integers;
 with Ada.Calendar.Formatting;
 with Hostkit.Metadata;
 with AUnit.Test_Cases;
@@ -3099,6 +3100,12 @@ package body Tests.Inference_Cases is
                  "a model decoded at load reports"
                  & Interfaces.Unsigned_64'Image (L.Repacked_Bytes (Ready))
                  & " bytes of copy");
+         --  Its weights held, not borrowed from the file; no device context
+         --  counted on the processor; and a token that costs bytes to read.
+         Assert (not L.Weights_Mapped (Ready) and then L.Device_Context (Ready) = 0
+                 and then L.Token_Bytes (Ready) > 0.0,
+                 "a model decoded at load said its weights were borrowed, counted a device's context, or cost"
+                 & " nothing a token");
          L.Close (Ready, Status);
       end;
 
@@ -20357,6 +20364,39 @@ package body Tests.Inference_Cases is
       Device.Close;
    end A_Second_Model_Adds_To_The_Device_Budget;
 
+   --  What an architecture is and what a configuration asks, said as the
+   --  documentation says it.
+   procedure Architectures_Are_Told_Apart (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+      Settings : L.Configuration;
+      Gib      : constant Interfaces.Unsigned_64 := 2 ** 30;
+   begin
+      Assert (L.Pure_SSM (L.Mamba) and then L.Pure_SSM (L.Mamba2) and then not L.Pure_SSM (L.Jamba)
+              and then L.Is_Mamba2 (L.Mamba2) and then not L.Is_Mamba2 (L.Mamba)
+              and then L.Is_RWKV (L.Rwkv6) and then L.Is_Jamba (L.Jamba) and then L.Is_MLA (L.Deepseek2)
+              and then L.Normalizes_After (L.Bert) and then not L.Normalizes_After (L.Llama),
+              "an architecture was taken for another");
+      Assert (L.Block_Drafts (L.Llama) and then not L.Block_Drafts (L.Bert)
+              and then L.One_State_Slot (L.Mamba) and then L.One_State_Slot (L.Jamba)
+              and then not L.One_State_Slot (L.Llama),
+              "whether an architecture drafts by its block or reads one state was misjudged");
+      Settings.Kind := L.Jamba;
+      Settings.Expert_Feed := 100;
+      Settings.Feed_Forward := 50;
+      Assert (L.Feed_Width (Settings) = 100, "a hybrid's feed was not its wider one");
+      Assert (L.Stores_Pair (L.Eighth, L.Value_Fourth) and then L.Stores_Pair (L.Exact, L.Same_As_Keys)
+              and then not L.Stores_Pair (L.Exact, L.Value_Fourth),
+              "a cache and values pair was let open that cannot be, or refused that can");
+      Assert (not L.Panels_Unasked (0, 64 * Gib, 64 * Gib)
+              and then not L.Panels_Unasked (8 * Gib, 64 * Gib, 8 * Gib)
+              and then not L.Panels_Unasked (8 * Gib, Gib, 64 * Gib),
+              "panels were made the default for a model with no weights, no room, or past an allocation");
+      if Model_Runner.Quantization.Integers.Has_Integer_Kernel (Model_Runner.GGUF.Type_Q2_K, Interleaved => True) then
+         Assert (L.Panels_Unasked (8 * Gib, 64 * Gib, 64 * Gib), "panels were not the default where they fit");
+      end if;
+   end Architectures_Are_Told_Apart;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -21008,6 +21048,9 @@ package body Tests.Inference_Cases is
         (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
          "a caller may stretch the rotation the file did not, and only a "
          & "model stretched for it reaches past its trained context");
+      Register_Routine
+        (T, Architectures_Are_Told_Apart'Access,
+         "what an architecture is and what a configuration asks are said as documented");
    end Register_Tests;
 
 end Tests.Inference_Cases;

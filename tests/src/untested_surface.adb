@@ -79,7 +79,7 @@ package body Untested_Surface is
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (45 of them, the last in the list, after Sign_Shuffle_Address.)
+   --  (31 of them, the last in the list, after Sign_Shuffle_Address.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -178,13 +178,10 @@ package body Untested_Surface is
          | "Sign_Shuffle_Address"
          | "Attends_Packed_Heads"
          | "Attention_Head_Room"
-         | "Block_Drafts"
          | "Cache_Bound"
          | "Cache_Bytes_For"
          | "Carry_Lost"
-         | "Device_Context"
          | "Entry_Point"
-         | "Feed_Width"
          | "Float_Shares"
          | "Has_Integer_Dot"
          | "Has_Matrix_Instruction"
@@ -193,17 +190,9 @@ package body Untested_Surface is
          | "Heap_Budget"
          | "Host_Alignment"
          | "Integer_Shares"
-         | "Is_Jamba"
-         | "Is_Mamba2"
-         | "Is_MLA"
-         | "Is_RWKV"
          | "Is_Stalled"
          | "Last_Refusal"
-         | "Normalizes_After"
-         | "One_State_Slot"
-         | "Panels_Unasked"
          | "Plain_Memory_Kinds"
-         | "Pure_SSM"
          | "Queues"
          | "Room_Beside"
          | "Run_Capabilities"
@@ -213,14 +202,11 @@ package body Untested_Surface is
          | "Shares_Host"
          | "Shares_Memory"
          | "Storage_Limit"
-         | "Stores_Pair"
          | "Submissions"
          | "Takes_Host_Memory"
          | "Tiled_Products"
-         | "Token_Bytes"
          | "Unsupported_Reason"
-         | "Untiled_Products"
-         | "Weights_Mapped";
+         | "Untiled_Products";
    end Is_Untested;
 
    -----------
