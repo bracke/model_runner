@@ -1046,6 +1046,12 @@ package body Tests.Framework_Cases is
               "an override did not win");
       Assert (Tp.Input_Count (Composed) = 3 and then Tp.Rule_Count (Composed) = 2,
               "inputs or discoveries were lost in composing");
+      Assert (To_String (Tp.Rule_At (Composed, 1).Path) = "tool.toml"
+              and then Tp.Composition_Fingerprint (Composed)'Length = 16,
+              "a discovery rule or the composition's fingerprint was not given");
+      Assert (Tp.Is_Project_Path ("src/a.adb") and then not Tp.Is_Project_Path ("../x")
+              and then not Tp.Is_Project_Path ("/etc/x"),
+              "a path out of the project was taken for one in it");
       Assert (Tp.Kind_Word (Tp.Task_Kind_Setting) = "task_kind",
               "a kind is not written as its word");
       Assert (Tp.Id (Tp.Root (Composed)) = "app"
@@ -9148,6 +9154,234 @@ package body Tests.Framework_Cases is
       end;
    end Changes_And_Likeness_Are_Said;
 
+   --  The framework's helpers answer as their documentation says: what the
+   --  surface check found named by no test once it saw functions.
+   procedure Framework_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Rp renames Model_Runner.Framework.Repository;
+      package Au renames Model_Runner.Framework.Authority;
+      use type Pm.Path_Verdict;
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Whole, Part : Unbounded_String;
+      Graph  : Rp.Graph;
+   begin
+      Task_Project (Store, "framework-helpers");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+
+      --  Tasks: the fields a kind allows and their schemas, the parts that
+      --  hold a whole, the next work, the components named.
+      Assert (Tk.Allowed_Fields (Store, "analysis").Contains ("estimate")
+              and then Tk.Field_Schema (Store, "estimate") = "text" and then Tk.Field_Schema (Store, "title") = "",
+              "a kind's fields or their schema were not said");
+      Tk.Create (Store, Change, Fields ("Whole", "analysis"), "user", "", Whole, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Create (Store, Change, Fields ("Part", "analysis", "parent", To_String (Whole)), "user", "", Part, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Part), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Assert (Tk.Holds_Parent (Store, To_String (Part), "accepted")
+              and then not Tk.Holds_Parent (Store, To_String (Part), "complete"),
+              "an accepted part did not hold its whole, or a complete one did");
+      Assert (Tk.Next_Work_Of (Store).Runnable.Contains (To_String (Part)),
+              "an accepted task was not the next work");
+      declare
+         Settings : R.Item := R.Create ("configuration", 1, "CONFIG", 1);
+      begin
+         R.Set (Settings, "set.components", "parser");
+         R.Set (Settings, "map.component.io", "src/io");
+         Assert (Tk.Components_Of (Settings).Contains ("parser") and then Tk.Components_Of (Settings).Contains ("io"),
+                 "a configuration's components, listed and placed, were not both named");
+      end;
+
+      --  Permissions: a grant as written and its faults, the file beside a
+      --  prompt, a path's verdict, a value said, a restriction that only
+      --  takes away, a ruling that says what the configuration does.
+      Assert (Pm.Grant_Problem ("run_tests", "profiles=quick") = ""
+              and then Pm.Grant_Problem ("create_children", "max_depth=many") /= "",
+              "a grant's fault was not found, or one that reads was refused");
+      Assert (Ada.Strings.Fixed.Index
+                (Pm.Grant_Text (Pm.Value ("write_source roots=src/") (Pm.Write_Source)), "roots=src/") > 0,
+              "a grant was not written as its value");
+      Assert (Dirs.Containing_Directory (Pm.Permissions_Beside ("/x/y/prompt.txt")) = "/x/y",
+              "the permissions file was not beside the prompt");
+      Assert (Pm.Path_Refused_As (Fresh_Root (Store), "src/parser.ads", Writing => False) = Pm.Path_Allowed
+              and then Pm.Path_Refused_As (Fresh_Root (Store), "/etc/hosts", Writing => False) = Pm.Path_Outside,
+              "a path's verdict was not what its refusal says");
+      Assert (Pm.Value_Said ("map.permission.project.write_source", "") = "granted, no limits",
+              "a grant with no limits was said as nothing");
+      Assert (Pm.Only_Withholds ("-write_source -use_network") and then not Pm.Only_Withholds ("write_source"),
+              "a restriction that only takes away was not told from one that gives");
+      Assert (Pm.Ruling_Agrees (Store, Model_Runner.Framework.Configurations.Required (Store),
+                                "map.permission.project.use_network", "off")
+              and then not Pm.Ruling_Agrees (Store, Model_Runner.Framework.Configurations.Required (Store),
+                                             "map.permission.project.use_network", "on"),
+              "a ruling on the network was not held to what the project gives");
+
+      --  The repository: roots, the graph's symbols, what it could not read,
+      --  and the fingerprint of the one kept.
+      Assert (Rp.Under_Roots (["src"], "src/parser.ads") and then not Rp.Under_Roots (["src"], "docs/x.md"),
+              "a path was placed under the wrong roots");
+      Rp.Current (Store, Graph, Status);
+      Assert (E.Is_Ok (Status) and then Rp.Symbol_Count (Graph) > 0
+              and then (for some Index in 1 .. Rp.Symbol_Count (Graph) =>
+                          To_String (Rp.Symbol_At (Graph, Index).Name) = "Parser")
+              and then Rp.Unread_Paths (Graph).Is_Empty
+              and then Rp.Kept_Fingerprint (Store) = Rp.Graph_Fingerprint (Graph),
+              "the graph's symbols, unread paths or kept fingerprint were not as made");
+
+      --  Authority: each subject's governing statement, in order.
+      declare
+         Resolved : constant Au.Resolution := Au.Resolve (Au.Gather (Store));
+      begin
+         Assert (Au.Governing_Count (Resolved) > 0
+                 and then (for all Index in 1 .. Au.Governing_Count (Resolved) =>
+                             Length (Au.Governing_At (Resolved, Index).Subject) > 0),
+                 "the governing statements were not given");
+      end;
+      S.Close (Store);
+   end Framework_Helpers_Answer_As_Said;
+
+   --  An agent that asks its host what the host says of the work, then
+   --  does the work: what only a running agent's host can answer.
+   type Probing_Agent is new Wk.Parenting_Runner with null record;
+
+   Probed : Unbounded_String;
+
+   overriding procedure Run
+     (Self        : Probing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Probing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Probing_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("probing"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Probing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Probing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      procedure Said (What : String; Holds : Boolean) is
+      begin
+         if not Holds then
+            Append (Probed, What & "; ");
+         end if;
+      end Said;
+   begin
+      Probed := Null_Unbounded_String;
+      Said ("its time was up at the start", not Children.Time_Is_Up);
+      Said ("it may not write source", Model_Runner.Framework.Permissions.Allows
+                                          (Children.Grants_Now, Model_Runner.Framework.Permissions.Write_Source));
+      Said ("where it writes was not said", Children.Where_Writes /= "");
+      Said ("its store was not the project's", S.Is_Open (Children.Store_Of.all));
+      Said ("something was not kept", E.Is_Ok (Children.Unkept));
+      Said ("what governs it would not read", Children.Authority_Readable);
+      Said ("it was shown no file at its revision", not Children.Shown_Revisions.Is_Empty);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   procedure Work_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      Id, Short : Unbounded_String;
+   begin
+      Task_Project
+        (Store, "work-helpers",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar task.max_steps.implementation = 7" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/hello.ads", "procedure Hello;" & LF);
+      Tk.Create (Store, Change, Fields ("Greet in src/hello.ads", "analysis"), "user", "", Id, Status);
+      Tk.Create (Store, Change, Fields ("Short", "implementation", "component", "hello"), "user", "", Short, Status);
+
+      --  A transaction's staged names, a namespace's last number, the
+      --  journal left empty.
+      Assert (S.Pending_Names (Change, Model_Runner.Framework.Tasks_Area).Contains (To_String (Id)),
+              "a staged task was not among the names the change writes");
+      S.Commit (Store, Change, Status);
+      Assert (S.Last_Number (Store, "TASK") = 2 and then not S.Journal_Pending (Store),
+              "the last task number or the journal was not as left");
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+
+      --  What a task's agent is allowed and told.
+      Assert (Wk.Steps_Allowed (Store, To_String (Id)) = 24 and then Wk.Steps_Allowed (Store, To_String (Short)) = 7,
+              "a task's steps were not its kind's, or the default");
+      Assert (Ada.Strings.Fixed.Index (Wk.Instructions_Of (Store, To_String (Id)), "status:") > 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Instructions, "status:") > 0,
+              "the instructions did not say how to answer");
+      Assert (Wk.Unable_Reason (Store, To_String (Id)) = "", "a task able to work was said unable");
+
+      --  The configuration's settings: what each means and its default,
+      --  and the fingerprint evidence of an earlier build was held to.
+      Assert (Cf.Meaning_Of ("scalar.agents.max_steps") /= ""
+              and then Cf.Default_Of ("scalar.agents.max_steps") = "24"
+              and then Cf.Legacy_Verification_Fingerprint (Cf.Required (Store))'Length = 16,
+              "a setting's meaning or default, or the legacy fingerprint, was not given");
+
+      --  And what the host says while the work runs.
+      Wk.Execute (Store, To_String (Id), Probing_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "complete",
+              "the probed work did not complete: " & To_String (Done.Reason));
+      Assert (Probed = Null_Unbounded_String, "the host said otherwise than it should: " & To_String (Probed));
+
+      --  Its evidence: tests none were looked for, and nothing to prune.
+      declare
+         State : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", State, Status);
+         Assert (R.Get (State, "current_verification") /= ""
+                 and then not Model_Runner.Framework.Verification.Found_No_Tests
+                                (Store, R.Get (State, "current_verification")),
+                 "evidence that ran no test runner was said to have found no tests");
+      end;
+      Assert (Model_Runner.Framework.Verification.Prune_Reuse_Index (Store) = 0
+              and then Model_Runner.Framework.Verification.Kind_Said
+                         (Model_Runner.Framework.Verification.Stale_Repository) /= "",
+              "evidence's helpers did not answer as said");
+      S.Close (Store);
+   end Work_Helpers_Answer_As_Said;
+
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Store  : aliased S.Store;
@@ -16356,6 +16590,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, Work_Helpers_Answer_As_Said'Access,
+         "the work's helpers and a running agent's host answer as their documentation says");
+      Register_Routine
+        (T, Framework_Helpers_Answer_As_Said'Access,
+         "the framework's helpers answer as their documentation says");
       Register_Routine
         (T, Changes_And_Likeness_Are_Said'Access,
          "a change is said as its lines, against what a failed attempt left, and findings alike are told apart");
