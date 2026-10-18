@@ -3,6 +3,7 @@ with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Directories;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Derivations;
@@ -735,7 +736,11 @@ package body Model_Runner.Framework.Observations is
          when Active | Promoted =>
             null;
       end case;
-      for Index in 1 .. Natural (Value.Files.Length) loop
+      --  A failure pattern says how the checks behave: its files are where
+      --  it was seen, and their later text does not make it stale -- a file
+      --  back as it was before the fix is where the fix applies again. The
+      --  checks it rests on are the configuration's.
+      for Index in 1 .. (if Value.Kind = Failure_Pattern then 0 else Natural (Value.Files.Length)) loop
          declare
             Path : constant String := Value.Files (Index);
             Now  : constant String := Print_Of (Root, Path);
@@ -1046,6 +1051,7 @@ package body Model_Runner.Framework.Observations is
       Component  : Unbounded_String;
       Serves     : Name_Lists.Vector;
       Touches    : Name_Lists.Vector;
+      Named      : Name_Lists.Vector;
       Hot_List   : Considered_Vectors.Vector;
       Warm_List  : Considered_Vectors.Vector;
       Result     : Considered_Vectors.Vector;
@@ -1077,6 +1083,29 @@ package body Model_Runner.Framework.Observations is
       if E.Is_Ok (Read) then
          Component := To_Unbounded_String (Records.Get (Defined, "component"));
          Serves := Lines_Of (Records.Get (Defined, "requirements"));
+         --  The words its title, notes and question say: a file named there
+         --  is one the work is about before it has touched any.
+         declare
+            Said  : constant String :=
+              Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes") & " "
+              & Records.Get (Defined, "question");
+            Start : Positive := Said'First;
+         begin
+            for Index in Said'First .. Said'Last + 1 loop
+               if Index > Said'Last or else Said (Index) in ' ' | ',' | ';' | '"' | ''' | '`' | '(' | ')' then
+                  declare
+                     Word : constant String :=
+                       Ada.Strings.Fixed.Trim (Said (Start .. Index - 1),
+                                               Ada.Strings.Maps.To_Set (":."), Ada.Strings.Maps.To_Set (":."));
+                  begin
+                     if Word /= "" and then not Named.Contains (Word) then
+                        Named.Append (Word);
+                     end if;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+         end;
       end if;
       Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
       if E.Is_Ok (Read) then
@@ -1136,6 +1165,10 @@ package body Model_Runner.Framework.Observations is
                         if Touches.Contains (Path) then
                            Heat := Hot;
                            Reason := To_Unbounded_String ("about " & Path & ", which this task's work touches");
+                           exit;
+                        elsif Named.Contains (Path) then
+                           Heat := Hot;
+                           Reason := To_Unbounded_String ("about " & Path & ", which this task names");
                            exit;
                         end if;
                      end loop;
@@ -1570,7 +1603,7 @@ package body Model_Runner.Framework.Observations is
                elsif Check /= "" then Last_Said (Item, Earlier, Check) else "");
          begin
             Keep_Harness
-              (Item, Change, Finding,
+              (Item, Change, Failure_Pattern,
                "the checks of " & Records.Get (Earlier, "profile") & " failed"
                & (if Check /= "" then " at " & Check else "")
                & (if Said /= "" then ": " & Said else "")

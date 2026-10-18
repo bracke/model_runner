@@ -9013,7 +9013,7 @@ package body Tests.Framework_Cases is
             Value : Ob.Observation;
          begin
             Ob.Read (Store, Name, Value, Status);
-            if Ob."=" (Value.Kind, Ob.Finding)
+            if Ob."=" (Value.Kind, Ob.Failure_Pattern)
               and then Ada.Strings.Fixed.Index
                          (To_String (Value.Summary), "-- src/hello.adb: - raise Program_Error; | + null;") > 0
             then
@@ -9579,7 +9579,7 @@ package body Tests.Framework_Cases is
          begin
             Ob.Read (Store, Id, Value, Status);
             case Value.Kind is
-               when Ob.Finding => Fixed := Value;
+               when Ob.Failure_Pattern => Fixed := Value;
                when Ob.Environment_Constraint => Refused := Value;
                when Ob.Implementation_Note => Noted := Value;
                when others => null;
@@ -9639,6 +9639,26 @@ package body Tests.Framework_Cases is
               and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "was done by changing src/hello.adb") > 0,
               "the next task was not told what the harness recorded: " & Joined (Cx.Knowledge (Built))
               & " / " & Joined (Cx.Knowledge_Left (Built)));
+
+      --  The file back as it was before the fix, as a fresh tree has it:
+      --  what made the checks pass still holds, and a task naming the file
+      --  is about it before its work has touched anything.
+      Put_File (Fresh_Root (Store) & "/src/hello.adb", "raise Program_Error;" & LF);
+      declare
+         Why   : Unbounded_String;
+         Third : Unbounded_String;
+         Left  : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Assert (Ob."=" (Ob.Applicability_Of (Store, Fixed, Why), Ob.Applicable),
+                 "a fix went stale when its file was as it was before it: " & To_String (Why));
+         Change := S.No_Changes;
+         Tk.Create (Store, Change, Fields ("Mend src/hello.adb", "analysis"), "user", "", Third, Status);
+         S.Commit (Store, Change, Status);
+         Assert ((for some One of Ob.Relevant (Store, To_String (Third), Left) =>
+                    One.Id = Fixed.Id and then Ob."=" (One.Heat, Ob.Hot)
+                    and then To_String (One.Reason) = "about src/hello.adb, which this task names"),
+                 "a fix of a file the task names was not hot: " & Joined (Left));
+      end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;
 
