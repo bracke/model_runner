@@ -483,4 +483,8 @@ begin
             & "; /check consistency lists it all");
       end if;
    end;
+
+   --  10: the pages a person reads of what was learned and worked out,
+   --  made again from the state as it now is.
+   Views.Refresh (Item);
 end Recover_On_Opening;

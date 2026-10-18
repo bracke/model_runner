@@ -3834,3 +3834,15 @@ The framework's knowledge mechanisms exist to reduce repeated model work -- tool
 The test suite SHALL include deterministic agent-behaviour scenarios that compare knowledge reuse enabled against disabled, measuring repeated work by counts while requiring the same final source, verification result and authoritative state.
 
 Timing SHALL NOT be a requirement of these scenarios.
+
+---
+
+# 124. Human-Readable Views
+
+The framework MAY keep pages of its observations and derivations for a person to read, below the state directory in views/.
+
+Each page SHALL say first that it is generated and not to be edited, and SHALL say that what it shows is not authoritative.
+
+A page SHALL be made from the state alone, the same state making the same page, and SHALL be made again when the state changes, so that an edit to one does not last.
+
+Nothing SHALL read a page, and the framework SHALL work the same without one; the project SHALL be able to turn them off (views.markdown).

@@ -1840,7 +1840,10 @@ package body Model_Runner.Framework.Stores is
                --  replaced: kept for a person, written by no commit.
                --  Nor the journal: a change under way, or one left for the
                --  next opening, is the commit's own, put right by it.
+               --  Nor the pages made for a person to read: made from the
+               --  state, by no commit, and made again from it.
                if Relative not in "runtime/exec" | "runtime/slots" | "results/payloads" | "runtime/journal"
+                                | "views"
 
                  and then not (Under = "workspaces")
                  and then not (Under = "runtime"

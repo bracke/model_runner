@@ -57,6 +57,7 @@ with Model_Runner.Framework.Templates;
 with Model_Runner.Framework.Traceability;
 with Model_Runner.Framework.Transitions;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Views;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
@@ -13616,6 +13617,100 @@ package body Tests.Framework_Cases is
       end;
    end Observations_At_The_Command_Line;
 
+   procedure Views_Are_Made (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Vw renames Model_Runner.Framework.Views;
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Report  : S.Recovery_Report;
+      Root    : Unbounded_String;
+      Spec    : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+      Mark    : constant String := "<!-- " & Vw.Generated_Mark & " -->";
+
+      function Page (Name : String) return String
+      is (Read_Whole (To_String (Root) & "/.model_runner/views/" & Name));
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      Task_Project (Store, "views");
+      Dv.Depend (Spec, Dv.Input, "file", "src/a.adb", "11");
+      Dv.Keep (Store, Change, Spec, "an answer", "a probe", Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a derivation was not kept: " & Code_Of (Status));
+      Root := To_Unbounded_String (Fresh_Root (Store));
+      S.Close (Store);
+
+      declare
+         Said : constant String :=
+           Command_Output
+             (To_String (Root),
+              ["/obs record finding the parser drops `a | b` when a trailing comma follows",
+               "/obs record experiment a 4 KiB buffer was no faster than 64 KiB",
+               "/obs dismiss 2 measured with the cache warm"]);
+         Seen    : constant String := Page ("observations.md");
+         Derived : constant String := Page ("derivations.md");
+      begin
+         Assert (Has (Said, "OBS-002 dismissed"), "the observations were not recorded: " & Said);
+         Assert (Seen'Length > Mark'Length and then Seen (Seen'First .. Seen'First + Mark'Length - 1) = Mark,
+                 "the observations page does not begin by saying it is generated: " & Seen);
+         Assert (Has (Seen, "not authoritative") or else Has (Seen, "satisfies no gate"),
+                 "the observations page does not say it is not authoritative: " & Seen);
+         Assert (Has (Seen, "# Active") and then Has (Seen, "## OBS-001") and then Has (Seen, "# No longer active")
+                 and then Has (Seen, "## OBS-002") and then Has (Seen, "- state: dismissed")
+                 and then Has (Seen, "measured with the cache warm"),
+                 "the observations page does not hold what is kept, active first: " & Seen);
+         Assert (Has (Seen, "```text" & ASCII.LF & "the parser drops `a | b` when"),
+                 "an observation's words were not quoted whole: " & Seen);
+         Assert (Has (Derived, Mark) and then Has (Derived, "| " & Dv.Key_Of (Spec) & " | probe | project | probe/1 |")
+                 and then Has (Derived, "| latest |"),
+                 "the derivations page does not list the derivation kept: " & Derived);
+
+         --  The same state makes the same page; an edit to one is gone
+         --  the next time the project changes.
+         S.Open (Store, To_String (Root), Report, Status);
+         Assert (Vw.Observations_Page (Store) = Seen and then Vw.Derivations_Page (Store) = Derived,
+                 "the pages are not what the state makes of them");
+         S.Close (Store);
+         Put_File (To_String (Root) & "/.model_runner/views/observations.md", "edited by hand");
+         declare
+            Again : constant String :=
+              Command_Output (To_String (Root), ["/obs record finding a third one, said after the edit"]);
+         begin
+            Assert (Has (Again, "OBS-003"), "the third observation was not recorded: " & Again);
+            Assert (not Has (Page ("observations.md"), "edited by hand")
+                    and then Has (Page ("observations.md"), "## OBS-003"),
+                    "an edited page was not made again from the state");
+         end;
+      end;
+
+      --  Without them the project works the same, and they come back.
+      Dirs.Delete_File (To_String (Root) & "/.model_runner/views/observations.md");
+      Dirs.Delete_File (To_String (Root) & "/.model_runner/views/derivations.md");
+      Dirs.Delete_Directory (To_String (Root) & "/.model_runner/views");
+      declare
+         Said : constant String := Command_Output (To_String (Root), ["/obs", "/obs dismiss 3 not so"]);
+      begin
+         Assert (Has (Said, "OBS-001") and then Has (Said, "OBS-003 dismissed"),
+                 "the project did not work without its pages: " & Said);
+         Assert (Has (Page ("observations.md"), "- state: dismissed"), "the pages did not come back");
+      end;
+
+      --  Turned off, they are not made, and those there are taken away.
+      Task_Project (Store, "views-off", "scalar views.markdown = off" & ASCII.LF);
+      declare
+         Off : constant String := Fresh_Root (Store);
+      begin
+         Dirs.Create_Directory (Off & "/.model_runner/views");
+         Put_File (Off & "/.model_runner/views/observations.md", "left from before");
+         Vw.Refresh (Store);
+         S.Close (Store);
+         Assert (not Dirs.Exists (Off & "/.model_runner/views/observations.md")
+                 and then not Dirs.Exists (Off & "/.model_runner/views/derivations.md"),
+                 "views.markdown = off left a page");
+      end;
+   end Views_Are_Made;
+
    procedure Session_Work_Line_Runs_The_Task
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -15492,6 +15587,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Observations_At_The_Command_Line'Access,
          "/obs lists, shows, records, dismisses, supersedes and promotes observations");
+      Register_Routine
+        (T, Views_Are_Made'Access,
+         "the pages of observations and derivations are generated, marked, made again and never needed");
       Register_Routine
         (T, Workspaces_Isolate_And_Integrate'Access,
          "workspace work is isolated, integrated by right, and verified after");

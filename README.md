@@ -257,6 +257,12 @@ and `/obs promote ID task|fact|decision` is the only way one becomes part of
 what the project means. `scalar knowledge.observations = off` turns it off,
 and `knowledge.max_hot` and `knowledge.max_warm` bound it (five each).
 
+Both are there to read, too: `.model_runner/views/observations.md` and
+`.model_runner/views/derivations.md` are made again from the state whenever
+it changes, say at their top that they are generated, and are read by
+nothing -- an edit to one is gone the next time it is made, and
+`scalar views.markdown = off` leaves them out.
+
 A task is revised with `/task edit TASK NAME=VALUE ...` -- a new revision of
 its definition, its kind among them (`kind=test`), and `/task link TASK
 REQ-001 ...` adds requirements it serves; its parent and dependencies have

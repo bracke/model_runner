@@ -200,6 +200,16 @@ package Model_Runner.Framework.Derivations is
    --  @return The lines; one saying so when there is no such derivation.
    function Explain (Item : Stores.Store; Key : String) return Name_Lists.Vector;
 
+   --  Every kept derivation, by key, a line each: its key, kind, subject,
+   --  algorithm/version, when it was made and its answer, tab-separated,
+   --  then "latest" for the last of its kind and subject, "earlier" for
+   --  one made before it, or "damaged" for one that will not read -- the
+   --  fields it could not give left "-".
+   --
+   --  @param Item The store.
+   --  @return The lines.
+   function Kept (Item : Stores.Store) return Name_Lists.Vector;
+
    --  Derivations worked out and not yet kept: what a computation that
    --  cannot write hands to the transaction that can.
    type Staged is private;

@@ -30,6 +30,7 @@ with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
+with Model_Runner.Framework.Views;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;

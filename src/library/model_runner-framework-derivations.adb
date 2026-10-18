@@ -1034,6 +1034,38 @@ package body Model_Runner.Framework.Derivations is
       Memory.Note (Kind, Again);
    end Count;
 
+   ----------
+   -- Kept --
+   ----------
+
+   function Kept (Item : Stores.Store) return Name_Lists.Vector is
+      Lines : Name_Lists.Vector;
+   begin
+      for Name of Stores.Names (Item, Derivations_Area) loop
+         if not Starts (Name, "head-") then
+            declare
+               Value  : Records.Item;
+               Spec   : Specification;
+               Status : E.Error_Info;
+            begin
+               Read_Kept (Item, Name, Value, Spec, Status);
+               if E.Is_Error (Status) then
+                  Lines.Append (Name & Tab & "-" & Tab & "-" & Tab & "-" & Tab & "-" & Tab & "-" & Tab
+                                & "damaged");
+               else
+                  Lines.Append
+                    (Name & Tab & To_String (Spec.Kind) & Tab & To_String (Spec.Subject) & Tab
+                     & To_String (Spec.Algorithm) & "/" & To_String (Spec.Version) & Tab
+                     & Records.Get (Value, "created_at") & Tab & Records.Get (Value, "result") & Tab
+                     & (if Latest (Item, To_String (Spec.Kind), To_String (Spec.Subject)) = Name
+                        then "latest" else "earlier"));
+               end if;
+            end;
+         end if;
+      end loop;
+      return Lines;
+   end Kept;
+
    -----------
    -- Prune --
    -----------

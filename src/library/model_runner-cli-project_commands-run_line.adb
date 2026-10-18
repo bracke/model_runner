@@ -217,6 +217,8 @@ is
                Pres.Put_Note (Screen, "cli.project.recovered", [Loc.Named ("detail", Line)]);
             end loop;
          end;
+         --  And the pages a person reads of it, made again where they differ.
+         Model_Runner.Framework.Views.Refresh (Store);
       end if;
       S.Close (Store);
    end With_Store;
