@@ -254,8 +254,10 @@ on the same task, its files, its requirements or its component is told it,
 after what governs the work and labelled stale where its files have changed
 since, and never as authoritative: `/obs` lists and shows what was learned,
 and `/obs promote ID task|fact|decision` is the only way one becomes part of
-what the project means. `scalar knowledge.observations = off` turns it off,
-and `knowledge.max_hot` and `knowledge.max_warm` bound it (five each).
+what the project means. `scalar knowledge.observations = off` stops it being
+told -- what agents and the harness find is still recorded, so turning it back
+on loses nothing -- and `knowledge.max_hot` and `knowledge.max_warm` bound it
+(five each).
 
 Both are there to read, too: `.model_runner/views/observations.md` and
 `.model_runner/views/derivations.md` are made again from the state whenever
