@@ -36,6 +36,9 @@ with Model_Runner.Tools.Schemas;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
+with Model_Runner.Sampling;
+with Model_Runner.Tokenizer.Folding;
+with Model_Runner.Tools.RTF;
 with Model_Runner.Framework;
 with Model_Runner.CLI.Options;
 with Model_Runner.Drafts;
@@ -3867,6 +3870,53 @@ package body Tests.Tools_Cases is
               "a moment ahead was not later than now");
    end Small_Helpers_Answer_As_Said;
 
+   --  More helpers, as their documentation says.
+   procedure More_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Rg renames Model_Runner.Tools.Registry;
+      package Ed renames Model_Runner.Tools.Editing;
+      package Tr renames Model_Runner.Tools.Runner;
+      use type Rg.Path_Use;
+      use type Tr.Tool_Context;
+      LF : constant Character := ASCII.LF;
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      --  The registry: the tools offered by name, a tool's path, whether it
+      --  asks the graph, and which findings do.
+      Assert (Has (Rg.Offered_Names ([others => True]), "read_file"), "the tools offered were not named");
+      Assert (Rg.Path_Of ("read_file") /= Rg.No_Path and then Rg.Path_Of ("no_such_tool") = Rg.No_Path,
+              "a tool's path use was not given");
+      Assert (not Rg.Asks_Graph ("read_file") and then Rg.Graph_Finding ("symbol")
+              and then not Rg.Graph_Finding ("text"),
+              "whether a tool or a finding asks the graph was misjudged");
+
+      --  Editing: a path on disk, a durable change's note, declarations.
+      Assert (Ed.On_Disk ("/b", "x/y") = "/b/x/y" and then Ed.On_Disk ("", "x") = "x",
+              "a path was not placed on disk as said");
+      Assert (Ed.Kept_Note ((others => <>)) = "", "a durable change was given a note");
+      Assert (Ed.Declarations_In ("procedure A;" & LF & "function B return X;" & LF & "C := 1;" & LF, 1, 3)
+                = "A, B",
+              "declarations were not named: " & Ed.Declarations_In ("procedure A;" & LF & "function B return X;"
+                                                                     & LF & "C := 1;" & LF, 1, 3));
+
+      --  The runner: a task that entered no context has none, and no stop.
+      Assert (Tr.Entered_Context = Tr.No_Context and then not Tr.Stop_Now,
+              "a task that entered no context had one, or was told to stop");
+
+      --  Documents' text, a letter's first decomposition.
+      Assert (Has (Model_Runner.Tools.RTF.Extract_Text ("{\rtf1\ansi hello world}"), "hello world"),
+              "an RTF document's text was not read: " & Model_Runner.Tools.RTF.Extract_Text
+                                                          ("{\rtf1\ansi hello world}"));
+      Assert (Model_Runner.Tokenizer.Folding.First_Of_Decomposition (16#E9#) = 16#65#
+              and then Model_Runner.Tokenizer.Folding.First_Of_Decomposition (65) = 65,
+              "a letter's decomposition was not begun as Unicode begins it");
+
+      --  The sampler's chain ranks first by top-k, unless greedy.
+      Assert (Model_Runner.Sampling.Ranks_First ((others => <>))
+              and then not Model_Runner.Sampling.Ranks_First (Model_Runner.Sampling.Greedy_Configuration),
+              "whether top-k comes first was misjudged");
+   end More_Helpers_Answer_As_Said;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -4005,6 +4055,9 @@ package body Tests.Tools_Cases is
       Register_Routine
         (T, Small_Helpers_Answer_As_Said'Access,
          "small helpers answer as their documentation says");
+      Register_Routine
+        (T, More_Helpers_Answer_As_Said'Access,
+         "more helpers answer as their documentation says");
    end Register_Tests;
 
 end Tests.Tools_Cases;

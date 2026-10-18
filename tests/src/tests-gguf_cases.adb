@@ -176,6 +176,10 @@ package body Tests.GGUF_Cases is
                  "wrong metadata count:"
                  & Natural'Image (Containers.Metadata_Count (Item)));
          Assert (Containers.Tensor_Count (Item) = 2, "wrong tensor count");
+         --  A whole model: the first of none, its split keys absent.
+         Assert (Containers.Shard_Index (Item) = 0 and then Containers.Shard_Tensor_Count (Item) = 0
+                 and then E.Is_Ok (Containers.Split_Problem (Item)),
+                 "a whole model was read as a shard, or its split as wrong");
          Assert (Containers.String_Value (Item, "general.architecture") = "llama",
                  "architecture not readable");
          Assert (Containers.Find_Tensor (Item, "token_embd.weight") /= 0,
