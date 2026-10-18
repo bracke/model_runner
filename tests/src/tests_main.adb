@@ -3627,7 +3627,9 @@ begin
               (if Option ("--context-size", "0")'Length in 1 .. 7
                  and then (for all C of Option ("--context-size", "0") => C in '0' .. '9')
                  and then Natural'Value (Option ("--context-size", "0")) >= 512
-               then Natural'Value (Option ("--context-size", "0")) else 0));
+               then Natural'Value (Option ("--context-size", "0")) else 0),
+            --  --accept on: a carried run accepts the lessons proposed.
+            Accept_Lessons => Option ("--accept", "off") = "on");
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 

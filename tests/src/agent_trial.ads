@@ -45,6 +45,10 @@ package Agent_Trial is
    --    it. Kept with each run in the history (context: N, or own); runs
    --    from before it was kept ran at 8192. What a reply and its thought
    --    may take grow with it.
+   --  @param Accept_Lessons Whether a carried run first accepts, as a person
+   --    would, the decisions the harness proposed from what earlier runs
+   --    mended alike (--accept on): what the checks hold work to, then in
+   --    every task's context as a decision rather than an observation.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -56,6 +60,7 @@ package Agent_Trial is
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
       Max_Seconds : Positive := 1200;
-      Context_Size : Natural := 0);
+      Context_Size : Natural := 0;
+      Accept_Lessons : Boolean := False);
 
 end Agent_Trial;

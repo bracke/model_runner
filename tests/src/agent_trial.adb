@@ -311,6 +311,69 @@ package body Agent_Trial is
       return False;
    end Chosen;
 
+   --  The decisions the harness proposed from what was mended alike, still
+   --  candidates, in a project's state: read from their records, a field
+   --  being its name and length on a line and then that many characters.
+   function Proposed_Lessons (Root : String) return Hostkit.String_Vectors.Vector is
+      use Ada.Directories;
+      Found  : Hostkit.String_Vectors.Vector;
+      Where  : constant String := Root & "/.model_runner/decisions";
+      Search : Search_Type;
+      Item   : Directory_Entry_Type;
+
+      function Field (Text, Name : String) return String is
+         Mark  : constant String := ASCII.LF & Name & " ";
+         At_It : constant Natural := Ada.Strings.Fixed.Index (Text, Mark);
+      begin
+         if At_It = 0 then
+            return "";
+         end if;
+         declare
+            Line_End : constant Natural := Ada.Strings.Fixed.Index (Text (At_It + 1 .. Text'Last), "" & ASCII.LF);
+            Count    : Natural := 0;
+         begin
+            if Line_End = 0 then
+               return "";
+            end if;
+            for C of Text (At_It + Mark'Length .. Line_End - 1) loop
+               exit when C not in '0' .. '9';
+               Count := Count * 10 + (Character'Pos (C) - Character'Pos ('0'));
+            end loop;
+            return Text (Line_End + 1 .. Natural'Min (Text'Last, Line_End + Count));
+         end;
+      end Field;
+   begin
+      if not Exists (Where) then
+         return Found;
+      end if;
+      Start_Search (Search, Where, "DEC-*.rec", [Ordinary_File => True, others => False]);
+      while More_Entries (Search) loop
+         Get_Next_Entry (Search, Item);
+         declare
+            File : Ada.Text_IO.File_Type;
+            Text : Unbounded_String;
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Full_Name (Item));
+            while not Ada.Text_IO.End_Of_File (File) loop
+               Append (Text, ASCII.LF & Ada.Text_IO.Get_Line (File));
+            end loop;
+            Ada.Text_IO.Close (File);
+            if Field (To_String (Text), "state") = "candidate"
+              and then Ada.Strings.Fixed.Head (Field (To_String (Text), "provenance"), 19) = "observation lesson "
+            then
+               Found.Append (To_Unbounded_String (Field (To_String (Text), "entity_id")));
+            end if;
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+         end;
+      end loop;
+      End_Search (Search);
+      return Found;
+   end Proposed_Lessons;
+
    procedure Run
      (Model     : String;
       Program   : String;
@@ -322,7 +385,8 @@ package body Agent_Trial is
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
       Max_Seconds : Positive := 1200;
-      Context_Size : Natural := 0)
+      Context_Size : Natural := 0;
+      Accept_Lessons : Boolean := False)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -450,7 +514,7 @@ package body Agent_Trial is
          Ada.Text_IO.Put_Line
            (File, Now & HT & Build & HT & Ada.Directories.Simple_Name (Model) & HT & Task_Name & HT
             & (if Apart then "workspace" else "project") & (if Knowledge then "" else ", knowledge off")
-            & (if Carry then ", carried" else "")
+            & (if Carry then ", carried" else "") & (if Accept_Lessons then ", lessons accepted" else "")
             & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed & HT
@@ -775,6 +839,18 @@ package body Agent_Trial is
                                                                            One.Styled, One.Convention))
                                                             and then Wait_For ("is now revision", 30.0))))
                               then
+                                 --  What the harness proposed from what earlier
+                                 --  runs mended alike, accepted as a person
+                                 --  would, before the task is made.
+                                 if Carried and then Accept_Lessons then
+                                    for Lesson of Proposed_Lessons (Root) loop
+                                       Send ("/decision accept " & To_String (Lesson));
+                                       if Wait_For (To_String (Lesson), 30.0) then
+                                          Ada.Text_IO.Put_Line
+                                            ("  accepted " & To_String (Lesson) & ", proposed from what was mended");
+                                       end if;
+                                    end loop;
+                                 end if;
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
                                        & (if To_String (One.Kind) = "implementation"
                                           then " component=" & Project else "")

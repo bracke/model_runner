@@ -49,7 +49,7 @@ package body Tool_Commands is
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
    Opts_Conform   : aliased constant String := " --arith --part --short ";
    Opts_Trial     : aliased constant String :=
-     " --model --program --task --options --repeats --isolation --knowledge --carry --max-seconds"
+     " --model --program --task --options --repeats --isolation --knowledge --carry --max-seconds --accept"
      & " --context-size ";
    Opts_Speed     : aliased constant String :=
      " --model --prompt-file --prompt-set --max-tokens --threads --batch-size --repack"
@@ -91,7 +91,7 @@ package body Tool_Commands is
    Takes_Trial     : aliased constant String :=
      "--model PATH [--program PATH] [--task edit|find|delegate|styled|convention[,...]]"
      & " [--options ""OPTIONS""] [--repeats N]"
-     & " [--isolation workspace] [--knowledge off] [--carry on] [--max-seconds N]"
+     & " [--isolation workspace] [--knowledge off] [--carry on] [--accept on] [--max-seconds N]"
      & " [--context-size N]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"
