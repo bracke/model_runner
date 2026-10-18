@@ -3617,7 +3617,12 @@ begin
             --  --knowledge off: nothing the agents find is kept or told.
             Knowledge => Option ("--knowledge", "on") /= "off",
             --  --carry on: a task's later runs keep its project's state.
-            Carry     => Option ("--carry", "off") = "on");
+            Carry     => Option ("--carry", "off") = "on",
+            Max_Seconds =>
+              (if Option ("--max-seconds", "1200")'Length in 1 .. 5
+                 and then (for all C of Option ("--max-seconds", "1200") => C in '0' .. '9')
+                 and then Natural'Value (Option ("--max-seconds", "1200")) >= 1
+               then Natural'Value (Option ("--max-seconds", "1200")) else 1200));
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 

@@ -183,7 +183,10 @@ package body Agent_Trial is
    --  The work's own bound, inside the half hour the trial waits for it:
    --  past that a run read "did not end", and nothing said why; ended by
    --  the harness, it says.
-   Time_Bound : constant String := " scalar.agents.max_seconds=1200";
+   Seconds_Bound : Positive := 1200;
+
+   function Time_Bound return String
+   is (" scalar.agents.max_seconds=" & Ada.Strings.Fixed.Trim (Positive'Image (Seconds_Bound), Ada.Strings.Both));
 
    --  Where the work is written: in a workspace of its own, taken in by
    --  the harness once its checks pass there, where the trial asks it.
@@ -281,7 +284,8 @@ package body Agent_Trial is
       Repeats   : Positive := 1;
       Apart     : Boolean := False;
       Knowledge : Boolean := True;
-      Carry     : Boolean := False)
+      Carry     : Boolean := False;
+      Max_Seconds : Positive := 1200)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -423,6 +427,7 @@ package body Agent_Trial is
          Discard_Copy;
          return;
       end if;
+      Seconds_Bound := Max_Seconds;
       for Round in 1 .. Repeats loop
          exit when Halted;
          for Which in Tasks'Range loop
@@ -674,7 +679,7 @@ package body Agent_Trial is
                                     Send ("/accept " & To_String (Task_Id));
                                     if Wait_For ("ready", 30.0) then
                                        Send ("/work " & To_String (Task_Id));
-                                       Worked := Wait_For ("How it came out", 1800.0);
+                                       Worked := Wait_For ("How it came out", Duration (Max_Seconds) + 600.0);
                                        declare
                                           Ignored : constant Boolean := Wait_For ("> ", 20.0);
                                        begin

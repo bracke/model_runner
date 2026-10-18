@@ -38,6 +38,8 @@ package Agent_Trial is
    --    earlier runs learned -- kept, and the task made anew in it; so a
    --    second run can be told what the first found, which a project made
    --    afresh each time never is.
+   --  @param Max_Seconds How long a task's work may take (--max-seconds):
+   --    agents.max_seconds in the project, and the wait for it past that.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -47,6 +49,7 @@ package Agent_Trial is
       Repeats   : Positive := 1;
       Apart     : Boolean := False;
       Knowledge : Boolean := True;
-      Carry     : Boolean := False);
+      Carry     : Boolean := False;
+      Max_Seconds : Positive := 1200);
 
 end Agent_Trial;
