@@ -94,18 +94,28 @@ package body Model_Runner.Framework.Observations is
    --  A summary as one line, its spacing made single.
    function One_Line (Text : String) return String is
       Result : Unbounded_String;
-      Space  : Boolean := False;
+      Break  : Boolean := False;
    begin
+      --  Its line ends and tabs each a space, one for a run of them; its
+      --  spaces as they are -- in a line quoted or a change said, two
+      --  spaces are not one: '--  SPDX' told as '-- SPDX' was told wrong,
+      --  and a change that added the space read as no change at all.
       for C of Text loop
-         if C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
-            Space := Length (Result) > 0;
+         if C in ASCII.HT | ASCII.LF | ASCII.CR then
+            Break := Length (Result) > 0;
          elsif C >= ' ' then
-            if Space then
+            if Break and then Element (Result, Length (Result)) /= ' ' and then C /= ' ' then
                Append (Result, ' ');
-               Space := False;
             end if;
-            Append (Result, C);
+            Break := False;
+            if C /= ' ' or else Length (Result) > 0 then
+               Append (Result, C);
+            end if;
          end if;
+      end loop;
+      --  And none at the end.
+      while Length (Result) > 0 and then Element (Result, Length (Result)) = ' ' loop
+         Delete (Result, Length (Result), Length (Result));
       end loop;
       return To_String (Result);
    end One_Line;
@@ -115,7 +125,20 @@ package body Model_Runner.Framework.Observations is
    --------------
 
    function Claim_Of (Said : Draft) return String is
-      Text : constant String := Lower (One_Line (To_String (Said.Summary)));
+      --  Its spacing set aside, as the claim it makes: two spaces or one
+      --  between words is the same finding, though the text keeps which.
+      function Spaced_Once (Line : String) return String is
+         Result : Unbounded_String;
+      begin
+         for C of Line loop
+            if C /= ' ' or else Length (Result) = 0 or else Element (Result, Length (Result)) /= ' ' then
+               Append (Result, C);
+            end if;
+         end loop;
+         return To_String (Result);
+      end Spaced_Once;
+
+      Text : constant String := Lower (Spaced_Once (One_Line (To_String (Said.Summary))));
       Last : Natural := Text'Last;
    begin
       --  How a sentence ends is not what it claims.

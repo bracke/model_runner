@@ -9506,6 +9506,32 @@ package body Tests.Framework_Cases is
       Ob.Record_Observation (Store, Change, Draft_Of (Ob.Implementation_Note, "B was done by changing calc.adb"),
                              Origin_Of (To_String (B), "1", "AG-1"), Noted, Fresh, Status);
       S.Commit (Store, Change, Status);
+      --  What a finding says is kept as it says it: two spaces are two,
+      --  in a line quoted as in the change a fix observation says -- told
+      --  as one, a license line '--  SPDX' was told wrong -- while the
+      --  same finding spaced otherwise is still the same.
+      declare
+         Spaced, Again : Unbounded_String;
+         Value  : Ob.Observation;
+      begin
+         Change := S.No_Changes;
+         Ob.Record_Observation
+           (Store, Change, Draft_Of (Ob.Finding, "a changed file begins with '--  SPDX-License-Identifier: MIT'"),
+            Origin_Of (To_String (A), "1", "AG-1"), Spaced, Fresh, Status);
+         S.Commit (Store, Change, Status);
+         Ob.Read (Store, To_String (Spaced), Value, Status);
+         Assert (Ada.Strings.Fixed.Index (To_String (Value.Summary), "'--  SPDX-License-Identifier: MIT'") > 0,
+                 "a finding's two spaces were kept as one: " & To_String (Value.Summary));
+         Change := S.No_Changes;
+         Ob.Record_Observation
+           (Store, Change, Draft_Of (Ob.Finding, "a changed file  begins with '-- SPDX-License-Identifier: MIT'"),
+            Origin_Of (To_String (B), "1", "AG-1"), Again, Fresh, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Again = Spaced and then not Fresh, "the same finding spaced otherwise was kept as another");
+         Change := S.No_Changes;
+         Ob.Dismiss (Store, Change, To_String (Spaced), "only to see it kept", Status);
+         S.Commit (Store, Change, Status);
+      end;
       declare
          Told : constant Ob.Considered_Vectors.Vector := Ob.Relevant (Store, To_String (C), Left);
       begin
