@@ -1758,6 +1758,21 @@ package body Model_Runner.Framework.Work is
       return Result;
    end Judged_Files;
 
+   --  What changed in a task's files since its last attempt failed, where
+   --  that attempt's files were kept (failed_files): "" where none were.
+   function Since_Failed_Attempt (Item : Stores.Store; Task_Id, Root : String) return String is
+      State : Records.Item;
+      Left  : Results.Result;
+      Read  : E.Error_Info;
+   begin
+      Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
+      if E.Is_Error (Read) or else Records.Get (State, "failed_files") = "" then
+         return "";
+      end if;
+      Results.Read (Item, Records.Get (State, "failed_files"), Left, Read);
+      return (if E.Is_Ok (Read) then Observations.Change_Since (Root, To_String (Left.Payload)) else "");
+   end Since_Failed_Attempt;
+
    --  Whose an observation made now is, as the host knows it: the task,
    --  its generation, the agent working, its parent, its last invocation
    --  and the tree -- never a call's to say.
@@ -1787,6 +1802,10 @@ package body Model_Runner.Framework.Work is
    -- Observe_Refusal --
    ---------------------
 
+   --  Keep a call refused the agent now working as a constraint later
+   --  work is told: its tool, why, and the path its arguments name. Kept
+   --  at once and apart: one that cannot be kept changes nothing of the
+   --  work.
    procedure Observe_Refusal (Host : in out Child_Host; Tool, Why, Arguments : String) is
       Change : Stores.Transaction;
       Id     : Unbounded_String;
@@ -1990,6 +2009,17 @@ package body Model_Runner.Framework.Work is
             Stores.Commit (Host.Item.all, Change, Status);
          end if;
          Keep_Unkept (Host, Status);
+      end if;
+      --  Refused: what the project does not allow, kept for later work --
+      --  why in the call's own answer where it gives one.
+      if Ended'Length >= 7 and then Ended (Ended'First .. Ended'First + 6) = "refused" then
+         Observe_Refusal
+           (Host, Named,
+            (if Answer'Length > 7 and then Answer (Answer'First .. Answer'First + 6) = "error: "
+             then Answer (Answer'First + 7 .. Answer'Last)
+             elsif Answer /= "" then Answer
+             else Ended),
+            Arguments);
       end if;
    end Note_Call;
 

@@ -282,6 +282,7 @@ package body Model_Runner.Framework.Schemas is
           Rule ("generation", Number_Field, True),
           Rule ("blocking_reasons", Text_Field, False),
           Rule ("current_failure", Text_Field, False),
+          Rule ("failed_files", Text_Field, False),
           Rule ("moved_by", Text_Field, False),
           Rule ("accepted_by", Text_Field, False),
           Rule ("rejected_by", Text_Field, False)]),

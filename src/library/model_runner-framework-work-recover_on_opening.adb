@@ -328,6 +328,18 @@ begin
          Said.Append ("let go of" & Natural'Image (Removed) & " derivations past their retention");
       end if;
 
+      --  Observations that no longer apply and have not been seen again for
+      --  a month, unless the project says otherwise: dismissed, saying why.
+      Observations.Retire_Stale
+        (Item, Change, Number_Of (Scalar (Item, "retention.stale_days"), 30), Removed);
+      if Removed > 0 then
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Said.Append ("dismissed" & Natural'Image (Removed) & " observations stale and unseen past their retention");
+      end if;
+
       --  Observations dismissed or superseded long ago, left as tombstones
       --  where the project keeps them only for a while; kept unless it says.
       Observations.Prune

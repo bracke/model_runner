@@ -8927,11 +8927,175 @@ package body Tests.Framework_Cases is
       Children.Run_Checks ("checks", Report, Got);
       Assert (Ada.Strings.Fixed.Index (To_String (Report), "passed") > 0,
               "the checks did not pass after the work: " & To_String (Report));
-      Children.Observe_Refusal ("write_file", "outside the project", "{""path"": ""/etc/hosts""}");
+      --  A write it was refused, said as the session says each call.
+      Children.Note_Call ("write_file", "{""path"": ""/etc/hosts""}", "error: /etc/hosts is outside the project",
+                          Ended => "refused: outside the project");
       Answer := To_Unbounded_String
         ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
       Status := E.Success;
    end Run_Parenting;
+
+   --  An agent wrong the first time, right the second: what a retry is
+   --  told is what changed between the attempt that failed and the one
+   --  that passed.
+   type Retrying_Agent is new Wk.Agent_Runner with null record;
+
+   Retrying_Attempt : Natural := 0;
+
+   overriding procedure Run
+     (Self        : Retrying_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run
+     (Self        : Retrying_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+   begin
+      Retrying_Attempt := Retrying_Attempt + 1;
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb",
+                "procedure Hello is" & LF & "begin" & LF
+                & (if Retrying_Attempt = 1 then "   raise Program_Error;" else "   null;") & LF
+                & "end Hello;" & LF);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run;
+
+   procedure Retry_Is_Told_What_Changed (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      Id     : Unbounded_String;
+      Found  : Boolean := False;
+   begin
+      Task_Project
+        (Store, "retry-told",
+         "set execution.allowed = sh" & LF
+         & "profile checks = holds: sh check.sh" & LF
+         & "scalar verification.default = checks" & LF);
+      Put_File (Fresh_Root (Store) & "/check.sh", "grep -q 'null;' src/hello.adb" & LF);
+      Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Retrying_Attempt := 0;
+      Wk.Execute (Store, To_String (Id), Retrying_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "failed",
+              "the first attempt did not fail: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      --  Taken up again, as a person does: accepted once more.
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Retrying_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "complete",
+              "the retry did not complete: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      for Name of Ob.List (Store) loop
+         declare
+            Value : Ob.Observation;
+         begin
+            Ob.Read (Store, Name, Value, Status);
+            if Ob."=" (Value.Kind, Ob.Finding)
+              and then Ada.Strings.Fixed.Index
+                         (To_String (Value.Summary), "-- src/hello.adb: - raise Program_Error; | + null;") > 0
+            then
+               Found := True;
+            end if;
+         end;
+      end loop;
+      Assert (Found, "the retry's fix did not say what changed since the attempt that failed");
+      S.Close (Store);
+   end Retry_Is_Told_What_Changed;
+
+   procedure Observations_Do_Not_Pile_Up (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      A, B, C : Unbounded_String;
+      Note_A, Note_B, Note_C, Stale_One, Fresh_One : Unbounded_String;
+      Fresh  : Boolean;
+      Dismissed : Natural;
+      Root   : Unbounded_String;
+
+      function Kept (Id : Unbounded_String) return Ob.Observation is
+         Value : Ob.Observation;
+      begin
+         Ob.Read (Store, To_String (Id), Value, Status);
+         return Value;
+      end Kept;
+
+      procedure Done (Task_Id : Unbounded_String; Files : Model_Runner.Framework.Name_Lists.Vector;
+                      Into : out Unbounded_String) is
+      begin
+         Change := S.No_Changes;
+         Ob.Observe_Done (Store, Change, To_String (Task_Id), "", Files,
+                          (Producer => Ob.Harness_Producer, Task_Id => Task_Id, others => <>), Into, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Length (Into) > 0, "a done note was not kept: " & Code_Of (Status));
+      end Done;
+
+      --  An observation last seen long ago, as its record would say.
+      procedure Seen_Long_Ago (Id : Unbounded_String) is
+         Value : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Observations_Area, To_String (Id), Value, Status);
+         R.Set (Value, "seen_at", "2020-01-01T00:00:00Z");
+         R.Set_Revision (Value, R.Revision (Value) + 1);
+         Change := S.No_Changes;
+         S.Put (Change, Model_Runner.Framework.Observations_Area, To_String (Id), Value);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the sighting was not put back: " & Code_Of (Status));
+      end Seen_Long_Ago;
+   begin
+      Task_Project (Store, "no-pile");
+      Root := To_Unbounded_String (Fresh_Root (Store));
+      Dirs.Create_Path (To_String (Root) & "/src");
+      for Name of Model_Runner.Framework.Name_Lists.Vector'(["a", "b", "c"]) loop
+         Put_File (To_String (Root) & "/src/" & Name & ".adb", "procedure " & Name & " is begin null; end;" & LF);
+      end loop;
+      Tk.Create (Store, Change, Fields ("First", "analysis"), "user", "", A, Status);
+      Tk.Create (Store, Change, Fields ("Second", "analysis"), "user", "", B, Status);
+      Tk.Create (Store, Change, Fields ("Third", "analysis"), "user", "", C, Status);
+      S.Commit (Store, Change, Status);
+
+      --  Later work on the same files supersedes what was said of them.
+      Done (A, ["src/a.adb"], Note_A);
+      Done (B, ["src/a.adb", "src/b.adb"], Note_B);
+      Done (C, ["src/c.adb"], Note_C);
+      Assert (Ob."=" (Kept (Note_A).Status, Ob.Superseded) and then Kept (Note_A).Superseded_By = Note_B,
+              "a done note was not superseded by later work on its files");
+      Assert (Ob."=" (Kept (Note_B).Status, Ob.Active) and then Ob."=" (Kept (Note_C).Status, Ob.Active),
+              "a done note about other files was superseded");
+
+      --  Stale and unseen for long: dismissed, saying why. Seen long ago
+      --  and still holding: kept.
+      Change := S.No_Changes;
+      Ob.Record_Observation (Store, Change, Draft_Of (Ob.Finding, "b's procedure takes no parameters", "src/b.adb"),
+                             Origin_Of (To_String (B), "1", "AG-1"), Stale_One, Fresh, Status);
+      Ob.Record_Observation (Store, Change, Draft_Of (Ob.Finding, "c's procedure takes no parameters", "src/c.adb"),
+                             Origin_Of (To_String (C), "1", "AG-1"), Fresh_One, Fresh, Status);
+      S.Commit (Store, Change, Status);
+      Seen_Long_Ago (Stale_One);
+      Seen_Long_Ago (Fresh_One);
+      Put_File (To_String (Root) & "/src/b.adb", "procedure b (X : Integer) is begin null; end;" & LF);
+      Change := S.No_Changes;
+      Ob.Retire_Stale (Store, Change, 30, Dismissed);
+      S.Commit (Store, Change, Status);
+      Assert (Dismissed = 1 and then Ob."=" (Kept (Stale_One).Status, Ob.Dismissed)
+              and then Ada.Strings.Fixed.Index (To_String (Kept (Stale_One).Reason), "retention.stale_days") > 0,
+              "a stale observation unseen for long was not dismissed, saying why:" & Natural'Image (Dismissed));
+      Assert (Ob."=" (Kept (Fresh_One).Status, Ob.Active), "an observation that still holds was dismissed");
+      S.Close (Store);
+   end Observations_Do_Not_Pile_Up;
 
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -8986,7 +9150,7 @@ package body Tests.Framework_Cases is
               and then Ob."=" (Fixed.Ground, Ob.Observed),
               "checks that failed and then passed were not recorded as what fixed them: "
               & To_String (Fixed.Summary));
-      Assert (To_String (Refused.Summary) = "write_file of /etc/hosts was refused: outside the project"
+      Assert (To_String (Refused.Summary) = "write_file of /etc/hosts was refused: /etc/hosts is outside the project"
               and then Refused.Files.Is_Empty and then Refused.Task_Id = First,
               "a refused call was not recorded as a constraint: " & To_String (Refused.Summary));
       Assert (Ada.Strings.Fixed.Index (To_String (Noted.Summary), To_String (First) & " (Greet) was done by changing"
@@ -9006,12 +9170,26 @@ package body Tests.Framework_Cases is
          Ob.Observe_Done (Store, Change, To_String (First), Fixed.Evidence (2), Nothing,
                           Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
          Assert (E.Is_Ok (Status) and then Length (Id) = 0, "work that changed nothing was recorded as done");
+         --  A refusal of a file of the project is about that file.
+         Change := S.No_Changes;
+         Ob.Observe_Refusal (Store, Change, "edit_file", "not permitted", "src/secret.adb",
+                             Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Value : Ob.Observation;
+         begin
+            Ob.Read (Store, To_String (Id), Value, Status);
+            Assert (E.Is_Ok (Status) and then Value.Files.Contains ("src/secret.adb")
+                    and then Ob."=" (Value.Kind, Ob.Environment_Constraint),
+                    "a refusal of a project's file was not kept as about it");
+         end;
       end;
 
       --  The next task of the component is told them.
       Cx.Build (Store, To_String (Second), Cx.Profile (Store, ""), Built, Status);
       Assert (E.Is_Ok (Status)
-              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "was refused: outside the project") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Cx.Rendered (Built), "was refused: /etc/hosts is outside the project") > 0
               and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "was done by changing src/hello.adb") > 0,
               "the next task was not told what the harness recorded: " & Joined (Cx.Knowledge (Built))
               & " / " & Joined (Cx.Knowledge_Left (Built)));
@@ -16127,6 +16305,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, Observations_Do_Not_Pile_Up'Access,
+         "later work supersedes what was said of the same files, and the stale and unseen are dismissed");
+      Register_Routine
+        (T, Retry_Is_Told_What_Changed'Access,
+         "a retry that passes says what changed since the attempt that failed");
       Register_Routine
         (T, Near_Observations_Told_Once'Access,
          "a finding worded otherwise is kept as nearly another, and the two are told once");

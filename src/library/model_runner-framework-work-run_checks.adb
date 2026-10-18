@@ -149,6 +149,12 @@ begin
 
       Fixed_By : Unbounded_String;
    begin
+      --  Failing first in an attempt before this one: what changed since
+      --  its files were kept.
+      if Passed and then Host.At_Failure.Is_Empty then
+         Fixed_By := To_Unbounded_String
+           (Since_Failed_Attempt (Host.Item.all, To_String (Host.Task_Id), To_String (Project_Dir)));
+      end if;
       if Passed and then not Host.At_Failure.Is_Empty then
          for Held of Host.At_Failure loop
             declare

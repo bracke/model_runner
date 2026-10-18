@@ -5,6 +5,7 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Derivations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
@@ -1249,6 +1250,70 @@ package body Model_Runner.Framework.Observations is
       Record_Observation (Item, Change, Said, From, Id, Fresh, Status);
    end Keep_Harness;
 
+   ----------------
+   -- Files_Said --
+   ----------------
+
+   function Files_Said (Root : String; Paths : Name_Lists.Vector) return String is
+      Text : Unbounded_String;
+   begin
+      for Path of Paths loop
+         declare
+            Held : Unbounded_String;
+            Read : E.Error_Info;
+            Full : constant String := Root & "/" & Path;
+         begin
+            if not Is_Rooted (Path) and then Ada.Directories.Exists (Full) then
+               Files.Read_Text (Full, Held, Read);
+               if E.Is_Ok (Read) then
+                  Append (Text, Derivations.Coded (Path) & Tab & Derivations.Coded (To_String (Held)) & LF);
+               end if;
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+      end loop;
+      return To_String (Text);
+   end Files_Said;
+
+   ------------------
+   -- Change_Since --
+   ------------------
+
+   function Change_Since (Root, Said : String) return String is
+      Text : Unbounded_String;
+   begin
+      for Line of Lines_Of (Said) loop
+         declare
+            Fields : constant Name_Lists.Vector := Derivations.Fields_Of (Line);
+         begin
+            if Natural (Fields.Length) = 2 then
+               declare
+                  Now  : Unbounded_String;
+                  Read : E.Error_Info;
+                  Full : constant String := Root & "/" & Fields (1);
+               begin
+                  if Ada.Directories.Exists (Full) then
+                     Files.Read_Text (Full, Now, Read);
+                  end if;
+                  declare
+                     One : constant String := Change_Said (Fields (1), Fields (2), To_String (Now));
+                  begin
+                     if One /= "" then
+                        Append (Text, (if Length (Text) = 0 then "" else " / ") & One);
+                     end if;
+                  end;
+               exception
+                  when others =>
+                     null;
+               end;
+            end if;
+         end;
+      end loop;
+      return To_String (Text);
+   end Change_Since;
+
    -----------------
    -- Change_Said --
    -----------------
@@ -1435,13 +1500,44 @@ package body Model_Runner.Framework.Observations is
          return;
       end if;
       Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-      Keep_Harness
-        (Item, Change, Implementation_Note,
-         Task_Id & " (" & One_Line (Records.Get (Defined, "title")) & ") was done by changing " & Listed (Changed)
-         & (if E.Is_Ok (Read) and then Records.Get (Value, "passed") = "true"
-            then "; the checks of " & Records.Get (Value, "profile") & " passed" else ""),
-         Changed, (if E.Is_Ok (Read) then Name_Lists.To_Vector (Evidence, 1) else Name_Lists.Empty_Vector),
-         From, Id, Status);
+      declare
+         Kept_Read : constant E.Error_Info := Read;
+      begin
+         Keep_Harness
+           (Item, Change, Implementation_Note,
+            Task_Id & " (" & One_Line (Records.Get (Defined, "title")) & ") was done by changing "
+            & Listed (Changed)
+            & (if E.Is_Ok (Kept_Read) and then Records.Get (Value, "passed") = "true"
+               then "; the checks of " & Records.Get (Value, "profile") & " passed" else ""),
+            Changed, (if E.Is_Ok (Kept_Read) then Name_Lists.To_Vector (Evidence, 1) else Name_Lists.Empty_Vector),
+            From, Id, Status);
+      end;
+      if E.Is_Error (Status) or else Length (Id) = 0 then
+         return;
+      end if;
+      --  What it says of its files is newer than what an earlier task's
+      --  note said of the same ones, or of some of them: that note is
+      --  superseded by this, so a file worked on often is told once.
+      for Name of List (Item) loop
+         if Name /= To_String (Id) then
+            declare
+               Other : Observation;
+               Got   : E.Error_Info;
+            begin
+               Observations.Read (Item, Name, Other, Got);
+               if E.Is_Ok (Got) and then Other.Status = Active and then Other.Kind = Implementation_Note
+                 and then Other.Producer = Harness_Producer and then not Other.Files.Is_Empty
+                 and then (for all Path of Other.Files => Changed.Contains (Path))
+               then
+                  Supersede (Item, Change, Name, To_String (Id), Got);
+                  if E.Is_Error (Got) then
+                     Status := Got;
+                     return;
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
    end Observe_Done;
 
    ---------------------
@@ -1560,5 +1656,50 @@ package body Model_Runner.Framework.Observations is
          end;
       end loop;
    end Prune;
+
+   ------------------
+   -- Retire_Stale --
+   ------------------
+
+   procedure Retire_Stale
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Days      : Natural;
+      Dismissed : out Natural)
+   is
+      use type Ada.Calendar.Time;
+      Cut : Unbounded_String;
+   begin
+      Dismissed := 0;
+      if Days = 0 then
+         return;
+      end if;
+      declare
+         Text : String := Ada.Calendar.Formatting.Image (Ada.Calendar.Clock - Duration (Days) * 86_400.0);
+      begin
+         Text (Text'First + 10) := 'T';
+         Cut := To_Unbounded_String (Text & "Z");
+      end;
+      for Id of List (Item) loop
+         declare
+            Value  : Observation;
+            Got    : E.Error_Info;
+            Why    : Unbounded_String;
+         begin
+            Read (Item, Id, Value, Got);
+            if E.Is_Ok (Got) and then Value.Status = Active
+              and then To_String (Value.Seen_At) < To_String (Cut)
+              and then Applicability_Of (Item, Value, Why) = Stale
+            then
+               Dismiss (Item, Change, Id,
+                        "stale and not seen again for" & Natural'Image (Days) & " days (retention.stale_days): "
+                        & To_String (Why), Got);
+               if E.Is_Ok (Got) then
+                  Dismissed := Dismissed + 1;
+               end if;
+            end if;
+         end;
+      end loop;
+   end Retire_Stale;
 
 end Model_Runner.Framework.Observations;

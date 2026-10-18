@@ -8,6 +8,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
+with Model_Runner.Framework.Read_Memory;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Work;
@@ -1488,19 +1489,30 @@ package body Model_Runner.Framework.Tasks is
    -- Children --
    --------------
 
+   --  A task's parent as its definition says it, "" for none, and "!" for
+   --  a definition that will not read: what a scan of every task asks of
+   --  each, remembered against the record's stamp -- a project's tasks are
+   --  scanned so each time readiness is worked out, and few have changed.
+   function Parent_Of (Item : Stores.Store; Id : String) return String is
+      function Read_Parent return String is
+         Value  : Records.Item;
+         Status : E.Error_Info;
+      begin
+         Definition (Item, Id, Value, Status);
+         return (if E.Is_Error (Status) then "!" else Records.Get (Value, "parent"));
+      end Read_Parent;
+   begin
+      return Read_Memory.Remembered
+        ("parent", Stores.Root (Item) & "/" & Directory_Name (Tasks_Area) & "/" & Id & ".rec", Read_Parent'Access);
+   end Parent_Of;
+
    function Unreadable (Item : Stores.Store) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
    begin
       for Id of List (Item) loop
-         declare
-            Value  : Records.Item;
-            Status : E.Error_Info;
-         begin
-            Definition (Item, Id, Value, Status);
-            if E.Is_Error (Status) then
-               Result.Append (Id);
-            end if;
-         end;
+         if Parent_Of (Item, Id) = "!" then
+            Result.Append (Id);
+         end if;
       end loop;
       return Result;
    end Unreadable;
@@ -1512,16 +1524,9 @@ package body Model_Runner.Framework.Tasks is
       Result : Name_Lists.Vector;
    begin
       for Id of List (Item) loop
-         declare
-            Value  : Records.Item;
-            Status : E.Error_Info;
-         begin
-            Definition (Item, Id, Value, Status);
-            if E.Is_Ok (Status) and then Records.Get (Value, "parent") = Parent
-            then
-               Result.Append (Id);
-            end if;
-         end;
+         if Parent_Of (Item, Id) = Parent then
+            Result.Append (Id);
+         end if;
       end loop;
       return Result;
    end Children;

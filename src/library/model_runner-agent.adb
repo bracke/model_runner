@@ -510,6 +510,15 @@ package body Model_Runner.Agent is
                   Thought_Before := U.To_Unbounded_String (Gen.Generated_Text (Last_Result) & Closing);
                   Thought_Tokens := Last_Result.Generated_Tokens;
                   Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
+                  --  Shown closed too, as the prompt has it: what the reply
+                  --  goes on with is no longer thought, and a call it
+                  --  opens is held back as a call -- shown as thought, a
+                  --  call's opening markup reached the screen.
+                  declare
+                     Closed : Boolean;
+                  begin
+                     Model_Runner.Output.Emit (Shown, Closing, Closed);
+                  end;
                   declare
                      Continued : constant String := Rendered.all & U.To_String (Thought_Before);
                   begin

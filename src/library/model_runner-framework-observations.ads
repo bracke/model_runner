@@ -441,6 +441,23 @@ package Model_Runner.Framework.Observations is
    --  @return The lines.
    function Change_Said (Path, Before, After : String) return String;
 
+   --  The files a failed attempt left, as kept for the attempt that comes
+   --  after: each path and its text, a line each, tab-separated and coded.
+   --
+   --  @param Root The tree they are in.
+   --  @param Paths The files, relative to it.
+   --  @return The text to keep.
+   function Files_Said (Root : String; Paths : Name_Lists.Vector) return String;
+
+   --  What changed in those files since, as Change_Said says it for each,
+   --  a " / " between files: what a fix observation tells of the change
+   --  that made the checks pass.
+   --
+   --  @param Root The tree they are in now.
+   --  @param Said What Files_Said kept.
+   --  @return The changes; "" where none or what was kept will not read.
+   function Change_Since (Root, Said : String) return String;
+
    --  Record a call the harness refused -- a permission, the sandbox, the
    --  execution policy, the project's edge -- as a constraint later work
    --  is told: the tool, why, and the file it was for where that is one of
@@ -485,6 +502,22 @@ package Model_Runner.Framework.Observations is
       From     : Origin;
       Id       : out Ada.Strings.Unbounded.Unbounded_String;
       Status   : out Model_Runner.Errors.Error_Info);
+
+   --  Dismiss the active observations that no longer apply and have not
+   --  been seen again for as long as the policy waits: what their files
+   --  say now has moved on from what they said, and nothing has said it
+   --  again since. Each is kept, dismissed and saying why, for the record;
+   --  and is let go as any other dismissed one is after.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Days How long one may stand stale and unseen; zero keeps them.
+   --  @param Dismissed How many were dismissed.
+   procedure Retire_Stale
+     (Item      : Stores.Store;
+      Change    : in out Stores.Transaction;
+      Days      : Natural;
+      Dismissed : out Natural);
 
    --  Let observations go that are dismissed or superseded and older than
    --  the policy keeps: each left as a tombstone -- its identifier, what it

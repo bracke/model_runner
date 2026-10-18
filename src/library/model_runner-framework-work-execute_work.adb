@@ -2170,6 +2170,30 @@ begin
                Change := Stores.No_Changes;
             end if;
          end;
+         --  And what the files it changed hold, kept for the attempt after
+         --  to be told what changed between this failing and that passing.
+         if not Result.Changed_Files.Is_Empty then
+            declare
+               Held : Stores.Transaction;
+               Kept : E.Error_Info;
+               Left : Results.Result :=
+                 (Kind       => Results.Implementation,
+                  Producer   => To_Unbounded_String ("harness"),
+                  Summary    => To_Unbounded_String
+                                  ("the files of " & Task_Id & " as " & To_String (Result.Evidence_Id)
+                                   & " found them"),
+                  Payload    => To_Unbounded_String
+                                  (Observations.Files_Said (To_String (Place), Result.Changed_Files)),
+                  Provenance => Result.Evidence_Id,
+                  others     => <>);
+            begin
+               Results.Add (Item, Held, Left, Kept);
+               if E.Is_Ok (Kept) then
+                  Annotate (Item, Held, Task_Id, "failed_files", To_String (Left.Id));
+                  Stores.Commit (Item, Held, Kept);
+               end if;
+            end;
+         end if;
          Conclude ("failed", To_String (Result.Evidence_Id) & " did not pass"
                    & First_Diagnostics (Item, To_String (Result.Evidence_Id)),
                    "completed");
@@ -2189,7 +2213,7 @@ begin
              Task_Id    => To_Unbounded_String (Task_Id),
              Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),
              others     => <>),
-            Id, Kept);
+            Id, Kept, Since_Failed_Attempt (Item, Task_Id, To_String (Place)));
          if E.Is_Ok (Kept) and then Stores.Change_Count (Fixed) > 0 then
             Stores.Commit (Item, Fixed, Kept);
          end if;
