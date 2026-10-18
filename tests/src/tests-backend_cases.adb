@@ -12279,6 +12279,29 @@ package body Tests.Backend_Cases is
       Device.Close;
    end The_Count_Is_Not_What_Bounds_What_Stays_Resident;
 
+   --  What the integer path takes, said as its documentation says it.
+   procedure Integer_Path_Choices_Are_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Qn renames Model_Runner.Quantization.Integers;
+      package Gf renames Model_Runner.GGUF;
+   begin
+      AUnit.Assertions.Assert (Qn.Is_Packable (64) and then not Qn.Is_Packable (33) and then not Qn.Is_Packable (0),
+                               "a width was packed that is no multiple of the block, or one that is was not");
+      AUnit.Assertions.Assert (Qn.Decodes_Dearly (Gf.Type_Q4_K) and then not Qn.Decodes_Dearly (Gf.Type_Q8_0),
+                               "a format's decoding was misjudged");
+      AUnit.Assertions.Assert (Qn.Takes_Few_Together (Gf.Type_Q4_K)
+                               and then not Qn.Takes_Few_Together (Gf.Type_Q8_0),
+                               "whether a few vectors go together was misjudged");
+      AUnit.Assertions.Assert (Qn.Wanted_Tile (1) = 4 and then Qn.Wanted_Tile (8) = Qn.Row_Tile,
+                               "the tile asked for was not the one said");
+      AUnit.Assertions.Assert (Qn.Packs_Vectors (Gf.Type_Q8_0, 1) and then Qn.Packs_Vectors (Gf.Type_Q8_0, 3)
+                               and then not Qn.Packs_Vectors (Gf.Type_F32, 1),
+                               "the activations were quantized for a product that declines them, or not for one");
+      AUnit.Assertions.Assert (Model_Runner.Quantization.Interleave.Panel_Row_Bytes (Gf.Type_Q4_K) = 144
+                               and then Model_Runner.Quantization.Interleave.Panel_Row_Bytes (Gf.Type_F32) = 0,
+                               "a row's share of a panel block was not a super-block's bytes");
+   end Integer_Path_Choices_Are_Said;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -12589,6 +12612,9 @@ package body Tests.Backend_Cases is
          & "sequence are the bytes and the scales the host's rounding "
          & "makes of the same rows, zeros, halves and either sign's "
          & "largest included");
+      Register_Routine
+        (T, Integer_Path_Choices_Are_Said'Access,
+         "what the integer path takes is said as its documentation says");
    end Register_Tests;
 
 end Tests.Backend_Cases;

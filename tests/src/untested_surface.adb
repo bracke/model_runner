@@ -63,6 +63,11 @@ package body Untested_Surface is
    --  hold what it gives. Delete_If_Present and Make_Directory are Files',
    --  the state's own writes, which every test that keeps a record runs.
    --
+   --  Private to the quantization. Grid_Integers hands its kernels the
+   --  grid formats' tables -- Is_Grid and the table addresses -- and every
+   --  grid format's product test runs through them, against the reference
+   --  decoding; being private, no test names them.
+   --
    --  Private to the command line. Execute.Support and Execute.Acquisition
    --  decide how a run runs -- its backend, workers, arithmetic, paging,
    --  panels, rotation, bounds, the model an alias names -- and every run
@@ -74,7 +79,7 @@ package body Untested_Surface is
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (60 of them, the last in the list, after Started_Below.)
+   --  (45 of them, the last in the list, after Sign_Shuffle_Address.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -162,19 +167,25 @@ package body Untested_Surface is
          | "Confirmed_Line"
          | "Edited_Line"
          | "Started_Below"
+         | "Is_Grid"
+         | "Grid_Address"
+         | "Sign_Ones_Address"
+         | "Byte_Sign_Ones_Address"
+         | "IQ1M_Scales_Address"
+         | "Offset_Signs_Address"
+         | "Offset_Words_Address"
+         | "Scale_Shuffle_Address"
+         | "Sign_Shuffle_Address"
          | "Attends_Packed_Heads"
          | "Attention_Head_Room"
          | "Block_Drafts"
-         | "Byte_Sign_Ones_Address"
          | "Cache_Bound"
          | "Cache_Bytes_For"
          | "Carry_Lost"
-         | "Decodes_Dearly"
          | "Device_Context"
          | "Entry_Point"
          | "Feed_Width"
          | "Float_Shares"
-         | "Grid_Address"
          | "Has_Integer_Dot"
          | "Has_Matrix_Instruction"
          | "Has_Sized_Subgroups"
@@ -182,21 +193,14 @@ package body Untested_Surface is
          | "Heap_Budget"
          | "Host_Alignment"
          | "Integer_Shares"
-         | "IQ1M_Scales_Address"
-         | "Is_Grid"
          | "Is_Jamba"
          | "Is_Mamba2"
          | "Is_MLA"
-         | "Is_Packable"
          | "Is_RWKV"
          | "Is_Stalled"
          | "Last_Refusal"
          | "Normalizes_After"
-         | "Offset_Signs_Address"
-         | "Offset_Words_Address"
          | "One_State_Slot"
-         | "Packs_Vectors"
-         | "Panel_Row_Bytes"
          | "Panels_Unasked"
          | "Plain_Memory_Kinds"
          | "Pure_SSM"
@@ -204,23 +208,18 @@ package body Untested_Surface is
          | "Room_Beside"
          | "Run_Capabilities"
          | "Runs_Linear"
-         | "Scale_Shuffle_Address"
          | "Second_Kind"
          | "Second_Memory_Bytes"
          | "Shares_Host"
          | "Shares_Memory"
-         | "Sign_Ones_Address"
-         | "Sign_Shuffle_Address"
          | "Storage_Limit"
          | "Stores_Pair"
          | "Submissions"
-         | "Takes_Few_Together"
          | "Takes_Host_Memory"
          | "Tiled_Products"
          | "Token_Bytes"
          | "Unsupported_Reason"
          | "Untiled_Products"
-         | "Wanted_Tile"
          | "Weights_Mapped";
    end Is_Untested;
 
