@@ -57,7 +57,8 @@ package body Untested_Surface is
    --  them through Dispatch, as a command run from the shell does.
    --  Private to the framework. Remembered is Read_Memory's, which no test
    --  can name; the retrieval key's hand-edit test and readiness's scan
-   --  hold what it gives.
+   --  hold what it gives. Delete_If_Present and Make_Directory are Files',
+   --  the state's own writes, which every test that keeps a record runs.
    --
    --  Not yet looked at. Until 2026-10-18 the check saw no function at all
    --  -- "   function " is a character shorter than "   procedure ", and was
@@ -65,7 +66,7 @@ package body Untested_Surface is
    --  then, named by no test. Most are reached through a caller; none has
    --  been looked at one by one yet. Each is to come off as a test names
    --  it, or to move to a group above with its reason.
-   --  (128 of them, from Action_Name on, after Remembered, in the list.)
+   --  (113 of them, from Action_Name on, after Remembered, in the list.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -139,8 +140,8 @@ package body Untested_Surface is
          | "Choose_Model"
          | "Do_Models"
          | "Remembered"
-         | "Action_Name"
-         | "Agent_Of"
+         | "Delete_If_Present"
+         | "Make_Directory"
          | "Asked_Rotation"
          | "Asks_Graph"
          | "Attends_Packed_Heads"
@@ -151,7 +152,6 @@ package body Untested_Surface is
          | "Byte_Sign_Ones_Address"
          | "Cache_Bound"
          | "Cache_Bytes_For"
-         | "Calls_Made"
          | "Carry_Lost"
          | "Chosen_Arithmetic"
          | "Coloured_Commands"
@@ -159,8 +159,6 @@ package body Untested_Surface is
          | "Confirmed_Line"
          | "Declarations_In"
          | "Decodes_Dearly"
-         | "Defaults"
-         | "Delete_If_Present"
          | "Device_Context"
          | "Dismissed_Issues"
          | "Edited_Line"
@@ -170,7 +168,6 @@ package body Untested_Surface is
          | "Feed_Width"
          | "First_Of_Decomposition"
          | "Float_Shares"
-         | "Going_Roots"
          | "Graph_Finding"
          | "Grid_Address"
          | "Has_Integer_Dot"
@@ -190,12 +187,9 @@ package body Untested_Surface is
          | "Is_Packable"
          | "Is_RWKV"
          | "Is_Stalled"
-         | "Joins_Cleanly"
          | "Kept_Note"
-         | "Last_Joined"
          | "Last_Refusal"
          | "Last_Refusals"
-         | "Make_Directory"
          | "Model_Bounds"
          | "Models_File"
          | "Normalizes_After"
@@ -205,7 +199,6 @@ package body Untested_Surface is
          | "On_Disk"
          | "One_State_Slot"
          | "Open_Issues"
-         | "Owner_Of"
          | "Packs_Vectors"
          | "Panel_Cache_For"
          | "Panel_Row_Bytes"
@@ -215,7 +208,6 @@ package body Untested_Surface is
          | "Picture_Marker"
          | "Picture_Tokens"
          | "Plain_Memory_Kinds"
-         | "Policy_From"
          | "Prompt_Of_Parts"
          | "Proxy_Bypass"
          | "Pure_SSM"
@@ -252,20 +244,16 @@ package body Untested_Surface is
          | "Submissions"
          | "Takes_Few_Together"
          | "Takes_Host_Memory"
-         | "Task_Of"
          | "Tiled_Products"
          | "Token_Bytes"
          | "Typed_During_Work"
-         | "Units_Of_File"
          | "Unsupported_Reason"
          | "Untiled_Products"
          | "User_Templates_Directory"
          | "Waiting_On_It"
          | "Wanted_Tile"
          | "Weights_Mapped"
-         | "Within_Configured"
          | "With_Panels"
-         | "Workspace_Revision"
          | "Written_Since";
    end Is_Untested;
 

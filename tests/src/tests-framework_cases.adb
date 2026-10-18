@@ -9364,6 +9364,8 @@ package body Tests.Framework_Cases is
       Assert (To_String (Done.Final_State) = "complete",
               "the probed work did not complete: " & To_String (Done.Reason));
       Assert (Probed = Null_Unbounded_String, "the host said otherwise than it should: " & To_String (Probed));
+      Assert (Model_Runner.Framework.Events.Workspace_Revision (Store) > 0,
+              "work that changed a file left the workspace's revision at nought");
 
       --  Its evidence: tests none were looked for, and nothing to prune.
       declare
@@ -9381,6 +9383,76 @@ package body Tests.Framework_Cases is
               "evidence's helpers did not answer as said");
       S.Close (Store);
    end Work_Helpers_Answer_As_Said;
+
+   --  More of the framework's helpers, as their documentation says.
+   procedure More_Helpers_Answer_As_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Ag renames Model_Runner.Framework.Agents;
+      package Am renames Model_Runner.Framework.Automation;
+      package Rp renames Model_Runner.Framework.Repository;
+      use type Model_Runner.Framework.Execution.Policy;
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id, Call : Unbounded_String;
+      Graph  : Rp.Graph;
+   begin
+      Task_Project (Store, "more-helpers");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+      Tk.Create (Store, Change, Fields ("One", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+
+      --  Agents going, as a task and an agent a space apart; none yet.
+      Assert (Ag.Task_Of ("TASK-001 AG-000002") = "TASK-001" and then Ag.Agent_Of ("TASK-001 AG-000002") = "AG-000002"
+              and then Ag.Going_Roots (Store).Is_Empty,
+              "a root agent going was not taken apart, or one was going");
+
+      --  An invocation's calls, counted; one there is none of, none.
+      Model_Runner.Framework.Invocations.Start
+        (Store, Change, "AGENT-1", To_String (Id), "1", "default", "CTX-1", "none",
+         Model_Runner.Framework.Invocations.Work_Claim, Call, Status);
+      S.Commit (Store, Change, Status);
+      Model_Runner.Framework.Invocations.Note_Call
+        (Store, Change, To_String (Call), "read_file", "{}", "text", Status);
+      S.Commit (Store, Change, Status);
+      Assert (Model_Runner.Framework.Invocations.Calls_Made (Store, To_String (Call)) = 1
+              and then Model_Runner.Framework.Invocations.Calls_Made (Store, "INV-NONE") = 0,
+              "an invocation's calls were not counted");
+
+      --  Automation's words and default rules; a lease's owner where none
+      --  is held; the execution policy a configuration sets.
+      Assert (Am.Action_Name (Am.Derive_Tasks) = "derive_tasks" and then not Am.Defaults.Is_Empty,
+              "automation's action words or default rules were not given");
+      Assert (Model_Runner.Framework.Leases.Owner_Of (Store, "no-such-resource") = "",
+              "a lease held by nobody named an owner");
+      Assert (Model_Runner.Framework.Execution.Policy_From (Cf.Required (Store))
+                = Model_Runner.Framework.Execution.Policy_Of (Store),
+              "the policy a configuration sets was not the project's");
+
+      --  A workspace never made joins nothing, and nothing was joined.
+      Assert (not Model_Runner.Framework.Workspaces.Joins_Cleanly (Store, "WS-NONE", "src/parser.ads")
+              and then Model_Runner.Framework.Workspaces.Last_Joined.Is_Empty,
+              "a workspace never made was said to join, or something was joined");
+
+      --  A session's model held to the project's profile: the lower room,
+      --  the larger reserve.
+      declare
+         Session : constant Cx.Model_Profile :=
+           (Id => To_Unbounded_String ("session"), Context_Limit => 4096, Output_Reserve => 3000, others => <>);
+         Planned : constant Cx.Model_Profile := Cx.Within_Configured (Store, Session);
+      begin
+         Assert (Planned.Context_Limit <= 4096 and then Planned.Output_Reserve >= 3000,
+                 "a session's model was not held to the lower room and the larger reserve");
+      end;
+
+      --  The units a file declares.
+      Rp.Current (Store, Graph, Status);
+      Assert (Model_Runner.Framework.Code_Queries.Units_Of_File (Graph, "src/parser.ads").Contains ("Parser"),
+              "a file's units were not given");
+      S.Close (Store);
+   end More_Helpers_Answer_As_Said;
 
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -16590,6 +16662,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, More_Helpers_Answer_As_Said'Access,
+         "more of the framework's helpers answer as their documentation says");
       Register_Routine
         (T, Work_Helpers_Answer_As_Said'Access,
          "the work's helpers and a running agent's host answer as their documentation says");
