@@ -1,3 +1,4 @@
+with Model_Runner.Output;
 with AUnit.Test_Cases;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
@@ -80,7 +81,12 @@ package body Tests.Agent_Loop_Cases is
 
       --  The reply, by number, that stops at its length limit; none at 0.
       Cut_At  : Natural := 0;
+
+      --  Whether its replies are held to each generation's limit.
+      Keeps   : Boolean := False;
    end record;
+
+   overriding function Keeps_To_Limit (Self : Script) return Boolean is (Self.Keeps);
 
    overriding function Cut_Off (Self : Script) return Boolean is (Self.Cut_At > 0 and then Self.Next - 1 = Self.Cut_At);
 
@@ -155,13 +161,35 @@ package body Tests.Agent_Loop_Cases is
       Self.Cut_Offs := Self.Cut_Offs + 1;
    end On_Cut_Off;
 
+   --  What the loop showed, as a screen would have it.
+   type Collecting is new Model_Runner.Output.Sink with record
+      Text : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   overriding procedure Write (Self : in out Collecting; Item : String; Closed : out Boolean);
+   overriding procedure Flush (Self : in out Collecting; Closed : out Boolean);
+   overriding function Is_Closed (Self : Collecting) return Boolean is (False);
+
+   overriding procedure Write (Self : in out Collecting; Item : String; Closed : out Boolean) is
+   begin
+      Ada.Strings.Unbounded.Append (Self.Text, Item);
+      Closed := False;
+   end Write;
+
+   overriding procedure Flush (Self : in out Collecting; Closed : out Boolean) is
+   begin
+      Closed := False;
+   end Flush;
+
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
      (Replies  : in out Script;
       Seen     : in out Recorder;
       Ended    : out Ag.Outcome;
       Carry    : Ag.Memory_Reference := null;
-      Approver : Ag.Approver_Reference := null)
+      Approver : Ag.Approver_Reference := null;
+      Budget   : Natural := 0;
+      Shown    : Model_Runner.Output.Sink_Reference := null)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -200,11 +228,12 @@ package body Tests.Agent_Loop_Cases is
          Executor   => Runner,
          Generation => Request,
          Stop_Set   => Stop,
-         Sink       => null,
+         Sink       => Shown,
          Time       => Clock'Unchecked_Access,
          Seeds      => Seeds'Unchecked_Access,
          Max_Steps  => 24,
-         Thinking   => Model_Runner.Templates.Thinking_Off,
+         Thinking   => (if Budget > 0 then Model_Runner.Templates.Thinking_On else Model_Runner.Templates.Thinking_Off),
+         Think_Budget => Budget,
          Watch      => Seen'Unchecked_Access,
          Approve    => Approver,
          Script     => Replies'Unchecked_Access,
@@ -246,6 +275,43 @@ package body Tests.Agent_Loop_Cases is
                  and then Ada.Directories.Exists (Dir & "/cut.txt"),
                  "a reply cut short mid-call was not said, or its call was taken:" & Seen.Cut_Offs'Image
                  & Seen.Results.Length'Image);
+      end;
+
+      --  A thought at its budget is closed for the reply -- shown closed --
+      --  and what it goes on to write has the whole reply's room again: a
+      --  call longer than the half the thought left is written whole.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Screen  : aliased Collecting;
+         Thought : constant String := "<think>" & [1 .. 200 => 'a'] & " still thinking";
+      begin
+         Replies.Replies.Append (Thought & "</think>" & Write ("budget.txt", [1 .. 40 => 'x']));
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Budget => 32, Shown => Screen'Unchecked_Access);
+         Assert (Ended.Thoughts_Closed = 1 and then Natural (Seen.Results.Length) = 1
+                 and then Ada.Directories.Exists (Dir & "/budget.txt"),
+                 "a thought at its budget was not closed, or the call after it was cut short:"
+                 & Ended.Thoughts_Closed'Image & Seen.Results.Length'Image);
+         Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing),
+                 "a thought closed for the reply was not shown closed");
+      end;
+
+      --  A thought the reply closed itself, and a call it was writing when
+      --  the budget came: asked for after as it stands, and run.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<think>short</think>" & Write ("closed.txt", [1 .. 80 => 'y']));
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Budget => 32);
+         Assert (Ended.Thoughts_Closed = 0 and then Seen.Cut_Offs = 0 and then Natural (Seen.Results.Length) = 1
+                 and then Ada.Directories.Exists (Dir & "/closed.txt"),
+                 "a call cut at the thought's budget, its thought closed, was not asked for after:"
+                 & Ended.Thoughts_Closed'Image & Seen.Cut_Offs'Image & Seen.Results.Length'Image);
       end;
 
       --  A file put back as an earlier write left it is said to be.

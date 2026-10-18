@@ -302,6 +302,10 @@ package body Model_Runner.Agent is
       --  was closed for it; False where the reply had closed it itself.
       Was_Open : Boolean := False;
 
+      --  What a script that keeps to the limit has still to give of its
+      --  reply: what a generation it was cut at did not take.
+      Script_Rest : U.Unbounded_String;
+
       --  The most a thought may take where the step's room is less than
       --  its budget and an answer after it: the budget less the answer's
       --  room, until compaction makes room again.
@@ -474,6 +478,30 @@ package body Model_Runner.Agent is
                  Budget > 0 and then Budget < Full
                  and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off);
                Closing  : String renames Thought_Closing;
+
+               --  A script that keeps to the limit, given as a model gives:
+               --  as much of its reply as the generation may take, four
+               --  bytes a token, stopped at the limit where it was longer --
+               --  the rest kept for what the reply is asked for after -- and
+               --  shown as it comes.
+               procedure Take_Scripted is
+                  Rest  : constant String := U.To_String (Script_Rest);
+                  Most  : constant Natural := Request.Max_Tokens * 4;
+                  Taken : constant String :=
+                    (if Rest'Length > Most then Rest (Rest'First .. Rest'First + Most - 1) else Rest);
+                  Shown_Closed : Boolean;
+               begin
+                  Script_Rest := U.To_Unbounded_String (Rest (Rest'First + Taken'Length .. Rest'Last));
+                  Model_Runner.Output.Emit (Shown, Taken, Shown_Closed);
+                  Last_Result :=
+                    (Reason           => (if Rest'Length > Most or else Script.Cut_Off then Gen.Maximum_Tokens
+                                          else Gen.End_Of_Sequence),
+                     Generated_Tokens => Natural'Max (1, (Taken'Length + 3) / 4),
+                     Text             => new Model_Runner.Bytes.Byte_Array'
+                                           (Model_Runner.Bytes.To_Bytes (Taken)),
+                     Text_Length      => Taken'Length,
+                     others           => <>);
+               end Take_Scripted;
             begin
                if Budgeted then
                   Request.Max_Tokens := Budget;
@@ -483,7 +511,7 @@ package body Model_Runner.Agent is
                Thought_Tokens := 0;
                --  A scripted reply, taken as a model's that ended where it
                --  meant to.
-               if Script /= null then
+               if Script /= null and then not Script.Keeps_To_Limit then
                   declare
                      Said : constant String := Script.Next_Reply;
                   begin
@@ -501,21 +529,26 @@ package body Model_Runner.Agent is
                --  opened, for the answer-alone filter to start inside it.
                Unthought.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all));
-               Gen.Generate
-                 (Source   => Source,
-                  Session  => Session,
-                  Prompt   => Rendered.all,
-                  Item     => Request,
-                  Stop_Set => Stop_Set,
-                  Rules    => Rules,
-                  Sink     => Shown,
-                  Observer => null,
-                  Time     => Time,
-                  Seeds    => Seeds,
-                  Cancel   => Cancel,
-                  Bounds   => Bounds,
-                  Pictures => Pictures,
-                  Outcome  => Last_Result);
+               if Script /= null then
+                  Script_Rest := U.To_Unbounded_String (Script.Next_Reply);
+                  Take_Scripted;
+               else
+                  Gen.Generate
+                    (Source   => Source,
+                     Session  => Session,
+                     Prompt   => Rendered.all,
+                     Item     => Request,
+                     Stop_Set => Stop_Set,
+                     Rules    => Rules,
+                     Sink     => Shown,
+                     Observer => null,
+                     Time     => Time,
+                     Seeds    => Seeds,
+                     Cancel   => Cancel,
+                     Bounds   => Bounds,
+                     Pictures => Pictures,
+                     Outcome  => Last_Result);
+               end if;
                --  Stopped at the thought's budget: the thought closed for it
                --  where it is still thinking, and the reply asked for after
                --  -- and where it closed its thought itself and was writing
@@ -564,24 +597,28 @@ package body Model_Runner.Agent is
                      --  conversation's: held back with its opening.
                      Request.Hold_Back := Request.Hold_Back + U.Length (Thought_Before);
                      Gen.Release (Last_Result);
-                     Gen.Generate
-                       (Source   => Source,
-                        Session  => Session,
-                        Prompt   => Continued,
-                        Item     => Request,
-                        Stop_Set => Stop_Set,
-                        --  The call grammar holds a reply from its start:
-                        --  after a closing it starts one again, but in the
-                        --  middle of a call begun it would ask for another.
-                        Rules    => (if Was_Open then Rules else null),
-                        Sink     => Shown,
-                        Observer => null,
-                        Time     => Time,
-                        Seeds    => Seeds,
-                        Cancel   => Cancel,
-                        Bounds   => Bounds,
-                        Pictures => Pictures,
-                        Outcome  => Last_Result);
+                     if Script /= null then
+                        Take_Scripted;
+                     else
+                        Gen.Generate
+                          (Source   => Source,
+                           Session  => Session,
+                           Prompt   => Continued,
+                           Item     => Request,
+                           Stop_Set => Stop_Set,
+                           --  The call grammar holds a reply from its start:
+                           --  after a closing it starts one again, but in the
+                           --  middle of a call begun it would ask for another.
+                           Rules    => (if Was_Open then Rules else null),
+                           Sink     => Shown,
+                           Observer => null,
+                           Time     => Time,
+                           Seeds    => Seeds,
+                           Cancel   => Cancel,
+                           Bounds   => Bounds,
+                           Pictures => Pictures,
+                           Outcome  => Last_Result);
+                     end if;
                   end;
                end if;
                <<Generated>>

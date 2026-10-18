@@ -308,6 +308,17 @@ package Model_Runner.Agent is
    --  @return True where it was cut short; none is, unless a script says.
    function Cut_Off (Self : Reply_Script) return Boolean is (False);
 
+   --  Whether the script's replies are held to each generation's limit as
+   --  a model's are: cut where they are longer, stopped at the limit, the
+   --  rest given when the reply is asked for after -- so what the loop does
+   --  with a thought at its budget, and a reply cut short, is held to a
+   --  script too -- and shown as a model's stream is. A script that does
+   --  not is given whole, as it always was, and shown nothing.
+   --
+   --  @param Self The script.
+   --  @return True where it keeps to the limit; none does, unless it says.
+   function Keeps_To_Limit (Self : Reply_Script) return Boolean is (False);
+
    --  A reference to a script of replies.
    type Script_Reference is access all Reply_Script'Class;
 
