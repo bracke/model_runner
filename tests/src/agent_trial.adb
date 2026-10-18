@@ -29,25 +29,30 @@ package body Agent_Trial is
 
    --  A task: its name, its kind, what it asks, and whether its project
    --  carries a test of what it asks -- which fails until the task is done,
-   --  so only the task that changes Add has it.
+   --  so only the task that changes Add has it -- and whether its checks
+   --  hold the code to GNAT's style rules, warnings errors: a convention
+   --  the task does not say and only a failed check tells, which a first
+   --  attempt most often misses and a later one may be told.
    type Trial_Task is record
       Name   : Unbounded_String;
       Kind   : Unbounded_String;
       Notes  : Unbounded_String;
       Tested : Boolean;
+      Styled : Boolean;
    end record;
 
-   function T (Name, Kind, Notes : String; Tested : Boolean := False) return Trial_Task is
-     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested));
+   function T (Name, Kind, Notes : String; Tested, Styled : Boolean := False) return Trial_Task is
+     ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled));
+
+   Edit_Notes : constant String :=
+     "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
+     & " Integer'First when it would overflow below, instead of raising. Change only Add.";
 
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 3) of Trial_Task :=
-     [T ("edit", "implementation",
-         "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
-         & " Integer'First when it would overflow below, instead of raising. Change only Add.",
-         Tested => True),
+   Tasks : constant array (1 .. 4) of Trial_Task :=
+     [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
          & " declared. Report them. Change no file."),
@@ -55,7 +60,10 @@ package body Agent_Trial is
          "Hand this part to a helper with the delegate tool, its outputs [""docs/calc.md""]: write"
          & " docs/calc.md, a short paragraph each on what Add and Times in src/calc.ads do. Do not"
          & " write docs/calc.md yourself. When the helper has finished, check that docs/calc.md is"
-         & " there, and report.")];
+         & " there, and report."),
+      --  The edit again, its build held to the style rules: run only when
+      --  asked by name, being the edit's own measure of what is learned.
+      T ("styled", "implementation", Edit_Notes, Tested => True, Styled => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
@@ -191,11 +199,20 @@ package body Agent_Trial is
    function Knowledge_Words (Knowledge : Boolean) return String is
      (if Knowledge then "" else " scalar.knowledge.observations=off");
 
-   function Check_Line (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True) return String is
+   --  The style rules and warnings as errors, and every unit compiled
+   --  each time: an edit within the second of the last build is not taken
+   --  for the source that built.
+   function Style_Words (Styled : Boolean) return String is
+     (if Styled then " -f -gnatyy -gnatwae" else "");
+
+   function Check_Line
+     (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False)
+      return String is
      (if Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
-           & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main;"
-           & " test: gnatmake -q -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
+           & "profile.checks=""build: gnatmake -q" & Style_Words (Styled) & " -D obj -aIsrc src/main.adb -o obj/main;"
+           & " test: gnatmake -q" & Style_Words (Styled)
+           & " -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
            & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes"
       else "/reconfigure add set.execution.allowed gnatmake "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"""
@@ -413,7 +430,7 @@ package body Agent_Trial is
             declare
                One : Trial_Task renames Tasks (Which);
             begin
-               if Chosen (Only, To_String (One.Name)) then
+               if Chosen (Only, To_String (One.Name)) and then (Only /= "" or else not One.Styled) then
                   declare
                      Name    : constant String := To_String (One.Name);
                      Root    : constant String := Ada.Directories.Full_Name ("obj/agent-trial-" & Name);
@@ -644,7 +661,8 @@ package body Agent_Trial is
                               if Carried
                                 or else (Wait_For ("initialized", 30.0)
                                          and then (Hostkit.Process.Locate ("gnatmake") = ""
-                                                   or else (Send_Then (Check_Line (One.Tested, Apart, Knowledge))
+                                                   or else (Send_Then
+                                                              (Check_Line (One.Tested, Apart, Knowledge, One.Styled))
                                                             and then Wait_For ("is now revision", 30.0))))
                               then
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)

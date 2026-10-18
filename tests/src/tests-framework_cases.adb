@@ -7983,6 +7983,12 @@ package body Tests.Framework_Cases is
             Computed := Dv.Computed (Cx.Retrieval_Kind) - Was_Computed;
             Reused := Dv.Reused (Cx.Retrieval_Kind) - Was_Reused;
             Assert (Computed + Reused >= 2, Isolation & ": /work did not build its context twice: " & Said);
+            --  And the page a person reads of what was worked out is made
+            --  again after it, as after any command that changes the state.
+            Assert (Ada.Strings.Fixed.Index
+                      (Read_Whole (To_String (Root) & "/.model_runner/views/derivations.md"),
+                       "| context_retrieval | " & To_String (Id) & " |") > 0,
+                    Isolation & ": the derivations page was not made again after /work");
          end;
       end Run;
 
@@ -8935,9 +8941,13 @@ package body Tests.Framework_Cases is
    begin
       Task_Project
         (Store, "harness-records",
-         "set execution.allowed = test" & LF
-         & "profile checks = exists: test -f src/hello.adb" & LF
+         "set execution.allowed = sh" & LF
+         & "profile checks = exists: sh check.sh" & LF
          & "scalar verification.default = checks" & LF);
+      --  A check that says why it fails, as a build does.
+      Put_File (Fresh_Root (Store) & "/check.sh",
+                "test -f src/hello.adb && exit 0" & LF
+                & "echo 'hello.adb:1:1: (style) space required'" & LF & "exit 1" & LF);
       Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", First, Status);
       Tk.Create (Store, Change, Fields ("Greet again", "analysis", "component", "hello"), "user", "", Second,
                  Status);
@@ -8962,7 +8972,8 @@ package body Tests.Framework_Cases is
             end case;
          end;
       end loop;
-      Assert (Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "the checks of checks failed") = 1
+      Assert (Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "the checks of checks failed at exists: ") = 1
+              and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "(style) space required") > 0
               and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "passed after changes to src/hello.adb") > 0
               and then Natural (Fixed.Evidence.Length) = 2 and then Fixed.Files.Contains ("src/hello.adb")
               and then Ob."=" (Fixed.Producer, Ob.Harness_Producer) and then Fixed.Task_Id = First

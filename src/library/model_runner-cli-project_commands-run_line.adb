@@ -388,6 +388,31 @@ begin
 
    --  Each command by its route, which the table of commands gives it:
    --  a case, so a route without a handler is a compilation that fails.
+   --  Those that open the project their own way leave the pages a person
+   --  reads to be made again here, as With_Store makes them.
+   if Route_Of (Word) in Work_Route | Cancel_Route | Repository_Route then
+      declare
+         procedure Refresh_After is
+            Store  : S.Store;
+            Report : S.Recovery_Report;
+            Opened : E.Error_Info;
+         begin
+            S.Open (Store, Here, Report, Opened);
+            if E.Is_Ok (Opened) then
+               Model_Runner.Framework.Views.Refresh (Store);
+               S.Close (Store);
+            end if;
+         end Refresh_After;
+      begin
+         case Route_Of (Word) is
+            when Work_Route => Route_Work;
+            when Cancel_Route => Route_Cancel;
+            when others => Route_Repository;
+         end case;
+         Refresh_After;
+         return;
+      end;
+   end if;
    case Route_Of (Word) is
       when No_Route => null;
       when Init_Route => Route_Init;

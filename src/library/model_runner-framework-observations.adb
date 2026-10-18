@@ -12,6 +12,7 @@ with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Verification;
 
@@ -1109,24 +1110,71 @@ package body Model_Runner.Framework.Observations is
    end Relevant;
 
    --  What a failed verification failed on first: its first error, as
-   --  file and message -- where it is, not which line, which moves.
+   --  file and message -- where it is, not which line, which moves -- or,
+   --  where it reported none, the first of anything it reported: a build
+   --  that takes its warnings for errors, a style rule, fails on those.
    procedure First_Error (Item : Stores.Store; Of_Evidence : String; File, Message : out Unbounded_String) is
       Said : constant Verification.Diagnostic_List := Verification.Diagnostics_Of (Item, Of_Evidence);
    begin
       File := Null_Unbounded_String;
       Message := Null_Unbounded_String;
-      for Index in 1 .. Verification.Length (Said) loop
+      for Errors_Only in reverse Boolean loop
+         for Index in 1 .. Verification.Length (Said) loop
+            declare
+               One : constant Verification.Diagnostic := Verification.Element (Said, Index);
+            begin
+               if not Errors_Only or else Lower (To_String (One.Severity)) = "error" then
+                  File := One.File;
+                  Message := To_Unbounded_String (One_Line (To_String (One.Message)));
+                  return;
+               end if;
+            end;
+         end loop;
+      end loop;
+   end First_Error;
+
+   --  The last line a failed check wrote, where its log is kept: what a
+   --  check that reports no diagnostic -- a test that raised -- said.
+   function Last_Said (Item : Stores.Store; Value : Records.Item; Label : String) return String is
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
          declare
-            One : constant Verification.Diagnostic := Verification.Element (Said, Index);
+            Field  : constant String := Records.Field_Name (Value, Index);
+            Line   : constant String := Records.Get (Value, Field);
+            Fields : Name_Lists.Vector;
+            Start  : Positive := Line'First;
          begin
-            if Lower (To_String (One.Severity)) = "error" then
-               File := One.File;
-               Message := To_Unbounded_String (One_Line (To_String (One.Message)));
-               return;
+            if Starts (Field, "check.") then
+               for At_Char in Line'First .. Line'Last + 1 loop
+                  if At_Char > Line'Last or else Line (At_Char) = Tab then
+                     Fields.Append (Line (Start .. At_Char - 1));
+                     Start := At_Char + 1;
+                  end if;
+               end loop;
+               if Natural (Fields.Length) >= 7 and then Fields (1) = Label
+                 and then Starts (Fields (7), "RES-")
+               then
+                  declare
+                     Log  : Results.Result;
+                     Read : E.Error_Info;
+                     Last : Unbounded_String;
+                  begin
+                     Results.Read (Item, Fields (7), Log, Read);
+                     if E.Is_Ok (Read) then
+                        for One of Lines_Of (To_String (Log.Payload)) loop
+                           if Trim (One) /= "" then
+                              Last := To_Unbounded_String (One_Line (One));
+                           end if;
+                        end loop;
+                     end if;
+                     return To_String (Last);
+                  end;
+               end if;
             end if;
          end;
       end loop;
-   end First_Error;
+      return "";
+   end Last_Said;
 
    --  The first required check a verification failed, by its label; "".
    function Failed_Check (Value : Records.Item) return String is
@@ -1255,18 +1303,35 @@ package body Model_Runner.Framework.Observations is
          if Length (Message) = 0 and then Failed_Check (Earlier) = "" then
             return;
          end if;
+         --  A compiler names a file as it was given it: calc.adb for
+         --  src/calc.adb. The changed file it is, where one is.
+         for Path of Changed loop
+            if Length (File) > 0 and then Path /= To_String (File)
+              and then Path'Length > Length (File)
+              and then Path (Path'Last - Length (File) .. Path'Last) = "/" & To_String (File)
+            then
+               File := To_Unbounded_String (Path);
+            end if;
+         end loop;
          Files_Of.Append (To_String (File));
          for Path of Changed loop
             Files_Of.Append (Path);
          end loop;
-         Keep_Harness
-           (Item, Change, Finding,
-            "the checks of " & Records.Get (Earlier, "profile") & " failed"
-            & (if Length (Message) > 0
-               then " on " & (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message)
-               else " at " & Failed_Check (Earlier))
-            & ", and passed after changes to " & Listed (Changed),
-            Files_Of, [To_String (Before), Evidence], From, Id, Status);
+         declare
+            Check : constant String := Failed_Check (Earlier);
+            Said  : constant String :=
+              (if Length (Message) > 0
+               then (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message)
+               elsif Check /= "" then Last_Said (Item, Earlier, Check) else "");
+         begin
+            Keep_Harness
+              (Item, Change, Finding,
+               "the checks of " & Records.Get (Earlier, "profile") & " failed"
+               & (if Check /= "" then " at " & Check else "")
+               & (if Said /= "" then ": " & Said else "")
+               & ", and passed after changes to " & Listed (Changed),
+               Files_Of, [To_String (Before), Evidence], From, Id, Status);
+         end;
       end;
    end Observe_Fix;
 
