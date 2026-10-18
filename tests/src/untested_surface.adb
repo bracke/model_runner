@@ -68,18 +68,24 @@ package body Untested_Surface is
    --  grid format's product test runs through them, against the reference
    --  decoding; being private, no test names them.
    --
+   --  Asked of the device. Has_Matrix_Instruction, Has_Subgroup_Arithmetic,
+   --  Has_Sized_Subgroups, Has_Integer_Dot and Shares_Memory answer
+   --  differently on every device and cannot be asserted against a value;
+   --  each decides which kernel runs, and the device's product tests run
+   --  whichever it picks against the processor's answer. Room_Beside is what
+   --  a model beside the first may take of the room the first claimed: a
+   --  count kept for the process, which a test would have to claim under
+   --  every other model the suite loads; the second model's fitting, which
+   --  the split mixture's tests load, reads it.
+   --
+   --  Not public. Entry_Point is declared in the private part of
+   --  Platform.Device, for its children; the check reads the whole of a
+   --  specification and takes it for public.
+   --
    --  Private to the command line. Execute.Support and Execute.Acquisition
    --  decide how a run runs -- its backend, workers, arithmetic, paging,
    --  panels, rotation, bounds, the model an alias names -- and every run
    --  command's test goes through them; being private, no test names them.
-   --
-   --  Not yet looked at. Until 2026-10-18 the check saw no function at all
-   --  -- "   function " is a character shorter than "   procedure ", and was
-   --  held to the same thirteen -- and these are the functions it found
-   --  then, named by no test. Most are reached through a caller; none has
-   --  been looked at one by one yet. Each is to come off as a test names
-   --  it, or to move to a group above with its reason.
-   --  (30 of them, the last in the list, after Sign_Shuffle_Address.)
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -176,36 +182,13 @@ package body Untested_Surface is
          | "Offset_Words_Address"
          | "Scale_Shuffle_Address"
          | "Sign_Shuffle_Address"
-         | "Attends_Packed_Heads"
-         | "Attention_Head_Room"
-         | "Cache_Bound"
-         | "Cache_Bytes_For"
-         | "Carry_Lost"
          | "Entry_Point"
-         | "Float_Shares"
-         | "Has_Integer_Dot"
          | "Has_Matrix_Instruction"
-         | "Has_Sized_Subgroups"
          | "Has_Subgroup_Arithmetic"
-         | "Heap_Budget"
-         | "Host_Alignment"
-         | "Integer_Shares"
-         | "Is_Stalled"
-         | "Plain_Memory_Kinds"
-         | "Queues"
-         | "Room_Beside"
-         | "Run_Capabilities"
-         | "Runs_Linear"
-         | "Second_Kind"
-         | "Second_Memory_Bytes"
-         | "Shares_Host"
+         | "Has_Sized_Subgroups"
+         | "Has_Integer_Dot"
          | "Shares_Memory"
-         | "Storage_Limit"
-         | "Submissions"
-         | "Takes_Host_Memory"
-         | "Tiled_Products"
-         | "Unsupported_Reason"
-         | "Untiled_Products";
+         | "Room_Beside";
    end Is_Untested;
 
    -----------

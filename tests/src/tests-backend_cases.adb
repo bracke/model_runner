@@ -1,3 +1,6 @@
+with Model_Runner.Tools.Registry;
+with Model_Runner.Agent_Runtime;
+with Model_Runner.Platform.Video;
 with AUnit.Test_Cases;
 with Ada.Environment_Variables;
 with Ada.Unchecked_Conversion;
@@ -11795,10 +11798,17 @@ package body Tests.Backend_Cases is
          end;
       end loop;
 
-      CPU.Dispatch_Batch
-        (null, View, Gathered, N.Element_Count (Members'Length), Straight,
-         Status);
-      Assert (E.Is_Ok (Status), "the product of the gathered rows failed");
+      declare
+         --  The shares of a quantized product, counted for a run's statistics.
+         Before : constant Long_Long_Integer := CPU.Integer_Shares + CPU.Float_Shares;
+      begin
+         CPU.Dispatch_Batch
+           (null, View, Gathered, N.Element_Count (Members'Length), Straight,
+            Status);
+         Assert (E.Is_Ok (Status), "the product of the gathered rows failed");
+         Assert (CPU.Integer_Shares + CPU.Float_Shares > Before,
+                 "a quantized product's shares were not counted");
+      end;
 
       CPU.Pack (Packed, Vectors, Count, Columns, False, Ok);
       Assert (Ok, "the rows would not pack");
@@ -12302,6 +12312,85 @@ package body Tests.Backend_Cases is
                                "a row's share of a panel block was not a super-block's bytes");
    end Integer_Path_Choices_Are_Said;
 
+   --  What the device's backend says with no device open, as its
+   --  documentation says it, and with one open, that it has one.
+   procedure Device_Answers_Without_A_Device (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Dev renames Model_Runner.Backend.Device;
+      use type Interfaces.Unsigned_64;
+   begin
+      if Dev.Is_Ready then
+         Assert (Dev.Queues >= 1 and then Dev.Attention_Head_Room > 0,
+                 "an open device had no queue, or no room for a head");
+      else
+         Assert (Dev.Queues = 0 and then Dev.Cache_Bound = 0 and then Dev.Attention_Head_Room = 0
+                 and then not Dev.Shares_Host and then not Dev.Carry_Lost and then not Dev.Runs_Linear
+                 and then not Dev.Attends_Packed_Heads (64, 64),
+                 "with no device open the backend said it had one's queues, bounds, room or kernels");
+      end if;
+      Assert (Dev.Cache_Bytes_For (2_000) >= Dev.Cache_Bytes_For (1_000),
+              "a cache for more elements was said to need fewer bytes");
+      Assert (Dev.Tiled_Products = Model_Runner.Platform.Device.Products.Tiled_Products
+              and then Dev.Untiled_Products = Model_Runner.Platform.Device.Products.Untiled_Products,
+              "the backend's count of products was not the engine's");
+      Assert (Model_Runner.Platform.Video.Is_Supported = (Model_Runner.Platform.Video.Unsupported_Reason = ""),
+              "a video reader's reason was said where it reads, or not where it does not");
+      Assert (Ada.Strings.Fixed.Index
+                (Model_Runner.Tools.Registry.Offered_Names
+                   (Model_Runner.Agent_Runtime.Run_Capabilities (May_Delegate => True, May_Ask => False)),
+                 "delegate") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Model_Runner.Tools.Registry.Offered_Names
+                            (Model_Runner.Agent_Runtime.Run_Capabilities (May_Delegate => False, May_Ask => False)),
+                          "delegate") = 0,
+              "a run was offered a helper where it may not make one, or none where it may");
+   end Device_Answers_Without_A_Device;
+
+   --  What a device context and its engine say of the device: a closed
+   --  context nothing, an open one what it has.
+   procedure Device_Context_Says_What_It_Has (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_32;
+      use type Interfaces.Unsigned_64;
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready : Boolean;
+   begin
+      --  Closed, as documented: no storage, no second heap.
+      Assert (Devices.Storage_Limit (Opened) = 0 and then Devices.Second_Kind (Opened) = -1
+              and then Devices.Second_Memory_Bytes (Opened) = 0,
+              "a closed context said it had storage or a second heap");
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a device context's answers");
+         Devices.Close (Held);
+         return;
+      end if;
+      --  Open: storage, a memory kind the processor reaches, a second heap
+      --  where its bytes are said and none where they are not.
+      Assert (Devices.Storage_Limit (Opened) > 0 and then Devices.Plain_Memory_Kinds (Opened) /= 0
+              and then (Devices.Second_Kind (Opened) = -1) = (Devices.Second_Memory_Bytes (Opened) = 0)
+              and then (not Devices.Takes_Host_Memory (Opened) or else Devices.Host_Alignment (Opened) > 0),
+              "an open context did not say what memory it has");
+      Products.Open (Engine, Opened, Ready);
+      if Ready then
+         Assert (not Products.Is_Stalled (Engine) and then Products.Submissions (Engine) >= 0
+                 and then (Products.Heap_Budget (Engine) = 0
+                           or else Products.Heap_Budget (Engine) <= Devices.Storage_Limit (Opened)
+                           or else Devices.Second_Memory_Bytes (Opened) > 0),
+                 "a fresh engine was stalled, or its budget past the device");
+         Products.Close (Engine);
+      end if;
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Device_Context_Says_What_It_Has;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -12615,6 +12704,12 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Integer_Path_Choices_Are_Said'Access,
          "what the integer path takes is said as its documentation says");
+      Register_Routine
+        (T, Device_Answers_Without_A_Device'Access,
+         "the device's backend answers as documented with no device open, and has one where one is");
+      Register_Routine
+        (T, Device_Context_Says_What_It_Has'Access,
+         "a device context and its engine say what the device has, and a closed one nothing");
    end Register_Tests;
 
 end Tests.Backend_Cases;
