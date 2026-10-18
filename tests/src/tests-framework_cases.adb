@@ -8860,6 +8860,147 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent that checks, fails, mends and checks again, is refused a
+   --  write outside the project, and finishes: what the harness sees of
+   --  that, it records.
+   type Mending_Agent is new Wk.Parenting_Runner with null record;
+
+   overriding procedure Run
+     (Self        : Mending_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Mending_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Mending_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("mending"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Mending_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Mending_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Children.Run_Checks ("checks", Report, Got);
+      Assert (Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0,
+              "the checks passed before the work: " & To_String (Report));
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Children.Run_Checks ("checks", Report, Got);
+      Assert (Ada.Strings.Fixed.Index (To_String (Report), "passed") > 0,
+              "the checks did not pass after the work: " & To_String (Report));
+      Children.Observe_Refusal ("write_file", "outside the project", "{""path"": ""/etc/hosts""}");
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      First, Second : Unbounded_String;
+      Fixed, Refused, Noted : Ob.Observation;
+      Built  : Cx.Built;
+   begin
+      Task_Project
+        (Store, "harness-records",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", First, Status);
+      Tk.Create (Store, Change, Fields ("Greet again", "analysis", "component", "hello"), "user", "", Second,
+                 Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (First), Mending_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) = "complete",
+              "the task did not complete: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+
+      for Id of Ob.List (Store) loop
+         declare
+            Value : Ob.Observation;
+         begin
+            Ob.Read (Store, Id, Value, Status);
+            case Value.Kind is
+               when Ob.Finding => Fixed := Value;
+               when Ob.Environment_Constraint => Refused := Value;
+               when Ob.Implementation_Note => Noted := Value;
+               when others => null;
+            end case;
+         end;
+      end loop;
+      Assert (Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "the checks of checks failed") = 1
+              and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "passed after changes to src/hello.adb") > 0
+              and then Natural (Fixed.Evidence.Length) = 2 and then Fixed.Files.Contains ("src/hello.adb")
+              and then Ob."=" (Fixed.Producer, Ob.Harness_Producer) and then Fixed.Task_Id = First
+              and then Ob."=" (Fixed.Ground, Ob.Observed),
+              "checks that failed and then passed were not recorded as what fixed them: "
+              & To_String (Fixed.Summary));
+      Assert (To_String (Refused.Summary) = "write_file of /etc/hosts was refused: outside the project"
+              and then Refused.Files.Is_Empty and then Refused.Task_Id = First,
+              "a refused call was not recorded as a constraint: " & To_String (Refused.Summary));
+      Assert (Ada.Strings.Fixed.Index (To_String (Noted.Summary), To_String (First) & " (Greet) was done by changing"
+                                       & " src/hello.adb; the checks of checks passed") = 1
+              and then Natural (Noted.Evidence.Length) = 1,
+              "the completed work was not recorded: " & To_String (Noted.Summary));
+
+      --  Nothing changed, nothing to say: a pass is no fix, and work that
+      --  changed no file was done nowhere.
+      declare
+         Id      : Unbounded_String;
+         Nothing : constant Model_Runner.Framework.Name_Lists.Vector := Model_Runner.Framework.Name_Lists.Empty_Vector;
+      begin
+         Ob.Observe_Fix (Store, Change, To_String (First), Fixed.Evidence (2), Nothing,
+                         Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
+         Assert (E.Is_Ok (Status) and then Length (Id) = 0, "a pass with nothing changed was taken for a fix");
+         Ob.Observe_Done (Store, Change, To_String (First), Fixed.Evidence (2), Nothing,
+                          Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
+         Assert (E.Is_Ok (Status) and then Length (Id) = 0, "work that changed nothing was recorded as done");
+      end;
+
+      --  The next task of the component is told them.
+      Cx.Build (Store, To_String (Second), Cx.Profile (Store, ""), Built, Status);
+      Assert (E.Is_Ok (Status)
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "was refused: outside the project") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "was done by changing src/hello.adb") > 0,
+              "the next task was not told what the harness recorded: " & Joined (Cx.Knowledge (Built))
+              & " / " & Joined (Cx.Knowledge_Left (Built)));
+      S.Close (Store);
+   end Harness_Records_What_It_Sees;
+
    --  Scenario A, measured both ways: two tasks of one component, the
    --  second meeting what the first found out. With what was learned kept
    --  and told, the second does not look again; without it, it does --
@@ -15966,6 +16107,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Knowledge_Saves_Work'Access,
          "what one task's agent found saves the next its looking, the outcome the same");
+      Register_Routine
+        (T, Harness_Records_What_It_Sees'Access,
+         "the harness records a fix, a refusal and finished work, and the next task is told them");
       Register_Routine
         (T, Near_Observations_Told_Once'Access,
          "a finding worded otherwise is kept as nearly another, and the two are told once");

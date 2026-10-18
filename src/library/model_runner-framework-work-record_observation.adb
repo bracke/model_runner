@@ -58,17 +58,7 @@ begin
    end if;
 
    --  Whose it is, as the host knows it: never the call's to say.
-   From :=
-     (Producer   => Observations.Agent_Producer,
-      Task_Id    => Host.Task_Id,
-      Generation => To_Unbounded_String (Generation_Of (Host.Item.all, To_String (Host.Task_Id))),
-      Agent      => To_Unbounded_String (Current (Host)),
-      Parent     => (if Natural (Host.Open.Length) > 1
-                     then To_Unbounded_String (Host.Open (Natural (Host.Open.Length) - 1))
-                     else Null_Unbounded_String),
-      Invocation => (if Host.Calls.Is_Empty then Null_Unbounded_String
-                     else To_Unbounded_String (Host.Calls.Last_Element)),
-      Tree       => (if Host.Apart then Host.Tree else Null_Unbounded_String));
+   From := Host_Origin (Host, Observations.Agent_Producer);
    Observations.Record_Observation (Host.Item.all, Change, Said, From, Id, Fresh, Status);
    if E.Is_Ok (Status) then
       Stores.Commit (Host.Item.all, Change, Status);

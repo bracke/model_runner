@@ -2176,6 +2176,25 @@ begin
          return;
       end if;
 
+      --  Passing where the attempt before failed: what was wrong and what
+      --  changed, kept for later work, apart from the conclusion.
+      declare
+         Fixed : Stores.Transaction;
+         Id    : Unbounded_String;
+         Kept  : E.Error_Info;
+      begin
+         Observations.Observe_Fix
+           (Item, Fixed, Task_Id, To_String (Result.Evidence_Id), Result.Changed_Files,
+            (Producer   => Observations.Harness_Producer,
+             Task_Id    => To_Unbounded_String (Task_Id),
+             Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),
+             others     => <>),
+            Id, Kept);
+         if E.Is_Ok (Kept) and then Stores.Change_Count (Fixed) > 0 then
+            Stores.Commit (Item, Fixed, Kept);
+         end if;
+      end;
+
       Verification.Complete_Task (Item, Change, Task_Id, Held);
       if E.Is_Error (Held) then
          Change := Stores.No_Changes;
@@ -2203,6 +2222,26 @@ begin
       --  judged by its tasks as the store holds them, and until then this
       --  one is still in verification.
       Stores.Commit (Item, Change, Status);
+      --  Complete: where its work was done, for later work on those files
+      --  to start from -- kept apart, as the rest of what was learned.
+      if E.Is_Ok (Status) then
+         declare
+            Done : Stores.Transaction;
+            Id   : Unbounded_String;
+            Kept : E.Error_Info;
+         begin
+            Observations.Observe_Done
+              (Item, Done, Task_Id, To_String (Result.Evidence_Id), Result.Changed_Files,
+               (Producer   => Observations.Harness_Producer,
+                Task_Id    => To_Unbounded_String (Task_Id),
+                Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),
+                others     => <>),
+               Id, Kept);
+            if E.Is_Ok (Kept) and then Stores.Change_Count (Done) > 0 then
+               Stores.Commit (Item, Done, Kept);
+            end if;
+         end;
+      end if;
       if E.Is_Ok (Status) then
          declare
             Judged : E.Error_Info;

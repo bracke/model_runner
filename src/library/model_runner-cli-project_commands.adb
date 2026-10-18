@@ -450,6 +450,10 @@ package body Model_Runner.CLI.Project_Commands is
       --  project's edge: what likely kept the work from going on.
       if Ended.Answer = Tr.Refused then
          Self.Refused_Outside := Self.Refused_Outside or else Ended.Refusal = Tr.Outside_Project;
+         --  What the project does not allow, kept for later work.
+         if Self.Host /= null then
+            Self.Host.Observe_Refusal (Named, Detail, Arguments);
+         end if;
          if Natural (Self.Refused.Length) < 3 and then not Self.Refused.Contains (Detail) then
             Self.Refused.Append (Detail);
          end if;

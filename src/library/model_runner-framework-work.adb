@@ -31,6 +31,7 @@ with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Views;
+with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Localization;
@@ -1757,6 +1758,23 @@ package body Model_Runner.Framework.Work is
       return Result;
    end Judged_Files;
 
+   --  Whose an observation made now is, as the host knows it: the task,
+   --  its generation, the agent working, its parent, its last invocation
+   --  and the tree -- never a call's to say.
+   function Host_Origin
+     (Host     : Child_Host;
+      Producer : Observations.Producer_Kind) return Observations.Origin
+   is (Producer   => Producer,
+       Task_Id    => Host.Task_Id,
+       Generation => To_Unbounded_String (Generation_Of (Host.Item.all, To_String (Host.Task_Id))),
+       Agent      => To_Unbounded_String (Current (Host)),
+       Parent     => (if Natural (Host.Open.Length) > 1
+                      then To_Unbounded_String (Host.Open (Natural (Host.Open.Length) - 1))
+                      else Null_Unbounded_String),
+       Invocation => (if Host.Calls.Is_Empty then Null_Unbounded_String
+                      else To_Unbounded_String (Host.Calls.Last_Element)),
+       Tree       => (if Host.Apart then Host.Tree else Null_Unbounded_String));
+
    procedure Run_Checks
      (Host     : in out Child_Host;
       Profile  : String;
@@ -1764,6 +1782,26 @@ package body Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False)
    is separate;
+
+   ---------------------
+   -- Observe_Refusal --
+   ---------------------
+
+   procedure Observe_Refusal (Host : in out Child_Host; Tool, Why, Arguments : String) is
+      Change : Stores.Transaction;
+      Id     : Unbounded_String;
+      Status : E.Error_Info;
+      Found  : Boolean;
+      Path   : constant String := Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Found);
+   begin
+      Observations.Observe_Refusal
+        (Host.Item.all, Change, Tool, Why, (if Found then Path else ""),
+         Host_Origin (Host, Observations.Harness_Producer), Id, Status);
+      --  Kept apart: what cannot be kept of it costs the work nothing.
+      if E.Is_Ok (Status) and then Stores.Change_Count (Change) > 0 then
+         Stores.Commit (Host.Item.all, Change, Status);
+      end if;
+   end Observe_Refusal;
 
    ------------------------
    -- Record_Observation --

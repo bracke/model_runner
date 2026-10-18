@@ -403,6 +403,75 @@ package Model_Runner.Framework.Observations is
       Id       : out Ada.Strings.Unbounded.Unbounded_String;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Record what a task's checks passing after they failed shows: what
+   --  failed first -- its first error, or the check that failed where none
+   --  was read -- and the files changed since, which made it pass. Only
+   --  where the task's verification before this one failed; one passing
+   --  after a pass, or with nothing changed, says nothing.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Task_Id The task.
+   --  @param Evidence The verification that passed.
+   --  @param Changed The files the work changed, as the harness saw them.
+   --  @param From Where it came from.
+   --  @param Id The observation recorded or seen again; "" for none.
+   --  @param Status A failure staging it.
+   procedure Observe_Fix
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Task_Id  : String;
+      Evidence : String;
+      Changed  : Name_Lists.Vector;
+      From     : Origin;
+      Id       : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info);
+
+   --  Record a call the harness refused -- a permission, the sandbox, the
+   --  execution policy, the project's edge -- as a constraint later work
+   --  is told: the tool, why, and the file it was for where that is one of
+   --  the project's.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Tool The tool called.
+   --  @param Why What the refusal said.
+   --  @param Path The path the call named, or "".
+   --  @param From Where it came from.
+   --  @param Id The observation recorded or seen again; "" for none.
+   --  @param Status A failure staging it.
+   procedure Observe_Refusal
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Tool   : String;
+      Why    : String;
+      Path   : String;
+      From   : Origin;
+      Id     : out Ada.Strings.Unbounded.Unbounded_String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Record where a completed task's work was done: the files it changed
+   --  and the verification that passed -- what later work on those files
+   --  or that component starts from rather than searches for.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Task_Id The task, complete.
+   --  @param Evidence The verification that passed.
+   --  @param Changed The files its work changed.
+   --  @param From Where it came from.
+   --  @param Id The observation recorded; "" for none.
+   --  @param Status A failure staging it.
+   procedure Observe_Done
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Task_Id  : String;
+      Evidence : String;
+      Changed  : Name_Lists.Vector;
+      From     : Origin;
+      Id       : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info);
+
    --  Let observations go that are dismissed or superseded and older than
    --  the policy keeps: each left as a tombstone -- its identifier, what it
    --  was and why it went -- so a record naming it finds it retired. The

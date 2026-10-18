@@ -1108,6 +1108,225 @@ package body Model_Runner.Framework.Observations is
       return Result;
    end Relevant;
 
+   --  What a failed verification failed on first: its first error, as
+   --  file and message -- where it is, not which line, which moves.
+   procedure First_Error (Item : Stores.Store; Of_Evidence : String; File, Message : out Unbounded_String) is
+      Said : constant Verification.Diagnostic_List := Verification.Diagnostics_Of (Item, Of_Evidence);
+   begin
+      File := Null_Unbounded_String;
+      Message := Null_Unbounded_String;
+      for Index in 1 .. Verification.Length (Said) loop
+         declare
+            One : constant Verification.Diagnostic := Verification.Element (Said, Index);
+         begin
+            if Lower (To_String (One.Severity)) = "error" then
+               File := One.File;
+               Message := To_Unbounded_String (One_Line (To_String (One.Message)));
+               return;
+            end if;
+         end;
+      end loop;
+   end First_Error;
+
+   --  The first required check a verification failed, by its label; "".
+   function Failed_Check (Value : Records.Item) return String is
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field  : constant String := Records.Field_Name (Value, Index);
+            Fields : Name_Lists.Vector;
+            Start  : Positive;
+         begin
+            if Starts (Field, "check.") then
+               declare
+                  Line : constant String := Records.Get (Value, Field);
+               begin
+                  Start := Line'First;
+                  for At_Char in Line'First .. Line'Last + 1 loop
+                     if At_Char > Line'Last or else Line (At_Char) = Tab then
+                        Fields.Append (Line (Start .. At_Char - 1));
+                        Start := At_Char + 1;
+                     end if;
+                  end loop;
+                  if Natural (Fields.Length) >= 6 and then Fields (5) /= "passed" and then Fields (6) = "required" then
+                     return Fields (1);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      return "";
+   end Failed_Check;
+
+   --  Names as a sentence lists them: a, b and c.
+   function Listed (Names : Name_Lists.Vector) return String is
+      Text : Unbounded_String;
+   begin
+      for Index in 1 .. Natural (Names.Length) loop
+         Append (Text, (if Index = 1 then ""
+                        elsif Index = Natural (Names.Length) then " and " else ", ") & Names (Index));
+      end loop;
+      return To_String (Text);
+   end Listed;
+
+   --  A harness's finding kept: its summary held to the length kept, its
+   --  files those of the project, at most as many as one is about.
+   procedure Keep_Harness
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Kind   : Observation_Kind;
+      Summary : String;
+      Files_Of : Name_Lists.Vector;
+      Evidence : Name_Lists.Vector;
+      From   : Origin;
+      Id     : out Unbounded_String;
+      Status : out E.Error_Info)
+   is
+      Said  : Draft;
+      Fresh : Boolean;
+   begin
+      Said.Kind := Kind;
+      Said.Summary := To_Unbounded_String
+        (if Summary'Length > Summary_Most then Summary (Summary'First .. Summary'First + Summary_Most - 1)
+         else Summary);
+      for Path of Files_Of loop
+         exit when Natural (Said.Files.Length) = Ties_Most;
+         if Path /= "" and then not Is_Rooted (Path) and then not Starts (Path, "../")
+           and then not Said.Files.Contains (Path)
+         then
+            Said.Files.Append (Path);
+         end if;
+      end loop;
+      Said.Evidence := Evidence;
+      Record_Observation (Item, Change, Said, From, Id, Fresh, Status);
+   end Keep_Harness;
+
+   -----------------
+   -- Observe_Fix --
+   -----------------
+
+   procedure Observe_Fix
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Task_Id  : String;
+      Evidence : String;
+      Changed  : Name_Lists.Vector;
+      From     : Origin;
+      Id       : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Value   : Records.Item;
+      Read    : E.Error_Info;
+      Before  : Unbounded_String;
+   begin
+      Id := Null_Unbounded_String;
+      Status := E.Success;
+      Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+      if E.Is_Error (Read) or else Records.Get (Value, "passed") /= "true" or else Changed.Is_Empty then
+         return;
+      end if;
+      --  The task's verification just before this one.
+      for Name of Stores.Names (Item, Verification_Area) loop
+         if Name /= Evidence and then Later (Evidence, Name) and then Later (Name, To_String (Before)) then
+            declare
+               Earlier : Records.Item;
+               Got     : E.Error_Info;
+            begin
+               Stores.Read (Item, Verification_Area, Name, Earlier, Got);
+               if E.Is_Ok (Got) and then Records.Get (Earlier, "task") = Task_Id then
+                  Before := To_Unbounded_String (Name);
+               end if;
+            end;
+         end if;
+      end loop;
+      if Length (Before) = 0 then
+         return;
+      end if;
+      declare
+         Earlier : Records.Item;
+         File, Message : Unbounded_String;
+         Files_Of : Name_Lists.Vector;
+      begin
+         Stores.Read (Item, Verification_Area, To_String (Before), Earlier, Read);
+         if E.Is_Error (Read) or else Records.Get (Earlier, "passed") /= "false" then
+            return;
+         end if;
+         First_Error (Item, To_String (Before), File, Message);
+         if Length (Message) = 0 and then Failed_Check (Earlier) = "" then
+            return;
+         end if;
+         Files_Of.Append (To_String (File));
+         for Path of Changed loop
+            Files_Of.Append (Path);
+         end loop;
+         Keep_Harness
+           (Item, Change, Finding,
+            "the checks of " & Records.Get (Earlier, "profile") & " failed"
+            & (if Length (Message) > 0
+               then " on " & (if Length (File) > 0 then To_String (File) & ": " else "") & To_String (Message)
+               else " at " & Failed_Check (Earlier))
+            & ", and passed after changes to " & Listed (Changed),
+            Files_Of, [To_String (Before), Evidence], From, Id, Status);
+      end;
+   end Observe_Fix;
+
+   ---------------------
+   -- Observe_Refusal --
+   ---------------------
+
+   procedure Observe_Refusal
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Tool   : String;
+      Why    : String;
+      Path   : String;
+      From   : Origin;
+      Id     : out Ada.Strings.Unbounded.Unbounded_String;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Keep_Harness
+        (Item, Change, Environment_Constraint,
+         Tool & (if Path /= "" then " of " & One_Line (Path) else "") & " was refused: " & One_Line (Why),
+         [Path], Name_Lists.Empty_Vector, From, Id, Status);
+   end Observe_Refusal;
+
+   ------------------
+   -- Observe_Done --
+   ------------------
+
+   procedure Observe_Done
+     (Item     : Stores.Store;
+      Change   : in out Stores.Transaction;
+      Task_Id  : String;
+      Evidence : String;
+      Changed  : Name_Lists.Vector;
+      From     : Origin;
+      Id       : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      Defined : Records.Item;
+      Value   : Records.Item;
+      Read    : E.Error_Info;
+   begin
+      Id := Null_Unbounded_String;
+      Status := E.Success;
+      if Changed.Is_Empty then
+         return;
+      end if;
+      Tasks.Definition (Item, Task_Id, Defined, Read);
+      if E.Is_Error (Read) then
+         return;
+      end if;
+      Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+      Keep_Harness
+        (Item, Change, Implementation_Note,
+         Task_Id & " (" & One_Line (Records.Get (Defined, "title")) & ") was done by changing " & Listed (Changed)
+         & (if E.Is_Ok (Read) and then Records.Get (Value, "passed") = "true"
+            then "; the checks of " & Records.Get (Value, "profile") & " passed" else ""),
+         Changed, (if E.Is_Ok (Read) then Name_Lists.To_Vector (Evidence, 1) else Name_Lists.Empty_Vector),
+         From, Id, Status);
+   end Observe_Done;
+
    ---------------------
    -- Observe_Failure --
    ---------------------
@@ -1121,26 +1340,6 @@ package body Model_Runner.Framework.Observations is
       Id       : out Ada.Strings.Unbounded.Unbounded_String;
       Status   : out Model_Runner.Errors.Error_Info)
    is
-      --  What a failed verification failed on first: its first error, as
-      --  file and message -- where it is, not which line, which moves.
-      procedure First_Error (Of_Evidence : String; File, Message : out Unbounded_String) is
-         Said : constant Verification.Diagnostic_List := Verification.Diagnostics_Of (Item, Of_Evidence);
-      begin
-         File := Null_Unbounded_String;
-         Message := Null_Unbounded_String;
-         for Index in 1 .. Verification.Length (Said) loop
-            declare
-               One : constant Verification.Diagnostic := Verification.Element (Said, Index);
-            begin
-               if Lower (To_String (One.Severity)) = "error" then
-                  File := One.File;
-                  Message := To_Unbounded_String (One_Line (To_String (One.Message)));
-                  return;
-               end if;
-            end;
-         end loop;
-      end First_Error;
-
       Value   : Records.Item;
       Read    : E.Error_Info;
       File    : Unbounded_String;
@@ -1152,7 +1351,7 @@ package body Model_Runner.Framework.Observations is
       if E.Is_Error (Read) or else Records.Get (Value, "passed") /= "false" then
          return;
       end if;
-      First_Error (Evidence, File, Message);
+      First_Error (Item, Evidence, File, Message);
       if Length (Message) = 0 then
          return;
       end if;
@@ -1169,7 +1368,7 @@ package body Model_Runner.Framework.Observations is
                  and then Records.Get (Earlier, "passed") = "false"
                  and then Records.Get (Earlier, "profile") = Records.Get (Value, "profile")
                then
-                  First_Error (Name, Then_File, Then_Message);
+                  First_Error (Item, Name, Then_File, Then_Message);
                   if Then_File = File and then Then_Message = Message then
                      declare
                         Said  : Draft;

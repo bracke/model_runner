@@ -464,6 +464,17 @@ package Model_Runner.Framework.Work is
       Report    : out Ada.Strings.Unbounded.Unbounded_String;
       Status    : out Model_Runner.Errors.Error_Info);
 
+   --  Keep a call the harness refused the agent now working as a
+   --  constraint later work is told (Observations.Observe_Refusal): its
+   --  tool, why, and the path its arguments name. Kept at once and apart:
+   --  one that cannot be kept changes nothing of the work.
+   --
+   --  @param Host The host.
+   --  @param Tool The tool called.
+   --  @param Why What the refusal said.
+   --  @param Arguments The call's arguments, a JSON object.
+   procedure Observe_Refusal (Host : in out Child_Host; Tool, Why, Arguments : String);
+
    --  Whether a file is one of the checks the work is judged by, which its
    --  agent may not change: a file the task's check commands name, or one
    --  already under the project's test roots (repository.tests). Changed to

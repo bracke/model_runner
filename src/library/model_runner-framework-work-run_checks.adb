@@ -125,6 +125,24 @@ begin
    end;
 
    Host.Checks_Failed := not Passed;
+
+   --  Passing where they failed before: what failed, and what the work
+   --  changed that made them pass, kept for later work -- apart, so what
+   --  cannot be kept of it costs the run nothing.
+   if Passed then
+      declare
+         Fixed  : Stores.Transaction;
+         Id     : Unbounded_String;
+         Kept   : E.Error_Info;
+      begin
+         Observations.Observe_Fix
+           (Host.Item.all, Fixed, To_String (Host.Task_Id), To_String (Evidence), Host.Edited,
+            Host_Origin (Host, Observations.Harness_Producer), Id, Kept);
+         if E.Is_Ok (Kept) and then Stores.Change_Count (Fixed) > 0 then
+            Stores.Commit (Host.Item.all, Fixed, Kept);
+         end if;
+      end;
+   end if;
    Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
 
    --  A profile whose every check is the command true -- what /init writes
