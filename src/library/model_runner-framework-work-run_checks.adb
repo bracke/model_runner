@@ -129,20 +129,60 @@ begin
    --  Passing where they failed before: what failed, and what the work
    --  changed that made them pass, kept for later work -- apart, so what
    --  cannot be kept of it costs the run nothing.
-   if Passed then
-      declare
-         Fixed  : Stores.Transaction;
-         Id     : Unbounded_String;
-         Kept   : E.Error_Info;
+   --  And what the changed files hold now, beside what they held when the
+   --  checks last failed: the change that made them pass, said.
+   declare
+      function Text_Of (Path : String) return String is
+         Text : Unbounded_String;
+         Got  : E.Error_Info;
+         Full : constant String := Hostkit.Fs.Join (To_String (Project_Dir), Path);
       begin
-         Observations.Observe_Fix
-           (Host.Item.all, Fixed, To_String (Host.Task_Id), To_String (Evidence), Host.Edited,
-            Host_Origin (Host, Observations.Harness_Producer), Id, Kept);
-         if E.Is_Ok (Kept) and then Stores.Change_Count (Fixed) > 0 then
-            Stores.Commit (Host.Item.all, Fixed, Kept);
+         if not Ada.Directories.Exists (Full) then
+            return "";
          end if;
-      end;
-   end if;
+         Files.Read_Text (Full, Text, Got);
+         return (if E.Is_Ok (Got) then To_String (Text) else "");
+      exception
+         when others =>
+            return "";
+      end Text_Of;
+
+      Fixed_By : Unbounded_String;
+   begin
+      if Passed and then not Host.At_Failure.Is_Empty then
+         for Held of Host.At_Failure loop
+            declare
+               Cut  : constant Natural := Ada.Strings.Fixed.Index (Held, [1 => ASCII.NUL]);
+               Path : constant String := Held (Held'First .. Cut - 1);
+               Said : constant String := Observations.Change_Said (Path, Held (Cut + 1 .. Held'Last), Text_Of (Path));
+            begin
+               if Said /= "" then
+                  Append (Fixed_By, (if Length (Fixed_By) = 0 then "" else " / ") & Said);
+               end if;
+            end;
+         end loop;
+      end if;
+      if Passed then
+         declare
+            Fixed  : Stores.Transaction;
+            Id     : Unbounded_String;
+            Kept   : E.Error_Info;
+         begin
+            Observations.Observe_Fix
+              (Host.Item.all, Fixed, To_String (Host.Task_Id), To_String (Evidence), Host.Edited,
+               Host_Origin (Host, Observations.Harness_Producer), Id, Kept, To_String (Fixed_By));
+            if E.Is_Ok (Kept) and then Stores.Change_Count (Fixed) > 0 then
+               Stores.Commit (Host.Item.all, Fixed, Kept);
+            end if;
+         end;
+         Host.At_Failure.Clear;
+      else
+         Host.At_Failure.Clear;
+         for Path of Host.Edited loop
+            Host.At_Failure.Append (Path & ASCII.NUL & Text_Of (Path));
+         end loop;
+      end if;
+   end;
    Stores.Read (Host.Item.all, Verification_Area, To_String (Evidence), Value, Read);
 
    --  A profile whose every check is the command true -- what /init writes

@@ -8914,12 +8914,16 @@ package body Tests.Framework_Cases is
       Report : Unbounded_String;
       Got    : E.Error_Info;
    begin
+      --  A first try that does not hold, then the one that does.
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   raise Program_Error;" & LF
+                & "end Hello;" & LF);
       Children.Run_Checks ("checks", Report, Got);
       Assert (Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0,
               "the checks passed before the work: " & To_String (Report));
-      Children.Keep_Before_Write ("src/hello.adb", Got);
-      Dirs.Create_Path (Project & "/src");
-      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   null;" & LF
+                & "end Hello;" & LF);
       Children.Run_Checks ("checks", Report, Got);
       Assert (Ada.Strings.Fixed.Index (To_String (Report), "passed") > 0,
               "the checks did not pass after the work: " & To_String (Report));
@@ -8946,7 +8950,7 @@ package body Tests.Framework_Cases is
          & "scalar verification.default = checks" & LF);
       --  A check that says why it fails, as a build does.
       Put_File (Fresh_Root (Store) & "/check.sh",
-                "test -f src/hello.adb && exit 0" & LF
+                "grep -q 'null;' src/hello.adb 2>/dev/null && exit 0" & LF
                 & "echo 'hello.adb:1:1: (style) space required'" & LF & "exit 1" & LF);
       Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", First, Status);
       Tk.Create (Store, Change, Fields ("Greet again", "analysis", "component", "hello"), "user", "", Second,
@@ -8974,6 +8978,8 @@ package body Tests.Framework_Cases is
       end loop;
       Assert (Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "the checks of checks failed at exists: ") = 1
               and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "(style) space required") > 0
+              and then Ada.Strings.Fixed.Index
+                         (To_String (Fixed.Summary), "-- src/hello.adb: - raise Program_Error; | + null;") > 0
               and then Ada.Strings.Fixed.Index (To_String (Fixed.Summary), "passed after changes to src/hello.adb") > 0
               and then Natural (Fixed.Evidence.Length) = 2 and then Fixed.Files.Contains ("src/hello.adb")
               and then Ob."=" (Fixed.Producer, Ob.Harness_Producer) and then Fixed.Task_Id = First

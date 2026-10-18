@@ -1250,6 +1250,56 @@ package body Model_Runner.Framework.Observations is
    end Keep_Harness;
 
    -----------------
+   -- Change_Said --
+   -----------------
+
+   function Change_Said (Path, Before, After : String) return String is
+      Old_Lines : Name_Lists.Vector;
+      New_Lines : Name_Lists.Vector;
+      Said      : Unbounded_String;
+      Count     : Natural := 0;
+      Line_Most : constant := 100;
+      Lines_Most : constant := 8;
+
+      function Kept_Lines (Text : String) return Name_Lists.Vector is
+         Result : Name_Lists.Vector;
+      begin
+         for One of Lines_Of (Text) loop
+            if Trim (One) /= "" then
+               Result.Append (Trim (One));
+            end if;
+         end loop;
+         return Result;
+      end Kept_Lines;
+
+      --  Each line of From not matched by one of Against, once each.
+      procedure Say (From, Against : Name_Lists.Vector; Mark : String) is
+         Left : Name_Lists.Vector := Against;
+      begin
+         for One of From loop
+            declare
+               At_It : constant Name_Lists.Extended_Index := Left.Find_Index (One);
+            begin
+               if At_It /= Name_Lists.No_Index then
+                  Left.Delete (At_It);
+               elsif Count < Lines_Most then
+                  Count := Count + 1;
+                  Append (Said, (if Length (Said) = 0 then "" else " | ") & Mark & " "
+                          & (if One'Length > Line_Most then One (One'First .. One'First + Line_Most - 1) & "..."
+                             else One));
+               end if;
+            end;
+         end loop;
+      end Say;
+   begin
+      Old_Lines := Kept_Lines (Before);
+      New_Lines := Kept_Lines (After);
+      Say (Old_Lines, New_Lines, "-");
+      Say (New_Lines, Old_Lines, "+");
+      return (if Length (Said) = 0 then "" else Path & ": " & To_String (Said));
+   end Change_Said;
+
+   -----------------
    -- Observe_Fix --
    -----------------
 
@@ -1261,7 +1311,8 @@ package body Model_Runner.Framework.Observations is
       Changed  : Name_Lists.Vector;
       From     : Origin;
       Id       : out Ada.Strings.Unbounded.Unbounded_String;
-      Status   : out Model_Runner.Errors.Error_Info)
+      Status   : out Model_Runner.Errors.Error_Info;
+      Fixed_By : String := "")
    is
       Value   : Records.Item;
       Read    : E.Error_Info;
@@ -1329,7 +1380,8 @@ package body Model_Runner.Framework.Observations is
                "the checks of " & Records.Get (Earlier, "profile") & " failed"
                & (if Check /= "" then " at " & Check else "")
                & (if Said /= "" then ": " & Said else "")
-               & ", and passed after changes to " & Listed (Changed),
+               & ", and passed after changes to " & Listed (Changed)
+               & (if Fixed_By /= "" then " -- " & Fixed_By else ""),
                Files_Of, [To_String (Before), Evidence], From, Id, Status);
          end;
       end;

@@ -3797,7 +3797,7 @@ An agent at work SHALL be able to record an observation through a narrow tool, k
 
 The harness SHALL record a failure pattern when a task's checks fail again as they failed before; a first failure SHALL NOT be recorded as one.
 
-The harness SHALL record, as observations of its own: checks that failed and then passed within a task, with the first error and the files changed since; a call it refused, with why; and a completed task's changed files with the verification that passed.
+The harness SHALL record, as observations of its own: checks that failed and then passed within a task, with what failed, the files changed since and, where it held them as they were when the checks failed, the lines the change took out and put in; a call it refused, with why; and a completed task's changed files with the verification that passed.
 
 Dismissed and superseded observations MAY be let go after the project's retention.observation_days, each left as a tombstone that still names what it was; active and promoted observations SHALL be kept.
 

@@ -930,6 +930,11 @@ private
       --  Whether the last checks run for the work failed.
       Checks_Failed : Boolean := False;
 
+      --  What each file the work had changed held when its checks last
+      --  failed, its path, a NUL and its text: what the change that made
+      --  them pass is told against.
+      At_Failure : Name_Lists.Vector;
+
       --  The files copied aside before their first write.
       Kept_Before : Name_Lists.Vector;
 

@@ -417,6 +417,8 @@ package Model_Runner.Framework.Observations is
    --  @param From Where it came from.
    --  @param Id The observation recorded or seen again; "" for none.
    --  @param Status A failure staging it.
+   --  @param Fixed_By What the change was, as Change_Said says it, where
+   --    the harness held the files as they were when the checks failed.
    procedure Observe_Fix
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -425,7 +427,19 @@ package Model_Runner.Framework.Observations is
       Changed  : Name_Lists.Vector;
       From     : Origin;
       Id       : out Ada.Strings.Unbounded.Unbounded_String;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Fixed_By : String := "");
+
+   --  The lines a change took out and put in, as a fix observation says
+   --  them: PATH: - LINE | + LINE, in the order they stand, blank lines and
+   --  leading space set aside, at most eight lines of a hundred characters;
+   --  "" where nothing changed.
+   --
+   --  @param Path The file.
+   --  @param Before What it held.
+   --  @param After What it holds.
+   --  @return The lines.
+   function Change_Said (Path, Before, After : String) return String;
 
    --  Record a call the harness refused -- a permission, the sandbox, the
    --  execution policy, the project's edge -- as a constraint later work
