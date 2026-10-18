@@ -448,6 +448,21 @@ package Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False);
 
+   --  Run, after a change, the checks the decisions that govern the task
+   --  hold every change to -- those the harness proposed from failures
+   --  mended alike in earlier tasks, once a person or the policy accepted
+   --  them -- and say what they reported where one failed: the agent hears
+   --  it with the change, not a check run later. Apart from the work's
+   --  evidence: never kept, so a few of the profile's checks never stand
+   --  for all of them.
+   --
+   --  @param Host The host.
+   --  @param Report What the agent is told; "" where every one passed, or
+   --    no such decision governs the task, or it may not run them.
+   procedure Lesson_Checks
+     (Host   : in out Child_Host;
+      Report : out Ada.Strings.Unbounded.Unbounded_String);
+
    --  Keep what the agent now working found, from a record_observation
    --  call's arguments: kind, summary, and the files, symbols and evidence
    --  it names. Kept at once, as an observation of the task -- its

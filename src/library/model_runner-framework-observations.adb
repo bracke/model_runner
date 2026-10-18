@@ -1542,6 +1542,16 @@ package body Model_Runner.Framework.Observations is
       return (if Length (Said) = 0 then "" else Path & ": " & To_String (Said));
    end Change_Said;
 
+   --  Lines as a sentence quotes them: 'a', 'b' and 'c'.
+   function Quoted_Each (Lines : Name_Lists.Vector) return String is
+      Quoted : Name_Lists.Vector;
+   begin
+      for Line of Lines loop
+         Quoted.Append ("'" & Line & "'");
+      end loop;
+      return Listed (Quoted);
+   end Quoted_Each;
+
    --------------------
    -- Propose_Lesson --
    --------------------
@@ -1558,9 +1568,41 @@ package body Model_Runner.Framework.Observations is
       Lesson   : String;
       Kept     : String;
       Fixed_By : String;
+      Checks   : Name_Lists.Vector;
       Status   : out E.Error_Info)
    is
+      --  The lines a change said as FILE: - OLD | + NEW put in, each once.
+      function Put_In (Said : String) return Name_Lists.Vector is
+         Found : Name_Lists.Vector;
+         Start : Positive := Said'First;
+      begin
+         for Index in Said'First .. Said'Last + 1 loop
+            if Index > Said'Last
+              or else (Index + 2 <= Said'Last and then Said (Index .. Index + 2) = " | ")
+            then
+               declare
+                  Part  : constant String := Ada.Strings.Fixed.Trim (Said (Start .. Index - 1), Ada.Strings.Both);
+                  --  The first of a file's lines carries the file's name.
+                  Named : constant Natural :=
+                    Natural'Max (Ada.Strings.Fixed.Index (Part, ": + "), Ada.Strings.Fixed.Index (Part, ": - "));
+                  Line  : constant String := (if Named > 0 then Part (Named + 2 .. Part'Last) else Part);
+               begin
+                  if Line'Length > 2 and then Line (Line'First .. Line'First + 1) = "+ "
+                    and then not Found.Contains (Line (Line'First + 2 .. Line'Last))
+                  then
+                     Found.Append (Line (Line'First + 2 .. Line'Last));
+                  end if;
+               end;
+               Start := Index + 3;
+            end if;
+         end loop;
+         return Found;
+      end Put_In;
+
       Provenance : constant String := "observation lesson " & Fingerprint (Lesson);
+      --  What every mending put in: the line the checks want, where the
+      --  rest of each change was the task's own.
+      Common     : Name_Lists.Vector := Put_In (Fixed_By);
       Head       : constant String := Lesson & ", and passed after changes to ";
       Tasks_Seen : Name_Lists.Vector;
       Seen_In    : Name_Lists.Vector;
@@ -1606,6 +1648,21 @@ package body Model_Runner.Framework.Observations is
                end if;
                if not Seen_In.Contains (Other) then
                   Seen_In.Append (Other);
+                  declare
+                     Text : constant String := To_String (Said);
+                     Mark : constant Natural := Ada.Strings.Fixed.Index (Text, " -- ", Head'Length - 4);
+                     Also : constant Name_Lists.Vector :=
+                       (if Mark = 0 or else Head'Length < 4 then Name_Lists.Empty_Vector
+                        else Put_In (Text (Mark + 4 .. Text'Last)));
+                     Kept_Lines : Name_Lists.Vector;
+                  begin
+                     for Line of Common loop
+                        if Also.Contains (Line) then
+                           Kept_Lines.Append (Line);
+                        end if;
+                     end loop;
+                     Common := Kept_Lines;
+                  end;
                end if;
                if Length (Component) = 0 then
                   Component := Value.Component;
@@ -1620,13 +1677,12 @@ package body Model_Runner.Framework.Observations is
         (Item, Change, Intent.Decision, "",
          "What the checks hold every change to",
          "Work SHALL leave the checks passing the first time: " & Lesson & "."
-         & " It failed so in " & Listed (Tasks_Seen) & " and passed after the change"
-         & (if Fixed_By = "" then ""
-             elsif Fixed_By'Length > Summary_Most
-             then " -- " & Fixed_By (Fixed_By'First .. Fixed_By'First + Summary_Most - 1)
-             else " -- " & Fixed_By)
-         & " (" & Listed (Seen_In) & ").",
-         "", "harness", Provenance,
+         & " It failed so in " & Listed (Tasks_Seen) & " (" & Listed (Seen_In) & ")"
+         & (if Common.Is_Empty then "."
+            else "; each time the change that mended it put in, exactly: " & Quoted_Each (Common) & "."),
+         --  What the harness runs after each change while it governs.
+         (if Checks.Is_Empty then "" else "checks: " & Joined (Checks, ", ")),
+         "harness", Provenance,
          (if Length (Component) > 0 then To_String (Component) else "project"),
          Decision, Status);
    end Propose_Lesson;
@@ -1720,7 +1776,7 @@ package body Model_Runner.Framework.Observations is
                & (if Fixed_By /= "" then " -- " & Fixed_By else ""),
                Files_Of, [To_String (Before), Evidence], From, Id, Status);
             if E.Is_Ok (Status) and then Length (Id) > 0 then
-               Propose_Lesson (Item, Change, Task_Id, Lesson, To_String (Id), Fixed_By, Status);
+               Propose_Lesson (Item, Change, Task_Id, Lesson, To_String (Id), Fixed_By, Failed, Status);
             end if;
          end;
       end;

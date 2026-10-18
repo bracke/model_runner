@@ -8945,6 +8945,75 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent that writes what a check refuses and then what it takes,
+   --  asking each time what the checks a decision holds every change to
+   --  say -- as the session does after each write -- and how much
+   --  evidence there was around the first asking.
+   type Lesson_Agent is new Wk.Parenting_Runner with null record;
+
+   Lesson_Failing, Lesson_Passing : Unbounded_String;
+   Lesson_Evidence_Before, Lesson_Evidence_After : Natural := 0;
+
+   overriding procedure Run
+     (Self        : Lesson_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Lesson_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Lesson_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("lesson"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Lesson_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Lesson_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Got : E.Error_Info;
+
+      function Evidence_Count return Natural is
+        (Natural (S.Names (Children.Store_Of.all, Model_Runner.Framework.Verification_Area).Length));
+   begin
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   raise Program_Error;" & LF
+                & "end Hello;" & LF);
+      Lesson_Evidence_Before := Evidence_Count;
+      Children.Lesson_Checks (Lesson_Failing);
+      Lesson_Evidence_After := Evidence_Count;
+      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   null;" & LF
+                & "end Hello;" & LF);
+      Children.Lesson_Checks (Lesson_Passing);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
    --  An agent wrong the first time, right the second: what a retry is
    --  told is what changed between the attempt that failed and the one
    --  that passed.
@@ -9694,6 +9763,49 @@ package body Tests.Framework_Cases is
             end;
          end loop;
          Assert (Proposed = 1, "a failure mended in two tasks was proposed" & Natural'Image (Proposed) & " times");
+      end;
+
+      --  Accepted, it governs the component's work: the checks it names
+      --  run after each change, and what they say comes with the change.
+      declare
+         Lesson : Unbounded_String;
+         Fourth : Unbounded_String;
+      begin
+         for Id of Nt.List (Store, Nt.Decision) loop
+            declare
+               Held : Nt.Entity;
+            begin
+               Nt.Read (Store, Nt.Decision, Id, Held, Status);
+               if To_String (Held.Source) = "harness" then
+                  Lesson := To_Unbounded_String (Id);
+                  Assert (To_String (Held.Criteria) = "checks: exists, again"
+                          and then Ada.Strings.Fixed.Index
+                                     (To_String (Held.Text),
+                                      "each time the change that mended it put in, exactly: 'null;'.")
+                                   > 0,
+                          "the lesson did not say the checks it names and what each mending put in: "
+                          & To_String (Held.Criteria) & " / " & To_String (Held.Text));
+               end if;
+            end;
+         end loop;
+         Change := S.No_Changes;
+         Nt.Move (Store, Change, Nt.Decision, To_String (Lesson), "accepted", Tr.Ordinary_Only, Status);
+         Tk.Create (Store, Change, Fields ("Greet once more", "analysis", "component", "hello"), "user", "", Fourth,
+                    Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Fourth), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Fourth), Lesson_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete",
+                 "the governed task did not complete: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+         Assert (Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "but the checks " & To_String (Lesson)
+                                          & " holds every change to failed after it") = 1
+                 and then Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "exists: failed") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "(style) space required") > 0,
+                 "a change the lesson's checks refuse was not said with it: " & To_String (Lesson_Failing));
+         Assert (Length (Lesson_Passing) = 0, "a change they take was said as failing: " & To_String (Lesson_Passing));
+         Assert (Lesson_Evidence_After = Lesson_Evidence_Before,
+                 "the checks after a change were kept as the work's evidence");
       end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;

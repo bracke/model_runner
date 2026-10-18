@@ -1798,6 +1798,11 @@ package body Model_Runner.Framework.Work is
       Affected : Boolean := False)
    is separate;
 
+   procedure Lesson_Checks
+     (Host   : in out Child_Host;
+      Report : out Ada.Strings.Unbounded.Unbounded_String)
+   is separate;
+
    ---------------------
    -- Observe_Refusal --
    ---------------------

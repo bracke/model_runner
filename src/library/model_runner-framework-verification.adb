@@ -687,7 +687,8 @@ package body Model_Runner.Framework.Verification is
       Within   : Natural := 0;
       Definition : String := "";
       Selection : String := "";
-      Derived  : Derivations.Staged := Derivations.Nothing_Staged)
+      Derived  : Derivations.Staged := Derivations.Nothing_Staged;
+      Unkept   : Boolean := False)
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String :=
@@ -1047,7 +1048,7 @@ package body Model_Runner.Framework.Verification is
                   Path : constant String := Reuse_Index (Item, Value, Key, Now);
                begin
                   return Result : Name_Lists.Vector do
-                     if Ada.Directories.Exists (Path) then
+                     if not Unkept and then Ada.Directories.Exists (Path) then
                         Files.Read_Text (Path, Text, Got);
                         if E.Is_Ok (Got) and then Length (Text) > 0 then
                            Result.Append (Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both));
@@ -1352,7 +1353,7 @@ package body Model_Runner.Framework.Verification is
          Stores.Put (Change, Verification_Area, To_String (Evidence), Value);
          --  Named in the reuse index under what it is: a later run the same
          --  finds it there. An entry not written is only checks run again.
-         if Records.Get (Value, "state_changed") = ""
+         if not Unkept and then Records.Get (Value, "state_changed") = ""
            and then Records.Get (Value, "scope_files") = ""
            and then Records.Get (Value, "changed_during") = ""
          then

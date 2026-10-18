@@ -177,6 +177,10 @@ package Model_Runner.Framework.Verification is
    --  @param Selection The derivation the tests it is given were chosen by,
    --    named on the evidence; "" for none.
    --  @param Derived What choosing them worked out, kept with the evidence.
+   --  @param Unkept Whether the run's transaction is to be let go, not
+   --    committed: it then neither takes an earlier run's result nor is
+   --    named for a later one to take, so an identifier it never kept is
+   --    never looked up.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -192,7 +196,8 @@ package Model_Runner.Framework.Verification is
       Within   : Natural := 0;
       Definition : String := "";
       Selection : String := "";
-      Derived  : Derivations.Staged := Derivations.Nothing_Staged);
+      Derived  : Derivations.Staged := Derivations.Nothing_Staged;
+      Unkept   : Boolean := False);
 
    --  How widely a task's work is verified, and with what.
    type Choice is record

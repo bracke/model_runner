@@ -1549,6 +1549,22 @@ package body Model_Runner.CLI.Project_Commands is
                         Put (Was & ASCII.LF & "used by: " & Users);
                      end if;
                   end;
+                  --  What the checks a decision holds every change to say
+                  --  of it, with it: Mellum, told such a rule, still wrote
+                  --  first and heard of it from run_checks a call later.
+                  declare
+                     Lessons : Unbounded_String;
+                  begin
+                     Wk.Lesson_Checks (Self.Host.all, Lessons);
+                     if Length (Lessons) > 0 then
+                        declare
+                           Both : constant String := Result (Result'First .. Last) & ASCII.LF & To_String (Lessons);
+                        begin
+                           --  As much of it as an answer holds.
+                           Put (Both (Both'First .. Both'First + Natural'Min (Both'Length, Result'Length) - 1));
+                        end;
+                     end if;
+                  end;
                end if;
             end if;
          end;

@@ -3805,7 +3805,9 @@ An observation that no longer applies and has not been seen again for the projec
 
 Where a task's attempt failed its checks, the files it changed SHALL be kept, so that the fix observation of a later attempt that passes can say what changed between them.
 
-Where checks failed alike and were mended in two tasks or more, the harness SHALL propose, once, a candidate decision saying what the checks hold work to, naming the tasks and the observations; it SHALL NOT propose it again once it was decided, and the observations SHALL stay as they were until a person or the policy accepts it.
+Where checks failed alike and were mended in two tasks or more, the harness SHALL propose, once, a candidate decision saying what the checks hold work to and what every mending put in, naming the checks, the tasks and the observations; it SHALL NOT propose it again once it was decided, and the observations SHALL stay as they were until a person or the policy accepts it.
+
+While such a decision governs a task, the checks it names SHALL be run after each change the task's agent makes, and what they report where one fails SHALL be told with that change; that run SHALL NOT be kept as the work's evidence.
 
 An observation that says nearly what an active one says -- the same kind, a file in common where both name files, and most of the same words -- SHALL be kept as its own, naming the other, and SHALL NOT be told to an agent beside it.
 
