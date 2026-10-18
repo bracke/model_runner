@@ -3622,7 +3622,12 @@ begin
               (if Option ("--max-seconds", "1200")'Length in 1 .. 5
                  and then (for all C of Option ("--max-seconds", "1200") => C in '0' .. '9')
                  and then Natural'Value (Option ("--max-seconds", "1200")) >= 1
-               then Natural'Value (Option ("--max-seconds", "1200")) else 1200));
+               then Natural'Value (Option ("--max-seconds", "1200")) else 1200),
+            Context_Size =>
+              (if Option ("--context-size", "8192")'Length in 1 .. 7
+                 and then (for all C of Option ("--context-size", "8192") => C in '0' .. '9')
+                 and then Natural'Value (Option ("--context-size", "8192")) >= 512
+               then Natural'Value (Option ("--context-size", "8192")) else 8192));
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 

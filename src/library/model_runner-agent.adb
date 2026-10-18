@@ -298,6 +298,10 @@ package body Model_Runner.Agent is
       Thought_Before : U.Unbounded_String;
       Thought_Tokens : Natural := 0;
 
+      --  Whether that thought was still open when its budget came, and so
+      --  was closed for it; False where the reply had closed it itself.
+      Was_Open : Boolean := False;
+
       --  The most a thought may take where the step's room is less than
       --  its budget and an answer after it: the budget less the answer's
       --  room, until compaction makes room again.
@@ -512,22 +516,31 @@ package body Model_Runner.Agent is
                   Bounds   => Bounds,
                   Pictures => Pictures,
                   Outcome  => Last_Result);
+               --  Stopped at the thought's budget: the thought closed for it
+               --  where it is still thinking, and the reply asked for after
+               --  -- and where it closed its thought itself and was writing
+               --  a call when the budget came, that is asked for after too,
+               --  as it stands: asked for the budget's tokens alone, Mellum
+               --  closed its thought, began a call and was cut there.
                if Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
                  and then Last_Result.Generated_Tokens < Full
-                 and then Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all)
                then
-                  Thought_Before := U.To_Unbounded_String (Gen.Generated_Text (Last_Result) & Closing);
+                  Was_Open := Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all);
+                  Thought_Before := U.To_Unbounded_String
+                    (Gen.Generated_Text (Last_Result) & (if Was_Open then Closing else ""));
                   Thought_Tokens := Last_Result.Generated_Tokens;
-                  Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
-                  --  Shown closed too, as the prompt has it: what the reply
-                  --  goes on with is no longer thought, and a call it
-                  --  opens is held back as a call -- shown as thought, a
-                  --  call's opening markup reached the screen.
-                  declare
-                     Closed : Boolean;
-                  begin
-                     Model_Runner.Output.Emit (Shown, Closing, Closed);
-                  end;
+                  if Was_Open then
+                     Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
+                     --  Shown closed too, as the prompt has it: what the reply
+                     --  goes on with is no longer thought, and a call it
+                     --  opens is held back as a call -- shown as thought, a
+                     --  call's opening markup reached the screen.
+                     declare
+                        Closed : Boolean;
+                     begin
+                        Model_Runner.Output.Emit (Shown, Closing, Closed);
+                     end;
+                  end if;
                   declare
                      Continued : constant String := Rendered.all & U.To_String (Thought_Before);
                   begin
@@ -557,7 +570,10 @@ package body Model_Runner.Agent is
                         Prompt   => Continued,
                         Item     => Request,
                         Stop_Set => Stop_Set,
-                        Rules    => Rules,
+                        --  The call grammar holds a reply from its start:
+                        --  after a closing it starts one again, but in the
+                        --  middle of a call begun it would ask for another.
+                        Rules    => (if Was_Open then Rules else null),
                         Sink     => Shown,
                         Observer => null,
                         Time     => Time,

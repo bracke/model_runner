@@ -285,7 +285,8 @@ package body Agent_Trial is
       Apart     : Boolean := False;
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
-      Max_Seconds : Positive := 1200)
+      Max_Seconds : Positive := 1200;
+      Context_Size : Positive := 8192)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -628,7 +629,8 @@ package body Agent_Trial is
                      end if;
                      Words.Append (To_Unbounded_String (Model));
                      Words.Append (To_Unbounded_String ("--context-size"));
-                     Words.Append (To_Unbounded_String ("8192"));
+                     Words.Append (To_Unbounded_String
+                                     (Ada.Strings.Fixed.Trim (Positive'Image (Context_Size), Ada.Strings.Both)));
                      declare
                         Start : Positive := Options'First;
                      begin
