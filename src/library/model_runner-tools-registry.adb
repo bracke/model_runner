@@ -91,6 +91,22 @@ package body Model_Runner.Tools.Registry is
             & " if not, what the failing checks reported. scope affected checks only what your changes"
             & " so far reach -- quicker while you work; full, the default, everything the task is held to.",
             [Sc.Text ("scope", Required => False, Choices => ["affected", "full"])]))),
+      --  What was learned, kept by the harness with where it came from: it
+      --  changes nothing another call reads.
+      (W ("record_observation"), Project_Knowledge, True, Changes, Pure, False, No_Path,
+       W (Sc.Definition
+         ("record_observation",
+            "Keep something you found that later work on this project should know -- a constraint of a"
+            & " tool or the machine, a behaviour that is not what its name says, an approach that failed"
+            & " and why -- with the files and symbols it is about and, where you have them, the results"
+            & " or verifications (RES-, VER-) that show it. It is kept as an observation, not a fact or a"
+            & " decision: it changes nothing about the task, and later work is told it as what was seen.",
+            [Sc.Text ("kind", Choices => ["finding", "experiment", "failure_pattern", "environment_constraint",
+                                          "tool_behavior", "implementation_note"]),
+             Sc.Text ("summary"),
+             Sc.Text_List ("files", Required => False),
+             Sc.Text_List ("symbols", Required => False),
+             Sc.Text_List ("evidence", Required => False)]))),
       --  Overlaps only without an embedding model: the runner says.
       (W ("retrieve"), Retrieval, True, Reads, Files, True, No_Path,
        W (Sc.Definition

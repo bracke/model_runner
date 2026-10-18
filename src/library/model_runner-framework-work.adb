@@ -14,6 +14,7 @@ with Hostkit.Process;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Derivations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
@@ -21,6 +22,7 @@ with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Indexes;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
+with Model_Runner.Framework.Observations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Records;
@@ -921,6 +923,7 @@ package body Model_Runner.Framework.Work is
    begin
       Can (Rg.Read_Files) := True;
       Can (Rg.Project_Graph) := Hosted;
+      Can (Rg.Project_Knowledge) := Hosted;
       Agents.Read (Item, Agent_Id, Held, Read);
       if E.Is_Error (Read) then
          return Can;
@@ -1759,6 +1762,17 @@ package body Model_Runner.Framework.Work is
       Report   : out Ada.Strings.Unbounded.Unbounded_String;
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False)
+   is separate;
+
+   ------------------------
+   -- Record_Observation --
+   ------------------------
+
+   procedure Record_Observation
+     (Host      : in out Child_Host;
+      Arguments : String;
+      Report    : out Ada.Strings.Unbounded.Unbounded_String;
+      Status    : out Model_Runner.Errors.Error_Info)
    is separate;
 
    ------------------

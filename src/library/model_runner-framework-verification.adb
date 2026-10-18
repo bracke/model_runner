@@ -685,7 +685,9 @@ package body Model_Runner.Framework.Verification is
       Offline  : Boolean := False;
       Workspace : String := "";
       Within   : Natural := 0;
-      Definition : String := "")
+      Definition : String := "";
+      Selection : String := "";
+      Derived  : Derivations.Staged := Derivations.Nothing_Staged)
    is
       Settings : constant Records.Item := Config (Item);
       Text     : constant String :=
@@ -854,12 +856,22 @@ package body Model_Runner.Framework.Verification is
       end if;
       Evidence := To_Unbounded_String ("VER-" & Pad (Number, 6));
 
+      --  How its tests were chosen, kept with it: the evidence names the
+      --  selection, and the selection what it rests on.
+      Derivations.Keep (Item, Change, Derived, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+
       declare
          Value : Records.Item :=
            Records.Create (Schemas.Evidence_Schema, 1, To_String (Evidence), 1);
       begin
          Records.Set (Value, "task", Task_Id);
          Records.Set (Value, "profile", Profile);
+         if Selection /= "" then
+            Records.Set (Value, "selection", Selection);
+         end if;
          if Stands_For /= "" and then Stands_For /= Profile then
             Records.Set (Value, "stands_for", Stands_For);
          end if;
@@ -1568,8 +1580,7 @@ package body Model_Runner.Framework.Verification is
 
       declare
          Selected : constant Traceability.Selection :=
-           Traceability.Select_Tests
-             (Item, Traceability.Impact_Of (Traceability.Build (Item, Files), Changed));
+           Traceability.Select_For (Item, Files, Changed, Records.Get (Value, "task")).Chosen;
       begin
          --  Only a selection of certain tests is a list: one of a
          --  component's runs all its tests, whichever it names.
@@ -2109,11 +2120,13 @@ package body Model_Runner.Framework.Verification is
             others => <>);
       else
          declare
-            Graph   : constant Traceability.Graph :=
-              Traceability.Build (Item, Repository.Now (Item));
+            Traced : constant Traceability.Traced :=
+              Traceability.Select_For (Item, Repository.Now (Item), Changed,
+                                       Subject => (if Task_Id = "" then "project" else Task_Id));
          begin
-            Selected := Traceability.Select_Tests
-              (Item, Traceability.Impact_Of (Graph, Changed));
+            Selected := Traced.Chosen;
+            Result.Selection := Traced.Selection_Key;
+            Result.Derived := Traced.Kept;
          end;
       end if;
 

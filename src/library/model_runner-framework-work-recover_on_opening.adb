@@ -315,6 +315,31 @@ begin
                       & " raw logs and kept contexts past their retention");
       end if;
 
+      --  Derivations past their retention, thirty days unless the project
+      --  says otherwise, and the answers no derivation names: all of it can
+      --  be worked out again.
+      Derivations.Prune
+        (Item, Change, Number_Of (Scalar (Item, "retention.derived_days"), 30), Removed);
+      if Removed > 0 then
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Said.Append ("let go of" & Natural'Image (Removed) & " derivations past their retention");
+      end if;
+
+      --  Observations dismissed or superseded long ago, left as tombstones
+      --  where the project keeps them only for a while; kept unless it says.
+      Observations.Prune
+        (Item, Change, Number_Of (Scalar (Item, "retention.observation_days"), 0), Removed);
+      if Removed > 0 then
+         Stores.Commit (Item, Change, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Said.Append ("retired" & Natural'Image (Removed) & " observations past their retention");
+      end if;
+
       --  And the payloads kept apart that nothing refers to now.
       declare
          Collected : Natural;

@@ -324,6 +324,7 @@ en.cli.interactive.help.why = /why [TASK]          why a task can or cannot run,
 en.cli.interactive.help_more = {count} more apply where this session is not -- /help project all lists every one
 en.cli.interactive.help.history = /history [ID]       what happened to a task, invocation or record, from the event log; with none, the latest
 en.cli.interactive.help.brief = /brief TASK          what /work would give the task's agent: each item in, as what, and each left out, and why
+en.cli.interactive.help.obs = /obs [ID | ACTION]   what was learned while working: list, all, show ID, record KIND TEXT, dismiss ID [WHY], supersede ID BY, promote ID task|fact|decision
 en.cli.interactive.usage.init = /init TEMPLATE NAME=VALUE ...  starts the project from TEMPLATE, each input as NAME=VALUE; /init alone offers the templates and asks for what is needed. The plan (inputs, files, facts, and checks the policy would refuse) is shown before anything is written
 en.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (the task it was proposed from) parent=P] -- /task new TITLE kind=KIND [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify and integrate take several, or all; reconsider takes a rejected task back to a candidate), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAME=VALUE (kind too), note ID TEXT (adds to its notes), grant ID CAPABILITY [roots=...], withhold ID CAPABILITY, link ID REQ..., depend ID ON [remove], split ID First; Second, rehome OLD NEW, move ID STATE [REASON], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAME or a task's ID, drop NAME, a task's ID or all]
 en.cli.interactive.usage.work = /work TASK-ID, or words of a task's title, or nothing to choose among the ready ones, or all for every one the plan can start, one after another -- [model=PATH [steps=N]]: a model file runs it apart, with file tools only, steps= at most the task's step limit -- [profile=NAME]: the map.model profile its context is planned with -- it shows its context, the agent's calls, the files changed, verification, and where the task ended
@@ -339,6 +340,7 @@ en.cli.interactive.usage.state = /state counts what stands (requirements, and of
 en.cli.interactive.usage.check = /check runs the default profile -- /check PROFILE runs that one, /check full every profile verification.full lists -- /check REQ-ID ... runs the checks of each requirement's tasks and its own, as /req verify does -- /check consistency lists what in the state does not hold together
 en.cli.interactive.usage.bootstrap = /bootstrap reads the documents bootstrap.sources names -- /bootstrap FILE, DIR or GLOB reads those; a line with SHALL, MUST or SHOULD (and shall, must, should in a list or a requirements document) is a candidate requirement, a heading ## REQ-001 Title an imported one, a decision record or a list under a heading of decisions candidate decisions, and a titled document that holds none of these a candidate specification (a changelog is left out unless named); read again, it revises what changed, follows what moved and retires what it no longer says
 en.cli.interactive.usage.instruct = /instruct lists the standing instructions -- /instruct SUBJECT = VALUE gives one, as /instruct documentation = every public operation gets a comment, and /instruct SUBJECT = VALUE overriding DEC-001 one that stands above that decision -- /instruct withdraw INSTR-001 takes one back
+en.cli.interactive.usage.obs = /obs lists the active observations, /obs all every one -- /obs ID (or show ID) shows one: what it says, whether it applies now, where it came from and what stands behind it -- /obs record KIND TEXT keeps a person's (KIND is finding, experiment, failure_pattern, environment_constraint, tool_behavior or implementation_note) -- /obs dismiss ID [WHY], /obs supersede ID BY -- /obs promote ID task [NAME=VALUE ...] makes a candidate task of it, fact KEY=VALUE a fact no surer than it, decision [KEY] [title=... text=... scope=...] a candidate decision; each names the observation it came from, and the observation is kept. An observation is never authoritative: it is told to later work as what was seen
 en.cli.interactive.setting.temperature = temperature
 en.cli.interactive.setting.top_k = top-k
 en.cli.interactive.settings.choosing = How a token is chosen
@@ -391,6 +393,15 @@ en.cli.history.event = {index}  {other}  {value}  {name}  {detail}
 en.cli.history.unknown_kind = of a kind this build does not know: left unconsumed for a build that does
 en.cli.history.none = no event names {name}
 en.cli.history.earlier = {count} earlier of {total} not shown
+en.cli.obs.none = no observations are kept: an agent at work keeps what it finds with record_observation, and /obs record KIND TEXT keeps yours
+en.cli.obs.hidden = {count} dismissed, superseded or promoted not shown: /obs all lists them
+en.cli.obs.heading = {name}
+en.cli.obs.not_authoritative = {name} is an observation: told to later work as what was seen, it changes nothing the project means -- /obs promote {name} task, fact or decision makes it part of that
+en.cli.obs.recorded = {name} kept: an observation, told to later work and changing nothing it is about
+en.cli.obs.seen_again = {name} says that already: counted as seen again
+en.cli.obs.dismissed = {name} dismissed: kept for the record, and told to no work again
+en.cli.obs.superseded = {name} superseded by {value}: later work is told {value} instead
+en.cli.obs.promoted = {name} promoted into {value}, {detail}; {name} is kept, marked promoted
 en.cli.brief.head = {name}: {count} tokens of {total}
 en.cli.brief.in = in   {name} ({detail})
 en.cli.brief.out = out  {name}: {detail}
@@ -552,6 +563,7 @@ en.cli.result.section.run = What the run was
 en.cli.result.section.ended = How it ended
 en.cli.result.section.calls = Its calls, in order
 en.cli.result.section.checked = What was checked
+en.cli.result.section.selection = How its tests were chosen
 en.cli.intent.unlinked = {name} is taken off
 en.cli.intent.unchanged = {name} already says that; nothing was revised
 en.cli.intent.text_changed = {name} said: {value} -- now: {detail}
@@ -1865,6 +1877,7 @@ da.cli.interactive.help.why = /why [OPGAVE]        hvorfor en opgave kan eller i
 da.cli.interactive.help_more = {count} flere gælder hvor denne session ikke er -- /help project all viser dem alle
 da.cli.interactive.help.history = /history [ID]       hvad der skete med en opgave, et kald eller en post, fra hændelsesloggen; uden, de seneste
 da.cli.interactive.help.brief = /brief OPGAVE        hvad /work ville give opgavens agent: hvert punkt med, som hvad, og hvert udeladt, og hvorfor
+da.cli.interactive.help.obs = /obs [ID | HANDLING] hvad der blev lært under arbejdet: list, all, show ID, record ART TEKST, dismiss ID [HVORFOR], supersede ID AF, promote ID task|fact|decision
 da.cli.interactive.usage.init = /init SKABELON NAVN=VÆRDI ...  starter projektet fra SKABELON, hvert input som NAVN=VÆRDI; /init alene tilbyder skabelonerne og spørger om det nødvendige. Planen (input, filer, fakta og kontroller politikken ville afvise) vises før noget skrives
 da.cli.interactive.usage.task = /task list [state=S kind=K component=C requirement=REQ origin=TASK (opgaven den blev foreslået fra) parent=P] -- /task new TITEL kind=ART [component=C requirements=REQ-... notes=... permissions=...] -- /task accept|reject|reopen|reconsider|complete|verify|integrate ID (accept, reject, complete, verify og integrate tager flere, eller all; reconsider tager en afvist opgave tilbage til kandidat), /task cancel ID [anyway] -- /task show|audit|context ID [--verbose], /task plan -- /task edit ID NAVN=VÆRDI (også kind), note ID TEKST (føjer til noterne), grant ID EVNE [roots=...], withhold ID EVNE, link ID REQ..., depend ID PÅ [remove], split ID Første; Anden, rehome GAMMEL NY, move ID TILSTAND [GRUND], derive -- /task diff ID, /task integrate ID [resolved|anyway|resolved anyway|discard] -- /task kept [diff|restore NAVN eller en opgaves ID, drop NAVN, en opgaves ID eller all]
 da.cli.interactive.usage.work = /work OPGAVE-ID, eller ord fra en opgaves titel, eller intet for at vælge blandt de klare, eller all for hver den plan kan starte, den ene efter den anden -- [model=STI [steps=N]]: en modelfil kører den for sig, kun med filværktøjer, steps= højst opgavens skridtgrænse -- [profile=NAVN]: den map.model-profil dens kontekst planlægges med -- den viser sin kontekst, agentens kald, de ændrede filer, verifikation, og hvor opgaven endte
@@ -1880,6 +1893,7 @@ da.cli.interactive.usage.state = /state tæller hvad der står (krav, og heraf k
 da.cli.interactive.usage.check = /check kører standardprofilen -- /check PROFIL kører den, /check full hver profil verification.full nævner -- /check KRAV-ID ... kører tjekkene for hvert kravs opgaver og dets egne, som /req verify gør -- /check consistency nævner hvad i tilstanden der ikke hænger sammen
 da.cli.interactive.usage.bootstrap = /bootstrap læser dokumenterne bootstrap.sources nævner -- /bootstrap FIL, MAPPE eller MØNSTER læser dem; en linje med SHALL, MUST eller SHOULD (og shall, must, should i en liste eller et kravdokument) er et kandidatkrav, en overskrift ## REQ-001 Titel et importeret, en beslutningsrapport eller en liste under en overskrift om beslutninger kandidatbeslutninger, og et dokument med titel der ingen af disse har en kandidatspecifikation (en changelog udelades medmindre den nævnes); læst igen reviderer den det ændrede, følger det flyttede og pensionerer det den ikke længere siger
 da.cli.interactive.usage.instruct = /instruct viser de gældende instrukser -- /instruct EMNE = VÆRDI giver en, som /instruct documentation = hver offentlig operation får en kommentar, og /instruct EMNE = VÆRDI overriding DEC-001 en der står over den beslutning -- /instruct withdraw INSTR-001 tager en tilbage
+da.cli.interactive.usage.obs = /obs viser de gældende iagttagelser, /obs all dem alle -- /obs ID (eller show ID) viser én: hvad den siger, om den gælder nu, hvor den kom fra og hvad der står bag den -- /obs record ART TEKST gemmer en persons (ART er finding, experiment, failure_pattern, environment_constraint, tool_behavior eller implementation_note) -- /obs dismiss ID [HVORFOR], /obs supersede ID AF -- /obs promote ID task [NAVN=VÆRDI ...] gør den til en kandidatopgave, fact NØGLE=VÆRDI til en kendsgerning der ikke er sikrere end den, decision [NØGLE] [title=... text=... scope=...] til en kandidatbeslutning; hver nævner iagttagelsen den kom fra, og iagttagelsen beholdes. En iagttagelse er aldrig bindende: den fortælles til senere arbejde som det, der blev set
 da.cli.interactive.system_cleared = systembeskeden er fjernet; konteksten ryddet
 da.cli.interactive.no_tools = ingen værktøjer tilbydes; start med --tools for at tilbyde nogle
 da.cli.interactive.tool_name = {name}
@@ -1908,6 +1922,15 @@ da.cli.history.event = {index}  {other}  {value}  {name}  {detail}
 da.cli.history.unknown_kind = af en slags denne version ikke kender: efterladt ubehandlet til en version, der gør
 da.cli.history.none = ingen hændelse nævner {name}
 da.cli.history.earlier = {count} tidligere af {total} ikke vist
+da.cli.obs.none = ingen iagttagelser gemt: en agent i arbejde gemmer hvad den finder med record_observation, og /obs record ART TEKST gemmer dine
+da.cli.obs.hidden = {count} afviste, afløste eller ophøjede ikke vist: /obs all viser dem
+da.cli.obs.heading = {name}
+da.cli.obs.not_authoritative = {name} er en iagttagelse: fortalt til senere arbejde som det, der blev set, ændrer den intet af hvad projektet betyder -- /obs promote {name} task, fact eller decision gør den til en del af det
+da.cli.obs.recorded = {name} gemt: en iagttagelse, fortalt til senere arbejde, som intet ændrer ved det, den handler om
+da.cli.obs.seen_again = {name} siger det allerede: talt som set igen
+da.cli.obs.dismissed = {name} afvist: beholdt til optegnelsen og fortalt til intet arbejde igen
+da.cli.obs.superseded = {name} afløst af {value}: senere arbejde får {value} at vide i stedet
+da.cli.obs.promoted = {name} ophøjet til {value}, {detail}; {name} beholdes, mærket ophøjet
 da.cli.brief.head = {name}: {count} tokens af {total}
 da.cli.brief.in = med  {name} ({detail})
 da.cli.brief.out = ude  {name}: {detail}
@@ -2069,6 +2092,7 @@ da.cli.result.section.run = Hvad kørslen var
 da.cli.result.section.ended = Hvordan den endte
 da.cli.result.section.calls = Dens kald, i rækkefølge
 da.cli.result.section.checked = Hvad der blev tjekket
+da.cli.result.section.selection = Hvordan dens test blev valgt
 da.cli.intent.unlinked = {name} er fjernet
 da.cli.intent.unchanged = {name} siger allerede det; intet blev revideret
 da.cli.intent.text_changed = {name} sagde: {value} -- nu: {detail}
@@ -3115,6 +3139,7 @@ qps.cli.interactive.help.why = ⟦/ŵĥý [ŦÁßK]          ŵĥý á ŧáßk �
 qps.cli.interactive.help_more = ⟦{count} ḿóŕé áþþĺý ŵĥéŕé ŧĥíś śéśśíóñ íś ñóŧ -- /ĥéĺþ þŕóĵéćŧ áĺĺ ĺíśŧś évéŕý óñé⟧
 qps.cli.interactive.help.history = ⟦/ĥíśŧóŕý [ÍĐ]       ŵĥáŧ ĥáppéñéď ŧó á ŧáśķ, íñvóćáŧíóñ óŕ ŕéćóŕď, fŕóm ŧĥé évéñŧ ĺóg; ŵíŧĥ ñóñé, ŧĥé ĺáŧéśŧ⟧
 qps.cli.interactive.help.brief = ⟦/ßŕíéf ŦÁßK          ŵĥáŧ /ŵóŕķ ŵóúĺď ĝívé ŧĥé ŧáśķ'ś áĝéñŧ: éáçĥ íŧéḿ íñ, áś ŵĥáŧ, áñď éáçĥ ĺéfŧ óúŧ, áñď ŵĥý⟧
+qps.cli.interactive.help.obs = ⟦/óbß [ID | AÇŦION]   wháŧ wáß ĺéáŕñéð whíĺé wóŕkíñg: ĺíßŧ, áĺĺ, ßhów ID, ŕéçóŕð KIND ŦEXŦ, ðíßmíßß ID [WHY], ßúpéŕßéðé ID BY, pŕómóŧé ID ŧáßk|fáçŧ|ðéçíßíóñ⟧
 qps.cli.interactive.usage.init = ⟦/íñíŧ ŦEMPLAŦE NAME=VALÚE ...  ßŧáŕŧß ŧhé pŕójéçŧ fŕóm ŦEMPLAŦE, éáçh íñpúŧ áß NAME=VALÚE; /íñíŧ áĺóñé ófféŕß ŧhé ŧémpĺáŧéß áñð áßkß fóŕ wháŧ íß ñééðéð. Ŧhé pĺáñ (íñpúŧß, fíĺéß, fáçŧß, áñð çhéçkß ŧhé póĺíçý wóúĺð ŕéfúßé) íß ßhówñ béfóŕé áñýŧhíñg íß wŕíŧŧéñ⟧
 qps.cli.interactive.usage.task = ⟦/ŧáßk ĺíßŧ [ßŧáŧé=S kíñð=K çómpóñéñŧ=Ç ŕéqúíŕéméñŧ=REQ óŕígíñ=ŦASK (ŧhé ŧáßk íŧ wáß pŕópóßéð fŕóm) páŕéñŧ=P] -- /ŧáßk ñéw ŦIŦLE kíñð=KIND [çómpóñéñŧ=Ç ŕéqúíŕéméñŧß=REQ-... ñóŧéß=... péŕmíßßíóñß=...] -- /ŧáßk áççépŧ|ŕéjéçŧ|ŕéópéñ|ŕéçóñßíðéŕ|çómpĺéŧé|véŕífý|íñŧégŕáŧé ID (áççépŧ, ŕéjéçŧ, çómpĺéŧé, véŕífý áñð íñŧégŕáŧé ŧáké ßévéŕáĺ, óŕ áĺĺ; ŕéçóñßíðéŕ ŧákéß á ŕéjéçŧéð ŧáßk báçk ŧó á çáñðíðáŧé), /ŧáßk çáñçéĺ ID [áñýwáý] -- /ŧáßk ßhów|áúðíŧ|çóñŧéxŧ ID [--véŕbóßé], /ŧáßk pĺáñ -- /ŧáßk éðíŧ ID NAME=VALÚE (kíñð ŧóó), ñóŧé ID ŦEXŦ (áððß ŧó íŧß ñóŧéß), gŕáñŧ ID ÇAPABILIŦY [ŕóóŧß=...], wíŧhhóĺð ID ÇAPABILIŦY, ĺíñk ID REQ..., ðépéñð ID ON [ŕémóvé], ßpĺíŧ ID Fíŕßŧ; Séçóñð, ŕéhómé OLD NEW, móvé ID SŦAŦE [REASON], ðéŕívé -- /ŧáßk ðíff ID, /ŧáßk íñŧégŕáŧé ID [ŕéßóĺvéð|áñýwáý|ŕéßóĺvéð áñýwáý|ðíßçáŕð] -- /ŧáßk képŧ [ðíff|ŕéßŧóŕé NAME óŕ á ŧáßk'ß ID, ðŕóp NAME, á ŧáßk'ß ID óŕ áĺĺ]⟧
 qps.cli.interactive.usage.work = ⟦/wóŕk ŦASK-ID, óŕ wóŕðß óf á ŧáßk'ß ŧíŧĺé, óŕ ñóŧhíñg ŧó çhóóßé ámóñg ŧhé ŕéáðý óñéß, óŕ áĺĺ fóŕ évéŕý óñé ŧhé pĺáñ çáñ ßŧáŕŧ, óñé áfŧéŕ áñóŧhéŕ -- [móðéĺ=PAŦH [ßŧépß=N]]: á móðéĺ fíĺé ŕúñß íŧ ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý, ßŧépß= áŧ móßŧ ŧhé ŧáßk'ß ßŧép ĺímíŧ -- [pŕófíĺé=NAME]: ŧhé máp.móðéĺ pŕófíĺé íŧß çóñŧéxŧ íß pĺáññéð wíŧh -- íŧ ßhówß íŧß çóñŧéxŧ, ŧhé ágéñŧ'ß çáĺĺß, ŧhé fíĺéß çháñgéð, véŕífíçáŧíóñ, áñð whéŕé ŧhé ŧáßk éñðéð⟧
@@ -3130,6 +3155,7 @@ qps.cli.interactive.usage.state = ⟦/ßŧáŧé çóúñŧß wháŧ ßŧáñð�
 qps.cli.interactive.usage.check = ⟦/çhéçk ŕúñß ŧhé ðéfáúĺŧ pŕófíĺé -- /çhéçk PROFILE ŕúñß ŧháŧ óñé, /çhéçk fúĺĺ évéŕý pŕófíĺé véŕífíçáŧíóñ.fúĺĺ ĺíßŧß -- /çhéçk REQ-ID ... ŕúñß ŧhé çhéçkß óf éáçh ŕéqúíŕéméñŧ'ß ŧáßkß áñð íŧß ówñ, áß /ŕéq véŕífý ðóéß -- /çhéçk çóñßíßŧéñçý ĺíßŧß wháŧ íñ ŧhé ßŧáŧé ðóéß ñóŧ hóĺð ŧógéŧhéŕ⟧
 qps.cli.interactive.usage.bootstrap = ⟦/bóóŧßŧŕáp ŕéáðß ŧhé ðóçúméñŧß bóóŧßŧŕáp.ßóúŕçéß ñáméß -- /bóóŧßŧŕáp FILE, DIR óŕ GLOB ŕéáðß ŧhóßé; á ĺíñé wíŧh SHALL, MÚSŦ óŕ SHOÚLD (áñð ßháĺĺ, múßŧ, ßhóúĺð íñ á ĺíßŧ óŕ á ŕéqúíŕéméñŧß ðóçúméñŧ) íß á çáñðíðáŧé ŕéqúíŕéméñŧ, á héáðíñg ## REQ-001 Ŧíŧĺé áñ ímpóŕŧéð óñé, á ðéçíßíóñ ŕéçóŕð óŕ á ĺíßŧ úñðéŕ á héáðíñg óf ðéçíßíóñß çáñðíðáŧé ðéçíßíóñß, áñð á ŧíŧĺéð ðóçúméñŧ ŧháŧ hóĺðß ñóñé óf ŧhéßé á çáñðíðáŧé ßpéçífíçáŧíóñ (á çháñgéĺóg íß ĺéfŧ óúŧ úñĺéßß ñáméð); ŕéáð ágáíñ, íŧ ŕévíßéß wháŧ çháñgéð, fóĺĺówß wháŧ móvéð áñð ŕéŧíŕéß wháŧ íŧ ñó ĺóñgéŕ ßáýß⟧
 qps.cli.interactive.usage.instruct = ⟦/íñßŧŕúçŧ ĺíßŧß ŧhé ßŧáñðíñg íñßŧŕúçŧíóñß -- /íñßŧŕúçŧ SÚBJEÇŦ = VALÚE gívéß óñé, áß /íñßŧŕúçŧ ðóçúméñŧáŧíóñ = évéŕý púbĺíç ópéŕáŧíóñ géŧß á çómméñŧ, áñð /íñßŧŕúçŧ SÚBJEÇŦ = VALÚE óvéŕŕíðíñg DEÇ-001 óñé ŧháŧ ßŧáñðß ábóvé ŧháŧ ðéçíßíóñ -- /íñßŧŕúçŧ wíŧhðŕáw INSŦR-001 ŧákéß óñé báçk⟧
+qps.cli.interactive.usage.obs = ⟦/óbß ĺíßŧß ŧhé áçŧívé óbßéŕváŧíóñß, /óbß áĺĺ évéŕý óñé -- /óbß ID (óŕ ßhów ID) ßhówß óñé: wháŧ íŧ ßáýß, whéŧhéŕ íŧ áppĺíéß ñów, whéŕé íŧ çámé fŕóm áñð wháŧ ßŧáñðß béhíñð íŧ -- /óbß ŕéçóŕð KIND ŦEXŦ kéépß á péŕßóñ'ß (KIND íß fíñðíñg, éxpéŕíméñŧ, fáíĺúŕé_páŧŧéŕñ, éñvíŕóñméñŧ_çóñßŧŕáíñŧ, ŧóóĺ_béhávíóŕ óŕ ímpĺéméñŧáŧíóñ_ñóŧé) -- /óbß ðíßmíßß ID [WHY], /óbß ßúpéŕßéðé ID BY -- /óbß pŕómóŧé ID ŧáßk [NAME=VALÚE ...] mákéß á çáñðíðáŧé ŧáßk óf íŧ, fáçŧ KEY=VALÚE á fáçŧ ñó ßúŕéŕ ŧháñ íŧ, ðéçíßíóñ [KEY] [ŧíŧĺé=... ŧéxŧ=... ßçópé=...] á çáñðíðáŧé ðéçíßíóñ; éáçh ñáméß ŧhé óbßéŕváŧíóñ íŧ çámé fŕóm, áñð ŧhé óbßéŕváŧíóñ íß képŧ. Añ óbßéŕváŧíóñ íß ñévéŕ áúŧhóŕíŧáŧívé: íŧ íß ŧóĺð ŧó ĺáŧéŕ wóŕk áß wháŧ wáß ßééñ⟧
 qps.cli.interactive.setting.temperature = ⟦ŧémpéŕáŧúŕé⟧
 qps.cli.interactive.setting.top_k = ⟦ŧóp-k⟧
 qps.cli.interactive.settings.choosing = ⟦Hów á ŧókéñ íß çhóßéñ⟧
@@ -3182,6 +3208,15 @@ qps.cli.history.event = ⟦{index}  {other}  {value}  {name}  {detail}⟧
 qps.cli.history.unknown_kind = ⟦óf á kíñd thíß búíld dóéß ñót kñóŵ: léft úñçóñßúméd fór á búíld thát dóéß⟧
 qps.cli.history.none = ⟦ñó évéñŧ ñáméś {name}⟧
 qps.cli.history.earlier = ⟦{count} éáŕĺíéŕ óf {total} ñóŧ śĥóŵñ⟧
+qps.cli.obs.none = ⟦ñó óbßéŕváŧíóñß áŕé képŧ: áñ ágéñŧ áŧ wóŕk kéépß wháŧ íŧ fíñðß wíŧh ŕéçóŕð_óbßéŕváŧíóñ, áñð /óbß ŕéçóŕð KIND ŦEXŦ kéépß ýóúŕß⟧
+qps.cli.obs.hidden = ⟦{count} ðíßmíßßéð, ßúpéŕßéðéð óŕ pŕómóŧéð ñóŧ ßhówñ: /óbß áĺĺ ĺíßŧß ŧhém⟧
+qps.cli.obs.heading = ⟦{name}⟧
+qps.cli.obs.not_authoritative = ⟦{name} íß áñ óbßéŕváŧíóñ: ŧóĺð ŧó ĺáŧéŕ wóŕk áß wháŧ wáß ßééñ, íŧ çháñgéß ñóŧhíñg ŧhé pŕójéçŧ méáñß -- /óbß pŕómóŧé {name} ŧáßk, fáçŧ óŕ ðéçíßíóñ mákéß íŧ páŕŧ óf ŧháŧ⟧
+qps.cli.obs.recorded = ⟦{name} képŧ: áñ óbßéŕváŧíóñ, ŧóĺð ŧó ĺáŧéŕ wóŕk áñð çháñgíñg ñóŧhíñg íŧ íß ábóúŧ⟧
+qps.cli.obs.seen_again = ⟦{name} ßáýß ŧháŧ áĺŕéáðý: çóúñŧéð áß ßééñ ágáíñ⟧
+qps.cli.obs.dismissed = ⟦{name} ðíßmíßßéð: képŧ fóŕ ŧhé ŕéçóŕð, áñð ŧóĺð ŧó ñó wóŕk ágáíñ⟧
+qps.cli.obs.superseded = ⟦{name} ßúpéŕßéðéð bý {value}: ĺáŧéŕ wóŕk íß ŧóĺð {value} íñßŧéáð⟧
+qps.cli.obs.promoted = ⟦{name} pŕómóŧéð íñŧó {value}, {detail}; {name} íß képŧ, máŕkéð pŕómóŧéð⟧
 qps.cli.brief.head = ⟦{name}: {count} ŧóķéñś óf {total}⟧
 qps.cli.brief.in = ⟦  íñ   {name} ({detail})⟧
 qps.cli.brief.out = ⟦  óúŧ  {name}: {detail}⟧
@@ -3343,6 +3378,7 @@ qps.cli.result.section.run = ⟦Wháŧ ŧhé ŕúñ wáß⟧
 qps.cli.result.section.ended = ⟦Hów íŧ éñðéð⟧
 qps.cli.result.section.calls = ⟦Iŧß çáĺĺß, íñ óŕðéŕ⟧
 qps.cli.result.section.checked = ⟦Wháŧ wáß çhéçkéð⟧
+qps.cli.result.section.selection = ⟦Hów íŧß ŧéßŧß wéŕé çhóßéñ⟧
 qps.cli.intent.unlinked = ⟦{name} íß ŧákéñ óff⟧
 qps.cli.intent.unchanged = ⟦{name} áĺŕéáðý ßáýß ŧháŧ; ñóŧhíñg wáß ŕévíßéð⟧
 qps.cli.intent.text_changed = ⟦{name} ßáíð: {value} -- ñów: {detail}⟧

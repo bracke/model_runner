@@ -32,7 +32,8 @@ package Model_Runner.Framework.Results is
       Integration_Report,
       Child_Result,
       Context_Report,
-      Bootstrap_Report);
+      Bootstrap_Report,
+      Derived_Artifact);
 
    --  One result.
    type Result is record

@@ -39,7 +39,8 @@ package Model_Runner.Tools.Registry is
       Ask_User,       --  somebody to put a question to
       Delegation,     --  a helper to hand part of the work to
       Project_Graph,  --  a project's repository graph to ask of its code
-      Project_Checks  --  a project's checks to run
+      Project_Checks, --  a project's checks to run
+      Project_Knowledge  --  a project's observations to add what was learned to
      );
 
    type Capabilities is array (Capability) of Boolean;

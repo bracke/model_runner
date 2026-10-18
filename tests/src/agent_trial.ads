@@ -29,13 +29,18 @@ package Agent_Trial is
    --    project and how many runs of each task ended complete is said.
    --  @param Apart Whether the work is written in a workspace of its own
    --    and taken in once its checks pass there (--isolation workspace).
+   --  @param Knowledge Whether what the agents find is kept and told to
+   --    later work (--knowledge off turns it off): the same tasks run both
+   --    ways set the work figures -- calls before the first change, whole
+   --    reads, observations kept -- side by side.
    procedure Run
-     (Model   : String;
-      Program : String;
-      Options : String;
-      Only    : String;
-      Clean   : out Boolean;
-      Repeats : Positive := 1;
-      Apart   : Boolean := False);
+     (Model     : String;
+      Program   : String;
+      Options   : String;
+      Only      : String;
+      Clean     : out Boolean;
+      Repeats   : Positive := 1;
+      Apart     : Boolean := False;
+      Knowledge : Boolean := True);
 
 end Agent_Trial;

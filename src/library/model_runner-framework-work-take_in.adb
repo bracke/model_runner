@@ -127,7 +127,8 @@ begin
             Verification.Run_Profile
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
                Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
-               Workspace => To_String (Space.Path));
+               Workspace => To_String (Space.Path),
+               Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
             if E.Is_Ok (Held) then
                Stores.Commit (Item, Change, Status);
                if E.Is_Error (Status) then
@@ -405,7 +406,8 @@ begin
       else
          Verification.Run_Profile
            (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
-            Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For));
+            Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+            Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
          if E.Is_Error (Held) then
             Leave ("blocked", (if Interrupted (Held) then "its verification was cancelled"
                                  else "its verification could not run: " & Why_Of (Held)));

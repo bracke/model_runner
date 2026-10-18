@@ -113,7 +113,8 @@ package body Model_Runner.CLI.Project_Commands is
       Reconfiguring_Route,
       Why_Route,
       History_Route,
-      Brief_Route);
+      Brief_Route,
+      Knowledge_Route);
 
    --  Every project command, once: its word and the catalog key of its
    --  help line, in the order help lists them, and the handler it goes to. Whether a word is a project
@@ -167,7 +168,8 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/trace"),       new String'("cli.interactive.help.trace"), Repository_Route, True, In_Project),
       (new String'("/why"),         new String'("cli.interactive.help.why"), Why_Route, True, In_Project),
       (new String'("/history"),     new String'("cli.interactive.help.history"), History_Route, True, In_Project),
-      (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True, In_Project)];
+      (new String'("/brief"),       new String'("cli.interactive.help.brief"), Brief_Route, True, In_Project),
+      (new String'("/obs"),         new String'("cli.interactive.help.obs"), Knowledge_Route, True, In_Project)];
 
    --  The tools that take a path in the tree, those of them that write,
    --  and those that ask the project's repository graph.
@@ -539,6 +541,7 @@ package body Model_Runner.CLI.Project_Commands is
          Rg.Project_Graph  => Host /= null,
          Rg.Project_Checks => Host /= null and then Host.May_Check (Host.Task_Profile),
          Rg.Delegation     => Host /= null and then Host.May (Pm.Create_Children),
+         Rg.Project_Knowledge => Host /= null,
          others            => False];
    end Work_Capabilities;
 
@@ -565,6 +568,9 @@ package body Model_Runner.CLI.Project_Commands is
       Searches      : Natural := 0;
       Graph_Asks    : Natural := 0;
       Check_Runs    : Natural := 0;
+
+      --  What it found and kept for later work (record_observation).
+      Observed      : Natural := 0;
 
       --  Replies whose thought reached its budget and was closed for them.
       Thoughts_Closed : Natural := 0;
@@ -1143,6 +1149,7 @@ package body Model_Runner.CLI.Project_Commands is
       & ", searches:" & Natural'Image (Self.Searches)
       & ", graph questions:" & Natural'Image (Self.Graph_Asks)
       & ", checks run:" & Natural'Image (Self.Check_Runs)
+      & (if Self.Observed = 0 then "" else ", observations kept:" & Natural'Image (Self.Observed))
       & (if Self.Thoughts_Closed = 0 then ""
          else ", thoughts closed at their budget:" & Natural'Image (Self.Thoughts_Closed)));
 
@@ -1401,6 +1408,24 @@ package body Model_Runner.CLI.Project_Commands is
                   Outcome.Answer := Tr.Failed;
                end if;
                Put (Said);
+            end;
+         end if;
+      elsif Named = "record_observation" then
+         if Self.Host = null then
+            Outcome.Answer := Tr.Failed;
+            Put ("error: there is no project to keep it in here");
+         else
+            declare
+               Report : Unbounded_String;
+               Kept   : E.Error_Info;
+            begin
+               Self.Host.Record_Observation (Arguments, Report, Kept);
+               if E.Is_Error (Kept) then
+                  Outcome.Answer := Tr.Failed;
+               else
+                  Self.Observed := Self.Observed + 1;
+               end if;
+               Put (To_String (Report));
             end;
          end if;
       elsif Named = "run_checks" then
@@ -2915,8 +2940,10 @@ package body Model_Runner.CLI.Project_Commands is
          return Result;
       end if;
       Result.Word := To_Unbounded_String (All_Words.First_Element);
-      Is_Note := All_Words.First_Element = "/task" and then Natural (All_Words.Length) >= 4
-        and then All_Words (2) = "note";
+      Is_Note := Natural (All_Words.Length) >= 4
+        and then ((All_Words.First_Element = "/task" and then All_Words (2) = "note")
+                  --  What a person says was found, and why one is dismissed.
+                  or else (All_Words.First_Element = "/obs" and then All_Words (2) in "record" | "dismiss"));
       --  A note is free text: kept as it was typed -- its quotes, its
       --  NAME=VALUE words -- not taken apart into settings.
       if Is_Note then

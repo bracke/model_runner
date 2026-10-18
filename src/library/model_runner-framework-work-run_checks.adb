@@ -88,6 +88,8 @@ begin
          Evidence, Passed, Status,
          Given      => (if Narrow then Chosen.Given else Name_Lists.Empty_Vector),
          Stands_For => (if Narrow then Profile else ""),
+         Selection  => (if Narrow then To_String (Chosen.Selection) else ""),
+         Derived    => (if Narrow then Chosen.Derived else Derivations.Nothing_Staged),
          Offline => not May (Host, Permissions.Use_Network, ""),
          Workspace => (if Host.Apart then To_String (Host.Tree) else ""),
          Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0),

@@ -2629,13 +2629,15 @@ package body Tests.Tools_Cases is
       end;
 
       --  Every tool the registry describes is carried out by one row --
-      --  here, or for a project's checks and graph questions by its work.
+      --  here, or for a project's checks, graph questions and observations
+      --  by its work.
       declare
          package Rg renames Model_Runner.Tools.Registry;
       begin
          for Index in 1 .. Rg.Count loop
             Assert (Builtin.Handles (Rg.Name_At (Index))
-                    or else Rg.Needs (Rg.Name_At (Index)) in Rg.Project_Graph | Rg.Project_Checks,
+                    or else Rg.Needs (Rg.Name_At (Index))
+                              in Rg.Project_Graph | Rg.Project_Checks | Rg.Project_Knowledge,
                     "a tool the registry describes is carried out nowhere: " & Rg.Name_At (Index));
          end loop;
       end;

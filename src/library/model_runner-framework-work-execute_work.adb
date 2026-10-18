@@ -1767,7 +1767,8 @@ begin
             Verification.Run_Profile
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
                Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
-               Definition => Frozen_Definition (To_String (Chosen.Profile)));
+               Definition => Frozen_Definition (To_String (Chosen.Profile)),
+               Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
             if E.Is_Ok (Held) then
                Stores.Commit (Item, Change, Status);
             else
@@ -1987,7 +1988,8 @@ begin
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
                Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
                Workspace => To_String (Space.Path),
-               Definition => Frozen_Definition (To_String (Chosen.Profile)));
+               Definition => Frozen_Definition (To_String (Chosen.Profile)),
+               Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
             if E.Is_Ok (Held) then
                --  Its evidence, as the task's audit reads it.
                Annotate (Item, Change, Task_Id, "current_verification",
@@ -2127,7 +2129,8 @@ begin
       Verification.Run_Profile
         (Item, Change, Profile, Task_Id, Result.Evidence_Id, Passed, Status,
          Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
-         Definition => Frozen_Definition (Profile));
+         Definition => Frozen_Definition (Profile),
+         Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
       if E.Is_Error (Status) then
          Held := Status;
          Status := E.Success;
@@ -2146,6 +2149,27 @@ begin
       end if;
 
       if not Passed then
+         --  Failing again as it failed before is a pattern the next attempt
+         --  is told; kept apart, so what cannot be kept of it costs nothing
+         --  of the conclusion.
+         declare
+            Pattern : Unbounded_String;
+            Kept    : E.Error_Info;
+         begin
+            Observations.Observe_Failure
+              (Item, Change, Task_Id, To_String (Result.Evidence_Id),
+               (Producer   => Observations.Harness_Producer,
+                Task_Id    => To_Unbounded_String (Task_Id),
+                Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),
+                others     => <>),
+               Pattern, Kept);
+            if E.Is_Ok (Kept) and then Stores.Change_Count (Change) > 0 then
+               Stores.Commit (Item, Change, Kept);
+            end if;
+            if E.Is_Error (Kept) then
+               Change := Stores.No_Changes;
+            end if;
+         end;
          Conclude ("failed", To_String (Result.Evidence_Id) & " did not pass"
                    & First_Diagnostics (Item, To_String (Result.Evidence_Id)),
                    "completed");

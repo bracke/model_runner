@@ -162,15 +162,19 @@ package body Agent_Trial is
            & " map.permission.project.request_integration=on"
       else "");
 
-   function Check_Line (Tested : Boolean; Apart : Boolean := False) return String is
+   --  What the agents find kept and told to later work, or not.
+   function Knowledge_Words (Knowledge : Boolean) return String is
+     (if Knowledge then "" else " scalar.knowledge.observations=off");
+
+   function Check_Line (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True) return String is
      (if Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main;"
            & " test: gnatmake -q -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"""
-           & Time_Bound & Apart_Words (Apart) & " confirm=yes"
+           & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes"
       else "/reconfigure add set.execution.allowed gnatmake "
            & "profile.checks=""build: gnatmake -q -D obj -aIsrc src/main.adb -o obj/main"""
-           & Time_Bound & Apart_Words (Apart) & " confirm=yes");
+           & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes");
 
    --  Text without the terminal's escape sequences and carriage returns.
    function Plain (Text : String) return String is
@@ -227,13 +231,14 @@ package body Agent_Trial is
    end Chosen;
 
    procedure Run
-     (Model   : String;
-      Program : String;
-      Options : String;
-      Only    : String;
-      Clean   : out Boolean;
-      Repeats : Positive := 1;
-      Apart   : Boolean := False)
+     (Model     : String;
+      Program   : String;
+      Options   : String;
+      Only      : String;
+      Clean     : out Boolean;
+      Repeats   : Positive := 1;
+      Apart     : Boolean := False;
+      Knowledge : Boolean := True)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -337,7 +342,8 @@ package body Agent_Trial is
          end if;
          Ada.Text_IO.Put_Line
            (File, Now & HT & Build & HT & Ada.Directories.Simple_Name (Model) & HT & Task_Name & HT
-            & (if Apart then "workspace" else "project") & HT & Ending & HT
+            & (if Apart then "workspace" else "project") & (if Knowledge then "" else ", knowledge off")
+            & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed);
          Ada.Text_IO.Close (File);
@@ -577,7 +583,7 @@ package body Agent_Trial is
                               Send ("");
                               if Wait_For ("initialized", 30.0)
                                 and then (Hostkit.Process.Locate ("gnatmake") = ""
-                                          or else (Send_Then (Check_Line (One.Tested, Apart))
+                                          or else (Send_Then (Check_Line (One.Tested, Apart, Knowledge))
                                                    and then Wait_For ("is now revision", 30.0)))
                               then
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)

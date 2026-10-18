@@ -266,11 +266,19 @@ package body Checks is
       --  A subunit is compiled into its parent and has no .ali of its own,
       --  so asking for one would report four perfectly ordinary files in a
       --  pinned crate as never compiled. It is recognized the way the
-      --  language defines it: the first thing that is not a comment or blank
-      --  is the word separate.
+      --  language defines it: past its context clause -- with and use
+      --  clauses, which a subunit may have of its own -- the first thing that
+      --  is not a comment or blank is the word separate.
       function Is_Subunit (Path : String) return Boolean is
          Handle : Ada.Text_IO.File_Type;
          Answer : Boolean := False;
+
+         --  Whether a clause of the context is still open: a with clause
+         --  that runs on over its next lines to its semicolon.
+         In_Clause : Boolean := False;
+
+         function Starts (Line, Word : String) return Boolean
+         is (Line'Length >= Word'Length and then Line (Line'First .. Line'First + Word'Length - 1) = Word);
       begin
          Ada.Text_IO.Open (Handle, Ada.Text_IO.In_File, Path);
          while not Ada.Text_IO.End_Of_File (Handle) loop
@@ -284,6 +292,12 @@ package body Checks is
                           and then Line (Line'First .. Line'First + 1) = "--")
                then
                   null;
+               elsif In_Clause
+                 or else Starts (Line, "with ") or else Starts (Line, "use ")
+                 or else Starts (Line, "private with ") or else Starts (Line, "limited with ")
+                 or else Starts (Line, "limited private with ")
+               then
+                  In_Clause := Ada.Strings.Fixed.Index (Line, ";") = 0;
                else
                   Answer :=
                     Line'Length >= 9

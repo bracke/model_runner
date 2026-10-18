@@ -83,7 +83,7 @@ package body Model_Runner.Tools.Builtin is
      (Rg.Offered ([Rg.Facts => True, others => False]));
 
    function All_Definitions_Text return String is
-     (Rg.Offered ([Rg.Project_Graph | Rg.Project_Checks => False, others => True]));
+     (Rg.Offered ([Rg.Project_Graph | Rg.Project_Checks | Rg.Project_Knowledge => False, others => True]));
 
    ------------------
    -- Offered_Text --

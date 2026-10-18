@@ -674,6 +674,8 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Usage (Screen, "cli.interactive.usage.bootstrap");
                   elsif Named = "instruct" then
                      Pres.Put_Usage (Screen, "cli.interactive.usage.instruct");
+                  elsif Named = "obs" then
+                     Pres.Put_Usage (Screen, "cli.interactive.usage.obs");
                   end if;
                else
                   --  The command most likely meant, as Tab would take it.

@@ -238,6 +238,25 @@ project's state -- the spec's list, including a task whose component the
 project does not have and one held ready while what it depends on is open --
 and opening a project says how much there is.
 
+The graph, what a change reaches and the tests chosen for it are worked out
+once and kept (`.model_runner/derivations`), each named by everything it was
+made from -- the files at their fingerprints, the project's records, the
+policy, and its algorithm's own version -- so the same change chooses its
+tests without working them out again, and anything changed is worked out
+anew. The evidence names the selection, and `/result VER-...` follows it back
+through what the change reached to the files that changed.
+
+What an agent finds while it works -- a tool's quirk, an approach that
+failed -- it keeps with `record_observation`; the harness keeps it at once,
+with the task, generation, agent and invocation it came from, and keeps one
+of its own when a task's checks fail again as they failed before. Later work
+on the same task, its files, its requirements or its component is told it,
+after what governs the work and labelled stale where its files have changed
+since, and never as authoritative: `/obs` lists and shows what was learned,
+and `/obs promote ID task|fact|decision` is the only way one becomes part of
+what the project means. `scalar knowledge.observations = off` turns it off,
+and `knowledge.max_hot` and `knowledge.max_warm` bound it (five each).
+
 A task is revised with `/task edit TASK NAME=VALUE ...` -- a new revision of
 its definition, its kind among them (`kind=test`), and `/task link TASK
 REQ-001 ...` adds requirements it serves; its parent and dependencies have

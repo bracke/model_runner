@@ -46,7 +46,9 @@ package Model_Runner.Framework is
       Verification_Area,
       Invocations_Area,
       Workspaces_Area,
-      Indexes_Area);
+      Indexes_Area,
+      Derivations_Area,
+      Observations_Area);
 
    --  Names, in the order an operation gives them: the files in an area,
    --  the fields of a record, the keys of the facts.
@@ -125,12 +127,16 @@ package Model_Runner.Framework is
    --
    --  Authored state is what people and the harness decided; runtime state
    --  is what is going on now; historical state is what happened and is
-   --  never rewritten; derived state can be thrown away and computed again
-   --  from the rest without changing what the project means.
+   --  never rewritten; observational state is what was learned while
+   --  working, kept and never authoritative; derived state can be thrown
+   --  away and computed again from the rest without changing what the
+   --  project means. Persistence does not imply authority: none of the
+   --  last two becomes the first except through what makes authored state.
    type State_Class is
      (Authored_State,
       Runtime_State,
       Historical_State,
+      Observational_State,
       Derived_State);
 
    --  Where an area belongs: with the repository, on this machine only, or

@@ -3587,7 +3587,9 @@ begin
                  and then Natural'Value (Option ("--repeats", "1")) >= 1
                then Natural'Value (Option ("--repeats", "1")) else 1),
             --  --isolation workspace: the work written apart and taken in.
-            Apart   => Option ("--isolation", "") = "workspace");
+            Apart   => Option ("--isolation", "") = "workspace",
+            --  --knowledge off: nothing the agents find is kept or told.
+            Knowledge => Option ("--knowledge", "on") /= "off");
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
       end;
 

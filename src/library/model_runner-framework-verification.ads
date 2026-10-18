@@ -3,6 +3,7 @@ private with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Derivations;
 with Model_Runner.Framework.Stores;
 
 --  Deciding, without a model, whether work is done.
@@ -173,6 +174,9 @@ package Model_Runner.Framework.Verification is
    --  @param Definition The profile's checks as a run resolved them when it
    --    started, which a /reconfigure since does not change; empty for the
    --    configuration's own now.
+   --  @param Selection The derivation the tests it is given were chosen by,
+   --    named on the evidence; "" for none.
+   --  @param Derived What choosing them worked out, kept with the evidence.
    procedure Run_Profile
      (Item     : Stores.Store;
       Change   : in out Stores.Transaction;
@@ -186,7 +190,9 @@ package Model_Runner.Framework.Verification is
       Offline  : Boolean := False;
       Workspace : String := "";
       Within   : Natural := 0;
-      Definition : String := "");
+      Definition : String := "";
+      Selection : String := "";
+      Derived  : Derivations.Staged := Derivations.Nothing_Staged);
 
    --  How widely a task's work is verified, and with what.
    type Choice is record
@@ -201,6 +207,12 @@ package Model_Runner.Framework.Verification is
 
       --  What the checks may use: tests, scope, component, as NAME=VALUE.
       Given      : Name_Lists.Vector;
+
+      --  The derivation the tests were chosen by, DRV- and its key, which
+      --  the evidence names; "" where nothing could be traced. And what
+      --  was worked out to choose them, for the run to keep.
+      Selection  : Ada.Strings.Unbounded.Unbounded_String;
+      Derived    : Derivations.Staged;
    end record;
 
    --  Choose how to verify a task's work from what it changed: what the

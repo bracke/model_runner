@@ -87,13 +87,25 @@ package body Model_Runner.Framework.Traceability is
       type Presence is (Present, Missing, Unknown);
 
       function Source_Here (Source : String) return Presence is
+         Found : Presence;
       begin
-         return (if Ada.Directories.Exists
-                      (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Source)
-                 then Present else Missing);
-      exception
-         when others =>
-            return Unknown;
+         begin
+            Found := (if Ada.Directories.Exists
+                           (Ada.Directories.Containing_Directory (Stores.Root (Item)) & "/" & Source)
+                      then Present else Missing);
+         exception
+            when others =>
+               Found := Unknown;
+         end;
+         --  What it looked for, for its derivation to confirm.
+         declare
+            Line : constant String := Lower (Presence'Image (Found)) & ASCII.HT & Source;
+         begin
+            if not Result.Looked_At.Contains (Line) then
+               Result.Looked_At.Append (Line);
+            end if;
+         end;
+         return Found;
       end Source_Here;
 
       function Source_Kind (Source : String) return String
@@ -804,5 +816,547 @@ package body Model_Runner.Framework.Traceability is
       end if;
       return Result;
    end Select_Tests;
+
+   ---------------------------------------------------------------------------
+   --  Derived, kept and used again.
+   ---------------------------------------------------------------------------
+
+   package Dv renames Derivations;
+   use type Dv.Currentness;
+
+   Tab : constant Character := ASCII.HT;
+
+   function Word_Of (Sure : Repository.Confidence) return String
+   is (Lower (Repository.Confidence'Image (Sure)));
+
+   function Word_Of (Source : Repository.Derivation) return String
+   is (Lower (Repository.Derivation'Image (Source)));
+
+   function Word_Of (Width : Scope) return String
+   is (Lower (Scope'Image (Width)));
+
+   --  The changed things as a set: sorted, each once -- so the same change
+   --  given in another order is the same derivation, and the same answer.
+   function As_Set (Changed : Name_Lists.Vector) return Name_Lists.Vector is
+      package Sorting is new Name_Lists.Generic_Sorting;
+      Sorted : Name_Lists.Vector := Changed;
+      Result : Name_Lists.Vector;
+   begin
+      Sorting.Sort (Sorted);
+      for One of Sorted loop
+         if Result.Is_Empty or else Result.Last_Element /= One then
+            Result.Append (One);
+         end if;
+      end loop;
+      return Result;
+   end As_Set;
+
+   -------------------------
+   -- Graph_Specification --
+   -------------------------
+
+   function Graph_Specification
+     (Item  : Stores.Store;
+      Files : Repository.Graph) return Derivations.Specification
+   is
+      Spec : Dv.Specification := Dv.Specify ("traceability", "traceability", Graph_Version);
+
+      --  A record's bytes as they are kept.
+      procedure Print_Of (Where : Area; Name : String; Print : out Unbounded_String; Read : out Boolean) is
+         Text   : Unbounded_String;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.Framework.Files.Read_Text
+           (Stores.Root (Item) & "/" & Directory_Name (Where) & "/" & Name & ".rec", Text, Status);
+         Read := E.Is_Ok (Status);
+         Print := (if Read then To_Unbounded_String (Fingerprint (To_String (Text)))
+                   else Null_Unbounded_String);
+      end Print_Of;
+
+      type Area_List is array (Positive range <>) of Area;
+   begin
+      Dv.Depend (Spec, Dv.Input, "repository_reader", "repository", Repository.Reader_Version);
+      if Repository.Unread_Count (Files) > 0 then
+         Dv.Depend (Spec, Dv.Input, "repository_graph", "project", "", Dv.Unreadable);
+      end if;
+      for Index in 1 .. Repository.File_Count (Files) loop
+         declare
+            File : constant Repository.File_Entry := Repository.File_At (Files, Index);
+         begin
+            Dv.Depend (Spec, Dv.Input, "file", To_String (File.Path), To_String (File.Fingerprint));
+         end;
+      end loop;
+
+      --  What the state says of the project, each record as kept; of a
+      --  task's runtime state only what its work changed, the one thing
+      --  the graph reads there.
+      for Where of Area_List'[Requirements_Area, Specs_Area, Decisions_Area, Tasks_Area] loop
+         for Name of Stores.Names (Item, Where) loop
+            if Where = Tasks_Area and then Name'Length > 6
+              and then Name (Name'Last - 5 .. Name'Last) = ".state"
+            then
+               declare
+                  State  : Records.Item;
+                  Status : E.Error_Info;
+                  Task_Id : constant String := Name (Name'First .. Name'Last - 6);
+               begin
+                  Stores.Read (Item, Tasks_Area, Name, State, Status);
+                  if E.Is_Ok (Status) then
+                     Dv.Depend (Spec, Dv.Input, "task_changes", Task_Id,
+                                Fingerprint (Records.Get (State, "changed_files")));
+                  else
+                     Dv.Depend (Spec, Dv.Input, "task_changes", Task_Id, "", Dv.Unreadable);
+                  end if;
+               end;
+            else
+               declare
+                  Print : Unbounded_String;
+                  Read  : Boolean;
+               begin
+                  Print_Of (Where, Name, Print, Read);
+                  Dv.Depend (Spec, Dv.Input, "record", Directory_Name (Where) & "/" & Name,
+                             To_String (Print), (if Read then Dv.Present else Dv.Unreadable));
+               end;
+            end if;
+         end loop;
+      end loop;
+
+      --  The evidence, whole: there is a lot of it and it does not change.
+      declare
+         Text : Unbounded_String;
+         Read : Boolean := True;
+      begin
+         for Name of Stores.Names (Item, Verification_Area) loop
+            declare
+               Print : Unbounded_String;
+               Got   : Boolean;
+            begin
+               Print_Of (Verification_Area, Name, Print, Got);
+               Read := Read and then Got;
+               Append (Text, Name & Tab & Print & ASCII.LF);
+            end;
+         end loop;
+         Dv.Depend (Spec, Dv.Input, "evidence", "verification", Fingerprint (To_String (Text)),
+                    (if Read then Dv.Present else Dv.Unreadable));
+      end;
+
+      --  The configuration says the roots and the components.
+      begin
+         Dv.Depend (Spec, Dv.Policy, "configuration", "project",
+                    Records.Fingerprint_Of (Configurations.Required (Item)));
+      exception
+         when Configurations.Configuration_Unavailable =>
+            Dv.Depend (Spec, Dv.Policy, "configuration", "project", "", Dv.Unreadable);
+      end;
+      return Spec;
+   end Graph_Specification;
+
+   --  A graph as an answer is kept: an edge, a component, an unread record
+   --  or a document looked for, a line each.
+   function Encode (From : Graph) return String is
+      Text : Unbounded_String;
+   begin
+      for One of From.Edges loop
+         Append (Text, "E" & Tab & Dv.Coded (To_String (One.From)) & Tab & Dv.Coded (To_String (One.To))
+                 & Tab & Dv.Coded (To_String (One.Kind)) & Tab & Word_Of (One.Source)
+                 & Tab & Word_Of (One.Sure) & Tab & Dv.Coded (To_String (One.Record_Of))
+                 & Tab & Dv.Coded (To_String (One.Created_At)) & ASCII.LF);
+      end loop;
+      for Name of From.Components loop
+         Append (Text, "C" & Tab & Dv.Coded (Name) & ASCII.LF);
+      end loop;
+      for Name of From.Unread loop
+         Append (Text, "U" & Tab & Dv.Coded (Name) & ASCII.LF);
+      end loop;
+      for Line of From.Looked_At loop
+         Append (Text, "L" & Tab & Dv.Coded (Line) & ASCII.LF);
+      end loop;
+      return To_String (Text);
+   end Encode;
+
+   procedure Decode
+     (Item  : Stores.Store;
+      Text  : String;
+      Into  : out Graph;
+      Valid : out Boolean) is
+   begin
+      Into := (Roots => Repository.Roots_Of (Item), others => <>);
+      Valid := True;
+      for Line of Lines_Of (Text) loop
+         declare
+            Parts : constant Name_Lists.Vector := Dv.Fields_Of (Line);
+         begin
+            if Parts (1) = "E" and then Natural (Parts.Length) = 8 then
+               Into.Edges.Append
+                 (Edge'(From       => To_Unbounded_String (Parts (2)),
+                        To         => To_Unbounded_String (Parts (3)),
+                        Kind       => To_Unbounded_String (Parts (4)),
+                        Source     => Repository.Derivation'Value (Parts (5)),
+                        Sure       => Repository.Confidence'Value (Parts (6)),
+                        Record_Of  => To_Unbounded_String (Parts (7)),
+                        Created_At => To_Unbounded_String (Parts (8))));
+            elsif Parts (1) = "C" and then Natural (Parts.Length) = 2 then
+               Into.Components.Append (Parts (2));
+            elsif Parts (1) = "U" and then Natural (Parts.Length) = 2 then
+               Into.Unread.Append (Parts (2));
+            elsif Parts (1) = "L" and then Natural (Parts.Length) = 2 then
+               Into.Looked_At.Append (Parts (2));
+            else
+               Valid := False;
+               return;
+            end if;
+         end;
+      end loop;
+   exception
+      when Constraint_Error =>
+         Valid := False;
+   end Decode;
+
+   function Encode (From : Impact) return String is
+      Text : Unbounded_String;
+   begin
+      for One of From.Items loop
+         Append (Text, "R" & Tab & Dv.Coded (To_String (One.Kind)) & Tab & Dv.Coded (To_String (One.Id))
+                 & Tab & Word_Of (One.Sure) & ASCII.LF);
+      end loop;
+      for Path of From.Unknown loop
+         Append (Text, "N" & Tab & Dv.Coded (Path) & ASCII.LF);
+      end loop;
+      return To_String (Text);
+   end Encode;
+
+   procedure Decode (Text : String; Into : out Impact; Valid : out Boolean) is
+   begin
+      Into := (others => <>);
+      Valid := True;
+      for Line of Lines_Of (Text) loop
+         declare
+            Parts : constant Name_Lists.Vector := Dv.Fields_Of (Line);
+         begin
+            if Parts (1) = "R" and then Natural (Parts.Length) = 4 then
+               Into.Items.Append
+                 (Reached'(Kind => To_Unbounded_String (Parts (2)),
+                           Id   => To_Unbounded_String (Parts (3)),
+                           Sure => Repository.Confidence'Value (Parts (4))));
+            elsif Parts (1) = "N" and then Natural (Parts.Length) = 2 then
+               Into.Unknown.Append (Parts (2));
+            else
+               Valid := False;
+               return;
+            end if;
+         end;
+      end loop;
+   exception
+      when Constraint_Error =>
+         Valid := False;
+   end Decode;
+
+   function Encode (From : Selection) return String is
+      Text : Unbounded_String :=
+        To_Unbounded_String ("W" & Tab & Word_Of (From.Width) & ASCII.LF
+                             & "R" & Tab & Dv.Coded (To_String (From.Reason)) & ASCII.LF);
+   begin
+      for Test of From.Tests loop
+         Append (Text, "T" & Tab & Dv.Coded (Test) & ASCII.LF);
+      end loop;
+      return To_String (Text);
+   end Encode;
+
+   procedure Decode (Text : String; Into : out Selection; Valid : out Boolean) is
+      Width_Seen : Boolean := False;
+   begin
+      Into := (others => <>);
+      Valid := True;
+      for Line of Lines_Of (Text) loop
+         declare
+            Parts : constant Name_Lists.Vector := Dv.Fields_Of (Line);
+         begin
+            if Parts (1) = "W" and then Natural (Parts.Length) = 2 then
+               Into.Width := Scope'Value (Parts (2));
+               Width_Seen := True;
+            elsif Parts (1) = "R" and then Natural (Parts.Length) = 2 then
+               Into.Reason := To_Unbounded_String (Parts (2));
+            elsif Parts (1) = "T" and then Natural (Parts.Length) = 2 then
+               Into.Tests.Append (Parts (2));
+            else
+               Valid := False;
+               return;
+            end if;
+         end;
+      end loop;
+      Valid := Width_Seen;
+   exception
+      when Constraint_Error =>
+         Valid := False;
+   end Decode;
+
+   function Impact_Specification
+     (Graph_Key : String;
+      Changed   : Name_Lists.Vector;
+      Subject   : String;
+      Version   : String) return Dv.Specification
+   is
+      Spec : Dv.Specification := Dv.Specify ("impact", "impact", Version, Subject);
+   begin
+      Dv.Depend (Spec, Dv.Input, Dv.Derived_Kind, "traceability", Graph_Key);
+      for Path of As_Set (Changed) loop
+         Dv.Depend (Spec, Dv.Input, "changed", Path, "");
+      end loop;
+      return Spec;
+   end Impact_Specification;
+
+   function Selection_Specification
+     (Item       : Stores.Store;
+      Impact_Key : String;
+      Subject    : String;
+      Version    : String) return Dv.Specification
+   is
+      Spec   : Dv.Specification := Dv.Specify ("test_selection", "test-selection", Version, Subject);
+      Config : constant Records.Item := Configurations.Required (Item);
+   begin
+      Dv.Depend (Spec, Dv.Input, Dv.Derived_Kind, "impact", Impact_Key);
+      --  What Select_Tests reads of the policy, and nothing more.
+      Dv.Depend (Spec, Dv.Policy, "configuration", "verification.escalation",
+                 Records.Get (Config, "scalar.verification.escalation"));
+      Dv.Depend (Spec, Dv.Policy, "configuration", "components",
+                 Records.Get (Config, "set.components"));
+      return Spec;
+   end Selection_Specification;
+
+   --  An answer kept and current, or held by this process: Text its
+   --  payload when Found.
+   procedure Look_Up
+     (Item  : Stores.Store;
+      Spec  : Dv.Specification;
+      Found : out Dv.Finding;
+      Text  : out Unbounded_String;
+      Held  : out Boolean)
+   is
+      Status : E.Error_Info;
+   begin
+      Found := Dv.Find_Current (Item, Spec);
+      Held := False;
+      Text := Null_Unbounded_String;
+      if Found.Standing = Dv.Current then
+         Dv.Answer (Item, Found, Text, Status);
+         Held := E.Is_Ok (Status);
+      end if;
+      if not Held and then Found.Standing /= Dv.Input_Unavailable then
+         Dv.Recall (Item, Spec, Text, Held);
+      end if;
+   end Look_Up;
+
+   ------------------
+   -- Derive_Graph --
+   ------------------
+
+   --  As Derive_Graph, from its description already made: making it reads
+   --  every record of the state.
+   procedure Derive_Graph_From
+     (Item   : Stores.Store;
+      Files  : Repository.Graph;
+      Spec   : in out Dv.Specification;
+      Result : out Graph;
+      Key    : out Ada.Strings.Unbounded.Unbounded_String;
+      Kept   : in out Derivations.Staged)
+   is
+      Found : Dv.Finding;
+      Text  : Unbounded_String;
+      Held  : Boolean;
+      Valid : Boolean;
+   begin
+      Key := Null_Unbounded_String;
+      Look_Up (Item, Spec, Found, Text, Held);
+      if Held then
+         Decode (Item, To_String (Text), Result, Valid);
+         if Valid then
+            Dv.Count ("traceability", Again => True);
+            Key := Found.Key;
+            return;
+         end if;
+      end if;
+
+      Result := Build (Item, Files);
+      Dv.Count ("traceability", Again => False);
+      --  A record whose bytes are there but will not read as one leaves the
+      --  graph without what it links: not an answer to keep.
+      if Found.Standing = Dv.Input_Unavailable or else not Result.Unread.Is_Empty then
+         return;
+      end if;
+      --  What it looked for, confirmed each time it is used again; one it
+      --  could not look at leaves nothing to confirm, and it is not kept.
+      for Line of Result.Looked_At loop
+         declare
+            At_Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => Tab]);
+            State  : constant String := Line (Line'First .. At_Tab - 1);
+         begin
+            if State = "unknown" then
+               return;
+            end if;
+            Dv.Confirm (Spec, "presence", Line (At_Tab + 1 .. Line'Last), "",
+                        (if State = "present" then Dv.Present else Dv.Absent));
+         end;
+      end loop;
+      declare
+         Payload : constant String := Encode (Result);
+      begin
+         Dv.Remember (Spec, Payload);
+         Dv.Add (Kept, Spec, Payload,
+                 "the traceability graph," & Natural'Image (Edge_Count (Result)) & " edges");
+         Key := To_Unbounded_String (Dv.Key_Of (Spec));
+      end;
+   end Derive_Graph_From;
+
+   procedure Derive_Graph
+     (Item   : Stores.Store;
+      Files  : Repository.Graph;
+      Result : out Graph;
+      Key    : out Ada.Strings.Unbounded.Unbounded_String;
+      Kept   : in out Derivations.Staged)
+   is
+      Spec : Dv.Specification := Graph_Specification (Item, Files);
+   begin
+      Derive_Graph_From (Item, Files, Spec, Result, Key, Kept);
+   end Derive_Graph;
+
+   -------------------
+   -- Derive_Impact --
+   -------------------
+
+   procedure Derive_Impact
+     (Item      : Stores.Store;
+      From      : Graph;
+      Graph_Key : String;
+      Changed   : Name_Lists.Vector;
+      Result    : out Impact;
+      Key       : out Ada.Strings.Unbounded.Unbounded_String;
+      Kept      : in out Derivations.Staged;
+      Subject   : String := "project";
+      Version   : String := Impact_Version)
+   is
+      Set   : constant Name_Lists.Vector := As_Set (Changed);
+      Spec  : constant Dv.Specification := Impact_Specification (Graph_Key, Set, Subject, Version);
+      Found : Dv.Finding;
+      Text  : Unbounded_String;
+      Held  : Boolean;
+      Valid : Boolean;
+   begin
+      Key := Null_Unbounded_String;
+      if Graph_Key /= "" then
+         Look_Up (Item, Spec, Found, Text, Held);
+         if Held then
+            Decode (To_String (Text), Result, Valid);
+            if Valid then
+               Dv.Count ("impact", Again => True);
+               Key := Found.Key;
+               return;
+            end if;
+         end if;
+      end if;
+      Result := Impact_Of (From, Set);
+      Dv.Count ("impact", Again => False);
+      if Graph_Key /= "" then
+         Dv.Remember (Spec, Encode (Result));
+         Dv.Add (Kept, Spec, Encode (Result),
+                 "what" & Natural'Image (Natural (Set.Length)) & " changed things reach:"
+                 & Natural'Image (Length (Result)) & " nodes");
+         Key := To_Unbounded_String (Dv.Key_Of (Spec));
+      end if;
+   end Derive_Impact;
+
+   ----------------------
+   -- Derive_Selection --
+   ----------------------
+
+   procedure Derive_Selection
+     (Item       : Stores.Store;
+      From       : Impact;
+      Impact_Key : String;
+      Result     : out Selection;
+      Key        : out Ada.Strings.Unbounded.Unbounded_String;
+      Kept       : in out Derivations.Staged;
+      Subject    : String := "project";
+      Version    : String := Selection_Version)
+   is
+      Spec  : constant Dv.Specification := Selection_Specification (Item, Impact_Key, Subject, Version);
+      Found : Dv.Finding;
+      Text  : Unbounded_String;
+      Held  : Boolean;
+      Valid : Boolean;
+   begin
+      Key := Null_Unbounded_String;
+      if Impact_Key /= "" then
+         Look_Up (Item, Spec, Found, Text, Held);
+         if Held then
+            Decode (To_String (Text), Result, Valid);
+            if Valid then
+               Dv.Count ("test_selection", Again => True);
+               Key := Found.Key;
+               return;
+            end if;
+         end if;
+      end if;
+      Result := Select_Tests (Item, From);
+      Dv.Count ("test_selection", Again => False);
+      if Impact_Key /= "" then
+         Dv.Remember (Spec, Encode (Result));
+         Dv.Add (Kept, Spec, Encode (Result),
+                 Word_Of (Result.Width) & ":" & Natural'Image (Natural (Result.Tests.Length)) & " tests");
+         Key := To_Unbounded_String (Dv.Key_Of (Spec));
+      end if;
+   end Derive_Selection;
+
+   ----------------
+   -- Select_For --
+   ----------------
+
+   function Select_For
+     (Item    : Stores.Store;
+      Files   : Repository.Graph;
+      Changed : Name_Lists.Vector;
+      Subject : String := "project") return Traced
+   is
+      Result     : Traced;
+      Graph_Spec : Dv.Specification := Graph_Specification (Item, Files);
+      Unreadable : constant Boolean := not Dv.Readable (Graph_Spec);
+      Traced_Graph : Graph;
+      Reach        : Impact;
+   begin
+      --  The keys rest on what each is made from, not on the answers: a
+      --  selection kept for the same graph and change is used without the
+      --  graph or the impact being read at all.
+      if not Unreadable then
+         declare
+            Graph_Key  : constant String := Dv.Key_Of (Graph_Spec);
+            Impact_Key : constant String :=
+              Dv.Key_Of (Impact_Specification (Graph_Key, Changed, Subject, Impact_Version));
+            Spec       : constant Dv.Specification :=
+              Selection_Specification (Item, Impact_Key, Subject, Selection_Version);
+            Found      : Dv.Finding;
+            Text       : Unbounded_String;
+            Held       : Boolean;
+            Valid      : Boolean;
+         begin
+            Look_Up (Item, Spec, Found, Text, Held);
+            if Held then
+               Decode (To_String (Text), Result.Chosen, Valid);
+               if Valid then
+                  Dv.Count ("test_selection", Again => True);
+                  Result.Graph_Key := To_Unbounded_String (Graph_Key);
+                  Result.Impact_Key := To_Unbounded_String (Impact_Key);
+                  Result.Selection_Key := Found.Key;
+                  return Result;
+               end if;
+            end if;
+         end;
+      end if;
+
+      Derive_Graph_From (Item, Files, Graph_Spec, Traced_Graph, Result.Graph_Key, Result.Kept);
+      Derive_Impact (Item, Traced_Graph, To_String (Result.Graph_Key), Changed, Reach,
+                     Result.Impact_Key, Result.Kept, Subject);
+      Derive_Selection (Item, Reach, To_String (Result.Impact_Key), Result.Chosen,
+                        Result.Selection_Key, Result.Kept, Subject);
+      return Result;
+   end Select_For;
 
 end Model_Runner.Framework.Traceability;

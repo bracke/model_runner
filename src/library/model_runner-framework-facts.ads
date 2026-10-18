@@ -20,7 +20,11 @@ package Model_Runner.Framework.Facts is
       Semantic_Analysis,
       Build_Metadata,
       Naming_Convention,
-      Heuristic);
+      Heuristic,
+
+      --  An observation promoted (Observations): as sure as its grounding,
+      --  never authoritative, its origin the observation.
+      Observation);
 
    --  How sure its source is.
    type Confidence_Level is

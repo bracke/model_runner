@@ -29,6 +29,8 @@ package body Model_Runner.Framework is
          when Invocations_Area  => return "invocations";
          when Workspaces_Area   => return "workspaces";
          when Indexes_Area      => return "indexes";
+         when Derivations_Area  => return "derivations";
+         when Observations_Area => return "observations";
       end case;
    end Directory_Name;
 
@@ -56,7 +58,10 @@ package body Model_Runner.Framework is
             | Invocations_Area =>
             return Historical_State;
 
-         when Indexes_Area =>
+         when Observations_Area =>
+            return Observational_State;
+
+         when Indexes_Area | Derivations_Area =>
             return Derived_State;
       end case;
    end Class_Of;
@@ -68,7 +73,8 @@ package body Model_Runner.Framework is
    function Portability_Of (Where : Area) return Portability is
    begin
       case Class_Of (Where) is
-         when Authored_State | Historical_State => return Repository_Portable;
+         when Authored_State | Historical_State | Observational_State =>
+            return Repository_Portable;
          when Runtime_State                     => return Machine_Local;
          when Derived_State                     => return Derived_Cache;
       end case;

@@ -10,6 +10,7 @@ with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Code_Queries;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
+with Model_Runner.Framework.Observations;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
@@ -97,6 +98,9 @@ package body Model_Runner.Framework.Context is
          return "What you are asked";
       elsif Kind = "source" then
          return "The file " & Id (Id'First + 5 .. Id'Last);
+      elsif Kind = "observation" then
+         return "Seen before, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id & "@", "@") - 1)
+           & " (an observation, not authoritative)";
       else
          return "The " & Kind & " " & Id;
       end if;
@@ -379,6 +383,14 @@ package body Model_Runner.Framework.Context is
          for Index in 1 .. Natural (Result.Excluded.Length) loop
             Append (Text, "-" & To_String (Result.Excluded (Index).Id) & " "
                     & Result.Reasons (Index) & ASCII.LF);
+         end loop;
+         --  What was learned and why it went in, or did not: a context is
+         --  as reproducible in its knowledge as in the rest.
+         for Line of Result.Knowledge loop
+            Append (Text, "~" & Line & ASCII.LF);
+         end loop;
+         for Line of Result.Knowledge_Left loop
+            Append (Text, "~-" & Line & ASCII.LF);
          end loop;
          Result.Print := To_Unbounded_String (Fingerprint (To_String (Text)));
       end;
@@ -1128,6 +1140,72 @@ package body Model_Runner.Framework.Context is
                 "results", High, To_String (Listed));
       end;
 
+      --  What was learned on this work or near it: observations, never
+      --  authoritative -- the hot among what matters next to the files and
+      --  the last attempt, the warm with the specifications -- each once,
+      --  and none that only says what is given already.
+      declare
+         Left  : Name_Lists.Vector;
+         Found : constant Observations.Considered_Vectors.Vector :=
+           Observations.Relevant (Item, Task_Id, Left);
+      begin
+         for One of Found loop
+            declare
+               Id    : constant String := To_String (One.Id) & "@" & Image (One.Revision);
+               Shown : Observations.Observation;
+               Read  : E.Error_Info;
+               Said  : Unbounded_String;
+            begin
+               Observations.Read (Item, To_String (One.Id), Shown, Read);
+               declare
+                  Claim : constant String := Lower (To_String (Shown.Summary));
+
+                  --  Whether a text says the claim as a phrase of its own:
+                  --  whole words, and long enough to be a claim -- a word or
+                  --  two is in every text without saying the same.
+                  function Says_It (Text : String) return Boolean is
+                     function Word_Char (C : Character) return Boolean
+                     is (C in 'a' .. 'z' | '0' .. '9' | '_');
+                     At_Claim : Natural := Ada.Strings.Fixed.Index (Text, Claim);
+                  begin
+                     if Claim'Length < 20 then
+                        return False;
+                     end if;
+                     while At_Claim > 0 loop
+                        if (At_Claim = Text'First or else not Word_Char (Text (At_Claim - 1)))
+                          and then (At_Claim + Claim'Length > Text'Last
+                                    or else not Word_Char (Text (At_Claim + Claim'Length)))
+                        then
+                           return True;
+                        end if;
+                        At_Claim := Ada.Strings.Fixed.Index (Text, Claim, At_Claim + 1);
+                     end loop;
+                     return False;
+                  end Says_It;
+               begin
+                  for Held of Candidates loop
+                     if Said = Null_Unbounded_String and then Says_It (Lower (To_String (Held.Text))) then
+                        Said := Held.Id;
+                     end if;
+                  end loop;
+               end;
+               if Said /= Null_Unbounded_String then
+                  Result.Knowledge_Left.Append (Id & ": says only what " & To_String (Said) & " says");
+               else
+                  Offer (Id, "observation",
+                         (if Observations."=" (One.Heat, Observations.Hot) then High else Normal),
+                         To_String (One.Text));
+                  Result.Knowledge.Append
+                    (Id & " " & Lower (Observations.Temperature'Image (One.Heat)) & " "
+                     & Observations.Word (One.Standing) & " " & To_String (One.Reason));
+               end if;
+            end;
+         end loop;
+         for Line of Left loop
+            Result.Knowledge_Left.Append (Line);
+         end loop;
+      end;
+
       Settle (Candidates, Task_Id, Result, Status);
       --  The files it shows, at the revisions they were read at.
       for Shown of Result.Included loop
@@ -1256,7 +1334,7 @@ package body Model_Runner.Framework.Context is
          --  holds in a row -- so that a heading in it is its own, not the
          --  harness's.
          if Ada.Strings.Fixed.Trim (Said (Next), Ada.Strings.Both) /= "" then
-            if To_String (Next.Kind) in "source" | "test" | "results" then
+            if To_String (Next.Kind) in "source" | "test" | "results" | "observation" then
                declare
                   Inner : constant String := Said (Next);
                   Run, Most : Natural := 0;
@@ -1303,6 +1381,12 @@ package body Model_Runner.Framework.Context is
 
    function Excluded_Why (From : Built; Index : Positive) return String
    is (From.Reasons (Index));
+
+   function Knowledge (From : Built) return Name_Lists.Vector
+   is (From.Knowledge);
+
+   function Knowledge_Left (From : Built) return Name_Lists.Vector
+   is (From.Knowledge_Left);
 
    function Semantic (From : Built) return Boolean
    is (From.Semantic);
@@ -1373,6 +1457,14 @@ package body Model_Runner.Framework.Context is
             Records.Set
               (Value, "excluded." & Image (Index),
                To_String (From.Excluded (Index).Id) & ": " & From.Reasons (Index));
+         end loop;
+         --  Each observation considered: why it was offered, how warm, and
+         --  whether it applied; and each not offered, and why.
+         for Index in 1 .. Natural (From.Knowledge.Length) loop
+            Records.Set (Value, "knowledge." & Image (Index), From.Knowledge (Index));
+         end loop;
+         for Index in 1 .. Natural (From.Knowledge_Left.Length) loop
+            Records.Set (Value, "knowledge_left." & Image (Index), From.Knowledge_Left (Index));
          end loop;
          for Revision of From.Revisions loop
             declare

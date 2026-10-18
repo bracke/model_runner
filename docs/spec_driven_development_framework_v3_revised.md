@@ -297,7 +297,7 @@ Conversation history SHALL NOT be authoritative project state.
 
 # 8. Persistent State Classification
 
-The framework SHALL distinguish four state classes.
+The framework SHALL distinguish five state classes.
 
 ## 8.1 Authored authoritative state
 
@@ -348,6 +348,20 @@ Examples:
 
 Reconstructable state MAY be deleted and rebuilt without changing project meaning.
 
+## 8.5 Observational state
+
+Examples:
+
+- findings discovered while working;
+- experiments and their outcomes;
+- failed approaches and why they failed;
+- tool and environment behaviour;
+- repeated failure patterns.
+
+Observational state is persistent and non-authoritative (section 120).
+
+Persistence does not imply authority: observational and reconstructable state SHALL NOT become authored state except through the mechanisms that make authored state.
+
 ---
 
 # 9. Persistence Root and Storage Ownership
@@ -376,7 +390,9 @@ The exact physical representation MAY evolve, but logical ownership SHALL be equ
 ├── verification/
 ├── invocations/
 ├── workspaces/
-└── indexes/
+├── indexes/
+├── derivations/
+└── observations/
 ```
 
 A project template MAY select another state root only through resolved configuration.
@@ -2787,6 +2803,8 @@ Core commands SHALL include:
 
 /accept
 /reject
+
+/obs
 ```
 
 A configuration command SHOULD be added before implementation freeze, for example:
@@ -3718,3 +3736,101 @@ Model invocations are bounded historical execution records.
 The harness owns authority, state, orchestration, persistence, transitions, context construction, verification, recovery, isolation, and deterministic project intelligence.
 
 That separation is the defining architectural rule of V3.
+
+---
+
+# 119. Derived Artifacts
+
+A derived artifact is a deterministic or mechanically derived value whose validity depends on identifiable inputs: the traceability graph, an impact, a test selection, and computations like them.
+
+A derived artifact SHALL be identified by a derivation key: the fingerprint of a canonical description of its kind, its algorithm, the algorithm's own version, and every input, policy and environment dependency that can change its result, each typed.
+
+Equivalent derivations SHALL receive the same key regardless of the order their dependencies were gathered in; inputs whose order has meaning SHALL keep their positions.
+
+Canonicalization SHALL distinguish an absent dependency from an unreadable one, and an empty one from an absent one.
+
+Changing an algorithm's semantics SHALL invalidate artifacts its previous version produced, even when no project byte changed; the version SHALL change only when the semantics do.
+
+Looking a derivation up SHALL report one of: current, missing, stale in its inputs, stale in its algorithm, stale in its policy, stale in its environment, corrupt, or not decidable because an input could not be read.
+
+An unreadable dependency SHALL NOT be treated as an absent one, and a corrupt derivation SHALL NOT be accepted as current; a corrupt cache MAY be discarded and computed again from the authoritative inputs.
+
+A derived artifact SHALL be able to explain, without a model, why it is current or stale: a deterministic path of the derivations it rests on and the dependencies that changed, bounded in depth, with cycles cut.
+
+A derivation's answer SHALL be kept as an immutable result; its record says why the result exists.
+
+The traceability graph, the impact of a change and the selection of tests for it SHALL be derivations, and verification evidence SHALL name the selection derivation that determined its scope.
+
+Derivations SHALL be reconstructible; they MAY be let go after the project's retention.derived_days, and doing so SHALL NOT remove a result another kept derivation names.
+
+Reuse is valid only when all semantic derivation inputs still match.
+
+---
+
+# 120. Observations
+
+An observation is knowledge discovered while working that later work should be told: a finding, an experiment, a failure pattern, an environment constraint, a tool's behaviour, an implementation note.
+
+Observations SHALL be persistent and non-authoritative: they survive context compaction, later attempts and process restart, and they SHALL NOT satisfy a completion gate, alter readiness, override a decision, alter permissions, satisfy a requirement, change verification policy, or become configuration.
+
+The kinds of observation SHALL be a small fixed vocabulary; an unknown kind SHALL NOT acquire meaning.
+
+Every observation SHALL record its provenance as the harness knows it: the task and its execution generation, the agent and its parent, the invocation, the evidence it rests on, and the files it is about at the revisions they were at. A model SHALL NOT supply provenance.
+
+Evidence an observation names SHALL be a result or verification evidence the project keeps; anything else SHALL be refused.
+
+An observation backed by kept evidence SHALL be distinguished from one resting on its producer's word alone.
+
+The same claim found again SHALL be the same observation, its sightings counted and their provenance added; observations whose claims differ SHALL NOT be merged.
+
+An observation's lifecycle SHALL be active, superseded, dismissed or promoted, changed only through transactions, each change an event.
+
+Whether an observation applies now SHALL be worked out, not assumed: applicable, stale, superseded, dismissed, uncertain or unreadable. A stale observation SHALL remain, labelled; an unreadable one SHALL NOT be treated as irrelevant.
+
+An agent at work SHALL be able to record an observation through a narrow tool, kept at once rather than at the end of its run.
+
+The harness SHALL record a failure pattern when a task's checks fail again as they failed before; a first failure SHALL NOT be recorded as one.
+
+Dismissed and superseded observations MAY be let go after the project's retention.observation_days, each left as a tombstone that still names what it was; active and promoted observations SHALL be kept.
+
+---
+
+# 121. Promotion
+
+An observation SHALL become part of what the project means only by explicit promotion through the mechanisms that already make that state.
+
+Promotion into a task SHALL create a candidate task, created by observation_promotion with the observation as its origin, accepted only where the project's policy accepts that class.
+
+Promotion into a fact SHALL record a fact no surer than the observation's grounding allows, never authoritative, with the observation as its origin.
+
+Promotion into a decision SHALL create a candidate decision for a person or the policy to accept.
+
+The promoted observation SHALL remain as a historical record, marked promoted and naming what it became.
+
+---
+
+# 122. Knowledge Temperature
+
+Context construction SHALL classify observations as hot, warm or cold, beside and not instead of item priority.
+
+Relevance SHALL be decided deterministically: the same task, files the task's work touched or failed in, requirements it serves, its component, and the project's tool and environment caveats.
+
+Hot observations SHALL rank below mandatory authoritative content; warm ones below the hot; cold ones SHALL NOT enter task context.
+
+An observation that does not apply now SHALL be no hotter than warm, and SHALL be told as what may no longer hold.
+
+Observation retrieval SHALL be bounded (knowledge.max_hot, knowledge.max_warm) and SHALL be possible to turn off (knowledge.observations).
+
+An observation that only repeats what the context already holds SHALL NOT consume context twice.
+
+The context manifest SHALL record each observation considered: offered, with its temperature, applicability and reason, or not offered, with why.
+
+---
+
+# 123. Agent-Behaviour Evaluation
+
+The framework's knowledge mechanisms exist to reduce repeated model work -- tool calls, file reads, investigations, turns -- particularly for local agents with limited context.
+
+The test suite SHALL include deterministic agent-behaviour scenarios that compare knowledge reuse enabled against disabled, measuring repeated work by counts while requiring the same final source, verification result and authoritative state.
+
+Timing SHALL NOT be a requirement of these scenarios.

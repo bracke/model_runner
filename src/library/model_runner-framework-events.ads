@@ -80,7 +80,14 @@ package Model_Runner.Framework.Events is
       --  task and agent, and how it ended -- so the log holds a /work run
       --  whole, where the invocation records hold its calls.
       Invocation_Started,
-      Invocation_Ended);
+      Invocation_Ended,
+
+      --  What was learned, kept and moved through its life (Observations).
+      --  Seeing one again is no event.
+      Observation_Recorded,
+      Observation_Superseded,
+      Observation_Dismissed,
+      Observation_Promoted);
 
    --  One event, as read back.
    type Event is record

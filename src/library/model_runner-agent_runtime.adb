@@ -211,6 +211,7 @@ package body Model_Runner.Agent_Runtime is
         Tools.Registry.Ask_User       => May_Ask,
         Tools.Registry.Project_Graph  => False,
         Tools.Registry.Project_Checks => False,
+        Tools.Registry.Project_Knowledge => False,
         others                        => True]);
 
 end Model_Runner.Agent_Runtime;

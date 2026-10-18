@@ -152,7 +152,7 @@ package Model_Runner.Framework.Intent is
    --  The state a kind starts in.
    --
    --  @param Kind The kind.
-   --  @return candidate, or proposed for a decision.
+   --  @return candidate, for every kind.
    function First_State (Kind : Intent_Kind) return String;
 
    --  Propose an entity.

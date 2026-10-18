@@ -157,6 +157,7 @@ is
    --  holds the project, and what changes nothing to judge again after.
    function Looks_Only return Boolean
    is (Word in "/state" | "/config" | "/git" | "/why" | "/history" | "/brief"
+       or else (Word = "/obs" and then Verb not in "record" | "dismiss" | "supersede" | "promote")
        or else (Word = "/result" and then Verb not in "dismiss" | "restore")
        or else (Word in "/req" | "/decision" | "/spec"
                 and then Verb not in "new" | "accept" | "reject" | "reconsider" | "obsolete" | "block"
@@ -286,6 +287,10 @@ is
    procedure Route_History is separate;
    procedure Route_Brief is separate;
 
+   --  What was learned while working: listed, shown, recorded by a person,
+   --  dismissed, superseded or promoted into what the project means.
+   procedure Route_Knowledge is separate;
+
    --  The branches of the config route, in the order the
    --  dispatch tried them.
    procedure Route_Config is separate;
@@ -393,6 +398,7 @@ begin
          when Why_Route => Route_Why;
          when History_Route => Route_History;
          when Brief_Route => Route_Brief;
+         when Knowledge_Route => Route_Knowledge;
       when Config_Route => Route_Config;
       when Intents_Route => Route_Intents;
       when Results_Route => Route_Results;

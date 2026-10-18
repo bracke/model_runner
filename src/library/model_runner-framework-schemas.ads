@@ -36,6 +36,14 @@ package Model_Runner.Framework.Schemas is
    --  from, and its entries.
    Derived_Index_Schema : constant String := "index.derived";
 
+   --  A derivation kept to be used again, and the record saying which one
+   --  of a kind and subject is the latest.
+   Derivation_Schema      : constant String := "derived.artifact";
+   Derivation_Head_Schema : constant String := "derived.head";
+
+   --  What was learned while working.
+   Observation_Schema : constant String := "knowledge.observation";
+
    --  A project's resolved configuration, current or of one revision.
    Configuration_Schema : constant String := "project.configuration";
 

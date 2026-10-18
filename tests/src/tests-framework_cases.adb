@@ -27,6 +27,7 @@ with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Derivations;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Automation;
 with Model_Runner.Framework.Events;
@@ -41,6 +42,7 @@ with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Code_Queries;
 with Model_Runner.Framework.Invocations;
+with Model_Runner.Framework.Observations;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
@@ -7349,6 +7351,1218 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Impact_Is_Traced;
 
+   --  What project commands said, run one after another in a project's
+   --  directory as a session runs them: output and errors together.
+   function Command_Output
+     (Root  : String;
+      Lines : Model_Runner.Framework.Name_Lists.Vector) return String
+   is
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Before  : constant String := Dirs.Current_Directory;
+      Agent   : constant Scripted_Agent :=
+        (File => Null_Unbounded_String, Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+         Broken => False);
+      Said    : Ada.Text_IO.File_Type;
+   begin
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Model_Runner.CLI.Options.Normal);
+      Dirs.Set_Directory (Root);
+      Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "said.txt");
+      Ada.Text_IO.Set_Output (Said);
+      Ada.Text_IO.Set_Error (Said);
+      for Line of Lines loop
+         Model_Runner.CLI.Project_Commands.Run (Line, Screen, Agent);
+      end loop;
+      Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+      Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+      Ada.Text_IO.Close (Said);
+      Dirs.Set_Directory (Before);
+      return Read_Whole (Root & "/said.txt");
+   exception
+      when others =>
+         Ada.Text_IO.Set_Output (Ada.Text_IO.Standard_Output);
+         Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+         if Ada.Text_IO.Is_Open (Said) then
+            Ada.Text_IO.Close (Said);
+         end if;
+         Dirs.Set_Directory (Before);
+         raise;
+   end Command_Output;
+
+   ---------------------------------------------------------------------------
+   --  Derivations.
+   ---------------------------------------------------------------------------
+
+   package Dv renames Model_Runner.Framework.Derivations;
+
+   --  Whether any line holds a text.
+   function Says (Lines : Model_Runner.Framework.Name_Lists.Vector; Part : String) return Boolean
+   is (for some Line of Lines => Ada.Strings.Fixed.Index (Line, Part) > 0);
+
+   function Joined (Lines : Model_Runner.Framework.Name_Lists.Vector) return String is
+      Text : Unbounded_String;
+   begin
+      for Line of Lines loop
+         Append (Text, Line & " | ");
+      end loop;
+      return To_String (Text);
+   end Joined;
+
+   --  A derivation's key is made from what it is canonically: the same
+   --  inputs in any order make one key, and any input, policy or version
+   --  changed makes another; absent, unreadable and empty are three things.
+   procedure Derivation_Keys_Are_Canonical (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      A : Dv.Specification := Dv.Specify ("impact", "impact", "1");
+      B : Dv.Specification := Dv.Specify ("impact", "impact", "1", Subject => "TASK-X-001");
+   begin
+      Dv.Depend (A, Dv.Input, "file", "src/a.adb", "11");
+      Dv.Depend (A, Dv.Input, "file", "src/b.adb", "22");
+      Dv.Depend (A, Dv.Policy, "configuration", "escalation", "narrow");
+      Dv.Depend (B, Dv.Policy, "configuration", "escalation", "narrow");
+      Dv.Depend (B, Dv.Input, "file", "src/b.adb", "22");
+      Dv.Depend (B, Dv.Input, "file", "src/a.adb", "11");
+      Dv.Depend (B, Dv.Input, "file", "src/a.adb", "11");
+      Assert (Dv.Key_Of (A) = Dv.Key_Of (B) and then Dv.Canonical (A) = Dv.Canonical (B),
+              "the same dependencies in another order, or named twice, made another key");
+      Assert (Dv.Key_Of (A)'Length = 20 and then Dv.Key_Of (A) (1 .. 4) = "DRV-"
+              and then Dv.Key_Of (A) = Dv.Key_Of (A),
+              "a key is not DRV- and sixteen digits, or not the same twice: " & Dv.Key_Of (A));
+
+      declare
+         Changed_Input  : Dv.Specification := Dv.Specify ("impact", "impact", "1");
+         Changed_Policy : Dv.Specification := Dv.Specify ("impact", "impact", "1");
+         Changed_Version : Dv.Specification := Dv.Specify ("impact", "impact", "2");
+         Other_Kind     : Dv.Specification := Dv.Specify ("traceability", "impact", "1");
+      begin
+         Dv.Depend (Changed_Input, Dv.Input, "file", "src/a.adb", "12");
+         Dv.Depend (Changed_Input, Dv.Input, "file", "src/b.adb", "22");
+         Dv.Depend (Changed_Input, Dv.Policy, "configuration", "escalation", "narrow");
+         Dv.Depend (Changed_Policy, Dv.Input, "file", "src/a.adb", "11");
+         Dv.Depend (Changed_Policy, Dv.Input, "file", "src/b.adb", "22");
+         Dv.Depend (Changed_Policy, Dv.Policy, "configuration", "escalation", "conservative");
+         Dv.Depend (Changed_Version, Dv.Input, "file", "src/a.adb", "11");
+         Dv.Depend (Changed_Version, Dv.Input, "file", "src/b.adb", "22");
+         Dv.Depend (Changed_Version, Dv.Policy, "configuration", "escalation", "narrow");
+         Dv.Depend (Other_Kind, Dv.Input, "file", "src/a.adb", "11");
+         Dv.Depend (Other_Kind, Dv.Input, "file", "src/b.adb", "22");
+         Dv.Depend (Other_Kind, Dv.Policy, "configuration", "escalation", "narrow");
+         Assert (Dv.Key_Of (Changed_Input) /= Dv.Key_Of (A), "a changed input kept the key");
+         Assert (Dv.Key_Of (Changed_Policy) /= Dv.Key_Of (A), "a changed policy kept the key");
+         Assert (Dv.Key_Of (Changed_Version) /= Dv.Key_Of (A),
+                 "a new version of the algorithm kept the key");
+         Assert (Dv.Key_Of (Other_Kind) /= Dv.Key_Of (A), "another kind kept the key");
+      end;
+
+      declare
+         Absent     : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+         Absent_Too : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+         Unread     : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+         Empty      : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+      begin
+         Dv.Depend (Absent, Dv.Input, "file", "x", "", Dv.Absent);
+         Dv.Depend (Absent_Too, Dv.Input, "file", "x", "left over", Dv.Absent);
+         Dv.Depend (Unread, Dv.Input, "file", "x", "", Dv.Unreadable);
+         Dv.Depend (Empty, Dv.Input, "file", "x", "");
+         Assert (Dv.Key_Of (Absent) /= Dv.Key_Of (Unread) and then Dv.Key_Of (Absent) /= Dv.Key_Of (Empty)
+                 and then Dv.Key_Of (Unread) /= Dv.Key_Of (Empty),
+                 "absent, unreadable and empty were not three things");
+         Assert (Dv.Key_Of (Absent) = Dv.Key_Of (Absent_Too),
+                 "what was passed with an absent input was taken for part of it");
+         Assert (not Dv.Readable (Unread) and then Dv.Readable (Absent) and then Dv.Readable (Empty),
+                 "an unreadable input was not told from the rest");
+      end;
+
+      declare
+         First  : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+         Second : Dv.Specification := Dv.Specify ("probe", "probe", "1");
+      begin
+         Dv.Depend (First, Dv.Input, "step", "a", "", Position => 1);
+         Dv.Depend (First, Dv.Input, "step", "b", "", Position => 2);
+         Dv.Depend (Second, Dv.Input, "step", "b", "", Position => 1);
+         Dv.Depend (Second, Dv.Input, "step", "a", "", Position => 2);
+         Assert (Dv.Key_Of (First) /= Dv.Key_Of (Second),
+                 "inputs whose order means something made one key in either order");
+      end;
+
+      --  Any text is a field of an answer's line, read back as it was.
+      declare
+         Awkward : constant String := "a" & ASCII.HT & "b%0A" & LF & "c" & ASCII.CR;
+         Parts   : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Dv.Fields_Of (Dv.Coded (Awkward) & ASCII.HT & Dv.Coded (""));
+      begin
+         Assert (Dv.Decoded (Dv.Coded (Awkward)) = Awkward
+                 and then Natural (Parts.Length) = 2 and then Parts (1) = Awkward and then Parts (2) = "",
+                 "a field with tabs, line ends or percents did not read back as it was");
+      end;
+   end Derivation_Keys_Are_Canonical;
+
+   --  A kept derivation is found current while what it was made from still
+   --  matches, and otherwise said stale in what changed -- never current
+   --  when an input will not read, its record is damaged, or its answer gone.
+   procedure Derivations_Are_Looked_Up (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Dv.Currentness;
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Found  : Dv.Finding;
+      Text   : Unbounded_String;
+
+      function Probe (Print, Mode, Version : String;
+                      State : Dv.Presence := Dv.Present) return Dv.Specification
+      is
+         Spec : Dv.Specification := Dv.Specify ("probe", "probe", Version);
+      begin
+         Dv.Depend (Spec, Dv.Input, "file", "src/a.adb", Print, State);
+         Dv.Depend (Spec, Dv.Policy, "configuration", "mode", Mode);
+         return Spec;
+      end Probe;
+
+      Kept : constant Dv.Specification := Probe ("11", "on", "1");
+
+      procedure Keep (Spec : Dv.Specification; Payload : String) is
+      begin
+         Change := S.No_Changes;
+         Dv.Keep (Store, Change, Spec, Payload, "a probe", Status);
+         Assert (E.Is_Ok (Status), "a derivation was not staged: " & Code_Of (Status));
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "a derivation was not kept: " & Code_Of (Status));
+      end Keep;
+   begin
+      Task_Project (Store, "derivations");
+      Found := Dv.Find_Current (Store, Kept);
+      Assert (Found.Standing = Dv.Missing and then Found.Causes.Is_Empty,
+              "a derivation never made was not missing: " & Dv.Word (Found.Standing));
+
+      Keep (Kept, "answer one");
+      Found := Dv.Find_Current (Store, Kept);
+      Assert (Found.Standing = Dv.Current and then Length (Found.Result) > 0,
+              "a kept derivation was not current: " & Dv.Word (Found.Standing) & " " & Joined (Found.Causes));
+      Dv.Answer (Store, Found, Text, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Text) = "answer one",
+              "a current derivation's answer did not read back");
+
+      Found := Dv.Find_Current (Store, Probe ("12", "on", "1"));
+      Assert (Found.Standing = Dv.Stale_Input and then To_String (Found.Prior) = Dv.Key_Of (Kept)
+              and then Says (Found.Causes, "file src/a.adb changed"),
+              "a changed input was not said stale in it: " & Dv.Word (Found.Standing)
+              & " " & Joined (Found.Causes));
+      Found := Dv.Find_Current (Store, Probe ("11", "off", "1"));
+      Assert (Found.Standing = Dv.Stale_Policy and then Says (Found.Causes, "policy configuration mode"),
+              "a changed policy was not said stale: " & Dv.Word (Found.Standing));
+      Found := Dv.Find_Current (Store, Probe ("11", "on", "2"));
+      Assert (Found.Standing = Dv.Stale_Algorithm and then Says (Found.Causes, "probe/1"),
+              "a new version of the algorithm was not said stale: " & Dv.Word (Found.Standing));
+      Found := Dv.Find_Current (Store, Probe ("", "on", "1", Dv.Unreadable));
+      Assert (Found.Standing = Dv.Input_Unavailable and then Says (Found.Causes, "could not be read"),
+              "an input that would not read was not said so: " & Dv.Word (Found.Standing));
+      Found := Dv.Find_Current (Store, Probe ("", "on", "1", Dv.Absent));
+      Assert (Found.Standing = Dv.Stale_Input and then Says (Found.Causes, "was present and is absent"),
+              "an input gone was not told from one that will not read: " & Dv.Word (Found.Standing));
+
+      --  Its answer gone: missing, and kept again it is whole again.
+      Found := Dv.Find_Current (Store, Kept);
+      Dirs.Delete_File (S.Root (Store) & "/results/" & To_String (Found.Result) & ".rec");
+      Found := Dv.Find_Current (Store, Kept);
+      Assert (Found.Standing = Dv.Missing and then Says (Found.Causes, "is gone"),
+              "a derivation whose answer is gone was not missing: " & Dv.Word (Found.Standing));
+      Keep (Kept, "answer one");
+      Assert (Dv.Find_Current (Store, Kept).Standing = Dv.Current,
+              "a derivation kept again was not current");
+
+      --  Its record damaged: corrupt, not a miss; kept again over it.
+      Put_File (S.Root (Store) & "/derivations/" & Dv.Key_Of (Kept) & ".rec", "not a record" & LF);
+      Found := Dv.Find_Current (Store, Kept);
+      Assert (Found.Standing = Dv.Corrupt,
+              "a damaged derivation was not corrupt: " & Dv.Word (Found.Standing));
+      Keep (Kept, "answer one");
+      Assert (Dv.Find_Current (Store, Kept).Standing = Dv.Current,
+              "a damaged derivation was not discarded and kept again");
+
+      --  What it found as it was made, confirmed when it is looked up.
+      declare
+         Looked : Dv.Specification := Probe ("33", "on", "1");
+      begin
+         Dv.Confirm (Looked, "presence", "docs/x.md", "", Dv.Absent);
+         Keep (Looked, "answer three");
+         Assert (Dv.Find_Current (Store, Looked).Standing = Dv.Current,
+                 "a derivation with what it found still so was not current");
+         Dirs.Create_Path (Fresh_Root (Store) & "/docs");
+         Put_File (Fresh_Root (Store) & "/docs/x.md", "x");
+         Found := Dv.Find_Current (Store, Looked);
+         Assert (Found.Standing = Dv.Stale_Input
+                 and then Says (Found.Causes, "presence docs/x.md was absent and is present"),
+                 "a document that appeared left a derivation that looked for it current: "
+                 & Dv.Word (Found.Standing) & " " & Joined (Found.Causes));
+      end;
+
+      --  A chain: why the later is made, followed to the input that changed.
+      declare
+         Up_One   : Dv.Specification := Dv.Specify ("upstream", "up", "1");
+         Up_Two   : Dv.Specification := Dv.Specify ("upstream", "up", "1");
+         Down_One : Dv.Specification := Dv.Specify ("downstream", "down", "1");
+         Down_Two : Dv.Specification := Dv.Specify ("downstream", "down", "1");
+         Lines    : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Dv.Depend (Up_One, Dv.Input, "file", "src/parser.adb", "1");
+         Dv.Depend (Up_Two, Dv.Input, "file", "src/parser.adb", "2");
+         Dv.Depend (Down_One, Dv.Input, Dv.Derived_Kind, "upstream", Dv.Key_Of (Up_One));
+         Dv.Depend (Down_Two, Dv.Input, Dv.Derived_Kind, "upstream", Dv.Key_Of (Up_Two));
+         Keep (Up_One, "up one");
+         Keep (Down_One, "down one");
+         Keep (Up_Two, "up two");
+         Keep (Down_Two, "down two");
+         Lines := Dv.Explain (Store, Dv.Key_Of (Down_One));
+         Assert (Says (Lines, "stale: " & Dv.Key_Of (Down_Two))
+                 and then Says (Lines, Dv.Key_Of (Up_One) & " became " & Dv.Key_Of (Up_Two))
+                 and then Says (Lines, "file src/parser.adb changed"),
+                 "a stale derivation was not followed to the input that changed: " & Joined (Lines));
+         Lines := Dv.Explain (Store, Dv.Key_Of (Down_Two));
+         Assert (Says (Lines, "the latest of its kind") and then Says (Lines, "rests on upstream"),
+                 "a current derivation did not say what it rests on: " & Joined (Lines));
+         Put_File (S.Root (Store) & "/derivations/" & Dv.Key_Of (Up_Two) & ".rec", "damaged" & LF);
+         Lines := Dv.Explain (Store, Dv.Key_Of (Down_Two));
+         Assert (Says (Lines, Dv.Key_Of (Up_Two) & " would not read"),
+                 "a damaged link in a chain was not said: " & Joined (Lines));
+         Lines := Dv.Explain (Store, Dv.Key_Of (Down_One));
+         Assert (Says (Lines, "what changed is not known"),
+                 "a damaged link was followed as though whole: " & Joined (Lines));
+         Assert (Says (Dv.Explain (Store, "DRV-0000000000000000"), "is not kept"),
+                 "a derivation nobody kept was explained");
+      end;
+      S.Close (Store);
+   end Derivations_Are_Looked_Up;
+
+   --  Letting derivations go keeps every answer one still kept names, and
+   --  takes the pointer to one gone with it.
+   procedure Derivations_Are_Pruned (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Dv.Currentness;
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Removed : Natural;
+      Old     : Dv.Specification := Dv.Specify ("probe", "probe", "1", Subject => "old");
+      Young   : Dv.Specification := Dv.Specify ("probe", "probe", "1", Subject => "young");
+      Alone   : Dv.Specification := Dv.Specify ("other", "probe", "1", Subject => "old");
+   begin
+      Task_Project (Store, "derivations-pruned");
+      Dv.Depend (Old, Dv.Input, "file", "a", "1");
+      Dv.Depend (Young, Dv.Input, "file", "a", "2");
+      Dv.Depend (Alone, Dv.Input, "file", "a", "3");
+      --  Old and young come to the same answer, kept once for both.
+      Dv.Keep (Store, Change, Old, "the same answer", "shared", Status);
+      Dv.Keep (Store, Change, Young, "the same answer", "shared", Status);
+      Dv.Keep (Store, Change, Alone, "its own answer", "alone", Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "derivations were not kept: " & Code_Of (Status));
+      Assert (Dv.Find_Current (Store, Old).Result = Dv.Find_Current (Store, Young).Result,
+              "one answer two derivations came to was kept twice");
+
+      --  Old and alone made long ago.
+      for Name of Model_Runner.Framework.Name_Lists.Vector'([Dv.Key_Of (Old), Dv.Key_Of (Alone)]) loop
+         declare
+            Value : R.Item;
+         begin
+            S.Read (Store, F.Derivations_Area, Name, Value, Status);
+            R.Set (Value, "created_at", "2001-01-01T00:00:00Z");
+            R.Set_Revision (Value, R.Revision (Value) + 1);
+            S.Put (Change, F.Derivations_Area, Name, Value);
+         end;
+      end loop;
+      S.Commit (Store, Change, Status);
+
+      Dv.Prune (Store, Change, 0, Removed);
+      Assert (Removed = 0, "a retention of nothing let derivations go");
+      Dv.Prune (Store, Change, 30, Removed);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then Removed > 0, "old derivations were not let go: " & Code_Of (Status));
+      Assert (Dv.Find_Current (Store, Old).Standing = Dv.Missing
+              and then Dv.Find_Current (Store, Alone).Standing = Dv.Missing,
+              "a derivation past its retention stayed");
+      Assert (Dv.Find_Current (Store, Young).Standing = Dv.Current,
+              "the answer a kept derivation shares with one let go went with it");
+      Assert (not S.Exists (Store, F.Derivations_Area,
+                            "head-" & F.Fingerprint ("other" & LF & "old")),
+              "the pointer to a derivation let go stayed");
+      S.Close (Store);
+   end Derivations_Are_Pruned;
+
+   --  The tests a change calls for come from derivations: the same change
+   --  is chosen for once, a changed file or a new version chooses again, and
+   --  the evidence of the run names the selection it was given.
+   procedure Selection_Is_Derived (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Tc.Scope;
+      use type Dv.Currentness;
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Req     : Unbounded_String;
+      Id      : Unbounded_String;
+      Given   : Tk.Field_Map;
+      Changed : Model_Runner.Framework.Name_Lists.Vector;
+      Files   : Rp.Graph;
+      Old     : Tc.Selection;
+      First   : Tc.Traced;
+      Second  : Tc.Traced;
+      Report  : S.Recovery_Report;
+      Selection_Root : Unbounded_String;
+   begin
+      Task_Project
+        (Store, "derived-selection",
+         "set execution.allowed = echo" & LF & "profile checks = say: echo fine" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads",
+                "package Parser is" & LF & "   procedure Next;" & LF & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/parser.adb",
+                "package body Parser is" & LF & "   procedure Next is null;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/main.adb",
+                "with Parser;" & LF & "procedure Main is" & LF & "begin" & LF
+                & "   Parser.Next;" & LF & "end Main;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb",
+                "with Parser;" & LF & "procedure Parser_Tests is" & LF & "begin" & LF
+                & "   null;" & LF & "end Parser_Tests;" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Next", "It SHALL advance.",
+                  "", "user", "", "parser", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted",
+               Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Given := Fields ("Next", "implementation", "component", "parser");
+      Given.Include ("requirements", To_String (Req));
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+
+      Files := Rp.Scan (Fresh_Root (Store));
+      Changed.Append ("src/parser.ads");
+      Old := Tc.Select_Tests (Store, Tc.Impact_Of (Tc.Build (Store, Files), Changed));
+
+      Dv.Forget;
+      First := Tc.Select_For (Store, Files, Changed, To_String (Id));
+      Assert (First.Chosen.Width = Old.Width and then First.Chosen.Tests = Old.Tests
+              and then First.Chosen.Reason = Old.Reason,
+              "the derived selection is not the one worked out directly");
+      Assert (Length (First.Graph_Key) = 20 and then Length (First.Impact_Key) = 20
+              and then Length (First.Selection_Key) = 20 and then Dv.Length (First.Kept) = 3,
+              "a selection did not come through three derivations");
+      Assert (Dv.Computed ("traceability") = 1 and then Dv.Computed ("impact") = 1
+              and then Dv.Computed ("test_selection") = 1,
+              "the first selection was not worked out once each");
+
+      --  Kept, and asked again in another process: nothing worked out.
+      Dv.Keep (Store, Change, First.Kept, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the derivations were not kept: " & Code_Of (Status));
+      Dv.Forget;
+      Second := Tc.Select_For (Store, Files, Changed, To_String (Id));
+      Assert (Second.Selection_Key = First.Selection_Key and then Second.Chosen.Tests = First.Chosen.Tests
+              and then Dv.Reused ("test_selection") = 1 and then Dv.Computed ("test_selection") = 0
+              and then Dv.Computed ("impact") = 0 and then Dv.Computed ("traceability") = 0
+              and then Dv.Length (Second.Kept) = 0,
+              "a selection kept for the same change was worked out again");
+
+      --  The same change in another order is the same selection.
+      declare
+         Both    : Model_Runner.Framework.Name_Lists.Vector;
+         Reverse_Both : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Both.Append ("src/main.adb");
+         Both.Append ("src/parser.ads");
+         Reverse_Both.Append ("src/parser.ads");
+         Reverse_Both.Append ("src/main.adb");
+         Reverse_Both.Append ("src/parser.ads");
+         Assert (Tc.Select_For (Store, Files, Both).Selection_Key
+                   = Tc.Select_For (Store, Files, Reverse_Both).Selection_Key,
+                 "the same change given in another order was another selection");
+      end;
+
+      --  A new version of the selection, the project's bytes the same.
+      declare
+         Graph  : Tc.Graph;
+         Reach  : Tc.Impact;
+         Chosen : Tc.Selection;
+         Key    : Unbounded_String;
+         Kept   : Dv.Staged;
+         Graph_Key, Impact_Key : Unbounded_String;
+      begin
+         Dv.Forget;
+         Tc.Derive_Graph (Store, Files, Graph, Graph_Key, Kept);
+         Tc.Derive_Impact (Store, Graph, To_String (Graph_Key), Changed, Reach, Impact_Key, Kept,
+                           To_String (Id));
+         Assert (Dv.Computed ("traceability") = 0 and then Dv.Computed ("impact") = 0
+                 and then Impact_Key = First.Impact_Key,
+                 "a kept graph or impact was worked out again");
+         Tc.Derive_Selection (Store, Reach, To_String (Impact_Key), Chosen, Key, Kept, To_String (Id),
+                              Version => "2");
+         Assert (Key /= First.Selection_Key and then Dv.Computed ("test_selection") = 1,
+                 "a new version of the selection used the old one's answer");
+      end;
+
+      --  The evidence names what chose its tests, and that is followed back.
+      declare
+         Chosen   : constant Vf.Choice := Vf.Choose (Store, To_String (Id), Changed, Own_Profile => "checks");
+         Evidence : Unbounded_String;
+         Passed   : Boolean;
+         Value    : R.Item;
+         Lines    : Model_Runner.Framework.Name_Lists.Vector;
+      begin
+         Assert (Length (Chosen.Selection) = 20, "the choice did not name its selection");
+         Vf.Run_Profile (Store, Change, To_String (Chosen.Profile), To_String (Id), Evidence, Passed, Status,
+                         Given => Chosen.Given, Selection => To_String (Chosen.Selection),
+                         Derived => Chosen.Derived);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Passed, "the checks did not run: " & Code_Of (Status));
+         S.Read (Store, F.Verification_Area, To_String (Evidence), Value, Status);
+         Assert (R.Get (Value, "selection") = To_String (Chosen.Selection),
+                 "the evidence does not name the selection its tests came from");
+         Lines := Dv.Explain (Store, To_String (Chosen.Selection));
+         Assert (Says (Lines, "rests on impact") and then Says (Lines, "rests on traceability"),
+                 "the selection was not followed back to the graph: " & Joined (Lines));
+         --  And /result says it, under the evidence.
+         declare
+            Root : constant String := Fresh_Root (Store);
+         begin
+            S.Close (Store);
+            Selection_Root := To_Unbounded_String (Root);
+         end;
+         declare
+            Text : constant String :=
+              Command_Output (To_String (Selection_Root), ["/result " & To_String (Evidence)]);
+         begin
+            Assert (Ada.Strings.Fixed.Index (Text, "How its tests were chosen") > 0
+                    and then Ada.Strings.Fixed.Index (Text, To_String (Chosen.Selection) & ": test_selection") > 0,
+                    "/result of the evidence did not say how its tests were chosen: " & Text);
+         end;
+         S.Open (Store, To_String (Selection_Root), Report, Status);
+      end;
+
+      --  A file changed: a new graph, said stale in that file.
+      Put_File (Fresh_Root (Store) & "/src/parser.adb",
+                "package body Parser is" & LF & "   procedure Next is begin null; end Next;" & LF
+                & "end Parser;" & LF);
+      Files := Rp.Scan (Fresh_Root (Store));
+      declare
+         Found : constant Dv.Finding := Dv.Find_Current (Store, Tc.Graph_Specification (Store, Files));
+      begin
+         Assert (Found.Standing = Dv.Stale_Input and then Says (Found.Causes, "file src/parser.adb changed"),
+                 "a changed source did not make the graph stale in it: " & Dv.Word (Found.Standing)
+                 & " " & Joined (Found.Causes));
+      end;
+      Dv.Forget;
+      Second := Tc.Select_For (Store, Files, Changed, To_String (Id));
+      Assert (Second.Graph_Key /= First.Graph_Key and then Dv.Computed ("traceability") = 1,
+              "a changed source used the old graph");
+
+      --  A record of the state that will not read: worked out, never kept.
+      Put_File (S.Root (Store) & "/requirements/" & To_String (Req) & ".rec", "damaged" & LF);
+      Second := Tc.Select_For (Store, Files, Changed, To_String (Id));
+      Assert (Length (Second.Selection_Key) = 0 and then Dv.Length (Second.Kept) = 0
+              and then Second.Chosen.Width = Tc.Full_Suite,
+              "a selection resting on a record that would not read was kept, or narrowed");
+      S.Close (Store);
+   end Selection_Is_Derived;
+
+   ---------------------------------------------------------------------------
+   --  What was learned: observations.
+   ---------------------------------------------------------------------------
+
+   package Ob renames Model_Runner.Framework.Observations;
+
+   function Draft_Of
+     (Kind : Ob.Observation_Kind; Summary : String; File : String := ""; Evidence : String := "")
+      return Ob.Draft
+   is
+      Result : Ob.Draft;
+   begin
+      Result.Kind := Kind;
+      Result.Summary := To_Unbounded_String (Summary);
+      if File /= "" then
+         Result.Files.Append (File);
+      end if;
+      if Evidence /= "" then
+         Result.Evidence.Append (Evidence);
+      end if;
+      return Result;
+   end Draft_Of;
+
+   function Origin_Of (Task_Id, Generation, Agent : String) return Ob.Origin
+   is (Producer   => Ob.Agent_Producer,
+       Task_Id    => To_Unbounded_String (Task_Id),
+       Generation => To_Unbounded_String (Generation),
+       Agent      => To_Unbounded_String (Agent),
+       Invocation => To_Unbounded_String ("INV-000001"),
+       others     => <>);
+
+   --  A finding is kept with where it came from, found again is the same
+   --  observation seen again, and it never stands in for what the project
+   --  means: it moves only through its own life, and becomes a task, a
+   --  fact or a decision only by being promoted into one, which names it.
+   procedure Observations_Are_Learned (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Ob.Lifecycle;
+      use type Ob.Grounding;
+      use type Ob.Applicability;
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Id      : Unbounded_String;
+      Again   : Unbounded_String;
+      Other   : Unbounded_String;
+      Fresh   : Boolean;
+      Value   : Ob.Observation;
+      Why     : Unbounded_String;
+      Task_Id : Unbounded_String;
+
+      procedure Keep (Said : Ob.Draft; From : Ob.Origin; Into : out Unbounded_String) is
+      begin
+         Change := S.No_Changes;
+         Ob.Record_Observation (Store, Change, Said, From, Into, Fresh, Status);
+         if E.Is_Ok (Status) then
+            S.Commit (Store, Change, Status);
+         end if;
+      end Keep;
+
+      --  Why a finding was refused, nothing of it kept.
+      function Refusal (Said : Ob.Draft) return E.Error_Code is
+         Into    : Unbounded_String;
+         Refused : E.Error_Info;
+      begin
+         Change := S.No_Changes;
+         Ob.Record_Observation (Store, Change, Said, Origin_Of ("", "", ""), Into, Fresh, Refused);
+         Change := S.No_Changes;
+         return Refused.Code;
+      end Refusal;
+   begin
+      Task_Project (Store, "observations");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is end Parser;" & LF);
+      Tk.Create (Store, Change, Fields ("Look", "analysis", "component", "parser"), "user", "", Task_Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task was not made: " & Code_Of (Status));
+
+      Keep (Draft_Of (Ob.Finding, "Parse_Actuals needs a non-empty actual list.", "src/parser.adb"),
+            Origin_Of (To_String (Task_Id), "1", "AG-1"), Id);
+      Assert (E.Is_Ok (Status) and then Fresh and then To_String (Id) = "OBS-001",
+              "a finding was not kept as a new observation: " & Code_Of (Status) & " " & To_String (Id));
+      Ob.Read (Store, To_String (Id), Value, Status);
+      Assert (Value.Status = Ob.Active and then Value.Ground = Ob.Reported
+              and then To_String (Value.Task_Id) = To_String (Task_Id)
+              and then To_String (Value.Generation) = "1" and then To_String (Value.Agent) = "AG-1"
+              and then To_String (Value.Invocation) = "INV-000001"
+              and then To_String (Value.Component) = "parser"
+              and then Value.Files.Contains ("src/parser.adb") and then Value.Occurrences = 1,
+              "an observation did not keep where it came from");
+
+      Assert (Ob.Claim_Of (Draft_Of (Ob.Finding, "Parse_Actuals needs a non-empty actual list.", "src/parser.adb"))
+                = Ob.Claim_Of (Draft_Of (Ob.Finding, "parse_actuals  needs a NON-EMPTY actual list",
+                                         "src/parser.adb"))
+              and then Ob.Claim_Of (Draft_Of (Ob.Finding, "Parse_Actuals needs a non-empty actual list."))
+                       /= Ob.Claim_Of (Draft_Of (Ob.Finding, "Parse_Actuals needs a non-empty actual list.",
+                                                 "src/parser.adb")),
+              "a claim's case, spacing or stop counted, or the files it is about did not");
+
+      --  The same claim, said otherwise in its case and its stop, later.
+      Keep (Draft_Of (Ob.Finding, "parse_actuals  needs a NON-EMPTY actual list", "src/parser.adb"),
+            Origin_Of (To_String (Task_Id), "2", "AG-2"), Again);
+      Ob.Read (Store, To_String (Id), Value, Status);
+      Assert (not Fresh and then Again = Id and then Value.Occurrences = 2
+              and then Natural (Value.Sightings.Length) = 2
+              and then Natural (Ob.List (Store).Length) = 1,
+              "the same finding found again was kept twice, or not counted");
+      --  Another claim is another observation.
+      Keep (Draft_Of (Ob.Finding, "Parse_Actuals accepts an empty actual list.", "src/parser.adb"),
+            Origin_Of (To_String (Task_Id), "2", "AG-2"), Other);
+      Assert (Fresh and then Other /= Id, "two findings that say different things were merged");
+
+      --  Refused: nothing said, a path out of the project, evidence that
+      --  is not evidence or is not kept.
+      Assert (Refusal (Draft_Of (Ob.Finding, "   ")) = E.Framework_Input_Invalid,
+              "an empty finding was kept");
+      Assert (Refusal (Draft_Of (Ob.Finding, "outside", "../etc/passwd")) = E.Framework_Input_Invalid,
+              "a path out of the project was kept");
+      Assert (Refusal (Draft_Of (Ob.Finding, "named", "", To_String (Task_Id))) = E.Framework_Input_Invalid,
+              "a task was taken for evidence");
+      Assert (Refusal (Draft_Of (Ob.Finding, "named", "", "VER-999999")) = E.Framework_Not_Found,
+              "evidence that is not kept was taken on trust");
+
+      --  Evidence kept stands behind it.
+      declare
+         Proof : Model_Runner.Framework.Results.Result :=
+           (Kind    => Model_Runner.Framework.Results.Analysis,
+            Producer => To_Unbounded_String ("test"),
+            Summary => To_Unbounded_String ("proof"),
+            Payload => To_Unbounded_String ("it failed so"),
+            others  => <>);
+         Grounded : Unbounded_String;
+      begin
+         Change := S.No_Changes;
+         Model_Runner.Framework.Results.Add (Store, Change, Proof, Status);
+         S.Commit (Store, Change, Status);
+         Keep (Draft_Of (Ob.Tool_Behavior, "gprbuild reads the -gnat2022 switch only in its own project",
+                         "", To_String (Proof.Id)),
+               Origin_Of (To_String (Task_Id), "2", "AG-2"), Grounded);
+         Ob.Read (Store, To_String (Grounded), Value, Status);
+         Assert (Value.Ground = Ob.Observed and then Value.Evidence.Contains (To_String (Proof.Id)),
+                 "an observation with evidence was not grounded in it");
+         Assert (Ob.Applicability_Of (Store, Value, Why) = Ob.Applicable,
+                 "a fresh observation did not apply: " & To_String (Why));
+         --  The configuration since changed: a tool's behaviour is uncertain.
+         declare
+            Held : R.Item;
+         begin
+            S.Read (Store, F.Observations_Area, To_String (Grounded), Held, Status);
+            R.Set (Held, "configuration", "another");
+            R.Set_Revision (Held, R.Revision (Held) + 1);
+            S.Put (Change, F.Observations_Area, To_String (Grounded), Held);
+            S.Commit (Store, Change, Status);
+            Ob.Read (Store, To_String (Grounded), Value, Status);
+            Assert (Ob.Applicability_Of (Store, Value, Why) = Ob.Uncertain,
+                    "a tool's behaviour seen under another configuration was not uncertain");
+         end;
+      end;
+
+      --  The file it is about changed: stale, said why, and still there.
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is null; end Parser;" & LF);
+      Ob.Read (Store, To_String (Id), Value, Status);
+      Assert (Ob.Applicability_Of (Store, Value, Why) = Ob.Stale
+              and then Ada.Strings.Fixed.Index (To_String (Why), "src/parser.adb changed") > 0,
+              "an observation of a file changed since was not stale: " & To_String (Why));
+
+      --  It is no gate, no readiness, no requirement: the task stands as it
+      --  stood, and an event says what was kept.
+      declare
+         Before : constant String := Tk.State_Of (Store, To_String (Task_Id));
+         Gates  : constant Vf.Gate_List := Vf.Gates (Store, To_String (Task_Id));
+         Seen   : Boolean := False;
+         Log    : constant Model_Runner.Framework.Events.Event_List := Model_Runner.Framework.Events.Since (Store, 0);
+      begin
+         Assert (Before = "candidate" and then
+                 (for some Index in 1 .. Vf.Length (Gates) => not Vf.Element (Gates, Index).Passed),
+                 "an observation moved its task or passed a gate");
+         for Index in 1 .. Model_Runner.Framework.Events.Length (Log) loop
+            Seen := Seen
+              or else (Model_Runner.Framework.Events.Element (Log, Index).Kind
+                         = Model_Runner.Framework.Events.Observation_Recorded
+                       and then To_String (Model_Runner.Framework.Events.Element (Log, Index).Subject)
+                                = To_String (Id));
+         end loop;
+         Assert (Seen, "keeping an observation was not an event");
+      end;
+
+      --  Its life: dismissed once, superseded by another, never by itself.
+      Change := S.No_Changes;
+      Ob.Supersede (Store, Change, To_String (Other), To_String (Other), Status);
+      Assert (Status.Code = E.Framework_Input_Invalid, "an observation superseded itself");
+      Change := S.No_Changes;
+      Ob.Supersede (Store, Change, To_String (Other), To_String (Id), Status);
+      S.Commit (Store, Change, Status);
+      Ob.Read (Store, To_String (Other), Value, Status);
+      Assert (Value.Status = Ob.Superseded and then To_String (Value.Superseded_By) = To_String (Id)
+              and then Ob.Applicability_Of (Store, Value, Why) = Ob.Superseded,
+              "a superseded observation did not say by which");
+      Change := S.No_Changes;
+      Ob.Dismiss (Store, Change, To_String (Other), "wrong", Status);
+      Assert (Status.Code = E.Framework_Transition_Invalid, "a superseded observation was dismissed");
+
+      --  Promoted into a task: a candidate, made from it, which stays what
+      --  it was but promoted; never twice.
+      declare
+         Made    : Unbounded_String;
+         Defined : R.Item;
+         Given   : constant Tk.Field_Map := Fields ("Allow empty actual lists", "analysis");
+      begin
+         Change := S.No_Changes;
+         Ob.Promote_To_Task (Store, Change, To_String (Id), Given, Made, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Tk.State_Of (Store, To_String (Made)) = "candidate",
+                 "a promoted observation did not make a candidate task: " & Code_Of (Status));
+         Tk.Definition (Store, To_String (Made), Defined, Status);
+         Assert (R.Get (Defined, "origin") = To_String (Id)
+                 and then R.Get (Defined, "created_by") = "observation_promotion",
+                 "the task made from an observation does not name it");
+         Ob.Read (Store, To_String (Id), Value, Status);
+         Assert (Value.Status = Ob.Promoted and then To_String (Value.Promoted_To) = To_String (Made)
+                 and then Ada.Strings.Fixed.Index (To_String (Value.Summary), "non-empty") > 0,
+                 "the promoted observation was not kept as it was, marked promoted");
+         Change := S.No_Changes;
+         Ob.Promote_To_Task (Store, Change, To_String (Id), Given, Made, Status);
+         Assert (Status.Code = E.Framework_Transition_Invalid, "an observation was promoted twice");
+      end;
+
+      --  Into a fact: no surer than it was, never authoritative.
+      declare
+         Learned : Unbounded_String;
+         Known   : Model_Runner.Framework.Facts.Fact;
+      begin
+         Keep (Draft_Of (Ob.Environment_Constraint, "the build machine has no network"),
+               Origin_Of (To_String (Task_Id), "2", "AG-2"), Learned);
+         Change := S.No_Changes;
+         Ob.Promote_To_Fact (Store, Change, To_String (Learned), "network", "none", Status);
+         S.Commit (Store, Change, Status);
+         Model_Runner.Framework.Facts.Find (Store, "network", Known, Status);
+         Assert (E.Is_Ok (Status) and then Known.Source = Model_Runner.Framework.Facts.Observation
+                 and then Known.Confidence = Model_Runner.Framework.Facts.Uncertain
+                 and then To_String (Known.Origin) = To_String (Learned),
+                 "a fact made from a reported observation was surer than it, or did not name it");
+      end;
+
+      --  Into a decision: proposed, for a person to decide.
+      declare
+         Learned : Unbounded_String;
+         Made    : Unbounded_String;
+      begin
+         Keep (Draft_Of (Ob.Implementation_Note, "errors are reported, never raised, across the parser"),
+               Origin_Of (To_String (Task_Id), "2", "AG-2"), Learned);
+         Change := S.No_Changes;
+         Ob.Promote_To_Decision (Store, Change, To_String (Learned), "PARSER", "", "", "", Made, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then Nt.State_Of (Store, Nt.Decision, To_String (Made)) = "candidate",
+                 "a decision made from an observation was not only a candidate: " & Code_Of (Status)
+                 & " " & Nt.State_Of (Store, Nt.Decision, To_String (Made)));
+      end;
+
+      --  Long dismissed: a tombstone, which still says what it was.
+      declare
+         Old : Unbounded_String;
+         Held : R.Item;
+         Retired : Natural;
+      begin
+         Keep (Draft_Of (Ob.Experiment, "a buffer of 4 KiB was slower"), Origin_Of ("", "", ""), Old);
+         Change := S.No_Changes;
+         Ob.Dismiss (Store, Change, To_String (Old), "measured wrong", Status);
+         S.Commit (Store, Change, Status);
+         S.Read (Store, F.Observations_Area, To_String (Old), Held, Status);
+         R.Set (Held, "seen_at", "2001-01-01T00:00:00Z");
+         R.Set_Revision (Held, R.Revision (Held) + 1);
+         S.Put (Change, F.Observations_Area, To_String (Old), Held);
+         S.Commit (Store, Change, Status);
+         Ob.Prune (Store, Change, 0, Retired);
+         Assert (Retired = 0, "a retention of nothing retired an observation");
+         Ob.Prune (Store, Change, 30, Retired);
+         S.Commit (Store, Change, Status);
+         Ob.Read (Store, To_String (Old), Value, Status);
+         Assert (E.Is_Ok (Status) and then Retired = 1 and then Length (Value.Retired) > 0
+                 and then Length (Value.Summary) = 0 and then Value.Status = Ob.Dismissed,
+                 "a long-dismissed observation was not left as a tombstone");
+         Ob.Read (Store, To_String (Id), Value, Status);
+         Assert (Length (Value.Retired) = 0, "a promoted observation was retired");
+      end;
+      S.Close (Store);
+   end Observations_Are_Learned;
+
+   --  The harness's own finding: a task's checks failing again as they
+   --  failed before is a pattern, kept once and seen again after; a first
+   --  failure is not one.
+   procedure Failures_Repeat_As_Patterns (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type Ob.Producer_Kind;
+      use type Ob.Grounding;
+      Store    : S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Task_Id  : Unbounded_String;
+      Seen     : array (1 .. 3) of Unbounded_String;
+      Value    : Ob.Observation;
+
+      procedure Fail_Once (Turn : Positive) is
+         Evidence : Unbounded_String;
+         Passed   : Boolean;
+      begin
+         Vf.Run_Profile (Store, Change, "broken", To_String (Task_Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then not Passed, "the failing check did not fail: " & Code_Of (Status));
+         Ob.Observe_Failure (Store, Change, To_String (Task_Id), To_String (Evidence),
+                             (Producer => Ob.Harness_Producer, Task_Id => Task_Id, others => <>),
+                             Seen (Turn), Status);
+         S.Commit (Store, Change, Status);
+      end Fail_Once;
+   begin
+      if not Dirs.Exists ("/bin/sh") then
+         return;
+      end if;
+      Task_Project (Store, "failure-pattern",
+                    "set execution.allowed = ./fails.sh" & LF & "profile broken = build: ./fails.sh" & LF);
+      declare
+         File    : Ada.Text_IO.File_Type;
+         Path    : constant String := Fresh_Root (Store) & "/fails.sh";
+         Ignored : Boolean;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put_Line (File, "#!/bin/sh");
+         Ada.Text_IO.Put_Line (File, "echo 'src/parser.adb:3:4: error: ""Next"" is undefined'");
+         Ada.Text_IO.Put_Line (File, "exit 1");
+         Ada.Text_IO.Close (File);
+         Ignored := Hostkit.Metadata.Set_Permissions (Path, 8#755#);
+      end;
+      Tk.Create (Store, Change, Fields ("Fix", "analysis"), "user", "", Task_Id, Status);
+      S.Commit (Store, Change, Status);
+      for Turn in Seen'Range loop
+         Fail_Once (Turn);
+      end loop;
+      Assert (Length (Seen (1)) = 0, "a first failure was taken for a pattern");
+      Assert (Length (Seen (2)) > 0 and then Seen (3) = Seen (2),
+              "a failure repeated was not kept as one pattern: [" & To_String (Seen (2)) & "] ["
+              & To_String (Seen (3)) & "] " & Code_Of (Status));
+      Ob.Read (Store, To_String (Seen (2)), Value, Status);
+      Assert (Value.Producer = Ob.Harness_Producer and then Value.Ground = Ob.Observed
+              and then Value.Occurrences = 2 and then Natural (Value.Evidence.Length) = 3
+              and then Ada.Strings.Fixed.Index (To_String (Value.Summary), "is undefined") > 0
+              and then Value.Files.Contains ("src/parser.adb"),
+              "the pattern does not say what failed, on what evidence, by whom: "
+              & To_String (Value.Summary) & Natural'Image (Value.Occurrences)
+              & Natural'Image (Natural (Value.Evidence.Length)));
+      S.Close (Store);
+   end Failures_Repeat_As_Patterns;
+
+   --  What a task's work is told of what was learned: the hot before the
+   --  warm, the cold not at all, what may no longer hold said so, nothing
+   --  that only repeats what is given, and what governs before all of it --
+   --  each considered recorded in the context's manifest.
+   procedure Knowledge_Is_Told (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Mine, Near, Far : Unbounded_String;
+      Req    : Unbounded_String;
+      Hot, Warm, Cold, Tool, Gone, Repeat : Unbounded_String;
+      Fresh  : Boolean;
+      Built  : Cx.Built;
+      Wide   : constant Cx.Model_Profile :=
+        (Id => To_Unbounded_String ("wide"), Context_Limit => 60_000, Output_Reserve => 512, others => <>);
+
+      procedure Keep (Said : Ob.Draft; From : Ob.Origin; Into : out Unbounded_String) is
+      begin
+         Change := S.No_Changes;
+         Ob.Record_Observation (Store, Change, Said, From, Into, Fresh, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "an observation was not kept: " & Code_Of (Status));
+      end Keep;
+
+      function Offered (Id : Unbounded_String) return Boolean
+      is (for some Line of Cx.Knowledge (Built) => Ada.Strings.Fixed.Index (Line, To_String (Id) & "@") = 1);
+
+      function Left (Id : Unbounded_String; Why : String) return Boolean
+      is (for some Line of Cx.Knowledge_Left (Built) =>
+            Ada.Strings.Fixed.Index (Line, To_String (Id)) = 1 and then Ada.Strings.Fixed.Index (Line, Why) > 0);
+
+      function Included (Id : Unbounded_String) return Boolean
+      is (for some Index in 1 .. Cx.Included_Count (Built) =>
+            Ada.Strings.Fixed.Index (To_String (Cx.Included_At (Built, Index).Id), To_String (Id) & "@") = 1);
+
+      function Excluded (Id : Unbounded_String) return Boolean
+      is (for some Index in 1 .. Cx.Excluded_Count (Built) =>
+            Ada.Strings.Fixed.Index (To_String (Cx.Excluded_At (Built, Index).Id), To_String (Id) & "@") = 1);
+   begin
+      Task_Project (Store, "knowledge");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is end Parser;" & LF);
+      Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Next", "It SHALL advance past a comma.",
+                  "", "user", "", "parser", Req, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Given : Tk.Field_Map := Fields ("Mine", "implementation", "component", "parser");
+      begin
+         Given.Include ("requirements", To_String (Req));
+         Tk.Create (Store, Change, Given, "user", "", Mine, Status);
+      end;
+      Tk.Create (Store, Change, Fields ("Near", "implementation", "component", "parser"), "user", "", Near, Status);
+      Tk.Create (Store, Change, Fields ("Far", "implementation", "component", "io"), "user", "", Far, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the tasks were not made: " & Code_Of (Status));
+
+      Keep (Draft_Of (Ob.Finding, "Next skips a comma only after a name", "src/parser.adb"),
+            Origin_Of (To_String (Mine), "1", "AG-1"), Hot);
+      Keep (Draft_Of (Ob.Implementation_Note, "the parser's tables are built at elaboration"),
+            Origin_Of (To_String (Near), "1", "AG-2"), Warm);
+      Keep (Draft_Of (Ob.Finding, "the io buffer is flushed twice"), Origin_Of (To_String (Far), "1", "AG-3"),
+            Cold);
+      Keep (Draft_Of (Ob.Tool_Behavior, "gnatprove needs --level=2 for the io proofs"),
+            Origin_Of (To_String (Far), "1", "AG-3"), Tool);
+      Keep (Draft_Of (Ob.Finding, "Next is never called twice"), Origin_Of (To_String (Mine), "1", "AG-1"), Gone);
+      Change := S.No_Changes;
+      Ob.Dismiss (Store, Change, To_String (Gone), "it is", Status);
+      S.Commit (Store, Change, Status);
+      Keep (Draft_Of (Ob.Finding, "It SHALL advance past a comma."), Origin_Of (To_String (Mine), "1", "AG-1"),
+            Repeat);
+
+      --  Considered as the context will: the hot first, each with why.
+      declare
+         Left  : Model_Runner.Framework.Name_Lists.Vector;
+         Found : constant Ob.Considered_Vectors.Vector := Ob.Relevant (Store, To_String (Mine), Left);
+         use type Ob.Temperature;
+      begin
+         Assert (not Found.Is_Empty and then Found.First_Element.Heat = Ob.Hot
+                 and then Found.Last_Element.Heat = Ob.Warm
+                 and then (for all Index in 2 .. Natural (Found.Length) =>
+                             Found (Index - 1).Heat <= Found (Index).Heat)
+                 and then (for all One of Found => Length (One.Reason) > 0),
+                 "the relevant observations were not the hot before the warm, each with why");
+      end;
+
+      Cx.Build (Store, To_String (Mine), Wide, Built, Status);
+      Assert (E.Is_Ok (Status), "the context was not built: " & Code_Of (Status));
+      Assert (Offered (Hot) and then Included (Hot)
+              and then (for some Line of Cx.Knowledge (Built) =>
+                          Ada.Strings.Fixed.Index (Line, To_String (Hot) & "@") = 1
+                          and then Ada.Strings.Fixed.Index (Line, " hot applicable found in this task") > 0),
+              "an observation of the task itself was not told it, hot: " & Joined (Cx.Knowledge (Built)));
+      Assert (Offered (Warm) and then Included (Warm)
+              and then (for some Line of Cx.Knowledge (Built) => Ada.Strings.Fixed.Index (Line, " warm ") > 0),
+              "an observation of its component was not told it, warm");
+      Assert (Offered (Tool), "a caveat of the project's tools was not told it");
+      Assert (not Offered (Cold) and then Left (Cold, "cold, unrelated"),
+              "an unrelated observation was told it, or not said left out: " & Joined (Cx.Knowledge_Left (Built)));
+      Assert (not Offered (Gone) and then Left (Gone, "dismissed"),
+              "a dismissed observation was told it");
+      Assert (not Offered (Repeat) and then Left (Repeat, "says only what " & To_String (Req)),
+              "an observation repeating its requirement took room: " & Joined (Cx.Knowledge_Left (Built)));
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Built), "an observation, not authoritative") > 0,
+              "an observation was told as though it were authoritative");
+
+      --  Kept in its manifest, built the same twice.
+      declare
+         Again : Cx.Built;
+         Value : R.Item;
+      begin
+         Cx.Build (Store, To_String (Mine), Wide, Again, Status);
+         Assert (Cx.Manifest_Id (Again) = Cx.Manifest_Id (Built), "the same state built another context");
+         Change := S.No_Changes;
+         Cx.Keep (Store, Change, Built, Status);
+         S.Commit (Store, Change, Status);
+         S.Read (Store, F.Invocations_Area, "manifest." & Cx.Manifest_Id (Built), Value, Status);
+         Assert (Ada.Strings.Fixed.Index (R.Get (Value, "knowledge.1") & R.Get (Value, "knowledge.2"),
+                                          To_String (Hot)) > 0
+                 and then (for some Index in 1 .. 9 =>
+                             Ada.Strings.Fixed.Index
+                               (R.Get (Value, "knowledge_left."
+                                              & Ada.Strings.Fixed.Trim (Index'Image, Ada.Strings.Both)),
+                                To_String (Cold)) = 1),
+                 "the manifest does not record the knowledge considered");
+      end;
+
+      --  Under pressure: what governs stays, the hot before the warm.
+      declare
+         Tight : Cx.Model_Profile := Wide;
+         Full  : constant Natural := Cx.Cost (Built);
+         Warm_Cost : Natural := 0;
+      begin
+         --  Room for all but the warm observations, and the list naming them.
+         for Index in 1 .. Cx.Included_Count (Built) loop
+            if Cx."=" (Cx.Included_At (Built, Index).Rank, Cx.Normal)
+              and then To_String (Cx.Included_At (Built, Index).Kind) = "observation"
+            then
+               Warm_Cost := Warm_Cost + Cx.Estimate (To_String (Cx.Included_At (Built, Index).Text)) + 16;
+            end if;
+         end loop;
+         Tight.Context_Limit := Full - Warm_Cost + Tight.Output_Reserve + 60;
+         Cx.Build (Store, To_String (Mine), Tight, Built, Status);
+         Assert (E.Is_Ok (Status) and then Included (Hot) and then Excluded (Warm),
+                 "under pressure the warm went before the hot, or the hot went: "
+                 & Boolean'Image (Included (Hot)) & Boolean'Image (Excluded (Warm)));
+         Assert ((for some Index in 1 .. Cx.Included_Count (Built) =>
+                    To_String (Cx.Included_At (Built, Index).Id) = To_String (Req) & "@1"),
+                 "what governs the work went for an observation");
+      end;
+
+      --  The file it is about changed: told, warm, as what may not hold.
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is null; end Parser;" & LF);
+      Cx.Build (Store, To_String (Mine), Wide, Built, Status);
+      Assert ((for some Line of Cx.Knowledge (Built) =>
+                 Ada.Strings.Fixed.Index (Line, To_String (Hot) & "@") = 1
+                 and then Ada.Strings.Fixed.Index (Line, " warm stale ") > 0)
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "now stale: src/parser.adb changed") > 0,
+              "a stale observation was told as current: " & Joined (Cx.Knowledge (Built)));
+      S.Close (Store);
+
+      --  Bounded, and off where the project says so.
+      Task_Project (Store, "knowledge-bounded", "scalar knowledge.max_hot = 1" & LF);
+      Tk.Create (Store, Change, Fields ("Mine", "analysis"), "user", "", Mine, Status);
+      S.Commit (Store, Change, Status);
+      Keep (Draft_Of (Ob.Finding, "one"), Origin_Of (To_String (Mine), "1", "AG-1"), Hot);
+      Keep (Draft_Of (Ob.Finding, "two"), Origin_Of (To_String (Mine), "1", "AG-1"), Warm);
+      Cx.Build (Store, To_String (Mine), Wide, Built, Status);
+      Assert (Natural (Cx.Knowledge (Built).Length) = 1
+              and then (for some Line of Cx.Knowledge_Left (Built) =>
+                          Ada.Strings.Fixed.Index (Line, "past knowledge.max_hot") > 0),
+              "the bound on hot observations was not kept: " & Code_Of (Status) & " "
+              & Joined (Cx.Knowledge (Built)) & " / " & Joined (Cx.Knowledge_Left (Built)));
+      S.Close (Store);
+      Task_Project (Store, "knowledge-off", "scalar knowledge.observations = off" & LF);
+      Tk.Create (Store, Change, Fields ("Mine", "analysis"), "user", "", Mine, Status);
+      S.Commit (Store, Change, Status);
+      Keep (Draft_Of (Ob.Finding, "one"), Origin_Of (To_String (Mine), "1", "AG-1"), Hot);
+      Cx.Build (Store, To_String (Mine), Wide, Built, Status);
+      Assert (Cx.Knowledge (Built).Is_Empty and then Ada.Strings.Fixed.Index (Cx.Rendered (Built), "OBS-") = 0,
+              "observations were told where the project turned them off");
+      S.Close (Store);
+   end Knowledge_Is_Told;
+
+   ---------------------------------------------------------------------------
+   --  Agent behaviour: does what was learned save work?
+   ---------------------------------------------------------------------------
+
+   --  The calls an agent made finding its way, and what it was told.
+   Knowing_Looks : Natural := 0;
+   Knowing_Told  : Boolean := False;
+
+   --  An agent that, not told what the project's build needs, finds it out
+   --  -- four calls of looking -- and keeps it as an observation; told it,
+   --  it does the work at once. What a model does with what it is told,
+   --  played deterministically.
+   type Knowing_Agent is new Wk.Parenting_Runner with null record;
+
+   overriding procedure Run
+     (Self        : Knowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Knowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Knowing_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("knowing"), Context_Limit => 16_384, others => <>));
+
+   Knowing_Finding : constant String := "the build needs the -gnatX switch for parser.adb";
+
+   overriding procedure Run
+     (Self        : Knowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: failed" & LF & "summary: run without a host");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Knowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self);
+      Told : constant String := Read_Whole (Prompt_Path);
+   begin
+      Knowing_Told := Ada.Strings.Fixed.Index (Told, Knowing_Finding) > 0;
+      if not Knowing_Told then
+         Knowing_Looks := Knowing_Looks + 4;
+         declare
+            Report : Unbounded_String;
+            Kept   : E.Error_Info;
+         begin
+            Children.Record_Observation
+              ("{""kind"": ""environment_constraint"", ""summary"": """ & Knowing_Finding
+               & """, ""files"": [""src/parser.adb""]}", Report, Kept);
+            Assert (E.Is_Ok (Kept) and then Ada.Strings.Fixed.Index (To_String (Report), "OBS-") > 0,
+                    "the agent's finding was not kept: " & To_String (Report));
+         end;
+      end if;
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end; -- " & Children.Current);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   --  Scenario A, measured both ways: two tasks of one component, the
+   --  second meeting what the first found out. With what was learned kept
+   --  and told, the second does not look again; without it, it does --
+   --  and the work, its verification and what the project means come out
+   --  the same either way.
+   procedure Knowledge_Saves_Work (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+
+      type Run_Of is record
+         Looks      : Natural := 0;
+         Told       : Boolean := False;
+         States     : Unbounded_String;
+         Decisions  : Natural := 0;
+         Facts      : Natural := 0;
+      end record;
+
+      function Measured (Leaf, Policy : String) return Run_Of is
+         Store  : aliased S.Store;
+         Change : S.Transaction;
+         Status : E.Error_Info;
+         Done   : Wk.Report;
+         First, Second : Unbounded_String;
+         Result : Run_Of;
+      begin
+         Knowing_Looks := 0;
+         Task_Project
+           (Store, Leaf,
+            "set execution.allowed = test" & LF
+            & "profile checks = exists: test -f src/hello.adb" & LF
+            & "scalar verification.default = checks" & LF & Policy);
+         Tk.Create (Store, Change, Fields ("First", "analysis", "component", "parser"), "user", "", First, Status);
+         Tk.Create (Store, Change, Fields ("Second", "analysis", "component", "parser"), "user", "", Second,
+                    Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+         Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (First), Knowing_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete",
+                 "the first task did not complete: " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+         Wk.Execute (Store, To_String (Second), Knowing_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete",
+                 "the second task did not complete: " & To_String (Done.Final_State));
+         Result.Looks := Knowing_Looks;
+         Result.Told := Knowing_Told;
+         Result.States := To_Unbounded_String (Tk.State_Of (Store, To_String (First)) & " "
+                                               & Tk.State_Of (Store, To_String (Second)));
+         Result.Decisions := Natural (Nt.List (Store, Nt.Decision).Length);
+         Result.Facts := Natural (Model_Runner.Framework.Facts.Keys (Store).Length);
+         --  The finding is the first task's, its agent's and invocation's.
+         if Natural (Ob.List (Store).Length) = 1 then
+            declare
+               Value : Ob.Observation;
+            begin
+               Ob.Read (Store, Ob.List (Store).First_Element, Value, Status);
+               Assert (To_String (Value.Task_Id) = To_String (First) and then Length (Value.Agent) > 0
+                       and then Length (Value.Invocation) > 0 and then Length (Value.Generation) > 0,
+                       "the agent's observation does not say whose it is");
+            end;
+         end if;
+         S.Close (Store);
+         return Result;
+      end Measured;
+
+      With_It    : constant Run_Of := Measured ("knowing-on", "");
+      Without_It : constant Run_Of := Measured ("knowing-off", "scalar knowledge.observations = off" & LF);
+   begin
+      Assert (With_It.Told and then not Without_It.Told,
+              "the second task was told what the first found only where it should have been");
+      Assert (With_It.Looks = 4 and then Without_It.Looks = 8,
+              "what was learned did not save the second task its looking:" & Natural'Image (With_It.Looks)
+              & " with it," & Natural'Image (Without_It.Looks) & " without");
+      Assert (With_It.States = Without_It.States and then With_It.Decisions = Without_It.Decisions
+              and then With_It.Facts = Without_It.Facts,
+              "knowledge changed the work's outcome or what the project means");
+   end Knowledge_Saves_Work;
+
    ---------------------------------------------------------------------------
    --  Permissions and recursive agents.
    ---------------------------------------------------------------------------
@@ -12341,6 +13555,67 @@ package body Tests.Framework_Cases is
       end;
    end Later_Build_Event;
 
+   --  /obs lists, shows, keeps a person's, dismisses, supersedes and
+   --  promotes observations, each said; what it shows says it is not
+   --  authoritative.
+   procedure Observations_At_The_Command_Line
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store    : S.Store;
+      Obs_Root : Unbounded_String;
+   begin
+      Task_Project (Store, "obs-command");
+      declare
+         Root : constant String := Fresh_Root (Store);
+      begin
+         S.Close (Store);
+         Obs_Root := To_Unbounded_String (Root);
+      end;
+      declare
+         Text : constant String :=
+           Command_Output
+             (To_String (Obs_Root),
+              ["/obs",
+               "/obs record tool_behavior gprbuild, as we run it, ignores -j0 under alr: say -j8",
+               "/obs record tool_behavior gprbuild, as we run it, ignores -j0 under alr: say -j8",
+               "/obs record finding the parser drops a trailing comma",
+               "/obs record nonsense what",
+               "/obs",
+               "/obs 1",
+               "/obs supersede 2 1",
+               "/obs record experiment a 4 KiB buffer was no faster than 64 KiB",
+               "/obs dismiss 3 measured with the cache warm",
+               "/obs",
+               "/obs all",
+               "/obs promote 1 fact build_jobs=8",
+               "/obs promote 1 task kind=analysis",
+               "/obs promote 9 nonsense",
+               "/obs nonsense"]);
+         function Has (Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+      begin
+         Assert (Has ("no observations are kept"), "an empty /obs did not say none are kept: " & Text);
+         Assert (Has ("OBS-001 kept: an observation") and then Has ("OBS-001 says that already"),
+                 "/obs record did not keep a person's finding once: " & Text);
+         Assert (Has ("ignores -j0 under alr: say -j8"),
+                 "a person's finding lost its commas or its words: " & Text);
+         Assert (Has ("nonsense"), "a kind that is none was not refused");
+         Assert (Has ("OBS-001  tool_behavior  active"), "/obs did not list what is kept: " & Text);
+         Assert (Has ("found: by a person") and then Has ("is an observation: told to later work"),
+                 "/obs ID did not show where it came from, or that it is not authoritative: " & Text);
+         Assert (Has ("OBS-002 superseded by OBS-001") and then Has ("OBS-003 dismissed"),
+                 "/obs supersede or dismiss was not said: " & Text);
+         Assert (Has ("2 dismissed, superseded or promoted not shown")
+                 and then Has ("OBS-003  experiment  dismissed"),
+                 "/obs did not hide the ended, or /obs all did not list them: " & Text);
+         Assert (Has ("OBS-001 promoted into fact build_jobs"),
+                 "/obs promote fact was not said: " & Text);
+         Assert (Has ("it is promoted already"),
+                 "a second promotion was not refused: " & Text);
+         Assert (Has ("/obs's actions"), "an action /obs does not have was not refused: " & Text);
+      end;
+   end Observations_At_The_Command_Line;
+
    procedure Session_Work_Line_Runs_The_Task
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -14190,6 +15465,33 @@ package body Tests.Framework_Cases is
         (T, Impact_Is_Traced'Access,
          "a change is traced to what it reaches, and the tests widen with"
          & " doubt");
+      Register_Routine
+        (T, Derivation_Keys_Are_Canonical'Access,
+         "a derivation's key is what it is made from, in any order, absent told from unreadable");
+      Register_Routine
+        (T, Derivations_Are_Looked_Up'Access,
+         "a kept derivation is current while its inputs match, and said stale, corrupt or unknowable");
+      Register_Routine
+        (T, Derivations_Are_Pruned'Access,
+         "letting derivations go keeps every answer a kept one names");
+      Register_Routine
+        (T, Selection_Is_Derived'Access,
+         "a change's tests are chosen once through kept derivations, and the evidence names them");
+      Register_Routine
+        (T, Observations_Are_Learned'Access,
+         "a finding is kept with where it came from, seen again once, and promoted only explicitly");
+      Register_Routine
+        (T, Failures_Repeat_As_Patterns'Access,
+         "a task's checks failing again as before are kept as one pattern, a first failure not");
+      Register_Routine
+        (T, Knowledge_Is_Told'Access,
+         "a task's context holds the hot observations before the warm, the stale said so, the cold not");
+      Register_Routine
+        (T, Knowledge_Saves_Work'Access,
+         "what one task's agent found saves the next its looking, the outcome the same");
+      Register_Routine
+        (T, Observations_At_The_Command_Line'Access,
+         "/obs lists, shows, records, dismisses, supersedes and promotes observations");
       Register_Routine
         (T, Workspaces_Isolate_And_Integrate'Access,
          "workspace work is isolated, integrated by right, and verified after");

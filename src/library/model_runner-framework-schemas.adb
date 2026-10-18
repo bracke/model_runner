@@ -79,7 +79,7 @@ package body Model_Runner.Framework.Schemas is
           Rule ("value", Text_Field, True),
           Rule ("source", Choice_Field, True,
                 "explicit template semantic_analysis build_metadata "
-                & "naming_convention heuristic "),
+                & "naming_convention heuristic observation "),
           Rule ("confidence", Choice_Field, True,
                 "authoritative certain probable uncertain "),
           Rule ("origin", Text_Field, False)]),
@@ -92,7 +92,7 @@ package body Model_Runner.Framework.Schemas is
                 "analysis implementation verification diagnostic "
                 & "decision_proposal task_proposal impact_report "
                 & "integration_report child_result context_report "
-                & "bootstrap_report "),
+                & "bootstrap_report derived_artifact "),
           Rule ("producer", Text_Field, True),
           Rule ("created_at", Text_Field, True),
           Rule ("summary", Text_Field, True),
@@ -144,6 +144,61 @@ package body Model_Runner.Framework.Schemas is
        Rules   => new Rule_List'
          [Rule ("source", Text_Field, True),
           Rule ("entry.*", Text_Field, False)]),
+
+      --  A derivation: what it is, what it was made from, and its answer.
+      --  Its every field means something to its key, so one it does not
+      --  name is refused rather than carried.
+      (Id      => new String'(Derivation_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("kind", Text_Field, True),
+          Rule ("subject", Text_Field, True),
+          Rule ("algorithm", Text_Field, True),
+          Rule ("version", Text_Field, True),
+          Rule ("created_at", Text_Field, True),
+          Rule ("result", Identifier_Field, True),
+          Rule ("need.*", Text_Field, False),
+          Rule ("confirm.*", Text_Field, False)]),
+
+      (Id      => new String'(Observation_Schema),
+       Version => 1,
+       Policy  => Preserve_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("kind", Choice_Field, True,
+                "finding experiment failure_pattern environment_constraint tool_behavior "
+                & "implementation_note "),
+          Rule ("summary", Text_Field, False),
+          Rule ("status", Choice_Field, True, "active superseded dismissed promoted "),
+          Rule ("grounding", Choice_Field, True, "observed reported "),
+          Rule ("producer", Choice_Field, True, "agent harness user "),
+          Rule ("claim", Text_Field, True),
+          Rule ("created_at", Text_Field, True),
+          Rule ("seen_at", Text_Field, True),
+          Rule ("occurrences", Number_Field, True),
+          Rule ("task", Text_Field, False),
+          Rule ("generation", Text_Field, False),
+          Rule ("agent", Text_Field, False),
+          Rule ("parent", Text_Field, False),
+          Rule ("invocation", Text_Field, False),
+          Rule ("sightings", Text_Field, False),
+          Rule ("component", Text_Field, False),
+          Rule ("evidence", Text_Field, False),
+          Rule ("files", Text_Field, False),
+          Rule ("symbols", Text_Field, False),
+          Rule ("configuration", Text_Field, False),
+          Rule ("superseded_by", Text_Field, False),
+          Rule ("promoted_to", Text_Field, False),
+          Rule ("reason", Text_Field, False),
+          Rule ("retired", Text_Field, False)]),
+
+      (Id      => new String'(Derivation_Head_Schema),
+       Version => 1,
+       Policy  => Reject_Unknown,
+       Rules   => new Rule_List'
+         [Rule ("kind", Text_Field, True),
+          Rule ("subject", Text_Field, True),
+          Rule ("key", Identifier_Field, True)]),
 
       (Id      => new String'(Manifest_Schema),
        Version => 1,
@@ -255,7 +310,9 @@ package body Model_Runner.Framework.Schemas is
           Rule ("included.*", Text_Field, False),
           Rule ("excluded.*", Text_Field, False),
           Rule ("applies.*", Number_Field, False),
-          Rule ("meaning.*", Text_Field, False)]),
+          Rule ("meaning.*", Text_Field, False),
+          Rule ("knowledge.*", Text_Field, False),
+          Rule ("knowledge_left.*", Text_Field, False)]),
 
       (Id      => new String'(Invocation_Schema),
        Version => 1,
@@ -283,7 +340,8 @@ package body Model_Runner.Framework.Schemas is
           Rule ("check.*", Text_Field, False),
           Rule ("diagnostic.*", Text_Field, False),
           Rule ("requirement.*", Number_Field, False),
-          Rule ("meaning.*", Text_Field, False)]),
+          Rule ("meaning.*", Text_Field, False),
+          Rule ("selection", Identifier_Field, False)]),
 
       (Id      => new String'(Agent_Schema),
        Version => 1,

@@ -448,6 +448,22 @@ package Model_Runner.Framework.Work is
       Status   : out Model_Runner.Errors.Error_Info;
       Affected : Boolean := False);
 
+   --  Keep what the agent now working found, from a record_observation
+   --  call's arguments: kind, summary, and the files, symbols and evidence
+   --  it names. Kept at once, as an observation of the task -- its
+   --  generation, the agent, its parent and its invocation the host's own,
+   --  never the call's -- so a run that ends or forgets has not lost it.
+   --
+   --  @param Host The host.
+   --  @param Arguments The call's arguments, a JSON object.
+   --  @param Report What the agent is told: kept as which, or why not.
+   --  @param Status Why it was not kept.
+   procedure Record_Observation
+     (Host      : in out Child_Host;
+      Arguments : String;
+      Report    : out Ada.Strings.Unbounded.Unbounded_String;
+      Status    : out Model_Runner.Errors.Error_Info);
+
    --  Whether a file is one of the checks the work is judged by, which its
    --  agent may not change: a file the task's check commands name, or one
    --  already under the project's test roots (repository.tests). Changed to

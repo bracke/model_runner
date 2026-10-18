@@ -1,3 +1,5 @@
+with Model_Runner.Framework.Derivations;
+
 separate (Model_Runner.CLI.Project_Commands.Run_Line)
 procedure Show_Result (Store : in out S.Store) is
    package Rs renames Model_Runner.Framework.Results;
@@ -375,6 +377,14 @@ procedure Show_Result (Store : in out S.Store) is
                Show_One (R.Field_Name (Value, Index));
             end if;
          end loop;
+         --  Why only these tests: the selection it was given, followed back
+         --  through what the change reached to the files that changed.
+         if R.Get (Value, "selection") /= "" then
+            Pres.Put_Section (Screen, "cli.result.section.selection");
+            for Line of Model_Runner.Framework.Derivations.Explain (Store, R.Get (Value, "selection")) loop
+               Pres.Put_Row (Screen, Line, "", Indent => 2);
+            end loop;
+         end if;
          Sectioned := False;
          --  Its way on: the requirement or task it checked, or the
          --  project's checks.

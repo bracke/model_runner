@@ -192,6 +192,20 @@ package Model_Runner.Framework.Context is
    --  @return The item.
    function Included_At (From : Built; Index : Positive) return Item;
 
+   --  The observations a context offered, each as ID@REVISION, how warm --
+   --  hot or warm -- whether it applies, and why it was offered.
+   --
+   --  @param From The context.
+   --  @return The lines.
+   function Knowledge (From : Built) return Name_Lists.Vector;
+
+   --  The observations a context did not offer, each as ID and why: cold,
+   --  dismissed, past the bound, or saying only what is given already.
+   --
+   --  @param From The context.
+   --  @return The lines.
+   function Knowledge_Left (From : Built) return Name_Lists.Vector;
+
    --  Whether the context was built with the repository's graph, or with
    --  the textual fallback because there was none.
    --
@@ -257,6 +271,12 @@ private
 
       --  What the agent is told after the context, counted in its cost.
       Instructions : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The observations offered, each as ID@REVISION, how warm, whether
+      --  it applies and why it was offered; and those not offered, as ID
+      --  and why. Offered is not given: the budget may yet leave one out.
+      Knowledge      : Name_Lists.Vector;
+      Knowledge_Left : Name_Lists.Vector;
    end record;
 
 end Model_Runner.Framework.Context;
