@@ -1,5 +1,7 @@
 private with Ada.Containers.Vectors;
 
+private with Model_Runner.Framework.Derivations;
+
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
@@ -206,6 +208,22 @@ package Model_Runner.Framework.Context is
    --  @return The lines.
    function Knowledge_Left (From : Built) return Name_Lists.Vector;
 
+   --  The kind of derivation a context's retrieval is kept as: what may go
+   --  in, before any of it is fitted to a model's room.
+   Retrieval_Kind : constant String := "context_retrieval";
+
+   --  The retrieval's version, raised whenever what it offers for the same
+   --  state changes.
+   Retrieval_Version : constant String := "1";
+
+   --  The derivation the context's candidates came from, DRV- and its
+   --  digits: the same for every model and room it is fitted to; "" where
+   --  an input would not read and so none could be named.
+   --
+   --  @param From The context.
+   --  @return The key.
+   function Retrieval (From : Built) return String;
+
    --  Whether the context was built with the repository's graph, or with
    --  the textual fallback because there was none.
    --
@@ -277,6 +295,11 @@ private
       --  and why. Offered is not given: the budget may yet leave one out.
       Knowledge      : Name_Lists.Vector;
       Knowledge_Left : Name_Lists.Vector;
+
+      --  The retrieval it was made from, and that retrieval to be kept with
+      --  the context where it was worked out now rather than found kept.
+      Retrieval      : Ada.Strings.Unbounded.Unbounded_String;
+      Derived        : Derivations.Staged := Derivations.Nothing_Staged;
    end record;
 
 end Model_Runner.Framework.Context;

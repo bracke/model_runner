@@ -23,6 +23,7 @@ with Model_Runner.Tools.Editing;
 package body Model_Runner.Framework.Context is
 
    use Ada.Strings.Unbounded;
+   use type Derivations.Currentness;
 
    package E renames Model_Runner.Errors;
 
@@ -245,6 +246,312 @@ package body Model_Runner.Framework.Context is
       return Result;
    end Within_Configured;
 
+   ---------------
+   -- Retrieval --
+   ---------------
+
+   Tab : constant Character := ASCII.HT;
+
+   --  The tree a context's source is read from: a workspace's, or the
+   --  project's.
+   function Tree_Of (Item : Stores.Store; Tree : String) return String
+   is (if Tree /= "" then Tree else Ada.Directories.Containing_Directory (Stores.Root (Item)));
+
+   --  The words of a task's title, notes and question -- and its whole's,
+   --  where it is a part -- that may name a file: what it is about.
+   function Named_Words (Item : Stores.Store; View : Records.Item) return Name_Lists.Vector is
+      Found : Name_Lists.Vector;
+
+      function Parent_Words return String is
+         Defined : Records.Item;
+         Read    : E.Error_Info;
+      begin
+         if Records.Get (View, "definition.parent") = "" then
+            return "";
+         end if;
+         Tasks.Definition (Item, Records.Get (View, "definition.parent"), Defined, Read);
+         return " " & Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes")
+           & " " & Records.Get (Defined, "question");
+      end Parent_Words;
+
+      Said  : constant String :=
+        Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
+        & " " & Records.Get (View, "definition.question") & Parent_Words;
+      Start : Positive := Said'First;
+   begin
+      for Index in Said'First .. Said'Last + 1 loop
+         if Index > Said'Last or else Said (Index) in ' ' | ',' | ';' | '"' | ''' | '`' | '(' | ')' then
+            declare
+               Word : constant String :=
+                 Ada.Strings.Fixed.Trim (Said (Start .. Index - 1),
+                                         Ada.Strings.Maps.To_Set (":."), Ada.Strings.Maps.To_Set (":."));
+            begin
+               if Word'Length > 2 and then Ada.Strings.Fixed.Index (Word, "..") = 0
+                 and then Word (Word'First) /= '/'
+                 and then Ada.Strings.Fixed.Index (Word, State_Directory) = 0
+                 and then not Found.Contains (Word)
+               then
+                  Found.Append (Word);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Found;
+   end Named_Words;
+
+   --  Everything a context's retrieval reads, as a derivation: the task
+   --  and every record of the state it can reach, the tree's files, the
+   --  files the task names wherever they are, the files its observations
+   --  are about, the evidence, the answer it was last given, and the
+   --  configuration and the harness's own rules as its policy. Not the
+   --  model, its room or the instructions: what is fitted to a room is
+   --  worked out from the retrieval each time.
+   function Retrieval_Specification
+     (Item    : Stores.Store;
+      Task_Id : String;
+      View    : Records.Item;
+      Tree    : String;
+      Graph   : Repository.Graph) return Derivations.Specification
+   is
+      package Dv renames Derivations;
+      Spec    : Dv.Specification := Dv.Specify (Retrieval_Kind, "context", Retrieval_Version, Task_Id);
+      Project : constant String := Tree_Of (Item, Tree);
+
+      --  A record's bytes as they are kept.
+      procedure Depend_Record (Where : Area; Name : String) is
+         Text   : Unbounded_String;
+         Status : E.Error_Info;
+      begin
+         Files.Read_Text (Stores.Root (Item) & "/" & Directory_Name (Where) & "/" & Name & ".rec", Text, Status);
+         Dv.Depend (Spec, Dv.Input, "record", Directory_Name (Where) & "/" & Name,
+                    (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else ""),
+                    (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
+      end Depend_Record;
+
+      --  A file by its path below a root: its print, a directory said so,
+      --  or absent.
+      procedure Depend_File (Kind, Root, Path : String) is
+         Full   : constant String := Hostkit.Fs.Join (Root, Path);
+         Print  : Unbounded_String;
+         Status : E.Error_Info;
+      begin
+         if not Ada.Directories.Exists (Full) then
+            Dv.Depend (Spec, Dv.Input, Kind, Path, "", Dv.Absent);
+         elsif Ada.Directories."/=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File) then
+            Dv.Depend (Spec, Dv.Input, Kind, Path, "not a file");
+         else
+            Files.Print_Of (Full, Print, Status);
+            Dv.Depend (Spec, Dv.Input, Kind, Path, To_String (Print),
+                       (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
+         end if;
+      exception
+         when others =>
+            --  A name the host will not look up is not known to be absent.
+            Dv.Depend (Spec, Dv.Input, Kind, Path, "", Dv.Unreadable);
+      end Depend_File;
+
+      type Area_List is array (Positive range <>) of Area;
+   begin
+      Dv.Depend (Spec, Dv.Policy, "harness_rules", "context", Fingerprint (Harness_Rules));
+      begin
+         Dv.Depend (Spec, Dv.Policy, "configuration", "project",
+                    Records.Fingerprint_Of (Configurations.Required (Item)));
+      exception
+         when Configurations.Configuration_Unavailable =>
+            Dv.Depend (Spec, Dv.Policy, "configuration", "project", "", Dv.Unreadable);
+      end;
+      --  What the run is confined to says what the agent may write, and so
+      --  which rules it is told.
+      Dv.Depend (Spec, Dv.Environment, "sandbox", "process", Fingerprint (Permissions.Sandbox_Text));
+      Dv.Depend (Spec, Dv.Input, "task", "id", Task_Id);
+      Dv.Depend (Spec, Dv.Input, "tree", "path", Tree);
+
+      --  The tree's files, as its graph reads them.
+      Dv.Depend (Spec, Dv.Input, "repository_reader", "repository", Repository.Reader_Version);
+      if Repository.Unread_Count (Graph) > 0 then
+         Dv.Depend (Spec, Dv.Input, "repository_graph", "tree", "", Dv.Unreadable);
+      end if;
+      for Index in 1 .. Repository.File_Count (Graph) loop
+         declare
+            File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+         begin
+            Dv.Depend (Spec, Dv.Input, "file", To_String (File.Path), To_String (File.Fingerprint));
+         end;
+      end loop;
+
+      --  What the task names, the graph's or not, and an Ada file's other
+      --  half beside it.
+      for Word of Named_Words (Item, View) loop
+         Depend_File ("named", Project, Word);
+         if Word'Length > 4 and then Word (Word'Last - 3 .. Word'Last) in ".adb" | ".ads" then
+            Depend_File ("named", Project, Word (Word'First .. Word'Last - 1)
+                                           & (if Word (Word'Last) = 'b' then "s" else "b"));
+         end if;
+      end loop;
+
+      --  Every record the retrieval can reach, as kept: the tasks and their
+      --  states, what they serve and are governed by, the specifications,
+      --  the facts, and what was learned.
+      for Where of Area_List'[Project_Area, Requirements_Area, Specs_Area, Decisions_Area, Tasks_Area,
+                              Observations_Area]
+      loop
+         for Name of Stores.Names (Item, Where) loop
+            --  Not the counters names are numbered by: every commit moves
+            --  them, and nothing told rests on them.
+            if not (Where = Project_Area and then Name = "counters") then
+               Depend_Record (Where, Name);
+            end if;
+         end loop;
+      end loop;
+
+      --  The files its observations are about, by the project's tree: what
+      --  says whether each still applies.
+      for Id of Observations.List (Item) loop
+         declare
+            Value  : Observations.Observation;
+            Status : E.Error_Info;
+         begin
+            Observations.Read (Item, Id, Value, Status);
+            if E.Is_Ok (Status) then
+               for Path of Value.Files loop
+                  Depend_File ("observed", Tree_Of (Item, ""), Path);
+               end loop;
+            end if;
+         end;
+      end loop;
+
+      --  The evidence, whole, and the answer the task was last given.
+      declare
+         Text : Unbounded_String;
+         Read : Boolean := True;
+      begin
+         for Name of Stores.Names (Item, Verification_Area) loop
+            declare
+               Got    : Unbounded_String;
+               Status : E.Error_Info;
+            begin
+               Files.Read_Text (Stores.Root (Item) & "/" & Directory_Name (Verification_Area) & "/" & Name
+                                & ".rec", Got, Status);
+               Read := Read and then E.Is_Ok (Status);
+               Append (Text, Name & Tab & Fingerprint (To_String (Got)) & ASCII.LF);
+            end;
+         end loop;
+         Dv.Depend (Spec, Dv.Input, "evidence", "verification", Fingerprint (To_String (Text)),
+                    (if Read then Dv.Present else Dv.Unreadable));
+      end;
+      declare
+         State  : Records.Item;
+         Status : E.Error_Info;
+      begin
+         Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Status);
+         if E.Is_Ok (Status) and then Records.Get (State, "last_result") /= "" then
+            declare
+               Id   : constant String := Records.Get (State, "last_result");
+               Held : Results.Result;
+            begin
+               if not Stores.Exists (Item, Results_Area, Id) then
+                  Dv.Depend (Spec, Dv.Input, "result", Id, "", Dv.Absent);
+               else
+                  Results.Read (Item, Id, Held, Status);
+                  Dv.Depend (Spec, Dv.Input, "result", Id,
+                             (if E.Is_Ok (Status) then Fingerprint (To_String (Held.Payload)) else ""),
+                             (if E.Is_Ok (Status) then Dv.Present else Dv.Unreadable));
+               end if;
+            end;
+         end if;
+      end;
+      return Spec;
+   end Retrieval_Specification;
+
+   --  A retrieval as its answer keeps it: each candidate, each file's
+   --  revision, and the revisions, meanings and observations considered,
+   --  a line each.
+   function Encode
+     (Candidates     : Item_Vectors.Vector;
+      File_Revisions : Name_Lists.Vector;
+      From           : Built) return String
+   is
+      package Dv renames Derivations;
+      Text : Unbounded_String;
+
+      procedure Lines (Tag : String; Of_These : Name_Lists.Vector) is
+      begin
+         for Line of Of_These loop
+            Append (Text, Tag & Tab & Dv.Coded (Line) & ASCII.LF);
+         end loop;
+      end Lines;
+   begin
+      for One of Candidates loop
+         Append (Text, "C" & Tab & Dv.Coded (To_String (One.Id)) & Tab & Dv.Coded (To_String (One.Kind))
+                 & Tab & Lower (Priority'Image (One.Rank)) & Tab & Dv.Coded (To_String (One.Text)) & ASCII.LF);
+      end loop;
+      Lines ("F", File_Revisions);
+      Lines ("R", From.Revisions);
+      Lines ("M", From.Meanings);
+      Lines ("K", From.Knowledge);
+      Lines ("L", From.Knowledge_Left);
+      return To_String (Text);
+   end Encode;
+
+   --  A retrieval's answer read back; False, with nothing taken from it,
+   --  where a line is not one Encode writes.
+   function Decode
+     (Text           : String;
+      Candidates     : in out Item_Vectors.Vector;
+      File_Revisions : in out Name_Lists.Vector;
+      Into           : in out Built) return Boolean
+   is
+      package Dv renames Derivations;
+      Items  : Item_Vectors.Vector;
+      Prints, Revisions, Meanings, Knowledge, Left : Name_Lists.Vector;
+   begin
+      for Line of Lines_Of (Text) loop
+         declare
+            Fields : constant Name_Lists.Vector := Dv.Fields_Of (Line);
+            Tag    : constant String := (if Fields.Is_Empty then "" else Fields.First_Element);
+         begin
+            if Tag = "C" and then Natural (Fields.Length) = 5 then
+               declare
+                  Rank  : Priority := Normal;
+                  Known : Boolean := False;
+               begin
+                  for One in Priority loop
+                     if Lower (Priority'Image (One)) = Fields (4) then
+                        Rank := One;
+                        Known := True;
+                     end if;
+                  end loop;
+                  if not Known then
+                     return False;
+                  end if;
+                  Items.Append (Context.Item'(Id   => To_Unbounded_String (Fields (2)),
+                                              Kind => To_Unbounded_String (Fields (3)),
+                                              Rank => Rank,
+                                              Text => To_Unbounded_String (Fields (5))));
+               end;
+            elsif Natural (Fields.Length) = 2 and then Tag in "F" | "R" | "M" | "K" | "L" then
+               case Tag (Tag'First) is
+                  when 'F' => Prints.Append (Fields (2));
+                  when 'R' => Revisions.Append (Fields (2));
+                  when 'M' => Meanings.Append (Fields (2));
+                  when 'K' => Knowledge.Append (Fields (2));
+                  when others => Left.Append (Fields (2));
+               end case;
+            else
+               return False;
+            end if;
+         end;
+      end loop;
+      Candidates := Items;
+      File_Revisions := Prints;
+      Into.Revisions := Revisions;
+      Into.Meanings := Meanings;
+      Into.Knowledge := Knowledge;
+      Into.Knowledge_Left := Left;
+      return True;
+   end Decode;
+
    --  Fit what is offered to the model's room -- mandatory whatever it
    --  costs, the rest by priority while it fits, the same text once -- and
    --  take the fingerprint of everything the manifest says.
@@ -415,6 +722,9 @@ package body Model_Runner.Framework.Context is
       --  Each file offered, as its item and its revision, read whole.
       File_Revisions : Name_Lists.Vector;
       Component  : Unbounded_String;
+      --  The tree's files as they are now: what is offered from, and what
+      --  a retrieval kept is held to.
+      Graph      : Repository.Graph;
 
       procedure Offer (Id, Kind : String; Rank : Priority; Text : String) is
       begin
@@ -557,6 +867,580 @@ package body Model_Runner.Framework.Context is
          end loop;
          return To_String (Text);
       end Registry_Facts;
+      --  What the context may hold, before any of it is fitted to a room:
+      --  the retrieval a derivation stands for, the same whatever model the
+      --  context is then budgeted for. Status fails where what is mandatory
+      --  will not read.
+      procedure Retrieve is
+      begin
+         --  The harness's rules, and the project's.
+         Offer ("rules", "rules", Mandatory,
+                Harness_Rules
+                & (if Records.Get (Config, "scalar.context.rules") = "" then ""
+                   else ASCII.LF & Records.Get (Config, "scalar.context.rules")));
+
+         --  The task as it is to be done: what it is, not its bookkeeping.
+         declare
+            Text : Unbounded_String;
+         begin
+            for Name of Wanted_Fields loop
+               if Records.Get (View, "definition." & Name.all) /= "" then
+                  Append (Text, Name.all & ": " & Records.Get (View, "definition." & Name.all)
+                          & ASCII.LF);
+               end if;
+            end loop;
+            for Index in 1 .. Records.Field_Count (View) loop
+               declare
+                  Field : constant String := Records.Field_Name (View, Index);
+               begin
+                  if Field'Length > 17 and then Field (Field'First .. Field'First + 16)
+                                                 = "definition.field."
+                  then
+                     Append (Text, Field (Field'First + 17 .. Field'Last) & ": "
+                             & Records.Get (View, Field) & ASCII.LF);
+                  end if;
+               end;
+            end loop;
+            Offer (Task_Id & "#effective", "task", Mandatory, To_String (Text));
+         end;
+
+         --  A part is one piece of a larger task: that task -- what it is for,
+         --  and its other parts -- so the piece is done as part of it.
+         declare
+            Parent : constant String := Records.Get (View, "definition.parent");
+         begin
+            if Parent /= "" then
+               declare
+                  Defined : Records.Item;
+                  Read    : E.Error_Info;
+                  Text    : Unbounded_String;
+               begin
+                  Tasks.Definition (Item, Parent, Defined, Read);
+                  if E.Is_Ok (Read) then
+                     Append (Text, "title: " & Records.Get (Defined, "title") & ASCII.LF);
+                     if Records.Get (Defined, "notes") /= "" then
+                        Append (Text, "notes: " & Records.Get (Defined, "notes") & ASCII.LF);
+                     end if;
+                     if Records.Get (Defined, "requirements") /= "" then
+                        Append (Text, "serves: " & Records.Get (Defined, "requirements") & ASCII.LF);
+                     end if;
+                     for Sibling of Tasks.Children (Item, Parent) loop
+                        if Sibling /= Task_Id then
+                           declare
+                              Other : Records.Item;
+                              Got   : E.Error_Info;
+                           begin
+                              Tasks.Definition (Item, Sibling, Other, Got);
+                              Append (Text, "another part: " & Sibling & " " & Records.Get (Other, "title")
+                                      & " (" & Tasks.State_Of (Item, Sibling) & ")" & ASCII.LF);
+                           end;
+                        end if;
+                     end loop;
+                     Offer (Parent & "#whole", "parent", Mandatory, To_String (Text));
+                  else
+                     --  Mandatory, and not to be had: no context, rather than
+                     --  one that claims to stand for the task without it.
+                     Status := Read;
+                     return;
+                  end if;
+               end;
+            end if;
+         end;
+
+         --  The requirements it serves, at their revisions.
+         for Index in 1 .. Records.Field_Count (View) loop
+            declare
+               Field : constant String := Records.Field_Name (View, Index);
+            begin
+               if Field'Length > 12 and then Field (Field'First .. Field'First + 11) = "requirement."
+               then
+                  declare
+                     Id   : constant String := Field (Field'First + 12 .. Field'Last);
+                     Held : Intent.Entity;
+                     Read : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Intent.Requirement, Id, Held, Read);
+                     if E.Is_Ok (Read) then
+                        Result.Revisions.Append (Id & "@" & Image (Held.Revision));
+                        Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
+                        Offer (Id & "@" & Image (Held.Revision), "requirement", Mandatory,
+                               Id & ": " & To_String (Held.Text)
+                               & (if Length (Held.Criteria) = 0 then ""
+                                  else ASCII.LF & "Acceptance: " & To_String (Held.Criteria)));
+                     else
+                        --  A requirement it serves that will not read: what the
+                        --  work is held to is missing, and the context with it.
+                        Status := Read;
+                        return;
+                     end if;
+                  end;
+               elsif Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "decision."
+               then
+                  declare
+                     Id   : constant String := Field (Field'First + 9 .. Field'Last);
+                     Held : Intent.Entity;
+                     Read : E.Error_Info;
+                  begin
+                     Intent.Read (Item, Intent.Decision, Id, Held, Read);
+                     if E.Is_Ok (Read) then
+                        Result.Revisions.Append (Id & "@" & Image (Held.Revision));
+                        Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
+                        --  Mandatory: a decision that applies is in the context,
+                        --  or the context does not fit -- never quietly left out.
+                        Offer (Id & "@" & Image (Held.Revision), "decision", Mandatory,
+                               Id & " " & To_String (Held.Title) & ": "
+                               & To_String (Held.Text));
+                     else
+                        Status := Read;
+                        return;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+
+         --  What governs the work, above the configuration, and every override
+         --  and conflict: the model is told what holds, not left to guess.
+         Offer (Task_Id & "#authority", "authority", Mandatory,
+                Without_Baseline_Source (Fields_Of (View, "authority."), Baselines => Writes)
+                & Fields_Of (View, "override.") & Fields_Of (View, "conflict."));
+
+         --  How the project is configured, as far as work on it goes.
+         declare
+            Kind : constant String := Records.Get (View, "definition.kind");
+            Profile_Name : constant String :=
+              (if Records.Get (Config, "scalar.task.profile." & Kind) /= ""
+               then Records.Get (Config, "scalar.task.profile." & Kind)
+               else Records.Get (Config, "scalar.verification.default"));
+         begin
+            Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
+                   --  Each fact once: the adapters the harness reads them by
+                   --  say the same again.
+                   Fields_Of (Config, "fact.") & Registry_Facts (Config)
+                   & (if Records.Get (Config, "profile." & Profile_Name) = "" then ""
+                      else "verification: " & Records.Get (Config, "profile." & Profile_Name)
+                           & ASCII.LF));
+         end;
+
+         --  The accepted specifications for the project and the component.
+         for Id of Intent.List (Item, Intent.Specification, "accepted") loop
+            declare
+               Held : Intent.Entity;
+               Read : E.Error_Info;
+            begin
+               Intent.Read (Item, Intent.Specification, Id, Held, Read);
+               if E.Is_Ok (Read)
+                 and then To_String (Held.Scope) in "project" | To_String (Component)
+               then
+                  Offer (Id & "@" & Image (Held.Revision), "specification", Normal,
+                         To_String (Held.Title) & ASCII.LF & To_String (Held.Text));
+               end if;
+            end;
+         end loop;
+
+         --  Source: from the repository's graph when one is kept, from the
+         --  files as they are when not -- and the manifest says which.
+         declare
+            Read    : E.Error_Info;
+            Project : constant String := Tree_Of (Item, Tree);
+            Wanted  : constant String := Lower (To_String (Component));
+
+            --  The files the task names, for what uses them to follow.
+            Named_Files : Name_Lists.Vector;
+         begin
+
+            --  A file the task names in its title, notes or question is what it is
+            --  about: offered first, whatever component it is in.
+            for Word of Named_Words (Item, View) loop
+               declare
+                  Text : Unbounded_String;
+                  Got  : E.Error_Info;
+               begin
+                  if Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
+                    and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Project, Word)),
+                                                  Ada.Directories.Ordinary_File)
+                  then
+                     Files.Read_Text (Hostkit.Fs.Join (Project, Word), Text, Got);
+                     if E.Is_Ok (Got) then
+                        Offer ("file:" & Word, "source", High, To_String (Text));
+                        if not Named_Files.Contains (Word) then
+                           Named_Files.Append (Word);
+                        end if;
+                     end if;
+                  end if;
+               exception
+                  when others =>
+                     --  An offer, not a requirement: a file that cannot be read is not offered.
+                     null;
+               end;
+            end loop;
+
+            --  An Ada file's other half -- a body's spec, a spec's body -- beside
+            --  it: what a change to one is held to is in the other.
+            declare
+               Halves : constant Name_Lists.Vector := Named_Files;
+            begin
+               for Named of Halves loop
+                  if Named'Length > 4
+                    and then Named (Named'Last - 3 .. Named'Last) in ".adb" | ".ads"
+                  then
+                     declare
+                        Other : constant String :=
+                          Named (Named'First .. Named'Last - 1)
+                          & (if Named (Named'Last) = 'b' then "s" else "b");
+                        Text  : Unbounded_String;
+                        Got   : E.Error_Info;
+                     begin
+                        if not Named_Files.Contains (Other)
+                          and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Other))
+                        then
+                           Files.Read_Text (Hostkit.Fs.Join (Project, Other), Text, Got);
+                           if E.Is_Ok (Got) then
+                              Offer ("file:" & Other,
+                                     (if Named (Named'Last) = 'b' then "spec of " else "body of ") & Named,
+                                     High, To_String (Text));
+                              Named_Files.Append (Other);
+                           end if;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+            end;
+
+            --  And what uses those files: the units that depend on theirs, their
+            --  files offered after, so a change to what the task names is made
+            --  seeing its callers -- found by the graph, not by the model.
+            declare
+               Users_Offered : Natural := 0;
+               Users_Most    : constant := 6;
+
+               --  The files that declare a unit: a package, its body, or a
+               --  subprogram that is a unit of its own.
+               function Files_Of (Unit : String) return Name_Lists.Vector is
+                  Found : Name_Lists.Vector;
+               begin
+                  for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                     declare
+                        One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                     begin
+                        if To_String (One.Name) = Unit
+                          and then not Found.Contains (To_String (One.Path))
+                        then
+                           Found.Append (To_String (One.Path));
+                        end if;
+                     end;
+                  end loop;
+                  return Found;
+               end Files_Of;
+            begin
+               for Named of Named_Files loop
+                  for Unit of Code_Queries.Units_Of_File (Graph, Named) loop
+                     begin
+                        if Unit /= Named then
+                           for User of Repository.Dependents_Of (Graph, Unit) loop
+                              for Path of Files_Of (User) loop
+                                 exit when Users_Offered = Users_Most;
+                                 if not Named_Files.Contains (Path) then
+                                    declare
+                                       Text : Unbounded_String;
+                                       Got  : E.Error_Info;
+                                    begin
+                                       Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Got);
+                                       if E.Is_Ok (Got) then
+                                          Offer ("file:" & Path, "user of " & Named, Low, To_String (Text));
+                                          Users_Offered := Users_Offered + 1;
+                                       end if;
+                                    end;
+                                 end if;
+                              end loop;
+                           end loop;
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+            end;
+
+            if Wanted /= "" then
+               for Index in 1 .. Repository.File_Count (Graph) loop
+                  declare
+                     use type Repository.File_Role;
+                     File : constant Repository.File_Entry :=
+                       Repository.File_At (Graph, Index);
+                     Path : constant String := To_String (File.Path);
+                     Text : Unbounded_String;
+                  begin
+                     if Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0
+                       and then File.Role in Repository.Source | Repository.Test
+                     then
+                        Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
+                        if E.Is_Ok (Read) then
+                           Offer ("file:" & Path,
+                                  (if File.Role = Repository.Source then "source" else "test"),
+                                  (if File.Role = Repository.Source then Normal else Low),
+                                  To_String (Text));
+                        end if;
+                     end if;
+                  end;
+               end loop;
+
+               --  The symbols its files declare: what there is to use or to
+               --  change, where the files themselves may not all fit.
+               declare
+                  Listed : Unbounded_String;
+               begin
+                  for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                     declare
+                        One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                     begin
+                        if Ada.Strings.Fixed.Index (Lower (To_String (One.Path)), Wanted) > 0 then
+                           Append (Listed, To_String (One.Kind) & " " & To_String (One.Name)
+                                   & "  " & To_String (One.Path) & ":" & Image (One.Line) & ASCII.LF);
+                        end if;
+                     end;
+                  end loop;
+                  Offer (Task_Id & "#symbols", "symbols", Normal, To_String (Listed));
+               end;
+            end if;
+
+            --  The tests that bear on it: the component's test files, and the
+            --  tests its requirements name.
+            declare
+               Listed : Unbounded_String;
+            begin
+               if Wanted /= "" then
+                  for Index in 1 .. Repository.File_Count (Graph) loop
+                     declare
+                        use type Repository.File_Role;
+                        File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+                     begin
+                        if File.Role = Repository.Test
+                          and then Ada.Strings.Fixed.Index (Lower (To_String (File.Path)), Wanted) > 0
+                        then
+                           Append (Listed, To_String (File.Path) & ASCII.LF);
+                        end if;
+                     end;
+                  end loop;
+               end if;
+               for Requirement of Lines_Of (Records.Get (View, "definition.requirements")) loop
+                  for Test of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test) loop
+                     Append (Listed, Test & " (tests " & Requirement & ")" & ASCII.LF);
+                  end loop;
+               end loop;
+
+               --  How the project's tests are laid out, and what runs them: a
+               --  test that is not registered where the harness lists its
+               --  tests does not run.
+               declare
+                  Layout : Unbounded_String;
+                  Shown  : Natural := 0;
+               begin
+                  for Index in 1 .. Repository.File_Count (Graph) loop
+                     declare
+                        use type Repository.File_Role;
+                        File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+                        Path : constant String := To_String (File.Path);
+                        Base : constant String :=
+                          Lower (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Path)));
+                        Text : Unbounded_String;
+                     begin
+                        if File.Role = Repository.Test then
+                           if Shown < 40 then
+                              Append (Layout, Path & ASCII.LF);
+                              Shown := Shown + 1;
+                           end if;
+                           --  Its harness file quoted only where the work is to
+                           --  add a test -- a test task, or one serving a
+                           --  requirement -- and the source of it, not its build
+                           --  file.
+                           if Base in "tests" | "test_main" | "all_tests" | "test_runner" | "suite"
+                                    | "test_suite" | "harness" | "conftest"
+                             and then (Records.Get (View, "definition.kind") = "test"
+                                       or else Records.Get (View, "definition.requirements") /= "")
+                             and then Lower (Ada.Directories.Extension (Path)) not in "gpr" | "toml" | "json" | "cfg"
+                           then
+                              Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
+                              if E.Is_Ok (Read) then
+                                 Offer ("file:" & Path, "test", Normal, To_String (Text));
+                              end if;
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+                  if Layout /= Null_Unbounded_String then
+                     Append (Listed, "The project's test files -- a new test runs only once it is"
+                             & " registered where the test harness lists its tests:" & ASCII.LF
+                             & Layout);
+                  end if;
+               end;
+               Offer (Task_Id & "#tests", "tests", Normal, To_String (Listed));
+            end;
+         end;
+
+         --  What earlier attempts left: the last answer, and what the last
+         --  verification found wrong -- a retry is told why it is one.
+         declare
+            State    : Records.Item;
+            Read     : E.Error_Info;
+            Listed   : Unbounded_String;
+
+            --  The results and evidence it came from, by their identifiers:
+            --  the manifest names what went in, not only that something did.
+            Sources  : Unbounded_String;
+         begin
+            Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
+            if Records.Get (State, "last_result") /= "" then
+               declare
+                  Held : Results.Result;
+               begin
+                  Results.Read (Item, Records.Get (State, "last_result"), Held, Read);
+                  --  An answer that said nothing tells the next attempt nothing.
+                  if E.Is_Ok (Read)
+                    and then Ada.Strings.Fixed.Trim (To_String (Held.Payload), Ada.Strings.Both) /= ""
+                  then
+                     --  Its lines once each where it went round -- the same
+                     --  line again and again -- and not past a screenful: a
+                     --  loop told back whole primes the next to loop.
+                     declare
+                        Told   : Unbounded_String;
+                        Last   : Unbounded_String;
+                        Again  : Natural := 0;
+                        Lines  : Natural := 0;
+                        procedure Flush_Again is
+                        begin
+                           if Again > 0 then
+                              Append (Told, "... the same line" & Natural'Image (Again) & " times more" & ASCII.LF);
+                              Again := 0;
+                           end if;
+                        end Flush_Again;
+                     begin
+                        for Line of Lines_Of (To_String (Held.Payload)) loop
+                           if Line = To_String (Last) and then Lines > 0 then
+                              Again := Again + 1;
+                           else
+                              Flush_Again;
+                              Lines := Lines + 1;
+                              exit when Lines > 40;
+                              Append (Told, Line & ASCII.LF);
+                              Last := To_Unbounded_String (Line);
+                           end if;
+                        end loop;
+                        Flush_Again;
+                        if Lines > 40 then
+                           Append (Told, "... (the rest of it left out)" & ASCII.LF);
+                        end if;
+                        Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
+                                & ASCII.LF & To_String (Told));
+                     end;
+                     Append (Sources, "," & Records.Get (State, "last_result"));
+                  end if;
+               end;
+            end if;
+            if Records.Get (State, "current_verification") /= "" then
+               declare
+                  Evidence : constant String := Records.Get (State, "current_verification");
+                  Said     : constant Verification.Diagnostic_List :=
+                    Verification.Diagnostics_Of (Item, Evidence);
+                  Value    : Records.Item;
+               begin
+                  Stores.Read (Item, Verification_Area, Evidence, Value, Read);
+                  if E.Is_Ok (Read) and then Records.Get (Value, "passed") /= "true" then
+                     Append (Sources, "," & Evidence);
+                     Append (Listed, Evidence & " did not pass:" & ASCII.LF);
+                     for Index in 1 .. Verification.Length (Said) loop
+                        declare
+                           One : constant Verification.Diagnostic := Verification.Element (Said, Index);
+                        begin
+                           Append (Listed, To_String (One.File) & ":" & Image (One.Line) & ": "
+                                   & To_String (One.Severity) & ": " & To_String (One.Message)
+                                   & ASCII.LF);
+                        end;
+                     end loop;
+                  end if;
+               end;
+            end if;
+            --  Why the last attempt did not end the task: the gate that held
+            --  it, or what failed -- what a retry has to do differently.
+            declare
+               Why : constant String :=
+                 (if Records.Get (State, "current_failure") /= "" then Records.Get (State, "current_failure")
+                  else Records.Get (State, "blocking_reasons"));
+            begin
+               if Ada.Strings.Fixed.Trim (Why, Ada.Strings.Both) /= "" then
+                  Append (Listed, "Why it did not end the task: " & Why & ASCII.LF);
+               end if;
+            end;
+            Offer (Task_Id & "#results"
+                   & (if Sources = Null_Unbounded_String then ""
+                      else ":" & Slice (Sources, 2, Length (Sources))),
+                   "results", High, To_String (Listed));
+         end;
+
+         --  What was learned on this work or near it: observations, never
+         --  authoritative -- the hot among what matters next to the files and
+         --  the last attempt, the warm with the specifications -- each once,
+         --  and none that only says what is given already.
+         declare
+            Left  : Name_Lists.Vector;
+            Found : constant Observations.Considered_Vectors.Vector :=
+              Observations.Relevant (Item, Task_Id, Left);
+         begin
+            for One of Found loop
+               declare
+                  Id    : constant String := To_String (One.Id) & "@" & Image (One.Revision);
+                  Shown : Observations.Observation;
+                  Read  : E.Error_Info;
+                  Said  : Unbounded_String;
+               begin
+                  Observations.Read (Item, To_String (One.Id), Shown, Read);
+                  declare
+                     Claim : constant String := Lower (To_String (Shown.Summary));
+
+                     --  Whether a text says the claim as a phrase of its own:
+                     --  whole words, and long enough to be a claim -- a word or
+                     --  two is in every text without saying the same.
+                     function Says_It (Text : String) return Boolean is
+                        function Word_Char (C : Character) return Boolean
+                        is (C in 'a' .. 'z' | '0' .. '9' | '_');
+                        At_Claim : Natural := Ada.Strings.Fixed.Index (Text, Claim);
+                     begin
+                        if Claim'Length < 20 then
+                           return False;
+                        end if;
+                        while At_Claim > 0 loop
+                           if (At_Claim = Text'First or else not Word_Char (Text (At_Claim - 1)))
+                             and then (At_Claim + Claim'Length > Text'Last
+                                       or else not Word_Char (Text (At_Claim + Claim'Length)))
+                           then
+                              return True;
+                           end if;
+                           At_Claim := Ada.Strings.Fixed.Index (Text, Claim, At_Claim + 1);
+                        end loop;
+                        return False;
+                     end Says_It;
+                  begin
+                     for Held of Candidates loop
+                        if Said = Null_Unbounded_String and then Says_It (Lower (To_String (Held.Text))) then
+                           Said := Held.Id;
+                        end if;
+                     end loop;
+                  end;
+                  if Said /= Null_Unbounded_String then
+                     Result.Knowledge_Left.Append (Id & ": says only what " & To_String (Said) & " says");
+                  else
+                     Offer (Id, "observation",
+                            (if Observations."=" (One.Heat, Observations.Hot) then High else Normal),
+                            To_String (One.Text));
+                     Result.Knowledge.Append
+                       (Id & " " & Lower (Observations.Temperature'Image (One.Heat)) & " "
+                        & Observations.Word (One.Standing) & " " & To_String (One.Reason));
+                  end if;
+               end;
+            end loop;
+            for Line of Left loop
+               Result.Knowledge_Left.Append (Line);
+            end loop;
+         end;
+      end Retrieve;
    begin
       Result := (Model => Model, others => <>);
       Result.Instructions := To_Unbounded_String (Instructions);
@@ -597,613 +1481,65 @@ package body Model_Runner.Framework.Context is
          end if;
       end;
 
-      --  The harness's rules, and the project's.
-      Offer ("rules", "rules", Mandatory,
-             Harness_Rules
-             & (if Records.Get (Config, "scalar.context.rules") = "" then ""
-                else ASCII.LF & Records.Get (Config, "scalar.context.rules")));
-
-      --  The task as it is to be done: what it is, not its bookkeeping.
+      --  The kept graph, brought up to date: a stale one would offer the
+      --  files and symbols as they were. Of the workspace, scanned as it
+      --  is: its files, not the project's, are the ones offered.
       declare
-         Text : Unbounded_String;
+         Loaded : Repository.Graph;
+         Read   : E.Error_Info;
       begin
-         for Name of Wanted_Fields loop
-            if Records.Get (View, "definition." & Name.all) /= "" then
-               Append (Text, Name.all & ": " & Records.Get (View, "definition." & Name.all)
-                       & ASCII.LF);
-            end if;
-         end loop;
-         for Index in 1 .. Records.Field_Count (View) loop
-            declare
-               Field : constant String := Records.Field_Name (View, Index);
-            begin
-               if Field'Length > 17 and then Field (Field'First .. Field'First + 16)
-                                              = "definition.field."
-               then
-                  Append (Text, Field (Field'First + 17 .. Field'Last) & ": "
-                          & Records.Get (View, Field) & ASCII.LF);
-               end if;
-            end;
-         end loop;
-         Offer (Task_Id & "#effective", "task", Mandatory, To_String (Text));
-      end;
-
-      --  A part is one piece of a larger task: that task -- what it is for,
-      --  and its other parts -- so the piece is done as part of it.
-      declare
-         Parent : constant String := Records.Get (View, "definition.parent");
-      begin
-         if Parent /= "" then
-            declare
-               Defined : Records.Item;
-               Read    : E.Error_Info;
-               Text    : Unbounded_String;
-            begin
-               Tasks.Definition (Item, Parent, Defined, Read);
-               if E.Is_Ok (Read) then
-                  Append (Text, "title: " & Records.Get (Defined, "title") & ASCII.LF);
-                  if Records.Get (Defined, "notes") /= "" then
-                     Append (Text, "notes: " & Records.Get (Defined, "notes") & ASCII.LF);
-                  end if;
-                  if Records.Get (Defined, "requirements") /= "" then
-                     Append (Text, "serves: " & Records.Get (Defined, "requirements") & ASCII.LF);
-                  end if;
-                  for Sibling of Tasks.Children (Item, Parent) loop
-                     if Sibling /= Task_Id then
-                        declare
-                           Other : Records.Item;
-                           Got   : E.Error_Info;
-                        begin
-                           Tasks.Definition (Item, Sibling, Other, Got);
-                           Append (Text, "another part: " & Sibling & " " & Records.Get (Other, "title")
-                                   & " (" & Tasks.State_Of (Item, Sibling) & ")" & ASCII.LF);
-                        end;
-                     end if;
-                  end loop;
-                  Offer (Parent & "#whole", "parent", Mandatory, To_String (Text));
-               else
-                  --  Mandatory, and not to be had: no context, rather than
-                  --  one that claims to stand for the task without it.
-                  Status := Read;
-                  return;
-               end if;
-            end;
-         end if;
-      end;
-
-      --  The requirements it serves, at their revisions.
-      for Index in 1 .. Records.Field_Count (View) loop
-         declare
-            Field : constant String := Records.Field_Name (View, Index);
-         begin
-            if Field'Length > 12 and then Field (Field'First .. Field'First + 11) = "requirement."
-            then
-               declare
-                  Id   : constant String := Field (Field'First + 12 .. Field'Last);
-                  Held : Intent.Entity;
-                  Read : E.Error_Info;
-               begin
-                  Intent.Read (Item, Intent.Requirement, Id, Held, Read);
-                  if E.Is_Ok (Read) then
-                     Result.Revisions.Append (Id & "@" & Image (Held.Revision));
-                     Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
-                     Offer (Id & "@" & Image (Held.Revision), "requirement", Mandatory,
-                            Id & ": " & To_String (Held.Text)
-                            & (if Length (Held.Criteria) = 0 then ""
-                               else ASCII.LF & "Acceptance: " & To_String (Held.Criteria)));
-                  else
-                     --  A requirement it serves that will not read: what the
-                     --  work is held to is missing, and the context with it.
-                     Status := Read;
-                     return;
-                  end if;
-               end;
-            elsif Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "decision."
-            then
-               declare
-                  Id   : constant String := Field (Field'First + 9 .. Field'Last);
-                  Held : Intent.Entity;
-                  Read : E.Error_Info;
-               begin
-                  Intent.Read (Item, Intent.Decision, Id, Held, Read);
-                  if E.Is_Ok (Read) then
-                     Result.Revisions.Append (Id & "@" & Image (Held.Revision));
-                     Result.Meanings.Append (Id & ASCII.HT & To_String (Held.Meaning));
-                     --  Mandatory: a decision that applies is in the context,
-                     --  or the context does not fit -- never quietly left out.
-                     Offer (Id & "@" & Image (Held.Revision), "decision", Mandatory,
-                            Id & " " & To_String (Held.Title) & ": "
-                            & To_String (Held.Text));
-                  else
-                     Status := Read;
-                     return;
-                  end if;
-               end;
-            end if;
-         end;
-      end loop;
-
-      --  What governs the work, above the configuration, and every override
-      --  and conflict: the model is told what holds, not left to guess.
-      Offer (Task_Id & "#authority", "authority", Mandatory,
-             Without_Baseline_Source (Fields_Of (View, "authority."), Baselines => Writes)
-             & Fields_Of (View, "override.") & Fields_Of (View, "conflict."));
-
-      --  How the project is configured, as far as work on it goes.
-      declare
-         Kind : constant String := Records.Get (View, "definition.kind");
-         Profile_Name : constant String :=
-           (if Records.Get (Config, "scalar.task.profile." & Kind) /= ""
-            then Records.Get (Config, "scalar.task.profile." & Kind)
-            else Records.Get (Config, "scalar.verification.default"));
-      begin
-         Offer ("CONFIG@" & Image (Result.Config_Revision), "configuration", High,
-                --  Each fact once: the adapters the harness reads them by
-                --  say the same again.
-                Fields_Of (Config, "fact.") & Registry_Facts (Config)
-                & (if Records.Get (Config, "profile." & Profile_Name) = "" then ""
-                   else "verification: " & Records.Get (Config, "profile." & Profile_Name)
-                        & ASCII.LF));
-      end;
-
-      --  The accepted specifications for the project and the component.
-      for Id of Intent.List (Item, Intent.Specification, "accepted") loop
-         declare
-            Held : Intent.Entity;
-            Read : E.Error_Info;
-         begin
-            Intent.Read (Item, Intent.Specification, Id, Held, Read);
-            if E.Is_Ok (Read)
-              and then To_String (Held.Scope) in "project" | To_String (Component)
-            then
-               Offer (Id & "@" & Image (Held.Revision), "specification", Normal,
-                      To_String (Held.Title) & ASCII.LF & To_String (Held.Text));
-            end if;
-         end;
-      end loop;
-
-      --  Source: from the repository's graph when one is kept, from the
-      --  files as they are when not -- and the manifest says which.
-      declare
-         Graph   : Repository.Graph;
-         Read    : E.Error_Info;
-         --  The tree it edits: the workspace's where it works apart.
-         Project : constant String :=
-           (if Tree /= "" then Tree else Ada.Directories.Containing_Directory (Stores.Root (Item)));
-         Wanted  : constant String := Lower (To_String (Component));
-
-         --  The files the task names, for what uses them to follow.
-         Named_Files : Name_Lists.Vector;
-      begin
-         --  The kept graph, brought up to date: a stale one would offer the
-         --  files and symbols as they were.
-         Repository.Load (Item, Graph, Read);
+         Repository.Load (Item, Loaded, Read);
          Result.Semantic := E.Is_Ok (Read);
-         --  Of the workspace, scanned as it is: its files, not the
-         --  project's, are the ones offered.
-         Graph := (if Tree /= "" then Repository.Scan (Tree, Repository.Roots_Of (Item))
-                   else Repository.Now (Item));
-         Result.Tree := To_Unbounded_String (Project);
-         Result.Tree_Fingerprint := To_Unbounded_String (Repository.Graph_Fingerprint (Graph));
-
-         --  A file the task names in its title, notes or question is what it is
-         --  about: offered first, whatever component it is in.
-         declare
-            --  And the task it is a part of: a part's files are its whole's.
-            function Parent_Words return String is
-               Defined : Records.Item;
-               Read    : E.Error_Info;
-            begin
-               if Records.Get (View, "definition.parent") = "" then
-                  return "";
-               end if;
-               Tasks.Definition (Item, Records.Get (View, "definition.parent"), Defined, Read);
-               return " " & Records.Get (Defined, "title") & " " & Records.Get (Defined, "notes")
-                 & " " & Records.Get (Defined, "question");
-            end Parent_Words;
-            Said  : constant String :=
-              Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
-              & " " & Records.Get (View, "definition.question") & Parent_Words;
-            Start : Positive := Said'First;
-         begin
-            for Index in Said'First .. Said'Last + 1 loop
-               if Index > Said'Last or else Said (Index) in ' ' | ',' | ';' | '"' | ''' | '`' | '(' | ')' then
-                  declare
-                     Word : constant String :=
-                       Ada.Strings.Fixed.Trim (Said (Start .. Index - 1),
-                                               Ada.Strings.Maps.To_Set (":."), Ada.Strings.Maps.To_Set (":."));
-                     Text : Unbounded_String;
-                     Got  : E.Error_Info;
-                  begin
-                     if Word'Length > 2 and then Ada.Strings.Fixed.Index (Word, "..") = 0
-                       and then Word (Word'First) /= '/'
-                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
-                       and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Project, Word)),
-                                                     Ada.Directories.Ordinary_File)
-                       and then Ada.Strings.Fixed.Index (Word, State_Directory) = 0
-                     then
-                        Files.Read_Text (Hostkit.Fs.Join (Project, Word), Text, Got);
-                        if E.Is_Ok (Got) then
-                           Offer ("file:" & Word, "source", High, To_String (Text));
-                           if not Named_Files.Contains (Word) then
-                              Named_Files.Append (Word);
-                           end if;
-                        end if;
-                     end if;
-                  exception
-                     when others =>
-                        --  An offer, not a requirement: a file that cannot be read is not offered.
-                        null;
-                  end;
-                  Start := Index + 1;
-               end if;
-            end loop;
-         end;
-
-         --  An Ada file's other half -- a body's spec, a spec's body -- beside
-         --  it: what a change to one is held to is in the other.
-         declare
-            Halves : constant Name_Lists.Vector := Named_Files;
-         begin
-            for Named of Halves loop
-               if Named'Length > 4
-                 and then Named (Named'Last - 3 .. Named'Last) in ".adb" | ".ads"
-               then
-                  declare
-                     Other : constant String :=
-                       Named (Named'First .. Named'Last - 1)
-                       & (if Named (Named'Last) = 'b' then "s" else "b");
-                     Text  : Unbounded_String;
-                     Got   : E.Error_Info;
-                  begin
-                     if not Named_Files.Contains (Other)
-                       and then Ada.Directories.Exists (Hostkit.Fs.Join (Project, Other))
-                     then
-                        Files.Read_Text (Hostkit.Fs.Join (Project, Other), Text, Got);
-                        if E.Is_Ok (Got) then
-                           Offer ("file:" & Other,
-                                  (if Named (Named'Last) = 'b' then "spec of " else "body of ") & Named,
-                                  High, To_String (Text));
-                           Named_Files.Append (Other);
-                        end if;
-                     end if;
-                  end;
-               end if;
-            end loop;
-         end;
-
-         --  And what uses those files: the units that depend on theirs, their
-         --  files offered after, so a change to what the task names is made
-         --  seeing its callers -- found by the graph, not by the model.
-         declare
-            Users_Offered : Natural := 0;
-            Users_Most    : constant := 6;
-
-            --  The files that declare a unit: a package, its body, or a
-            --  subprogram that is a unit of its own.
-            function Files_Of (Unit : String) return Name_Lists.Vector is
-               Found : Name_Lists.Vector;
-            begin
-               for Index in 1 .. Repository.Symbol_Count (Graph) loop
-                  declare
-                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
-                  begin
-                     if To_String (One.Name) = Unit
-                       and then not Found.Contains (To_String (One.Path))
-                     then
-                        Found.Append (To_String (One.Path));
-                     end if;
-                  end;
-               end loop;
-               return Found;
-            end Files_Of;
-         begin
-            for Named of Named_Files loop
-               for Unit of Code_Queries.Units_Of_File (Graph, Named) loop
-                  begin
-                     if Unit /= Named then
-                        for User of Repository.Dependents_Of (Graph, Unit) loop
-                           for Path of Files_Of (User) loop
-                              exit when Users_Offered = Users_Most;
-                              if not Named_Files.Contains (Path) then
-                                 declare
-                                    Text : Unbounded_String;
-                                    Got  : E.Error_Info;
-                                 begin
-                                    Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Got);
-                                    if E.Is_Ok (Got) then
-                                       Offer ("file:" & Path, "user of " & Named, Low, To_String (Text));
-                                       Users_Offered := Users_Offered + 1;
-                                    end if;
-                                 end;
-                              end if;
-                           end loop;
-                        end loop;
-                     end if;
-                  end;
-               end loop;
-            end loop;
-         end;
-
-         if Wanted /= "" then
-            for Index in 1 .. Repository.File_Count (Graph) loop
-               declare
-                  use type Repository.File_Role;
-                  File : constant Repository.File_Entry :=
-                    Repository.File_At (Graph, Index);
-                  Path : constant String := To_String (File.Path);
-                  Text : Unbounded_String;
-               begin
-                  if Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0
-                    and then File.Role in Repository.Source | Repository.Test
-                  then
-                     Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
-                     if E.Is_Ok (Read) then
-                        Offer ("file:" & Path,
-                               (if File.Role = Repository.Source then "source" else "test"),
-                               (if File.Role = Repository.Source then Normal else Low),
-                               To_String (Text));
-                     end if;
-                  end if;
-               end;
-            end loop;
-
-            --  The symbols its files declare: what there is to use or to
-            --  change, where the files themselves may not all fit.
-            declare
-               Listed : Unbounded_String;
-            begin
-               for Index in 1 .. Repository.Symbol_Count (Graph) loop
-                  declare
-                     One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
-                  begin
-                     if Ada.Strings.Fixed.Index (Lower (To_String (One.Path)), Wanted) > 0 then
-                        Append (Listed, To_String (One.Kind) & " " & To_String (One.Name)
-                                & "  " & To_String (One.Path) & ":" & Image (One.Line) & ASCII.LF);
-                     end if;
-                  end;
-               end loop;
-               Offer (Task_Id & "#symbols", "symbols", Normal, To_String (Listed));
-            end;
-         end if;
-
-         --  The tests that bear on it: the component's test files, and the
-         --  tests its requirements name.
-         declare
-            Listed : Unbounded_String;
-         begin
-            if Wanted /= "" then
-               for Index in 1 .. Repository.File_Count (Graph) loop
-                  declare
-                     use type Repository.File_Role;
-                     File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
-                  begin
-                     if File.Role = Repository.Test
-                       and then Ada.Strings.Fixed.Index (Lower (To_String (File.Path)), Wanted) > 0
-                     then
-                        Append (Listed, To_String (File.Path) & ASCII.LF);
-                     end if;
-                  end;
-               end loop;
-            end if;
-            for Requirement of Lines_Of (Records.Get (View, "definition.requirements")) loop
-               for Test of Intent.Links (Item, Intent.Requirement, Requirement, Intent.Test) loop
-                  Append (Listed, Test & " (tests " & Requirement & ")" & ASCII.LF);
-               end loop;
-            end loop;
-
-            --  How the project's tests are laid out, and what runs them: a
-            --  test that is not registered where the harness lists its
-            --  tests does not run.
-            declare
-               Layout : Unbounded_String;
-               Shown  : Natural := 0;
-            begin
-               for Index in 1 .. Repository.File_Count (Graph) loop
-                  declare
-                     use type Repository.File_Role;
-                     File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
-                     Path : constant String := To_String (File.Path);
-                     Base : constant String :=
-                       Lower (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Path)));
-                     Text : Unbounded_String;
-                  begin
-                     if File.Role = Repository.Test then
-                        if Shown < 40 then
-                           Append (Layout, Path & ASCII.LF);
-                           Shown := Shown + 1;
-                        end if;
-                        --  Its harness file quoted only where the work is to
-                        --  add a test -- a test task, or one serving a
-                        --  requirement -- and the source of it, not its build
-                        --  file.
-                        if Base in "tests" | "test_main" | "all_tests" | "test_runner" | "suite"
-                                 | "test_suite" | "harness" | "conftest"
-                          and then (Records.Get (View, "definition.kind") = "test"
-                                    or else Records.Get (View, "definition.requirements") /= "")
-                          and then Lower (Ada.Directories.Extension (Path)) not in "gpr" | "toml" | "json" | "cfg"
-                        then
-                           Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
-                           if E.Is_Ok (Read) then
-                              Offer ("file:" & Path, "test", Normal, To_String (Text));
-                           end if;
-                        end if;
-                     end if;
-                  end;
-               end loop;
-               if Layout /= Null_Unbounded_String then
-                  Append (Listed, "The project's test files -- a new test runs only once it is"
-                          & " registered where the test harness lists its tests:" & ASCII.LF
-                          & Layout);
-               end if;
-            end;
-            Offer (Task_Id & "#tests", "tests", Normal, To_String (Listed));
-         end;
       end;
+      Graph := (if Tree /= "" then Repository.Scan (Tree, Repository.Roots_Of (Item))
+                else Repository.Now (Item));
+      Result.Tree := To_Unbounded_String (Tree_Of (Item, Tree));
+      Result.Tree_Fingerprint := To_Unbounded_String (Repository.Graph_Fingerprint (Graph));
 
-      --  What earlier attempts left: the last answer, and what the last
-      --  verification found wrong -- a retry is told why it is one.
+      --  What may go in: the retrieval kept for the same state, where every
+      --  input it names still holds, or worked out and left to be kept.
       declare
-         State    : Records.Item;
-         Read     : E.Error_Info;
-         Listed   : Unbounded_String;
-
-         --  The results and evidence it came from, by their identifiers:
-         --  the manifest names what went in, not only that something did.
-         Sources  : Unbounded_String;
+         Spec  : constant Derivations.Specification :=
+           Retrieval_Specification (Item, Task_Id, View, Tree, Graph);
+         Found : Derivations.Finding;
+         Text  : Unbounded_String;
+         Held  : Boolean := False;
+         Read  : E.Error_Info;
       begin
-         Stores.Read (Item, Tasks_Area, Task_Id & ".state", State, Read);
-         if Records.Get (State, "last_result") /= "" then
-            declare
-               Held : Results.Result;
-            begin
-               Results.Read (Item, Records.Get (State, "last_result"), Held, Read);
-               --  An answer that said nothing tells the next attempt nothing.
-               if E.Is_Ok (Read)
-                 and then Ada.Strings.Fixed.Trim (To_String (Held.Payload), Ada.Strings.Both) /= ""
-               then
-                  --  Its lines once each where it went round -- the same
-                  --  line again and again -- and not past a screenful: a
-                  --  loop told back whole primes the next to loop.
-                  declare
-                     Told   : Unbounded_String;
-                     Last   : Unbounded_String;
-                     Again  : Natural := 0;
-                     Lines  : Natural := 0;
-                     procedure Flush_Again is
-                     begin
-                        if Again > 0 then
-                           Append (Told, "... the same line" & Natural'Image (Again) & " times more" & ASCII.LF);
-                           Again := 0;
-                        end if;
-                     end Flush_Again;
-                  begin
-                     for Line of Lines_Of (To_String (Held.Payload)) loop
-                        if Line = To_String (Last) and then Lines > 0 then
-                           Again := Again + 1;
-                        else
-                           Flush_Again;
-                           Lines := Lines + 1;
-                           exit when Lines > 40;
-                           Append (Told, Line & ASCII.LF);
-                           Last := To_Unbounded_String (Line);
-                        end if;
-                     end loop;
-                     Flush_Again;
-                     if Lines > 40 then
-                        Append (Told, "... (the rest of it left out)" & ASCII.LF);
-                     end if;
-                     Append (Listed, "The last answer (" & Records.Get (State, "last_result") & "):"
-                             & ASCII.LF & To_String (Told));
-                  end;
-                  Append (Sources, "," & Records.Get (State, "last_result"));
-               end if;
-            end;
-         end if;
-         if Records.Get (State, "current_verification") /= "" then
-            declare
-               Evidence : constant String := Records.Get (State, "current_verification");
-               Said     : constant Verification.Diagnostic_List :=
-                 Verification.Diagnostics_Of (Item, Evidence);
-               Value    : Records.Item;
-            begin
-               Stores.Read (Item, Verification_Area, Evidence, Value, Read);
-               if E.Is_Ok (Read) and then Records.Get (Value, "passed") /= "true" then
-                  Append (Sources, "," & Evidence);
-                  Append (Listed, Evidence & " did not pass:" & ASCII.LF);
-                  for Index in 1 .. Verification.Length (Said) loop
-                     declare
-                        One : constant Verification.Diagnostic := Verification.Element (Said, Index);
-                     begin
-                        Append (Listed, To_String (One.File) & ":" & Image (One.Line) & ": "
-                                & To_String (One.Severity) & ": " & To_String (One.Message)
-                                & ASCII.LF);
-                     end;
-                  end loop;
-               end if;
-            end;
-         end if;
-         --  Why the last attempt did not end the task: the gate that held
-         --  it, or what failed -- what a retry has to do differently.
-         declare
-            Why : constant String :=
-              (if Records.Get (State, "current_failure") /= "" then Records.Get (State, "current_failure")
-               else Records.Get (State, "blocking_reasons"));
-         begin
-            if Ada.Strings.Fixed.Trim (Why, Ada.Strings.Both) /= "" then
-               Append (Listed, "Why it did not end the task: " & Why & ASCII.LF);
+         if Derivations.Readable (Spec) then
+            Found := Derivations.Find_Current (Item, Spec);
+            if Found.Standing = Derivations.Current then
+               Derivations.Answer (Item, Found, Text, Read);
+               Held := E.Is_Ok (Read);
             end if;
-         end;
-         Offer (Task_Id & "#results"
-                & (if Sources = Null_Unbounded_String then ""
-                   else ":" & Slice (Sources, 2, Length (Sources))),
-                "results", High, To_String (Listed));
-      end;
-
-      --  What was learned on this work or near it: observations, never
-      --  authoritative -- the hot among what matters next to the files and
-      --  the last attempt, the warm with the specifications -- each once,
-      --  and none that only says what is given already.
-      declare
-         Left  : Name_Lists.Vector;
-         Found : constant Observations.Considered_Vectors.Vector :=
-           Observations.Relevant (Item, Task_Id, Left);
-      begin
-         for One of Found loop
-            declare
-               Id    : constant String := To_String (One.Id) & "@" & Image (One.Revision);
-               Shown : Observations.Observation;
-               Read  : E.Error_Info;
-               Said  : Unbounded_String;
-            begin
-               Observations.Read (Item, To_String (One.Id), Shown, Read);
-               declare
-                  Claim : constant String := Lower (To_String (Shown.Summary));
-
-                  --  Whether a text says the claim as a phrase of its own:
-                  --  whole words, and long enough to be a claim -- a word or
-                  --  two is in every text without saying the same.
-                  function Says_It (Text : String) return Boolean is
-                     function Word_Char (C : Character) return Boolean
-                     is (C in 'a' .. 'z' | '0' .. '9' | '_');
-                     At_Claim : Natural := Ada.Strings.Fixed.Index (Text, Claim);
-                  begin
-                     if Claim'Length < 20 then
-                        return False;
-                     end if;
-                     while At_Claim > 0 loop
-                        if (At_Claim = Text'First or else not Word_Char (Text (At_Claim - 1)))
-                          and then (At_Claim + Claim'Length > Text'Last
-                                    or else not Word_Char (Text (At_Claim + Claim'Length)))
-                        then
-                           return True;
-                        end if;
-                        At_Claim := Ada.Strings.Fixed.Index (Text, Claim, At_Claim + 1);
-                     end loop;
-                     return False;
-                  end Says_It;
-               begin
-                  for Held of Candidates loop
-                     if Said = Null_Unbounded_String and then Says_It (Lower (To_String (Held.Text))) then
-                        Said := Held.Id;
-                     end if;
-                  end loop;
-               end;
-               if Said /= Null_Unbounded_String then
-                  Result.Knowledge_Left.Append (Id & ": says only what " & To_String (Said) & " says");
-               else
-                  Offer (Id, "observation",
-                         (if Observations."=" (One.Heat, Observations.Hot) then High else Normal),
-                         To_String (One.Text));
-                  Result.Knowledge.Append
-                    (Id & " " & Lower (Observations.Temperature'Image (One.Heat)) & " "
-                     & Observations.Word (One.Standing) & " " & To_String (One.Reason));
-               end if;
-            end;
-         end loop;
-         for Line of Left loop
-            Result.Knowledge_Left.Append (Line);
-         end loop;
+            if not Held and then Found.Standing /= Derivations.Input_Unavailable then
+               Derivations.Recall (Item, Spec, Text, Held);
+            end if;
+         end if;
+         if Held and then Decode (To_String (Text), Candidates, File_Revisions, Result) then
+            Derivations.Count (Retrieval_Kind, Again => True);
+         else
+            Candidates.Clear;
+            File_Revisions.Clear;
+            Result.Revisions.Clear;
+            Result.Meanings.Clear;
+            Result.Knowledge.Clear;
+            Result.Knowledge_Left.Clear;
+            Retrieve;
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Derivations.Count (Retrieval_Kind, Again => False);
+            if Derivations.Readable (Spec) then
+               Text := To_Unbounded_String (Encode (Candidates, File_Revisions, Result));
+               Derivations.Remember (Spec, To_String (Text));
+               Derivations.Add (Result.Derived, Spec, To_String (Text),
+                                "what a context for " & Task_Id & " may hold");
+            end if;
+         end if;
+         if Derivations.Readable (Spec) then
+            Result.Retrieval := To_Unbounded_String (Derivations.Key_Of (Spec));
+         end if;
       end;
 
       Settle (Candidates, Task_Id, Result, Status);
@@ -1388,6 +1724,9 @@ package body Model_Runner.Framework.Context is
    function Knowledge_Left (From : Built) return Name_Lists.Vector
    is (From.Knowledge_Left);
 
+   function Retrieval (From : Built) return String
+   is (To_String (From.Retrieval));
+
    function Semantic (From : Built) return Boolean
    is (From.Semantic);
 
@@ -1411,7 +1750,12 @@ package body Model_Runner.Framework.Context is
          Provenance => To_Unbounded_String (Id),
          others     => <>);
    begin
-      Status := E.Success;
+      --  The retrieval it was made from, where it was worked out now: kept
+      --  whether or not the same context was kept before.
+      Derivations.Keep (Item, Change, From.Derived, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       if Stores.Exists (Item, Invocations_Area, Name) then
          return;
       end if;
@@ -1430,6 +1774,9 @@ package body Model_Runner.Framework.Context is
          Records.Set (Value, "configuration_revision", Image (From.Config_Revision));
          Records.Set (Value, "configuration_fingerprint", To_String (From.Config_Fingerprint));
          Records.Set (Value, "retrieval", (if From.Semantic then "semantic" else "textual"));
+         if Length (From.Retrieval) > 0 then
+            Records.Set (Value, "retrieval_derivation", To_String (From.Retrieval));
+         end if;
          --  The tree its source came from, and as it was: what was shown and
          --  what is edited can be told the same.
          for Shown of From.Sources loop

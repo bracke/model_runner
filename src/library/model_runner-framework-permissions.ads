@@ -145,6 +145,13 @@ package Model_Runner.Framework.Permissions is
      (Text   : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The confinement in force as it was written: the shell's, a line end,
+   --  and the session's -- what a computation that rests on Sandbox names
+   --  as what it rested on.
+   --
+   --  @return The two texts.
+   function Sandbox_Text return String;
+
    --  Where the confinement in force comes from, to be said with what it
    --  refused: MODEL_RUNNER_SANDBOX, the session's /sandbox, both, or none.
    --

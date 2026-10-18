@@ -303,6 +303,7 @@ package body Model_Runner.Framework.Schemas is
           Rule ("model_profile", Text_Field, True),
           Rule ("configuration_revision", Number_Field, True),
           Rule ("retrieval", Choice_Field, True, "semantic textual "),
+          Rule ("retrieval_derivation", Identifier_Field, False),
           Rule ("budget", Number_Field, True),
           Rule ("estimated_tokens", Number_Field, True),
           Rule ("fingerprint", Text_Field, True),

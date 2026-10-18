@@ -3765,6 +3765,10 @@ Derivations SHALL be reconstructible; they MAY be let go after the project's ret
 
 Reuse is valid only when all semantic derivation inputs still match.
 
+A context's retrieval -- the candidate items a context may hold, before any is fitted to a model's room -- SHALL be a derivation, its dependencies the task and every record of the state it reads, the tree's files and the files the task names, the files its observations are about, the evidence, the answer the task was last given, the configuration, the harness's rules and the confinement the run is under, and its manifest SHALL name it.
+
+Budgeted rendering SHALL NOT be part of that derivation: the same retrieval is fitted afresh to each model's room.
+
 ---
 
 # 120. Observations

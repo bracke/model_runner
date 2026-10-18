@@ -636,6 +636,13 @@ package body Model_Runner.Framework.Permissions is
       return Intersect (Shell, Session);
    end Sandbox;
 
+   ------------------
+   -- Sandbox_Text --
+   ------------------
+
+   function Sandbox_Text return String
+   is (Shell_Text & ASCII.LF & To_String (Session_Text));
+
    --------------------
    -- Sandbox_Source --
    --------------------

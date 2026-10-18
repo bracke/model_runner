@@ -7695,6 +7695,139 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Derivations_Are_Pruned;
 
+   procedure Retrieval_Is_Derived (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Pm renames Model_Runner.Framework.Permissions;
+      package Ob renames Model_Runner.Framework.Observations;
+      Store  : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Wide   : constant Cx.Model_Profile :=
+        (Id => To_Unbounded_String ("wide"), Context_Limit => 60_000, Output_Reserve => 512, others => <>);
+      Narrow : constant Cx.Model_Profile :=
+        (Id => To_Unbounded_String ("narrow"), Context_Limit => 6_000, Output_Reserve => 512, others => <>);
+      First, Again : Cx.Built;
+      Computed, Reused : Natural;
+
+      procedure Build (Profile : Cx.Model_Profile; Into : out Cx.Built) is
+      begin
+         Cx.Build (Store, To_String (Id), Profile, Into, Status);
+         Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      end Build;
+
+      procedure Counts is
+      begin
+         Computed := Dv.Computed (Cx.Retrieval_Kind);
+         Reused := Dv.Reused (Cx.Retrieval_Kind);
+      end Counts;
+
+      function Worked_Out return Boolean
+      is (Dv.Computed (Cx.Retrieval_Kind) = Computed + 1 and then Dv.Reused (Cx.Retrieval_Kind) = Reused);
+
+      function Used_Again return Boolean
+      is (Dv.Computed (Cx.Retrieval_Kind) = Computed and then Dv.Reused (Cx.Retrieval_Kind) = Reused + 1);
+   begin
+      Task_Project (Store, "retrieval");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is end Parser;" & LF);
+      Tk.Create (Store, Change, Fields ("Mend src/parser.adb", "implementation", "component", "parser"), "user", "",
+                 Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the task was not made: " & Code_Of (Status));
+      Dv.Forget;
+
+      --  Worked out once, and fitted to two rooms from the same retrieval.
+      Counts;
+      Build (Wide, First);
+      Assert (Worked_Out and then Ada.Strings.Fixed.Index (Cx.Retrieval (First), "DRV-") = 1,
+              "the retrieval was not worked out and named: " & Cx.Retrieval (First));
+      Counts;
+      Build (Narrow, Again);
+      Assert (Used_Again and then Cx.Retrieval (Again) = Cx.Retrieval (First),
+              "a second room did not use the same retrieval again");
+      Assert (Cx.Budget (Again) < Cx.Budget (First),
+              "the rooms were not each fitted on their own: the rendered context reused across budgets");
+
+      --  Worked out afresh, it is the same context.
+      Dv.Forget;
+      Counts;
+      Build (Wide, Again);
+      Assert (Worked_Out and then Cx.Manifest_Id (Again) = Cx.Manifest_Id (First)
+              and then Cx.Rendered (Again) = Cx.Rendered (First),
+              "a retrieval worked out again made another context");
+
+      --  Kept with the context, it is used again from the store, the same.
+      Change := S.No_Changes;
+      Cx.Keep (Store, Change, Again, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the context was not kept: " & Code_Of (Status));
+      Assert (S.Exists (Store, Model_Runner.Framework.Derivations_Area, Cx.Retrieval (First)),
+              "keeping the context did not keep its retrieval");
+      Dv.Forget;
+      Counts;
+      Build (Wide, Again);
+      Assert (Used_Again and then Cx.Manifest_Id (Again) = Cx.Manifest_Id (First)
+              and then Cx.Rendered (Again) = Cx.Rendered (First),
+              "a kept retrieval was not used again, or made another context: " & Cx.Retrieval (Again) & " "
+              & Cx.Retrieval (First) & " " & Joined (Dv.Explain (Store, Cx.Retrieval (First)))
+              & Natural'Image (Dv.Computed (Cx.Retrieval_Kind) - Computed)
+              & Natural'Image (Dv.Reused (Cx.Retrieval_Kind) - Reused));
+
+      --  A damaged one is worked out again, never believed.
+      Put_File (S.Root (Store) & "/derivations/" & Cx.Retrieval (First) & ".rec", "not a record");
+      Dv.Forget;
+      Counts;
+      Build (Wide, Again);
+      Assert (Worked_Out and then Cx.Rendered (Again) = Cx.Rendered (First),
+              "a damaged retrieval was used, or not worked out again");
+
+      --  A file the task names changed: another retrieval, the file as it is.
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "package body Parser is --  mended" & LF & "end Parser;" & LF);
+      Counts;
+      Build (Wide, Again);
+      Assert (Worked_Out and then Cx.Retrieval (Again) /= Cx.Retrieval (First)
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Again), "--  mended") > 0,
+              "a changed file was not read again");
+
+      --  What was learned since: another retrieval, and it is told.
+      declare
+         Said  : Ob.Draft;
+         From  : Ob.Origin;
+         Kept  : Unbounded_String;
+         Fresh : Boolean;
+         Was   : constant String := Cx.Retrieval (Again);
+      begin
+         Said.Kind := Ob.Finding;
+         --  About no file: what was learned is itself what the retrieval
+         --  rests on, not only the files it names.
+         Said.Summary := To_Unbounded_String ("Parser's body takes no pragma at its end");
+         From.Task_Id := Id;
+         Change := S.No_Changes;
+         Ob.Record_Observation (Store, Change, Said, From, Kept, Fresh, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the observation was not kept: " & Code_Of (Status));
+         Counts;
+         Build (Wide, Again);
+         Assert (Worked_Out and then Cx.Retrieval (Again) /= Was
+                 and then Ada.Strings.Fixed.Index (Cx.Rendered (Again), "takes no pragma") > 0,
+                 "an observation recorded since was not told");
+      end;
+
+      --  Confined otherwise, the agent is told otherwise: another retrieval.
+      declare
+         Was : constant String := Cx.Retrieval (Again);
+      begin
+         Pm.Set_Sandbox ("read_source", Status);
+         Counts;
+         Build (Wide, Again);
+         Pm.Set_Sandbox ("", Status);
+         Assert (Worked_Out and then Cx.Retrieval (Again) /= Was,
+                 "a retrieval was used again under another confinement");
+      end;
+      S.Close (Store);
+   end Retrieval_Is_Derived;
+
    --  The tests a change calls for come from derivations: the same change
    --  is chosen for once, a changed file or a new version chooses again, and
    --  the evidence of the run names the selection it was given.
@@ -15569,6 +15702,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Derivations_Are_Pruned'Access,
          "letting derivations go keeps every answer a kept one names");
+      Register_Routine
+        (T, Retrieval_Is_Derived'Access,
+         "a context's retrieval is kept and used again for every room, and worked out again when what it read changes");
       Register_Routine
         (T, Selection_Is_Derived'Access,
          "a change's tests are chosen once through kept derivations, and the evidence names them");
