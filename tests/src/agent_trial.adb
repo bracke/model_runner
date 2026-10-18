@@ -286,7 +286,7 @@ package body Agent_Trial is
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
       Max_Seconds : Positive := 1200;
-      Context_Size : Positive := 8192)
+      Context_Size : Natural := 0)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -384,8 +384,31 @@ package body Agent_Trial is
             Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
             Ada.Text_IO.Put_Line
               (File, "when_utc" & HT & "build" & HT & "model" & HT & "task" & HT & "isolation" & HT & "outcome"
-               & HT & "seconds" & HT & "calls" & HT & "thoughts_closed");
+               & HT & "seconds" & HT & "calls" & HT & "thoughts_closed" & HT & "context");
          else
+            --  A history kept before the context was: its heading given the
+            --  column, its rows left as they were -- the context they ran at
+            --  not said, 8192 as every trial then ran.
+            declare
+               Old   : Ada.Text_IO.File_Type;
+               Lines : Hostkit.String_Vectors.Vector;
+            begin
+               Ada.Text_IO.Open (Old, Ada.Text_IO.In_File, Path);
+               while not Ada.Text_IO.End_Of_File (Old) loop
+                  Lines.Append (To_Unbounded_String (Ada.Text_IO.Get_Line (Old)));
+               end loop;
+               Ada.Text_IO.Close (Old);
+               if not Lines.Is_Empty
+                 and then Ada.Strings.Fixed.Index (To_String (Lines.First_Element), HT & "context") = 0
+               then
+                  Lines.Replace_Element (Lines.First_Index, Lines.First_Element & HT & "context");
+                  Ada.Text_IO.Create (Old, Ada.Text_IO.Out_File, Path);
+                  for Line of Lines loop
+                     Ada.Text_IO.Put_Line (Old, To_String (Line));
+                  end loop;
+                  Ada.Text_IO.Close (Old);
+               end if;
+            end;
             Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Path);
          end if;
          Ada.Text_IO.Put_Line
@@ -394,7 +417,9 @@ package body Agent_Trial is
             & (if Carry then ", carried" else "")
             & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
-            & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed);
+            & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed & HT
+            & (if Context_Size = 0 then "own" else Ada.Strings.Fixed.Trim (Natural'Image (Context_Size),
+                                                                             Ada.Strings.Left)));
          Ada.Text_IO.Close (File);
       exception
          --  A history not kept is no trial lost.
@@ -628,9 +653,13 @@ package body Agent_Trial is
                         return;
                      end if;
                      Words.Append (To_Unbounded_String (Model));
-                     Words.Append (To_Unbounded_String ("--context-size"));
-                     Words.Append (To_Unbounded_String
-                                     (Ada.Strings.Fixed.Trim (Positive'Image (Context_Size), Ada.Strings.Both)));
+                     --  The session's own context where none is asked, as a
+                     --  person's session has it.
+                     if Context_Size > 0 then
+                        Words.Append (To_Unbounded_String ("--context-size"));
+                        Words.Append (To_Unbounded_String
+                                        (Ada.Strings.Fixed.Trim (Natural'Image (Context_Size), Ada.Strings.Both)));
+                     end if;
                      declare
                         Start : Positive := Options'First;
                      begin

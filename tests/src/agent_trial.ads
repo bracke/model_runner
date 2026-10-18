@@ -40,9 +40,11 @@ package Agent_Trial is
    --    afresh each time never is.
    --  @param Max_Seconds How long a task's work may take (--max-seconds):
    --    agents.max_seconds in the project, and the wait for it past that.
-   --  @param Context_Size The session's context, in tokens (--context-size):
-   --    8192 unless said, so a trial's runs set beside an earlier one's had
-   --    the same room; what a reply and its thought may take grow with it.
+   --  @param Context_Size The session's context, in tokens (--context-size);
+   --    0, unless said, for the session's own, as a person's session has
+   --    it. Kept with each run in the history (context: N, or own); runs
+   --    from before it was kept ran at 8192. What a reply and its thought
+   --    may take grow with it.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -54,6 +56,6 @@ package Agent_Trial is
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
       Max_Seconds : Positive := 1200;
-      Context_Size : Positive := 8192);
+      Context_Size : Natural := 0);
 
 end Agent_Trial;
