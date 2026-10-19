@@ -1660,11 +1660,44 @@ package body Model_Runner.Framework.Observations is
          return Found;
       end Put_In;
 
-      Provenance : constant String := "observation lesson " & Fingerprint (Lesson);
+      --  A failure's shape: its text with each run of digits one mark, so
+      --  the same failure said with another time, count or line number is
+      --  the same failure -- told with timings, a lesson never reached a
+      --  second task.
+      function Shape (Text : String) return String is
+         Result    : Unbounded_String;
+         In_Digits : Boolean := False;
+      begin
+         for C of Text loop
+            if C in '0' .. '9' then
+               if not In_Digits then
+                  Append (Result, '#');
+               end if;
+               In_Digits := True;
+            else
+               Append (Result, C);
+               In_Digits := False;
+            end if;
+         end loop;
+         return To_String (Result);
+      end Shape;
+
+      Provenance : constant String := "observation lesson " & Fingerprint (Shape (Lesson));
       --  What every mending put in: the line the checks want, where the
       --  rest of each change was the task's own.
       Common     : Name_Lists.Vector := Put_In (Fixed_By);
       Head       : constant String := Lesson & ", and passed after changes to ";
+      Shaped     : constant String := Shape (Head);
+
+      --  Whether a summary is one of this failure: its shape begins with
+      --  the head's, or -- cut at its length -- the head's begins with it.
+      function Of_This (Said : String) return Boolean is
+         Its : constant String := Shape (Said);
+      begin
+         return (Its'Length >= Shaped'Length and then Its (Its'First .. Its'First + Shaped'Length - 1) = Shaped)
+           or else (Said'Length >= Summary_Most and then Its'Length <= Shaped'Length
+                    and then Shaped (Shaped'First .. Shaped'First + Its'Length - 1) = Its);
+      end Of_This;
       Tasks_Seen : Name_Lists.Vector;
       Seen_In    : Name_Lists.Vector;
       Component  : Unbounded_String;
@@ -1699,9 +1732,7 @@ package body Model_Runner.Framework.Observations is
               and then Value.Producer = Harness_Producer and then Value.Status = Active
               and then Length (Value.Retired) = 0
               and then Length (Value.Task_Id) > 0
-              and then Length (Said) >= Natural'Min (Head'Length, Summary_Most)
-              and then Slice (Said, 1, Natural'Min (Head'Length, Summary_Most))
-                       = Head (Head'First .. Head'First + Natural'Min (Head'Length, Summary_Most) - 1)
+              and then Of_This (To_String (Said))
             then
                --  Every task it was seen in: the same fix said the same
                --  way is one observation, seen again.
@@ -1725,9 +1756,9 @@ package body Model_Runner.Framework.Observations is
                      Text : constant String := To_String (Said);
                      --  The mending's part, where the summary still holds
                      --  it: one cut at its length may end before.
+                     Passed_At : constant Natural := Ada.Strings.Fixed.Index (Text, ", and passed after changes to ");
                      Mark : constant Natural :=
-                       (if Head'Length >= 4 and then Head'Length - 4 in Text'Range
-                        then Ada.Strings.Fixed.Index (Text, " -- ", Head'Length - 4) else 0);
+                       (if Passed_At = 0 then 0 else Ada.Strings.Fixed.Index (Text, " -- ", Passed_At));
                      Read_In : Name_Lists.Vector :=
                        (if Mark = 0 then Name_Lists.Empty_Vector else Put_In (Text (Mark + 4 .. Text'Last)));
                      Kept_Lines : Name_Lists.Vector;

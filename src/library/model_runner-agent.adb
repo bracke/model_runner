@@ -1457,10 +1457,8 @@ package body Model_Runner.Agent is
       Generated : Natural;
       Pace      : Natural) return Boolean
    is
-      --  Fewer than this and the speed is a reply's start-up, not its rate.
-      Least : constant := 48;
    begin
-      return Pace > 0 and then Generated >= Least and then Generating > 0
+      return Pace > 0 and then Generated >= Pace_Least and then Generating > 0
         and then Long_Float (Elapsed)
                  > Long_Float (Generating) / Long_Float (Generated) * Long_Float (Pace);
    end Past_Pace;

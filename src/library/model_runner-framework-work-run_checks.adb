@@ -92,7 +92,7 @@ begin
          Derived    => (if Narrow then Chosen.Derived else Derivations.Nothing_Staged),
          Offline => not May (Host, Permissions.Use_Network, ""),
          Workspace => (if Host.Apart then To_String (Host.Tree) else ""),
-         Within  => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0),
+         Within  => Checks_Time (Host),
          --  The work's own profile as it stood when the work started.
          Definition =>
            (if Host.Profile_Frozen and then not Narrow

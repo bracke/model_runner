@@ -427,6 +427,13 @@ package Model_Runner.Framework.Work is
    --  @return True where the task's time is set to model.
    function Is_Paced (Host : Child_Host) return Boolean;
 
+   --  How long a check run now may take: the time left, and where the
+   --  work is paced and its speed measured, no more than its pace leaves.
+   --
+   --  @param Host The host.
+   --  @return Whole seconds, 1 at least; 0 where the work is not bounded.
+   function Checks_Time (Host : Child_Host) return Natural;
+
    --  The task's pace, measured across its root's runs and its helpers'.
    --
    --  @param Host The host.

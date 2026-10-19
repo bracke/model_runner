@@ -11,6 +11,7 @@ with Hostkit.Durability;
 with Hostkit.Fs;
 with Hostkit.Process;
 
+with Model_Runner.Clocks;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
@@ -1122,6 +1123,12 @@ package body Model_Runner.Framework.Work is
       Rounds : constant Positive := (if State.Root then 3 else 2);
       Said   : constant String := To_String (State.Answer);
    begin
+      --  Out of time, or past its pace: no round more, whatever it would
+      --  be for. Begun, it stopped before its first step and the task ended
+      --  out of time, not as what the round was asked for left it.
+      if State.Hosted and then not State.Time_Left then
+         return Finish;
+      end if;
       --  Given up -- or said done -- on checks that failed, with time
       --  left: sent back once to fix what they reported. A small model
       --  that saw one compile error ended the task failed at once.
@@ -1562,6 +1569,29 @@ package body Model_Runner.Framework.Work is
 
    function Pace_Of (Host : in out Child_Host) return Model_Runner.Agent.Pace_Reference
    is (Host.Pace'Unchecked_Access);
+
+   function Checks_Time (Host : Child_Host) return Natural is
+      use type Model_Runner.Agent.Clock_Reading;
+      Clock : aliased Model_Runner.Clocks.System_Clock;
+      Now   : constant Model_Runner.Agent.Clock_Reading := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
+      Left  : Duration := Time_Left (Host);
+   begin
+      if not Host.Bounded then
+         return 0;
+      end if;
+      if Host.Paced and then Host.Pace.Started /= 0 and then Now >= Host.Pace.Started
+        and then Host.Pace.Tokens >= Model_Runner.Agent.Pace_Least and then Host.Pace.Spent_Ns > 0
+      then
+         declare
+            Allowed : constant Long_Float :=
+              Long_Float (Host.Pace.Spent_Ns) / Long_Float (Host.Pace.Tokens) * Long_Float (Pace_Tokens);
+            Used    : constant Long_Float := Long_Float (Now - Host.Pace.Started);
+         begin
+            Left := Duration'Min (Left, Duration (Long_Float'Max (0.0, Allowed - Used) / 1.0e9));
+         end;
+      end if;
+      return Natural (Duration'Max (1.0, Left));
+   end Checks_Time;
 
    function Pace_Spent (Host : Child_Host; Now : Model_Runner.Agent.Clock_Reading) return Boolean is
       use type Model_Runner.Agent.Clock_Reading;

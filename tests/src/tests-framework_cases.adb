@@ -21,6 +21,7 @@ with Model_Runner.Llama;
 with Model_Runner.Stops;
 with Tiny_Model;
 with Model_Runner.Cancellation;
+with Model_Runner.Clocks;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Options;
@@ -5784,6 +5785,12 @@ package body Tests.Framework_Cases is
          Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True))
                  = Wk.Ask_To_Report,
                  "an agent repeating a write it made was not asked for its report");
+         Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True,
+                                Time_Left => False)) = Wk.Finish
+                 and then Wk.Next_Step ((Worked with delta Check_Runs => 1, Time_Left => False,
+                                         Answer => To_Unbounded_String ("status: blocked" & LF & "parts: x")))
+                          = Wk.Finish,
+                 "a round was begun for an agent whose time or pace was spent");
          Assert (Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False)) = Wk.Ask_To_Call
                  and then Wk.Next_Step ((Worked with delta Calls => 0, Hosted => False, Round => 3)) = Wk.Finish,
                  "a root that answered without a call was not told so, or told on its last round");
@@ -8967,6 +8974,8 @@ package body Tests.Framework_Cases is
    --  is spent half a second and 481 seconds after it began: its 24,000
    --  tokens take 480.
    Lesson_Spent_Early, Lesson_Spent_Late : Boolean := False;
+   --  And how long a check run may take with 10 s of that pace left.
+   Lesson_Checks_Time : Natural := 0;
    Lesson_Evidence_Before, Lesson_Evidence_After : Natural := 0;
    --  And the reuse indexes the checks' runs leave, the one thing such a
    --  run would write outside the transaction it never commits.
@@ -9137,6 +9146,15 @@ package body Tests.Framework_Cases is
       Children.Pace_Of.all := (Started => 1_000_000_000, Tokens => 50, Spent_Ns => 1_000_000_000);
       Lesson_Spent_Early := Children.Pace_Spent (1_500_000_000);
       Lesson_Spent_Late := Children.Pace_Spent (482_000_000_000);
+      --  Begun now, at a speed whose 24,000 tokens take ten seconds.
+      declare
+         Clock : aliased Model_Runner.Clocks.System_Clock;
+      begin
+         Children.Pace_Of.all :=
+           (Started  => Model_Runner.Clocks.Read (Clock'Unchecked_Access), Tokens => 24_000,
+            Spent_Ns => 10_000_000_000);
+         Lesson_Checks_Time := Children.Checks_Time;
+      end;
       Lesson_Evidence_Before := Evidence_Count;
       Lesson_Reuse_Before := Reuse_Count;
       Children.Lesson_Checks (Lesson_Failing);
@@ -9940,8 +9958,8 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "(style) space required") > 0,
                  "a change the lesson's checks refuse was not said with it: " & To_String (Lesson_Failing));
          Assert (Length (Lesson_Passing) = 0, "a change they take was said as failing: " & To_String (Lesson_Passing));
-         Assert (not Lesson_Paced and then not Lesson_Spent_Late,
-                 "work with no time set to model was held to a pace");
+         Assert (not Lesson_Paced and then not Lesson_Spent_Late and then Lesson_Checks_Time > 100,
+                 "work with no time set to model was held to a pace:" & Natural'Image (Lesson_Checks_Time));
          Assert (Lesson_Evidence_After = Lesson_Evidence_Before
                  and then Lesson_Reuse_After = Lesson_Reuse_Before,
                  "the checks after a change were kept as the work's evidence, or left an index to reuse it by");
@@ -10045,6 +10063,53 @@ package body Tests.Framework_Cases is
       Assert (Lessons = 1, "a long failure mended in two tasks was proposed" & Natural'Image (Lessons) & " times");
       S.Close (Store);
    end A_Long_Failure_Is_Still_Learned;
+
+   --  A failure said with a different number each time -- a time, a
+   --  count, a process -- is the same failure: two tasks mending it are one
+   --  lesson, where its text alone never matched a second time.
+   procedure A_Failure_Told_With_Numbers_Is_Learned (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      First, Second : Unbounded_String;
+      type Two_Tasks is array (1 .. 2) of Unbounded_String;
+      Lessons : Natural := 0;
+   begin
+      Task_Project
+        (Store, "numbered-lesson",
+         "set execution.allowed = sh" & LF
+         & "profile checks = exists: sh check.sh" & LF
+         & "scalar verification.default = checks" & LF);
+      --  The shell's own process number, another each run.
+      Put_File (Fresh_Root (Store) & "/check.sh",
+                "grep -q 'null;' src/hello.adb 2>/dev/null && exit 0" & LF
+                & "echo ""hello.adb:1:1: failed in process $$""" & LF & "exit 1" & LF);
+      Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", First, Status);
+      Tk.Create (Store, Change, Fields ("Greet again", "analysis", "component", "hello"), "user", "", Second,
+                 Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      for Id of Two_Tasks'[First, Second] loop
+         Wk.Execute (Store, To_String (Id), Mending_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      end loop;
+      for Id of Nt.List (Store, Nt.Decision) loop
+         declare
+            Held : Nt.Entity;
+         begin
+            Nt.Read (Store, Nt.Decision, Id, Held, Status);
+            if To_String (Held.Source) = "harness" then
+               Lessons := Lessons + 1;
+            end if;
+         end;
+      end loop;
+      Assert (Lessons = 1, "a failure told with another number each time was proposed" & Natural'Image (Lessons)
+              & " times");
+      S.Close (Store);
+   end A_Failure_Told_With_Numbers_Is_Learned;
 
    --  A check run kept nowhere -- the lesson's checks after a change --
    --  leaves no index a later run would reuse it by, where the same run
@@ -10160,6 +10225,8 @@ package body Tests.Framework_Cases is
       Assert (Lesson_Paced, "the agents of work whose time is set to model were not held to its pace");
       Assert (not Lesson_Spent_Early and then Lesson_Spent_Late,
               "a pace was spent before the time its tokens take, or not after it");
+      Assert (Lesson_Checks_Time in 1 .. 10,
+              "a paced task's checks were given more than its pace leaves:" & Natural'Image (Lesson_Checks_Time));
       S.Close (Store);
       declare
          --  Nanoseconds: 2,399 s and 2,401 s, 10 s, 1 s, 99,999 s.
@@ -17288,6 +17355,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, A_Failure_Told_With_Numbers_Is_Learned'Access,
+         "a failure told with another number each time is learned as one");
       Register_Routine
         (T, An_Unkept_Run_Leaves_No_Reuse_Index'Access,
          "a check run kept nowhere leaves no index to reuse it by");

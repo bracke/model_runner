@@ -163,7 +163,7 @@ begin
         (Host.Item.all, Change, Profile, To_String (Host.Task_Id), Evidence, Passed, Status,
          Offline    => not May (Host, Permissions.Use_Network, ""),
          Workspace  => (if Host.Apart then To_String (Host.Tree) else ""),
-         Within     => (if Host.Bounded then Natural (Duration'Max (1.0, Time_Left (Host))) else 0),
+         Within     => Checks_Time (Host),
          Definition => To_String (Subset),
          Unkept     => True);
       if E.Is_Error (Status) or else Passed then

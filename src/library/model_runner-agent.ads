@@ -548,6 +548,10 @@ package Model_Runner.Agent is
       Pace        : Pace_Reference := null;
       Result     : out Outcome);
 
+   --  The fewest tokens a pace's speed is measured from: fewer, and it is
+   --  a reply's start-up, not its rate.
+   Pace_Least : constant := 48;
+
    --  Whether a run held to a pace is past it: what Pace tokens take at
    --  the speed measured so far -- Generated tokens in Generating
    --  nanoseconds of decoding -- against the time it has run. Never before
