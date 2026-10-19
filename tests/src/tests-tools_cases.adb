@@ -2049,6 +2049,24 @@ package body Tests.Tools_Cases is
          Status, Syntax => Tools.Function_XML);
       Assert (E.Is_Ok (Status), "the function-form call would not read");
       Assert (Tools.Count (Asked) = 1, "not one call");
+      --  Prose that speaks of <functions> is no call begun: read as one
+      --  never closed, it dropped the reply's real call.
+      Tools.Close (Asked);
+      Tools.Read_Calls
+        (Asked,
+         "The tools are listed as <functions> above." & ASCII.LF
+         & "<function name=""calculator""><param name=""a"">1</param></function>",
+         Status, Syntax => Tools.Function_XML);
+      Assert (E.Is_Ok (Status) and then Tools.Count (Asked) = 1,
+              "prose naming <functions> lost the call after it");
+      Tools.Close (Asked);
+      Tools.Read_Calls
+        (Asked,
+         "<function name=""calculator"">"
+         & "<param name=""a"">47</param>"
+         & "<param name=""op"">*</param>"
+         & "<param name=""b"">89</param></function>",
+         Status, Syntax => Tools.Function_XML);
       Assert (Tools.Called (Asked, 1) = "calculator",
               "wrong name: " & Tools.Called (Asked, 1));
       --  A numeric param value becomes a JSON number, so a typed tool gets a
@@ -3696,6 +3714,36 @@ package body Tests.Tools_Cases is
                    (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
                     """count"": 3") = 0,
                  "a call a thought opened with was kept in its reasoning too, to be written twice");
+         --  A reply that never thought, whose call's arguments spell
+         --  </think> or </tool_call>: the call is read whole -- cut at the
+         --  spelled tag, it was dropped.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 8, ""note"": ""a </think> b""}}"
+                  & "</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call whose arguments spell </think> was cut there");
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 9, ""note"": ""x </tool_call> y""}}"
+                  & "</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call whose arguments spell </tool_call> was cut there");
+         --  A bare call on its own line after prose: the prose is the turn's
+         --  text, the call its call, and not the call's text twice.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "I will edit it." & LF & "{""name"": ""edit"", ""arguments"": {""count"": 10}}",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
+                             """count""") = 0,
+                 "a bare call was kept as its turn's text beside the call");
          --  Drafted first and then made, as written: made once.
          Model_Runner.Conversation.Append_Reply
            (Talk, "<think>" & LF & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 5}}</tool_call>"

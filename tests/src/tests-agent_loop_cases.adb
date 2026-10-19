@@ -312,6 +312,41 @@ package body Tests.Agent_Loop_Cases is
                  "a thought closed for the reply was not shown closed");
       end;
 
+      --  A reply that ended within its thought's budget does not hold the
+      --  next step to that budget: the request was left at it, and a call
+      --  longer than the budget, a step later, was cut and never run.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("first.txt", "x"));
+         Replies.Replies.Append (Write ("second.txt", [1 .. 100 => 'z']));
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Budget => 32);
+         Assert (Seen.Cut_Offs = 0 and then Ada.Directories.Exists (Dir & "/second.txt"),
+                 "a step after one that ended within its budget was held to it:" & Seen.Cut_Offs'Image
+                 & Seen.Results.Length'Image);
+      end;
+
+      --  A reply cut at its length, again and again, with no call: no
+      --  answer -- the cut text was taken for one, and the run said it
+      --  answered.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         for Again in 1 .. 4 loop
+            Replies.Replies.Append (String'[1 .. 2_000 => 'w']);
+         end loop;
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended);
+         Assert (Ended.Reason = Ag.Token_Limit,
+                 "a reply cut at its length every time was taken for the answer: "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
       --  A thought the reply closed itself, and a call it was writing when
       --  the budget came: asked for after as it stands, and run.
       declare

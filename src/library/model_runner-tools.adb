@@ -11,6 +11,11 @@ with Model_Runner.Tools.Python_Calls;
 
 package body Model_Runner.Tools is
 
+   --  The most braces a reply's text is looked at for a call standing open
+   --  in it: a call is among the first, and a reply that repeats "{" is
+   --  read once, not once a brace.
+   Most_Objects_Tried : constant := 64;
+
    package E renames Model_Runner.Errors;
 
    --  How deeply a value may nest. A tool's parameters are a schema and a
@@ -538,6 +543,35 @@ package body Model_Runner.Tools is
                   Last  := (if Shut = 0 then Upto else Shut - 1);
                end;
             end if;
+         end;
+         return;
+      end if;
+
+      --  The open form with no envelope: a call stands bare or fenced on a
+      --  line of its own, and the prose is what comes before the first
+      --  such line -- cut at the envelope alone, the object was kept as the
+      --  turn's text and attached as its call, and the next prompt held it
+      --  twice.
+      if Syntax = Open_JSON and then Ada.Strings.Fixed.Index (Reply, Call_Opens) = 0 then
+         First := Reply'First;
+         Last  := Reply'Last;
+         declare
+            At_Line_Start : Boolean := True;
+         begin
+            for Start in Reply'First .. Reply'Last loop
+               if At_Line_Start
+                 and then (Reply (Start) = '{'
+                           or else (Start + 2 <= Reply'Last and then Reply (Start .. Start + 2) = "```"))
+               then
+                  Last := Start - 1;
+                  while Last >= Reply'First and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+                     Last := Last - 1;
+                  end loop;
+                  return;
+               end if;
+               At_Line_Start :=
+                 Reply (Start) = ASCII.LF or else (At_Line_Start and then Reply (Start) in ' ' | ASCII.HT);
+            end loop;
          end;
          return;
       end if;
@@ -1265,8 +1299,16 @@ package body Model_Runner.Tools is
          P        : Natural;
          Count    : Natural := 0;
 
+         --  Past the room, noted and not written: a value of quotes and
+         --  line breaks grows as JSON, and its write ran past Args.
+         Overflowed : Boolean := False;
+
          procedure Add (S : String) is
          begin
+            if A_Len + S'Length > Args'Length then
+               Overflowed := True;
+               return;
+            end if;
             Args (A_Len + 1 .. A_Len + S'Length) := S;
             A_Len := A_Len + S'Length;
          end Add;
@@ -1324,6 +1366,11 @@ package body Model_Runner.Tools is
                end if;
             end loop;
             Add ("}");
+            if Overflowed then
+               Status := E.Make (E.Tools_Too_Large);
+               E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Call_Bytes), E.Param_Bytes);
+               return;
+            end if;
             Store (Name, Args (1 .. A_Len));
          end;
       end Take_Function;
@@ -1339,8 +1386,16 @@ package body Model_Runner.Tools is
          P     : Natural;
          Count : Natural := 0;
 
+         --  Past the room, noted and not written: a value of quotes and
+         --  line breaks grows as JSON, and its write ran past Args.
+         Overflowed : Boolean := False;
+
          procedure Add (S : String) is
          begin
+            if A_Len + S'Length > Args'Length then
+               Overflowed := True;
+               return;
+            end if;
             Args (A_Len + 1 .. A_Len + S'Length) := S;
             A_Len := A_Len + S'Length;
          end Add;
@@ -1452,6 +1507,11 @@ package body Model_Runner.Tools is
                end if;
             end loop;
             Add ("}");
+            if Overflowed then
+               Status := E.Make (E.Tools_Too_Large);
+               E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Call_Bytes), E.Param_Bytes);
+               return;
+            end if;
             Store (Name, Args (1 .. A_Len));
          end;
       end Take_Qwen;
@@ -1471,7 +1531,17 @@ package body Model_Runner.Tools is
                declare
                   First : constant Natural := Index + Call_Opens'Length;
                   Shut  : Natural := First;
+                  Brace : Natural := First;
                begin
+                  --  Where the block's object closes, when it holds one: its
+                  --  strings may spell the closing tag -- a call writing a
+                  --  file about calls -- and the first tag cut it there.
+                  while Brace <= Reply'Last and then Reply (Brace) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+                     Brace := Brace + 1;
+                  end loop;
+                  if Brace <= Reply'Last and then Reply (Brace) = '{' and then Object_End (Brace) > 0 then
+                     Shut := Object_End (Brace) + 1;
+                  end if;
                   while Shut <= Reply'Last and then not Marks (Shut, Call_Closes)
                   loop
                      Shut := Shut + 1;
@@ -1511,25 +1581,33 @@ package body Model_Runner.Tools is
          --  brace is text, and the search moves on one character.
          if Syntax = Open_JSON and then Item.Used = 0 then
             Index := Reply'First;
-            while Index <= Reply'Last loop
-               if Reply (Index) = '{' then
-                  declare
-                     Shut  : constant Natural := Object_End (Index);
-                     Taken : Boolean := False;
-                  begin
-                     if Shut > 0 then
-                        Take_One (Reply (Index .. Shut), Announced => False,
-                                  Taken => Taken);
-                        if E.Is_Error (Status) then
-                           return;
+            declare
+               --  Braces looked at: each that is not a call is read to its
+               --  close, or to the reply's end, and a reply gone round on
+               --  "{" took a scan of the rest for every one of them.
+               Tried : Natural := 0;
+            begin
+               while Index <= Reply'Last and then Tried < Most_Objects_Tried loop
+                  if Reply (Index) = '{' then
+                     Tried := Tried + 1;
+                     declare
+                        Shut  : constant Natural := Object_End (Index);
+                        Taken : Boolean := False;
+                     begin
+                        if Shut > 0 then
+                           Take_One (Reply (Index .. Shut), Announced => False,
+                                     Taken => Taken);
+                           if E.Is_Error (Status) then
+                              return;
+                           end if;
                         end if;
-                     end if;
-                     Index := (if Taken then Shut + 1 else Index + 1);
-                  end;
-               else
-                  Index := Index + 1;
-               end if;
-            end loop;
+                        Index := (if Taken then Shut + 1 else Index + 1);
+                     end;
+                  else
+                     Index := Index + 1;
+                  end if;
+               end loop;
+            end;
          end if;
 
          --  The same call dressed as the offer was: a <name> and then its
@@ -1581,11 +1659,24 @@ package body Model_Runner.Tools is
                         if Name /= "" and then Args'Length >= 2
                           and then Args (Args'First) = '{' and then Args (Args'Last) = '}'
                           and then Trimmed (Reply (N_Shut + Name_Shuts'Length .. A_Open - 1)) = ""
+                          and then (Offered = null or else Offers (Offered.all, Name))
                         then
-                           Store (Name, Args);
-                           if E.Is_Error (Status) then
-                              return;
-                           end if;
+                           --  As JSON reads it, written the one way: kept as it
+                           --  stood, an object that did not read went to the
+                           --  tool as its arguments.
+                           declare
+                              Room    : String (1 .. Max_Call_Bytes);
+                              Written : Natural;
+                              Reading : E.Error_Info;
+                           begin
+                              Rewrite (Controls_Escaped (Args), Room, Written, Reading);
+                              if E.Is_Ok (Reading) then
+                                 Store (Name, Room (1 .. Written));
+                                 if E.Is_Error (Status) then
+                                    return;
+                                 end if;
+                              end if;
+                           end;
                         end if;
                      end;
                      Index := A_Shut + Args_Shuts'Length;
@@ -1601,7 +1692,12 @@ package body Model_Runner.Tools is
          begin
             Index := Reply'First;
             while Index <= Reply'Last loop
-               if Marks (Index, Open_Tag) then
+               --  The tag, not a word it begins: prose that speaks of
+               --  <functions> was read as a call never closed, and every call
+               --  of the reply was dropped.
+               if Marks (Index, Open_Tag) and then Index + Open_Tag'Length <= Reply'Last
+                 and then Reply (Index + Open_Tag'Length) in ' ' | '>'
+               then
                   declare
                      Shut : Natural := Index;
                   begin
@@ -1732,7 +1828,9 @@ package body Model_Runner.Tools is
          end loop;
 
          if Item.Used = 0 then
-            Read_Calls (Item, Reply, Status, Open_JSON);
+            --  Held to what was offered, as the open form always is: a bare
+            --  object in prose naming any tool was taken for a call.
+            Read_Calls (Item, Reply, Status, Open_JSON, Offered => Offered);
          end if;
 
       when Recipient_JSON =>

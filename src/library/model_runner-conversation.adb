@@ -696,27 +696,45 @@ package body Model_Runner.Conversation is
                exit when Last - Reply'First + 1 < Close_Tag'Length
                  or else Reply (Last - Close_Tag'Length + 1 .. Last) /= Close_Tag;
                declare
-                  --  The call's opening is the latest before its close that a
-                  --  call follows: reasoning may draft a call and write the
-                  --  real one after it, and may talk of the tag in prose.
-                  Opens    : Natural := 0;
-                  Look_End : Natural := Last - Close_Tag'Length;
+                  --  The call's opening is the first after the call before it
+                  --  closed that a call follows and that reads as one to the
+                  --  close: reasoning may talk of the tag, or draft a call and
+                  --  write the real one after it, and a call's own arguments
+                  --  may spell <tool_call>{.
+                  Before : constant Natural :=
+                    Ada.Strings.Fixed.Index
+                      (Reply (Reply'First .. Last - Close_Tag'Length), Close_Tag, Ada.Strings.Backward);
+                  Look   : Positive := (if Before = 0 then Reply'First else Before + Close_Tag'Length);
+                  Opens  : Natural := 0;
+
+                  --  Whether the text from an opening to the close reads as
+                  --  calls.
+                  function Reads (From : Positive) return Boolean is
+                     Asked_Here : Model_Runner.Tools.Calls;
+                     Status     : E.Error_Info;
+                     Found      : Boolean;
+                  begin
+                     Model_Runner.Tools.Read_Calls
+                       (Asked_Here, Reply (From .. Last), Status, Syntax => Syntax, Offered => Offered);
+                     Found := E.Is_Ok (Status) and then Model_Runner.Tools.Count (Asked_Here) > 0;
+                     Model_Runner.Tools.Close (Asked_Here);
+                     return Found;
+                  end Reads;
                begin
                   loop
                      declare
-                        Found : constant Natural :=
-                          Ada.Strings.Fixed.Index (Reply (Reply'First .. Look_End), Open_Tag, Ada.Strings.Backward);
+                        Found : constant Natural := Ada.Strings.Fixed.Index (Reply (Look .. Last), Open_Tag);
                         After : Positive := Found + Open_Tag'Length;
                      begin
                         exit when Found = 0;
                         while After <= Last and then Reply (After) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
                            After := After + 1;
                         end loop;
-                        if After <= Last and then Reply (After) in '{' | '<' then
+                        if After <= Last and then Reply (After) in '{' | '<' and then Reads (Found) then
                            Opens := Found;
                            exit;
                         end if;
-                        Look_End := Found - 1;
+                        Look := Found + 1;
                      end;
                   end loop;
                   exit when Opens = 0;
@@ -726,17 +744,23 @@ package body Model_Runner.Conversation is
             end loop;
             return Start;
          end Trailing_Calls;
+         Opens_Thought : Boolean;
+         First_Call    : constant Natural := Ada.Strings.Fixed.Index (Reply, "<tool_call>");
       begin
-         if Close /= 0 then
-            return Close + 8;
-         end if;
          while Lead <= Reply'Last
            and then Reply (Lead) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
          loop
             Lead := Lead + 1;
          end loop;
-         if Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>"
-         then
+         Opens_Thought := Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>";
+         --  A close ends the reasoning where the reply opened it, or -- one
+         --  the prompt opened -- where it comes before any call: a call's
+         --  arguments that spell </think>, in a reply that never thought,
+         --  cut the reply inside the call and dropped it.
+         if Close /= 0 and then (Opens_Thought or else First_Call = 0 or else Close < First_Call) then
+            return Close + 8;
+         end if;
+         if Opens_Thought then
             return Trailing_Calls;
          end if;
          return Reply'First;

@@ -479,6 +479,11 @@ package body Model_Runner.Agent is
                               else null),
                  Literal => Content_Text'Access);
 
+            --  Each step asks for the reply's whole room afresh: what the
+            --  last step's thought budget or cap left in the request is not
+            --  this one's -- a reply that ended within its budget held every
+            --  later step to it, and long thoughts were cut.
+            Request.Max_Tokens := Generation.Max_Tokens;
             --  No more asked of a generation than the run has left.
             if Max_Total_Tokens > 0 then
                if Spent >= Max_Total_Tokens then
@@ -511,7 +516,7 @@ package body Model_Runner.Agent is
                --  shown as it comes.
                procedure Take_Scripted (Given : Natural := 0; New_Prompt : Natural := 0) is
                   Rest  : constant String := U.To_String (Script_Rest);
-                  Most  : constant Natural := Request.Max_Tokens * 4;
+                  Most  : constant Natural := Natural'Min (Request.Max_Tokens, Natural'Last / 4) * 4;
                   Taken : constant String :=
                     (if Rest'Length > Most then Rest (Rest'First .. Rest'First + Most - 1) else Rest);
                   Shown_Closed : Boolean;
@@ -520,7 +525,8 @@ package body Model_Runner.Agent is
                   --  Past the room the step has, after what it has taken:
                   --  refused as a full context is, the reply given again.
                   if Room /= Natural'Last
-                    and then New_Prompt + Request.Max_Tokens > Room - Natural'Min (Room, Given)
+                    and then Long_Long_Integer (New_Prompt) + Long_Long_Integer (Request.Max_Tokens)
+                             > Long_Long_Integer (Room - Natural'Min (Room, Given))
                   then
                      declare
                         Status : E.Error_Info := E.Make (E.Generation_Context_Exhausted);
@@ -686,6 +692,9 @@ package body Model_Runner.Agent is
          if Last_Result.Reason = Gen.Runtime_Error then
             --  An unfinished turn is not committed, and the session is reset
             --  so the next attempt re-evaluates the committed conversation.
+            --  What it generated was spent all the same: counted, so a
+            --  retry is held to the run's budget.
+            Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
             L.Reset (Session);
             case Recovery_For (Class_Of (Last_Result.Error), Compact, Retries_Left, 0) is
                when Retry_Same =>
@@ -799,6 +808,9 @@ package body Model_Runner.Agent is
             --  a model does reach when a tool's result was all it needed and
             --  it adds nothing to it.
             if Status.Code = E.Conversation_Empty then
+               --  Its thought, where it was all thought, was generated all
+               --  the same.
+               Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
                Result.Reason := Answered;
                exit Step_Loop;
             end if;
@@ -919,8 +931,19 @@ package body Model_Runner.Agent is
                end;
             end if;
 
-            --  Nothing left to run: the model has answered.
-            exit Step_Loop when Asked = 0;
+            --  Nothing left to run: the model has answered -- unless the
+            --  reply was cut at its length or the context's, or could not
+            --  be read on the last step: then what stopped it was a limit,
+            --  and the cut text is no answer.
+            if Asked = 0 then
+               if Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full then
+                  Result.Reason :=
+                    (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
+               elsif E.Is_Error (Reading) and then Result.Steps >= Max_Steps then
+                  Result.Reason := Step_Limit;
+               end if;
+               exit Step_Loop;
+            end if;
 
             if Watch /= null then
                Watch.On_Turn (Result.Steps, Asked);

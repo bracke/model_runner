@@ -853,6 +853,14 @@ package body Model_Runner.CLI.Project_Commands is
                      & " needs a change, make it now by calling write_file, then report"
                      & " again.", Status);
                when Wk.Finish =>
+                  --  Finished for want of time where a round was owed: the
+                  --  work ran out of time, as it would have at that round's
+                  --  first step -- not an answer taken as it stands.
+                  if State.Hosted and then not State.Time_Left
+                    and then Wk."/=" (Wk.Next_Step ((State with delta Time_Left => True)), Wk.Finish)
+                  then
+                     Outcome.Reason := Model_Runner.Agent.Timed_Out;
+                  end if;
                   exit;
             end case;
             exit when E.Is_Error (Status);
@@ -1359,10 +1367,12 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       --  Past the work's time, nothing more is done: the call is refused,
       --  and the run ends as out of time.
-      --  Refused, not failed: the call was not wrong, its time was up.
+      --  Timed out, not failed and not refused: the call was not wrong,
+      --  and the project does not forbid it -- said as a refusal, it was
+      --  kept as something the project does not allow and told to later
+      --  work.
       if Self.Host /= null and then Wk.Time_Is_Up (Self.Host.all) then
-         Outcome.Answer := Tr.Refused;
-         Outcome.Refusal := Tr.Policy;
+         Outcome.Answer := Tr.Timed_Out;
          Put ("error: the work's time is up; no further call is run");
          return;
       end if;

@@ -10208,6 +10208,24 @@ package body Tests.Framework_Cases is
                  "a reply the work's time ran out in, past a call, was not said: " & To_String (Shown)
                  & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       end;
+      --  And a report that cannot be taken, come in after the time is up:
+      --  the round owed to mend it is not begun, and the work ran out of
+      --  time -- it was taken as the answer it was, and the task failed.
+      declare
+         Late : aliased Session_Script;
+      begin
+         Tk.Create (Store, Change, Fields ("Look late", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Late.First_Takes := 3.0;
+         Late.Replies (1) := To_Unbounded_String ("status: blocked" & LF & "parts: x");
+         On_Session (Store, To_String (Id), Late, Shown, Done);
+         Assert (To_String (Done.Final_State) = "blocked"
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "ran out of time") > 0,
+                 "a report come in past the time was taken for the answer: " & To_String (Done.Final_State) & " "
+                 & To_String (Done.Reason));
+      end;
       S.Close (Store);
       --  A time set to model is the lease's at most, held to the model's
       --  pace within it: what Pace_Tokens take at the speed it decodes at,
