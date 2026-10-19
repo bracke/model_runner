@@ -354,26 +354,31 @@ package body Agent_Trial is
       Start_Search (Search, Where, "DEC-*.rec", [Ordinary_File => True, others => False]);
       while More_Entries (Search) loop
          Get_Next_Entry (Search, Item);
-         declare
-            File : Ada.Text_IO.File_Type;
-            Text : Unbounded_String;
-         begin
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Full_Name (Item));
-            while not Ada.Text_IO.End_Of_File (File) loop
-               Append (Text, ASCII.LF & Ada.Text_IO.Get_Line (File));
-            end loop;
-            Ada.Text_IO.Close (File);
-            if Field (To_String (Text), "state") = "candidate"
-              and then Ada.Strings.Fixed.Head (Field (To_String (Text), "provenance"), 19) = "observation lesson "
-            then
-               Found.Append (To_Unbounded_String (Field (To_String (Text), "entity_id")));
-            end if;
-         exception
-            when others =>
-               if Ada.Text_IO.Is_Open (File) then
-                  Ada.Text_IO.Close (File);
+         --  A decision's earlier revisions lie beside it, DEC-N.rev-M.rec:
+         --  the decision is the record without one, and accepting a
+         --  revision's entity id asked for a decision there is none of.
+         if Ada.Strings.Fixed.Index (Simple_Name (Item), ".rev-") = 0 then
+            declare
+               File : Ada.Text_IO.File_Type;
+               Text : Unbounded_String;
+            begin
+               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Full_Name (Item));
+               while not Ada.Text_IO.End_Of_File (File) loop
+                  Append (Text, ASCII.LF & Ada.Text_IO.Get_Line (File));
+               end loop;
+               Ada.Text_IO.Close (File);
+               if Field (To_String (Text), "state") = "candidate"
+                 and then Ada.Strings.Fixed.Head (Field (To_String (Text), "provenance"), 19) = "observation lesson "
+               then
+                  Found.Append (To_Unbounded_String (Field (To_String (Text), "entity_id")));
                end if;
-         end;
+            exception
+               when others =>
+                  if Ada.Text_IO.Is_Open (File) then
+                     Ada.Text_IO.Close (File);
+                  end if;
+            end;
+         end if;
       end loop;
       End_Search (Search);
       return Found;
