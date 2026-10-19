@@ -3309,6 +3309,24 @@ package body Model_Runner.Sampling is
       if Takes (Mirostat_Eta) then
          Result.Mirostat_Eta := File.Mirostat_Eta;
       end if;
+      --  Mirostat replaces the truncation filters, and Validate refuses the
+      --  two together: a file that asks for it has the filters the caller
+      --  did not name set aside, as llama.cpp does -- left at this program's
+      --  defaults, every generation on that file was refused.
+      if Takes (Mirostat) and then Result.Mirostat /= 0 then
+         if not Given (Top_K) then
+            Result.Top_K := 0;
+         end if;
+         if not Given (Top_P) then
+            Result.Top_P := 1.0;
+         end if;
+         if not Given (Min_P) then
+            Result.Min_P := 0.0;
+         end if;
+         if not Given (XTC_Probability) then
+            Result.XTC_Probability := 0.0;
+         end if;
+      end if;
       return Result;
    end Taking;
 

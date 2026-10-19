@@ -4008,6 +4008,10 @@ package body Model_Runner.CLI.Tasks is
                         & (if Tk.Kind_Policy (Store, Kind, "max_seconds") /= "" then "task.max_seconds." & Kind
                            elsif R.Get (Config, "scalar.agents.max_seconds") /= "" then "agents.max_seconds"
                            else "work.lease")
+                        & (if Model_Runner.Framework.Work.Paced (Store, Argument)
+                           then ", held to" & Natural'Image (Model_Runner.Framework.Work.Pace_Tokens)
+                                & " tokens at the model's own speed"
+                           else "")
                         & ")"
                         & (if R.Get (View, "resource.max_steps") = "" then ""
                            else ", " & R.Get (View, "resource.max_steps") & " steps")

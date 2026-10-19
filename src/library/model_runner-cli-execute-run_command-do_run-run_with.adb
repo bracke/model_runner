@@ -248,6 +248,24 @@ begin
       end;
    end if;
 
+   --  A draft model beside a grammar or a schema where the run samples,
+   --  as the command line refuses it where a temperature is named: here,
+   --  with the model file's own settings known, before the draft loads.
+   if not T.Is_Empty (Item.Draft_Path)
+     and then not Model_Runner.Sampling.Is_Greedy (Opt.Sampling_For (Item, Prepared))
+     and then (Item.Grammar_Text /= null or else not T.Is_Empty (Item.Grammar_Path)
+               or else Item.Schema_Text /= null or else not T.Is_Empty (Item.Schema_Path))
+   then
+      Condition := E.Make (E.CLI_Option_Combination);
+      E.Add_Text (Condition, "option", "--draft-model", E.Param_Identifier);
+      E.Add_Text (Condition, "other",
+                  (if Item.Grammar_Text /= null or else not T.Is_Empty (Item.Grammar_Path)
+                   then "--grammar" else "--json-schema"),
+                  E.Param_Identifier);
+      Fail (Condition);
+      return;
+   end if;
+
    if not T.Is_Empty (Item.Draft_Path)
      or else not T.Is_Empty (Auto_Draft)
    then

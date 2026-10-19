@@ -174,7 +174,8 @@ begin
       Containers.Metadata_Bytes (Source));
 
    --  What the file says it is sampled with: each setting read where it is
-   --  there and in range, and one that is not left as this program's own.
+   --  there and in the range Sampling.Validate holds it to, and one that is
+   --  not left as this program's own.
    declare
       package Sm renames Model_Runner.Sampling;
       Found : Sm.Key_Set := Sm.No_Keys;
@@ -212,12 +213,12 @@ begin
       Real_Key (Sm.Top_P, 1.0e-6, 1.0, Taken.Top_P);
       Real_Key (Sm.Min_P, 0.0, 1.0, Taken.Min_P);
       Real_Key (Sm.XTC_Probability, 0.0, 1.0, Taken.XTC_Probability);
-      Real_Key (Sm.XTC_Threshold, 0.0, 1.0, Taken.XTC_Threshold);
+      Real_Key (Sm.XTC_Threshold, 1.0e-6, 1.0, Taken.XTC_Threshold);
       Whole_Key (Sm.Penalty_Last_N, 1_000_000, Taken.Repeat_Window);
       Real_Key (Sm.Penalty_Repeat, 1.0e-6, 10.0, Taken.Repeat_Penalty);
       Whole_Key (Sm.Mirostat, 2, Taken.Mirostat);
-      Real_Key (Sm.Mirostat_Tau, 0.0, 100.0, Taken.Mirostat_Tau);
-      Real_Key (Sm.Mirostat_Eta, 0.0, 1.0, Taken.Mirostat_Eta);
+      Real_Key (Sm.Mirostat_Tau, 1.0e-6, 100.0, Taken.Mirostat_Tau);
+      Real_Key (Sm.Mirostat_Eta, 1.0e-6, 10.0, Taken.Mirostat_Eta);
       Item.Sampled_With := Taken;
       Item.Sampled_Keys := Found;
    end;

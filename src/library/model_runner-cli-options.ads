@@ -714,16 +714,15 @@ package Model_Runner.CLI.Options is
    --  What a run on a model samples with: the settings named on the
    --  command line, and the model file's own for each that was not, as
    --  llama.cpp takes them. One rule for run, an interactive turn and a
-   --  /work agent's.
+   --  /work agent's. Where what the two make together is not a setting the
+   --  sampler takes, what was named stands alone: a file's settings never
+   --  make a run fail that would have run without them.
    --
    --  @param Item The parsed command.
    --  @param Prepared The model.
    --  @return The configuration to sample with.
    function Sampling_For
-     (Item : Command; Prepared : Model_Runner.Llama.Model) return Model_Runner.Sampling.Configuration
-   is (Model_Runner.Sampling.Taking
-         (Item.Sampling, Item.Sampling_Given,
-          Model_Runner.Llama.File_Sampling (Prepared), Model_Runner.Llama.File_Sampling_Keys (Prepared)));
+     (Item : Command; Prepared : Model_Runner.Llama.Model) return Model_Runner.Sampling.Configuration;
 
    --  The tokens a turn of a conversation may write when --max-tokens
    --  names none: a reasoning model thinks before it answers, and at the

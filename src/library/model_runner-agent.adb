@@ -148,6 +148,7 @@ package body Model_Runner.Agent is
       Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
       Pace_Tokens : Natural := 0;
+      Pace        : Pace_Reference := null;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -215,10 +216,11 @@ package body Model_Runner.Agent is
       --  time below is never negative.
       Timing    : constant Boolean := Time /= null and then Max_Seconds > 0.0;
 
-      --  The tokens decoded so far and the time decoding them took: the
-      --  speed a run held to a pace is measured by.
-      Paced_Tokens : Natural := 0;
-      Paced_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
+      --  The tokens decoded so far and the time decoding them took -- the
+      --  speed a run held to a pace is measured by -- and when the pace
+      --  began: the work's, where the caller keeps it across its runs.
+      Own_Pace : aliased Pace_State;
+      Kept     : constant Pace_Reference := (if Pace /= null then Pace else Own_Pace'Unchecked_Access);
       Started   : constant Model_Runner.Clocks.Nanoseconds :=
         (if Timing then Model_Runner.Clocks.Read (Time) else 0);
       Budget_Ns : constant Model_Runner.Clocks.Nanoseconds :=
@@ -387,6 +389,10 @@ package body Model_Runner.Agent is
    begin
       Result := (Reason => Answered, others => <>);
       Tidied.Answer_Only (Hide_Reasoning);
+      --  The pace begins with the work's first run.
+      if Timing and then Kept.Started = 0 then
+         Kept.Started := Started;
+      end if;
 
       Request.Add_Beginning := False;
       Request.Retain_Text := True;
@@ -421,7 +427,8 @@ package body Model_Runner.Agent is
          end if;
          --  And the pace: what Pace_Tokens take at the speed it decodes at.
          if Timing
-           and then Past_Pace (Model_Runner.Clocks.Read (Time) - Started, Paced_Ns, Paced_Tokens, Pace_Tokens)
+           and then Past_Pace (Model_Runner.Clocks.Read (Time) - Kept.Started, Kept.Spent_Ns, Kept.Tokens,
+                               Pace_Tokens)
          then
             Result.Reason := Timed_Out;
             exit Step_Loop;
@@ -801,8 +808,8 @@ package body Model_Runner.Agent is
            Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
          --  The speed, from the generation this reply ended with: a thought
          --  closed at its budget took its own, which is not kept.
-         Paced_Tokens := Paced_Tokens + Last_Result.Generated_Tokens;
-         Paced_Ns := Paced_Ns + Last_Result.Decode_Ns;
+         Kept.Tokens := Kept.Tokens + Last_Result.Generated_Tokens;
+         Kept.Spent_Ns := Kept.Spent_Ns + Last_Result.Decode_Ns;
          Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
 
          --  A call written so that it could not be read: the model is told,

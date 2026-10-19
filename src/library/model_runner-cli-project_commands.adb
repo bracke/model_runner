@@ -638,6 +638,8 @@ package body Model_Runner.CLI.Project_Commands is
       Asked_To_Fix    : Boolean := False;
       --  What the loop holds of its calls, carried from round to round.
       Rounds_Memory   : aliased Model_Runner.Agent.Recall.Carried;
+      --  And its pace, the task's across them, where its time is paced.
+      Rounds_Pace     : aliased Model_Runner.Agent.Pace_State;
       Asked_To_Mend   : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
@@ -749,6 +751,7 @@ package body Model_Runner.CLI.Project_Commands is
             --  Where the task's time is its model's: so many tokens at the
             --  speed this session generates at.
             Pace_Tokens => (if Host /= null and then Wk.Is_Paced (Host.all) then Wk.Pace_Tokens else 0),
+            Pace        => Rounds_Pace'Unchecked_Access,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran

@@ -696,9 +696,32 @@ package body Model_Runner.Conversation is
                exit when Last - Reply'First + 1 < Close_Tag'Length
                  or else Reply (Last - Close_Tag'Length + 1 .. Last) /= Close_Tag;
                declare
-                  Opens : constant Natural :=
-                    Ada.Strings.Fixed.Index (Reply (Reply'First .. Last), Open_Tag, Ada.Strings.Backward);
+                  --  The call's opening is the first after the call before
+                  --  it closed, and one a call follows: the text of a call's
+                  --  arguments may spell its tag, and so may reasoning that
+                  --  talks of one.
+                  Before : constant Natural :=
+                    Ada.Strings.Fixed.Index
+                      (Reply (Reply'First .. Last - Close_Tag'Length), Close_Tag, Ada.Strings.Backward);
+                  Opens  : Natural := 0;
+                  Look   : Positive := (if Before = 0 then Reply'First else Before + Close_Tag'Length);
                begin
+                  loop
+                     declare
+                        Found : constant Natural := Ada.Strings.Fixed.Index (Reply (Look .. Last), Open_Tag);
+                        After : Positive := Found + Open_Tag'Length;
+                     begin
+                        exit when Found = 0;
+                        while After <= Last and then Reply (After) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+                           After := After + 1;
+                        end loop;
+                        if After <= Last and then Reply (After) in '{' | '<' then
+                           Opens := Found;
+                           exit;
+                        end if;
+                        Look := Found + 1;
+                     end;
+                  end loop;
                   exit when Opens = 0;
                   Start := Opens;
                   Last := Opens - 1;
@@ -728,13 +751,17 @@ package body Model_Runner.Conversation is
       --  no draft, which reasoning's prose would hold, but what was done.
       --  qwen3-8b opened a thought with its edit, began another thought,
       --  and called run_checks after it; the edit was dropped, and the
-      --  model went on as if it had been made. Their text, or none.
-      function Leading_Calls return String is
+      --  model went on as if it had been made. Where they lie, or an empty
+      --  span.
+      type Text_Span is record
+         From, Upto : Natural := 0;
+      end record;
+
+      function Leading_Span return Text_Span is
          Open_Tag  : constant String := "<tool_call>";
          Close_Tag : constant String := "</tool_call>";
          At_It     : Positive := Reply'First;
-         From      : Natural := 0;
-         Upto      : Natural := 0;
+         Found     : Text_Span;
 
          procedure Skip_Space is
          begin
@@ -750,11 +777,11 @@ package body Model_Runner.Conversation is
            and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Open_JSON)
            and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Qwen_XML)
          then
-            return "";
+            return Found;
          end if;
          Skip_Space;
          if not Here ("<think>") then
-            return "";
+            return Found;
          end if;
          At_It := At_It + 7;
          loop
@@ -765,16 +792,34 @@ package body Model_Runner.Conversation is
                  Ada.Strings.Fixed.Index (Reply (At_It .. Reply'Last), Close_Tag);
             begin
                exit when Shut = 0;
-               if From = 0 then
-                  From := At_It;
+               if Found.From = 0 then
+                  Found.From := At_It;
                end if;
-               Upto := Shut + Close_Tag'Length - 1;
-               At_It := Upto + 1;
+               Found.Upto := Shut + Close_Tag'Length - 1;
+               At_It := Found.Upto + 1;
             end;
          end loop;
          --  Where they run into the answer, the answer reads them already.
-         return (if From = 0 or else Upto >= Answer_At then "" else Reply (From .. Upto) & ASCII.LF);
-      end Leading_Calls;
+         return (if Found.From = 0 or else Found.Upto >= Answer_At then (0, 0) else Found);
+      end Leading_Span;
+
+      Lead : constant Text_Span := Leading_Span;
+
+      --  Their text, to be read before the answer's -- but not a call the
+      --  answer makes again as it was written: drafted first and then
+      --  made, it is made once.
+      function Leading_Calls return String
+      is (if Lead.From = 0
+            or else Ada.Strings.Fixed.Index (Reply (Answer_At .. Reply'Last), Reply (Lead.From .. Lead.Upto)) > 0
+          then ""
+          else Reply (Lead.From .. Lead.Upto) & ASCII.LF);
+
+      --  The reasoning kept as the turn's, without the calls it opened
+      --  with: they are the turn's calls, and kept as text too, a template
+      --  that keeps the reasoning wrote each of them twice.
+      function Without_Lead (First, Last : Natural) return String
+      is (if Lead.From = 0 or else Lead.From < First or else Lead.Upto > Last then Reply (First .. Last)
+          else Reply (First .. Lead.From - 1) & Reply (Lead.Upto + 1 .. Last));
    begin
       Model_Runner.Tools.Read_Calls
         (Asked, Leading_Calls & Reply (Answer_At .. Reply'Last), Reading,
@@ -817,7 +862,7 @@ package body Model_Runner.Conversation is
             First := Reply'First;
          end if;
          --  Reasoning its calls ended, closed for the template to keep.
-         Append_Asking (Item, Closed_Reasoning (Reply (First .. Last)), Status);
+         Append_Asking (Item, Closed_Reasoning (Without_Lead (First, Last)), Status);
 
          for Index in 1 .. Model_Runner.Tools.Count (Asked) loop
             exit when E.Is_Error (Status);

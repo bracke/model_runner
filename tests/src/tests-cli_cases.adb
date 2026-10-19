@@ -3622,7 +3622,9 @@ package body Tests.CLI_Cases is
    --  A model file's own sampling settings are what a run samples with,
    --  but for each one the command line names: llama.cpp takes a file's
    --  general.sampling.* so, and a qwen3 file that said temperature 0.6
-   --  was sampled at this program's 0.4.
+   --  was sampled at this program's 0.4. And a file that asks for
+   --  mirostat has the truncation filters set aside, as llama.cpp does:
+   --  beside this program's own, the sampler refused every generation.
    procedure File_Sampling_Stands_Where_Unnamed
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3635,6 +3637,7 @@ package body Tests.CLI_Cases is
       Status : E.Error_Info;
 
       function Near (A, B : Model_Runner.Sampling.Real) return Boolean is (abs (A - B) < 1.0e-4);
+      Plain_Defaults : constant Model_Runner.Sampling.Configuration := (others => <>);
    begin
       Add (Source, "run");
       Add (Source, "model.gguf");
@@ -3664,7 +3667,7 @@ package body Tests.CLI_Cases is
             Own   : constant Model_Runner.Sampling.Configuration := Opt.Sampling_For (Item, Ready_Too);
             Plain_Default : constant Model_Runner.Sampling.Configuration := (others => <>);
          begin
-            Assert (Near (Used.Temperature, 0.2) and then Used.Top_K = 20 and then Near (Used.Top_P, 0.95)
+            Assert (Near (Used.Temperature, 0.2) and then Used.Top_K = 20 and then Near (Used.Top_P, 0.8)
                     and then Near (Used.Min_P, Plain_Default.Min_P),
                     "the file's settings did not stand where none was named, or stood over one that was:"
                     & Used.Top_K'Image & Used.Temperature'Image);
@@ -3680,8 +3683,78 @@ package body Tests.CLI_Cases is
                              = "general.sampling.penalty_last_n",
                     "the settings a file says were not the ones it carries, or not under llama.cpp's names");
          end;
+         --  A file that asks for mirostat: the filters not named set
+         --  aside, and the sampler takes it; one named stays, and the
+         --  sampler refuses the two together, as it does when both are
+         --  named.
+         declare
+            File  : Model_Runner.Sampling.Configuration;
+            Found : Model_Runner.Sampling.Key_Set := Model_Runner.Sampling.No_Keys;
+            Given : Model_Runner.Sampling.Key_Set := Model_Runner.Sampling.No_Keys;
+            Check : E.Error_Info;
+         begin
+            File.Mirostat := 2;
+            Found (Model_Runner.Sampling.Mirostat) := True;
+            Model_Runner.Sampling.Validate (Model_Runner.Sampling.Taking (Plain_Defaults, Given, File, Found), Check);
+            Assert (E.Is_Ok (Check), "a file's mirostat beside the program's own filters was refused");
+            Given (Model_Runner.Sampling.Top_K) := True;
+            Model_Runner.Sampling.Validate (Model_Runner.Sampling.Taking (Plain_Defaults, Given, File, Found), Check);
+            Assert (E.Is_Error (Check), "a filter named beside a file's mirostat was set aside");
+         end;
          Model_Runner.Llama.Close (Ready, Status);
          Model_Runner.Llama.Close (Ready_Too, Status);
+      end;
+      --  And a draft model beside a grammar, where nothing named the
+      --  temperature and the file's own samples: refused once the model is
+      --  open, as the command line refuses it where a temperature is named.
+      declare
+         Path : constant String := "obj/sampled-model.gguf";
+         File : Ada.Streams.Stream_IO.File_Type;
+         Run_It : Fixed_Arguments;
+         Code   : Natural;
+      begin
+         Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Path);
+         declare
+            Bytes : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+              with Import, Address => Image.all'Address;
+         begin
+            Ada.Streams.Stream_IO.Write (File, Bytes);
+         end;
+         Ada.Streams.Stream_IO.Close (File);
+         Add (Run_It, "run");
+         Add (Run_It, Path);
+         --  The prompt as it is: the fixture's context is sixteen tokens.
+         Add (Run_It, "--raw");
+         Add (Run_It, "--prompt");
+         Add (Run_It, "a");
+         Add (Run_It, "--draft-model");
+         Add (Run_It, Path);
+         Add (Run_It, "--grammar");
+         Add (Run_It, "root ::= ""a""");
+         Add (Run_It, "--max-tokens");
+         Add (Run_It, "1");
+         declare
+            Said_There : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (Said_There, Ada.Text_IO.Out_File, "obj/draft-grammar.txt");
+            Ada.Text_IO.Set_Error (Said_There);
+            Ran (Run_It, Code);
+            Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+            Ada.Text_IO.Close (Said_There);
+         end;
+         declare
+            Told : constant String := Text_Of ("obj/draft-grammar.txt");
+         begin
+            Assert (Code /= 0
+                    and then Ada.Strings.Fixed.Index (Told, "--draft-model cannot be used with --grammar") > 0,
+                    "a draft beside a grammar was not refused where the model file's own settings sample: " & Told);
+         end;
+         --  Greedy, the draft keeps the grammar's text, and runs.
+         Add (Run_It, "--temperature");
+         Add (Run_It, "0");
+         Ran (Run_It, Code);
+         Assert (Code = 0, "a greedy draft beside a grammar was refused");
+         Ada.Directories.Delete_File (Path);
       end;
       Model_Runner.Bytes.Free (Image);
       Model_Runner.Bytes.Free (Plain);
@@ -5446,11 +5519,15 @@ package body Tests.CLI_Cases is
       --  and a draft is a second model file a run that never asks it
       --  anything has paid for. A temperature alone is not refused: above
       --  zero the draft is verified by speculative sampling, which keeps
-      --  the target's own distribution.
+      --  the target's own distribution. Refused here where a temperature
+      --  above nought is named; where none is, the model file's own may
+      --  make the run greedy, and run decides once it is open.
       Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --draft-model d.gguf --grammar root --temperature 0.8");
+      Expect (E.CLI_Option_Combination,
+              "run m.gguf --prompt a --draft-model d.gguf --json-schema {} --temperature 0.8");
+      Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --grammar root");
-      Expect (E.CLI_Option_Combination,
-              "run m.gguf --prompt a --draft-model d.gguf --json-schema {}");
       Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --grammar root"
               & " --temperature 0");

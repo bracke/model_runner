@@ -2903,7 +2903,12 @@ package body Model_Runner.CLI.Options is
       --  exactly what it would have done without it. Silence there is worse
       --  than refusing, because the refusal is the only thing that tells the
       --  caller their configuration does not mean what they think.
+      --  Here where a temperature above nought is named, which the model
+      --  file's own settings cannot change; where none is, the file's may
+      --  make the run greedy, and run decides once the model is open
+      --  (Sampling_For), before it loads the draft.
       if not T.Is_Empty (Result.Draft_Path)
+        and then Result.Sampling_Given (Model_Runner.Sampling.Temp)
         and then not Model_Runner.Sampling.Is_Greedy (Result.Sampling)
       then
          if Result.Grammar_Text /= null
@@ -3187,5 +3192,22 @@ package body Model_Runner.CLI.Options is
 
       Model_Runner.Sampling.Validate (Result.Sampling, Status);
    end Parse;
+
+   ------------------
+   -- Sampling_For --
+   ------------------
+
+   function Sampling_For
+     (Item : Command; Prepared : Model_Runner.Llama.Model) return Model_Runner.Sampling.Configuration
+   is
+      Taken  : constant Model_Runner.Sampling.Configuration :=
+        Model_Runner.Sampling.Taking
+          (Item.Sampling, Item.Sampling_Given,
+           Model_Runner.Llama.File_Sampling (Prepared), Model_Runner.Llama.File_Sampling_Keys (Prepared));
+      Status : Model_Runner.Errors.Error_Info;
+   begin
+      Model_Runner.Sampling.Validate (Taken, Status);
+      return (if Model_Runner.Errors.Is_Ok (Status) then Taken else Item.Sampling);
+   end Sampling_For;
 
 end Model_Runner.CLI.Options;

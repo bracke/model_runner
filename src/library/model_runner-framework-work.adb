@@ -1876,6 +1876,10 @@ package body Model_Runner.Framework.Work is
       end;
    end Time_Allowed;
 
+   -----------
+   -- Paced --
+   -----------
+
    function Paced (Item : Stores.Store; Task_Id : String) return Boolean is
       Kind : constant String := Kind_Of_Task (Item, Task_Id);
    begin

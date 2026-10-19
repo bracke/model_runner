@@ -2103,7 +2103,9 @@ package body Model_Runner.Framework.Configurations is
                return Name & " is a count"
                  & (if Starts (Name, "scalar.task.max_seconds.") then " of seconds"
                     elsif Starts (Name, "scalar.task.token_budget.") then " of tokens" else "")
-                 & ", 1 or more in digits, not " & Value;
+                 & ", 1 or more in digits"
+                 & (if Starts (Name, "scalar.task.max_seconds.") then ", or model for the model's pace" else "")
+                 & ", not " & Value;
             end if;
             --  A model profile says what Context reads, each in its kind:
             --  a word it does not know would be dropped without a word.
@@ -2260,7 +2262,9 @@ package body Model_Runner.Framework.Configurations is
                  & (if Name in "scalar.agents.max_steps" | "scalar.agents.token_budget" | "scalar.work.lease"
                              | "scalar.agents.max_seconds" | "scalar.agents.max_active" | "scalar.work.max_workspaces"
                     then ", 1 or more" else ", 0 or more")
-                 & " in digits, not " & Value;
+                 & " in digits"
+                 & (if Name = "scalar.agents.max_seconds" then ", or model for the model's pace" else "")
+                 & ", not " & Value;
             end if;
          end;
       end loop;

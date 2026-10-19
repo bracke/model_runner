@@ -14165,8 +14165,8 @@ package body Model_Runner.Platform.Device.Products is
             --  kernels' count did not bound: a tiled batch reserved no
             --  records and the packed kernel cut up to Slice_Limit slices
             --  past its room. Bounded here from the fewest workgroups its
-            --  bundles can give -- the most slices -- and by Merged_Rows
-            --  between the heads, as the dispatch below is.
+            --  bundles can give -- the most slices -- and by Merged_Slices
+            --  at the deepest cache, as the dispatch below is at its own.
             Packed_Most : constant Natural :=
               (if This.Attends and then This.Packed.K_Bits /= 0
                then Natural'Min
@@ -16288,9 +16288,9 @@ package body Model_Runner.Platform.Device.Products is
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position));
 
-                     --  No more than Merged_Rows partial answers between
-                     --  the heads, as the exact kernel's -- and so never
-                     --  past the records Mine gave the step room for.
+                     --  No more than Merged_Slices gives the heads at this
+                     --  depth, as the exact kernel's -- and so never past
+                     --  the records Mine gave the step room for.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
                         else Natural'Min
@@ -16450,7 +16450,7 @@ package body Model_Runner.Platform.Device.Products is
                           Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0));
 
                      --  As many slices as the cache gives, but no more than
-                     --  Merged_Rows partial answers between the heads.
+                     --  Merged_Slices gives the heads at this depth.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
                         elsif Few

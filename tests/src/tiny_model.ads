@@ -446,8 +446,9 @@ package Tiny_Model is
    --    one width the device keeps a state in registers for.
    --  @param Template The chat template the file carries, or empty for the
    --    fixture's own small one.
-   --  @param Sampled Whether the file says it is sampled with qwen3's own
-   --    settings (general.sampling.temp 0.6, top_k 20, top_p 0.95).
+   --  @param Sampled Whether the file says it is sampled so: temperature
+   --    0.6 and top_k 20, as qwen3's do, and top_p 0.8, apart from this
+   --    program's own.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;

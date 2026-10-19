@@ -340,6 +340,19 @@ package Model_Runner.Agent is
    --  A reference to a script of replies.
    type Script_Reference is access all Reply_Script'Class;
 
+   --  What a pace has measured, kept across the runs one piece of work
+   --  makes -- a task's root is run again to report, to check, to mend --
+   --  so the pace is the work's, not each run's: when it started, and the
+   --  tokens decoded and the time decoding them took.
+   type Pace_State is record
+      Started  : Model_Runner.Clocks.Nanoseconds := 0;
+      Tokens   : Natural := 0;
+      Spent_Ns : Model_Runner.Clocks.Nanoseconds := 0;
+   end record;
+
+   --  A reference to a pace kept across runs.
+   type Pace_Reference is access all Pace_State;
+
    --  What closes a thought held to its budget, the rest of the reply
    --  asked for after it.
    Thought_Closing : constant String := ASCII.LF & "</think>" & ASCII.LF & ASCII.LF;
@@ -491,6 +504,8 @@ package Model_Runner.Agent is
    --    tokens take at the speed its replies are generated at, measured as
    --    it goes (Past_Pace), within Max_Seconds: a slow model is given
    --    longer for the same work.
+   --  @param Pace Where the pace is kept across the runs of one piece of
+   --    work, carried on and added to; null for a run paced alone.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
@@ -527,6 +542,7 @@ package Model_Runner.Agent is
       Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
       Pace_Tokens : Natural := 0;
+      Pace        : Pace_Reference := null;
       Result     : out Outcome);
 
    --  Whether a run held to a pace is past it: what Pace tokens take at

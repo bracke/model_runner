@@ -1,3 +1,4 @@
+with Interfaces;
 with Model_Runner.Output;
 with AUnit.Test_Cases;
 with Ada.Containers.Indefinite_Vectors;
@@ -195,7 +196,10 @@ package body Tests.Agent_Loop_Cases is
       Budget   : Natural := 0;
       Shown    : Model_Runner.Output.Sink_Reference := null;
       Reply    : Positive := 64;
-      Compact  : Boolean := False)
+      Compact  : Boolean := False;
+      Pace     : Ag.Pace_Reference := null;
+      Pace_Tokens : Natural := 0;
+      Seconds  : Duration := 0.0)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -245,6 +249,9 @@ package body Tests.Agent_Loop_Cases is
          Approve    => Approver,
          Script     => Replies'Unchecked_Access,
          Carry      => Carry,
+         Max_Seconds => Seconds,
+         Pace_Tokens => Pace_Tokens,
+         Pace        => Pace,
          Result     => Ended);
       Conv.Close (Messages);
       Model_Runner.Tools.Close (Offered);
@@ -559,6 +566,42 @@ package body Tests.Agent_Loop_Cases is
       Model_Runner.Bytes.Free (Harmony);
    end An_Unnamed_Syntax_Is_The_Models_Own;
 
+   --  A pace kept across runs bounds them together: a task's root run
+   --  again to report or to mend was given a fresh pace each time, and so
+   --  as many paces as it had runs.
+   procedure A_Pace_Is_The_Works_Not_Each_Runs
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Clock   : aliased Model_Runner.Clocks.System_Clock;
+      Now     : constant Interfaces.Unsigned_64 := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
+      --  An earlier run's, begun before this one: a million tokens decoded
+      --  in a nanosecond, so 50 of them take no time at all, and the work
+      --  is past its pace whatever this run takes.
+      Spent   : aliased Ag.Pace_State :=
+        (Started => Interfaces.Unsigned_64'Max (1, Now), Tokens => 1_000_000, Spent_Ns => 1);
+      Replies : Script;
+      Fresh   : Script;
+      Seen    : Recorder;
+      Ended   : Ag.Outcome;
+   begin
+      if not Ada.Directories.Exists (Dir) then
+         Ada.Directories.Create_Path (Dir);
+      end if;
+      if Image = null then
+         Tiny_Model.Build (Image);
+      end if;
+      Replies.Replies.Append ("done");
+      Run (Replies, Seen, Ended, Pace => Spent'Unchecked_Access, Pace_Tokens => 50, Seconds => 3_600.0);
+      Assert (Ended.Reason = Ag.Timed_Out and then Replies.Next = 1,
+              "a run whose work was past its pace already was not stopped before its first reply: "
+              & Ag.Stop_Reason'Image (Ended.Reason));
+      Fresh.Replies.Append ("done");
+      Run (Fresh, Seen, Ended, Pace_Tokens => 50, Seconds => 3_600.0);
+      Assert (Ended.Reason = Ag.Answered, "a run paced alone was stopped before any speed was measured: "
+              & Ag.Stop_Reason'Image (Ended.Reason));
+   end A_Pace_Is_The_Works_Not_Each_Runs;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -568,6 +611,9 @@ package body Tests.Agent_Loop_Cases is
       Register_Routine
         (T, An_Unnamed_Syntax_Is_The_Models_Own'Access,
          "a loop not told its model's call syntax reads the model's own");
+      Register_Routine
+        (T, A_Pace_Is_The_Works_Not_Each_Runs'Access,
+         "a pace kept across runs bounds them together");
    end Register_Tests;
 
 end Tests.Agent_Loop_Cases;

@@ -1077,7 +1077,7 @@ package body Tiny_Model is
       if Sampled then
          Fixtures.Add_F32 (Builder, "general.sampling.temp", 0.6);
          Fixtures.Add_I32 (Builder, "general.sampling.top_k", 20);
-         Fixtures.Add_F32 (Builder, "general.sampling.top_p", 0.95);
+         Fixtures.Add_F32 (Builder, "general.sampling.top_p", 0.8);
       end if;
 
       --  A reranker's own prompt for a pair, where asked.

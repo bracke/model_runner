@@ -243,6 +243,8 @@ is
    function Resolved_Lines return String is
      ("config_revision=" & Image (Frozen.Config_Revision) & ASCII.LF
       & "max_seconds=" & Image (Frozen.Max_Seconds) & ASCII.LF
+      --  Held to the model's pace within that: said, where it was.
+      & (if Frozen.Paced then "paced=" & Image (Pace_Tokens) & " tokens" & ASCII.LF else "")
       & "max_steps=" & Image (Frozen.Max_Steps) & ASCII.LF
       & "max_tool_calls=" & Image (Frozen.Max_Tool_Calls) & ASCII.LF
       & "token_budget=" & Image (Frozen.Token_Budget) & ASCII.LF
