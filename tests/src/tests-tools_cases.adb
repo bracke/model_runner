@@ -2885,7 +2885,98 @@ package body Tests.Tools_Cases is
                            Status);
                Assert (Whole_File (Tree & "/hard2.txt") = "two",
                        "a file of two names written under one kept the old text under the other");
+               --  Written in place and the file would not open: its new
+               --  text is kept whole in the partial, and said -- deleted,
+               --  it was lost with the old. Its owner may not write it,
+               --  its group may: not read-only, and not opened.
+               if Hostkit.Metadata.Set_Permissions (Tree & "/hard.txt", 8#464#) then
+                  Placed.Run ("read_file", "{""path"": ""hard.txt""}", Room, Last, Ended, Status);
+                  Placed.Run ("write_file", "{""path"": ""hard.txt"", ""content"": ""three""}", Room, Last,
+                              Ended, Status);
+                  declare
+                     Said : constant String := Room (Room'First .. Last);
+                     Mark : constant Natural := Ada.Strings.Fixed.Index (Said, "kept whole in ");
+                     Kept : constant String :=
+                       (if Mark = 0 then "" else Ada.Strings.Fixed.Trim (Said (Mark + 14 .. Said'Last),
+                                                                        Ada.Strings.Both));
+                     Only : Natural := Kept'Last;
+                  begin
+                     while Only >= Kept'First and then Kept (Only) not in '0' .. '9' loop
+                        Only := Only - 1;
+                     end loop;
+                     Assert (not Ended.Changed and then Mark > 0
+                             and then Ada.Directories.Exists (Kept (Kept'First .. Only))
+                             and then Whole_File (Kept (Kept'First .. Only)) = "three",
+                             "a write in place that failed lost its new text: " & Said);
+                     if Mark > 0 and then Ada.Directories.Exists (Kept (Kept'First .. Only)) then
+                        Ada.Directories.Delete_File (Kept (Kept'First .. Only));
+                     end if;
+                  end;
+                  Assert (Hostkit.Metadata.Set_Permissions (Tree & "/hard.txt", 8#644#),
+                          "the file of two names could not be made writable again");
+               end if;
             end if;
+         end;
+         --  A link to a file outside the tree a write is held to is
+         --  replaced as itself, never written through: the state's restore
+         --  and the take-in of work write with no tree, and a link planted
+         --  there wrote to a file outside the project. A read-only file it
+         --  names is no refusal: the link is what is written.
+         declare
+            Away    : constant String := Ada.Directories.Full_Name ("obj") & "/tools-away";
+            Outside : constant String := Away & "/outside.txt";
+            Put     : Model_Runner.Tools.Editing.Said;
+            Ignored : Boolean;
+         begin
+            if Ada.Directories.Exists (Away) then
+               Ada.Directories.Delete_Tree (Away);
+            end if;
+            Ada.Directories.Create_Path (Away);
+            Put_Bytes (Outside, "theirs");
+            --  Of two names, as a written-in-place file is: a link's count
+            --  is what it names, and the write went through it.
+            declare
+               Linked : Boolean;
+               Args   : GNAT.OS_Lib.Argument_List := [new String'(Outside), new String'(Away & "/second.txt")];
+            begin
+               GNAT.OS_Lib.Spawn ("/bin/ln", Args, Linked);
+               for One of Args loop
+                  GNAT.OS_Lib.Free (One);
+               end loop;
+            end;
+            Ignored := Hostkit.Metadata.Set_Permissions (Outside, 8#444#);
+            if Hostkit.Fs.Create_Link (Outside, Tree & "/away.txt")
+              and then Hostkit.Fs.Create_Link (Outside, Tree & "/away2.txt")
+            then
+               Model_Runner.Tools.Editing.Replace ("away.txt", "mine", Put, Base => Tree);
+               Assert (not Put.Failed and then Whole_File (Outside) = "theirs"
+                       and then not Hostkit.Fs.Is_Link (Tree & "/away.txt")
+                       and then Whole_File (Tree & "/away.txt") = "mine",
+                       "a write held to a tree went through a link to a file outside it");
+               Model_Runner.Tools.Editing.Replace (Tree & "/away2.txt", "mine", Put);
+               Assert (not Put.Failed and then Whole_File (Outside) = "theirs"
+                       and then not Hostkit.Fs.Is_Link (Tree & "/away2.txt"),
+                       "a write with no tree went through a link to a file outside");
+               Ada.Directories.Delete_File (Tree & "/away.txt");
+               Ada.Directories.Delete_File (Tree & "/away2.txt");
+            end if;
+            Ignored := Hostkit.Metadata.Set_Permissions (Outside, 8#644#);
+            Ada.Directories.Delete_Tree (Away);
+         end;
+         --  A long name's stale partial, an hour old, is cleared at its next
+         --  write: looked for under the whole name, it was never found.
+         declare
+            Long_Name : constant String := [1 .. 240 => 'n'] & ".txt";
+            Stale     : constant String :=
+              Tree & "/." & Long_Name (1 .. 160) & ".model_runner-partial.1.1";
+         begin
+            Put_Bytes (Stale, "left by a crash");
+            GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Stale, GNAT.OS_Lib.GM_Time_Of (2020, 1, 1, 0, 0, 0));
+            Placed.Run ("read_file", "{""path"": """ & Long_Name & """}", Room, Last, Ended, Status);
+            Placed.Run ("write_file", "{""path"": """ & Long_Name & """, ""content"": ""longer""}",
+                        Room, Last, Ended, Status);
+            Assert (Ended.Changed and then not Ada.Directories.Exists (Stale),
+                    "a long name's stale partial was left: " & Room (Room'First .. Last));
          end;
          --  A loose edit keeps the blank line the model gave its new text.
          Placed.Run ("write_file", "{""path"": ""blank.txt"", ""content"": ""foo  \nbaz\n""}",
@@ -3483,6 +3574,13 @@ package body Tests.Tools_Cases is
                   & "</parameter>" & LF & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
             "edit({""old_string"": ""a""})edit({""old_string"": ""b""})",
             "a Qwen3-Coder parameter left open swallowed the call after it");
+      --  A value that spells the envelope's close -- a file about calls --
+      --  is the value whole too: bounded at the spelled tag, it was cut.
+      Same (Read ("<tool_call>" & LF & "<function=edit>" & LF
+                  & "<parameter=old_string>" & LF & "a</tool_call></function>b" & LF & "</parameter>" & LF
+                  & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
+            "edit({""old_string"": ""a</tool_call></function>b""})",
+            "a Qwen3-Coder value spelling </tool_call> cut the call there");
       Same (Read ("<function=other>" & LF & "<parameter=n>" & LF & "0123" & LF
                   & "</parameter>" & LF & "</function>", Tools.Qwen_XML,
                   Offered => False),
@@ -3822,6 +3920,37 @@ package body Tests.Tools_Cases is
                    (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
                     """count"": 3") = 0,
                  "a call a thought opened with was kept in its reasoning too, to be written twice");
+         --  A bare call written out over lines is the call, not the prose:
+         --  read by its first line alone, it was kept as the turn's text
+         --  and attached as its call.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "I will edit it." & LF & "{" & LF & "  ""name"": ""edit""," & LF
+                  & "  ""arguments"": {""count"": 5}" & LF & "}",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
+                             """count""") = 0,
+                 "a call written out over lines was kept as the prose too");
+         --  A call quoted whole in a thought the template opened, the real
+         --  one after its close: the close is the thought's, and the call after it read.
+         --  Read from the quoted call, the close was taken for inside one.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "I could send <tool_call>{""name"": ""edit"", ""arguments"": {""count"": 6}}"
+                  & "</tool_call> but not yet.</think>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 7}}</tool_call>",
+            Status, Reading, Syntax => Tools.Tool_Call_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Conversation.Call_Arguments
+                               (Talk, Model_Runner.Conversation.Length (Talk), 1), "7") > 0,
+                 "a call quoted in a closed thought hid the thought's close");
          --  A reply that never thought, whose call's arguments spell
          --  </think> or </tool_call>: the call is read whole -- cut at the
          --  spelled tag, it was dropped.

@@ -619,8 +619,8 @@ package body Model_Runner.Framework.Work is
        --  Copied aside before they were first written: put back from
        --  there, whatever version control knows of them.
        & (if Ada.Directories.Exists (Before_Copy (Item, Task_Id))
-          then " -- /task kept restore overwritten-" & Task_Id & " puts back the files it overwrote,"
-               & " and removing a file it made undoes that,"
+          then " -- /task kept restore overwritten-" & Task_Id & " puts back the files its edits overwrote"
+               & " (not what a command it ran wrote), and removing a file it made undoes that,"
           elsif Ada.Directories.Exists
                (Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Stores.Root (Item)), ".git"))
           then " -- git checkout -- FILE undoes a change, and removing a file it made undoes that,"
@@ -1387,14 +1387,34 @@ package body Model_Runner.Framework.Work is
       Status : out Model_Runner.Errors.Error_Info)
    is
       Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Host.Item.all));
-      From    : constant String := Hostkit.Fs.Join (Project, Path);
-      To      : constant String := Hostkit.Fs.Join (Before_Copy (Host.Item.all, To_String (Host.Task_Id)), Path);
+      --  Kept under its place in the project, however it was spelt: an
+      --  absolute path joined to the project named nothing, and one with
+      --  ".." put its copy outside where restore looks.
+      --  The project's root as a path from the root names it, whatever
+      --  the store's own spelling: relative, an absolute path never matched.
+      Whole   : constant String := Ada.Directories.Full_Name (Project);
+      Within  : constant String :=
+        (if Path'Length > Whole'Length and then Path (Path'First .. Path'First + Whole'Length - 1) = Whole
+           and then Path (Path'First + Whole'Length) = '/'
+         then Path (Path'First + Whole'Length + 1 .. Path'Last) else Path);
+      Plain   : constant String := Permissions.Normal (Within);
+      From    : constant String := Hostkit.Fs.Join (Project, Plain);
+      To      : constant String := Hostkit.Fs.Join (Before_Copy (Host.Item.all, To_String (Host.Task_Id)), Plain);
    begin
       Status := E.Success;
+      --  A path that is no place inside the project has nothing here to
+      --  keep: its write is refused where paths are judged.
+      if Plain = "" or else (Within'Length > 0 and then Within (Within'First) = '/')
+        or else Plain = ".." or else Ada.Strings.Fixed.Index (Plain, "../") = Plain'First
+        or else Ada.Strings.Fixed.Index (Plain, "/../") > 0
+        or else (Plain'Length >= 3 and then Plain (Plain'Last - 2 .. Plain'Last) = "/..")
+      then
+         return;
+      end if;
       if not Host.Edited.Contains (Path) then
          Host.Edited.Append (Path);
       end if;
-      if Host.Apart or else Host.Kept_Before.Contains (Path) then
+      if Host.Apart or else Host.Kept_Before.Contains (Plain) then
          return;
       end if;
       --  The first copy is the one before any run wrote it: a later run's
@@ -1407,7 +1427,7 @@ package body Model_Runner.Framework.Work is
       end if;
       --  Noted once the copy is there, so a copy that failed is tried
       --  again before the next write rather than taken as made.
-      Host.Kept_Before.Append (Path);
+      Host.Kept_Before.Append (Plain);
    exception
       when others =>
          --  Gone in the meantime is nothing to keep; anything else is a
@@ -1415,7 +1435,7 @@ package body Model_Runner.Framework.Work is
          if Ada.Directories.Exists (From) then
             Files.Write_Failed (To, Status);
          else
-            Host.Kept_Before.Append (Path);
+            Host.Kept_Before.Append (Plain);
          end if;
    end Keep_Before_Write;
 

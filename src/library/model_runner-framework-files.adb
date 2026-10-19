@@ -204,7 +204,11 @@ package body Model_Runner.Framework.Files is
 
    function Delete_If_Present (Path : String) return Boolean is
    begin
-      if Dirs.Exists (Path) then
+      --  A link is taken away itself, never what it names: one to a
+      --  folder was refused as a folder, and one to nothing not seen.
+      if Hostkit.Fs.Is_Link (Path) then
+         return Hostkit.Fs.Delete_Link (Path);
+      elsif Dirs.Exists (Path) then
          Dirs.Delete_File (Path);
       end if;
       return True;

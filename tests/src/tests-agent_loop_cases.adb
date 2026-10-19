@@ -207,7 +207,8 @@ package body Tests.Agent_Loop_Cases is
       Pace     : Ag.Pace_Reference := null;
       Pace_Tokens : Natural := 0;
       Seconds  : Duration := 0.0;
-      Total    : Natural := 0)
+      Total    : Natural := 0;
+      Steps    : Positive := 24)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -249,7 +250,7 @@ package body Tests.Agent_Loop_Cases is
          Sink       => Shown,
          Time       => Clock'Unchecked_Access,
          Seeds      => Seeds'Unchecked_Access,
-         Max_Steps  => 24,
+         Max_Steps  => Steps,
          Thinking   => (if Budget > 0 then Model_Runner.Templates.Thinking_On else Model_Runner.Templates.Thinking_Off),
          Think_Budget => Budget,
          Compact    => Compact,
@@ -412,6 +413,57 @@ package body Tests.Agent_Loop_Cases is
          Run (Replies, Seen, Ended, Approver => Gate'Unchecked_Access);
          Assert (Unanswered = 0 and then Told_Lost,
                  "a halt's answers were parted from their calls by the note:" & Unanswered'Image);
+      end;
+
+      --  A block that would not read in the middle, and a call cut at the
+      --  length after it, its object whole and its close not written: the
+      --  whole first call runs, the cut one does not -- taken for the lost
+      --  block, it ran and wrote its file short.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append
+           (Write ("mid-a.txt", "a") & "<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>"
+            & "<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": ""mid-c.txt"","
+            & " ""content"": ""cut sh""}}");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Ada.Directories.Exists (Dir & "/mid-a.txt") and then not Ada.Directories.Exists (Dir & "/mid-c.txt"),
+                 "a call cut at the length after a block that would not read was run:"
+                 & Seen.Results.Length'Image & " " & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  A whole call after a block that would not read runs too, and the
+      --  lost one is said: read only to the bad block, it was dropped unsaid.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append
+           ("<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>"
+            & Write ("after-bad.txt", "b"));
+         Run (Replies, Seen, Ended);
+         Assert (Ada.Directories.Exists (Dir & "/after-bad.txt") and then Told_Lost and then Unanswered = 0,
+                 "a whole call after a block that would not read was dropped, or the block not said");
+      end;
+
+      --  On the last step, a call block closed that would not read, words
+      --  after it: the step limit stopped it, not an answer.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append
+           ("<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>" & ASCII.LF
+            & "Done, I think.");
+         Run (Replies, Seen, Ended, Steps => 1);
+         Assert (Ended.Reason = Ag.Step_Limit,
+                 "a call that would not read on the last step, words after it, was an answer: "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
       end;
 
       --  A reply that ended within its thought's budget does not hold the

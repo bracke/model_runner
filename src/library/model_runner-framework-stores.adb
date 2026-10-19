@@ -87,11 +87,16 @@ package body Model_Runner.Framework.Stores is
 
    protected Written is
       procedure Add (Root_Path : String; Names : Name_Lists.Vector);
+      --  The print of what a commit installed under a name: a record the
+      --  harness wrote is told from one changed behind it after.
+      procedure Note_Print (Root_Path, Name, Print : String);
+      function Print_Of (Root_Path, Name : String) return String;
       function Count return Natural;
       function Since (Root_Path : String; From : Natural) return Name_Lists.Vector;
    private
       Commits : Natural := 0;
       Last    : Seen_At.Map;
+      Prints  : Text_Maps.Map;
    end Written;
 
    protected body Written is
@@ -102,6 +107,15 @@ package body Model_Runner.Framework.Stores is
             Last.Include (Root_Path & ASCII.HT & Name, Commits);
          end loop;
       end Add;
+
+      procedure Note_Print (Root_Path, Name, Print : String) is
+      begin
+         Prints.Include (Root_Path & ASCII.HT & Name, To_Unbounded_String (Print));
+      end Note_Print;
+
+      function Print_Of (Root_Path, Name : String) return String
+      is (if Prints.Contains (Root_Path & ASCII.HT & Name)
+          then To_String (Prints.Element (Root_Path & ASCII.HT & Name)) else "");
 
       function Count return Natural is (Commits);
 
@@ -1122,6 +1136,7 @@ package body Model_Runner.Framework.Stores is
          return;
       end if;
 
+      --  A count of digits: the manifest's schema holds it to one.
       for Char of Records.Get (Manifest, "operations") loop
          Count := Count * 10 + (Character'Pos (Char) - Character'Pos ('0'));
       end loop;
@@ -1196,6 +1211,7 @@ package body Model_Runner.Framework.Stores is
                              ("the change to " & Place_Of (Where, Name) & " is not a whole record");
                            return;
                         end if;
+                        Written.Note_Print (Root (Item), Record_Name (Where, Name), Fingerprint (To_String (Text)));
                      end;
                   end if;
                   if Dirs.Exists (Staged) then
@@ -1815,6 +1831,9 @@ package body Model_Runner.Framework.Stores is
    --  record has.
    Unread_Mark : constant String := ASCII.NUL & "unread";
 
+   --  And a link's: kept so, neither read nor walked into.
+   Link_Mark : constant String := ASCII.NUL & "link";
+
    procedure Gather
      (Root, Under : String;
       Into        : in out Text_Maps.Map)
@@ -1833,6 +1852,11 @@ package body Model_Runner.Framework.Stores is
          begin
             if Name in "." | ".." then
                null;
+            --  A link is the state's as a link, never followed: walked into,
+            --  what it named outside was read as the state's, and a restore
+            --  deleted every file of it as new.
+            elsif Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Here, Name)) then
+               Into.Include (Relative, To_Unbounded_String (Link_Mark));
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
                --  Payloads are the harness's, written as a result is kept --
                --  by name, from what they hold -- not by a commit.
@@ -1914,7 +1938,18 @@ package body Model_Runner.Framework.Stores is
             Name : constant String := Text_Maps.Key (Position);
             Path : constant String := Hostkit.Fs.Join (Root (Item), Name);
          begin
-            if Committed.Contains (Name) or else Own_Files.Holds (Root (Item), Name) then
+            --  Written by a commit since, and as that commit wrote it: the
+            --  harness's own. Changed after it -- an agent's edit to a
+            --  record the harness had just written -- it is said, though
+            --  what the commit wrote is not kept to put back.
+            if Committed.Contains (Name)
+              and then Now.Files.Contains (Name)
+              and then Written.Print_Of (Root (Item), Name) /= ""
+              and then Fingerprint (To_String (Now.Files (Name))) /= Written.Print_Of (Root (Item), Name)
+            then
+               Changed.Append (Name);
+               Left.Append (Name & ": changed after the harness wrote it, so it is not as the harness left it");
+            elsif Committed.Contains (Name) or else Own_Files.Holds (Root (Item), Name) then
                null;
             elsif (not Now.Files.Contains (Name)
                    or else Now.Files (Name) /= Text_Maps.Element (Position))
@@ -1942,7 +1977,18 @@ package body Model_Runner.Framework.Stores is
          end;
       end loop;
       for Position in Now.Files.Iterate loop
+         --  Made by a commit since, and changed after it: said, as one
+         --  that was there before is -- and kept, the harness's record.
          if not From.Files.Contains (Text_Maps.Key (Position))
+           and then Committed.Contains (Text_Maps.Key (Position))
+           and then Written.Print_Of (Root (Item), Text_Maps.Key (Position)) /= ""
+           and then Fingerprint (To_String (Text_Maps.Element (Position)))
+                    /= Written.Print_Of (Root (Item), Text_Maps.Key (Position))
+         then
+            Changed.Append (Text_Maps.Key (Position));
+            Left.Append (Text_Maps.Key (Position)
+                         & ": changed after the harness wrote it, so it is not as the harness left it");
+         elsif not From.Files.Contains (Text_Maps.Key (Position))
            and then not Committed.Contains (Text_Maps.Key (Position))
            and then not Own_Files.Holds (Root (Item), Text_Maps.Key (Position))
          then

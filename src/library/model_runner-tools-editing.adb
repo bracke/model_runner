@@ -222,12 +222,20 @@ package body Model_Runner.Tools.Editing is
    is
       use Ada.Streams;
       Given  : constant String := On_Disk (Base, Path);
-      --  A link written through to the file it names, which the path's
-      --  checks found inside the tree: renamed over, the link became a file
-      --  of its own and what it named was left as it was.
+      --  A link written through to the file it names where that is inside
+      --  the tree the write is held to -- renamed over, the link became a
+      --  file of its own and what it named was left as it was -- and
+      --  replaced as a link anywhere else: the state's restore and the
+      --  take-in of work write with no tree to hold them, and a link
+      --  planted there was written through to a file outside the project.
+      Resolved : constant String :=
+        (if Base /= "" and then Hostkit.Fs.Is_Link (Given) then Hostkit.Fs.Real_Path (Given) else "");
+      Tree     : constant String := (if Base = "" then "" else Hostkit.Fs.Real_Path (Base));
       Disk   : constant String :=
-        (if Hostkit.Fs.Is_Link (Given) and then Hostkit.Fs.Real_Path (Given) /= ""
-         then Hostkit.Fs.Real_Path (Given) else Given);
+        (if Resolved /= "" and then Tree /= "" and then Resolved'Length > Tree'Length
+           and then Resolved (Resolved'First .. Resolved'First + Tree'Length - 1) = Tree
+           and then Resolved (Resolved'First + Tree'Length) = '/'
+         then Resolved else Given);
       Folder : constant String := Ada.Directories.Containing_Directory (Disk);
       --  Hidden beside it, where a crash may leave it, and on the same
       --  filesystem, which the rename needs; named for this process and this
@@ -247,7 +255,8 @@ package body Model_Runner.Tools.Editing is
         Ada.Directories.Exists (Disk)
         and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File);
       Before : constant String := (if There then Revision_Of (Path, Base) else "");
-      --  Whether the file has other names than this one: hard links.
+      --  Whether the file has other names than this one: hard links. A
+      --  link's own count, never what it names: Capture does not follow it.
       Shared_By_Names : constant Boolean :=
         There and then Hostkit.Metadata_Copy.Is_Available (Hostkit.Metadata_Copy.Capture (Disk))
         and then Interfaces."<" (1, Hostkit.Metadata_Copy.Link_Count (Hostkit.Metadata_Copy.Capture (Disk)));
@@ -289,13 +298,18 @@ package body Model_Runner.Tools.Editing is
       end if;
 
       --  A file no one may write, as its mode says: not written over -- the
-      --  rename put a writable one in its place.
-      if There then
+      --  rename put a writable one in its place. A link's mode is what it
+      --  names, and a link is replaced as itself.
+      if There and then not Hostkit.Fs.Is_Link (Disk) then
          declare
             Available : Boolean;
             Bits      : constant Natural := Hostkit.Metadata.File_Permission_Bits (Disk, Available);
          begin
-            if Available and then (Bits / 8#200#) mod 2 = 0 and then (Bits / 8#20#) mod 2 = 0
+            --  Where the bits say who may write: Windows gives them from its
+            --  owner, group and everyone alone, and a file a group of users
+            --  may write read as no one's.
+            if Available and then Hostkit.Host."/=" (Hostkit.Host.Current, Hostkit.Host.Windows)
+              and then (Bits / 8#200#) mod 2 = 0 and then (Bits / 8#20#) mod 2 = 0
               and then (Bits / 8#2#) mod 2 = 0
             then
                Fail (Path & " is read-only, so it is not written over: a person makes it writable first");
@@ -346,8 +360,9 @@ package body Model_Runner.Tools.Editing is
          Search : Ada.Directories.Search_Type;
          Found  : Ada.Directories.Directory_Entry_Type;
          Stale  : U.Unbounded_String;
+         --  As the partials are named: the file's name held to its cap.
          Prefix : constant String :=
-           "." & Ada.Directories.Simple_Name (Disk) & ".model_runner-partial.";
+           "." & Named (Named'First .. Named'First + Natural'Min (Named'Length, 160) - 1) & ".model_runner-partial.";
       begin
          Ada.Directories.Start_Search
            (Search, (if Folder = "" then "." else Folder), Prefix & "*",
@@ -458,16 +473,23 @@ package body Model_Runner.Tools.Editing is
             Stream_IO.Open (Copy, Stream_IO.Out_File, Disk);
             Stream_IO.Write (Copy, Block);
             Stream_IO.Close (Copy);
+            --  Durable as the file itself is made so, not as its partial was.
+            declare
+               use type Hostkit.Durability.Outcome;
+            begin
+               Result.Durable := Hostkit.Durability.Sync_File (Disk) = Hostkit.Durability.Synced;
+            end;
             Ada.Directories.Delete_File (Partial);
          exception
             when Failure : others =>
                if Stream_IO.Is_Open (Copy) then
                   Stream_IO.Close (Copy);
                end if;
-               if Ada.Directories.Exists (Partial) then
-                  Ada.Directories.Delete_File (Partial);
-               end if;
-               Fail ("could not write " & Path & ": " & Ada.Exceptions.Exception_Message (Failure));
+               --  The file was opened empty to be written in place: its
+               --  partial is the one whole copy of the new text, kept and
+               --  named -- deleted, the text was lost with the old.
+               Fail ("could not write " & Path & " in place: " & Ada.Exceptions.Exception_Message (Failure)
+                     & "; its new text is kept whole in " & Partial);
                return;
          end;
       elsif not Hostkit.Fs.Replace_File (Partial, Disk) then

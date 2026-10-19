@@ -7027,6 +7027,120 @@ package body Tests.Framework_Cases is
                  "a taking in committed was not kept whole, or its journal stayed");
       end;
 
+      --  A file past what is read whole is taken in, and put back, as a
+      --  copy; a script keeps its mode into the workspace, a mode the work
+      --  set is taken in, and one the project set since stays.
+      declare
+         Big     : constant String := Fresh_Root (Store) & "/src/big.dat";
+         Script  : constant String := Fresh_Root (Store) & "/src/run.sh";
+         Shared  : constant String := Fresh_Root (Store) & "/src/shared.adb";
+         Journal : constant String := S.Root (Store) & "/runtime/integrating-";
+         Back    : Model_Runner.Framework.Name_Lists.Vector;
+         Settled : E.Error_Info;
+         Known   : Boolean;
+         Ignored : Boolean;
+         --  Sparse past the limit, its last byte LAST.
+         procedure Put_Big (Path : String; Last : Character) is
+            File : Ada.Streams.Stream_IO.File_Type;
+         begin
+            Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Path);
+            Ada.Streams.Stream_IO.Set_Index (File, 67_108_865);
+            Character'Write (Ada.Streams.Stream_IO.Stream (File), Last);
+            Ada.Streams.Stream_IO.Close (File);
+         end Put_Big;
+         function Last_Of (Path : String) return Character is
+            File : Ada.Streams.Stream_IO.File_Type;
+            Got  : Character;
+         begin
+            Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+            Ada.Streams.Stream_IO.Set_Index (File, 67_108_865);
+            Character'Read (Ada.Streams.Stream_IO.Stream (File), Got);
+            Ada.Streams.Stream_IO.Close (File);
+            return Got;
+         end Last_Of;
+      begin
+         Put_Big (Big, 'a');
+         Put_File (Script, "echo one" & LF);
+         Ignored := Hostkit.Metadata.Set_Permissions (Script, 8#755#);
+         Ignored := Hostkit.Metadata.Set_Permissions (Shared, 8#644#);
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+         S.Commit (Store, Change, Status);
+         if Hostkit.Metadata.Mode_Bits_Are_Native then
+            Assert (Hostkit.Metadata.File_Permission_Bits (To_String (Made.Path) & "/src/run.sh", Known)
+                      mod 8#1000# = 8#755# and then Known,
+                    "a script lost its mode in the workspace");
+         end if;
+         Put_Big (To_String (Made.Path) & "/src/big.dat", 'b');
+         Put_File (To_String (Made.Path) & "/src/run.sh", "echo two" & LF);
+         Ignored := Hostkit.Metadata.Set_Permissions (To_String (Made.Path) & "/src/run.sh", 8#700#);
+         Put_File (To_String (Made.Path) & "/src/shared.adb", "five");
+         Ignored := Hostkit.Metadata.Set_Permissions (Shared, 8#600#);
+         --  Stopped part way: the large file is put back from its copy.
+         S.Crash_At (S.Mid_Integration);
+         begin
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+            Assert (False, "a taking in armed to stop did not stop: " & Code_Of (Status));
+         exception
+            when S.Simulated_Crash =>
+               null;
+         end;
+         Change := S.No_Changes;
+         Ws.Recover_Integrations (Store, Back, Settled);
+         Assert (E.Is_Ok (Settled) and then Back.Contains (To_String (Made.Id))
+                 and then Last_Of (Big) = 'a'
+                 and then not Dirs.Exists (Journal & To_String (Made.Id)),
+                 "a large file taken in part way was not put back: " & Code_Of (Settled));
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         S.Commit (Store, Change, Status);
+         Ws.Settle_Integration (Store, To_String (Made.Id), Kept => E.Is_Ok (Status), Status => Settled);
+         Assert (E.Is_Ok (Status) and then Taken.Contains ("src/big.dat") and then Last_Of (Big) = 'b'
+                 and then Ada.Strings.Fixed.Index (Read_Whole (Script), "two") > 0,
+                 "a large file was not taken in: " & Code_Of (Status));
+         if Hostkit.Metadata.Mode_Bits_Are_Native then
+            Assert (Hostkit.Metadata.File_Permission_Bits (Script, Known) mod 8#1000# = 8#700# and then Known,
+                    "the mode the work set was not taken in");
+            Assert (Hostkit.Metadata.File_Permission_Bits (Shared, Known) mod 8#1000# = 8#600# and then Known,
+                    "the mode the project set since was taken over");
+         end if;
+         Dirs.Delete_File (Big);
+      end;
+
+      --  A link the work made is for a person to settle, never taken in as
+      --  text, nor kept when the work is given up: it brought in what it
+      --  named. A file of bytes the work changed is taken in as any file
+      --  is -- by a stamp no print matched, it was always a conflict.
+      declare
+         Outside : constant String := Dirs.Full_Name ("obj") & "/ws-outside.txt";
+         Kept_At : Unbounded_String;
+      begin
+         Put_File (Outside, "a key");
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+         S.Commit (Store, Change, Status);
+         Put_File (To_String (Made.Path) & "/src/fixture.bin", "xy" & ASCII.NUL & "z");
+         if Hostkit.Fs.Create_Link (Outside, To_String (Made.Path) & "/src/linked.adb") then
+            Assert (Ws.Conflicts (Store, To_String (Made.Id)).Contains ("src/linked.adb"),
+                    "a link the work made was not a conflict to settle");
+            Kept_At := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
+            Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+            S.Commit (Store, Change, Status);
+            Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Kept_At) & "/src/linked.adb")
+                    and then Dirs.Exists (To_String (Kept_At) & "/src/fixture.bin"),
+                    "work given up kept what a link named, or not its own: " & Code_Of (Status));
+            Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+            S.Commit (Store, Change, Status);
+            Put_File (To_String (Made.Path) & "/src/fixture.bin", "xy" & ASCII.NUL & "z");
+         end if;
+         Assert (Ws.Conflicts (Store, To_String (Made.Id)).Is_Empty,
+                 "a file of bytes the work changed was a conflict");
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         S.Commit (Store, Change, Status);
+         Ws.Settle_Integration (Store, To_String (Made.Id), Kept => E.Is_Ok (Status), Status => Status);
+         Assert (E.Is_Ok (Status) and then Read_Whole (Fresh_Root (Store) & "/src/fixture.bin")
+                                           = "xy" & ASCII.NUL & "z",
+                 "a file of bytes the work changed was not taken in: " & Code_Of (Status));
+         Dirs.Delete_File (Outside);
+      end;
+
       --  Its commit failing once its change is marked -- which the next
       --  opening finishes -- the files stay with it: put back, they would
       --  leave records saying the work is in and a project without it.
@@ -10192,6 +10306,23 @@ package body Tests.Framework_Cases is
          Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
          S.Commit (Store, Change, Status);
          Assert (Reused_From = "", "a run after a document changed reused the evidence of before: " & Reused_From);
+         --  A check that writes a document is reused all the same on the
+         --  tree it left: the documents' print was taken before it wrote
+         --  them, and the next run never matched it.
+         Put_File (Fresh_Root (Store) & "/check.sh", "printf 'made\n' > MADE.md" & LF & "exit 0" & LF);
+         Change := S.No_Changes;
+         Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Writing_Kept : constant String := To_String (Evidence);
+         begin
+            Change := S.No_Changes;
+            Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+            S.Commit (Store, Change, Status);
+            Assert (Dirs.Exists (Fresh_Root (Store) & "/MADE.md") and then Reused_From = Writing_Kept,
+                    "a run of a check that writes a document was not reused on the tree it left: "
+                    & Reused_From);
+         end;
       end;
       --  A profile of no checks is no profile to pass.
       Change := S.No_Changes;
@@ -12609,6 +12740,50 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
 
+      --  Taken in on its own only where checks ran and passed: with no
+      --  profile to run, work was taken in unchecked. An analysis that may
+      --  write nothing and wrote nothing goes on as it did.
+      Task_Project
+        (Store, "auto-unchecked",
+         "scalar work.isolation = workspace" & LF
+         & "scalar work.integrate = automatic" & LF
+         & "map permission.project.read_source =" & LF
+         & "map permission.project.write_source =" & LF
+         & "map permission.project.request_integration =" & LF);
+      Tk.Create (Store, Change, Fields ("Unchecked", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (not Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb")
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "not taken in on its own") > 0,
+              "work no check ran on was taken in on its own: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+      Task_Project
+        (Store, "auto-reads",
+         "scalar work.isolation = workspace" & LF
+         & "scalar work.integrate = automatic" & LF
+         & "map permission.project.read_source =" & LF
+         & "map permission.project.request_integration =" & LF);
+      Tk.Create (Store, Change, Fields ("Reads", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => Null_Unbounded_String,
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: read"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (Ada.Strings.Fixed.Index (To_String (Done.Reason), "not taken in on its own") = 0,
+              "an analysis that wrote nothing waited to be taken in: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+
       --  Set aside and tried again, a task has one workspace: the earlier
       --  attempt's is abandoned, not left standing beside the new one.
       Task_Project
@@ -13672,6 +13847,65 @@ package body Tests.Framework_Cases is
                  and then Left.Is_Empty
                  and then not Dirs.Exists (Fresh_Root (Store) & "/.model_runner/sneaked.rec"),
                  "a commit made meanwhile was put back, or a write behind the harness kept");
+      end;
+
+      --  A record the harness committed, changed behind it after: said --
+      --  taken for the harness's own, the change was kept unsaid.
+      declare
+         Taken   : S.State_Snapshot;
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Other   : Unbounded_String;
+      begin
+         S.Snapshot_State (Store, Taken);
+         Tk.Create (Store, Change, Fields ("Then edited", "analysis"), "user", "", Other, Status);
+         S.Commit (Store, Change, Status);
+         declare
+            Target : constant String :=
+              Fresh_Root (Store) & "/.model_runner/tasks/" & To_String (Other) & ".rec";
+         begin
+            Put_File (Target, Read_Whole (Target) & "# edited after the harness" & LF);
+         end;
+         S.Restore_State (Store, Taken, Changed, Left);
+         Assert ((for some Line of Left =>
+                    Ada.Strings.Fixed.Index (Line, "changed after the harness wrote it") > 0),
+                 "a record changed after the harness committed it was taken for the harness's");
+      end;
+
+      --  A link written into the state is taken out as a link: walked
+      --  into, what it named outside was read as the state's and every
+      --  file of it deleted as new.
+      declare
+         Taken   : S.State_Snapshot;
+         Changed : Model_Runner.Framework.Name_Lists.Vector;
+         Left    : Model_Runner.Framework.Name_Lists.Vector;
+         Away    : constant String := Dirs.Full_Name (Fresh_Root (Store)) & "/away";
+         Link    : constant String := Fresh_Root (Store) & "/.model_runner/away";
+      begin
+         Dirs.Create_Path (Away);
+         Put_File (Away & "/keep.txt", "the person's");
+         S.Snapshot_State (Store, Taken);
+         if Hostkit.Fs.Create_Link (Away, Link) then
+            S.Restore_State (Store, Taken, Changed, Left);
+            Assert (Dirs.Exists (Away & "/keep.txt") and then not Hostkit.Fs.Is_Link (Link)
+                    and then Changed.Contains ("away"),
+                    "a link written into the state was walked into, or left:"
+                    & Boolean'Image (Dirs.Exists (Away & "/keep.txt")) & Boolean'Image (Hostkit.Fs.Is_Link (Link))
+                    & Boolean'Image (Changed.Contains ("away")) & Changed.Length'Image
+                    & (if Left.Is_Empty then "" else Left.First_Element));
+         end if;
+         --  One that names nothing is taken out too: not there to look at,
+         --  it was left.
+         S.Snapshot_State (Store, Taken);
+         if Hostkit.Fs.Create_Link (Away & "/gone", Link) then
+            S.Restore_State (Store, Taken, Changed, Left);
+            Assert (not Hostkit.Fs.Is_Link (Link), "a link to nothing written into the state was left");
+         end if;
+         --  Never a tree's removal through it, whatever was asserted.
+         if Hostkit.Fs.Is_Link (Link) and then not Hostkit.Fs.Delete_Link (Link) then
+            Assert (False, "the link could not be removed: " & Link);
+         end if;
+         Dirs.Delete_Tree (Away);
       end;
 
       --  A record written behind the harness that names itself in a log
@@ -14773,6 +15007,22 @@ package body Tests.Framework_Cases is
                   --  Left as it was before, for what is asserted next.
                   Dirs.Delete_File (To_String (Aside) & "/locked.txt");
                   Dirs.Delete_File (Project & "/src/locked.txt");
+                  --  Spelt from the root, a file is kept under its place in
+                  --  the project -- joined to the project, it named nothing;
+                  --  and one outside it is not kept at all -- "../" put its
+                  --  copy outside where restore looks.
+                  Put_File (Project & "/src/whole.txt", "before");
+                  Children.Keep_Before_Write (Dirs.Full_Name (Project) & "/src/whole.txt", Kept_Status);
+                  Assert (E.Is_Ok (Kept_Status) and then Dirs.Exists (To_String (Aside) & "/whole.txt"),
+                          "a file spelt from the root was not kept under its place in the project");
+                  Dirs.Delete_File (To_String (Aside) & "/whole.txt");
+                  Dirs.Delete_File (Project & "/src/whole.txt");
+                  Put_File (Dirs.Containing_Directory (Dirs.Full_Name (Project)) & "/beside.txt", "theirs");
+                  Children.Keep_Before_Write ("src/../../beside.txt", Kept_Status);
+                  Assert (E.Is_Ok (Kept_Status)
+                          and then not Dirs.Exists (Project & "/.model_runner/runtime/beside.txt"),
+                          "a file outside the project was kept outside where restore looks");
+                  Dirs.Delete_File (Dirs.Containing_Directory (Dirs.Full_Name (Project)) & "/beside.txt");
                end;
                --  The copy is listed, put back over the project's file, and
                --  removed.

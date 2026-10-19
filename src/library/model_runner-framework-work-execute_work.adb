@@ -2010,7 +2010,11 @@ begin
            Verification.Choose (Item, Task_Id, Result.Changed_Files,
                                Own_Profile => To_String (Frozen.Verification_Profile));
          Space  : Workspaces.Workspace;
-         Passed : Boolean := True;
+         --  Passed only where checks ran and passed: with no profile to
+         --  run, work was taken in on its own unchecked, and the task was
+         --  blocked for having none only after. Work that changed nothing has
+         --  nothing to check, and goes on.
+         Passed : Boolean := Workspaces.Changes (Item, To_String (Result.Workspace_Id)).Is_Empty;
          Said   : Unbounded_String;
       begin
          Workspaces.Read (Item, To_String (Result.Workspace_Id), Space, Held);

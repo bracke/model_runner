@@ -761,14 +761,22 @@ package body Model_Runner.Conversation is
          --  it closes.
          if Close /= 0 and then not Opens_Thought and then First_Call /= 0 and then First_Call < Close then
             declare
+               --  The call that could hold it: the last opened before it,
+               --  and not closed before it. An earlier one -- quoted whole
+               --  in the thought, or named in its prose -- read with the
+               --  real call after the close, held it shut.
+               Opened : constant Natural :=
+                 Ada.Strings.Fixed.Index (Reply (Reply'First .. Close), "<tool_call>", Ada.Strings.Backward);
+               Closed_Between : constant Boolean :=
+                 Opened /= 0 and then Ada.Strings.Fixed.Index (Reply (Opened .. Close), "</tool_call>") /= 0;
                Shut : constant Natural := Ada.Strings.Fixed.Index (Reply (Close .. Reply'Last), "</tool_call>");
                Here : Model_Runner.Tools.Calls;
                Read : E.Error_Info;
                Call_Holds_It : Boolean := False;
             begin
-               if Shut /= 0 then
+               if Shut /= 0 and then Opened /= 0 and then not Closed_Between then
                   Model_Runner.Tools.Read_Calls
-                    (Here, Reply (First_Call .. Shut + 11), Read, Syntax => Syntax, Offered => Offered);
+                    (Here, Reply (Opened .. Shut + 11), Read, Syntax => Syntax, Offered => Offered);
                   Call_Holds_It := E.Is_Ok (Read) and then Model_Runner.Tools.Count (Here) > 0;
                   Model_Runner.Tools.Close (Here);
                end if;

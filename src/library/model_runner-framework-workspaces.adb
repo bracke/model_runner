@@ -9,7 +9,9 @@ with Ada.Strings.Fixed;
 with Ada.Unchecked_Deallocation;
 
 with Hostkit;
+with Hostkit.Durability;
 with Hostkit.Fs;
+with Hostkit.Host;
 with Hostkit.Metadata;
 
 with Model_Runner.Framework.Events;
@@ -61,6 +63,20 @@ package body Model_Runner.Framework.Workspaces is
    --  that is unchanged, nor -- being in the map -- for one that is gone.
    Unknown_Print : constant String := "?";
 
+   --  The fingerprint of one file, or the empty string when it is not there.
+   function Print_Of (Path : String) return String is
+      Text   : Unbounded_String;
+      Status : E.Error_Info;
+   begin
+      if not Dirs.Exists (Path) then
+         return "";
+      end if;
+      --  A piece at a time: the same print as of its whole text, for a
+      --  file of any size.
+      Files.Print_Of (Path, Text, Status);
+      return (if E.Is_Ok (Status) then To_String (Text) else Unknown_Print);
+   end Print_Of;
+
    --  Every file's fingerprint in a tree, by path; a file the scan could
    --  not read is in it with Unknown_Print, and in Unread.
    procedure Snapshot
@@ -89,7 +105,11 @@ package body Model_Runner.Framework.Workspaces is
             Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
          begin
             if Tab > Line'First then
-               Result.Include (Line (Line'First .. Tab - 1), "bytes:" & Line (Tab + 1 .. Line'Last));
+               --  By what they hold, as a text file is: the stamp they had
+               --  was set against a print of their bytes, and never equal,
+               --  every file of bytes the work changed was a conflict.
+               Result.Include (Line (Line'First .. Tab - 1),
+                               Print_Of (Hostkit.Fs.Join (Directory, Line (Line'First .. Tab - 1))));
             end if;
          end;
       end loop;
@@ -115,23 +135,9 @@ package body Model_Runner.Framework.Workspaces is
       return To_String (Text);
    end Joined;
 
-   --  The fingerprint of one file, or the empty string when it is not there.
    --  Where the files a workspace was found in conflict over are kept.
    function Conflict_Record (Item : Stores.Store; Id : String) return String
    is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "runtime"), "conflict." & Id));
-
-   function Print_Of (Path : String) return String is
-      Text   : Unbounded_String;
-      Status : E.Error_Info;
-   begin
-      if not Dirs.Exists (Path) then
-         return "";
-      end if;
-      --  A piece at a time: the same print as of its whole text, for a
-      --  file of any size.
-      Files.Print_Of (Path, Text, Status);
-      return (if E.Is_Ok (Status) then To_String (Text) else Unknown_Print);
-   end Print_Of;
 
    --  Whether two files are known to hold the same: both read, and alike.
    --  Two that cannot be read are not the same as far as anyone knows.
@@ -185,7 +191,8 @@ package body Model_Runner.Framework.Workspaces is
                Failed ("the directory " & Dirs.Containing_Directory (Target) & " cannot be made", Status);
                return;
             end if;
-            Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target);
+            --  With its mode: a script's executable bit was lost to the copy.
+            Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target, Form => "preserve=all_attributes");
          exception
             when Failure : others =>
                Failed (Path & " could not be copied to " & Target & ": "
@@ -207,7 +214,8 @@ package body Model_Runner.Framework.Workspaces is
                Failed ("the directory " & Dirs.Containing_Directory (Target) & " cannot be made", Status);
                return;
             end if;
-            Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target);
+            --  With its mode: a script's executable bit was lost to the copy.
+            Dirs.Copy_File (Hostkit.Fs.Join (From, Path), Target, Form => "preserve=all_attributes");
          exception
             when Failure : others =>
                Failed (Path & " could not be copied to " & Target & ": "
@@ -361,7 +369,8 @@ package body Model_Runner.Framework.Workspaces is
                                  raise Not_Read;
                               end if;
                               Dirs.Copy_File
-                                (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target);
+                                (Hostkit.Fs.Join (Project, Maps.Key (Position)), Target,
+                                 Form => "preserve=all_attributes");
                            end;
                         end if;
                      end loop;
@@ -1036,9 +1045,17 @@ package body Model_Runner.Framework.Workspaces is
               (if Baseline.Contains (Path) then Baseline (Path) else "");
             Now    : constant String := Print_Of (Hostkit.Fs.Join (Project, Path));
          begin
+            --  A link on either side is for a person to settle, never taken
+            --  in as text: the workspace's brought in what it named -- a
+            --  file outside, a key -- as a file of the project, and the
+            --  project's, written over, was replaced or written through.
+            if (E.Is_Ok (Read_It) and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (To_String (Held.Path), Path)))
+              or else Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Project, Path))
+            then
+               Result.Append (Path);
             --  Changed in the project since, and not to what the workspace
             --  has: a project that already says the same is no conflict.
-            if Now /= Before
+            elsif Now /= Before
               and then (E.Is_Error (Read_It)
                         or else Now /= Print_Of (Hostkit.Fs.Join (To_String (Held.Path), Path)))
             then
@@ -1285,7 +1302,9 @@ package body Model_Runner.Framework.Workspaces is
       Model_Runner.Tools.Editing.Replace (Target, Text, Put);
       if Put.Failed then
          Files.Write_Failed (Target, Status);
-      elsif Put.Created and then Has_Mode then
+      --  Given one, the mode is set on a file that was there too: what was
+      --  put back or taken in has the mode it had, not only the text.
+      elsif Has_Mode then
          declare
             Ignored : constant Boolean := Hostkit.Metadata.Set_Permissions (Target, Mode);
             pragma Unreferenced (Ignored);
@@ -1294,6 +1313,32 @@ package body Model_Runner.Framework.Workspaces is
          end;
       end if;
    end Put_File;
+
+   --  A file past what is read whole, copied as it is with its mode: to a
+   --  copy of this process's own beside TARGET, synced, renamed over.
+   procedure Copy_Large (From, Target : String; Status : out E.Error_Info) is
+      Partial : constant String :=
+        Target & ".model_runner-copy." & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id),
+                                                                  Ada.Strings.Left);
+      use type Hostkit.Durability.Outcome;
+   begin
+      Status := E.Success;
+      if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
+         Files.Write_Failed (Target, Status);
+         return;
+      end if;
+      Dirs.Copy_File (From, Partial, Form => "preserve=all_attributes");
+      if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
+        or else not Hostkit.Fs.Replace_File (Partial, Target)
+      then
+         Files.Discard (Partial);
+         Files.Write_Failed (Target, Status);
+      end if;
+   exception
+      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+         Files.Discard (Partial);
+         Files.Write_Failed (Target, Status);
+   end Copy_Large;
 
    --  A journal's line in its fields, a tab apart.
    function Split_Tabs (Line : String) return Name_Lists.Vector is
@@ -1410,11 +1455,14 @@ package body Model_Runner.Framework.Workspaces is
                      declare
                         Was   : Unbounded_String;
                         Got   : E.Error_Info;
-                        Wrote : E.Error_Info;
+                        Wrote : E.Error_Info := E.Success;
                         Mode  : constant String := (if Natural (Fields.Length) >= 3 then Fields (3) else "-");
                      begin
                         Files.Read_Text (Saved_Of (Item, Id, Path), Was, Got);
-                        if E.Is_Ok (Got) then
+                        if E."=" (Got.Code, E.IO_File_Too_Large) then
+                           Got := E.Success;
+                           Copy_Large (Saved_Of (Item, Id, Path), Target, Wrote);
+                        elsif E.Is_Ok (Got) then
                            Put_File (Target, To_String (Was),
                                      (if Mode /= "-" and then (for all C of Mode => C in '0' .. '9')
                                       then Natural'Value (Mode) else 0),
@@ -1500,10 +1548,18 @@ package body Model_Runner.Framework.Workspaces is
             Target : constant String := Hostkit.Fs.Join (Project, Path);
             Text   : Unbounded_String;
             Read   : E.Error_Info;
-            Saved  : E.Error_Info;
+            Saved  : E.Error_Info := E.Success;
+            Large  : Boolean := False;
          begin
             if Dirs.Exists (Target) then
                Files.Read_Text (Target, Text, Read);
+               --  Past what is read whole, it is kept as a copy: refused, a
+               --  large file the work changed could never be taken in.
+               if E."=" (Read.Code, E.IO_File_Too_Large) then
+                  Read := E.Success;
+                  Copy_Large (Target, Saved_Of (Item, Id, Path), Read);
+                  Large := True;
+               end if;
                if E.Is_Error (Read) then
                   Status := Read;
                   Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
@@ -1516,7 +1572,9 @@ package body Model_Runner.Framework.Workspaces is
                   Stores.Release_Own (Item, "runtime/integrating-" & Id);
                   return;
                end if;
-               Files.Write_Whole (Saved_Of (Item, Id, Path), To_String (Text), Saved);
+               if not Large then
+                  Files.Write_Whole (Saved_Of (Item, Id, Path), To_String (Text), Saved);
+               end if;
                if E.Is_Error (Saved) then
                   Status := Saved;
                   Files.Discard_Tree (Journal_Of (Item, Id) & ".before");
@@ -1860,7 +1918,7 @@ package body Model_Runner.Framework.Workspaces is
                                               Path);
                         begin
                            Dirs.Create_Path (Dirs.Containing_Directory (Aside));
-                           Dirs.Copy_File (Target, Aside);
+                           Dirs.Copy_File (Target, Aside, Form => "preserve=all_attributes");
                         exception
                            --  Not kept aside, not joined: a join that could
                            --  not be put back is not made.
@@ -1893,20 +1951,40 @@ package body Model_Runner.Framework.Workspaces is
                         end if;
                      else
                         --  The workspace's copy, written as an edit is, a
-                        --  new file given the workspace file's mode.
+                        --  new file given the workspace file's mode -- and one
+                        --  there given it only where the work changed it from
+                        --  the base: a mode the project set since stays.
                         declare
-                           Content : Unbounded_String;
-                           Got     : E.Error_Info;
-                           Known   : Boolean;
-                           Mode    : constant Natural := Hostkit.Metadata.File_Permission_Bits (From, Known);
+                           Content    : Unbounded_String;
+                           Got        : E.Error_Info;
+                           Known      : Boolean;
+                           Mode       : constant Natural := Hostkit.Metadata.File_Permission_Bits (From, Known);
+                           Base_Known : Boolean;
+                           Base_Mode  : constant Natural :=
+                             Hostkit.Metadata.File_Permission_Bits
+                               (Hostkit.Fs.Join (Base_Tree (Held), Path), Base_Known);
+                           There      : constant Boolean := Dirs.Exists (Target);
+                           Had_Known  : Boolean;
+                           Had_Mode   : constant Natural := Hostkit.Metadata.File_Permission_Bits (Target, Had_Known);
+                           Carry      : constant Boolean :=
+                             Known and then (not There or else (Base_Known and then Base_Mode /= Mode));
                         begin
                            Files.Read_Text (From, Content, Got);
                            if E.Is_Ok (Got) then
-                              Put_File (Target, To_String (Content), Mode, Known, Wrote);
+                              Put_File (Target, To_String (Content), Mode, Carry, Wrote);
                            elsif E."=" (Got.Code, E.IO_File_Too_Large) then
-                              --  Past what is read whole: copied as it was.
+                              --  Past what is read whole: copied as it was,
+                              --  its mode with it unless the project's stays.
                               Got := E.Success;
-                              Dirs.Copy_File (From, Target);
+                              Copy_Large (From, Target, Wrote);
+                              if E.Is_Ok (Wrote) and then There and then Had_Known and then not Carry then
+                                 declare
+                                    Ignored : constant Boolean := Hostkit.Metadata.Set_Permissions (Target, Had_Mode);
+                                    pragma Unreferenced (Ignored);
+                                 begin
+                                    null;
+                                 end;
+                              end if;
                            end if;
                            if E.Is_Error (Got) or else E.Is_Error (Wrote) then
                               Status := (if E.Is_Error (Got) then Got else Wrote);
@@ -1916,6 +1994,19 @@ package body Model_Runner.Framework.Workspaces is
                         end;
                      end if;
                   end;
+               --  Gone in the workspace, and changed in the project as it was
+               --  taken in: the person's change is not deleted -- a write is
+               --  held to that, and a deletion was not.
+               elsif not Resolved.Contains (Path) and then Dirs.Exists (Target)
+                 and then (not Base.Contains (Path) or else not Same_Print_As (Target, Base (Path)))
+               then
+                  Status := E.Make (E.Framework_Integration_Conflict);
+                  E.Add_Text (Status, "name", Id);
+                  E.Add_Text (Status, "detail",
+                              Path & " changed in the project as it was taken in, where the work removes it:"
+                              & " nothing was taken in");
+                  Put_Back;
+                  return;
                elsif not Files.Delete_If_Present (Target) then
                   Files.Write_Failed (Target, Status);
                   Put_Back;
@@ -2368,7 +2459,7 @@ package body Model_Runner.Framework.Workspaces is
             Target : constant String := Hostkit.Fs.Join (Aside, Path);
          begin
             Dirs.Create_Path (Dirs.Containing_Directory (Target));
-            Dirs.Copy_File (Hostkit.Fs.Join (Project, Path), Target);
+            Dirs.Copy_File (Hostkit.Fs.Join (Project, Path), Target, Form => "preserve=all_attributes");
          end;
       end loop;
       --  What the project held of these files kept in a journal before
@@ -2400,8 +2491,7 @@ package body Model_Runner.Framework.Workspaces is
                Put_File (Target, To_String (Content), Mode, Known, Wrote);
             elsif E."=" (Got.Code, E.IO_File_Too_Large) then
                Got := E.Success;
-               Dirs.Create_Path (Dirs.Containing_Directory (Target));
-               Dirs.Copy_File (From, Target);
+               Copy_Large (From, Target, Wrote);
             end if;
             if E.Is_Error (Got) or else E.Is_Error (Wrote) then
                Status := (if E.Is_Error (Got) then Got else Wrote);
@@ -2548,9 +2638,11 @@ package body Model_Runner.Framework.Workspaces is
                From : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
                To   : constant String := Hostkit.Fs.Join (Into, Path);
             begin
-               if Dirs.Exists (From) then
+               --  Not through a link: what it named, outside the workspace,
+               --  is no work of the task's to keep.
+               if Dirs.Exists (From) and then not Hostkit.Fs.Is_Link (From) then
                   Dirs.Create_Path (Dirs.Containing_Directory (To));
-                  Dirs.Copy_File (From, To);
+                  Dirs.Copy_File (From, To, Form => "preserve=all_attributes");
                end if;
             exception
                when Failure : others =>

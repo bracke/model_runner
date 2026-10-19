@@ -1153,23 +1153,21 @@ package body Model_Runner.Tools.Builtin is
       elsif not Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Base, Path)) then
          return Failure ("no file at " & Path);
       end if;
-      --  Read between two looks at its revision that agree: saved in the
+      --  Stamped with the revision it had before it was read: saved in the
       --  middle, the old bytes were stamped with the new revision, and a
-      --  write of them went through over the save.
-      for Attempt in 1 .. 3 loop
-         declare
-            Before : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
-            Read   : constant Reply := Read_Capped (Path, Base);
-            Now    : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
-         begin
-            if Read.Failed or else Now = "" then
-               return Read;
-            elsif Before = Now then
-               return Stamped (Read, Now);
-            end if;
-         end;
-      end loop;
-      return Failure (Path & " kept changing while it was read, by something other than you: read it again");
+      --  write of them went through over the save. Stamped so, a file that
+      --  changed as it was read has a stamp older than it is, and a write
+      --  over it is refused until it is read again -- a log that keeps
+      --  growing is read all the same.
+      declare
+         Before : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
+         Read   : constant Reply := Read_Capped (Path, Base);
+      begin
+         if Read.Failed or else Before = "" then
+            return Read;
+         end if;
+         return Stamped (Read, Before);
+      end;
    end Read_File;
 
    --  What the editing package said, as a reply.

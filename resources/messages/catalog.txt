@@ -924,7 +924,7 @@ en.cli.work.runner.session = the session's model
 en.cli.work.runner_apart = a model named by model=PATH runs apart, with file tools only: it runs no checks and makes no helpers -- /work without model= runs the session's model, which does
 en.cli.work.steps_capped = steps={value} is more than {name} may take: it runs {count}, as {other} allows
 en.cli.run.capped = {name} {value} is more than this run takes: it runs {count}
-en.cli.work.overwritten_kept = the files it wrote over are kept as they were in {name} -- {detail}: /task kept diff {name} shows what changed, and /task kept restore {name} puts them back
+en.cli.work.overwritten_kept = the files its edits wrote over are kept as they were in {name} -- {detail} (what a command it ran wrote is not): /task kept diff {name} shows what changed, and /task kept restore {name} puts them back
 en.cli.work.section.start = Starting {name}
 en.cli.work.section.run = The run
 en.cli.work.section.outcome = How it came out
@@ -2459,7 +2459,7 @@ da.cli.work.runner.session = sessionens model
 da.cli.work.runner_apart = en model angivet med model=PATH kører for sig, kun med filværktøjer: den kører ingen tjek og laver ingen hjælpere -- /work uden model= kører sessionens model, som gør
 da.cli.work.steps_capped = steps={value} er flere end {name} må tage: den kører {count}, som {other} tillader
 da.cli.run.capped = {name} {value} er flere end denne kørsel tager: den kører {count}
-da.cli.work.overwritten_kept = de filer den skrev over gemmes som de var i {name} -- {detail}: /task kept diff {name} viser hvad der ændrede sig, og /task kept restore {name} lægger dem tilbage
+da.cli.work.overwritten_kept = de filer dens redigeringer skrev over gemmes som de var i {name} -- {detail} (hvad en kommando den kørte skrev, gemmes ikke): /task kept diff {name} viser hvad der ændrede sig, og /task kept restore {name} lægger dem tilbage
 da.cli.work.section.start = Starter {name}
 da.cli.work.section.run = Kørslen
 da.cli.work.section.outcome = Hvordan det gik
@@ -3751,7 +3751,7 @@ qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
 qps.cli.work.runner_apart = ⟦á móðéĺ ñáméð bý móðéĺ=PAŦH ŕúñß ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý: íŧ ŕúñß ñó çhéçkß áñð mákéß ñó héĺpéŕß -- /wóŕk wíŧhóúŧ móðéĺ= ŕúñß ŧhé ßéßßíóñ'ß móðéĺ, whíçh ðóéß⟧
 qps.cli.work.steps_capped = ⟦ßŧépß={value} íß móŕé ŧháñ {name} máý ŧáké: íŧ ŕúñß {count}, áß {other} áĺĺówß⟧
 qps.cli.run.capped = ⟦{name} {value} íß móŕé ŧháñ ŧhíß ŕúñ ŧáķéß: íŧ ŕúñß {count}⟧
-qps.cli.work.overwritten_kept = ⟦ŧhé fíĺéß íŧ wŕóŧé óvéŕ áŕé képŧ áß ŧhéý wéŕé íñ {name} -- {detail}: /ŧáßk képŧ ðíff {name} ßhówß wháŧ çháñgéð, áñð /ŧáßk képŧ ŕéßŧóŕé {name} púŧß ŧhém báçk⟧
+qps.cli.work.overwritten_kept = ⟦ŧhé fíĺéß íŧß éðíŧß wŕóŧé óvéŕ áŕé képŧ áß ŧhéý wéŕé íñ {name} -- {detail} (wháŧ á çómmáñð íŧ ŕáñ wŕóŧé íß ñóŧ): /ŧáßk képŧ ðíff {name} ßhówß wháŧ çháñgéð, áñð /ŧáßk képŧ ŕéßŧóŕé {name} púŧß ŧhém báçk⟧
 qps.cli.work.section.start = ⟦Sŧáŕŧíñg {name}⟧
 qps.cli.work.section.run = ⟦Ŧhé ŕúñ⟧
 qps.cli.work.section.outcome = ⟦Hów íŧ çámé óúŧ⟧

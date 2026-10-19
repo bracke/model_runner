@@ -1364,6 +1364,14 @@ package body Model_Runner.Framework.Verification is
          --  its own -- Alire's config/ is one -- and evidence taken before
          --  it would be out of date the moment it was recorded.
          Records.Set (Value, "repository_revision", Repository_Now (Item));
+         --  The documents as the checks left them, as the revision is: a
+         --  check that writes one -- generated pages, a changelog -- left
+         --  the print of before, and the next run never matched it.
+         Records.Set
+           (Value, "documents_fingerprint",
+            Fingerprint (Document_Lines
+                           (if Workspace = "" then Repository.Now (Item)
+                            else Repository.Scan (Workspace, Repository.Roots_Of (Item)))));
          Records.Set (Value, "files", File_Lines (Repository.Now (Item)));
          --  A source or test changed while they ran -- by the checks
          --  themselves, as a build writes its own, or by a person: which

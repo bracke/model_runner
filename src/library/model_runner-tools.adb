@@ -558,29 +558,50 @@ package body Model_Runner.Tools is
          declare
             At_Line_Start : Boolean := True;
 
-            --  Whether the lines from Start, so many of them, name a call.
-            function Names_Call (Start : Positive; Lines : Positive) return Boolean is
-               Upto : Natural := Start - 1;
+            --  Whether the object that opens at or soon after Start names a
+            --  call, read to its own close: on its first line alone, a call
+            --  written out over lines was taken for prose, and kept twice.
+            function Names_Call (Start : Positive) return Boolean is
+               Brace     : constant Natural :=
+                 Ada.Strings.Fixed.Index (Reply (Start .. Natural'Min (Reply'Last, Start + 200)), "{");
+               Depth     : Natural := 0;
+               In_String : Boolean := False;
+               Upto      : Natural := 0;
+               P         : Natural := Brace;
             begin
-               for Line in 1 .. Lines loop
-                  exit when Upto >= Reply'Last;
-                  declare
-                     Break : constant Natural :=
-                       Ada.Strings.Fixed.Index (Reply (Upto + 1 .. Reply'Last), [1 => ASCII.LF]);
-                  begin
-                     Upto := (if Break = 0 then Reply'Last else Break);
-                  end;
+               if Brace = 0 then
+                  return False;
+               end if;
+               while P <= Natural'Min (Reply'Last, Brace + 8_000) loop
+                  if In_String then
+                     if Reply (P) = '\' then
+                        P := P + 1;
+                     elsif Reply (P) = '"' then
+                        In_String := False;
+                     end if;
+                  elsif Reply (P) = '"' then
+                     In_String := True;
+                  elsif Reply (P) = '{' then
+                     Depth := Depth + 1;
+                  elsif Reply (P) = '}' then
+                     Depth := Depth - 1;
+                     if Depth = 0 then
+                        Upto := P;
+                        exit;
+                     end if;
+                  end if;
+                  P := P + 1;
                end loop;
-               return Ada.Strings.Fixed.Index (Reply (Start .. Upto), """name""") > 0;
+               return Upto /= 0 and then Ada.Strings.Fixed.Index (Reply (Brace .. Upto), """name""") > 0;
             end Names_Call;
          begin
             for Start in Reply'First .. Reply'Last loop
                --  A line that opens an object naming a call, or a fence whose
                --  object does: an object shown in the prose is the prose's.
                if At_Line_Start
-                 and then ((Reply (Start) = '{' and then Names_Call (Start, Lines => 1))
+                 and then ((Reply (Start) = '{' and then Names_Call (Start))
                            or else (Start + 2 <= Reply'Last and then Reply (Start .. Start + 2) = "```"
-                                    and then Names_Call (Start, Lines => 2)))
+                                    and then Names_Call (Start)))
                then
                   Last := Start - 1;
                   while Last >= Reply'First and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
@@ -1540,6 +1561,8 @@ package body Model_Runner.Tools is
          end;
       end Take_Qwen;
 
+      --  The first closed call block that would not read, the rest read.
+      Bad : E.Error_Info := E.Success;
    begin
       Close (Item);
       Status := E.Success;
@@ -1586,7 +1609,12 @@ package body Model_Runner.Tools is
                   begin
                      Take_One (Reply (First .. Shut - 1), Taken => Taken);
                   end;
-                  if E.Is_Error (Status) then
+                  if E.Is_Error (Status) and then E."=" (Status.Code, E.Tools_Call_Malformed) then
+                     if E.Is_Ok (Bad) then
+                        Bad := Status;
+                     end if;
+                     Status := E.Success;
+                  elsif E.Is_Error (Status) then
                      return;
                   end if;
 
@@ -1596,6 +1624,12 @@ package body Model_Runner.Tools is
                Index := Index + 1;
             end if;
          end loop;
+         --  A closed block that would not read is said once the rest are
+         --  read: stopped at it, a whole call after it was dropped unsaid.
+         if E.Is_Error (Bad) then
+            Status := Bad;
+            return;
+         end if;
 
          --  The shapes a model trained on no envelope writes: an object
          --  standing open in the text, bare or fenced. Looked for only when
@@ -1770,16 +1804,38 @@ package body Model_Runner.Tools is
                      loop
                         if Marks (Shut, Param_Opens) then
                            declare
-                              --  Not past the call's envelope or the next call:
-                              --  a parameter left open swallowed the call after.
-                              Envelope_End : constant Natural :=
-                                Ada.Strings.Fixed.Index (Reply (Shut .. Reply'Last), "</tool_call>");
-                              Next_Call    : constant Natural :=
-                                (if Shut + 1 > Reply'Last then 0
-                                 else Ada.Strings.Fixed.Index (Reply (Shut + 1 .. Reply'Last), Open_Tag));
-                              Bound        : constant Natural :=
-                                Natural'Min ((if Envelope_End = 0 then Reply'Last else Envelope_End - 1),
-                                             (if Next_Call = 0 then Reply'Last else Next_Call - 1));
+                              --  Not past where the call ends: a </function> the
+                              --  envelope's close, the next call, or the reply's
+                              --  end follows -- a parameter left open swallowed
+                              --  the call after it, and one whose text spells
+                              --  </tool_call> must still be read whole.
+                              function Call_End return Natural is
+                                 Look : Natural := Shut;
+                              begin
+                                 loop
+                                    declare
+                                       Found : constant Natural :=
+                                         (if Look > Reply'Last then 0
+                                          else Ada.Strings.Fixed.Index (Reply (Look .. Reply'Last), Close_Tag));
+                                       After : Natural := Found + Close_Tag'Length;
+                                    begin
+                                       exit when Found = 0;
+                                       while After <= Reply'Last
+                                         and then Reply (After) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+                                       loop
+                                          After := After + 1;
+                                       end loop;
+                                       if After > Reply'Last or else Marks (After, "</tool_call>")
+                                         or else Marks (After, "<tool_call>") or else Marks (After, Open_Tag)
+                                       then
+                                          return Found - 1;
+                                       end if;
+                                       Look := Found + 1;
+                                    end;
+                                 end loop;
+                                 return Reply'Last;
+                              end Call_End;
+                              Bound : constant Natural := Call_End;
                               Param_End : constant Natural :=
                                 Ada.Strings.Fixed.Index (Reply (Shut .. Bound), Param_Shuts);
                            begin

@@ -923,10 +923,10 @@ package body Model_Runner.Agent is
                     (Messages, Conv.User_Role,
                      (if Lost_Cut
                       then "Your reply reached its length limit in the middle of one more tool call, so that"
-                           & " one was not run; the calls before it did run. Write it again if you still need"
+                           & " one was not run; the other calls did run. Write it again if you still need"
                            & " it, and think less before it."
                       else "One more tool call in your reply could not be read, so it was not run; the calls"
-                           & " before it did run. Write it again, exactly in the format the tools were offered"
+                           & " that could be read did run. Write it again, exactly in the format the tools were offered"
                            & " in, if you still need it."),
                      Told);
                end if;
@@ -969,7 +969,9 @@ package body Model_Runner.Agent is
                     (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
                --  A call attempted, its block closed, that would not read --
                --  not prose that names the tag.
-               elsif E.Is_Error (Reading) and then Result.Steps >= Max_Steps and then Closes_Call (Reply_Text) then
+               elsif E.Is_Error (Reading) and then Result.Steps >= Max_Steps
+                 and then (Closes_Call (Reply_Text) or else Ada.Strings.Fixed.Index (Reply_Text, "</tool_call>") > 0)
+               then
                   Result.Reason := Step_Limit;
                end if;
                exit Step_Loop;
