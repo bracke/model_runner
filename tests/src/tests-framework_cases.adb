@@ -8959,6 +8959,7 @@ package body Tests.Framework_Cases is
    type Lesson_Agent is new Wk.Parenting_Runner with null record;
 
    Lesson_Failing, Lesson_Passing : Unbounded_String;
+   Lesson_Paced : Boolean := False;
    Lesson_Evidence_Before, Lesson_Evidence_After : Natural := 0;
 
    overriding procedure Run
@@ -8985,16 +8986,93 @@ package body Tests.Framework_Cases is
    type Session_Script is new Model_Runner.Agent.Reply_Script with record
       Replies : Reply_List;
       Next    : Positive := 1;
+
+      --  How long the first reply takes to come, and whether it stops at
+      --  its length limit; whether the replies keep to the limit, and are
+      --  shown, as a model's are.
+      First_Takes : Duration := 0.0;
+      First_Cut   : Boolean := False;
+      Keeps       : Boolean := False;
+
+      --  Whether the run's time runs out in the first reply.
+      First_Timed : Boolean := False;
    end record;
 
    overriding function Next_Reply (Self : in out Session_Script) return String;
+   overriding function Cut_Off (Self : Session_Script) return Boolean is (Self.First_Cut and then Self.Next = 2);
+   overriding function Keeps_To_Limit (Self : Session_Script) return Boolean is (Self.Keeps);
+   overriding function Out_Of_Time (Self : Session_Script) return Boolean is (Self.First_Timed and then Self.Next = 2);
 
    overriding function Next_Reply (Self : in out Session_Script) return String is
    begin
+      if Self.Next = 1 then
+         delay Self.First_Takes;
+      end if;
       Self.Next := Self.Next + 1;
       return (if Self.Next - 1 <= Self.Replies'Last then To_String (Self.Replies (Self.Next - 1))
               else "status: done" & LF & "summary: done");
    end Next_Reply;
+
+   --  A task's work on the session, as /work runs it on a model -- the
+   --  tiny one, its replies the script's -- and what the screen showed of
+   --  the calls and their answers, which it gives on standard error.
+   procedure On_Session
+     (Store   : aliased in out S.Store;
+      Task_Id : String;
+      Replies : aliased in out Session_Script;
+      Shown   : out Unbounded_String;
+      Done    : out Wk.Report)
+   is
+      Image   : Model_Runner.Bytes.Byte_Array_Access;
+      Status  : E.Error_Info;
+   begin
+      Tiny_Model.Build (Image, Room => 32_768);
+      declare
+         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
+         Parsed  : Model_Runner.GGUF.Containers.Container;
+         Ready   : aliased Model_Runner.Llama.Model;
+         Session : aliased Model_Runner.Llama.Session;
+         Stop    : aliased Model_Runner.Stops.Set;
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : aliased Model_Runner.Presentation.Console;
+         Item    : aliased Model_Runner.CLI.Options.Command;
+         Notes   : aliased Model_Runner.CLI.Project_Commands.Run_Notes;
+         Said    : Ada.Text_IO.File_Type;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+         Model_Runner.Llama.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         Model_Runner.Llama.Open (Session, Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model's session did not open");
+         Model_Runner.Stops.Open (Stop);
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Model_Runner.CLI.Options.Normal);
+         declare
+            Agent : Model_Runner.CLI.Project_Commands.Session_Agent
+              (Ready'Access, Session'Access, Stop'Access, Screen'Access, Item'Access, null, Notes'Access);
+         begin
+            Agent.Script := Replies'Unchecked_Access;
+            Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "obj/session-work.txt");
+            Ada.Text_IO.Set_Error (Said);
+            Wk.Execute (Store, Task_Id, Agent, Cx.Profile (Store, ""), Done, Status);
+            Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+            Ada.Text_IO.Close (Said);
+         exception
+            when others =>
+               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+               if Ada.Text_IO.Is_Open (Said) then
+                  Ada.Text_IO.Close (Said);
+               end if;
+               raise;
+         end;
+         Shown := To_Unbounded_String (Read_Whole ("obj/session-work.txt"));
+         Model_Runner.Llama.Close (Session);
+      end;
+   end On_Session;
 
    overriding procedure Run
      (Self        : Lesson_Agent;
@@ -9027,6 +9105,7 @@ package body Tests.Framework_Cases is
       Dirs.Create_Path (Project & "/src");
       Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   raise Program_Error;" & LF
                 & "end Hello;" & LF);
+      Lesson_Paced := Children.Is_Paced;
       Lesson_Evidence_Before := Evidence_Count;
       Children.Lesson_Checks (Lesson_Failing);
       Lesson_Evidence_After := Evidence_Count;
@@ -9828,6 +9907,7 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "(style) space required") > 0,
                  "a change the lesson's checks refuse was not said with it: " & To_String (Lesson_Failing));
          Assert (Length (Lesson_Passing) = 0, "a change they take was said as failing: " & To_String (Lesson_Passing));
+         Assert (not Lesson_Paced, "work with no time set to model was held to a pace");
          Assert (Lesson_Evidence_After = Lesson_Evidence_Before,
                  "the checks after a change were kept as the work's evidence");
       end;
@@ -9836,78 +9916,116 @@ package body Tests.Framework_Cases is
       --  after a write come with the write's answer, on the screen as the
       --  model is given it.
       declare
-         Image   : Model_Runner.Bytes.Byte_Array_Access;
          Fifth   : Unbounded_String;
+         Replies : aliased Session_Script;
+         Shown   : Unbounded_String;
+         Broken  : constant String := "procedure Hello is\nbegin\n   raise Program_Error;\nend Hello;\n";
       begin
-         Tiny_Model.Build (Image, Room => 32_768);
-         declare
-            Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
-            Parsed  : Model_Runner.GGUF.Containers.Container;
-            Ready   : aliased Model_Runner.Llama.Model;
-            Session : aliased Model_Runner.Llama.Session;
-            Stop    : aliased Model_Runner.Stops.Set;
-            Catalog : aliased Model_Runner.Localization.Catalog;
-            Screen  : aliased Model_Runner.Presentation.Console;
-            Item    : aliased Model_Runner.CLI.Options.Command;
-            Notes   : aliased Model_Runner.CLI.Project_Commands.Run_Notes;
-            Replies : aliased Session_Script;
-            Said    : Ada.Text_IO.File_Type;
-            Broken  : constant String := "procedure Hello is\nbegin\n   raise Program_Error;\nend Hello;\n";
-         begin
-            Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
-            Model_Runner.Llama.Prepare (Ready, Parsed, Source, Status => Status);
-            Assert (E.Is_Ok (Status), "the tiny model did not prepare");
-            Model_Runner.Llama.Open (Session, Ready, Status => Status);
-            Assert (E.Is_Ok (Status), "the tiny model's session did not open");
-            Model_Runner.Stops.Open (Stop);
-            Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
-            Model_Runner.Presentation.Open
-              (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
-               (Output_Is_Terminal => False, Error_Is_Terminal => False,
-                Input_Is_Terminal  => False, Colour_Suppressed => True),
-               Model_Runner.CLI.Options.Normal);
-            Replies.Replies :=
-              [To_Unbounded_String ("<tool_call>{""name"": ""read_file"", ""arguments"": "
-                                    & "{""path"": ""src/hello.adb""}}</tool_call>"),
-               To_Unbounded_String ("<tool_call>{""name"": ""write_file"", ""arguments"": "
-                                    & "{""path"": ""src/hello.adb"", ""content"": """ & Broken & """}}</tool_call>"),
-               To_Unbounded_String ("status: done" & LF & "summary: wrote hello" & LF
-                                    & "changed_files: src/hello.adb")];
-            Change := S.No_Changes;
-            Tk.Create (Store, Change, Fields ("Greet a fifth time", "implementation", "component", "hello"), "user",
-                       "", Fifth, Status);
-            S.Commit (Store, Change, Status);
-            Tk.Move (Store, Change, To_String (Fifth), "accepted", "", Status => Status);
-            S.Commit (Store, Change, Status);
-            declare
-               Agent : Model_Runner.CLI.Project_Commands.Session_Agent
-                 (Ready'Access, Session'Access, Stop'Access, Screen'Access, Item'Access, null, Notes'Access);
-            begin
-               Agent.Script := Replies'Unchecked_Access;
-               --  The calls' answers, as the screen gives them: on standard
-               --  error.
-               Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "obj/session-lesson.txt");
-               Ada.Text_IO.Set_Error (Said);
-               Wk.Execute (Store, To_String (Fifth), Agent, Cx.Profile (Store, ""), Done, Status);
-               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
-               Ada.Text_IO.Close (Said);
-               declare
-                  Shown : constant String := Read_Whole ("obj/session-lesson.txt");
-               begin
-                  Assert (Ada.Strings.Fixed.Index (Shown, "holds every change to failed after it") > 0,
-                          "a write on the session was not told the lesson's checks after it: " & Shown
-                          & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason)
-                          & Positive'Image (Replies.Next));
-                  Assert (Replies.Next > 3, "the session's work did not take the script's replies:"
-                          & Positive'Image (Replies.Next) & " " & To_String (Done.Final_State) & " "
-                          & To_String (Done.Reason));
-               end;
-            end;
-            Model_Runner.Llama.Close (Session);
-         end;
+         Replies.Replies :=
+           [To_Unbounded_String ("<tool_call>{""name"": ""read_file"", ""arguments"": "
+                                 & "{""path"": ""src/hello.adb""}}</tool_call>"),
+            To_Unbounded_String ("<tool_call>{""name"": ""write_file"", ""arguments"": "
+                                 & "{""path"": ""src/hello.adb"", ""content"": """ & Broken & """}}</tool_call>"),
+            To_Unbounded_String ("status: done" & LF & "summary: wrote hello" & LF
+                                 & "changed_files: src/hello.adb")];
+         Change := S.No_Changes;
+         Tk.Create (Store, Change, Fields ("Greet a fifth time", "implementation", "component", "hello"), "user",
+                    "", Fifth, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Fifth), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         On_Session (Store, To_String (Fifth), Replies, Shown, Done);
+         Assert (Ada.Strings.Fixed.Index (To_String (Shown), "holds every change to failed after it") > 0,
+                 "a write on the session was not told the lesson's checks after it: " & To_String (Shown)
+                 & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+         Assert (Replies.Next > 3, "the session's work did not take the script's replies:"
+                 & Positive'Image (Replies.Next) & " " & To_String (Done.Final_State) & " "
+                 & To_String (Done.Reason));
       end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;
+
+   --  A call the work's time ran out in the middle of is said to be none:
+   --  its markup was on the screen as written, with nothing to say why.
+   procedure A_Call_Cut_By_Time_Is_Said (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store   : aliased S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Done    : Wk.Report;
+      Replies : aliased Session_Script;
+      Shown   : Unbounded_String;
+   begin
+      Task_Project (Store, "cut-by-time", "scalar agents.max_seconds = 2" & LF);
+      Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      --  Past the time before its first reply is in, and that reply cut
+      --  at its length in the call it began.
+      Replies.First_Takes := 3.0;
+      Replies.First_Cut := True;
+      Replies.Keeps := True;
+      Replies.Replies (1) := To_Unbounded_String ("<tool_call>{""name"": ""read_file"", ""arguments"": {""pa");
+      On_Session (Store, To_String (Id), Replies, Shown, Done);
+      Assert (Ada.Strings.Fixed.Index (To_String (Shown), "time ran out while the reply was being written") > 0,
+              "a call cut off by the work's time was not said to be none: " & To_String (Shown)
+              & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      --  And where the time runs out inside the reply, as a generation's
+      --  deadline stops it: qwen3-8b's call, and another thought begun
+      --  after it, the screen's last with nothing to say why.
+      declare
+         Again : aliased Session_Script;
+      begin
+         Tk.Create (Store, Change, Fields ("Look once more", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Again.First_Timed := True;
+         Again.Keeps := True;
+         Again.Replies (1) := To_Unbounded_String
+           ("<think>" & LF & "</think>" & LF & LF & "<tool_call>" & LF
+            & "{""name"": ""read_file"", ""arguments"": {""path"": ""x""}}" & LF & "</tool_call>" & LF
+            & "<think>" & LF & "Okay, and then");
+         On_Session (Store, To_String (Id), Again, Shown, Done);
+         Assert (Ada.Strings.Fixed.Index (To_String (Shown), "time ran out while the reply was being written") > 0,
+                 "a reply the work's time ran out in, past a call, was not said: " & To_String (Shown)
+                 & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      end;
+      S.Close (Store);
+      --  A time set to model is the lease's at most, held to the model's
+      --  pace within it: what Pace_Tokens take at the speed it decodes at,
+      --  and never judged before a speed is measured.
+      Task_Project (Store, "time-by-model", "scalar agents.max_seconds = model" & LF);
+      Tk.Create (Store, Change, Fields ("Look again", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (Wk.Paced (Store, To_String (Id)) and then Wk.Time_Allowed (Store, To_String (Id)) = 3_600,
+              "a time set to model was not paced within the lease:"
+              & Natural'Image (Wk.Time_Allowed (Store, To_String (Id))));
+      --  And its agents are told so.
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Lesson_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (Lesson_Paced, "the agents of work whose time is set to model were not held to its pace");
+      S.Close (Store);
+      declare
+         --  Nanoseconds: 2,399 s and 2,401 s, 10 s, 1 s, 99,999 s.
+         Under  : constant Interfaces.Unsigned_64 := 2_399_000_000_000;
+         Over   : constant Interfaces.Unsigned_64 := 2_401_000_000_000;
+         Ten    : constant Interfaces.Unsigned_64 := 10_000_000_000;
+         One    : constant Interfaces.Unsigned_64 := 1_000_000_000;
+         Long   : constant Interfaces.Unsigned_64 := 99_999_000_000_000;
+      begin
+         --  At 10 tokens a second, 24,000 tokens take 2,400 s.
+         Assert (not Model_Runner.Agent.Past_Pace (Under, Ten, 100, Wk.Pace_Tokens)
+                 and then Model_Runner.Agent.Past_Pace (Over, Ten, 100, Wk.Pace_Tokens),
+                 "the pace was not what its tokens take at the speed measured");
+         Assert (not Model_Runner.Agent.Past_Pace (Long, One, 10, Wk.Pace_Tokens)
+                 and then not Model_Runner.Agent.Past_Pace (Long, Ten, 100, 0),
+                 "a run was held to a pace before a speed was measured, or with none asked");
+      end;
+   end A_Call_Cut_By_Time_Is_Said;
 
    --  Scenario A, measured both ways: two tasks of one component, the
    --  second meeting what the first found out. With what was learned kept
@@ -17018,6 +17136,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, A_Call_Cut_By_Time_Is_Said'Access,
+         "a call the work's time ran out in the middle of is said to be none");
       Register_Routine
         (T, Findings_Come_Before_Notes'Access,
          "what was found is told before a note of where work was done, whichever is newer");

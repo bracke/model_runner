@@ -694,7 +694,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  run's budget bounds the whole.
       Request.Max_Tokens :=
         Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all));
-      Request.Sampling := Self.Item.Sampling;
+      Request.Sampling := Opt.Sampling_For (Self.Item.all, Self.Prepared.all);
       Request.Seed := Self.Item.Seed;
       Request.Has_Seed := Self.Item.Has_Seed;
       Request.Batch_Size :=
@@ -746,6 +746,9 @@ package body Model_Runner.CLI.Project_Commands is
             --  time after seven.
             Think_Budget => Request.Max_Tokens / 2,
             Script      => Self.Script,
+            --  Where the task's time is its model's: so many tokens at the
+            --  speed this session generates at.
+            Pace_Tokens => (if Host /= null and then Wk.Is_Paced (Host.all) then Wk.Pace_Tokens else 0),
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran

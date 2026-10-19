@@ -3619,6 +3619,74 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_File (Model);
    end A_Rerank_Pair_Is_Whole;
 
+   --  A model file's own sampling settings are what a run samples with,
+   --  but for each one the command line names: llama.cpp takes a file's
+   --  general.sampling.* so, and a qwen3 file that said temperature 0.6
+   --  was sampled at this program's 0.4.
+   procedure File_Sampling_Stands_Where_Unnamed
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Model_Runner.Sampling.Key_Set;
+      Image  : Model_Runner.Bytes.Byte_Array_Access;
+      Plain  : Model_Runner.Bytes.Byte_Array_Access;
+      Source : Fixed_Arguments;
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+
+      function Near (A, B : Model_Runner.Sampling.Real) return Boolean is (abs (A - B) < 1.0e-4);
+   begin
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--temperature");
+      Add (Source, "0.2");
+      Opt.Parse (Source, Item, Status);
+      Assert (E.Is_Ok (Status) and then Item.Sampling_Given (Model_Runner.Sampling.Temp)
+              and then not Item.Sampling_Given (Model_Runner.Sampling.Top_K),
+              "the sampling options named were not told from those left as they were");
+      Tiny_Model.Build (Image, Sampled => True);
+      Tiny_Model.Build (Plain);
+      declare
+         Held      : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
+         Held_Too  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Plain);
+         Parsed    : Model_Runner.GGUF.Containers.Container;
+         Parsed_Too : Model_Runner.GGUF.Containers.Container;
+         Ready     : Model_Runner.Llama.Model;
+         Ready_Too : Model_Runner.Llama.Model;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Held, Status => Status);
+         Model_Runner.Llama.Prepare (Ready, Parsed, Held, Status => Status);
+         Assert (E.Is_Ok (Status), "the sampled tiny model did not prepare");
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed_Too, Held_Too, Status => Status);
+         Model_Runner.Llama.Prepare (Ready_Too, Parsed_Too, Held_Too, Status => Status);
+         declare
+            Used  : constant Model_Runner.Sampling.Configuration := Opt.Sampling_For (Item, Ready);
+            Own   : constant Model_Runner.Sampling.Configuration := Opt.Sampling_For (Item, Ready_Too);
+            Plain_Default : constant Model_Runner.Sampling.Configuration := (others => <>);
+         begin
+            Assert (Near (Used.Temperature, 0.2) and then Used.Top_K = 20 and then Near (Used.Top_P, 0.95)
+                    and then Near (Used.Min_P, Plain_Default.Min_P),
+                    "the file's settings did not stand where none was named, or stood over one that was:"
+                    & Used.Top_K'Image & Used.Temperature'Image);
+            Assert (Own.Top_K = Plain_Default.Top_K and then Near (Own.Top_P, Plain_Default.Top_P),
+                    "a file that says nothing changed what is sampled with");
+            Assert (Model_Runner.Llama.File_Sampling_Keys (Ready)
+                      = Model_Runner.Sampling.Key_Set'
+                          [Model_Runner.Sampling.Temp | Model_Runner.Sampling.Top_K
+                             | Model_Runner.Sampling.Top_P => True,
+                           others => False]
+                    and then Model_Runner.Llama.File_Sampling_Keys (Ready_Too) = Model_Runner.Sampling.No_Keys
+                    and then Model_Runner.Sampling.GGUF_Key (Model_Runner.Sampling.Penalty_Last_N)
+                             = "general.sampling.penalty_last_n",
+                    "the settings a file says were not the ones it carries, or not under llama.cpp's names");
+         end;
+         Model_Runner.Llama.Close (Ready, Status);
+         Model_Runner.Llama.Close (Ready_Too, Status);
+      end;
+      Model_Runner.Bytes.Free (Image);
+      Model_Runner.Bytes.Free (Plain);
+   end File_Sampling_Stands_Where_Unnamed;
+
    --  Whether a write's own partial (Partials.Beside) is left beside Path.
    function Partial_Left (Path : String) return Boolean is
       Search : Ada.Directories.Search_Type;
@@ -15991,6 +16059,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, A_Rerank_Pair_Is_Whole'Access,
          "a reranker scores the query and a short document whole, alone as among others");
+      Register_Routine
+        (T, File_Sampling_Stands_Where_Unnamed'Access,
+         "a model file's own sampling settings stand where the command line names none");
       Register_Routine
         (T, Hub_Names_Stay_Inside'Access,
          "a file the hub lists is written only where its name stays inside the models directory");

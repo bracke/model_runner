@@ -344,7 +344,10 @@ declare, which tests bear on it, and what the last attempt left -- the
 previous answer and what its verification found wrong -- so a retry knows
 why it is one. And work is bounded in time: `scalar agents.max_seconds`, or
 `task.max_seconds.KIND`, else the task's lease, for the agent and its
-children together; past it the task is set aside, blocked, not failed.
+children together; past it the task is set aside, blocked, not failed. Set
+to `model`, the time is the model's pace instead: what 24,000 tokens take
+at the speed it generates at, measured as it works, so a slow model is
+given longer for the same work -- the lease at most.
 
 A task answers for itself: `/task audit TASK` says, from the records alone,
 which requirement and definition revisions applied, why it could start (kept

@@ -308,6 +308,15 @@ package Model_Runner.Agent is
    --  @return True where it was cut short; none is, unless a script says.
    function Cut_Off (Self : Reply_Script) return Boolean is (False);
 
+   --  Whether the reply just given was stopped by the run's time, as a
+   --  model's generation is at its deadline: what the loop does with a
+   --  reply the time ran out in, held to a script too.
+   --
+   --  @param Self The script.
+   --  @return True where the time ran out in it; none does, unless a
+   --    script says.
+   function Out_Of_Time (Self : Reply_Script) return Boolean is (False);
+
    --  Whether the script's replies are held to each generation's limit as
    --  a model's are: cut where they are longer, stopped at the limit, the
    --  rest given when the reply is asked for after -- so what the loop does
@@ -478,6 +487,10 @@ package Model_Runner.Agent is
    --  @param Script Replies to take in place of generating them, or null.
    --  @param Carry What an earlier run on this conversation held of its
    --    calls, carried on and added to; null for a run that starts afresh.
+   --  @param Pace_Tokens Where not 0, the run's time is what this many
+   --    tokens take at the speed its replies are generated at, measured as
+   --    it goes (Past_Pace), within Max_Seconds: a slow model is given
+   --    longer for the same work.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
@@ -513,6 +526,22 @@ package Model_Runner.Agent is
       Think_Budget : Natural := 0;
       Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
+      Pace_Tokens : Natural := 0;
       Result     : out Outcome);
+
+   --  Whether a run held to a pace is past it: what Pace tokens take at
+   --  the speed measured so far -- Generated tokens in Generating
+   --  nanoseconds of decoding -- against the time it has run. Never before
+   --  a speed is measured, from a few dozen tokens at least.
+   --
+   --  @param Elapsed Nanoseconds the run has taken.
+   --  @param Generated Tokens decoded so far.
+   --  @param Generating Nanoseconds spent decoding them.
+   --  @param Pace The tokens the run may take.
+   --  @return True where the run is past its pace.
+   function Past_Pace
+     (Elapsed, Generating : Model_Runner.Clocks.Nanoseconds;
+      Generated : Natural;
+      Pace      : Natural) return Boolean;
 
 end Model_Runner.Agent;

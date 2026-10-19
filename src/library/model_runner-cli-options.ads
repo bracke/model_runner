@@ -462,6 +462,11 @@ package Model_Runner.CLI.Options is
       Backend_Set  : Boolean := False;
 
       Sampling : Model_Runner.Sampling.Configuration;
+
+      --  The sampling settings named on the command line: those a model
+      --  file's own settings do not replace.
+      Sampling_Given : Model_Runner.Sampling.Key_Set := Model_Runner.Sampling.No_Keys;
+
       Seed     : Interfaces.Unsigned_64 := 0;
       Has_Seed : Boolean := False;
 
@@ -705,6 +710,20 @@ package Model_Runner.CLI.Options is
       Show_Tensors  : Boolean := False;
       Validate_Only : Boolean := False;
    end record;
+
+   --  What a run on a model samples with: the settings named on the
+   --  command line, and the model file's own for each that was not, as
+   --  llama.cpp takes them. One rule for run, an interactive turn and a
+   --  /work agent's.
+   --
+   --  @param Item The parsed command.
+   --  @param Prepared The model.
+   --  @return The configuration to sample with.
+   function Sampling_For
+     (Item : Command; Prepared : Model_Runner.Llama.Model) return Model_Runner.Sampling.Configuration
+   is (Model_Runner.Sampling.Taking
+         (Item.Sampling, Item.Sampling_Given,
+          Model_Runner.Llama.File_Sampling (Prepared), Model_Runner.Llama.File_Sampling_Keys (Prepared)));
 
    --  The tokens a turn of a conversation may write when --max-tokens
    --  names none: a reasoning model thinks before it answers, and at the

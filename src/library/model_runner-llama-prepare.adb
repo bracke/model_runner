@@ -173,6 +173,55 @@ begin
      (Item.Accounting, Mem.Metadata_Storage,
       Containers.Metadata_Bytes (Source));
 
+   --  What the file says it is sampled with: each setting read where it is
+   --  there and in range, and one that is not left as this program's own.
+   declare
+      package Sm renames Model_Runner.Sampling;
+      Found : Sm.Key_Set := Sm.No_Keys;
+      Taken : Sm.Configuration;
+
+      procedure Real_Key (Key : Sm.Model_Key; Low, High : Model_Runner.Numerics.Wide_Real;
+                          Into : in out Sm.Real) is
+         Value : Model_Runner.Numerics.Wide_Real;
+         Read  : E.Error_Info;
+      begin
+         if Containers.Has (Source, Sm.GGUF_Key (Key)) then
+            Containers.Get_Float (Source, Sm.GGUF_Key (Key), Low, High, Value, Read);
+            if E.Is_Ok (Read) then
+               Into := Sm.Real (Value);
+               Found (Key) := True;
+            end if;
+         end if;
+      end Real_Key;
+
+      procedure Whole_Key (Key : Sm.Model_Key; High : Long_Long_Integer; Into : in out Natural) is
+         Value : Long_Long_Integer;
+         Read  : E.Error_Info;
+      begin
+         if Containers.Has (Source, Sm.GGUF_Key (Key)) then
+            Containers.Get_Integer (Source, Sm.GGUF_Key (Key), 0, High, Value, Read);
+            if E.Is_Ok (Read) then
+               Into := Natural (Value);
+               Found (Key) := True;
+            end if;
+         end if;
+      end Whole_Key;
+   begin
+      Real_Key (Sm.Temp, 0.0, 10.0, Taken.Temperature);
+      Whole_Key (Sm.Top_K, 1_000_000, Taken.Top_K);
+      Real_Key (Sm.Top_P, 1.0e-6, 1.0, Taken.Top_P);
+      Real_Key (Sm.Min_P, 0.0, 1.0, Taken.Min_P);
+      Real_Key (Sm.XTC_Probability, 0.0, 1.0, Taken.XTC_Probability);
+      Real_Key (Sm.XTC_Threshold, 0.0, 1.0, Taken.XTC_Threshold);
+      Whole_Key (Sm.Penalty_Last_N, 1_000_000, Taken.Repeat_Window);
+      Real_Key (Sm.Penalty_Repeat, 1.0e-6, 10.0, Taken.Repeat_Penalty);
+      Whole_Key (Sm.Mirostat, 2, Taken.Mirostat);
+      Real_Key (Sm.Mirostat_Tau, 0.0, 100.0, Taken.Mirostat_Tau);
+      Real_Key (Sm.Mirostat_Eta, 0.0, 1.0, Taken.Mirostat_Eta);
+      Item.Sampled_With := Taken;
+      Item.Sampled_Keys := Found;
+   end;
+
    --  Chat template. An embedded template is untrusted data: it is compiled
    --  and validated here, before anything can be generated with it. A
    --  template outside the supported subset leaves the model usable in raw

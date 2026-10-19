@@ -1330,7 +1330,10 @@ package body Model_Runner.CLI.Work is
                   return (if Kind /= "" and then Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
                           then "task.max_seconds." & Kind
                           elsif R.Get (Config, "scalar.agents.max_seconds") /= "" then "agents.max_seconds"
-                          else "work.lease, as agents.max_seconds is not set");
+                          else "work.lease, as agents.max_seconds is not set")
+                    & (if W.Paced (Store, To_String (Chosen))
+                       then ", held to" & Natural'Image (W.Pace_Tokens) & " tokens at the model's own speed"
+                       else "");
                end;
             end Time_Source;
          begin

@@ -151,6 +151,7 @@ is
    type Settings is record
       Config_Revision  : Natural := 0;
       Max_Seconds      : Natural := 0;
+      Paced            : Boolean := False;
       Max_Steps        : Natural := 24;
       Max_Tool_Calls   : Natural := 0;
       Token_Budget     : Natural := 0;
@@ -182,6 +183,7 @@ is
       Configurations.Read (Item, Config, Read);
       Result.Config_Revision := (if E.Is_Ok (Read) then Records.Revision (Config) else 0);
       Result.Max_Seconds := Time_Allowed (Item, Task_Id);
+      Result.Paced := Paced (Item, Task_Id);
       Result.Max_Steps := Number_Of (Policy ("max_steps", "agents.max_steps"), 24);
       Result.Max_Tool_Calls := Number_Of (Policy ("max_tool_calls", "agents.max_tool_calls"), 0);
       Result.Token_Budget := Number_Of (Tasks.Kind_Policy (Item, Kind, "token_budget"), 0);
@@ -809,6 +811,7 @@ begin
             Seconds : constant Natural := Frozen.Max_Seconds;
          begin
             Host.Bounded := Seconds > 0;
+            Host.Paced := Frozen.Paced;
             Host.Deadline := Ada.Calendar.Clock + Duration (Seconds);
          end;
          Host.Max_Calls := Frozen.Max_Tool_Calls;
@@ -1125,9 +1128,15 @@ begin
       Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work ran out of time");
       --  Which limit it was, as the run resolved it when it started, and
       --  how it is raised: a retry alone runs out the same way.
-      Conclude ("blocked", "its work ran out of time:" & Natural'Image (Frozen.Max_Seconds)
-                & " s, as " & To_String (Frozen.Seconds_From) & " allows; /reconfigure "
-                & To_String (Frozen.Seconds_From) & "=N gives it longer",
+      Conclude ("blocked",
+                (if Frozen.Paced
+                 then "its work ran out of time: what" & Natural'Image (Pace_Tokens)
+                      & " tokens take at the speed its model generated at, as " & To_String (Frozen.Seconds_From)
+                      & "=model allows, and the lease at most; /reconfigure " & To_String (Frozen.Seconds_From)
+                      & "=N gives it a time of its own"
+                 else "its work ran out of time:" & Natural'Image (Frozen.Max_Seconds)
+                      & " s, as " & To_String (Frozen.Seconds_From) & " allows; /reconfigure "
+                      & To_String (Frozen.Seconds_From) & "=N gives it longer"),
                 "failed");
       return;
    elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Agent_Failed then

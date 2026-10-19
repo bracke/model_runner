@@ -3619,10 +3619,9 @@ begin
             --  --carry on: a task's later runs keep its project's state.
             Carry     => Option ("--carry", "off") = "on",
             Max_Seconds =>
-              (if Option ("--max-seconds", "1200")'Length in 1 .. 5
-                 and then (for all C of Option ("--max-seconds", "1200") => C in '0' .. '9')
-                 and then Natural'Value (Option ("--max-seconds", "1200")) >= 1
-               then Natural'Value (Option ("--max-seconds", "1200")) else 1200),
+              (if Option ("--max-seconds", "0")'Length in 1 .. 5
+                 and then (for all C of Option ("--max-seconds", "0") => C in '0' .. '9')
+               then Natural'Value (Option ("--max-seconds", "0")) else 0),
             Context_Size =>
               (if Option ("--context-size", "0")'Length in 1 .. 7
                  and then (for all C of Option ("--context-size", "0") => C in '0' .. '9')

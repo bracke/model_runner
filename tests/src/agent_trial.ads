@@ -39,7 +39,8 @@ package Agent_Trial is
    --    second run can be told what the first found, which a project made
    --    afresh each time never is.
    --  @param Max_Seconds How long a task's work may take (--max-seconds):
-   --    agents.max_seconds in the project, and the wait for it past that.
+   --    agents.max_seconds in the project, and the wait for it past that;
+   --    0, unless said, for the model's pace (agents.max_seconds=model).
    --  @param Context_Size The session's context, in tokens (--context-size);
    --    0, unless said, for the session's own, as a person's session has
    --    it. Kept with each run in the history (context: N, or own); runs
@@ -59,7 +60,7 @@ package Agent_Trial is
       Apart     : Boolean := False;
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
-      Max_Seconds : Positive := 1200;
+      Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False);
 

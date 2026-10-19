@@ -723,9 +723,61 @@ package body Model_Runner.Conversation is
       end Answer_Start;
 
       Answer_At : constant Positive := Answer_Start;
+
+      --  The tagged calls a thought opens with, before any of its reasoning:
+      --  no draft, which reasoning's prose would hold, but what was done.
+      --  qwen3-8b opened a thought with its edit, began another thought,
+      --  and called run_checks after it; the edit was dropped, and the
+      --  model went on as if it had been made. Their text, or none.
+      function Leading_Calls return String is
+         Open_Tag  : constant String := "<tool_call>";
+         Close_Tag : constant String := "</tool_call>";
+         At_It     : Positive := Reply'First;
+         From      : Natural := 0;
+         Upto      : Natural := 0;
+
+         procedure Skip_Space is
+         begin
+            while At_It <= Reply'Last and then Reply (At_It) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+               At_It := At_It + 1;
+            end loop;
+         end Skip_Space;
+
+         function Here (Mark : String) return Boolean
+         is (Reply'Last - At_It + 1 >= Mark'Length and then Reply (At_It .. At_It + Mark'Length - 1) = Mark);
+      begin
+         if Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Tool_Call_JSON)
+           and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Open_JSON)
+           and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Qwen_XML)
+         then
+            return "";
+         end if;
+         Skip_Space;
+         if not Here ("<think>") then
+            return "";
+         end if;
+         At_It := At_It + 7;
+         loop
+            Skip_Space;
+            exit when not Here (Open_Tag);
+            declare
+               Shut : constant Natural :=
+                 Ada.Strings.Fixed.Index (Reply (At_It .. Reply'Last), Close_Tag);
+            begin
+               exit when Shut = 0;
+               if From = 0 then
+                  From := At_It;
+               end if;
+               Upto := Shut + Close_Tag'Length - 1;
+               At_It := Upto + 1;
+            end;
+         end loop;
+         --  Where they run into the answer, the answer reads them already.
+         return (if From = 0 or else Upto >= Answer_At then "" else Reply (From .. Upto) & ASCII.LF);
+      end Leading_Calls;
    begin
       Model_Runner.Tools.Read_Calls
-        (Asked, Reply (Answer_At .. Reply'Last), Reading,
+        (Asked, Leading_Calls & Reply (Answer_At .. Reply'Last), Reading,
          Syntax => Syntax, Offered => Offered);
 
       if E.Is_Error (Reading)

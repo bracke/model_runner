@@ -935,7 +935,7 @@ begin
             end if;
          end;
 
-         Request.Sampling := Item.Sampling;
+         Request.Sampling := Opt.Sampling_For (Item, Prepared);
          --  An agent's reply holds its reasoning and its call: a reasoning
          --  model spent the plain run's 256 tokens reasoning and was cut off
          --  inside the call it was writing. As every turn of a conversation
@@ -1628,7 +1628,7 @@ begin
                                   Model_Runner.Backend.Backend_Device),
                   Threads   => Model_Runner.Platform.Core_Count);
             end;
-            Request.Sampling := Item.Sampling;
+            Request.Sampling := Opt.Sampling_For (Item, Prepared);
             Request.Seed := Item.Seed;
             Request.Has_Seed := Item.Has_Seed;
             --  A backend that does not batch is asked for one token at

@@ -503,6 +503,9 @@ package body Model_Runner.CLI.Interactive is
       --  printed as written.
       procedure Show_Settings is
          Default : constant Model_Runner.Sampling.Configuration := (others => <>);
+         --  As a turn samples: the model file's own settings where none
+         --  was named.
+         Used    : constant Model_Runner.Sampling.Configuration := Opt.Sampling_For (Item, Prepared);
          use type Model_Runner.Sampling.Real;
 
          --  A value the session changed from the default stands out.
@@ -514,20 +517,20 @@ package body Model_Runner.CLI.Interactive is
          Pres.Put_Heading (Screen, "cli.interactive.settings.choosing", Pres.Diagnostic);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.temperature",
-            T.Image (Long_Float (Item.Sampling.Temperature), 3), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Temperature /= Default.Temperature));
+            T.Image (Long_Float (Used.Temperature), 3), Pres.Diagnostic,
+            Tone_Of (Used.Temperature /= Default.Temperature));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_k",
-            T.Image (Long_Long_Integer (Item.Sampling.Top_K)), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Top_K /= Default.Top_K));
+            T.Image (Long_Long_Integer (Used.Top_K)), Pres.Diagnostic,
+            Tone_Of (Used.Top_K /= Default.Top_K));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.top_p",
-            T.Image (Long_Float (Item.Sampling.Top_P), 3), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Top_P /= Default.Top_P));
+            T.Image (Long_Float (Used.Top_P), 3), Pres.Diagnostic,
+            Tone_Of (Used.Top_P /= Default.Top_P));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.min_p",
-            T.Image (Long_Float (Item.Sampling.Min_P), 3), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Min_P /= Default.Min_P));
+            T.Image (Long_Float (Used.Min_P), 3), Pres.Diagnostic,
+            Tone_Of (Used.Min_P /= Default.Min_P));
          if Item.Has_Seed then
             Pres.Put_Field
               (Screen, "cli.interactive.setting.seed",
@@ -536,12 +539,12 @@ package body Model_Runner.CLI.Interactive is
          Pres.Put_Heading (Screen, "cli.interactive.settings.repeating", Pres.Diagnostic, Gap => True);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.repeat_penalty",
-            T.Image (Long_Float (Item.Sampling.Repeat_Penalty), 3), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Repeat_Penalty /= Default.Repeat_Penalty));
+            T.Image (Long_Float (Used.Repeat_Penalty), 3), Pres.Diagnostic,
+            Tone_Of (Used.Repeat_Penalty /= Default.Repeat_Penalty));
          Pres.Put_Field
            (Screen, "cli.interactive.setting.repeat_window",
-            T.Image (Long_Long_Integer (Item.Sampling.Repeat_Window)), Pres.Diagnostic,
-            Tone_Of (Item.Sampling.Repeat_Window /= Default.Repeat_Window));
+            T.Image (Long_Long_Integer (Used.Repeat_Window)), Pres.Diagnostic,
+            Tone_Of (Used.Repeat_Window /= Default.Repeat_Window));
          Pres.Put_Heading (Screen, "cli.interactive.settings.length", Pres.Diagnostic, Gap => True);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.max_tokens",
@@ -1142,7 +1145,7 @@ package body Model_Runner.CLI.Interactive is
          --  The room a turn of a conversation is given; see Reply_Tokens.
          --  The plain run's 256 cut a reasoning model off mid-thought.
          Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
-         Request.Sampling := Item.Sampling;
+         Request.Sampling := Opt.Sampling_For (Item, Prepared);
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
          --  What the backend can be asked for, not what was asked. The

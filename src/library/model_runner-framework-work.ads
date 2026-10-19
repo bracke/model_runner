@@ -62,12 +62,26 @@ package Model_Runner.Framework.Work is
 
    --  How long an agent may work on a task: its kind's scalar
    --  task.max_seconds.KIND, else agents.max_seconds, else the lease's
-   --  length.
+   --  length -- the lease's too where the setting is model, which bounds
+   --  the work by the model's pace within it (Paced).
    --
    --  @param Item The store.
    --  @param Task_Id The task.
    --  @return The seconds.
    function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural;
+
+   --  The tokens a task's work may take, at the speed its model generates
+   --  at, where its time is set to model: a slow model is given longer for
+   --  the same work, measured as it works, not guessed.
+   Pace_Tokens : constant := 24_000;
+
+   --  Whether a task's time is its model's pace: its kind's
+   --  task.max_seconds.KIND, else agents.max_seconds, set to model.
+   --
+   --  @param Item The store.
+   --  @param Task_Id The task.
+   --  @return True where it is.
+   function Paced (Item : Stores.Store; Task_Id : String) return Boolean;
 
    --  How many steps an agent may take on a task: its kind's scalar
    --  task.max_steps.KIND, else agents.max_steps, else 24.
@@ -404,6 +418,13 @@ package Model_Runner.Framework.Work is
    --  @param Host The host.
    --  @return The time left, or 0.0 for no bound.
    function Time_Left (Host : Child_Host) return Duration;
+
+   --  Whether the agents on the task are held to their model's pace
+   --  within that time: Pace_Tokens at the speed they generate at.
+   --
+   --  @param Host The host.
+   --  @return True where the task's time is set to model.
+   function Is_Paced (Host : Child_Host) return Boolean;
 
    --  The verification profile the task is checked with.
    --
@@ -981,6 +1002,9 @@ private
       --  When the work must be over, where it is bounded.
       Bounded     : Boolean := False;
       Deadline    : Ada.Calendar.Time := Ada.Calendar.Clock;
+
+      --  Whether, within that, the work is held to its model's pace.
+      Paced       : Boolean := False;
 
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;

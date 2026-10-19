@@ -3243,4 +3243,73 @@ package body Model_Runner.Sampling is
       Status := E.Success;
    end Sample_Residual;
 
+   --------------
+   -- GGUF_Key --
+   --------------
+
+   function GGUF_Key (Key : Model_Key) return String
+   is ("general.sampling."
+       & (case Key is
+            when Temp            => "temp",
+            when Top_K           => "top_k",
+            when Top_P           => "top_p",
+            when Min_P           => "min_p",
+            when XTC_Probability => "xtc_probability",
+            when XTC_Threshold   => "xtc_threshold",
+            when Penalty_Last_N  => "penalty_last_n",
+            when Penalty_Repeat  => "penalty_repeat",
+            when Mirostat        => "mirostat",
+            when Mirostat_Tau    => "mirostat_tau",
+            when Mirostat_Eta    => "mirostat_eta"));
+
+   ------------
+   -- Taking --
+   ------------
+
+   function Taking
+     (Asked : Configuration;
+      Given : Key_Set;
+      File  : Configuration;
+      Found : Key_Set) return Configuration
+   is
+      Result : Configuration := Asked;
+
+      function Takes (Key : Model_Key) return Boolean is (Found (Key) and then not Given (Key));
+   begin
+      if Takes (Temp) then
+         Result.Temperature := File.Temperature;
+      end if;
+      if Takes (Top_K) then
+         Result.Top_K := File.Top_K;
+      end if;
+      if Takes (Top_P) then
+         Result.Top_P := File.Top_P;
+      end if;
+      if Takes (Min_P) then
+         Result.Min_P := File.Min_P;
+      end if;
+      if Takes (XTC_Probability) then
+         Result.XTC_Probability := File.XTC_Probability;
+      end if;
+      if Takes (XTC_Threshold) then
+         Result.XTC_Threshold := File.XTC_Threshold;
+      end if;
+      if Takes (Penalty_Last_N) then
+         Result.Repeat_Window := File.Repeat_Window;
+      end if;
+      if Takes (Penalty_Repeat) then
+         Result.Repeat_Penalty := File.Repeat_Penalty;
+      end if;
+      if Takes (Mirostat) then
+         Result.Mirostat := File.Mirostat;
+      end if;
+      if Takes (Mirostat_Tau) then
+         Result.Mirostat_Tau := File.Mirostat_Tau;
+      end if;
+      if Takes (Mirostat_Eta) then
+         Result.Mirostat_Eta := File.Mirostat_Eta;
+      end if;
+      return Result;
+   end Taking;
+
 end Model_Runner.Sampling;

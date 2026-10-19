@@ -217,10 +217,15 @@ package body Agent_Trial is
    --  The work's own bound, inside the half hour the trial waits for it:
    --  past that a run read "did not end", and nothing said why; ended by
    --  the harness, it says.
-   Seconds_Bound : Positive := 1200;
+   --  0 where the trial names none: the model's pace, what so many tokens
+   --  take at the speed it generates at -- a 12 t/s model ran out of a
+   --  ten-minute bound a 40 t/s one did not need.
+   Seconds_Bound : Natural := 0;
 
    function Time_Bound return String
-   is (" scalar.agents.max_seconds=" & Ada.Strings.Fixed.Trim (Positive'Image (Seconds_Bound), Ada.Strings.Both));
+   is (" scalar.agents.max_seconds="
+       & (if Seconds_Bound = 0 then "model"
+          else Ada.Strings.Fixed.Trim (Natural'Image (Seconds_Bound), Ada.Strings.Both)));
 
    --  Where the work is written: in a workspace of its own, taken in by
    --  the harness once its checks pass there, where the trial asks it.
@@ -384,7 +389,7 @@ package body Agent_Trial is
       Apart     : Boolean := False;
       Knowledge : Boolean := True;
       Carry     : Boolean := False;
-      Max_Seconds : Positive := 1200;
+      Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False)
    is
@@ -860,7 +865,9 @@ package body Agent_Trial is
                                     Send ("/accept " & To_String (Task_Id));
                                     if Wait_For ("ready", 30.0) then
                                        Send ("/work " & To_String (Task_Id));
-                                       Worked := Wait_For ("How it came out", Duration (Max_Seconds) + 600.0);
+                                       Worked := Wait_For ("How it came out",
+                                                          Duration (if Max_Seconds = 0 then 3_600 else Max_Seconds)
+                                                          + 600.0);
                                        declare
                                           Ignored : constant Boolean := Wait_For ("> ", 20.0);
                                        begin

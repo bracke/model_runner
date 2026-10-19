@@ -92,7 +92,8 @@ package body Tiny_Model is
       Add_End_Token   : Boolean := False;
       Add_Sep_Token   : Integer := -1;
       Unit_Ssm_Norms  : Boolean := False;
-      Rare_Form       : Boolean := False)
+      Rare_Form       : Boolean := False;
+      Sampled         : Boolean := False)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -1070,6 +1071,13 @@ package body Tiny_Model is
          Fixtures.Add_U32
            (Builder, Prefix & ".pooling_type",
             Interfaces.Unsigned_32 (Pooling_Type));
+      end if;
+
+      --  The settings a file may say it is sampled with, qwen3's.
+      if Sampled then
+         Fixtures.Add_F32 (Builder, "general.sampling.temp", 0.6);
+         Fixtures.Add_I32 (Builder, "general.sampling.top_k", 20);
+         Fixtures.Add_F32 (Builder, "general.sampling.top_p", 0.95);
       end if;
 
       --  A reranker's own prompt for a pair, where asked.

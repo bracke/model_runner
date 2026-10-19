@@ -147,6 +147,7 @@ package body Model_Runner.Agent is
       Think_Budget : Natural := 0;
       Script     : Script_Reference := null;
       Carry      : Memory_Reference := null;
+      Pace_Tokens : Natural := 0;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -213,6 +214,11 @@ package body Model_Runner.Agent is
       --  at the start; a monotonic clock never goes back, so the elapsed
       --  time below is never negative.
       Timing    : constant Boolean := Time /= null and then Max_Seconds > 0.0;
+
+      --  The tokens decoded so far and the time decoding them took: the
+      --  speed a run held to a pace is measured by.
+      Paced_Tokens : Natural := 0;
+      Paced_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
       Started   : constant Model_Runner.Clocks.Nanoseconds :=
         (if Timing then Model_Runner.Clocks.Read (Time) else 0);
       Budget_Ns : constant Model_Runner.Clocks.Nanoseconds :=
@@ -413,6 +419,13 @@ package body Model_Runner.Agent is
             Result.Reason := Timed_Out;
             exit Step_Loop;
          end if;
+         --  And the pace: what Pace_Tokens take at the speed it decodes at.
+         if Timing
+           and then Past_Pace (Model_Runner.Clocks.Read (Time) - Started, Paced_Ns, Paced_Tokens, Pace_Tokens)
+         then
+            Result.Reason := Timed_Out;
+            exit Step_Loop;
+         end if;
 
          declare
             Rendered : Text_Access := null;
@@ -520,7 +533,8 @@ package body Model_Runner.Agent is
                   Script_Rest := U.To_Unbounded_String (Rest (Rest'First + Taken'Length .. Rest'Last));
                   Model_Runner.Output.Emit (Shown, Taken, Shown_Closed);
                   Last_Result :=
-                    (Reason           => (if Rest'Length > Most or else Script.Cut_Off then Gen.Maximum_Tokens
+                    (Reason           => (if Script.Out_Of_Time then Gen.Time_Limit
+                                          elsif Rest'Length > Most or else Script.Cut_Off then Gen.Maximum_Tokens
                                           else Gen.End_Of_Sequence),
                      Generated_Tokens => Natural'Max (1, (Taken'Length + 3) / 4),
                      Text             => new Model_Runner.Bytes.Byte_Array'
@@ -542,7 +556,9 @@ package body Model_Runner.Agent is
                      Said : constant String := Script.Next_Reply;
                   begin
                      Last_Result :=
-                       (Reason           => (if Script.Cut_Off then Gen.Maximum_Tokens else Gen.End_Of_Sequence),
+                       (Reason           => (if Script.Out_Of_Time then Gen.Time_Limit
+                                             elsif Script.Cut_Off then Gen.Maximum_Tokens
+                                             else Gen.End_Of_Sequence),
                         Generated_Tokens => Natural'Max (1, Said'Length / 4),
                         Text             => new Model_Runner.Bytes.Byte_Array'
                                               (Model_Runner.Bytes.To_Bytes (Said)),
@@ -783,6 +799,10 @@ package body Model_Runner.Agent is
          Result.Steps := Result.Steps + 1;
          Result.Generated_Tokens :=
            Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
+         --  The speed, from the generation this reply ended with: a thought
+         --  closed at its budget took its own, which is not kept.
+         Paced_Tokens := Paced_Tokens + Last_Result.Generated_Tokens;
+         Paced_Ns := Paced_Ns + Last_Result.Decode_Ns;
          Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
 
          --  A call written so that it could not be read: the model is told,
@@ -1413,7 +1433,24 @@ package body Model_Runner.Agent is
          Result.Error := E.Unexpected (Failure, "agent");
    end Run;
 
-------------------
+   ---------------
+   -- Past_Pace --
+   ---------------
+
+   function Past_Pace
+     (Elapsed, Generating : Model_Runner.Clocks.Nanoseconds;
+      Generated : Natural;
+      Pace      : Natural) return Boolean
+   is
+      --  Fewer than this and the speed is a reply's start-up, not its rate.
+      Least : constant := 48;
+   begin
+      return Pace > 0 and then Generated >= Least and then Generating > 0
+        and then Long_Float (Elapsed)
+                 > Long_Float (Generating) / Long_Float (Generated) * Long_Float (Pace);
+   end Past_Pace;
+
+   ------------------
    -- Thought_Open --
    ------------------
 

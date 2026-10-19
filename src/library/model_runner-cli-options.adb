@@ -1979,6 +1979,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--temperature" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Temp) := True;
                      Real_Value (Flag_Temperature, Result.Sampling.Temperature,
                                  Good);
                      if not Good then
@@ -1986,6 +1987,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--top-k" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Top_K) := True;
                      Natural_Value (Flag_Top_K, 0, 1_000_000,
                                     Result.Sampling.Top_K, Good);
                      if not Good then
@@ -1993,12 +1995,14 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--top-p" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Top_P) := True;
                      Real_Value (Flag_Top_P, Result.Sampling.Top_P, Good);
                      if not Good then
                         return;
                      end if;
 
                   elsif Name = "--min-p" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Min_P) := True;
                      Real_Value (Flag_Min_P, Result.Sampling.Min_P, Good);
                      if not Good then
                         return;
@@ -2025,6 +2029,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--xtc-probability" then
+                     Result.Sampling_Given (Model_Runner.Sampling.XTC_Probability) := True;
                      Real_Value (Flag_XTC_Probability,
                                  Result.Sampling.XTC_Probability, Good);
                      if not Good then
@@ -2032,6 +2037,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--xtc-threshold" then
+                     Result.Sampling_Given (Model_Runner.Sampling.XTC_Threshold) := True;
                      Real_Value (Flag_XTC_Threshold,
                                  Result.Sampling.XTC_Threshold, Good);
                      if not Good then
@@ -2060,6 +2066,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--mirostat" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Mirostat) := True;
                      Natural_Value (Flag_Mirostat, 0, 2,
                                     Result.Sampling.Mirostat, Good);
                      if not Good then
@@ -2067,6 +2074,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--mirostat-tau" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Mirostat_Tau) := True;
                      Real_Value (Flag_Mirostat_Tau,
                                  Result.Sampling.Mirostat_Tau, Good);
                      if not Good then
@@ -2074,6 +2082,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--mirostat-eta" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Mirostat_Eta) := True;
                      Real_Value (Flag_Mirostat_Eta,
                                  Result.Sampling.Mirostat_Eta, Good);
                      if not Good then
@@ -2139,6 +2148,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--repeat-penalty" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Penalty_Repeat) := True;
                      Real_Value (Flag_Repeat_Penalty,
                                  Result.Sampling.Repeat_Penalty, Good);
                      if not Good then
@@ -2160,6 +2170,7 @@ package body Model_Runner.CLI.Options is
                      end if;
 
                   elsif Name = "--repeat-window" then
+                     Result.Sampling_Given (Model_Runner.Sampling.Penalty_Last_N) := True;
                      Natural_Value (Flag_Repeat_Window, 0, 1_000_000,
                                     Result.Sampling.Repeat_Window, Good);
                      if not Good then

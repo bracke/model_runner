@@ -18,6 +18,7 @@ with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Shares;
 with Model_Runner.Progress;
+with Model_Runner.Sampling;
 with Model_Runner.Templates;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
@@ -1379,6 +1380,20 @@ package Model_Runner.Llama is
    --  @param Item Prepared model.
    --  @return True when Template_Format was recognised, not named.
    function Template_Stood_In (Item : Model) return Boolean;
+
+   --  The sampling settings the file says it is run with (general.sampling.*),
+   --  each read and in range; this program's own for the rest.
+   --
+   --  @param Item A prepared model.
+   --  @return The settings.
+   function File_Sampling (Item : Model) return Model_Runner.Sampling.Configuration;
+
+   --  Which of File_Sampling's settings the file says: none for a file
+   --  that says none.
+   --
+   --  @param Item A prepared model.
+   --  @return The set of them.
+   function File_Sampling_Keys (Item : Model) return Model_Runner.Sampling.Key_Set;
 
    --  The compiled chat template.
    --
@@ -3083,6 +3098,10 @@ private
       Chat_Format_Name : String (1 .. 16) := [others => ' '];
       Chat_Format_Used : Natural := 0;
       Chat_Stood_In    : Boolean := False;
+
+      --  What the file says it is sampled with, and which settings those are.
+      Sampled_With     : Model_Runner.Sampling.Configuration;
+      Sampled_Keys     : Model_Runner.Sampling.Key_Set := Model_Runner.Sampling.No_Keys;
       Accounting  : Model_Runner.Memory.Account;
 
       --  What the backend this model was prepared for can read. Every tensor

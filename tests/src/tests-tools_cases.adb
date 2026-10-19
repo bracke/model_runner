@@ -3675,6 +3675,23 @@ package body Tests.Tools_Cases is
          Assert (Model_Runner.Conversation.Call_Count
                    (Talk, Model_Runner.Conversation.Length (Talk)) = 0,
                  "a bare object in an unclosed thought was taken for a call");
+         --  A thought that opens with a call, before any reasoning, made
+         --  it: qwen3-8b began a second thought after its edit and called
+         --  run_checks, and the edit was dropped.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>" & LF & "<tool_call>" & LF
+                  & "{""name"": ""edit"", ""arguments"": {""count"": 3}}" & LF
+                  & "</tool_call>" & LF & "<think>Now check it.</think>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 4}}</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 2
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Conversation.Call_Arguments
+                               (Talk, Model_Runner.Conversation.Length (Talk), 1), "3") > 0,
+                 "a call a thought opened with was dropped, or not taken first");
          Model_Runner.Conversation.Append_Reply
            (Talk, "  <think>I could call "
                   & "<tool_call>{""name"": ""edit"", ""arguments"": "

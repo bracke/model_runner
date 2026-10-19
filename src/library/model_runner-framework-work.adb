@@ -1558,6 +1558,8 @@ package body Model_Runner.Framework.Work is
       return Host.Bounded and then Ada.Calendar.Clock >= Host.Deadline;
    end Time_Is_Up;
 
+   function Is_Paced (Host : Child_Host) return Boolean is (Host.Paced);
+
    function Time_Left (Host : Child_Host) return Duration is
       use type Ada.Calendar.Time;
    begin
@@ -1873,6 +1875,14 @@ package body Model_Runner.Framework.Work is
             Lease_Seconds (Item));
       end;
    end Time_Allowed;
+
+   function Paced (Item : Stores.Store; Task_Id : String) return Boolean is
+      Kind : constant String := Kind_Of_Task (Item, Task_Id);
+   begin
+      return (if Tasks.Kind_Policy (Item, Kind, "max_seconds") /= ""
+              then Tasks.Kind_Policy (Item, Kind, "max_seconds")
+              else Scalar (Item, "agents.max_seconds")) = "model";
+   end Paced;
 
    -----------
    -- Spend --

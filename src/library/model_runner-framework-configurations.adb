@@ -2095,6 +2095,8 @@ package body Model_Runner.Framework.Configurations is
             --  A limit for one kind of task is a count as the whole one is.
             if (Starts (Name, "scalar.task.max_seconds.") or else Starts (Name, "scalar.task.max_tool_calls.")
                 or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.token_budget."))
+              --  A time may be the model's pace instead of seconds.
+              and then not (Starts (Name, "scalar.task.max_seconds.") and then Value = "model")
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
             then
@@ -2245,6 +2247,7 @@ package body Model_Runner.Framework.Configurations is
                 or else Name in "scalar.agents.token_budget" | "scalar.execution.output_limit"
                               | "scalar.execution.process_slots" | "scalar.execution.timeout"
                               | "scalar.work.lease" | "scalar.work.max_workspaces")
+              and then not (Name = "scalar.agents.max_seconds" and then Value = "model")
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
             then
@@ -2336,7 +2339,8 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "scalar.agents.max_tool_calls" then
          return "how many tool calls an agent may make: a count, 0 for no limit";
       elsif Name = "scalar.agents.max_seconds" then
-         return "how long an agent may work on a task: seconds";
+         return "how long an agent may work on a task: seconds, or model -- what 24000 tokens take at the speed"
+           & " the model generates at, measured as it works";
       elsif Name = "scalar.agents.on_child_failure" then
          return "what a failed helper does to its task: block, fail or continue";
       elsif Name = "scalar.agents.token_budget" then

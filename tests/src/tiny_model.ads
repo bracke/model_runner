@@ -446,6 +446,8 @@ package Tiny_Model is
    --    one width the device keeps a state in registers for.
    --  @param Template The chat template the file carries, or empty for the
    --    fixture's own small one.
+   --  @param Sampled Whether the file says it is sampled with qwen3's own
+   --    settings (general.sampling.temp 0.6, top_k 20, top_p 0.95).
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -486,6 +488,7 @@ package Tiny_Model is
       Add_End_Token   : Boolean := False;
       Add_Sep_Token   : Integer := -1;
       Unit_Ssm_Norms  : Boolean := False;
-      Rare_Form       : Boolean := False);
+      Rare_Form       : Boolean := False;
+      Sampled         : Boolean := False);
 
 end Tiny_Model;

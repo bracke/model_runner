@@ -255,6 +255,38 @@ package Model_Runner.Sampling is
      (Item   : Configuration;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  The settings a model file may say it is sampled with, as llama.cpp
+   --  writes them (general.sampling.*): its maker's, from the model's
+   --  generation configuration.
+   type Model_Key is
+     (Temp, Top_K, Top_P, Min_P, XTC_Probability, XTC_Threshold,
+      Penalty_Last_N, Penalty_Repeat, Mirostat, Mirostat_Tau, Mirostat_Eta);
+
+   --  Which of them: a file's that it says, or a caller's that it named.
+   type Key_Set is array (Model_Key) of Boolean;
+   No_Keys : constant Key_Set := [others => False];
+
+   --  A setting's key in a model file.
+   --
+   --  @param Key The setting.
+   --  @return Its name, as general.sampling.temp.
+   function GGUF_Key (Key : Model_Key) return String;
+
+   --  What a run samples with: what the caller named, and the file's
+   --  setting for each it did not, where the file says one -- as
+   --  llama.cpp takes them. The rest stay this program's defaults.
+   --
+   --  @param Asked What the caller's configuration holds.
+   --  @param Given The settings the caller named.
+   --  @param File The file's settings.
+   --  @param Found The settings the file says.
+   --  @return The configuration to sample with.
+   function Taking
+     (Asked : Configuration;
+      Given : Key_Set;
+      File  : Configuration;
+      Found : Key_Set) return Configuration;
+
    --  Sampling state: the workspace, the generator and the token history.
    type Sampler is tagged limited private;
 

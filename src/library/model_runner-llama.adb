@@ -7718,6 +7718,16 @@ package body Model_Runner.Llama is
    function Template_Stood_In (Item : Model) return Boolean
    is (Item.Chat_Stood_In);
 
+   -------------------
+   -- File_Sampling --
+   -------------------
+
+   function File_Sampling (Item : Model) return Model_Runner.Sampling.Configuration
+   is (Item.Sampled_With);
+
+   function File_Sampling_Keys (Item : Model) return Model_Runner.Sampling.Key_Set
+   is (Item.Sampled_Keys);
+
    --------------
    -- Template --
    --------------
