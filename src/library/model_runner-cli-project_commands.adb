@@ -638,7 +638,7 @@ package body Model_Runner.CLI.Project_Commands is
       Asked_To_Fix    : Boolean := False;
       --  What the loop holds of its calls, carried from round to round.
       Rounds_Memory   : aliased Model_Runner.Agent.Recall.Carried;
-      --  And its pace, the task's across them, where its time is paced.
+      --  And its pace where there is no task to keep it.
       Rounds_Pace     : aliased Model_Runner.Agent.Pace_State;
       Asked_To_Mend   : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
@@ -751,7 +751,8 @@ package body Model_Runner.CLI.Project_Commands is
             --  Where the task's time is its model's: so many tokens at the
             --  speed this session generates at.
             Pace_Tokens => (if Host /= null and then Wk.Is_Paced (Host.all) then Wk.Pace_Tokens else 0),
-            Pace        => Rounds_Pace'Unchecked_Access,
+            --  The task's, its root's and its helpers' together.
+            Pace        => (if Host /= null then Wk.Pace_Of (Host.all) else Rounds_Pace'Unchecked_Access),
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran
@@ -793,7 +794,11 @@ package body Model_Runner.CLI.Project_Commands is
                Hosted          => Host /= null,
                Checks_Failing  => Host /= null and then Host.Checks_Failing,
                May_Check       => Host /= null and then Host.May_Check (Host.Task_Profile),
-               Time_Left       => Host /= null and then Host.Time_Left > 0.0,
+               --  Time_Left gives a second at least while bounded: whether
+               --  the time is up, or the pace spent, is asked.
+               Time_Left       => Host /= null and then not Wk.Time_Is_Up (Host.all)
+                                  and then not Wk.Pace_Spent
+                                                 (Host.all, Model_Runner.Clocks.Read (Clock'Unchecked_Access)),
                Check_Runs      => Runner.Check_Runs,
                Calls           => Calls,
                Wrote           => Watcher.Wrote,
@@ -1354,8 +1359,10 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       --  Past the work's time, nothing more is done: the call is refused,
       --  and the run ends as out of time.
+      --  Refused, not failed: the call was not wrong, its time was up.
       if Self.Host /= null and then Wk.Time_Is_Up (Self.Host.all) then
-         Outcome.Answer := Tr.Failed;
+         Outcome.Answer := Tr.Refused;
+         Outcome.Refusal := Tr.Policy;
          Put ("error: the work's time is up; no further call is run");
          return;
       end if;
@@ -1574,10 +1581,15 @@ package body Model_Runner.CLI.Project_Commands is
                      Wk.Lesson_Checks (Self.Host.all, Lessons);
                      if Length (Lessons) > 0 then
                         declare
-                           Both : constant String := Result (Result'First .. Last) & ASCII.LF & To_String (Lessons);
+                           --  The write's own answer whole, and as much of
+                           --  what the checks said as the room leaves: the
+                           --  end of their logs goes first.
+                           Answer : constant String :=
+                             (if Last >= Result'First then Result (Result'First .. Last) & ASCII.LF else "");
+                           Said   : constant String := To_String (Lessons);
+                           Room   : constant Natural := Result'Length - Natural'Min (Result'Length, Answer'Length);
                         begin
-                           --  As much of it as an answer holds.
-                           Put (Both (Both'First .. Both'First + Natural'Min (Both'Length, Result'Length) - 1));
+                           Put (Answer & Said (Said'First .. Said'First + Natural'Min (Said'Length, Room) - 1));
                         end;
                      end if;
                   end;

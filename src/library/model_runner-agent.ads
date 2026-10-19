@@ -344,6 +344,9 @@ package Model_Runner.Agent is
    --  makes -- a task's root is run again to report, to check, to mend --
    --  so the pace is the work's, not each run's: when it started, and the
    --  tokens decoded and the time decoding them took.
+   --  A reading of the run's clock, in nanoseconds.
+   subtype Clock_Reading is Model_Runner.Clocks.Nanoseconds;
+
    type Pace_State is record
       Started  : Model_Runner.Clocks.Nanoseconds := 0;
       Tokens   : Natural := 0;

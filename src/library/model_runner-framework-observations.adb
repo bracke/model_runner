@@ -1052,6 +1052,25 @@ package body Model_Runner.Framework.Observations is
       Serves     : Name_Lists.Vector;
       Touches    : Name_Lists.Vector;
       Named      : Name_Lists.Vector;
+
+      --  Whether the task names a path: whole, by its file's name alone
+      --  (calc.adb for src/calc.adb), or by a directory holding it (src/).
+      function Names (Path : String) return Boolean is
+         Slash : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+         Base  : constant String := Path (Slash + 1 .. Path'Last);
+      begin
+         for Word of Named loop
+            if Word = Path
+              or else (Ada.Strings.Fixed.Index (Word, "/") = 0 and then Ada.Strings.Fixed.Index (Word, ".") > 0
+                       and then Word = Base)
+              or else (Word'Length > 1 and then Word (Word'Last) = '/' and then Path'Length > Word'Length
+                       and then Path (Path'First .. Path'First + Word'Length - 1) = Word)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Names;
       Hot_List   : Considered_Vectors.Vector;
       Warm_List  : Considered_Vectors.Vector;
       Result     : Considered_Vectors.Vector;
@@ -1092,11 +1111,21 @@ package body Model_Runner.Framework.Observations is
             Start : Positive := Said'First;
          begin
             for Index in Said'First .. Said'Last + 1 loop
-               if Index > Said'Last or else Said (Index) in ' ' | ',' | ';' | '"' | ''' | '`' | '(' | ')' then
+               if Index > Said'Last
+                 or else Said (Index) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT | ',' | ';' | '"' | ''' | '`' | '('
+                                       | ')'
+               then
                   declare
-                     Word : constant String :=
+                     --  A sentence's colon or full stop is no part of a
+                     --  path, but a leading dot is: .github/x is not
+                     --  github/x. A path said from here, ./src/a.adb, is
+                     --  src/a.adb.
+                     Trimmed : constant String :=
                        Ada.Strings.Fixed.Trim (Said (Start .. Index - 1),
-                                               Ada.Strings.Maps.To_Set (":."), Ada.Strings.Maps.To_Set (":."));
+                                               Ada.Strings.Maps.To_Set (":"), Ada.Strings.Maps.To_Set (":."));
+                     Word    : constant String :=
+                       (if Trimmed'Length > 2 and then Trimmed (Trimmed'First .. Trimmed'First + 1) = "./"
+                        then Trimmed (Trimmed'First + 2 .. Trimmed'Last) else Trimmed);
                   begin
                      if Word /= "" and then not Named.Contains (Word) then
                         Named.Append (Word);
@@ -1174,7 +1203,7 @@ package body Model_Runner.Framework.Observations is
                            Heat := Hot;
                            Reason := To_Unbounded_String ("about " & Path & ", which this task's work touches");
                            exit;
-                        elsif Named.Contains (Path) then
+                        elsif Names (Path) then
                            Heat := Hot;
                            Reason := To_Unbounded_String ("about " & Path & ", which this task names");
                            exit;
@@ -1515,8 +1544,24 @@ package body Model_Runner.Framework.Observations is
          return Result;
       end Kept_Lines;
 
-      --  Each line of From not matched by one of Against, once each.
-      procedure Say (From, Against : Name_Lists.Vector; Mark : String) is
+      --  How many lines of From one of Against does not match.
+      function Unmatched (From, Against : Name_Lists.Vector) return Natural is
+         Left  : Name_Lists.Vector := Against;
+         Found : Natural := 0;
+      begin
+         for One of From loop
+            if Left.Find_Index (One) /= Name_Lists.No_Index then
+               Left.Delete (Left.Find_Index (One));
+            else
+               Found := Found + 1;
+            end if;
+         end loop;
+         return Found;
+      end Unmatched;
+
+      --  Each line of From not matched by one of Against, once each, up to
+      --  Most lines said in all.
+      procedure Say (From, Against : Name_Lists.Vector; Mark : String; Most : Natural) is
          Left : Name_Lists.Vector := Against;
       begin
          for One of From loop
@@ -1525,7 +1570,7 @@ package body Model_Runner.Framework.Observations is
             begin
                if At_It /= Name_Lists.No_Index then
                   Left.Delete (At_It);
-               elsif Count < Lines_Most then
+               elsif Count < Most then
                   Count := Count + 1;
                   Append (Said, (if Length (Said) = 0 then "" else " | ") & Mark & " "
                           & (if One'Length > Line_Most then One (One'First .. One'First + Line_Most - 1) & "..."
@@ -1537,8 +1582,11 @@ package body Model_Runner.Framework.Observations is
    begin
       Old_Lines := Kept_Lines (Before);
       New_Lines := Kept_Lines (After);
-      Say (Old_Lines, New_Lines, "-");
-      Say (New_Lines, Old_Lines, "+");
+      --  The lines put in keep room of their own: a rewrite whose removed
+      --  lines took all of it said nothing of what mended it.
+      Say (Old_Lines, New_Lines, "-",
+           Lines_Most - Natural'Min (Lines_Most / 2, Unmatched (New_Lines, Old_Lines)));
+      Say (New_Lines, Old_Lines, "+", Lines_Most);
       return (if Length (Said) = 0 then "" else Path & ": " & To_String (Said));
    end Change_Said;
 
@@ -1571,14 +1619,27 @@ package body Model_Runner.Framework.Observations is
       Checks   : Name_Lists.Vector;
       Status   : out E.Error_Info)
    is
-      --  The lines a change said as FILE: - OLD | + NEW put in, each once.
+      --  The lines a change said as FILE: - OLD | + NEW put in, each once;
+      --  the files' parts joined by " / ", as Change_Since joins them --
+      --  there, where what follows is a file's name and its first line.
       function Put_In (Said : String) return Name_Lists.Vector is
          Found : Name_Lists.Vector;
          Start : Positive := Said'First;
+
+         --  Whether " / " at Index begins the next file's part.
+         function Next_File (Index : Positive) return Boolean is
+            Colon : constant Natural := Ada.Strings.Fixed.Index (Said (Index + 3 .. Said'Last), ": ");
+         begin
+            return Colon > Index + 3
+              and then Ada.Strings.Fixed.Index (Said (Index + 3 .. Colon - 1), " ") = 0
+              and then Colon + 3 <= Said'Last
+              and then Said (Colon + 2 .. Colon + 3) in "+ " | "- ";
+         end Next_File;
       begin
          for Index in Said'First .. Said'Last + 1 loop
             if Index > Said'Last
               or else (Index + 2 <= Said'Last and then Said (Index .. Index + 2) = " | ")
+              or else (Index + 2 <= Said'Last and then Said (Index .. Index + 2) = " / " and then Next_File (Index))
             then
                declare
                   Part  : constant String := Ada.Strings.Fixed.Trim (Said (Start .. Index - 1), Ada.Strings.Both);
@@ -1615,6 +1676,17 @@ package body Model_Runner.Framework.Observations is
       end if;
       Tasks_Seen.Append (Task_Id);
       Seen_In.Append (Kept);
+      --  The component of the task it was mended in now, which the
+      --  decision governs: not that of whichever earlier task came first.
+      declare
+         Defined : Records.Item;
+         Read    : E.Error_Info;
+      begin
+         Tasks.Definition (Item, Task_Id, Defined, Read);
+         if E.Is_Ok (Read) then
+            Component := To_Unbounded_String (Records.Get (Defined, "component"));
+         end if;
+      end;
       for Other of List (Item) loop
          declare
             Value : Observation;
@@ -1625,6 +1697,7 @@ package body Model_Runner.Framework.Observations is
             Said := Value.Summary;
             if E.Is_Ok (Got) and then Value.Kind = Failure_Pattern
               and then Value.Producer = Harness_Producer and then Value.Status = Active
+              and then Length (Value.Retired) = 0
               and then Length (Value.Task_Id) > 0
               and then Length (Said) >= Natural'Min (Head'Length, Summary_Most)
               and then Slice (Said, 1, Natural'Min (Head'Length, Summary_Most))
@@ -1650,14 +1723,21 @@ package body Model_Runner.Framework.Observations is
                   Seen_In.Append (Other);
                   declare
                      Text : constant String := To_String (Said);
-                     Mark : constant Natural := Ada.Strings.Fixed.Index (Text, " -- ", Head'Length - 4);
-                     Also : constant Name_Lists.Vector :=
-                       (if Mark = 0 or else Head'Length < 4 then Name_Lists.Empty_Vector
-                        else Put_In (Text (Mark + 4 .. Text'Last)));
+                     --  The mending's part, where the summary still holds
+                     --  it: one cut at its length may end before.
+                     Mark : constant Natural :=
+                       (if Head'Length >= 4 and then Head'Length - 4 in Text'Range
+                        then Ada.Strings.Fixed.Index (Text, " -- ", Head'Length - 4) else 0);
+                     Read_In : Name_Lists.Vector :=
+                       (if Mark = 0 then Name_Lists.Empty_Vector else Put_In (Text (Mark + 4 .. Text'Last)));
                      Kept_Lines : Name_Lists.Vector;
                   begin
+                     --  A summary cut at its length cut its last line too.
+                     if Text'Length >= Summary_Most and then not Read_In.Is_Empty then
+                        Read_In.Delete_Last;
+                     end if;
                      for Line of Common loop
-                        if Also.Contains (Line) then
+                        if Read_In.Contains (Line) then
                            Kept_Lines.Append (Line);
                         end if;
                      end loop;
@@ -1775,8 +1855,14 @@ package body Model_Runner.Framework.Observations is
                Lesson & ", and passed after changes to " & Listed (Changed)
                & (if Fixed_By /= "" then " -- " & Fixed_By else ""),
                Files_Of, [To_String (Before), Evidence], From, Id, Status);
+            --  A lesson that could not be proposed leaves the fix kept as it
+            --  is: the observation is the record, the proposal a suggestion.
             if E.Is_Ok (Status) and then Length (Id) > 0 then
-               Propose_Lesson (Item, Change, Task_Id, Lesson, To_String (Id), Fixed_By, Failed, Status);
+               declare
+                  Proposed : E.Error_Info;
+               begin
+                  Propose_Lesson (Item, Change, Task_Id, Lesson, To_String (Id), Fixed_By, Failed, Proposed);
+               end;
             end if;
          end;
       end;

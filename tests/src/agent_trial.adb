@@ -855,7 +855,9 @@ package body Agent_Trial is
                                  if Carried and then Accept_Lessons then
                                     for Lesson of Proposed_Lessons (Root) loop
                                        Send ("/decision accept " & To_String (Lesson));
-                                       if Wait_For (To_String (Lesson), 30.0) then
+                                       --  The session's word that it is, not the
+                                       --  echo of the command that asked.
+                                       if Wait_For (To_String (Lesson) & " is accepted", 30.0) then
                                           Ada.Text_IO.Put_Line
                                             ("  accepted " & To_String (Lesson) & ", proposed from what was mended");
                                        end if;

@@ -8,6 +8,8 @@ is
    Read     : E.Error_Info;
    Wanted   : Name_Lists.Vector;
    Ruling   : Name_Lists.Vector;
+   --  What each of them says, as checks: A, B, in Ruling's order.
+   Ruling_Says : Name_Lists.Vector;
    Subset   : Unbounded_String;
 
    function Starts (Text, Prefix : String) return Boolean
@@ -21,6 +23,26 @@ is
       end loop;
       return To_String (Text);
    end Joined;
+
+   --  The checks a decision names, from its checks: A, B.
+   function Checks_Of (Says : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Positive := Says'First + 8;  --  past checks:
+   begin
+      for Index in Start .. Says'Last + 1 loop
+         if Index > Says'Last or else Says (Index) = ',' then
+            declare
+               Name : constant String := Ada.Strings.Fixed.Trim (Says (Start .. Index - 1), Ada.Strings.Both);
+            begin
+               if Name /= "" then
+                  Result.Append (Name);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Checks_Of;
 
    --  The last lines of a text, enough to see an error by.
    function Tail (Text : String; Count : Positive) return String is
@@ -56,6 +78,7 @@ begin
            and then Starts (To_String (Held.Criteria), "checks: ")
          then
             Ruling.Append (Id);
+            Ruling_Says.Append (To_String (Held.Criteria));
             declare
                Names : constant String := To_String (Held.Criteria);
                Start : Positive := Names'First + 8;  --  past checks:
@@ -150,36 +173,59 @@ begin
       if not Staged then
          return;
       end if;
-      Report := To_Unbounded_String
-        ("but the checks " & Joined (Ruling) & " holds every change to failed after it -- fix this before"
-         & " anything else:");
-      for Index in 1 .. Records.Field_Count (Value) loop
-         declare
-            Field : constant String := Records.Field_Name (Value, Index);
-            Parts : constant Name_Lists.Vector :=
-              (if Starts (Field, "check.") then Fields_Of (Records.Get (Value, Field)) else Name_Lists.Empty_Vector);
-         begin
-            if Natural (Parts.Length) >= 7 and then Parts (5) /= "passed" then
-               declare
-                  Log    : Records.Item;
-                  Kept   : Boolean;
-                  Stored : Results.Result;
-                  Got    : E.Error_Info;
-               begin
-                  --  Staged where it is new; one the same is kept already.
-                  Stores.Pending (Change, Results_Area, Parts (7), Log, Kept);
-                  if not Kept or else Records.Get (Log, "payload") = "" then
-                     Results.Read (Host.Item.all, Parts (7), Stored, Got);
-                  end if;
-                  Append (Report, ASCII.LF & Parts (1) & ": " & Parts (5));
-                  if Kept and then Records.Get (Log, "payload") /= "" then
-                     Append (Report, ASCII.LF & Tail (Records.Get (Log, "payload"), 15));
-                  elsif E.Is_Ok (Got) and then Length (Stored.Payload) > 0 then
-                     Append (Report, ASCII.LF & Tail (To_String (Stored.Payload), 15));
-                  end if;
-               end;
+      --  The required checks that failed, each with the end of its log,
+      --  and only the decisions that name one of them: a failed optional
+      --  or warning check holds no change back, as it holds no work back.
+      declare
+         Failed  : Name_Lists.Vector;
+         Details : Unbounded_String;
+         Named   : Name_Lists.Vector;
+      begin
+         for Index in 1 .. Records.Field_Count (Value) loop
+            declare
+               Field : constant String := Records.Field_Name (Value, Index);
+               Parts : constant Name_Lists.Vector :=
+                 (if Starts (Field, "check.") then Fields_Of (Records.Get (Value, Field)) else Name_Lists.Empty_Vector);
+            begin
+               if Natural (Parts.Length) >= 8 and then Parts (5) /= "passed" and then Parts (6) = "required"
+                 and then Parts (8) /= "warning"
+               then
+                  declare
+                     Log    : Records.Item;
+                     Kept   : Boolean;
+                     Stored : Results.Result;
+                     Got    : E.Error_Info;
+                  begin
+                     --  Staged where it is new; one the same is kept already.
+                     Stores.Pending (Change, Results_Area, Parts (7), Log, Kept);
+                     if not Kept or else Records.Get (Log, "payload") = "" then
+                        Results.Read (Host.Item.all, Parts (7), Stored, Got);
+                     end if;
+                     Failed.Append (Parts (1));
+                     Append (Details, ASCII.LF & Parts (1) & ": " & Parts (5));
+                     if Kept and then Records.Get (Log, "payload") /= "" then
+                        Append (Details, ASCII.LF & Tail (Records.Get (Log, "payload"), 15));
+                     elsif E.Is_Ok (Got) and then Length (Stored.Payload) > 0 then
+                        Append (Details, ASCII.LF & Tail (To_String (Stored.Payload), 15));
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         if Failed.Is_Empty then
+            return;
+         end if;
+         for Index in 1 .. Natural (Ruling.Length) loop
+            if (for some Label of Failed =>
+                  (for some Named_Check of Name_Lists.Vector'(Checks_Of (Ruling_Says (Index))) => Named_Check = Label))
+            then
+               Named.Append (Ruling (Index));
             end if;
-         end;
-      end loop;
+         end loop;
+         Report := To_Unbounded_String
+           ("but the checks " & Joined (Named) & (if Natural (Named.Length) = 1 then " holds" else " hold")
+            & " every change to failed after it -- fix this before anything else:")
+           & Details;
+      end;
    end;
 end Lesson_Checks;

@@ -3200,14 +3200,24 @@ package body Model_Runner.CLI.Options is
    function Sampling_For
      (Item : Command; Prepared : Model_Runner.Llama.Model) return Model_Runner.Sampling.Configuration
    is
-      Taken  : constant Model_Runner.Sampling.Configuration :=
-        Model_Runner.Sampling.Taking
-          (Item.Sampling, Item.Sampling_Given,
-           Model_Runner.Llama.File_Sampling (Prepared), Model_Runner.Llama.File_Sampling_Keys (Prepared));
+      package Sm renames Model_Runner.Sampling;
+      Found  : constant Sm.Key_Set := Model_Runner.Llama.File_Sampling_Keys (Prepared);
+      --  Without the file's mirostat, which is what a filter named on the
+      --  command line refuses beside it: the file's other settings stand.
+      Bare   : constant Sm.Key_Set :=
+        [for Key in Sm.Model_Key => Found (Key) and then Key not in Sm.Mirostat .. Sm.Mirostat_Eta];
+      Taken  : constant Sm.Configuration :=
+        Sm.Taking (Item.Sampling, Item.Sampling_Given, Model_Runner.Llama.File_Sampling (Prepared), Found);
+      Plain  : constant Sm.Configuration :=
+        Sm.Taking (Item.Sampling, Item.Sampling_Given, Model_Runner.Llama.File_Sampling (Prepared), Bare);
       Status : Model_Runner.Errors.Error_Info;
    begin
-      Model_Runner.Sampling.Validate (Taken, Status);
-      return (if Model_Runner.Errors.Is_Ok (Status) then Taken else Item.Sampling);
+      Sm.Validate (Taken, Status);
+      if Model_Runner.Errors.Is_Ok (Status) then
+         return Taken;
+      end if;
+      Sm.Validate (Plain, Status);
+      return (if Model_Runner.Errors.Is_Ok (Status) then Plain else Item.Sampling);
    end Sampling_For;
 
 end Model_Runner.CLI.Options;

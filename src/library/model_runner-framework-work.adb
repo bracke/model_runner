@@ -1560,6 +1560,17 @@ package body Model_Runner.Framework.Work is
 
    function Is_Paced (Host : Child_Host) return Boolean is (Host.Paced);
 
+   function Pace_Of (Host : in out Child_Host) return Model_Runner.Agent.Pace_Reference
+   is (Host.Pace'Unchecked_Access);
+
+   function Pace_Spent (Host : Child_Host; Now : Model_Runner.Agent.Clock_Reading) return Boolean is
+      use type Model_Runner.Agent.Clock_Reading;
+   begin
+      return Host.Paced and then Host.Pace.Started /= 0 and then Now >= Host.Pace.Started
+        and then Model_Runner.Agent.Past_Pace (Now - Host.Pace.Started, Host.Pace.Spent_Ns, Host.Pace.Tokens,
+                                               Pace_Tokens);
+   end Pace_Spent;
+
    function Time_Left (Host : Child_Host) return Duration is
       use type Ada.Calendar.Time;
    begin

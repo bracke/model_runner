@@ -127,6 +127,15 @@ is
    --  Whether it went over its token budget.
    Over_Budget : Boolean := False;
 
+   --  The limit a run's failure names, or "".
+   function Limit_Named (Ran : E.Error_Info) return String is
+      Found : Boolean;
+      Given : E.Parameter;
+   begin
+      E.Find_Parameter (Ran, "name", Found, Given);
+      return (if Found then Model_Runner.Text.To_String (Given.Text_Value) else "");
+   end Limit_Named;
+
    --  The first record of the work the state could not keep, if any.
    Not_Kept : E.Error_Info := E.Success;
 
@@ -183,7 +192,9 @@ is
       Configurations.Read (Item, Config, Read);
       Result.Config_Revision := (if E.Is_Ok (Read) then Records.Revision (Config) else 0);
       Result.Max_Seconds := Time_Allowed (Item, Task_Id);
-      Result.Paced := Paced (Item, Task_Id);
+      --  Paced where the session's own model runs it, whose speed the runs
+      --  measure: a model run as a process of its own is held to the lease.
+      Result.Paced := Paced (Item, Task_Id) and then Runner in Parenting_Runner'Class;
       Result.Max_Steps := Number_Of (Policy ("max_steps", "agents.max_steps"), 24);
       Result.Max_Tool_Calls := Number_Of (Policy ("max_tool_calls", "agents.max_tool_calls"), 0);
       Result.Token_Budget := Number_Of (Tasks.Kind_Policy (Item, Kind, "token_budget"), 0);
@@ -1140,6 +1151,15 @@ begin
                       & " s, as " & To_String (Frozen.Seconds_From) & " allows; /reconfigure "
                       & To_String (Frozen.Seconds_From) & "=N gives it longer"),
                 "failed");
+      return;
+   elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Limit_Exceeded
+     and then Limit_Named (Ran) in "the agent's steps" | "the agent's token budget"
+   then
+      --  Its steps or its tokens spent are a limit as its time is: the
+      --  task set aside, not failed -- the session says it waits, and the
+      --  task said failed.
+      Stop_Children (Item, Change, To_String (Result.Agent_Id), "the work reached a limit");
+      Conclude ("blocked", Why_Of (Ran), "failed");
       return;
    elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Agent_Failed then
       --  A crash is not wrong work: what it changed is kept to be

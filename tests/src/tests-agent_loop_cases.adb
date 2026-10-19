@@ -575,11 +575,11 @@ package body Tests.Agent_Loop_Cases is
       pragma Unreferenced (T);
       Clock   : aliased Model_Runner.Clocks.System_Clock;
       Now     : constant Interfaces.Unsigned_64 := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
-      --  An earlier run's, begun before this one: a million tokens decoded
-      --  in a nanosecond, so 50 of them take no time at all, and the work
-      --  is past its pace whatever this run takes.
+      --  An earlier run's, begun 0.3 s before this one, its speed such that
+      --  50 tokens take 0.2 s: past its pace only where its start is kept
+      --  -- a pace begun afresh with this run would have nearly all of it.
       Spent   : aliased Ag.Pace_State :=
-        (Started => Interfaces.Unsigned_64'Max (1, Now), Tokens => 1_000_000, Spent_Ns => 1);
+        (Started => Interfaces.Unsigned_64'Max (1, Now), Tokens => 50, Spent_Ns => 200_000_000);
       Replies : Script;
       Fresh   : Script;
       Seen    : Recorder;
@@ -592,6 +592,7 @@ package body Tests.Agent_Loop_Cases is
          Tiny_Model.Build (Image);
       end if;
       Replies.Replies.Append ("done");
+      delay 0.3;
       Run (Replies, Seen, Ended, Pace => Spent'Unchecked_Access, Pace_Tokens => 50, Seconds => 3_600.0);
       Assert (Ended.Reason = Ag.Timed_Out and then Replies.Next = 1,
               "a run whose work was past its pace already was not stopped before its first reply: "

@@ -8888,6 +8888,9 @@ package body Tests.Framework_Cases is
    --  that, it records.
    type Mending_Agent is new Wk.Parenting_Runner with null record;
 
+   --  The line its mending puts in, which a test may make another's.
+   Mending_Line : Unbounded_String := To_Unbounded_String ("   null;");
+
    overriding procedure Run
      (Self        : Mending_Agent;
       Prompt_Path : String;
@@ -8939,7 +8942,7 @@ package body Tests.Framework_Cases is
       Children.Run_Checks ("checks", Report, Got);
       Assert (Ada.Strings.Fixed.Index (To_String (Report), "failed") > 0,
               "the checks passed before the work: " & To_String (Report));
-      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   null;" & LF
+      Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & To_String (Mending_Line) & LF
                 & "end Hello;" & LF);
       Children.Run_Checks ("checks", Report, Got);
       Assert (Ada.Strings.Fixed.Index (To_String (Report), "passed") > 0,
@@ -8960,7 +8963,14 @@ package body Tests.Framework_Cases is
 
    Lesson_Failing, Lesson_Passing : Unbounded_String;
    Lesson_Paced : Boolean := False;
+   --  And whether the task's pace, set to 50 tokens decoded in a second,
+   --  is spent half a second and 481 seconds after it began: its 24,000
+   --  tokens take 480.
+   Lesson_Spent_Early, Lesson_Spent_Late : Boolean := False;
    Lesson_Evidence_Before, Lesson_Evidence_After : Natural := 0;
+   --  And the reuse indexes the checks' runs leave, the one thing such a
+   --  run would write outside the transaction it never commits.
+   Lesson_Reuse_Before, Lesson_Reuse_After : Natural := 0;
 
    overriding procedure Run
      (Self        : Lesson_Agent;
@@ -9100,18 +9110,41 @@ package body Tests.Framework_Cases is
 
       function Evidence_Count return Natural is
         (Natural (S.Names (Children.Store_Of.all, Model_Runner.Framework.Verification_Area).Length));
+
+      function Reuse_Count return Natural is
+         Where  : constant String := S.Root (Children.Store_Of.all) & "/runtime/evidence-reuse";
+         Search : Dirs.Search_Type;
+         One    : Dirs.Directory_Entry_Type;
+         Count  : Natural := 0;
+      begin
+         if not Dirs.Exists (Where) then
+            return 0;
+         end if;
+         Dirs.Start_Search (Search, Where, "", [Dirs.Ordinary_File => True, others => False]);
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, One);
+            Count := Count + 1;
+         end loop;
+         Dirs.End_Search (Search);
+         return Count;
+      end Reuse_Count;
    begin
       Children.Keep_Before_Write ("src/hello.adb", Got);
       Dirs.Create_Path (Project & "/src");
       Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   raise Program_Error;" & LF
                 & "end Hello;" & LF);
       Lesson_Paced := Children.Is_Paced;
+      Children.Pace_Of.all := (Started => 1_000_000_000, Tokens => 50, Spent_Ns => 1_000_000_000);
+      Lesson_Spent_Early := Children.Pace_Spent (1_500_000_000);
+      Lesson_Spent_Late := Children.Pace_Spent (482_000_000_000);
       Lesson_Evidence_Before := Evidence_Count;
+      Lesson_Reuse_Before := Reuse_Count;
       Children.Lesson_Checks (Lesson_Failing);
       Lesson_Evidence_After := Evidence_Count;
       Put_File (Project & "/src/hello.adb", "procedure Hello is" & LF & "begin" & LF & "   null;" & LF
                 & "end Hello;" & LF);
       Children.Lesson_Checks (Lesson_Passing);
+      Lesson_Reuse_After := Reuse_Count;
       Answer := To_Unbounded_String
         ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
       Status := E.Success;
@@ -9907,9 +9940,11 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (To_String (Lesson_Failing), "(style) space required") > 0,
                  "a change the lesson's checks refuse was not said with it: " & To_String (Lesson_Failing));
          Assert (Length (Lesson_Passing) = 0, "a change they take was said as failing: " & To_String (Lesson_Passing));
-         Assert (not Lesson_Paced, "work with no time set to model was held to a pace");
-         Assert (Lesson_Evidence_After = Lesson_Evidence_Before,
-                 "the checks after a change were kept as the work's evidence");
+         Assert (not Lesson_Paced and then not Lesson_Spent_Late,
+                 "work with no time set to model was held to a pace");
+         Assert (Lesson_Evidence_After = Lesson_Evidence_Before
+                 and then Lesson_Reuse_After = Lesson_Reuse_Before,
+                 "the checks after a change were kept as the work's evidence, or left an index to reuse it by");
       end;
 
       --  And on the session, as /work runs a model: the lesson's checks
@@ -9944,6 +9979,121 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;
+
+   --  A failure whose lesson says more than an observation keeps -- its
+   --  summary cut at Summary_Most -- is still mended into one lesson:
+   --  reading the mending out of the cut summary raised Index_Error, and
+   --  the second task's fix was lost with it.
+   procedure A_Long_Failure_Is_Still_Learned (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Done   : Wk.Report;
+      First, Second : Unbounded_String;
+      Long   : constant String (1 .. 700) := [others => 'x'];
+      type Name_Vectors is array (1 .. 2) of Unbounded_String;
+      Lessons : Natural := 0;
+
+      --  Forty checks that fail alike: the lesson names each, past what
+      --  an observation's summary keeps.
+      function Profile_Text return String is
+         Text : Unbounded_String;
+      begin
+         for Index in 10 .. 49 loop
+            Append (Text, (if Index = 10 then "" else "; ") & "a_check_named_" & Ada.Strings.Fixed.Trim (Index'Image,
+                    Ada.Strings.Left) & ": sh check.sh");
+         end loop;
+         return To_String (Text);
+      end Profile_Text;
+   begin
+      Task_Project
+        (Store, "long-lesson",
+         "set execution.allowed = sh" & LF
+         & "profile checks = " & Profile_Text & LF
+         & "scalar verification.default = checks" & LF);
+      Put_File (Fresh_Root (Store) & "/check.sh",
+                "grep -q 'null;' src/hello.adb 2>/dev/null && exit 0" & LF
+                & "echo 'hello.adb:1:1: " & Long & "'" & LF & "exit 1" & LF);
+      Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", First, Status);
+      Tk.Create (Store, Change, Fields ("Greet again", "analysis", "component", "hello"), "user", "", Second,
+                 Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (First), "accepted", "", Status => Status);
+      Tk.Move (Store, Change, To_String (Second), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      --  Mended a little differently each time: two observations, not one
+      --  seen twice, so the second reads the first's mending back.
+      for Id of Name_Vectors'[First, Second] loop
+         Mending_Line := To_Unbounded_String (if Id = First then "   null;" else "   null; -- again");
+         Wk.Execute (Store, To_String (Id), Mending_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Assert (To_String (Done.Final_State) = "complete",
+                 "a task with a long failure did not complete: " & To_String (Done.Final_State) & " "
+                 & To_String (Done.Reason));
+      end loop;
+      Mending_Line := To_Unbounded_String ("   null;");
+      for Id of Nt.List (Store, Nt.Decision) loop
+         declare
+            Held : Nt.Entity;
+         begin
+            Nt.Read (Store, Nt.Decision, Id, Held, Status);
+            if To_String (Held.Source) = "harness" then
+               Lessons := Lessons + 1;
+            end if;
+         end;
+      end loop;
+      Assert (Lessons = 1, "a long failure mended in two tasks was proposed" & Natural'Image (Lessons) & " times");
+      S.Close (Store);
+   end A_Long_Failure_Is_Still_Learned;
+
+   --  A check run kept nowhere -- the lesson's checks after a change --
+   --  leaves no index a later run would reuse it by, where the same run
+   --  kept does: its evidence was never committed, and the index would
+   --  name evidence there is none of.
+   procedure An_Unkept_Run_Leaves_No_Reuse_Index (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Vf renames Model_Runner.Framework.Verification;
+      Store    : aliased S.Store;
+      Change   : S.Transaction;
+      Status   : E.Error_Info;
+      Id       : Unbounded_String;
+      Evidence : Unbounded_String;
+      Passed   : Boolean;
+
+      function Indexes return Natural is
+         Where  : constant String := S.Root (Store) & "/runtime/evidence-reuse";
+         Search : Dirs.Search_Type;
+         One    : Dirs.Directory_Entry_Type;
+         Count  : Natural := 0;
+      begin
+         if not Dirs.Exists (Where) then
+            return 0;
+         end if;
+         Dirs.Start_Search (Search, Where, "", [Dirs.Ordinary_File => True, others => False]);
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, One);
+            Count := Count + 1;
+         end loop;
+         Dirs.End_Search (Search);
+         return Count;
+      end Indexes;
+   begin
+      Task_Project
+        (Store, "unkept-index",
+         "set execution.allowed = sh" & LF & "profile checks = holds: sh check.sh" & LF);
+      Put_File (Fresh_Root (Store) & "/check.sh", "exit 0" & LF);
+      Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Change := S.No_Changes;
+      Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status, Unkept => True);
+      Assert (E.Is_Ok (Status) and then Passed and then Indexes = 0,
+              "a check run kept nowhere left an index to reuse it by:" & Natural'Image (Indexes));
+      Change := S.No_Changes;
+      Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+      Assert (E.Is_Ok (Status) and then Indexes = 1,
+              "the same run kept left no index -- this test would not see one:" & Natural'Image (Indexes));
+      S.Close (Store);
+   end An_Unkept_Run_Leaves_No_Reuse_Index;
 
    --  A call the work's time ran out in the middle of is said to be none:
    --  its markup was on the screen as written, with nothing to say why.
@@ -10008,6 +10158,8 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Wk.Execute (Store, To_String (Id), Lesson_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
       Assert (Lesson_Paced, "the agents of work whose time is set to model were not held to its pace");
+      Assert (not Lesson_Spent_Early and then Lesson_Spent_Late,
+              "a pace was spent before the time its tokens take, or not after it");
       S.Close (Store);
       declare
          --  Nanoseconds: 2,399 s and 2,401 s, 10 s, 1 s, 99,999 s.
@@ -17136,6 +17288,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Harness_Records_What_It_Sees'Access,
          "the harness records a fix, a refusal and finished work, and the next task is told them");
+      Register_Routine
+        (T, An_Unkept_Run_Leaves_No_Reuse_Index'Access,
+         "a check run kept nowhere leaves no index to reuse it by");
+      Register_Routine
+        (T, A_Long_Failure_Is_Still_Learned'Access,
+         "a failure whose error is longer than an observation keeps is still learned");
       Register_Routine
         (T, A_Call_Cut_By_Time_Is_Said'Access,
          "a call the work's time ran out in the middle of is said to be none");

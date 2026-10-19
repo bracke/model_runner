@@ -696,19 +696,16 @@ package body Model_Runner.Conversation is
                exit when Last - Reply'First + 1 < Close_Tag'Length
                  or else Reply (Last - Close_Tag'Length + 1 .. Last) /= Close_Tag;
                declare
-                  --  The call's opening is the first after the call before
-                  --  it closed, and one a call follows: the text of a call's
-                  --  arguments may spell its tag, and so may reasoning that
-                  --  talks of one.
-                  Before : constant Natural :=
-                    Ada.Strings.Fixed.Index
-                      (Reply (Reply'First .. Last - Close_Tag'Length), Close_Tag, Ada.Strings.Backward);
-                  Opens  : Natural := 0;
-                  Look   : Positive := (if Before = 0 then Reply'First else Before + Close_Tag'Length);
+                  --  The call's opening is the latest before its close that a
+                  --  call follows: reasoning may draft a call and write the
+                  --  real one after it, and may talk of the tag in prose.
+                  Opens    : Natural := 0;
+                  Look_End : Natural := Last - Close_Tag'Length;
                begin
                   loop
                      declare
-                        Found : constant Natural := Ada.Strings.Fixed.Index (Reply (Look .. Last), Open_Tag);
+                        Found : constant Natural :=
+                          Ada.Strings.Fixed.Index (Reply (Reply'First .. Look_End), Open_Tag, Ada.Strings.Backward);
                         After : Positive := Found + Open_Tag'Length;
                      begin
                         exit when Found = 0;
@@ -719,7 +716,7 @@ package body Model_Runner.Conversation is
                            Opens := Found;
                            exit;
                         end if;
-                        Look := Found + 1;
+                        Look_End := Found - 1;
                      end;
                   end loop;
                   exit when Opens = 0;
@@ -805,14 +802,56 @@ package body Model_Runner.Conversation is
 
       Lead : constant Text_Span := Leading_Span;
 
-      --  Their text, to be read before the answer's -- but not a call the
-      --  answer makes again as it was written: drafted first and then
-      --  made, it is made once.
-      function Leading_Calls return String
-      is (if Lead.From = 0
-            or else Ada.Strings.Fixed.Index (Reply (Answer_At .. Reply'Last), Reply (Lead.From .. Lead.Upto)) > 0
-          then ""
-          else Reply (Lead.From .. Lead.Upto) & ASCII.LF);
+      --  Their text, to be read before the answer's -- each but one the
+      --  answer makes again, the same tool with the same arguments: drafted
+      --  first and then made, a call is made once.
+      function Leading_Calls return String is
+         package U renames Ada.Strings.Unbounded;
+         Close_Tag : constant String := "</tool_call>";
+         Kept      : U.Unbounded_String;
+         Answer    : Model_Runner.Tools.Calls;
+         Read      : E.Error_Info;
+         At_It     : Natural := Lead.From;
+
+         --  Whether the answer makes this call.
+         function Repeated (Block : String) return Boolean is
+            One    : Model_Runner.Tools.Calls;
+            Status : E.Error_Info;
+            Found  : Boolean := False;
+         begin
+            Model_Runner.Tools.Read_Calls (One, Block, Status, Syntax => Syntax, Offered => Offered);
+            if E.Is_Ok (Status) and then E.Is_Ok (Read) and then Model_Runner.Tools.Count (One) = 1 then
+               for Index in 1 .. Model_Runner.Tools.Count (Answer) loop
+                  Found := Found
+                    or else (Model_Runner.Tools.Called (Answer, Index) = Model_Runner.Tools.Called (One, 1)
+                             and then Model_Runner.Tools.Arguments (Answer, Index)
+                                      = Model_Runner.Tools.Arguments (One, 1));
+               end loop;
+            end if;
+            Model_Runner.Tools.Close (One);
+            return Found;
+         end Repeated;
+      begin
+         if Lead.From = 0 then
+            return "";
+         end if;
+         Model_Runner.Tools.Read_Calls
+           (Answer, Reply (Answer_At .. Reply'Last), Read, Syntax => Syntax, Offered => Offered);
+         --  The span is calls and the spaces between them, each closed.
+         while At_It > 0 and then At_It <= Lead.Upto loop
+            declare
+               Shut : constant Natural := Ada.Strings.Fixed.Index (Reply (At_It .. Lead.Upto), Close_Tag);
+               Upto : constant Natural := (if Shut = 0 then Lead.Upto else Shut + Close_Tag'Length - 1);
+            begin
+               if not Repeated (Reply (At_It .. Upto)) then
+                  U.Append (Kept, Reply (At_It .. Upto) & ASCII.LF);
+               end if;
+               At_It := Upto + 1;
+            end;
+         end loop;
+         Model_Runner.Tools.Close (Answer);
+         return U.To_String (Kept);
+      end Leading_Calls;
 
       --  The reasoning kept as the turn's, without the calls it opened
       --  with: they are the turn's calls, and kept as text too, a template

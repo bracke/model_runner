@@ -4005,13 +4005,15 @@ package body Model_Runner.CLI.Tasks is
                Grouped ("  " & "limits",
                         T.Image (Long_Long_Integer (Seconds))
                         & (if Seconds = 1 then " second (" else " seconds (")
-                        & (if Tk.Kind_Policy (Store, Kind, "max_seconds") /= "" then "task.max_seconds." & Kind
+                        & (if Model_Runner.Framework.Work.Paced (Store, Argument)
+                           then "at most: work.lease, as "
+                                & (if Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
+                                   then "task.max_seconds." & Kind else "agents.max_seconds")
+                                & " is model; held to" & Natural'Image (Model_Runner.Framework.Work.Pace_Tokens)
+                                & " tokens at the session model's own speed"
+                           elsif Tk.Kind_Policy (Store, Kind, "max_seconds") /= "" then "task.max_seconds." & Kind
                            elsif R.Get (Config, "scalar.agents.max_seconds") /= "" then "agents.max_seconds"
                            else "work.lease")
-                        & (if Model_Runner.Framework.Work.Paced (Store, Argument)
-                           then ", held to" & Natural'Image (Model_Runner.Framework.Work.Pace_Tokens)
-                                & " tokens at the model's own speed"
-                           else "")
                         & ")"
                         & (if R.Get (View, "resource.max_steps") = "" then ""
                            else ", " & R.Get (View, "resource.max_steps") & " steps")

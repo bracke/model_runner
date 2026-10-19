@@ -1327,13 +1327,21 @@ package body Model_Runner.CLI.Work is
                declare
                   Kind : constant String := R.Get (Defined, "kind");
                begin
-                  return (if Kind /= "" and then Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
+                  --  A time set to model is the lease at most, and held to
+                  --  the pace within it where the session's model runs it.
+                  return (if W.Paced (Store, To_String (Chosen))
+                          then "work.lease at most, as "
+                               & (if Kind /= "" and then Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
+                                  then "task.max_seconds." & Kind else "agents.max_seconds")
+                               & " is model"
+                               & (if Given_Runner /= null and then Given_Runner.all in W.Parenting_Runner'Class
+                                    and then Path = ""
+                                  then ", held to" & Natural'Image (W.Pace_Tokens) & " tokens at the model's own speed"
+                                  else "; a model run apart is held to the lease")
+                          elsif Kind /= "" and then Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""
                           then "task.max_seconds." & Kind
                           elsif R.Get (Config, "scalar.agents.max_seconds") /= "" then "agents.max_seconds"
-                          else "work.lease, as agents.max_seconds is not set")
-                    & (if W.Paced (Store, To_String (Chosen))
-                       then ", held to" & Natural'Image (W.Pace_Tokens) & " tokens at the model's own speed"
-                       else "");
+                          else "work.lease, as agents.max_seconds is not set");
                end;
             end Time_Source;
          begin

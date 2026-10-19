@@ -3692,6 +3692,34 @@ package body Tests.Tools_Cases is
                             (Model_Runner.Conversation.Call_Arguments
                                (Talk, Model_Runner.Conversation.Length (Talk), 1), "3") > 0,
                  "a call a thought opened with was dropped, or not taken first");
+         Assert (Ada.Strings.Fixed.Index
+                   (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
+                    """count"": 3") = 0,
+                 "a call a thought opened with was kept in its reasoning too, to be written twice");
+         --  Drafted first and then made, as written: made once.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>" & LF & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 5}}</tool_call>"
+                  & LF & "<think>Yes.</think>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 5}}</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call a thought opened with and the answer made again was made twice");
+         --  A thought that talks of the tag, drafts a call, and ends in the
+         --  real one: the real one is what is made.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>I will use <tool_call> tags. Maybe "
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 6}} -- no." & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 7}}</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1
+                 and then Ada.Strings.Fixed.Index
+                            (Model_Runner.Conversation.Call_Arguments
+                               (Talk, Model_Runner.Conversation.Length (Talk), 1), "7") > 0,
+                 "the real call ending a thought was lost to a draft or a mention before it");
          Model_Runner.Conversation.Append_Reply
            (Talk, "  <think>I could call "
                   & "<tool_call>{""name"": ""edit"", ""arguments"": "

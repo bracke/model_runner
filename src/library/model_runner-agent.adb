@@ -754,6 +754,14 @@ package body Model_Runner.Agent is
             exit Step_Loop;
          end if;
 
+         --  A reply stopped part way was generated all the same: counted,
+         --  as the run's output and in the speed its pace measures.
+         if Last_Result.Reason in Gen.Cancelled | Gen.Time_Limit then
+            Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
+            Kept.Tokens := Kept.Tokens + Last_Result.Generated_Tokens;
+            Kept.Spent_Ns := Kept.Spent_Ns + Last_Result.Decode_Ns;
+         end if;
+
          if Last_Result.Reason = Gen.Cancelled then
             L.Reset (Session);
             Result.Reason := Cancelled;

@@ -2,6 +2,7 @@ with Ada.Calendar;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Agent;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Agents;
@@ -425,6 +426,21 @@ package Model_Runner.Framework.Work is
    --  @param Host The host.
    --  @return True where the task's time is set to model.
    function Is_Paced (Host : Child_Host) return Boolean;
+
+   --  The task's pace, measured across its root's runs and its helpers'.
+   --
+   --  @param Host The host.
+   --  @return Where it is kept.
+   function Pace_Of (Host : in out Child_Host) return Model_Runner.Agent.Pace_Reference;
+
+   --  Whether the task's pace is spent: what Pace_Tokens take at the speed
+   --  measured so far, against the time since its first run began. False
+   --  where the work is not paced or no speed is measured yet.
+   --
+   --  @param Host The host.
+   --  @param Now The clock's reading now, as the runs read it.
+   --  @return True where it is spent.
+   function Pace_Spent (Host : Child_Host; Now : Model_Runner.Agent.Clock_Reading) return Boolean;
 
    --  The verification profile the task is checked with.
    --
@@ -1003,8 +1019,11 @@ private
       Bounded     : Boolean := False;
       Deadline    : Ada.Calendar.Time := Ada.Calendar.Clock;
 
-      --  Whether, within that, the work is held to its model's pace.
+      --  Whether, within that, the work is held to its model's pace, and
+      --  the pace as measured: the task's, kept for its root and every
+      --  helper, not one of each's own.
       Paced       : Boolean := False;
+      Pace        : aliased Model_Runner.Agent.Pace_State;
 
       --  What the root generated, and how long its conversation came to be.
       Root_Out    : Natural := 0;
