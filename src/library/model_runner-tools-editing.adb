@@ -14,6 +14,8 @@ with Hostkit.Host;
 with Hostkit.Metadata;
 with Hostkit.Metadata_Copy;
 
+with Model_Runner.Durable_Syncs;
+
 package body Model_Runner.Tools.Editing is
 
    package E renames Model_Runner.Errors;
@@ -425,7 +427,7 @@ package body Model_Runner.Tools.Editing is
       begin
          --  Failed, not unsupported: a host with no such sync has done all
          --  it can.
-         Result.Durable := Hostkit.Durability.Sync_File (Partial) /= Hostkit.Durability.Failed;
+         Result.Durable := Model_Runner.Durable_Syncs.Sync_File (Partial) /= Hostkit.Durability.Failed;
       end;
       --  Not on the device, it is not put in its place: renamed over, a
       --  crash could leave the file empty where it held what it held.
@@ -477,7 +479,7 @@ package body Model_Runner.Tools.Editing is
             declare
                use type Hostkit.Durability.Outcome;
             begin
-               Result.Durable := Hostkit.Durability.Sync_File (Disk) = Hostkit.Durability.Synced;
+               Result.Durable := Model_Runner.Durable_Syncs.Sync_File (Disk) /= Hostkit.Durability.Failed;
             end;
             Ada.Directories.Delete_File (Partial);
          exception
@@ -503,7 +505,7 @@ package body Model_Runner.Tools.Editing is
          use type Hostkit.Durability.Outcome;
       begin
          Result.Durable := Result.Durable
-           and then Hostkit.Durability.Sync_Directory (if Folder = "" then "." else Folder)
+           and then Model_Runner.Durable_Syncs.Sync_Directory (if Folder = "" then "." else Folder)
                     /= Hostkit.Durability.Failed;
       end;
       Result.Changed := True;

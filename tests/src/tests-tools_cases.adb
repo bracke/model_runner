@@ -20,6 +20,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Numerics;
 with Model_Runner.Grammar;
+with Hostkit.Durability;
 with Hostkit.Fs;
 with Hostkit.Metadata;
 with Model_Runner.Tools;
@@ -35,6 +36,7 @@ with Model_Runner.Tools.Python_Calls;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Schemas;
 with Model_Runner.Race_Points;
+with Model_Runner.Durable_Syncs;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
@@ -3003,6 +3005,70 @@ package body Tests.Tools_Cases is
                         Status);
             Assert (not Ended.Changed and then Whole_File (Tree & "/raced.txt") = "saved meanwhile",
                     "a write over a file saved as it was read went through: " & Room (Room'First .. Last));
+         end;
+         --  A sync the device would not take: what was written but not made
+         --  durable is not put in place over the file, and a change already
+         --  in place -- written into a file of two names, or renamed into a
+         --  folder that would not sync -- is told as not durable.
+         declare
+            package Syncs renames Model_Runner.Durable_Syncs;
+            Put : Model_Runner.Tools.Editing.Said;
+
+            --  Whether a partial of NAME was left in the tree.
+            function Partial_Left (Name : String) return Boolean is
+               Search : Ada.Directories.Search_Type;
+               Left   : Boolean;
+            begin
+               Ada.Directories.Start_Search (Search, Tree, "." & Name & ".model_runner-partial*");
+               Left := Ada.Directories.More_Entries (Search);
+               Ada.Directories.End_Search (Search);
+               return Left;
+            end Partial_Left;
+            use type Hostkit.Durability.Outcome;
+         begin
+            --  The one after those passed fails, once.
+            Syncs.Fail_Next (Syncs.Folder, Passing => 1);
+            Assert (Syncs.Sync_Directory (Tree) = Hostkit.Durability.Synced
+                    and then Syncs.Sync_Directory (Tree) = Hostkit.Durability.Failed
+                    and then Syncs.Sync_Directory (Tree) = Hostkit.Durability.Synced,
+                    "a sync said to fail after one passed did not fail once, then pass");
+            Put_Bytes (Tree & "/synced.txt", "old");
+            Assert (Syncs.Sync_File (Tree & "/synced.txt") = Hostkit.Durability.Synced,
+                    "a sync no test said to fail did not pass");
+            Syncs.Fail_Next (Syncs.File);
+            Model_Runner.Tools.Editing.Replace ("synced.txt", "new", Put, Base => Tree);
+            Assert (Put.Failed and then Whole_File (Tree & "/synced.txt") = "old"
+                    and then not Partial_Left ("synced.txt"),
+                    "a write that could not be made durable was put in place, or its partial left");
+            Syncs.Fail_Next (Syncs.Folder);
+            Model_Runner.Tools.Editing.Replace ("synced.txt", "new", Put, Base => Tree);
+            Assert (not Put.Failed and then not Put.Durable and then Whole_File (Tree & "/synced.txt") = "new"
+                    and then Model_Runner.Tools.Editing.Kept_Note (Put) /= "",
+                    "a change renamed into a folder that would not sync was told as durable");
+            declare
+               Linked : Boolean;
+               Args   : GNAT.OS_Lib.Argument_List :=
+                 [new String'(Tree & "/synced.txt"), new String'(Tree & "/synced2.txt")];
+            begin
+               GNAT.OS_Lib.Spawn ("/bin/ln", Args, Linked);
+               for One of Args loop
+                  GNAT.OS_Lib.Free (One);
+               end loop;
+               if Linked then
+                  --  The partial's sync passes; the file's own, after the
+                  --  text was written into it, does not.
+                  Syncs.Fail_Next (Syncs.File, Passing => 1);
+                  Model_Runner.Tools.Editing.Replace ("synced.txt", "newer", Put, Base => Tree);
+                  Assert (not Put.Failed and then not Put.Durable
+                          and then Whole_File (Tree & "/synced2.txt") = "newer"
+                          and then not Partial_Left ("synced.txt"),
+                          "a change written in place that would not sync was told as durable");
+                  Ada.Directories.Delete_File (Tree & "/synced2.txt");
+               end if;
+            end;
+            Model_Runner.Tools.Editing.Replace ("synced.txt", "last", Put, Base => Tree);
+            Assert (not Put.Failed and then Put.Durable, "a change that synced was told as not durable");
+            Ada.Directories.Delete_File (Tree & "/synced.txt");
          end;
          --  A file with no revision -- bytes, or past what is read whole --
          --  is stamped by its change: one stamp for every version of it, a

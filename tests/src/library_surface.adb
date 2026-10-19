@@ -17,6 +17,10 @@ package body Library_Surface is
       --  crash a commit at each and reopen the store, and nothing else.
       new String'("Crash_At"),
 
+      --  Having a later sync fail: for the tests of what a write does when
+      --  the device will not take it, and nothing else.
+      new String'("Fail_Next"),
+
       --  How many stacks fetched ahead wait untaken: for the test that a
       --  paired mixture's read-ahead is taken, which nothing else asks.
       new String'("Prefetches_Held"),
