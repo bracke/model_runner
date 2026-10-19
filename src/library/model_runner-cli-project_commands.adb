@@ -939,11 +939,21 @@ package body Model_Runner.CLI.Project_Commands is
                   E.Add_Text (Status, "name", "time");
                   E.Add_Text (Status, "detail", "the work ran out of the time it was given");
                when Model_Runner.Agent.Token_Limit =>
-                  E.Add_Text (Status, "name", "the agent's token budget");
-                  E.Add_Text (Status, "detail", "the model used all its tokens -- /config token_budget says which"
-                              & " setting holds for this task (its kind's task.token_budget.KIND, else"
-                              & " agents.token_budget, and a decision's ruling over either), and /reconfigure"
-                              & " of that one gives it more");
+                  --  Its replies cut at their length, every time, with the
+                  --  budget not spent: the reply's length was the limit, and
+                  --  the budget's advice was not the way out.
+                  if Budget = 0 or else All_Spent < Budget then
+                     E.Add_Text (Status, "name", "the reply's length");
+                     E.Add_Text (Status, "detail", "the model's replies reached their length limit, again and"
+                                 & " again, before a call or an answer -- a model thinking at length: --max-tokens"
+                                 & " gives a reply more room, --no-think asks it not to think");
+                  else
+                     E.Add_Text (Status, "name", "the agent's token budget");
+                     E.Add_Text (Status, "detail", "the model used all its tokens -- /config token_budget says which"
+                                 & " setting holds for this task (its kind's task.token_budget.KIND, else"
+                                 & " agents.token_budget, and a decision's ruling over either), and /reconfigure"
+                                 & " of that one gives it more");
+                  end if;
                when others =>
                   E.Add_Text (Status, "name", "the agent's steps");
                   E.Add_Text (Status, "detail", "the model used all its steps with a call still open -- /config"

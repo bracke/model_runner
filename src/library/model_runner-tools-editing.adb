@@ -12,6 +12,7 @@ with Hostkit.Durability;
 with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Metadata;
+with Hostkit.Metadata_Copy;
 
 package body Model_Runner.Tools.Editing is
 
@@ -220,29 +221,63 @@ package body Model_Runner.Tools.Editing is
       Base    : String := "")
    is
       use Ada.Streams;
-      Disk   : constant String := On_Disk (Base, Path);
+      Given  : constant String := On_Disk (Base, Path);
+      --  A link written through to the file it names, which the path's
+      --  checks found inside the tree: renamed over, the link became a file
+      --  of its own and what it named was left as it was.
+      Disk   : constant String :=
+        (if Hostkit.Fs.Is_Link (Given) and then Hostkit.Fs.Real_Path (Given) /= ""
+         then Hostkit.Fs.Real_Path (Given) else Given);
       Folder : constant String := Ada.Directories.Containing_Directory (Disk);
       --  Hidden beside it, where a crash may leave it, and on the same
       --  filesystem, which the rename needs; named for this process and this
       --  write, so two writers of one file never share it -- one named for
       --  the file alone let a second process empty the first's before it
       --  was renamed in.
+      --  The file's own name held to a length that leaves room for the
+      --  rest within a name's limit: a long name was a file that could not
+      --  be written at all.
+      Named   : constant String := Ada.Directories.Simple_Name (Disk);
       Partial : constant String :=
-        (if Folder = "" then "" else Folder & "/") & "." & Ada.Directories.Simple_Name (Disk)
+        (if Folder = "" then "" else Folder & "/") & "."
+        & Named (Named'First .. Named'First + Natural'Min (Named'Length, 160) - 1)
         & ".model_runner-partial." & Trim (Integer'Image (Hostkit.Host.Own_Process_Id))
         & "." & Trim (Natural'Image (Next_Partial));
       There  : constant Boolean :=
         Ada.Directories.Exists (Disk)
         and then Ada.Directories."=" (Ada.Directories.Kind (Disk), Ada.Directories.Ordinary_File);
       Before : constant String := (if There then Revision_Of (Path, Base) else "");
+      --  Whether the file has other names than this one: hard links.
+      Shared_By_Names : constant Boolean :=
+        There and then Hostkit.Metadata_Copy.Is_Available (Hostkit.Metadata_Copy.Capture (Disk))
+        and then Interfaces."<" (1, Hostkit.Metadata_Copy.Link_Count (Hostkit.Metadata_Copy.Capture (Disk)));
       After  : constant String := Revision (Content);
       File   : Stream_IO.File_Type;
+
+      --  The folders this write made for the file, deepest first: taken
+      --  away again where the write fails, as they were not there before.
+      Made_Folders : array (1 .. 64) of U.Unbounded_String;
+      Made_Count   : Natural := 0;
 
       procedure Fail (Text : String) is
       begin
          Result := Failing (Text);
          Result.Before_Revision := U.To_Unbounded_String (Before);
          Result.After_Revision := U.To_Unbounded_String (Before);
+         --  Empty ones only, and never followed through a link: a folder
+         --  something else put a file in since stays.
+         for Index in 1 .. Made_Count loop
+            begin
+               if Ada.Directories.Exists (U.To_String (Made_Folders (Index)))
+                 and then not Hostkit.Fs.Is_Link (U.To_String (Made_Folders (Index)))
+               then
+                  Ada.Directories.Delete_Directory (U.To_String (Made_Folders (Index)));
+               end if;
+            exception
+               when others =>
+                  exit;
+            end;
+         end loop;
       end Fail;
    begin
       Result := (others => <>);
@@ -253,6 +288,22 @@ package body Model_Runner.Tools.Editing is
          return;
       end if;
 
+      --  A file no one may write, as its mode says: not written over -- the
+      --  rename put a writable one in its place.
+      if There then
+         declare
+            Available : Boolean;
+            Bits      : constant Natural := Hostkit.Metadata.File_Permission_Bits (Disk, Available);
+         begin
+            if Available and then (Bits / 8#200#) mod 2 = 0 and then (Bits / 8#20#) mod 2 = 0
+              and then (Bits / 8#2#) mod 2 = 0
+            then
+               Fail (Path & " is read-only, so it is not written over: a person makes it writable first");
+               return;
+            end if;
+         end;
+      end if;
+
       --  Its folder made with it -- and the reason said where it cannot be.
       if Folder /= "" and then Ada.Directories.Exists (Folder)
         and then Ada.Directories."/=" (Ada.Directories.Kind (Folder), Ada.Directories.Directory)
@@ -261,6 +312,23 @@ package body Model_Runner.Tools.Editing is
                & Ada.Directories.Simple_Name (Folder) & " is a file");
          return;
       elsif Folder /= "" and then not Ada.Directories.Exists (Folder) then
+         --  Which of its folders are not there yet, deepest first.
+         declare
+            Up : U.Unbounded_String := U.To_Unbounded_String (Folder);
+         begin
+            while Made_Count < Made_Folders'Last and then U.Length (Up) > 0
+              and then not Ada.Directories.Exists (U.To_String (Up))
+            loop
+               Made_Count := Made_Count + 1;
+               Made_Folders (Made_Count) := Up;
+               begin
+                  Up := U.To_Unbounded_String (Ada.Directories.Containing_Directory (U.To_String (Up)));
+               exception
+                  when others =>
+                     Up := U.Null_Unbounded_String;
+               end;
+            end loop;
+         end;
          begin
             Ada.Directories.Create_Path (Folder);
          exception
@@ -366,7 +434,43 @@ package body Model_Runner.Tools.Editing is
             end if;
          end;
       end if;
-      if not Hostkit.Fs.Replace_File (Partial, Disk) then
+      --  Still as it was when this write began: saved by something else
+      --  while the new text was written and flushed, that save would be
+      --  lost under the rename.
+      if There and then Revision_Of (Path, Base) /= Before then
+         if Ada.Directories.Exists (Partial) then
+            Ada.Directories.Delete_File (Partial);
+         end if;
+         Fail (Path & " changed while it was being written, by something other than you: read it again");
+         return;
+      end if;
+      --  A file of more than one name is written in place, its partial
+      --  read back into it: renamed over, the name written went to a new
+      --  file and the others kept the old text.
+      if There and then Shared_By_Names then
+         declare
+            Copy  : Stream_IO.File_Type;
+            Block : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
+         begin
+            for Index in Block'Range loop
+               Block (Index) := Stream_Element (Character'Pos (Content (Content'First + Natural (Index) - 1)));
+            end loop;
+            Stream_IO.Open (Copy, Stream_IO.Out_File, Disk);
+            Stream_IO.Write (Copy, Block);
+            Stream_IO.Close (Copy);
+            Ada.Directories.Delete_File (Partial);
+         exception
+            when Failure : others =>
+               if Stream_IO.Is_Open (Copy) then
+                  Stream_IO.Close (Copy);
+               end if;
+               if Ada.Directories.Exists (Partial) then
+                  Ada.Directories.Delete_File (Partial);
+               end if;
+               Fail ("could not write " & Path & ": " & Ada.Exceptions.Exception_Message (Failure));
+               return;
+         end;
+      elsif not Hostkit.Fs.Replace_File (Partial, Disk) then
          if Ada.Directories.Exists (Partial) then
             Ada.Directories.Delete_File (Partial);
          end if;
@@ -661,6 +765,36 @@ package body Model_Runner.Tools.Editing is
          return Refused;
       end if;
 
+      --  Tabs are no spaces: a line the file indents with a tab, matched by
+      --  one given indented otherwise, would be moved by spaces and lose
+      --  its tab -- a Makefile's recipe so lost breaks its build.
+      declare
+         function Lead (Item : String) return String is
+            Last : Natural := Item'First - 1;
+         begin
+            while Last < Item'Last and then Item (Last + 1) in ' ' | ASCII.HT loop
+               Last := Last + 1;
+            end loop;
+            return Item (Item'First .. Last);
+         end Lead;
+      begin
+         for Offset in 0 .. Natural (Given.Length) - 1 loop
+            declare
+               In_File  : constant String := Lead (U.To_String (File (At_Line + Offset)));
+               In_Given : constant String := Lead (U.To_String (Given (1 + Offset)));
+            begin
+               if Ada.Strings.Fixed.Index (In_File & In_Given, [1 => ASCII.HT]) > 0
+                 and then In_File /= In_Given
+               then
+                  return Failing
+                    ("old_text is in " & Path & " only with its lines' tabs and spaces told apart otherwise, at"
+                     & " line" & Natural'Image (At_Line + Offset) & ": give the lines exactly as read_file shows"
+                     & " them, tabs and all");
+               end if;
+            end;
+         end loop;
+      end;
+
       declare
          Shift : constant Integer :=
            Indent (U.To_String (File (At_Line))) - Indent (U.To_String (Given.First_Element));
@@ -670,17 +804,22 @@ package body Model_Runner.Tools.Editing is
          Ends_CR    : constant Boolean :=
            First_Line'Length > 0 and then First_Line (First_Line'Last) = ASCII.CR;
          Moved : U.Unbounded_String;
-         --  Trimmed as what it replaces was: blank lines at its ends were
-         --  no part of what was found, and are none of what is put.
+         --  The lines it puts, as written -- blank ones the model gave at its
+         --  ends too, which were dropped -- but the empty one its closing
+         --  line break makes: the line break of the lines replaced is the
+         --  file's, and a blank line was put in for it.
          function Trimmed return Line_Lists.Vector is
             Result : Line_Lists.Vector := Lines_Of (New_Text);
          begin
-            while not Result.Is_Empty and then Bare (U.To_String (Result.First_Element)) = "" loop
-               Result.Delete_First;
-            end loop;
-            while not Result.Is_Empty and then Bare (U.To_String (Result.Last_Element)) = "" loop
+            --  Nothing given: no line, not one empty one.
+            if New_Text = "" then
+               return Line_Lists.Empty_Vector;
+            end if;
+            if New_Text'Length > 0 and then New_Text (New_Text'Last) = ASCII.LF
+              and then not Result.Is_Empty and then U.Length (Result.Last_Element) = 0
+            then
                Result.Delete_Last;
-            end loop;
+            end if;
             return Result;
          end Trimmed;
          Fresh : constant Line_Lists.Vector := Trimmed;
@@ -705,7 +844,11 @@ package body Model_Runner.Tools.Editing is
             end;
          end loop;
          for Index in 1 .. Natural (File.Length) loop
-            if Index = At_Line then
+            --  Nothing put in their place: the lines go, their breaks with
+            --  them -- a blank line was left where they were.
+            if Index = At_Line and then Fresh.Is_Empty then
+               goto Next_Line;
+            elsif Index = At_Line then
                U.Append (After, Moved);
             elsif Index in At_Line + 1 .. At_Line + Natural (Given.Length) - 1 then
                goto Next_Line;
@@ -805,7 +948,7 @@ package body Model_Runner.Tools.Editing is
                      Within := Within + 1;
                      Where := From;
                   end if;
-                  From := Ada.Strings.Fixed.Index (Text, Old_Text, From + 1);
+                  From := (if From >= Text'Last then 0 else Ada.Strings.Fixed.Index (Text, Old_Text, From + 1));
                end loop;
                return (if Within = 1 then Where else 0);
             end Near;

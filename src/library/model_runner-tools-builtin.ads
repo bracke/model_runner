@@ -359,6 +359,7 @@ private
    --  The revisions, kept by calls that may run side by side.
    protected type Revisions is
       procedure Put (Path : String; Revision : String);
+      procedure Forget (Path : String);
       function Has (Path : String) return Boolean;
       function Get (Path : String) return String;
    private

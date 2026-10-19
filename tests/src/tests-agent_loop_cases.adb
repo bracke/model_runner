@@ -267,8 +267,10 @@ package body Tests.Agent_Loop_Cases is
       Told_Lost := False;
       for Index in 1 .. Conv.Length (Messages) loop
          if Conv."=" (Conv.Sender_At (Messages, Index), Conv.User_Role)
-           and then Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "could not be read, so it was not run")
-                    > 0
+           and then (Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "could not be read, so it was not run")
+                       > 0
+                     or else Ada.Strings.Fixed.Index
+                               (Conv.Content_At (Messages, Index), "in the middle of one more tool call") > 0)
          then
             Told_Lost := True;
          end if;
@@ -376,6 +378,40 @@ package body Tests.Agent_Loop_Cases is
          Run (Replies, Seen, Ended);
          Assert (Ada.Directories.Exists (Dir & "/kept.txt") and then Told_Lost,
                  "a block that would not read took the good call with it, or was not said");
+      end;
+
+      --  Cut at its length in the middle of its second call: the whole
+      --  first one runs -- taken for the call cut short, it was not.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("whole.txt", "w") & "<tool_call>{""name"": ""write_file"", ""argu");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Ada.Directories.Exists (Dir & "/whole.txt") and then Told_Lost,
+                 "a whole call before one cut at the length was not run, or the cut one not said:"
+                 & Seen.Results.Length'Image & Seen.Cut_Offs'Image & " " & Told_Lost'Image & " "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  Halted, and a block lost beside: every call answered before the
+      --  model is told of the lost one -- a note among the answers parted
+      --  them from their calls.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Gate    : aliased Counter;
+      begin
+         Replies.Replies.Append
+           (Write ("both-a.txt", "a") & Write ("both-b.txt", "b")
+            & "<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>");
+         Gate.Halt_At := 2;
+         Run (Replies, Seen, Ended, Approver => Gate'Unchecked_Access);
+         Assert (Unanswered = 0 and then Told_Lost,
+                 "a halt's answers were parted from their calls by the note:" & Unanswered'Image);
       end;
 
       --  A reply that ended within its thought's budget does not hold the

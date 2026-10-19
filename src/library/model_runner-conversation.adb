@@ -754,10 +754,29 @@ package body Model_Runner.Conversation is
          end loop;
          Opens_Thought := Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>";
          --  A close ends the reasoning where the reply opened it, or -- one
-         --  the prompt opened -- where it comes before any call: a call's
-         --  arguments that spell </think>, in a reply that never thought,
-         --  cut the reply inside the call and dropped it.
-         if Close /= 0 and then (Opens_Thought or else First_Call = 0 or else Close < First_Call) then
+         --  the prompt opened -- unless it lies inside a call that reads as
+         --  one: a call's arguments that spell </think>, in a reply that
+         --  never thought, cut the reply inside the call and dropped it;
+         --  and a thought the prompt opened may talk of <tool_call> before
+         --  it closes.
+         if Close /= 0 and then not Opens_Thought and then First_Call /= 0 and then First_Call < Close then
+            declare
+               Shut : constant Natural := Ada.Strings.Fixed.Index (Reply (Close .. Reply'Last), "</tool_call>");
+               Here : Model_Runner.Tools.Calls;
+               Read : E.Error_Info;
+               Call_Holds_It : Boolean := False;
+            begin
+               if Shut /= 0 then
+                  Model_Runner.Tools.Read_Calls
+                    (Here, Reply (First_Call .. Shut + 11), Read, Syntax => Syntax, Offered => Offered);
+                  Call_Holds_It := E.Is_Ok (Read) and then Model_Runner.Tools.Count (Here) > 0;
+                  Model_Runner.Tools.Close (Here);
+               end if;
+               if not Call_Holds_It then
+                  return Close + 8;
+               end if;
+            end;
+         elsif Close /= 0 then
             return Close + 8;
          end if;
          if Opens_Thought then

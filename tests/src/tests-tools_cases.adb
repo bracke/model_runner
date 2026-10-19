@@ -1,5 +1,6 @@
 with AUnit.Test_Cases;
 with Ada.Strings.Fixed;
+with GNAT.OS_Lib;
 with Ada.Real_Time;
 with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
@@ -2809,12 +2810,103 @@ package body Tests.Tools_Cases is
          Assert (Whole_File (Tree & "/loose.txt") = "bar" & ASCII.LF & "baz" & ASCII.LF,
                  "a loose edit put a blank line in: " & Whole_File (Tree & "/loose.txt"));
 
+         --  A loose match across a tab is refused, not moved by spaces: the
+         --  file's tab was lost to them.
+         Placed.Run ("write_file", "{""path"": ""tabbed.txt"", ""content"": ""all:\n\tgcc foo  \n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""tabbed.txt"", ""old_text"": ""    gcc foo\n"","
+                     & " ""new_text"": ""    gcc bar\n""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed and then Whole_File (Tree & "/tabbed.txt") = "all:" & ASCII.LF & ASCII.HT
+                 & "gcc foo  " & ASCII.LF,
+                 "a loose edit moved a tabbed line by spaces: " & Room (Room'First .. Last));
+         --  Matched loosely and given nothing in its place: the lines go,
+         --  not a blank line left for them.
+         Placed.Run ("write_file", "{""path"": ""gone.txt"", ""content"": ""a\nb  \nc\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""gone.txt"", ""old_text"": ""b\n"", ""new_text"": """"}",
+                     Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/gone.txt") = "a" & ASCII.LF & "c" & ASCII.LF,
+                 "a loose edit to nothing left a blank line: " & Whole_File (Tree & "/gone.txt"));
+         --  A file no one may write is not written over.
+         Placed.Run ("write_file", "{""path"": ""locked.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
+         declare
+            Kept : constant Boolean := Hostkit.Metadata.Set_Permissions (Tree & "/locked.txt", 8#444#);
+         begin
+            Placed.Run ("read_file", "{""path"": ""locked.txt""}", Room, Last, Ended, Status);
+            Placed.Run ("write_file", "{""path"": ""locked.txt"", ""content"": ""theirs""}", Room, Last, Ended,
+                        Status);
+            Assert (not Kept or else (not Ended.Changed and then Whole_File (Tree & "/locked.txt") = "mine"),
+                    "a read-only file was written over: " & Room (Room'First .. Last));
+            Assert (Hostkit.Metadata.Set_Permissions (Tree & "/locked.txt", 8#644#) or else not Kept,
+                    "the read-only file could not be made writable again");
+         end;
+         --  Through a link to a file in the tree: the file named is written,
+         --  and the link stays a link.
+         Placed.Run ("write_file", "{""path"": ""target.txt"", ""content"": ""one""}", Room, Last, Ended, Status);
+         if Hostkit.Fs.Create_Link ("target.txt", Tree & "/linked.txt") then
+            Placed.Run ("read_file", "{""path"": ""linked.txt""}", Room, Last, Ended, Status);
+            Placed.Run ("write_file", "{""path"": ""linked.txt"", ""content"": ""two""}", Room, Last, Ended,
+                        Status);
+            Assert (Hostkit.Fs.Is_Link (Tree & "/linked.txt") and then Whole_File (Tree & "/target.txt") = "two",
+                    "a write through a link made the link a file and left what it named: "
+                    & Room (Room'First .. Last));
+         end if;
+         --  A long name is written: the partial beside it was past a name's
+         --  limit.
+         declare
+            Long_Name : constant String := [1 .. 240 => 'n'] & ".txt";
+         begin
+            Placed.Run ("write_file", "{""path"": """ & Long_Name & """, ""content"": ""long""}",
+                        Room, Last, Ended, Status);
+            Assert (Ended.Changed, "a file of a long name could not be written: " & Room (Room'First .. Last));
+         end;
+
+         --  A write that fails leaves no folder it made: a name past the
+         --  limit fails after its folders were made, and they stayed.
+         Placed.Run ("write_file", "{""path"": ""made/deep/" & [1 .. 300 => 'n'] & ".txt"", ""content"": ""x""}",
+                     Room, Last, Ended, Status);
+         Assert (not Ended.Changed and then not Ada.Directories.Exists (Tree & "/made"),
+                 "a failed write left the folders it made");
+         --  A file of two names, written under one, holds the new text under
+         --  both: renamed over, the other name kept the old.
+         Placed.Run ("write_file", "{""path"": ""hard.txt"", ""content"": ""one""}", Room, Last, Ended, Status);
+         declare
+            Linked : Boolean;
+            Args   : GNAT.OS_Lib.Argument_List :=
+              [new String'(Tree & "/hard.txt"), new String'(Tree & "/hard2.txt")];
+         begin
+            GNAT.OS_Lib.Spawn ("/bin/ln", Args, Linked);
+            for One of Args loop
+               GNAT.OS_Lib.Free (One);
+            end loop;
+            if Linked then
+               Placed.Run ("read_file", "{""path"": ""hard.txt""}", Room, Last, Ended, Status);
+               Placed.Run ("write_file", "{""path"": ""hard.txt"", ""content"": ""two""}", Room, Last, Ended,
+                           Status);
+               Assert (Whole_File (Tree & "/hard2.txt") = "two",
+                       "a file of two names written under one kept the old text under the other");
+            end if;
+         end;
+         --  A loose edit keeps the blank line the model gave its new text.
+         Placed.Run ("write_file", "{""path"": ""blank.txt"", ""content"": ""foo  \nbaz\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""blank.txt"", ""old_text"": ""foo\n"", ""new_text"": ""bar\n\n""}",
+                     Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/blank.txt") = "bar" & ASCII.LF & ASCII.LF & "baz" & ASCII.LF,
+                 "a loose edit dropped the blank line it was given: " & Whole_File (Tree & "/blank.txt"));
+
          --  Seen, and gone since: not made again over what was seen.
          Placed.Run ("read_file", "{""path"": ""loose.txt""}", Room, Last, Ended, Status);
          Ada.Directories.Delete_File (Tree & "/loose.txt");
          Placed.Run ("write_file", "{""path"": ""loose.txt"", ""content"": ""back""}", Room, Last, Ended, Status);
          Assert (not Ended.Changed and then not Ada.Directories.Exists (Tree & "/loose.txt"),
                  "a file seen and gone since was made again unseen: " & Room (Room'First .. Last));
+         --  Read again, as it is told, and found gone: then it is made anew --
+         --  remembered as seen, no write could ever make it again.
+         Placed.Run ("read_file", "{""path"": ""loose.txt""}", Room, Last, Ended, Status);
+         Placed.Run ("write_file", "{""path"": ""loose.txt"", ""content"": ""back""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed and then Whole_File (Tree & "/loose.txt") = "back",
+                 "a file read again and found gone could not be made anew: " & Room (Room'First .. Last));
 
          --  A search held to what may be read shows nothing of a place
          --  denied; let go, it shows it again.
@@ -3383,6 +3475,14 @@ package body Tests.Tools_Cases is
                   & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
             "edit({""old_string"": ""a</function>b""})",
             "a Qwen3-Coder value spelling </function> cut the call there");
+      --  A parameter left open does not swallow the next call: its value
+      --  ends where its call's envelope does.
+      Same (Read ("<tool_call>" & LF & "<function=edit>" & LF & "<parameter=old_string>" & LF & "a" & LF
+                  & "</function>" & LF & "</tool_call>" & LF
+                  & "<tool_call>" & LF & "<function=edit>" & LF & "<parameter=old_string>" & LF & "b" & LF
+                  & "</parameter>" & LF & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
+            "edit({""old_string"": ""a""})edit({""old_string"": ""b""})",
+            "a Qwen3-Coder parameter left open swallowed the call after it");
       Same (Read ("<function=other>" & LF & "<parameter=n>" & LF & "0123" & LF
                   & "</parameter>" & LF & "</function>", Tools.Qwen_XML,
                   Offered => False),
@@ -3763,6 +3863,27 @@ package body Tests.Tools_Cases is
          Assert (E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed)
                  and then Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
                  "a block that would not read took the reply's good call with it");
+         --  A thought the prompt opened -- no <think> of its own -- that
+         --  talks of <tool_call> before it closes: its close still ends it,
+         --  and the call after it is read.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "I will emit a <tool_call> for it." & LF & "</think>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 12}}</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a thought the prompt opened lost its close to a <tool_call> it talked of");
+         --  An object shown in the prose, naming no call, is the prose's.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "The settings are:" & LF & "{""depth"": 3}" & LF & "Now the call."
+                  & LF & "{""name"": ""edit"", ""arguments"": {""count"": 13}}",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Ada.Strings.Fixed.Index
+                   (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
+                    "Now the call.") > 0,
+                 "prose after an object it showed was cut from the turn");
          --  Drafted first and then made, as written: made once.
          Model_Runner.Conversation.Append_Reply
            (Talk, "<think>" & LF & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 5}}</tool_call>"

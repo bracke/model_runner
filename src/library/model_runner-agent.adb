@@ -900,9 +900,37 @@ package body Model_Runner.Agent is
             --  what was written before the cut -- a file's content stopping
             --  mid-line -- and is not run: a write of it would leave the
             --  file cut short.
+            --  Not where the cut call is the block that would not read: the
+            --  calls before it are whole and run, and the cut one is said
+            --  -- taken for the last of those read, a whole call was not run.
+            Lost_Cut : constant Boolean :=
+              Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
+              and then not Closes_Call (Reply_Text)
+              and then E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed);
             Cut_Last : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
-              and then not Closes_Call (Reply_Text);
+              and then not Closes_Call (Reply_Text)
+              and then not Lost_Cut;
+
+            --  A block of the reply that would not read, beside the calls
+            --  that did and ran: said, so the model writes it again -- after
+            --  every answer to the turn's calls, which go together.
+            procedure Tell_Lost is
+               Told : E.Error_Info;
+            begin
+               if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed) then
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     (if Lost_Cut
+                      then "Your reply reached its length limit in the middle of one more tool call, so that"
+                           & " one was not run; the calls before it did run. Write it again if you still need"
+                           & " it, and think less before it."
+                      else "One more tool call in your reply could not be read, so it was not run; the calls"
+                           & " before it did run. Write it again, exactly in the format the tools were offered"
+                           & " in, if you still need it."),
+                     Told);
+               end if;
+            end Tell_Lost;
          begin
             --  Stopped at its length limit before it called or answered -- a
             --  reasoning model mid-thought: not an answer. It is told so and
@@ -939,7 +967,9 @@ package body Model_Runner.Agent is
                if Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full then
                   Result.Reason :=
                     (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
-               elsif E.Is_Error (Reading) and then Result.Steps >= Max_Steps then
+               --  A call attempted, its block closed, that would not read --
+               --  not prose that names the tag.
+               elsif E.Is_Error (Reading) and then Result.Steps >= Max_Steps and then Closes_Call (Reply_Text) then
                   Result.Reason := Step_Limit;
                end if;
                exit Step_Loop;
@@ -1410,20 +1440,6 @@ package body Model_Runner.Agent is
                   end;
                end loop Report_Calls;
 
-               --  A block of the reply that would not read, beside the calls
-               --  that did and ran: said, so the model writes it again.
-               if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed) then
-                  declare
-                     Told : E.Error_Info;
-                  begin
-                     Conv.Append
-                       (Messages, Conv.User_Role,
-                        "One more tool call in your reply could not be read, so it was not run; the calls"
-                        & " above did run. Write it again, exactly in the format the tools were offered in,"
-                        & " if you still need it.", Told);
-                  end;
-               end if;
-
                if Halted then
                   --  The calls the gate stopped before they ran each have an
                   --  answer too, saying so: a conversation picked up again
@@ -1438,9 +1454,11 @@ package body Model_Runner.Agent is
                         exit when E.Is_Error (Told);
                      end;
                   end loop;
+                  Tell_Lost;
                   Result.Reason := Declined;
                   exit Step_Loop;
                end if;
+               Tell_Lost;
 
                --  A call the run's own limits stopped ends the run: its
                --  cancellation, its deadline. A tool's own time limit is

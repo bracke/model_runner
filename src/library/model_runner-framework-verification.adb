@@ -439,6 +439,25 @@ package body Model_Runner.Framework.Verification is
    --  What evidence is checked against: the files as they are now.
    function File_Lines (Files : Repository.Graph) return String;
 
+   --  The documentation's files, each by its print: left out of what
+   --  evidence is current against, and so out of what a run reused is the
+   --  same on -- a check of the documents, or the changelog, reused a pass
+   --  taken before they changed.
+   function Document_Lines (Files : Repository.Graph) return String is
+      Result : Unbounded_String;
+   begin
+      for Index in 1 .. Repository.File_Count (Files) loop
+         declare
+            One : constant Repository.File_Entry := Repository.File_At (Files, Index);
+         begin
+            if Repository."=" (One.Role, Repository.Documentation) then
+               Append (Result, To_String (One.Fingerprint) & ASCII.HT & To_String (One.Path) & ASCII.LF);
+            end if;
+         end;
+      end loop;
+      return To_String (Result);
+   end Document_Lines;
+
    package Print_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash,
       Equivalent_Keys => "=");
@@ -588,8 +607,8 @@ package body Model_Runner.Framework.Verification is
       --  And the harness that ran them: a newer one reads checks' output
       --  into diagnostics its own way, and does not inherit an older one's.
       Mix (Model_Runner.Version);
-      for Field of Name_Lists.Vector'(["checks_fingerprint", "configuration_fingerprint",
-                                       "environment_fingerprint", "network"])
+      for Field of Name_Lists.Vector'(["checks_fingerprint", "definition_fingerprint", "documents_fingerprint",
+                                       "configuration_fingerprint", "environment_fingerprint", "network"])
       loop
          Mix (Records.Get (Value, Field));
       end loop;
@@ -839,7 +858,9 @@ package body Model_Runner.Framework.Verification is
       Passed := False;
       Rules.Prefer_Offline := Offline;
 
-      if Text = "" then
+      --  A profile of no checks -- empty, or only its separators -- is no
+      --  profile to pass: " ; " parsed to none, and passed.
+      if Text = "" or else Length (Checks) = 0 then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", "profile " & Profile);
          return;
@@ -893,6 +914,16 @@ package body Model_Runner.Framework.Verification is
             Records.Get (Settings, "configuration_fingerprint"));
          Records.Set
            (Value, "checks_fingerprint", Configurations.Verification_Fingerprint (Settings));
+         --  And the checks' text as this run has them: a work's frozen
+         --  profile, where the configuration's has changed since, is not
+         --  the configuration's -- evidence of the one was reused for the
+         --  other, and a check added since never ran.
+         Records.Set (Value, "definition_fingerprint", Fingerprint (Text));
+         Records.Set
+           (Value, "documents_fingerprint",
+            Fingerprint (Document_Lines
+                           (if Workspace = "" then Repository.Now (Item)
+                            else Repository.Scan (Workspace, Repository.Roots_Of (Item)))));
          Records.Set
            (Value, "environment_fingerprint",
             Fingerprint (Model_Runner.Platform.Passed_Environment
@@ -1069,14 +1100,20 @@ package body Model_Runner.Framework.Verification is
                      Read  : E.Error_Info;
                      Same  : Boolean;
 
-                     --  Whether a value given to the checks is one a command
-                     --  names: one none names changes nothing they do.
+                     --  Whether a value given to the checks is one a command or
+                     --  a directory names, as {NAME} -- the form Filled puts
+                     --  values in: one none names changes nothing they do.
+                     --  Looked for as ${NAME}, a template's form, none was
+                     --  ever found, and tests chosen from another set of
+                     --  files reused the evidence of the first.
                      function Used (Field : String) return Boolean is
                         Name : constant String := Field (Field'First + 6 .. Field'Last);
                      begin
                         return Name = "scope" or else (for some Index in 1 .. Length (Checks) =>
                                   Ada.Strings.Fixed.Index
-                                    (To_String (Element (Checks, Index).Command), "${" & Name & "}") > 0);
+                                    (To_String (Element (Checks, Index).Command), "{" & Name & "}") > 0
+                                  or else Ada.Strings.Fixed.Index
+                                            (To_String (Element (Checks, Index).Directory), "{" & Name & "}") > 0);
                      end Used;
                   begin
                      Stores.Read (Item, Verification_Area, Id, Prior, Read);
@@ -1094,9 +1131,13 @@ package body Model_Runner.Framework.Verification is
                                   (Prior, (if Workspace = "" then "repository_revision" else "workspace_revision"))
                                 = Now
                        and then Records.Get (Prior, "scope_files") = ""
+                       --  Nor evidence whose sources changed while it ran: it
+                       --  was taken on no one tree, whatever it ended on.
+                       and then Records.Get (Prior, "changed_during") = ""
                        and then (for all Field of Name_Lists.Vector'
-                                   (["checks_fingerprint", "configuration_fingerprint",
-                                     "environment_fingerprint", "network", "harness_version"]) =>
+                                   (["checks_fingerprint", "definition_fingerprint", "documents_fingerprint",
+                                     "configuration_fingerprint", "environment_fingerprint", "network",
+                                     "harness_version"]) =>
                                    Records.Get (Prior, Field) = Records.Get (Value, Field));
                      --  The same values given to its commands, none more.
                      if Same then

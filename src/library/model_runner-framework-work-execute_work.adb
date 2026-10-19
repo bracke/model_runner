@@ -1153,7 +1153,7 @@ begin
                 "failed");
       return;
    elsif E.Is_Error (Ran) and then Ran.Code = E.Framework_Limit_Exceeded
-     and then Limit_Named (Ran) in "the agent's steps" | "the agent's token budget"
+     and then Limit_Named (Ran) in "the agent's steps" | "the agent's token budget" | "the reply's length"
    then
       --  Its steps or its tokens spent are a limit as its time is: the
       --  task set aside, not failed -- the session says it waits, and the

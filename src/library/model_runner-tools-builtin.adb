@@ -1132,6 +1132,17 @@ package body Model_Runner.Tools.Builtin is
          return "";
    end Rooted;
 
+   --  A file's text read whole, with the revision it was read at.
+   function Stamped (Read : Reply; Now : String) return Reply is
+      Text : constant String := Read.Text & ASCII.LF & "(revision " & Now & ")";
+   begin
+      return (Length => Text'Length, Failed => False, Changed => False,
+              Halted => Read.Halted, Truncated => Read.Truncated, Tokens => 0,
+              Before_Revision => Model_Runner.Tools.Runner.Mark (Now),
+              After_Revision  => Model_Runner.Tools.Runner.Mark (Now),
+              Created => False, Text => Text);
+   end Stamped;
+
    --  A file whole, and its revision after it, for edit_file to be given.
    function Read_File (Args : String; Base : String) return Reply is
       Have : Boolean;
@@ -1142,23 +1153,23 @@ package body Model_Runner.Tools.Builtin is
       elsif not Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (Base, Path)) then
          return Failure ("no file at " & Path);
       end if;
-      declare
-         Read : constant Reply := Read_Capped (Path, Base);
-         Now  : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
-      begin
-         if Read.Failed or else Now = "" then
-            return Read;
-         end if;
+      --  Read between two looks at its revision that agree: saved in the
+      --  middle, the old bytes were stamped with the new revision, and a
+      --  write of them went through over the save.
+      for Attempt in 1 .. 3 loop
          declare
-            Text : constant String := Read.Text & ASCII.LF & "(revision " & Now & ")";
+            Before : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
+            Read   : constant Reply := Read_Capped (Path, Base);
+            Now    : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
          begin
-            return (Length => Text'Length, Failed => False, Changed => False,
-                    Halted => Read.Halted, Truncated => Read.Truncated, Tokens => 0,
-                    Before_Revision => Model_Runner.Tools.Runner.Mark (Now),
-                    After_Revision  => Model_Runner.Tools.Runner.Mark (Now),
-                    Created => False, Text => Text);
+            if Read.Failed or else Now = "" then
+               return Read;
+            elsif Before = Now then
+               return Stamped (Read, Now);
+            end if;
          end;
-      end;
+      end loop;
+      return Failure (Path & " kept changing while it was read, by something other than you: read it again");
    end Read_File;
 
    --  What the editing package said, as a reply.
@@ -2278,6 +2289,11 @@ package body Model_Runner.Tools.Builtin is
          Held.Include (Path, Revision);
       end Put;
 
+      procedure Forget (Path : String) is
+      begin
+         Held.Exclude (Path);
+      end Forget;
+
       function Has (Path : String) return Boolean is (Held.Contains (Path));
 
       function Get (Path : String) return String
@@ -2662,6 +2678,18 @@ package body Model_Runner.Tools.Builtin is
 
                Given : constant Reply := Answered;
             begin
+               --  Read, and gone: what was seen of it is forgotten, so a
+               --  write makes it anew as the refusal said -- read it again
+               --  first. Remembered, every write was refused and no read
+               --  could clear it.
+               if Have and then Given.Failed and then Named in "read_file" | "read_range"
+                 and then not Ada.Directories.Exists
+                                (Model_Runner.Tools.Editing.On_Disk (U.To_String (Self.Base), Spelt))
+               then
+                  Self.Seen.Forget (Path);
+                  Self.Whole.Forget (Path);
+                  Self.Read_At.Forget (Path);
+               end if;
                --  Which lines it read: a part, kept; the whole, none.
                if Have and then not Given.Failed and then Named in "read_file" | "read_range" then
                   declare

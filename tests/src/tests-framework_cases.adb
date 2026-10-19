@@ -10157,6 +10157,46 @@ package body Tests.Framework_Cases is
       Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
       Assert (E.Is_Ok (Status) and then Indexes = 1,
               "the same run kept left no index -- this test would not see one:" & Natural'Image (Indexes));
+      S.Commit (Store, Change, Status);
+      --  Reused the same, on the same tree with the same checks: the new
+      --  evidence names what it was reused from.
+      declare
+         First_Kept : constant String := To_String (Evidence);
+
+         function Reused_From return String is
+            Held : R.Item;
+            Got  : E.Error_Info;
+         begin
+            S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Evidence), Held, Got);
+            return R.Get (Held, "reused_from");
+         end Reused_From;
+      begin
+         Change := S.No_Changes;
+         Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused_From = First_Kept, "a run the same on the same tree was not reused: " & Reused_From);
+         --  Not with other checks than the configuration's -- a work's frozen
+         --  profile: one added since never ran.
+         Change := S.No_Changes;
+         Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status,
+                         Definition => "holds: sh check.sh; more: sh check.sh");
+         S.Commit (Store, Change, Status);
+         Assert (Reused_From = "", "a run of other checks reused the evidence of these: " & Reused_From);
+         --  Nor after a document changed: a check of the documents passed
+         --  on the old ones.
+         Change := S.No_Changes;
+         Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Put_File (Fresh_Root (Store) & "/README.md", "changed" & LF);
+         Change := S.No_Changes;
+         Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Reused_From = "", "a run after a document changed reused the evidence of before: " & Reused_From);
+      end;
+      --  A profile of no checks is no profile to pass.
+      Change := S.No_Changes;
+      Vf.Run_Profile (Store, Change, "checks", To_String (Id), Evidence, Passed, Status, Definition => " ; ");
+      Assert (E.Is_Error (Status) and then not Passed, "a profile of no checks passed");
       S.Close (Store);
    end An_Unkept_Run_Leaves_No_Reuse_Index;
 

@@ -557,11 +557,30 @@ package body Model_Runner.Tools is
          Last  := Reply'Last;
          declare
             At_Line_Start : Boolean := True;
+
+            --  Whether the lines from Start, so many of them, name a call.
+            function Names_Call (Start : Positive; Lines : Positive) return Boolean is
+               Upto : Natural := Start - 1;
+            begin
+               for Line in 1 .. Lines loop
+                  exit when Upto >= Reply'Last;
+                  declare
+                     Break : constant Natural :=
+                       Ada.Strings.Fixed.Index (Reply (Upto + 1 .. Reply'Last), [1 => ASCII.LF]);
+                  begin
+                     Upto := (if Break = 0 then Reply'Last else Break);
+                  end;
+               end loop;
+               return Ada.Strings.Fixed.Index (Reply (Start .. Upto), """name""") > 0;
+            end Names_Call;
          begin
             for Start in Reply'First .. Reply'Last loop
+               --  A line that opens an object naming a call, or a fence whose
+               --  object does: an object shown in the prose is the prose's.
                if At_Line_Start
-                 and then (Reply (Start) = '{'
-                           or else (Start + 2 <= Reply'Last and then Reply (Start .. Start + 2) = "```"))
+                 and then ((Reply (Start) = '{' and then Names_Call (Start, Lines => 1))
+                           or else (Start + 2 <= Reply'Last and then Reply (Start .. Start + 2) = "```"
+                                    and then Names_Call (Start, Lines => 2)))
                then
                   Last := Start - 1;
                   while Last >= Reply'First and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
@@ -1461,6 +1480,11 @@ package body Model_Runner.Tools is
                         loop
                            V_Last := V_Last + 1;
                         end loop;
+                        --  Never closed: the value runs to the call's end, not
+                        --  to eleven short of it.
+                        if V_Last + 12 > Last then
+                           V_Last := Last;
+                        end if;
                         P := V_Last + 1;
 
                         --  The value stands on its own lines: the one line
@@ -1746,8 +1770,18 @@ package body Model_Runner.Tools is
                      loop
                         if Marks (Shut, Param_Opens) then
                            declare
+                              --  Not past the call's envelope or the next call:
+                              --  a parameter left open swallowed the call after.
+                              Envelope_End : constant Natural :=
+                                Ada.Strings.Fixed.Index (Reply (Shut .. Reply'Last), "</tool_call>");
+                              Next_Call    : constant Natural :=
+                                (if Shut + 1 > Reply'Last then 0
+                                 else Ada.Strings.Fixed.Index (Reply (Shut + 1 .. Reply'Last), Open_Tag));
+                              Bound        : constant Natural :=
+                                Natural'Min ((if Envelope_End = 0 then Reply'Last else Envelope_End - 1),
+                                             (if Next_Call = 0 then Reply'Last else Next_Call - 1));
                               Param_End : constant Natural :=
-                                Ada.Strings.Fixed.Index (Reply (Shut .. Reply'Last), Param_Shuts);
+                                Ada.Strings.Fixed.Index (Reply (Shut .. Bound), Param_Shuts);
                            begin
                               Shut := (if Param_End = 0 then Shut + 1 else Param_End + Param_Shuts'Length);
                            end;
