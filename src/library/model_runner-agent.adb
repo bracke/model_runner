@@ -1410,7 +1410,34 @@ package body Model_Runner.Agent is
                   end;
                end loop Report_Calls;
 
+               --  A block of the reply that would not read, beside the calls
+               --  that did and ran: said, so the model writes it again.
+               if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed) then
+                  declare
+                     Told : E.Error_Info;
+                  begin
+                     Conv.Append
+                       (Messages, Conv.User_Role,
+                        "One more tool call in your reply could not be read, so it was not run; the calls"
+                        & " above did run. Write it again, exactly in the format the tools were offered in,"
+                        & " if you still need it.", Told);
+                  end;
+               end if;
+
                if Halted then
+                  --  The calls the gate stopped before they ran each have an
+                  --  answer too, saying so: a conversation picked up again
+                  --  rendered calls with none, which a template refuses.
+                  for Call in Planned + 1 .. Asked loop
+                     declare
+                        Told : E.Error_Info;
+                     begin
+                        Conv.Append
+                          (Messages, Conv.Tool_Role,
+                           "error: not run -- the run was stopped before this call", Told);
+                        exit when E.Is_Error (Told);
+                     end;
+                  end loop;
                   Result.Reason := Declined;
                   exit Step_Loop;
                end if;

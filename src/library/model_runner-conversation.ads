@@ -166,9 +166,10 @@ package Model_Runner.Conversation is
    --  @param Status Success, Conversation_Too_Long, or Conversation_Empty
    --    when the reply is empty and carries no call.
    --  @param Reading Whether the calls could be read. A block this cannot
-   --    read leaves the reply appended whole, as text: a reply half taken
-   --    apart is worse than one not taken apart at all, and the caller is
-   --    told which of the two it has.
+   --    read, where no other was read, leaves the reply appended whole, as
+   --    text; beside calls that did read, those are the turn's calls and
+   --    Reading says one was lost, for the caller to tell the model -- one
+   --    bad block took all the others with it. Too many calls leave none.
    --  @param Syntax The shape the reply's calls are written in, passed to the
    --    tools reader (see Model_Runner.Tools.Read_Calls).
    --  @param Offered The tools offered, which name a call's arguments

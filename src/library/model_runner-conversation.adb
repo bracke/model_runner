@@ -888,8 +888,12 @@ package body Model_Runner.Conversation is
         (Asked, Leading_Calls & Reply (Answer_At .. Reply'Last), Reading,
          Syntax => Syntax, Offered => Offered);
 
-      if E.Is_Error (Reading)
-        or else Model_Runner.Tools.Count (Asked) = 0
+      --  One block that would not read leaves the calls that did: they
+      --  are the turn's, and the agent tells the model of the one lost --
+      --  all of them went for one, and the reply was taken as its text.
+      --  Too many calls stay none, as the model is told to split them.
+      if Model_Runner.Tools.Count (Asked) = 0
+        or else (E.Is_Error (Reading) and then not E."=" (Reading.Code, E.Tools_Call_Malformed))
       then
          --  Nothing to take apart, or nothing this can take apart. Either
          --  way the reply is the turn, exactly as it arrived -- but for a

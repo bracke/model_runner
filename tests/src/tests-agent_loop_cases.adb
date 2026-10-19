@@ -140,6 +140,8 @@ package body Tests.Agent_Loop_Cases is
    --  Every call let through, and counted.
    type Counter is new Ag.Approver with record
       Asked : Natural := 0;
+      --  The call it halts the run at, or none at 0.
+      Halt_At : Natural := 0;
    end record;
 
    overriding function Consider (Self : in out Counter; Named : String; Arguments : String) return Ag.Verdict;
@@ -149,7 +151,7 @@ package body Tests.Agent_Loop_Cases is
       pragma Unreferenced (Named, Arguments);
    begin
       Self.Asked := Self.Asked + 1;
-      return Ag.Allow;
+      return (if Self.Halt_At > 0 and then Self.Asked = Self.Halt_At then Ag.Halt else Ag.Allow);
    end Consider;
 
    --  The tiny model, prepared, and what it borrows.
@@ -186,6 +188,11 @@ package body Tests.Agent_Loop_Cases is
       Closed := False;
    end Flush;
 
+   --  How many of the last run's calls had no tool answer after them, and
+   --  whether it was told that a call of its reply could not be read.
+   Unanswered : Natural := 0;
+   Told_Lost  : Boolean := False;
+
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
      (Replies  : in out Script;
@@ -199,7 +206,8 @@ package body Tests.Agent_Loop_Cases is
       Compact  : Boolean := False;
       Pace     : Ag.Pace_Reference := null;
       Pace_Tokens : Natural := 0;
-      Seconds  : Duration := 0.0)
+      Seconds  : Duration := 0.0;
+      Total    : Natural := 0)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -250,9 +258,35 @@ package body Tests.Agent_Loop_Cases is
          Script     => Replies'Unchecked_Access,
          Carry      => Carry,
          Max_Seconds => Seconds,
+         Max_Total_Tokens => Total,
          Pace_Tokens => Pace_Tokens,
          Pace        => Pace,
          Result     => Ended);
+      --  Each assistant turn's calls, against the tool answers after it.
+      Unanswered := 0;
+      Told_Lost := False;
+      for Index in 1 .. Conv.Length (Messages) loop
+         if Conv."=" (Conv.Sender_At (Messages, Index), Conv.User_Role)
+           and then Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "could not be read, so it was not run")
+                    > 0
+         then
+            Told_Lost := True;
+         end if;
+         if Conv."=" (Conv.Sender_At (Messages, Index), Conv.Assistant_Role) then
+            declare
+               Answers : Natural := 0;
+               Next    : Positive := Index + 1;
+            begin
+               while Next <= Conv.Length (Messages)
+                 and then Conv."=" (Conv.Sender_At (Messages, Next), Conv.Tool_Role)
+               loop
+                  Answers := Answers + 1;
+                  Next := Next + 1;
+               end loop;
+               Unanswered := Unanswered + Natural'Max (0, Conv.Call_Count (Messages, Index) - Answers);
+            end;
+         end if;
+      end loop;
       Conv.Close (Messages);
       Model_Runner.Tools.Close (Offered);
    end Run;
@@ -310,6 +344,38 @@ package body Tests.Agent_Loop_Cases is
                  & Ended.Thoughts_Closed'Image & Seen.Results.Length'Image);
          Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing),
                  "a thought closed for the reply was not shown closed");
+      end;
+
+      --  A gate that halts the run at a reply's second call: the first
+      --  runs, and the second is answered as not run -- left with no
+      --  answer, a conversation picked up again had a call with none.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Gate    : aliased Counter;
+      begin
+         Replies.Replies.Append (Write ("halt-a.txt", "a") & Write ("halt-b.txt", "b"));
+         Gate.Halt_At := 2;
+         Run (Replies, Seen, Ended, Approver => Gate'Unchecked_Access);
+         Assert (Ended.Reason = Ag.Declined and then Ada.Directories.Exists (Dir & "/halt-a.txt")
+                 and then not Ada.Directories.Exists (Dir & "/halt-b.txt") and then Unanswered = 0,
+                 "a call a halt stopped was left with no answer:" & Unanswered'Image & " "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  A good call beside a block that will not read: the good one runs,
+      --  and the model is told of the other -- all of them went for one.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append
+           (Write ("kept.txt", "k") & "<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>");
+         Run (Replies, Seen, Ended);
+         Assert (Ada.Directories.Exists (Dir & "/kept.txt") and then Told_Lost,
+                 "a block that would not read took the good call with it, or was not said");
       end;
 
       --  A reply that ended within its thought's budget does not hold the

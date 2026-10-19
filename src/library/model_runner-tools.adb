@@ -1729,6 +1729,8 @@ package body Model_Runner.Tools is
          declare
             Open_Tag  : constant String := "<function=";
             Close_Tag : constant String := "</function>";
+            Param_Opens : constant String := "<parameter=";
+            Param_Shuts : constant String := "</parameter>";
          begin
             Index := Reply'First;
             while Index <= Reply'Last loop
@@ -1736,10 +1738,22 @@ package body Model_Runner.Tools is
                   declare
                      Shut : Natural := Index;
                   begin
+                     --  Each parameter's text stepped over to its close: a
+                     --  file's content may spell </function>, and the call
+                     --  was cut there, its content written short.
                      while Shut <= Reply'Last
                        and then not Marks (Shut, Close_Tag)
                      loop
-                        Shut := Shut + 1;
+                        if Marks (Shut, Param_Opens) then
+                           declare
+                              Param_End : constant Natural :=
+                                Ada.Strings.Fixed.Index (Reply (Shut .. Reply'Last), Param_Shuts);
+                           begin
+                              Shut := (if Param_End = 0 then Shut + 1 else Param_End + Param_Shuts'Length);
+                           end;
+                        else
+                           Shut := Shut + 1;
+                        end if;
                      end loop;
                      if Shut > Reply'Last then
                         Status := E.Make (E.Tools_Call_Malformed);

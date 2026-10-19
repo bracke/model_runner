@@ -3375,6 +3375,14 @@ package body Tests.Tools_Cases is
             "edit({""old_string"": ""    return x"", ""version"": ""3.10"", "
             & """count"": 42, ""flag"": true})",
             "a Qwen3-Coder call's values were trimmed or typed by their look");
+      --  A value that spells the call's closing tag -- a file about such
+      --  calls -- is the value whole: the call was cut there, and the file
+      --  written short.
+      Same (Read ("<tool_call>" & LF & "<function=edit>" & LF
+                  & "<parameter=old_string>" & LF & "a</function>b" & LF & "</parameter>" & LF
+                  & "</function>" & LF & "</tool_call>", Tools.Qwen_XML),
+            "edit({""old_string"": ""a</function>b""})",
+            "a Qwen3-Coder value spelling </function> cut the call there");
       Same (Read ("<function=other>" & LF & "<parameter=n>" & LF & "0123" & LF
                   & "</parameter>" & LF & "</function>", Tools.Qwen_XML,
                   Offered => False),
@@ -3744,6 +3752,17 @@ package body Tests.Tools_Cases is
                             (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
                              """count""") = 0,
                  "a bare call was kept as its turn's text beside the call");
+         --  A good call beside a block that will not read: the good one is
+         --  the turn's call, and the reading says one was lost -- all of
+         --  them went for one.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 11}}</tool_call>" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": }</tool_call>",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed)
+                 and then Model_Runner.Conversation.Call_Count (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a block that would not read took the reply's good call with it");
          --  Drafted first and then made, as written: made once.
          Model_Runner.Conversation.Append_Reply
            (Talk, "<think>" & LF & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 5}}</tool_call>"
