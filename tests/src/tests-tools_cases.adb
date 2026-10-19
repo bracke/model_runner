@@ -34,6 +34,7 @@ with Model_Runner.Agent_Runtime;
 with Model_Runner.Tools.Python_Calls;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Schemas;
+with Model_Runner.Race_Points;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Tools.Runner;
@@ -2977,6 +2978,24 @@ package body Tests.Tools_Cases is
                         Room, Last, Ended, Status);
             Assert (Ended.Changed and then not Ada.Directories.Exists (Stale),
                     "a long name's stale partial was left: " & Room (Room'First .. Last));
+         end;
+         --  Changed after it was read and before its stamp was given: the
+         --  stamp is of what was read, so a write over the change is
+         --  refused -- stamped after, the old bytes went over the new.
+         declare
+            procedure Someone_Saves is
+            begin
+               Put_Bytes (Tree & "/raced.txt", "saved meanwhile");
+            end Someone_Saves;
+         begin
+            Placed.Run ("write_file", "{""path"": ""raced.txt"", ""content"": ""first""}", Room, Last, Ended, Status);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Read_File_Stamps,
+                                          Someone_Saves'Unrestricted_Access);
+            Placed.Run ("read_file", "{""path"": ""raced.txt""}", Room, Last, Ended, Status);
+            Placed.Run ("write_file", "{""path"": ""raced.txt"", ""content"": ""mine""}", Room, Last, Ended,
+                        Status);
+            Assert (not Ended.Changed and then Whole_File (Tree & "/raced.txt") = "saved meanwhile",
+                    "a write over a file saved as it was read went through: " & Room (Room'First .. Last));
          end;
          --  A loose edit keeps the blank line the model gave its new text.
          Placed.Run ("write_file", "{""path"": ""blank.txt"", ""content"": ""foo  \nbaz\n""}",

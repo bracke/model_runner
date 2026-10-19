@@ -42,6 +42,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Tools.Builtin;
+with Model_Runner.Race_Points;
 with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Framework.Identifiers;
@@ -7139,6 +7140,48 @@ package body Tests.Framework_Cases is
                                            = "xy" & ASCII.NUL & "z",
                  "a file of bytes the work changed was not taken in: " & Code_Of (Status));
          Dirs.Delete_File (Outside);
+      end;
+
+      --  A mode the work set alone, its text as it was, is a change, taken
+      --  in: by its text alone, a script the work made one never was.
+      --  And a file the work removes, changed in the project after its
+      --  conflicts were judged and before it is taken in, is not removed.
+      declare
+         Script : constant String := Fresh_Root (Store) & "/src/run.sh";
+         Shared : constant String := Fresh_Root (Store) & "/src/shared.adb";
+         Was    : constant String := Read_Whole (Shared);
+         Known  : Boolean;
+         Ignored : Boolean;
+         procedure Person_Edits is
+         begin
+            Put_File (Shared, "the person's");
+         end Person_Edits;
+      begin
+         Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+         S.Commit (Store, Change, Status);
+         if Hostkit.Metadata.Mode_Bits_Are_Native then
+            Ignored := Hostkit.Metadata.Set_Permissions (To_String (Made.Path) & "/src/run.sh", 8#750#);
+            Assert (Ws.Changes (Store, To_String (Made.Id)).Contains ("src/run.sh"),
+                    "a mode the work set alone was not a change");
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+            S.Commit (Store, Change, Status);
+            Ws.Settle_Integration (Store, To_String (Made.Id), Kept => E.Is_Ok (Status), Status => Status);
+            Assert (E.Is_Ok (Status)
+                    and then Hostkit.Metadata.File_Permission_Bits (Script, Known) mod 8#1000# = 8#750#
+                    and then Known,
+                    "a mode the work set alone was not taken in: " & Code_Of (Status));
+            Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+            S.Commit (Store, Change, Status);
+         end if;
+         Dirs.Delete_File (To_String (Made.Path) & "/src/shared.adb");
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Take_In_Writes, Person_Edits'Unrestricted_Access);
+         Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+         Assert (Status.Code = E.Framework_Integration_Conflict and then Read_Whole (Shared) = "the person's",
+                 "a file changed as the work that removes it was taken in was removed: " & Code_Of (Status));
+         Change := S.No_Changes;
+         Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+         S.Commit (Store, Change, Status);
+         Put_File (Shared, Was);
       end;
 
       --  Its commit failing once its change is marked -- which the next

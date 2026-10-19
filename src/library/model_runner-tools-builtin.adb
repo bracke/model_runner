@@ -18,6 +18,7 @@ with Jsonlib.Errors;
 with Jsonlib.Parsers;
 with Jsonlib.Serializers;
 
+with Model_Runner.Race_Points;
 with Model_Runner.Processes;
 
 with Http_Client.Clients;
@@ -1163,6 +1164,7 @@ package body Model_Runner.Tools.Builtin is
          Before : constant String := Model_Runner.Tools.Editing.Revision_Of (Path, Base);
          Read   : constant Reply := Read_Capped (Path, Base);
       begin
+         Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Read_File_Stamps);
          if Read.Failed or else Before = "" then
             return Read;
          end if;

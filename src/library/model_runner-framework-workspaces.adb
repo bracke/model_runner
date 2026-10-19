@@ -20,6 +20,7 @@ with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Race_Points;
 with Model_Runner.Tools.Editing;
 
 package body Model_Runner.Framework.Workspaces is
@@ -695,6 +696,32 @@ package body Model_Runner.Framework.Workspaces is
    -- Changes --
    -------------
 
+   --  Where a workspace keeps the project's files as they were when it was
+   --  made, to join changes against.
+   function Base_Tree (Held : Workspace) return String
+   is (Hostkit.Fs.Join (Dirs.Containing_Directory (To_String (Held.Path)), "base"));
+
+   --  Whether two files have one mode, or either's cannot be told.
+   function Same_Mode (Left, Right : String) return Boolean is
+      Left_Known, Right_Known : Boolean;
+      Left_Mode  : constant Natural := Hostkit.Metadata.File_Permission_Bits (Left, Left_Known);
+      Right_Mode : constant Natural := Hostkit.Metadata.File_Permission_Bits (Right, Right_Known);
+   begin
+      return not Left_Known or else not Right_Known or else Left_Mode = Right_Mode;
+   end Same_Mode;
+
+   --  Whether a file's mode in the workspace is known to differ from the
+   --  one it had when the workspace was made: both known, and not alike.
+   function Mode_Changed (Held : Workspace; Path : String) return Boolean is
+      Now_Known, Base_Known : Boolean;
+      Now  : constant Natural :=
+        Hostkit.Metadata.File_Permission_Bits (Hostkit.Fs.Join (To_String (Held.Path), Path), Now_Known);
+      Base : constant Natural :=
+        Hostkit.Metadata.File_Permission_Bits (Hostkit.Fs.Join (Base_Tree (Held), Path), Base_Known);
+   begin
+      return Now_Known and then Base_Known and then Now /= Base;
+   end Mode_Changed;
+
    function Changes (Item : Stores.Store; Id : String) return Name_Lists.Vector is
       Held     : Workspace;
       Status   : E.Error_Info;
@@ -709,8 +736,11 @@ package body Model_Runner.Framework.Workspaces is
          Now      : constant Maps.Map := Snapshot (To_String (Held.Path), Repository.Roots_Of (Item));
       begin
          for Position in Now.Iterate loop
+            --  Its text, or its mode alone: a script the work made one
+            --  is a change, and was never taken in.
             if not Baseline.Contains (Maps.Key (Position))
               or else Baseline (Maps.Key (Position)) /= Maps.Element (Position)
+              or else Mode_Changed (Held, Maps.Key (Position))
             then
                Result.Append (Maps.Key (Position));
             end if;
@@ -966,11 +996,6 @@ package body Model_Runner.Framework.Workspaces is
       end;
       Clean := True;
    end Join_Changes;
-
-   --  Where a workspace keeps the project's files as they were when it was
-   --  made, to join changes against.
-   function Base_Tree (Held : Workspace) return String
-   is (Hostkit.Fs.Join (Dirs.Containing_Directory (To_String (Held.Path)), "base"));
 
    --  A file changed in the workspace and in the project since, joined, when
    --  the two change different lines.
@@ -1865,6 +1890,7 @@ package body Model_Runner.Framework.Workspaces is
          if E.Is_Error (Status) then
             return;
          end if;
+         Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Take_In_Writes);
 
          for Path of Wanted loop
             declare
@@ -1873,7 +1899,9 @@ package body Model_Runner.Framework.Workspaces is
             begin
                --  What would change nothing -- the project holds it as the
                --  workspace does, or neither holds it -- is not taken in.
-               if (Dirs.Exists (From) and then Dirs.Exists (Target) and then Same_Print (From, Target))
+               --  The same text in a mode of its own is a change still.
+               if (Dirs.Exists (From) and then Dirs.Exists (Target) and then Same_Print (From, Target)
+                   and then Same_Mode (From, Target))
                  or else (not Dirs.Exists (From) and then not Dirs.Exists (Target))
                then
                   goto Next_Path;
