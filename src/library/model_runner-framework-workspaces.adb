@@ -64,6 +64,13 @@ package body Model_Runner.Framework.Workspaces is
    --  that is unchanged, nor -- being in the map -- for one that is gone.
    Unknown_Print : constant String := "?";
 
+   --  The store's own runtime folder, where kept copies are.
+   function Runtime_Of (Item : Stores.Store) return String
+   is (Hostkit.Fs.Join (Stores.Root (Item), "runtime"));
+
+   --  The mark a kept copy put back carries.
+   Restored_Mark : constant String := ".restored";
+
    --  The fingerprint of one file, or the empty string when it is not there.
    function Print_Of (Path : String) return String is
       Text   : Unbounded_String;
@@ -242,6 +249,11 @@ package body Model_Runner.Framework.Workspaces is
    -- Create_Whole --
    ------------------
 
+   --  Where a workspace's tree is: under this store, whatever its record
+   --  holds.
+   function Tree_Under (Item : Stores.Store; Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"), Id), "tree"));
+
    --  Create's work; Create below takes away what it leaves on failure.
    procedure Create_Whole
      (Item       : Stores.Store;
@@ -314,9 +326,8 @@ package body Model_Runner.Framework.Workspaces is
       declare
          Id    : constant String :=
            "WS-" & [1 .. Integer'Max (0, 6 - Image (Number)'Length) => '0'] & Image (Number);
-         Home  : constant String :=
-           Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"), Id);
-         Tree  : constant String := Hostkit.Fs.Join (Home, "tree");
+         Tree  : constant String := Tree_Under (Item, Id);
+         Home  : constant String := Dirs.Containing_Directory (Tree);
       begin
          Result.Id := To_Unbounded_String (Id);
          Result.Path := To_Unbounded_String (Tree);
@@ -497,7 +508,10 @@ package body Model_Runner.Framework.Workspaces is
         (Id         => To_Unbounded_String (Id),
          Kind       => (if Records.Get (Value, "backend") = "git_worktree"
                         then Git_Worktree else File_Copy),
-         Path       => To_Unbounded_String (Records.Get (Value, "path")),
+         --  Where this store makes its trees, not where the record says:
+         --  a project copied with its state named the original's trees,
+         --  and giving a task up there removed the original's work.
+         Path       => To_Unbounded_String (Tree_Under (Item, Id)),
          Base       => To_Unbounded_String (Records.Get (Value, "base")),
          Agent      => To_Unbounded_String (Records.Get (Value, "agent")),
          Task_Id    => To_Unbounded_String (Records.Get (Value, "task")),
@@ -590,7 +604,7 @@ package body Model_Runner.Framework.Workspaces is
       --  the copy of the project the workspace keeps, where it has one.
       declare
          Base  : constant String :=
-           Hostkit.Fs.Join (Dirs.Containing_Directory (Records.Get (Value, "path")), "base");
+           Hostkit.Fs.Join (Dirs.Containing_Directory (Tree_Under (Item, Id)), "base");
          Empty : constant String := Fingerprint ("");
          use type Dirs.File_Size;
       begin
@@ -1340,11 +1354,17 @@ package body Model_Runner.Framework.Workspaces is
    end Put_File;
 
    --  A file past what is read whole, copied as it is with its mode: to a
-   --  copy of this process's own beside TARGET, synced, renamed over.
+   --  copy of this process's own beside TARGET, synced, renamed over --
+   --  named as an edit's partial is, hidden: one a stop left is no file of
+   --  the project's to a scan, and the file's next write clears it.
    procedure Copy_Large (From, Target : String; Status : out E.Error_Info) is
+      Named   : constant String := Dirs.Simple_Name (Target);
       Partial : constant String :=
-        Target & ".model_runner-copy." & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id),
-                                                                  Ada.Strings.Left);
+        Hostkit.Fs.Join
+          (Dirs.Containing_Directory (Target),
+           "." & Named (Named'First .. Named'First + Natural'Min (Named'Length, 160) - 1)
+           & ".model_runner-partial."
+           & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Left) & ".copy");
       use type Hostkit.Durability.Outcome;
    begin
       Status := E.Success;
@@ -1353,6 +1373,7 @@ package body Model_Runner.Framework.Workspaces is
          return;
       end if;
       Dirs.Copy_File (From, Partial, Form => "preserve=all_attributes");
+      Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Large_Copy_Renames);
       if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
         or else not Hostkit.Fs.Replace_File (Partial, Target)
       then
@@ -1360,7 +1381,7 @@ package body Model_Runner.Framework.Workspaces is
          Files.Write_Failed (Target, Status);
       end if;
    exception
-      when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+      when others =>
          Files.Discard (Partial);
          Files.Write_Failed (Target, Status);
    end Copy_Large;
@@ -1686,15 +1707,49 @@ package body Model_Runner.Framework.Workspaces is
             Held : Workspace;
             Got  : E.Error_Info;
             Back : E.Error_Info;
+
+            --  A copy put back is kept where the restore's records were
+            --  committed: of a task, its state names this restore -- a mark
+            --  alone kept files the records never said were put back --
+            --  and of no task, the mark is all there is to say it.
+            function Restore_Kept_By_Records (Name : String) return Boolean is
+               At_Task : constant Natural := Ada.Strings.Fixed.Index (Name, "TASK-");
+               Stop    : Natural := (if At_Task = 0 then 0 else At_Task + 5);
+            begin
+               if not Was_Restored (Item, Name) then
+                  return False;
+               elsif At_Task = 0 then
+                  return True;
+               end if;
+               while Stop <= Name'Last and then Name (Stop) in '0' .. '9' loop
+                  Stop := Stop + 1;
+               end loop;
+               declare
+                  Owner : constant String := Name (At_Task .. Stop - 1);
+                  State : Records.Item;
+                  Read  : E.Error_Info;
+               begin
+                  if not Stores.Exists (Item, Tasks_Area, Owner) then
+                     return True;
+                  end if;
+                  Stores.Read (Item, Tasks_Area, Owner & ".state", State, Read);
+                  return E.Is_Ok (Read) and then Records.Get (State, "kept_restore") = Restore_Token (Item, Name);
+               end;
+            end Restore_Kept_By_Records;
          begin
             Read (Item, Id, Held, Got);
             --  A kept copy put back: done where it is marked so -- what is
             --  said of the task reads the mark -- put back where not.
             if Id'Length > 8 and then Id (Id'First .. Id'First + 7) = "restore-" then
-               if Was_Restored (Item, Id (Id'First + 8 .. Id'Last)) then
+               if Restore_Kept_By_Records (Id (Id'First + 8 .. Id'Last)) then
                   Settle_Integration (Item, Id, True, Back);
                else
                   Roll_Back (Item, Id, Back);
+                  --  Put back, not marked so: what is said of the task reads it.
+                  if E.Is_Ok (Back) then
+                     Files.Discard (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Id (Id'First + 8 .. Id'Last)),
+                                                     Restored_Mark));
+                  end if;
                   if E.Is_Ok (Back) then
                      Put_Back.Append (Id);
                   end if;
@@ -1906,6 +1961,18 @@ package body Model_Runner.Framework.Workspaces is
                then
                   goto Next_Path;
                end if;
+               --  A link, on either side, is never taken in -- settled by
+               --  hand or not: read through, what it named outside -- a key
+               --  -- was written into the project as a file.
+               if Hostkit.Fs.Is_Link (From) or else Hostkit.Fs.Is_Link (Target) then
+                  Status := E.Make (E.Framework_Integration_Conflict);
+                  E.Add_Text (Status, "name", Id);
+                  E.Add_Text (Status, "detail",
+                              Path & " is a link, which is not taken in: make it a file, or remove it,"
+                              & " in the workspace or the project; nothing was taken in");
+                  Put_Back;
+                  return;
+               end if;
                Taken.Append (Path);
                if Dirs.Exists (From) then
                   --  Changed in the project since, on other lines: the two
@@ -1971,7 +2038,18 @@ package body Model_Runner.Framework.Workspaces is
                            Put_Back;
                            return;
                         end if;
-                        Put_File (Target, To_String (Joined), 0, False, Wrote);
+                        --  With the mode the work set, where it set one: joined
+                        --  as text alone, a script it made one was not.
+                        declare
+                           Work_Known, Base_Known : Boolean;
+                           Work_Mode : constant Natural := Hostkit.Metadata.File_Permission_Bits (From, Work_Known);
+                           Base_Mode : constant Natural :=
+                             Hostkit.Metadata.File_Permission_Bits
+                               (Hostkit.Fs.Join (Base_Tree (Held), Path), Base_Known);
+                        begin
+                           Put_File (Target, To_String (Joined), Work_Mode,
+                                     Work_Known and then Base_Known and then Work_Mode /= Base_Mode, Wrote);
+                        end;
                         if E.Is_Error (Wrote) then
                            Status := Wrote;
                            Put_Back;
@@ -2240,9 +2318,6 @@ package body Model_Runner.Framework.Workspaces is
    -- Kept_Copies --
    -----------------
 
-   function Runtime_Of (Item : Stores.Store) return String
-   is (Hostkit.Fs.Join (Stores.Root (Item), "runtime"));
-
    function Is_Kept_Name (Name : String) return Boolean
    --  One folder's name and nothing that steps out of it on any host: no
    --  separator of either kind, no drive, no control character.
@@ -2352,8 +2427,13 @@ package body Model_Runner.Framework.Workspaces is
                Simple   : constant String := Dirs.Simple_Name (Found);
                Relative : constant String := (if Prefix = "" then Simple else Prefix & "/" & Simple);
             begin
-               --  Its own mark -- .restored -- is not one of the files kept.
-               if Simple (Simple'First) /= '.' and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found)) then
+               --  Its own mark -- .restored, at its top -- is not one of the
+               --  files kept; a dot-file is: passed over, the only copy of
+               --  a .gitignore was pruned with the folder that held it.
+               if Simple not in "." | ".."
+                 and then not (Prefix = "" and then Simple = Restored_Mark)
+                 and then not Hostkit.Fs.Is_Link (Dirs.Full_Name (Found))
+               then
                   if Dirs."=" (Dirs.Kind (Found), Dirs.Directory) then
                      Below.Append (Simple);
                   elsif Dirs."=" (Dirs.Kind (Found), Dirs.Ordinary_File) then
@@ -2394,13 +2474,23 @@ package body Model_Runner.Framework.Workspaces is
       return Result;
    end Kept_Files;
 
-   Restored_Mark : constant String := ".restored";
-
    function Was_Restored (Item : Stores.Store; Name : String) return Boolean
    is (Is_Kept_Name (Name)
        and then Dirs.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark))
        and then Dirs."=" (Dirs.Kind (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark)),
                          Dirs.Ordinary_File));
+
+   function Restore_Token (Item : Stores.Store; Name : String) return String is
+      Text : Unbounded_String;
+      Got  : E.Error_Info;
+   begin
+      if not Was_Restored (Item, Name) then
+         return "";
+      end if;
+      Files.Read_Text (Hostkit.Fs.Join (Hostkit.Fs.Join (Runtime_Of (Item), Name), Restored_Mark), Text, Got);
+      return (if E.Is_Ok (Got) then Name & " " & Ada.Strings.Fixed.Trim (To_String (Text), Ada.Strings.Both)
+              else "");
+   end Restore_Token;
 
    ------------------
    -- Restore_Kept --
@@ -2536,7 +2626,12 @@ package body Model_Runner.Framework.Workspaces is
       declare
          Marked : E.Error_Info;
       begin
-         Files.Write_Text (Hostkit.Fs.Join (Where, Restored_Mark), "restored", Marked);
+         --  Its own token: one restore of the copy told from another.
+         Files.Write_Text
+           (Hostkit.Fs.Join (Where, Restored_Mark),
+            Ada.Calendar.Formatting.Image (Ada.Calendar.Clock, Include_Time_Fraction => True)
+            & " " & Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Left),
+            Marked);
          if E.Is_Error (Marked) then
             Status := Marked;
             --  Not marked, not put back: the files back as they were.

@@ -47,6 +47,10 @@ begin
             & (if Execution.Cancel_Asked_From_Outside then "cancelled" else "interrupted"));
       elsif E.Is_Error (Ran) then
          Why := To_Unbounded_String ("it failed: " & Why_Of (Ran));
+      --  Over its budget, said so first: its answer, cut there, is no
+      --  report, and it was failed for that, not for what stopped it.
+      elsif E.Is_Error (Charged) then
+         Why := To_Unbounded_String ("it went over its budget");
       else
          Invocations.Hold (Child_Claim, Answer, Said, Held);
          if E.Is_Error (Held) then
@@ -54,8 +58,6 @@ begin
               ("its answer did not keep to the child result contract: "
                & E.Text_Of (Held, "name") & ": " & E.Text_Of (Held, "detail")
                & " -- a helper answers with status: done, and summary: one line on what it found");
-         elsif E.Is_Error (Charged) then
-            Why := To_Unbounded_String ("it went over its budget");
          else
             Good := Invocations.Claim (Said, "status") = "done";
             Why := To_Unbounded_String (Own_Words (Invocations.Claim (Said, "summary")));

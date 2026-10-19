@@ -1129,6 +1129,14 @@ begin
             --  the user; an end of input is answered as no answer.
             Built_Runner.Use_Inquirer (Asker'Unchecked_Access);
 
+            --  The tree its file tools are held to: the project the harness
+            --  named, else where the run is. With none, a link inside it was
+            --  replaced by a file of its own, and what it named kept the old.
+            Built_Runner.Set_Base
+              (if Ada.Environment_Variables.Exists (Model_Runner.Framework.Permissions.Agent_Root_Variable)
+               then Ada.Environment_Variables.Value (Model_Runner.Framework.Permissions.Agent_Root_Variable)
+               else Ada.Directories.Current_Directory);
+
             --  Back memory with a file when one was named, so what the
             --  run writes with memory_put is there for a later run.
             if not T.Is_Empty (Item.Memory_File_Path) then

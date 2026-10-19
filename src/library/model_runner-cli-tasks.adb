@@ -6778,6 +6778,13 @@ package body Model_Runner.CLI.Tasks is
                                       (Store, Notes, Owner, Ws.Kept_Files (Store, Name), Got);
                                     Keep_Noted (Got);
                                  end if;
+                                 --  This restore kept, as the next opening reads it
+                                 --  where it stops before the files are settled.
+                                 if State /= "" then
+                                    Model_Runner.Framework.Work.Note_Kept_Restore
+                                      (Store, Notes, Owner, Ws.Restore_Token (Store, Name), Got);
+                                    Keep_Noted (Got);
+                                 end if;
                                  --  Work a restore brings back of another task --
                                  --  what its file holds is that task's again --
                                  --  undone no more; work it puts out, undone.

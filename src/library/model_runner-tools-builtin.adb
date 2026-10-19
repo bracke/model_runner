@@ -2445,6 +2445,7 @@ package body Model_Runner.Tools.Builtin is
             Mix ("unreadable " & Folder);
       end Walk;
 
+      Fresh    : Natural;
       Has_Path : Boolean;
       Path     : constant String := Text_Argument (Arguments, "path", Has_Path);
       Where    : constant String :=
@@ -2461,7 +2462,24 @@ package body Model_Runner.Tools.Builtin is
       if Ada.Directories.Exists (Where)
         and then Ada.Directories.Kind (Where) = Ada.Directories.Ordinary_File
       then
-         return "file " & Model_Runner.Tools.Editing.Revision_Of (Where);
+         declare
+            Revision : constant String := Model_Runner.Tools.Editing.Revision_Of (Where);
+            Available : Boolean;
+            Changed   : constant String :=
+              (if Revision = "" then Hostkit.Metadata.Change_Stamp (Where, Available) else "");
+         begin
+            --  A file with no revision -- past what is read whole, or bytes
+            --  -- by its size and change stamp: every version of it had the
+            --  one stamp "file ", and a growing log was answered from
+            --  memory as it first was.
+            if Revision /= "" then
+               return "file " & Revision;
+            elsif Available then
+               return "file " & Changed & Ada.Directories.File_Size'Image (Ada.Directories.Size (Where));
+            end if;
+            Unstamped.Next (Fresh);
+            return "unstamped" & Natural'Image (Fresh);
+         end;
       elsif Ada.Directories.Exists (Where) then
          Walk (Where);
          return "tree" & Natural'Image (Files) & " " & Hash'Image (Sum);

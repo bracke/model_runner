@@ -82,6 +82,9 @@ package body Model_Runner.Framework.Verification is
    function Parse_Profile (Text : String) return Check_List is
       Result : Check_List;
       Start  : Natural := Text'First;
+      --  Checks written with no label, numbered past the first: all called
+      --  check, a lesson learned from the second ran the first.
+      Unlabelled : Natural := 0;
    begin
       for Index in Text'First .. Text'Last + 1 loop
          if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
@@ -92,7 +95,9 @@ package body Model_Runner.Framework.Verification is
                if Part /= "" then
                   declare
                      Head    : constant String :=
-                       (if Colon = 0 then "check" else Trim (Part (Part'First .. Colon - 1)));
+                       (if Colon /= 0 then Trim (Part (Part'First .. Colon - 1))
+                        elsif Unlabelled = 0 then "check"
+                        else "check" & Trim (Natural'Image (Unlabelled + 1)));
                      Command : constant String :=
                        (if Colon = 0 then Part else Trim (Part (Colon + 1 .. Part'Last)));
                      Inside  : constant Natural := Ada.Strings.Fixed.Index (Head, " in ");
@@ -148,6 +153,9 @@ package body Model_Runner.Framework.Verification is
                      end loop;
                      Result.Items.Append (Made);
                   end;
+                  if Colon = 0 then
+                     Unlabelled := Unlabelled + 1;
+                  end if;
                end if;
             end;
             Start := Index + 1;
@@ -912,8 +920,15 @@ package body Model_Runner.Framework.Verification is
          Records.Set
            (Value, "configuration_fingerprint",
             Records.Get (Settings, "configuration_fingerprint"));
+         --  The configuration's, where the checks that ran are its own; a
+         --  work's frozen profile that the configuration has changed since
+         --  is not -- stamped as the configuration's, the old checks' run
+         --  stood for the new ones, and a check added since never ran.
          Records.Set
-           (Value, "checks_fingerprint", Configurations.Verification_Fingerprint (Settings));
+           (Value, "checks_fingerprint",
+            (if Definition = "" or else Definition = Records.Get (Settings, "profile." & Profile)
+             then Configurations.Verification_Fingerprint (Settings)
+             else "frozen " & Fingerprint (Text)));
          --  And the checks' text as this run has them: a work's frozen
          --  profile, where the configuration's has changed since, is not
          --  the configuration's -- evidence of the one was reused for the

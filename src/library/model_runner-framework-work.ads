@@ -144,6 +144,9 @@ package Model_Runner.Framework.Work is
    --  @param Budget The tokens it may generate.
    --  @param Status Framework_Permission_Denied when the parent may not
    --    create children, Framework_Limit_Exceeded past a limit.
+   --  @param Left What the parent's own run has left to spend now: what it
+   --    generated is charged to its record only when it ends, and a child
+   --    given half the record's rest took what the parent spent meanwhile.
    procedure Open_Child
      (Host     : in out Child_Host;
       Role     : String;
@@ -153,7 +156,8 @@ package Model_Runner.Framework.Work is
       Child_Id : out Ada.Strings.Unbounded.Unbounded_String;
       Context  : out Ada.Strings.Unbounded.Unbounded_String;
       Budget   : out Natural;
-      Status   : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      Left     : Natural := Natural'Last);
 
    --  Take the innermost open child's answer: hold it to the child result
    --  contract, keep it, charge what it used and record how it ended.
@@ -787,6 +791,22 @@ package Model_Runner.Framework.Work is
       Change  : in out Stores.Transaction;
       Task_Id : String;
       Copy    : String;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Note, in the change a restore keeps what it says of whose work in,
+   --  that the restore of a kept copy is kept: what the next opening reads
+   --  to settle a restore stopped part way, as the store's commit has it.
+   --
+   --  @param Item The store.
+   --  @param Change The change it is staged in.
+   --  @param Task_Id The task the copy is of.
+   --  @param Restore The copy and its restore's token (Workspaces.Restore_Token).
+   --  @param Status A failure staging it; the change is then spoiled.
+   procedure Note_Kept_Restore
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Restore : String;
       Status  : out Model_Runner.Errors.Error_Info);
 
    --  Note in a task's history that a copy of its work was put back in the

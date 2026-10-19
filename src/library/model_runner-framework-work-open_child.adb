@@ -8,7 +8,8 @@ procedure Open_Child
    Child_Id : out Ada.Strings.Unbounded.Unbounded_String;
    Context  : out Ada.Strings.Unbounded.Unbounded_String;
    Budget   : out Natural;
-   Status   : out Model_Runner.Errors.Error_Info)
+   Status   : out Model_Runner.Errors.Error_Info;
+   Left     : Natural := Natural'Last)
 is
    Change  : Stores.Transaction;
    Parent  : constant String := Current (Host);
@@ -31,7 +32,10 @@ begin
    if E.Is_Error (Status) then
       return;
    end if;
-   Budget := (if Owner.Used >= Owner.Budget then 0 else (Owner.Budget - Owner.Used) / 2);
+   --  And of what its run has left now: what the parent generated is
+   --  charged to its record only when it ends.
+   Budget := (if Owner.Used >= Owner.Budget then 0
+              else Natural'Min (Owner.Budget - Owner.Used, Left) / 2);
    if Budget = 0 then
       Status := E.Make (E.Framework_Limit_Exceeded);
       E.Add_Text (Status, "name", Parent);

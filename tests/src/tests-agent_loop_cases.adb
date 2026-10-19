@@ -192,6 +192,10 @@ package body Tests.Agent_Loop_Cases is
    --  whether it was told that a call of its reply could not be read.
    Unanswered : Natural := 0;
    Told_Lost  : Boolean := False;
+   --  Whether it was told its reply ended after its reasoning, and how
+   --  many of its turns hold a thought left open.
+   Told_Empty : Boolean := False;
+   Left_Open  : Natural := 0;
 
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
@@ -266,7 +270,18 @@ package body Tests.Agent_Loop_Cases is
       --  Each assistant turn's calls, against the tool answers after it.
       Unanswered := 0;
       Told_Lost := False;
+      Told_Empty := False;
+      Left_Open := 0;
       for Index in 1 .. Conv.Length (Messages) loop
+         if Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "ended after its reasoning") > 0 then
+            Told_Empty := True;
+         end if;
+         if Conv."=" (Conv.Sender_At (Messages, Index), Conv.Assistant_Role)
+           and then Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "<think>") > 0
+           and then Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "</think>") = 0
+         then
+            Left_Open := Left_Open + 1;
+         end if;
          if Conv."=" (Conv.Sender_At (Messages, Index), Conv.User_Role)
            and then (Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "could not be read, so it was not run")
                        > 0
@@ -433,6 +448,85 @@ package body Tests.Agent_Loop_Cases is
          Assert (Ada.Directories.Exists (Dir & "/mid-a.txt") and then not Ada.Directories.Exists (Dir & "/mid-c.txt"),
                  "a call cut at the length after a block that would not read was run:"
                  & Seen.Results.Length'Image & " " & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  Calls left by the step limit, or the token budget, are each
+      --  answered as not run: left with none, a conversation picked up
+      --  again rendered calls with no answer.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("limit-a.txt", "a") & Write ("limit-b.txt", "b"));
+         Run (Replies, Seen, Ended, Steps => 1);
+         Assert (Ended.Reason = Ag.Step_Limit and then Unanswered = 0,
+                 "calls the step limit left were not answered:" & Unanswered'Image & " "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  A call that will not read, written so again with its chances
+      --  spent, is no answer: the run fails, where the markup was handed
+      --  back as its answer.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Bad     : constant String := "<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": }</tool_call>";
+      begin
+         for Times in 1 .. 4 loop
+            Replies.Replies.Append (Bad);
+         end loop;
+         Run (Replies, Seen, Ended);
+         Assert (Ended.Reason = Ag.Generation_Failed,
+                 "a call that would not read, its chances spent, ended as an answer: "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  Out of room with no turn to drop and compaction not asked for: the
+      --  reply made to fit the room left, where the run failed.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("fit.txt", "f"));
+         Replies.Keeps := True;
+         Replies.Room_Of := 900;
+         Run (Replies, Seen, Ended, Reply => 1_024);
+         Assert (Ada.Directories.Exists (Dir & "/fit.txt"),
+                 "a reply was not made to fit the room left without compaction: "
+                 & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
+      --  A reply cut at its length inside its thought is kept closed: left
+      --  open, every later prompt carried it whole.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<think>" & [1 .. 40 => 'm'] & " still");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Left_Open = 0, "a thought cut at the length was kept open:" & Left_Open'Image);
+      end;
+
+      --  A reply whose thought the harness closed at its budget and which
+      --  then stopped gave no answer: told so, where it was taken for one.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         --  The budget's 32 tokens of thought, and only a space after.
+         Replies.Replies.Append ("<think>" & [1 .. 121 => 'a'] & " ");
+         Replies.Replies.Append ("the answer");
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Budget => 32);
+         Assert (Told_Empty and then Ended.Reason = Ag.Answered,
+                 "a reply of thought alone was taken for an answer: " & Ag.Stop_Reason'Image (Ended.Reason)
+                 & " " & Told_Empty'Image);
       end;
 
       --  A whole call after a block that would not read runs too, and the

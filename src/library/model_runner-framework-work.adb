@@ -388,6 +388,17 @@ package body Model_Runner.Framework.Work is
       end if;
    end Note_Undone;
 
+   procedure Note_Kept_Restore
+     (Item    : Stores.Store;
+      Change  : in out Stores.Transaction;
+      Task_Id : String;
+      Restore : String;
+      Status  : out Model_Runner.Errors.Error_Info) is
+   begin
+      Status := E.Success;
+      Annotate (Item, Change, Task_Id, "kept_restore", Restore);
+   end Note_Kept_Restore;
+
    procedure Note_Undone
      (Item : in out Stores.Store; Task_Id, Copy : String; Status : out Model_Runner.Errors.Error_Info)
    is
@@ -1139,10 +1150,12 @@ package body Model_Runner.Framework.Work is
       --  Said done with no check run at all, where it may run them: the
       --  harness runs them, and a failure sends it back once with what
       --  they said -- in a workspace qwen3-8b answered done three runs out
-      --  of three without a check, and its work waited there failed.
+      --  of three without a check, and its work waited there failed. Not
+      --  where it made no call at all: checks passing on a tree it never
+      --  touched took its word, and the task completed with nothing done.
       elsif State.Root and then State.Answered and then State.Round < 3 and then not State.Asked_To_Fix
         and then State.Hosted and then State.Check_Runs = 0 and then State.May_Check and then State.Time_Left
-        and then Says_Done (Said)
+        and then State.Calls > 0 and then Says_Done (Said)
       then
          return Check_For_It;
       --  A report the harness cannot take -- a required line missing, a
@@ -2143,7 +2156,8 @@ package body Model_Runner.Framework.Work is
       Child_Id : out Ada.Strings.Unbounded.Unbounded_String;
       Context  : out Ada.Strings.Unbounded.Unbounded_String;
       Budget   : out Natural;
-      Status   : out Model_Runner.Errors.Error_Info)
+      Status   : out Model_Runner.Errors.Error_Info;
+      Left     : Natural := Natural'Last)
    is separate;
 
    -----------------

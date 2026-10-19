@@ -405,6 +405,17 @@ package Model_Runner.Framework.Workspaces is
    --  @return True once Restore_Kept put it back.
    function Was_Restored (Item : Stores.Store; Name : String) return Boolean;
 
+   --  What marks this restore of a kept copy from any other of it: kept
+   --  with the records of whose work (Work.Note_Kept_Restore), so a restore
+   --  stopped part way is kept where its records were committed and put
+   --  back where they were not -- as it would have been had it not stopped.
+   --
+   --  @param Item The store.
+   --  @param Name The copy.
+   --  @return The copy's name and its restore's token; "" where it was not
+   --    put back.
+   function Restore_Token (Item : Stores.Store; Name : String) return String;
+
    --  Take out of a kept copy each file the project holds just so still:
    --  it keeps nothing the project has not -- a write that failed left the
    --  file as it was -- and a copy left empty goes.

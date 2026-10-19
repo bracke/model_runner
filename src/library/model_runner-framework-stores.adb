@@ -1832,8 +1832,21 @@ package body Model_Runner.Framework.Stores is
    --  record has.
    Unread_Mark : constant String := ASCII.NUL & "unread";
 
-   --  And a link's: kept so, neither read nor walked into.
+   --  And a link's: kept so, neither read nor walked into -- with what it
+   --  names, so a restore makes it again as it was.
    Link_Mark : constant String := ASCII.NUL & "link";
+
+   function Link_Value (Path : String) return Unbounded_String is
+      Target : Unbounded_String;
+   begin
+      if Hostkit.Fs.Read_Link_Target (Path, Target) then
+         return To_Unbounded_String (Link_Mark & " ") & Target;
+      end if;
+      return To_Unbounded_String (Link_Mark);
+   end Link_Value;
+
+   function Is_Link_Value (Value : Unbounded_String) return Boolean
+   is (Length (Value) >= Link_Mark'Length and then Slice (Value, 1, Link_Mark'Length) = Link_Mark);
 
    procedure Gather
      (Root, Under : String;
@@ -1853,7 +1866,7 @@ package body Model_Runner.Framework.Stores is
               and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Here, One.Name))
             then
                Into.Include ((if Under = "" then One.Name else Under & "/" & One.Name),
-                             To_Unbounded_String (Link_Mark));
+                             Link_Value (Hostkit.Fs.Join (Here, One.Name)));
             end if;
          end loop;
       end if;
@@ -1871,7 +1884,7 @@ package body Model_Runner.Framework.Stores is
             --  what it named outside was read as the state's, and a restore
             --  deleted every file of it as new.
             elsif Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Here, Name)) then
-               Into.Include (Relative, To_Unbounded_String (Link_Mark));
+               Into.Include (Relative, Link_Value (Hostkit.Fs.Join (Here, Name)));
             elsif Ada.Directories.Kind (Found) = Ada.Directories.Directory then
                --  Payloads are the harness's, written as a result is kept --
                --  by name, from what they hold -- not by a commit.
@@ -1966,6 +1979,28 @@ package body Model_Runner.Framework.Stores is
                Left.Append (Name & ": changed after the harness wrote it, so it is not as the harness left it");
             elsif Committed.Contains (Name) or else Own_Files.Holds (Root (Item), Name) then
                null;
+            --  A link, made again as it was -- gone, made a file, or named
+            --  elsewhere: written back as text, the mark went into a file
+            --  where the link was, and one named elsewhere was kept.
+            elsif Is_Link_Value (Text_Maps.Element (Position)) then
+               if not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position) then
+                  Changed.Append (Name);
+                  declare
+                     Was    : constant String := To_String (Text_Maps.Element (Position));
+                     Target : constant String :=
+                       (if Was'Length > Link_Mark'Length + 1 then Was (Was'First + Link_Mark'Length + 1 .. Was'Last)
+                        else "");
+                  begin
+                     if Target = "" or else not Files.Delete_If_Present (Path)
+                       or else not Hostkit.Fs.Create_Link (Target, Path)
+                     then
+                        Left.Append (Name & ": a link, which cannot be made again as it was");
+                     end if;
+                  exception
+                     when others =>
+                        Left.Append (Name & ": a link, which cannot be made again as it was");
+                  end;
+               end if;
             elsif (not Now.Files.Contains (Name)
                    or else Now.Files (Name) /= Text_Maps.Element (Position))
               and then (To_String (Text_Maps.Element (Position)) = Unread_Mark

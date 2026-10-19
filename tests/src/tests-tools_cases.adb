@@ -2503,7 +2503,14 @@ package body Tests.Tools_Cases is
               and then not Model_Runner.Agent.Thought_Open ("<think>\nmulled</think>\ncall", "assistant\n")
               and then not Model_Runner.Agent.Thought_Open
                              ("answer", "<|im_start|>assistant\n<think>\n\n</think>\n\n")
-              and then not Model_Runner.Agent.Thought_Open ("plain answer", ""),
+              and then not Model_Runner.Agent.Thought_Open ("plain answer", "")
+              --  "<think>" in a call's file text opens nothing: closed there,
+              --  the closing went into the file.
+              and then not Model_Runner.Agent.Thought_Open
+                             ("<tool_call>{""content"": ""if Tag = ""<think>"" then", "assistant\n")
+              and then Model_Runner.Agent.Thought_Open ("  <think>mulling", "assistant\n")
+              --  A prompt whose tail closed the thought it opened opened none.
+              and then not Model_Runner.Agent.Thought_Open ("answer", "assistant<think></think>"),
               "a thought was taken as open where it was closed or never opened, or the other way");
 
       --  The harness's notes on a call: a file put back at a revision seen
@@ -2996,6 +3003,20 @@ package body Tests.Tools_Cases is
                         Status);
             Assert (not Ended.Changed and then Whole_File (Tree & "/raced.txt") = "saved meanwhile",
                     "a write over a file saved as it was read went through: " & Room (Room'First .. Last));
+         end;
+         --  A file with no revision -- bytes, or past what is read whole --
+         --  is stamped by its change: one stamp for every version of it, a
+         --  read again was answered from memory as it first was.
+         declare
+            First_Stamp : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Put_Bytes (Tree & "/bytes.dat", "a" & ASCII.NUL & "b");
+            First_Stamp := Ada.Strings.Unbounded.To_Unbounded_String
+              (Placed.Stamp ("read_file", "{""path"": ""bytes.dat""}"));
+            Put_Bytes (Tree & "/bytes.dat", "a" & ASCII.NUL & "bc");
+            Assert (Ada.Strings.Unbounded.To_String (First_Stamp)
+                    /= Placed.Stamp ("read_file", "{""path"": ""bytes.dat""}"),
+                    "a file of bytes was stamped alike before and after it changed");
          end;
          --  A loose edit keeps the blank line the model gave its new text.
          Placed.Run ("write_file", "{""path"": ""blank.txt"", ""content"": ""foo  \nbaz\n""}",
@@ -3535,6 +3556,22 @@ package body Tests.Tools_Cases is
          return Ada.Strings.Unbounded.To_String (Said);
       end Read;
 
+      --  The calls read and what the reading said, a call that would not
+      --  read beside them.
+      function Read_Kept (Reply : String; Syntax : Tools.Call_Syntax) return String is
+         Asked  : Tools.Calls;
+         Status : E.Error_Info;
+         Said   : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Tools.Read_Calls (Asked, Reply, Status, Syntax => Syntax, Offered => Defs'Unchecked_Access);
+         for Index in 1 .. Tools.Count (Asked) loop
+            Ada.Strings.Unbounded.Append
+              (Said, Tools.Called (Asked, Index) & "(" & Tools.Arguments (Asked, Index) & ")");
+         end loop;
+         Tools.Close (Asked);
+         return Ada.Strings.Unbounded.To_String (Said) & " | " & E.Error_Code'Image (Status.Code);
+      end Read_Kept;
+
       function Span
         (Reply : String; Syntax : Tools.Call_Syntax) return String
       is
@@ -3605,6 +3642,55 @@ package body Tests.Tools_Cases is
                   Offered => False),
             "other({""n"": ""0123""})",
             "a leading nought was written as a bare number");
+
+      --  An opening named in prose before the call is the prose's, and a
+      --  call whose close was never written ends where the next opens: read
+      --  to the next close, each took the real call with it.
+      Same (Read ("I'll use a <tool_call> block." & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 1}}</tool_call>",
+                  Tools.Tool_Call_JSON),
+            "edit({""count"": 1})",
+            "a <tool_call> named in prose took the call after it");
+      Same (Read ("<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 1}}" & LF
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": {""count"": 2}}</tool_call>",
+                  Tools.Tool_Call_JSON),
+            "edit({""count"": 1})edit({""count"": 2})",
+            "a call whose close was missing took the next call with it");
+
+      --  In every syntax a call that will not read leaves the calls after
+      --  it, and is said: stopped at it, the rest were dropped and the
+      --  model told the others ran.
+      declare
+         Kept : constant String := "edit({""count"": 2}) | TOOLS_CALL_MALFORMED";
+      begin
+         Same (Read_Kept ("<function><param name=""count"">1</param></function>"
+                          & "<function name=""edit""><param name=""count"">2</param></function>",
+                          Tools.Function_XML),
+               Kept, "a Llama function call that would not read dropped the next");
+         Same (Read_Kept (Tools.Mistral_Calls & "edit" & Tools.Mistral_Args & "{""count"": 1,}"
+                          & Tools.Mistral_Calls & "edit" & Tools.Mistral_Args & "{""count"": 2}",
+                          Tools.Mistral_Call),
+               Kept, "a Mistral call that would not read dropped the next");
+         Same (Read_Kept (Tools.DeepSeek_Calls_Begin
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""count"": 1,}"
+                          & Tools.DeepSeek_Call_End
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""count"": 2}"
+                          & Tools.DeepSeek_Call_End & Tools.DeepSeek_Calls_End,
+                          Tools.DeepSeek_Plain),
+               Kept, "a DeepSeek call that would not read dropped the next");
+         Same (Read_Kept (">>>edit" & LF & "{""count"": 1" & LF & ">>>edit" & LF & "{""count"": 2}",
+                          Tools.Recipient_JSON),
+               Kept, "a recipient call that would not read dropped the next");
+         Same (Read_Kept ("<|channel|>commentary " & Tools.Harmony_Recipient & "edit" & Tools.Harmony_Message
+                          & "{""count"": 1" & "<|call|>"
+                          & "<|channel|>commentary " & Tools.Harmony_Recipient & "edit"
+                          & Tools.Harmony_Message & "{""count"": 2}<|call|>",
+                          Tools.Harmony_Call),
+               Kept, "a harmony call that would not read dropped the next");
+         Same (Read_Kept ("```tool_code" & LF & "edit(count=)" & LF & "```" & LF
+                          & "```tool_code" & LF & "edit(count=2)" & LF & "```", Tools.Python_Code),
+               Kept, "a Python call that would not read dropped the next");
+      end;
 
       --  Llama 3's own spelling.
       Same (Read ("{""name"": ""edit"", ""parameters"": {""count"": 1}}",
@@ -4286,6 +4372,22 @@ package body Tests.Tools_Cases is
               and then Tools.Tool_Name (Defs, Tools.Count (Defs) + 1) = "",
               "a tool's name was not given, or one past the last was");
       Assert (Tools.Spoken_Length ("just words") = 10, "a reply with no call was not spoken whole");
+      --  An example object with a name alone is the prose's, and so is
+      --  what follows it: cut there, the rest was lost from later prompts.
+      declare
+         Said  : constant String := "Here is the config:" & LF & "```json" & LF & "{""name"": ""demo""}" & LF
+                                    & "```" & LF & "Now I write it.";
+         Reply : constant String := Said & LF & "{""name"": ""edit"", ""arguments"": {""count"": 1}}";
+         First, Last : Natural;
+      begin
+         Tools.Spoken_Span (Reply, Tools.Open_JSON, First, Last);
+         Assert (Reply (First .. Last) = Said, "the prose was cut at an example object: " & Reply (First .. Last));
+      end;
+      --  A <tool_call> named in the prose is the prose's: cut there, the
+      --  rest of what was said was lost from later prompts.
+      Assert (Tools.Spoken_Length ("Use a <tool_call> block." & LF & "<tool_call>{""name"": ""x""}</tool_call>")
+              = 24,
+              "the spoken part was cut at a <tool_call> named in the prose");
       Assert (Tools.Controls_Escaped ("{""a"": ""x" & LF & "y""}") = "{""a"": ""x\ny""}",
               "a raw line end in a string was not escaped: " & Tools.Controls_Escaped ("{""a"": ""x" & LF & "y""}"));
       Assert (Model_Runner.Video.Half_Even (2.5) = 2 and then Model_Runner.Video.Half_Even (3.5) = 4

@@ -114,19 +114,30 @@ begin
 
       procedure Take (Text : String) is
          Start : Positive := Text'First;
+         --  Each check by its label in the whole profile: one with none is
+         --  numbered as Parse_Profile numbers it there, not "check" alone.
+         Whole : constant Verification.Check_List := Verification.Parse_Profile (Text);
+         At_Check : Natural := 0;
       begin
          for Index in Text'First .. Text'Last + 1 loop
             if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
                declare
                   Part  : constant String := Ada.Strings.Fixed.Trim (Text (Start .. Index - 1), Ada.Strings.Both);
-                  Check : constant Verification.Check_List := Verification.Parse_Profile (Part);
                begin
-                  if Part /= "" and then Verification.Length (Check) = 1
-                    and then Wanted.Contains (To_String (Verification.Element (Check, 1).Label))
-                    and then not Found.Contains (To_String (Verification.Element (Check, 1).Label))
-                  then
-                     Found.Append (To_String (Verification.Element (Check, 1).Label));
-                     Append (Subset, (if Length (Subset) = 0 then "" else "; ") & Part);
+                  if Part /= "" then
+                     At_Check := At_Check + 1;
+                     if At_Check <= Verification.Length (Whole) then
+                        declare
+                           Label : constant String := To_String (Verification.Element (Whole, At_Check).Label);
+                        begin
+                           if Wanted.Contains (Label) and then not Found.Contains (Label) then
+                              Found.Append (Label);
+                              Append (Subset, (if Length (Subset) = 0 then "" else "; ")
+                                      & (if Ada.Strings.Fixed.Index (Part, ":") = 0 then Label & ": " else "")
+                                      & Part);
+                           end if;
+                        end;
+                     end if;
                   end if;
                end;
                Start := Index + 1;

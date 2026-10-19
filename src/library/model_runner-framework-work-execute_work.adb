@@ -1941,11 +1941,29 @@ begin
                   end loop;
                   declare
                      Files_Text : Unbounded_String;
+                     Prints     : Unbounded_String;
+                     Project    : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
                   begin
                      for Path of Result.Changed_Files loop
                         Append (Files_Text, (if Files_Text = Null_Unbounded_String then ""
                                              else [1 => ASCII.LF]) & Path);
                      end loop;
+                     --  In the project itself, as before the stage: an earlier
+                     --  attempt's files still this task's, and each file's
+                     --  print as the stage left it -- the print of before
+                     --  read a formatted file as no task's work.
+                     if not Isolated then
+                        for Path of Earlier_Changed loop
+                           if not Result.Changed_Files.Contains (Path) then
+                              Append (Files_Text, (if Files_Text = Null_Unbounded_String then ""
+                                                   else [1 => ASCII.LF]) & Path);
+                           end if;
+                        end loop;
+                        for Path of Result.Changed_Files loop
+                           Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
+                        end loop;
+                        Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
+                     end if;
                      Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
                      Stores.Commit (Item, Change, Status);
                   end;
@@ -2143,6 +2161,10 @@ begin
                Result.Tree_Left := To_Unbounded_String (Why_Of (Left));
             end if;
          end;
+         --  Taken in, its work is the project's: what a failure there
+         --  keeps of its files is read from the project, not from the tree
+         --  just let go -- read there, it kept nothing.
+         Place := To_Unbounded_String (Project);
       end;
    end if;
 

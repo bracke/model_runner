@@ -695,8 +695,15 @@ package body Model_Runner.Agent is
             --  What it generated was spent all the same: counted, so a
             --  retry is held to the run's budget.
             Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
-            L.Reset (Session);
-            case Recovery_For (Class_Of (Last_Result.Error), Compact, Retries_Left, 0) is
+            --  Out of room is found before anything is read: what the
+            --  session holds is kept for the shared prefix -- reset, every
+            --  retry with a shorter reply read the whole conversation again.
+            if Class_Of (Last_Result.Error) /= Context_Exhausted then
+               L.Reset (Session);
+            end if;
+            case (if Class_Of (Last_Result.Error) = Context_Exhausted
+                  then Compact_And_Retry
+                  else Recovery_For (Class_Of (Last_Result.Error), Compact, Retries_Left, 0)) is
                when Retry_Same =>
                   --  A retry: the committed conversation is unchanged, so
                   --  the loop renders it again and generates again. The step
@@ -708,10 +715,14 @@ package body Model_Runner.Agent is
                   --  Out of context: room made by dropping the oldest turns,
                   --  and the step tried again -- where it was tried again as
                   --  it was, and ran out the same way.
+                  --  Where the caller lets it: the reply made to fit, below,
+                  --  needs no turn dropped, and was never tried without it.
                   declare
-                     Gone : Natural;
+                     Gone : Natural := 0;
                   begin
-                     Conv.Compact (Messages, Keep_Recent, Gone, Work.Record_Text);
+                     if Compact then
+                        Conv.Compact (Messages, Keep_Recent, Gone, Work.Record_Text);
+                     end if;
                      if Gone > 0 then
                         Result.Compactions := Result.Compactions + 1;
                         --  Room made: the reply may be as long as asked again.
@@ -799,7 +810,7 @@ package body Model_Runner.Agent is
             else
                Conv.Append
                  (Messages, Conv.Assistant_Role,
-                  Reply_Text, Status);
+                  Conv.Closed_Reasoning (Reply_Text), Status);
             end if;
 
             --  An empty reply -- no words and no call -- is not a failure of
@@ -959,6 +970,36 @@ package body Model_Runner.Agent is
                end;
             end if;
 
+            --  A reply that thought and stopped with nothing after its
+            --  thought -- the harness closed it at its budget and the reply
+            --  ended there -- gave no answer: told so and goes on, as a cut
+            --  reply is; taken as one, a helper handed back nothing and the
+            --  work ended with no report.
+            if Asked = 0 and then Last_Result.Reason not in Gen.Maximum_Tokens | Gen.Context_Full
+              and then E.Is_Ok (Reading)
+              and then (Thought_Tokens > 0 or else Ada.Strings.Fixed.Index (Reply_Text, "</think>") > 0)
+              and then Ada.Strings.Fixed.Trim (Answer_Of (Reply_Text), Ada.Strings.Both) = ""
+            then
+               if Cut_Notes_Left > 0 and then Result.Steps < Max_Steps
+                 and then (Max_Total_Tokens = 0 or else Spent < Max_Total_Tokens)
+               then
+                  declare
+                     Told : E.Error_Info;
+                  begin
+                     Cut_Notes_Left := Cut_Notes_Left - 1;
+                     Conv.Append
+                       (Messages, Conv.User_Role,
+                        "Your reply ended after its reasoning, with no tool call and no answer. Go on:"
+                        & " make your next tool call, or give your answer.", Told);
+                     if E.Is_Ok (Told) then
+                        goto Next_Iteration;
+                     end if;
+                  end;
+               end if;
+               Result.Reason := (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
+               exit Step_Loop;
+            end if;
+
             --  Nothing left to run: the model has answered -- unless the
             --  reply was cut at its length or the context's, or could not
             --  be read on the last step: then what stopped it was a limit,
@@ -973,6 +1014,15 @@ package body Model_Runner.Agent is
                  and then (Closes_Call (Reply_Text) or else Ada.Strings.Fixed.Index (Reply_Text, "</tool_call>") > 0)
                then
                   Result.Reason := Step_Limit;
+               --  A call that would not read once its chances to write it
+               --  again were spent: no answer -- the markup was handed back
+               --  as one, a helper's result the broken call.
+               elsif E.Is_Error (Reading)
+                 and then (Class_Of (Reading) = Unreadable_Call or else E."=" (Reading.Code, E.Tools_Too_Many))
+                 and then (Closes_Call (Reply_Text) or else Ada.Strings.Fixed.Index (Reply_Text, "</tool_call>") > 0)
+               then
+                  Result.Reason := Generation_Failed;
+                  Result.Error := Reading;
                end if;
                exit Step_Loop;
             end if;
@@ -981,15 +1031,26 @@ package body Model_Runner.Agent is
                Watch.On_Turn (Result.Steps, Asked);
             end if;
 
-            --  Calls to run, but no room to run them and read the answer.
-            if Result.Steps >= Max_Steps then
-               Result.Reason := Step_Limit;
-               exit Step_Loop;
-            end if;
-
-            --  Calls to run, but the cumulative token budget is spent.
-            if Max_Total_Tokens > 0 and then Spent >= Max_Total_Tokens then
-               Result.Reason := Token_Limit;
+            --  Calls to run, but no room to run them and read the answer --
+            --  or the cumulative token budget is spent: each call answered
+            --  as not run, as a halt's are -- a conversation picked up again
+            --  rendered calls with none, which a template refuses.
+            if Result.Steps >= Max_Steps
+              or else (Max_Total_Tokens > 0 and then Spent >= Max_Total_Tokens)
+            then
+               Result.Reason := (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
+               for Call in 1 .. Asked loop
+                  declare
+                     Told : E.Error_Info;
+                  begin
+                     Conv.Append
+                       (Messages, Conv.Tool_Role,
+                        "error: not run -- the run's "
+                        & (if Result.Reason = Step_Limit then "step" else "token") & " limit was reached",
+                        Told);
+                     exit when E.Is_Error (Told);
+                  end;
+               end loop;
                exit Step_Loop;
             end if;
 
@@ -1538,11 +1599,22 @@ package body Model_Runner.Agent is
    ------------------
 
    function Thought_Open (Reply, Prompt : String) return Boolean is
-      Tail : constant String := Prompt (Natural'Max (Prompt'First, Prompt'Last - 15) .. Prompt'Last);
+      Tail   : constant String := Prompt (Natural'Max (Prompt'First, Prompt'Last - 15) .. Prompt'Last);
+      Lead   : Natural := Reply'First;
+      --  The prompt opened one where its last opening comes after its last
+      --  close: a thinking-off prompt ending "<think></think>" opened none.
+      Opened : constant Natural := Ada.Strings.Fixed.Index (Tail, "<think>", Ada.Strings.Backward);
+      Shut   : constant Natural := Ada.Strings.Fixed.Index (Tail, "</think>", Ada.Strings.Backward);
    begin
+      while Lead <= Reply'Last and then Reply (Lead) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+         Lead := Lead + 1;
+      end loop;
+      --  A thought is what opens the reply, as Answer_Of reads it: "<think>"
+      --  further on -- in a call's file text -- is no thought, and closing
+      --  it there wrote the closing into the file.
       return Ada.Strings.Fixed.Index (Reply, "</think>") = 0
-        and then (Ada.Strings.Fixed.Index (Reply, "<think>") > 0
-                  or else Ada.Strings.Fixed.Index (Tail, "<think>") > 0);
+        and then ((Lead + 6 <= Reply'Last and then Reply (Lead .. Lead + 6) = "<think>")
+                  or else (Opened > 0 and then Opened > Shut));
    end Thought_Open;
 
 end Model_Runner.Agent;

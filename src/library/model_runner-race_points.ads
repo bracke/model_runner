@@ -8,8 +8,9 @@ package Model_Runner.Race_Points is
 
    --  The places: a workspace's taking in, after its conflicts were judged
    --  and before its files are written or removed; read_file, after the
-   --  file was read and before its revision stamp is given.
-   type Point is (Take_In_Writes, Read_File_Stamps);
+   --  file was read and before its revision stamp is given; a large file's
+   --  copy, made and not yet renamed into its place.
+   type Point is (Take_In_Writes, Read_File_Stamps, Large_Copy_Renames);
 
    --  What a test does at a point.
    type Action is access procedure;

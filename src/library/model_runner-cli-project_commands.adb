@@ -713,7 +713,13 @@ package body Model_Runner.CLI.Project_Commands is
          --  first has what the earlier left -- and, asked to mend its report
          --  or fix what failed, two steps at least to do it, bounded by the
          --  rounds; no tokens left, there is none.
-         exit when Round > 1 and then Budget > 0 and then All_Spent >= Budget;
+         --  Stopped so, it stopped at its budget: the push-back it was given
+         --  is the last turn, and read as its answer, nothing was -- the
+         --  task told it broke its report, not that its budget was spent.
+         if Round > 1 and then Budget > 0 and then All_Spent >= Budget then
+            Outcome.Reason := Model_Runner.Agent.Token_Limit;
+            exit;
+         end if;
          --  One memory of the calls across the rounds: a second round
          --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
@@ -1091,7 +1097,8 @@ package body Model_Runner.CLI.Project_Commands is
             Retry   : Boolean;
          begin
             Self.Host.Open_Child
-              (Role, Need, Brief, To_String (Retry_Of), Id, Context, Budget, Status);
+              (Role, Need, Brief, To_String (Retry_Of), Id, Context, Budget, Status,
+               Left => Tr.Context_Of (Self).Tokens_Left);
             if E.Is_Error (Status) then
                return Refuses
                  ((if Told = Null_Unbounded_String then ""

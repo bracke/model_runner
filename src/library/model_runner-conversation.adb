@@ -923,17 +923,14 @@ package body Model_Runner.Conversation is
         or else (E.Is_Error (Reading) and then not E."=" (Reading.Code, E.Tools_Call_Malformed))
       then
          --  Nothing to take apart, or nothing this can take apart. Either
-         --  way the reply is the turn, exactly as it arrived -- but for a
-         --  harmony reply, whose turn is its final message: its template
-         --  refuses a turn that carries the channels' markers.
+         --  way the reply is the turn as it arrived -- but for a harmony
+         --  reply, whose turn is its final message: its template refuses a
+         --  turn that carries the channels' markers.
+         --  A thought cut short is kept closed: left open, every later
+         --  prompt carried it whole, as the template strips only a closed
+         --  one.
          Model_Runner.Tools.Close (Asked);
-         if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Harmony_Call)
-         then
-            Append (Item, Assistant_Role,
-                    Model_Runner.Tools.Harmony_Answer (Reply), Status);
-         else
-            Append (Item, Assistant_Role, Reply, Status);
-         end if;
+         Append (Item, Assistant_Role, Reply_Turn (Reply, Syntax), Status);
          return;
       end if;
 

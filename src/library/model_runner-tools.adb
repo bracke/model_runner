@@ -383,9 +383,27 @@ package body Model_Runner.Tools is
 
    function Spoken_Length (Reply : String) return Natural is
       Last : Natural := Reply'Last;
+
+      --  An opening that holds an object, as a call's does: one named in
+      --  the prose before the calls is the prose's.
+      function Holds_Object (Start : Positive) return Boolean is
+         At_Brace : Natural := Start + Call_Opens'Length;
+      begin
+         while At_Brace <= Reply'Last and then Reply (At_Brace) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+            At_Brace := At_Brace + 1;
+         end loop;
+         return At_Brace <= Reply'Last and then Reply (At_Brace) = '{';
+      end Holds_Object;
+
+      --  The first opening that holds one, else the first of all.
+      Any : constant Boolean :=
+        (for some Start in Reply'First .. Reply'Last - Call_Opens'Length + 1 =>
+           Reply (Start .. Start + Call_Opens'Length - 1) = Call_Opens and then Holds_Object (Start));
    begin
       for Start in Reply'First .. Reply'Last - Call_Opens'Length + 1 loop
-         if Reply (Start .. Start + Call_Opens'Length - 1) = Call_Opens then
+         if Reply (Start .. Start + Call_Opens'Length - 1) = Call_Opens
+           and then (not Any or else Holds_Object (Start))
+         then
             Last := Start - 1;
 
             --  The newline a model writes between what it said and the
@@ -561,9 +579,26 @@ package body Model_Runner.Tools is
             --  Whether the object that opens at or soon after Start names a
             --  call, read to its own close: on its first line alone, a call
             --  written out over lines was taken for prose, and kept twice.
+            --  The brace that opens the object: at Start, or -- after a
+            --  fence -- first on the line after it; a closing fence with
+            --  prose after it opens none.
+            function Opening (Start : Positive) return Natural is
+               At_Brace : Natural := Start;
+            begin
+               if Reply (Start) = '{' then
+                  return Start;
+               end if;
+               while At_Brace <= Reply'Last and then Reply (At_Brace) /= ASCII.LF loop
+                  At_Brace := At_Brace + 1;
+               end loop;
+               while At_Brace <= Reply'Last and then Reply (At_Brace) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+                  At_Brace := At_Brace + 1;
+               end loop;
+               return (if At_Brace <= Reply'Last and then Reply (At_Brace) = '{' then At_Brace else 0);
+            end Opening;
+
             function Names_Call (Start : Positive) return Boolean is
-               Brace     : constant Natural :=
-                 Ada.Strings.Fixed.Index (Reply (Start .. Natural'Min (Reply'Last, Start + 200)), "{");
+               Brace     : constant Natural := Opening (Start);
                Depth     : Natural := 0;
                In_String : Boolean := False;
                Upto      : Natural := 0;
@@ -592,7 +627,11 @@ package body Model_Runner.Tools is
                   end if;
                   P := P + 1;
                end loop;
-               return Upto /= 0 and then Ada.Strings.Fixed.Index (Reply (Brace .. Upto), """name""") > 0;
+               --  A name and its arguments, as a call has them: an example
+               --  object with a name alone -- a config shown -- is prose.
+               return Upto /= 0 and then Ada.Strings.Fixed.Index (Reply (Brace .. Upto), """name""") > 0
+                 and then (Ada.Strings.Fixed.Index (Reply (Brace .. Upto), """arguments""") > 0
+                           or else Ada.Strings.Fixed.Index (Reply (Brace .. Upto), """parameters""") > 0);
             end Names_Call;
          begin
             for Start in Reply'First .. Reply'Last loop
@@ -1563,6 +1602,30 @@ package body Model_Runner.Tools is
 
       --  The first closed call block that would not read, the rest read.
       Bad : E.Error_Info := E.Success;
+
+      --  A call that would not read is kept to be said once the rest are
+      --  read: stopped at it, every call after it was dropped, and the
+      --  model was told the others ran.
+      procedure Lose is
+      begin
+         if E.Is_Ok (Bad) then
+            Bad := E.Make (E.Tools_Call_Malformed);
+            E.Add_Integer (Bad, "index", Long_Long_Integer (Item.Used + 1));
+         end if;
+      end Lose;
+
+      --  After a call was stored: on past one that would not read, and
+      --  whether anything else stops the reading.
+      function Read_On return Boolean is
+      begin
+         if E.Is_Error (Status) and then E."=" (Status.Code, E.Tools_Call_Malformed) then
+            if E.Is_Ok (Bad) then
+               Bad := Status;
+            end if;
+            Status := E.Success;
+         end if;
+         return E.Is_Ok (Status);
+      end Read_On;
    begin
       Close (Item);
       Status := E.Success;
@@ -1589,6 +1652,43 @@ package body Model_Runner.Tools is
                   if Brace <= Reply'Last and then Reply (Brace) = '{' and then Object_End (Brace) > 0 then
                      Shut := Object_End (Brace) + 1;
                   end if;
+                  declare
+                     --  Another opening before this block's close: this one
+                     --  is a call whose close was never written, where it
+                     --  holds a whole object, or a tag named in prose or a
+                     --  draft -- read to the next close, it took the real
+                     --  call with it.
+                     Again : Natural := Shut;
+                  begin
+                     while Again <= Reply'Last and then not Marks (Again, Call_Closes)
+                       and then not Marks (Again, Call_Opens)
+                     loop
+                        Again := Again + 1;
+                     end loop;
+                     if Again <= Reply'Last and then Marks (Again, Call_Opens) then
+                        --  A whole object and nothing but space after it:
+                        --  words after it -- "-- no." -- make it a draft.
+                        if Shut > First
+                          and then (for all C of Reply (Shut .. Again - 1) => C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR)
+                        then
+                           declare
+                              Taken : Boolean;
+                           begin
+                              Take_One (Reply (First .. Shut - 1), Taken => Taken);
+                           end;
+                           if E.Is_Error (Status) and then E."=" (Status.Code, E.Tools_Call_Malformed) then
+                              if E.Is_Ok (Bad) then
+                                 Bad := Status;
+                              end if;
+                              Status := E.Success;
+                           elsif E.Is_Error (Status) then
+                              return;
+                           end if;
+                        end if;
+                        Index := Again;
+                        goto Next_Block;
+                     end if;
+                  end;
                   while Shut <= Reply'Last and then not Marks (Shut, Call_Closes)
                   loop
                      Shut := Shut + 1;
@@ -1623,6 +1723,7 @@ package body Model_Runner.Tools is
             else
                Index := Index + 1;
             end if;
+            <<Next_Block>>
          end loop;
          --  A closed block that would not read is said once the rest are
          --  read: stopped at it, a whole call after it was dropped unsaid.
@@ -1772,7 +1873,7 @@ package body Model_Runner.Tools is
                         return;
                      end if;
                      Take_Function (Index, Shut - 1);
-                     if E.Is_Error (Status) then
+                     if not Read_On then
                         return;
                      end if;
                      Index := Shut + Close_Tag'Length;
@@ -1853,7 +1954,7 @@ package body Model_Runner.Tools is
                         return;
                      end if;
                      Take_Qwen (Index, Shut - 1);
-                     if E.Is_Error (Status) then
+                     if not Read_On then
                         return;
                      end if;
                      Index := Shut + Close_Tag'Length;
@@ -1887,16 +1988,35 @@ package body Model_Runner.Tools is
                   Read      : Boolean;
                begin
                   loop
-                     Python_Calls.Read_Call
-                       (Rest, From, Name, Name_Last, Args, Args_Last,
-                        Found, Read, Offered);
-                     exit when not Found;
-                     if not Read then
-                        Status := E.Make (E.Tools_Call_Malformed);
-                        E.Add_Integer
-                          (Status, "index", Long_Long_Integer (Item.Used + 1));
-                        return;
-                     end if;
+                     declare
+                        Was : constant Positive := From;
+                     begin
+                        Python_Calls.Read_Call
+                          (Rest, From, Name, Name_Last, Args, Args_Last,
+                           Found, Read, Offered);
+                        exit when not Found;
+                        --  One that will not read: the block read on from
+                        --  its close, where there is one -- the reader went
+                        --  to the reply's end, and the calls after it were
+                        --  dropped.
+                        if not Read then
+                           declare
+                              Fence : constant Natural :=
+                                (if Was > Rest'Last then 0
+                                 else Ada.Strings.Fixed.Index (Rest (Was .. Rest'Last), Code_Closes));
+                           begin
+                              if Fence = 0 then
+                                 Status := E.Make (E.Tools_Call_Malformed);
+                                 E.Add_Integer
+                                   (Status, "index", Long_Long_Integer (Item.Used + 1));
+                                 return;
+                              end if;
+                              Lose;
+                              From := Fence;
+                              exit;
+                           end;
+                        end if;
+                     end;
                      declare
                         Room    : String (1 .. Max_Call_Bytes);
                         Written : Natural;
@@ -1904,14 +2024,12 @@ package body Model_Runner.Tools is
                      begin
                         Rewrite (Args (1 .. Args_Last), Room, Written, Reading);
                         if E.Is_Error (Reading) then
-                           Status := E.Make (E.Tools_Call_Malformed);
-                           E.Add_Integer
-                             (Status, "index", Long_Long_Integer (Item.Used + 1));
-                           return;
+                           Lose;
+                        else
+                           Store (Name (1 .. Name_Last), Room (1 .. Written));
                         end if;
-                        Store (Name (1 .. Name_Last), Room (1 .. Written));
                      end;
-                     if E.Is_Error (Status) then
+                     if not Read_On then
                         return;
                      end if;
                   end loop;
@@ -2011,33 +2129,35 @@ package body Model_Runner.Tools is
                               declare
                                  Shut : constant Natural := Object_End (Open);
                               begin
-                                 if Shut = 0 then
-                                    Status := E.Make (E.Tools_Call_Malformed);
-                                    E.Add_Integer
-                                      (Status, "index",
-                                       Long_Long_Integer (Item.Used + 1));
-                                    return;
-                                 end if;
-                                 declare
-                                    Room    : String (1 .. Max_Call_Bytes);
-                                    Written : Natural;
-                                    Reading : E.Error_Info;
-                                 begin
-                                    Rewrite (Controls_Escaped (Reply (Open .. Shut)),
-                                             Room, Written, Reading);
-                                    if E.Is_Error (Reading) then
-                                       Status :=
-                                         E.Make (E.Tools_Call_Malformed);
+                                 --  Its block ends at the next marker: one that
+                                 --  would not read is passed, and said after.
+                                 if Shut = 0 or else Shut > Body_Last then
+                                    if Body_Last = Reply'Last then
+                                       Status := E.Make (E.Tools_Call_Malformed);
                                        E.Add_Integer
                                          (Status, "index",
                                           Long_Long_Integer (Item.Used + 1));
                                        return;
                                     end if;
-                                    Store (Name, Room (1 .. Written));
-                                 end;
+                                    Lose;
+                                 else
+                                    declare
+                                       Room    : String (1 .. Max_Call_Bytes);
+                                       Written : Natural;
+                                       Reading : E.Error_Info;
+                                    begin
+                                       Rewrite (Controls_Escaped (Reply (Open .. Shut)),
+                                                Room, Written, Reading);
+                                       if E.Is_Error (Reading) then
+                                          Lose;
+                                       else
+                                          Store (Name, Room (1 .. Written));
+                                       end if;
+                                    end;
+                                 end if;
                               end;
                            end if;
-                           if E.Is_Error (Status) then
+                           if not Read_On then
                               return;
                            end if;
                         end;
@@ -2110,17 +2230,27 @@ package body Model_Runner.Tools is
                            else
                               declare
                                  Shut : constant Natural := Object_End (Open);
+                                 Next : constant Natural :=
+                                   Ada.Strings.Fixed.Index (Reply (Open .. Reply'Last), Harmony_Recipient);
                               begin
-                                 if Shut = 0 then
-                                    Malformed;
-                                    return;
+                                 --  Not closed before the next call's header:
+                                 --  passed, and said after; not closed at all,
+                                 --  a reply cut in it.
+                                 if Shut = 0 or else (Next /= 0 and then Shut > Next) then
+                                    if Next = 0 then
+                                       Malformed;
+                                       return;
+                                    end if;
+                                    Lose;
+                                    Index := Next;
+                                 else
+                                    Store_Object (Name, Reply (Open .. Shut));
+                                    Index := Shut + 1;
                                  end if;
-                                 Store_Object (Name, Reply (Open .. Shut));
-                                 Index := Shut + 1;
                               end;
                            end if;
                         end;
-                        if E.Is_Error (Status) then
+                        if not Read_On then
                            return;
                         end if;
                      end if;
@@ -2168,7 +2298,7 @@ package body Model_Runner.Tools is
                               return;
                            end if;
                            Take_One (Reply (P .. Shut), Taken => Taken);
-                           if E.Is_Error (Status) then
+                           if not Read_On then
                               return;
                            end if;
                            P := Shut + 1;
@@ -2203,24 +2333,32 @@ package body Model_Runner.Tools is
                            loop
                               Open := Open + 1;
                            end loop;
-                           if Name = "" or else Open > Reply'Last
-                             or else Reply (Open) /= '{'
-                           then
-                              Malformed;
-                              return;
-                           end if;
                            declare
-                              Shut : constant Natural := Object_End (Open);
+                              --  The next call's marker bounds this one: a
+                              --  call that will not read before it is passed,
+                              --  and said after; with none after, the reply
+                              --  was cut in it.
+                              Next : constant Natural :=
+                                (if Name_Last + 1 > Reply'Last then 0
+                                 else Ada.Strings.Fixed.Index (Reply (Name_Last + 1 .. Reply'Last), Mistral_Calls));
+                              Shut : constant Natural :=
+                                (if Name = "" or else Open > Reply'Last or else Reply (Open) /= '{' then 0
+                                 else Object_End (Open));
                            begin
-                              if Shut = 0 then
-                                 Malformed;
-                                 return;
+                              if Shut = 0 or else (Next /= 0 and then Shut > Next) then
+                                 if Next = 0 then
+                                    Malformed;
+                                    return;
+                                 end if;
+                                 Lose;
+                                 Index := Next;
+                              else
+                                 Store_Object (Name, Reply (Open .. Shut));
+                                 if not Read_On then
+                                    return;
+                                 end if;
+                                 Index := Shut + 1;
                               end if;
-                              Store_Object (Name, Reply (Open .. Shut));
-                              if E.Is_Error (Status) then
-                                 return;
-                              end if;
-                              Index := Shut + 1;
                            end;
                         end;
                      end;
@@ -2255,9 +2393,14 @@ package body Model_Runner.Tools is
                      end if;
                      Shut := Shut + 1;
                   end loop;
-                  if Shut > Reply'Last or else Sep = 0 then
+                  if Shut > Reply'Last then
                      Malformed;
                      return;
+                  elsif Sep = 0 then
+                     --  Closed with no separator: passed, and said after.
+                     Lose;
+                     Index := Shut + DeepSeek_Call_End'Length;
+                     goto Next_DeepSeek;
                   end if;
 
                   declare
@@ -2288,19 +2431,16 @@ package body Model_Runner.Tools is
                         Last_Brace : constant Natural :=
                           (if Open < Shut then Object_End (Open) else 0);
                      begin
-                        if Name = "" then
-                           Malformed;
-                           return;
-                        end if;
-                        if Open >= Shut then
+                        --  Its markers bound it: one that will not read
+                        --  is passed, and said after.
+                        if Name = "" or else (Open < Shut and then (Last_Brace = 0 or else Last_Brace >= Shut)) then
+                           Lose;
+                        elsif Open >= Shut then
                            Store (Name, "{}");
-                        elsif Last_Brace = 0 or else Last_Brace >= Shut then
-                           Malformed;
-                           return;
                         else
                            Store_Object (Name, Reply (Open .. Last_Brace));
                         end if;
-                        if E.Is_Error (Status) then
+                        if not Read_On then
                            return;
                         end if;
                      end;
@@ -2310,8 +2450,12 @@ package body Model_Runner.Tools is
             else
                Index := Index + 1;
             end if;
+            <<Next_DeepSeek>>
          end loop;
       end case;
+      if E.Is_Ok (Status) and then E.Is_Error (Bad) then
+         Status := Bad;
+      end if;
    exception
       when others =>
          Close (Item);
