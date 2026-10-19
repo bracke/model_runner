@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 
 with Hostkit.Durability;
+with Hostkit.Directory_Listing;
 with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Process;
@@ -1841,7 +1842,21 @@ package body Model_Runner.Framework.Stores is
       Search : Ada.Directories.Search_Type;
       Found  : Ada.Directories.Directory_Entry_Type;
       Here   : constant String := (if Under = "" then Root else Hostkit.Fs.Join (Root, Under));
+      Listed : Hostkit.Directory_Listing.Entry_Vectors.Vector;
    begin
+      --  The links from the folder's own list: one that names nothing is
+      --  passed over by the search, which looks at what each names, and
+      --  was left by a restore.
+      if Hostkit.Directory_Listing.List (Here, Listed) then
+         for One of Listed loop
+            if One.Name not in "." | ".."
+              and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Here, One.Name))
+            then
+               Into.Include ((if Under = "" then One.Name else Under & "/" & One.Name),
+                             To_Unbounded_String (Link_Mark));
+            end if;
+         end loop;
+      end if;
       Ada.Directories.Start_Search (Search, Here, "");
       while Ada.Directories.More_Entries (Search) loop
          Ada.Directories.Get_Next_Entry (Search, Found);

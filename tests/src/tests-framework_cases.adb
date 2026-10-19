@@ -8717,12 +8717,22 @@ package body Tests.Framework_Cases is
 
       Cx.Build (Store, To_String (Mine), Wide, Built, Status);
       Assert (E.Is_Ok (Status), "the context was not built: " & Code_Of (Status));
-      Assert ((for some Line of Cx.Knowledge (Built) => Ada.Strings.Fixed.Index (Line, To_String (First) & "@") = 1)
-              and then (for some Line of Cx.Knowledge (Built) =>
-                          Ada.Strings.Fixed.Index (Line, To_String (Other) & "@") = 1)
-              and then (for some Line of Cx.Knowledge_Left (Built) =>
-                          Ada.Strings.Fixed.Index (Line, To_String (Again) & "@") = 1
-                          and then Ada.Strings.Fixed.Index (Line, "says nearly what " & To_String (First)) > 0),
+      --  Which of the two is told is which ranks first -- the newer, where
+      --  they were kept in different seconds; the other is left as nearly it.
+      Assert ((for some Line of Cx.Knowledge (Built) =>
+                 Ada.Strings.Fixed.Index (Line, To_String (Other) & "@") = 1)
+              and then ((for some Line of Cx.Knowledge (Built) =>
+                           Ada.Strings.Fixed.Index (Line, To_String (First) & "@") = 1)
+                        and then (for some Line of Cx.Knowledge_Left (Built) =>
+                                    Ada.Strings.Fixed.Index (Line, To_String (Again) & "@") = 1
+                                    and then Ada.Strings.Fixed.Index (Line, "says nearly what " & To_String (First))
+                                             > 0))
+                       /= ((for some Line of Cx.Knowledge (Built) =>
+                              Ada.Strings.Fixed.Index (Line, To_String (Again) & "@") = 1)
+                           and then (for some Line of Cx.Knowledge_Left (Built) =>
+                                       Ada.Strings.Fixed.Index (Line, To_String (First) & "@") = 1
+                                       and then Ada.Strings.Fixed.Index (Line, "says nearly what " & To_String (Again))
+                                                > 0)),
               "nearly the same finding was told twice, or the other not told: " & Joined (Cx.Knowledge (Built))
               & " / " & Joined (Cx.Knowledge_Left (Built)));
       declare
@@ -13899,7 +13909,14 @@ package body Tests.Framework_Cases is
          S.Snapshot_State (Store, Taken);
          if Hostkit.Fs.Create_Link (Away & "/gone", Link) then
             S.Restore_State (Store, Taken, Changed, Left);
-            Assert (not Hostkit.Fs.Is_Link (Link), "a link to nothing written into the state was left");
+            declare
+               Stayed : constant Boolean := Hostkit.Fs.Is_Link (Link);
+            begin
+               if Stayed and then not Hostkit.Fs.Delete_Link (Link) then
+                  null;
+               end if;
+               Assert (not Stayed, "a link to nothing written into the state was left");
+            end;
          end if;
          --  Never a tree's removal through it, whatever was asserted.
          if Hostkit.Fs.Is_Link (Link) and then not Hostkit.Fs.Delete_Link (Link) then
