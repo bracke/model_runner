@@ -680,7 +680,11 @@ package body Model_Runner.Conversation is
             Last      : Natural := Reply'Last;
             Start     : Positive := Reply'Last + 1;
          begin
+            --  Open_JSON too, which /work reads a JSON template's calls in:
+            --  the envelope is what it reads first, and only the envelope
+            --  is taken out of a thought, never a bare object.
             if Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Tool_Call_JSON)
+              and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Open_JSON)
               and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Qwen_XML)
             then
                return Start;

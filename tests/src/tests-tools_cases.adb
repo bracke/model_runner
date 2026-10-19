@@ -2721,6 +2721,22 @@ package body Tests.Tools_Cases is
                     "a file changed since it was shown was written over: " & Room (Room'First .. Last));
          end;
 
+         --  Read in part, it is said which part, and how to read the rest.
+         declare
+            Outside : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (Outside, Ada.Text_IO.Out_File, Tree & "/part.txt");
+            Ada.Text_IO.Put (Outside, "a" & ASCII.LF & "b" & ASCII.LF & "c" & ASCII.LF & "d" & ASCII.LF);
+            Ada.Text_IO.Close (Outside);
+         end;
+         Placed.Run ("read_file", "{""path"": ""part.txt"", ""first_line"": 1, ""last_line"": 2}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("write_file", "{""path"": ""part.txt"", ""content"": ""z\n""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "you read lines 1 to 2 of it") > 0
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "with no first_line or last_line") > 0,
+                 "a file read in part was refused without saying which part: " & Room (Room'First .. Last));
+
          --  A passage there twice is edited where the lines it last read
          --  hold it.
          Placed.Run ("write_file", "{""path"": ""twice.txt"", ""content"": ""x\ny\nx\n""}",
@@ -3640,6 +3656,25 @@ package body Tests.Tools_Cases is
                    (Model_Runner.Conversation.Content_At
                       (Talk, Model_Runner.Conversation.Length (Talk)), "</think>") > 0,
                  "the reasoning a call ended was kept unclosed");
+         --  As /work reads a JSON template's calls, the envelope or the
+         --  bare object: qwen3-8b's thought ended in a call, dropped there.
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>" & LF & "<tool_call>" & LF
+                  & "{""name"": ""edit"", ""arguments"": {""count"": 2}}" & LF
+                  & "</tool_call>" & LF,
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call ending an unclosed thought was dropped where the bare object is read too");
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "<think>I could send {""name"": ""edit"", ""arguments"": {}}",
+            Status, Reading, Syntax => Tools.Open_JSON,
+            Offered => Defs'Unchecked_Access);
+         Assert (Model_Runner.Conversation.Call_Count
+                   (Talk, Model_Runner.Conversation.Length (Talk)) = 0,
+                 "a bare object in an unclosed thought was taken for a call");
          Model_Runner.Conversation.Append_Reply
            (Talk, "  <think>I could call "
                   & "<tool_call>{""name"": ""edit"", ""arguments"": "

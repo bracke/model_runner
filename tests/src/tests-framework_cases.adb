@@ -13,6 +13,13 @@ with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
 
+with Model_Runner.Agent;
+with Model_Runner.Byte_Sources.Memory;
+with Model_Runner.Bytes;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Llama;
+with Model_Runner.Stops;
+with Tiny_Model;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
@@ -8972,6 +8979,23 @@ package body Tests.Framework_Cases is
    overriding function Profile (Self : Lesson_Agent) return Cx.Model_Profile
    is ((Id => To_Unbounded_String ("lesson"), Context_Limit => 16_384, others => <>));
 
+   --  The session's own work held to a script: a reply a step, and "done"
+   --  past them.
+   type Reply_List is array (Positive range 1 .. 3) of Unbounded_String;
+   type Session_Script is new Model_Runner.Agent.Reply_Script with record
+      Replies : Reply_List;
+      Next    : Positive := 1;
+   end record;
+
+   overriding function Next_Reply (Self : in out Session_Script) return String;
+
+   overriding function Next_Reply (Self : in out Session_Script) return String is
+   begin
+      Self.Next := Self.Next + 1;
+      return (if Self.Next - 1 <= Self.Replies'Last then To_String (Self.Replies (Self.Next - 1))
+              else "status: done" & LF & "summary: done");
+   end Next_Reply;
+
    overriding procedure Run
      (Self        : Lesson_Agent;
       Prompt_Path : String;
@@ -9806,6 +9830,81 @@ package body Tests.Framework_Cases is
          Assert (Length (Lesson_Passing) = 0, "a change they take was said as failing: " & To_String (Lesson_Passing));
          Assert (Lesson_Evidence_After = Lesson_Evidence_Before,
                  "the checks after a change were kept as the work's evidence");
+      end;
+
+      --  And on the session, as /work runs a model: the lesson's checks
+      --  after a write come with the write's answer, on the screen as the
+      --  model is given it.
+      declare
+         Image   : Model_Runner.Bytes.Byte_Array_Access;
+         Fifth   : Unbounded_String;
+      begin
+         Tiny_Model.Build (Image, Room => 32_768);
+         declare
+            Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
+            Parsed  : Model_Runner.GGUF.Containers.Container;
+            Ready   : aliased Model_Runner.Llama.Model;
+            Session : aliased Model_Runner.Llama.Session;
+            Stop    : aliased Model_Runner.Stops.Set;
+            Catalog : aliased Model_Runner.Localization.Catalog;
+            Screen  : aliased Model_Runner.Presentation.Console;
+            Item    : aliased Model_Runner.CLI.Options.Command;
+            Notes   : aliased Model_Runner.CLI.Project_Commands.Run_Notes;
+            Replies : aliased Session_Script;
+            Said    : Ada.Text_IO.File_Type;
+            Broken  : constant String := "procedure Hello is\nbegin\n   raise Program_Error;\nend Hello;\n";
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+            Model_Runner.Llama.Prepare (Ready, Parsed, Source, Status => Status);
+            Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+            Model_Runner.Llama.Open (Session, Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the tiny model's session did not open");
+            Model_Runner.Stops.Open (Stop);
+            Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+            Model_Runner.Presentation.Open
+              (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+               (Output_Is_Terminal => False, Error_Is_Terminal => False,
+                Input_Is_Terminal  => False, Colour_Suppressed => True),
+               Model_Runner.CLI.Options.Normal);
+            Replies.Replies :=
+              [To_Unbounded_String ("<tool_call>{""name"": ""read_file"", ""arguments"": "
+                                    & "{""path"": ""src/hello.adb""}}</tool_call>"),
+               To_Unbounded_String ("<tool_call>{""name"": ""write_file"", ""arguments"": "
+                                    & "{""path"": ""src/hello.adb"", ""content"": """ & Broken & """}}</tool_call>"),
+               To_Unbounded_String ("status: done" & LF & "summary: wrote hello" & LF
+                                    & "changed_files: src/hello.adb")];
+            Change := S.No_Changes;
+            Tk.Create (Store, Change, Fields ("Greet a fifth time", "implementation", "component", "hello"), "user",
+                       "", Fifth, Status);
+            S.Commit (Store, Change, Status);
+            Tk.Move (Store, Change, To_String (Fifth), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+            declare
+               Agent : Model_Runner.CLI.Project_Commands.Session_Agent
+                 (Ready'Access, Session'Access, Stop'Access, Screen'Access, Item'Access, null, Notes'Access);
+            begin
+               Agent.Script := Replies'Unchecked_Access;
+               --  The calls' answers, as the screen gives them: on standard
+               --  error.
+               Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "obj/session-lesson.txt");
+               Ada.Text_IO.Set_Error (Said);
+               Wk.Execute (Store, To_String (Fifth), Agent, Cx.Profile (Store, ""), Done, Status);
+               Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+               Ada.Text_IO.Close (Said);
+               declare
+                  Shown : constant String := Read_Whole ("obj/session-lesson.txt");
+               begin
+                  Assert (Ada.Strings.Fixed.Index (Shown, "holds every change to failed after it") > 0,
+                          "a write on the session was not told the lesson's checks after it: " & Shown
+                          & " / " & To_String (Done.Final_State) & " " & To_String (Done.Reason)
+                          & Positive'Image (Replies.Next));
+                  Assert (Replies.Next > 3, "the session's work did not take the script's replies:"
+                          & Positive'Image (Replies.Next) & " " & To_String (Done.Final_State) & " "
+                          & To_String (Done.Reason));
+               end;
+            end;
+            Model_Runner.Llama.Close (Session);
+         end;
       end;
       S.Close (Store);
    end Harness_Records_What_It_Sees;

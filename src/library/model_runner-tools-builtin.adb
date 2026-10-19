@@ -2617,10 +2617,28 @@ package body Model_Runner.Tools.Builtin is
                         & " not written over whole: change a part of it with edit_file");
                   elsif There /= "" and then not (Self.Whole.Has (Path) and then Self.Whole.Get (Path) = There)
                   then
-                     return Failure
-                       (Spelt & " is there and you have not read the whole of it as it is now, so"
-                        & " writing it whole would lose what you did not see: read_file it, or change"
-                        & " a part of it with edit_file");
+                     declare
+                        --  The lines last read of it, where they were a part:
+                        --  said, and how to read the rest. qwen3-8b read
+                        --  lines 1 to 10 of 24, was told to read_file it,
+                        --  and wrote it whole again, refused twice.
+                        Part  : constant String :=
+                          (if Self.Read_At.Has (Path) then Self.Read_At.Get (Path) else "");
+                        Colon : constant Natural := Ada.Strings.Fixed.Index (Part, ":");
+                     begin
+                        if Colon > 0 then
+                           return Failure
+                             (Spelt & " is there and you read lines " & Part (Part'First .. Colon - 1)
+                              & (if Part (Colon + 1 .. Part'Last) = "100000000" then " on"
+                                 else " to " & Part (Colon + 1 .. Part'Last))
+                              & " of it, not the whole, so writing it whole would lose the rest: read_file it"
+                              & " with no first_line or last_line, or change a part of it with edit_file");
+                        end if;
+                        return Failure
+                          (Spelt & " is there and you have not read the whole of it as it is now, so"
+                           & " writing it whole would lose what you did not see: read_file it, or change"
+                           & " a part of it with edit_file");
+                     end;
                   end if;
                end;
             end if;

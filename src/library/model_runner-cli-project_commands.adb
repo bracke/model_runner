@@ -11,7 +11,6 @@ with Hostkit.Descriptors;
 with Hostkit.Fs;
 with Hostkit.Terminal_Control;
 
-with Model_Runner.Agent;
 with Model_Runner.Agent.Recall;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.CLI.Choosers;
@@ -746,12 +745,23 @@ package body Model_Runner.CLI.Project_Commands is
             --  qwen3-8b thought for minutes a call and ran out of the work's
             --  time after seven.
             Think_Budget => Request.Max_Tokens / 2,
+            Script      => Self.Script,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran
          --  into: "changed_files: docs/calc.mdthe work as the harness...".
-         Release_Held (Sink);
-         Pres.End_Line (Pres.Standard_Output_Sink (Sink));
+         --  A call begun when the work's time ran out is shown as written,
+         --  and said to be none, as a reply cut at its length is.
+         declare
+            Cut_In_Call : constant Boolean :=
+              Model_Runner.Agent."=" (Outcome.Reason, Model_Runner.Agent.Timed_Out) and then Sink.Holding;
+         begin
+            Release_Held (Sink);
+            Pres.End_Line (Pres.Standard_Output_Sink (Sink));
+            if Cut_In_Call then
+               Pres.Put_Note (Self.Screen.all, "cli.agent.timed_out_in_call");
+            end if;
+         end;
          Calls := Calls + Outcome.Calls;
          Steps_Taken := Steps_Taken + Outcome.Steps;
          All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;

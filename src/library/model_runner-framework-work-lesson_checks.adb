@@ -81,27 +81,47 @@ begin
       return;
    end if;
 
-   --  Those of the task's profile, as the work's run resolved it.
+   --  Those of the task's profile, as the work's run resolved it; and a
+   --  check it does not hold from the profile that does, as the lesson
+   --  was learned under one: an implementation task, run by "tests",
+   --  ran none of the "checks" a lesson named.
    declare
-      Text  : constant String :=
-        (if Host.Profile_Frozen then To_String (Host.Profile_Text)
-         else Records.Get (Configurations.Required (Host.Item.all), "profile." & Profile));
-      Start : Positive := Text'First;
+      Found  : Name_Lists.Vector;
+      Config : constant Records.Item := Configurations.Required (Host.Item.all);
+
+      procedure Take (Text : String) is
+         Start : Positive := Text'First;
+      begin
+         for Index in Text'First .. Text'Last + 1 loop
+            if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
+               declare
+                  Part  : constant String := Ada.Strings.Fixed.Trim (Text (Start .. Index - 1), Ada.Strings.Both);
+                  Check : constant Verification.Check_List := Verification.Parse_Profile (Part);
+               begin
+                  if Part /= "" and then Verification.Length (Check) = 1
+                    and then Wanted.Contains (To_String (Verification.Element (Check, 1).Label))
+                    and then not Found.Contains (To_String (Verification.Element (Check, 1).Label))
+                  then
+                     Found.Append (To_String (Verification.Element (Check, 1).Label));
+                     Append (Subset, (if Length (Subset) = 0 then "" else "; ") & Part);
+                  end if;
+               end;
+               Start := Index + 1;
+            end if;
+         end loop;
+      end Take;
    begin
-      for Index in Text'First .. Text'Last + 1 loop
-         if Index > Text'Last or else Text (Index) in ';' | ASCII.LF then
-            declare
-               Part  : constant String := Ada.Strings.Fixed.Trim (Text (Start .. Index - 1), Ada.Strings.Both);
-               Check : constant Verification.Check_List := Verification.Parse_Profile (Part);
-            begin
-               if Part /= "" and then Verification.Length (Check) = 1
-                 and then Wanted.Contains (To_String (Verification.Element (Check, 1).Label))
-               then
-                  Append (Subset, (if Length (Subset) = 0 then "" else "; ") & Part);
-               end if;
-            end;
-            Start := Index + 1;
-         end if;
+      Take (if Host.Profile_Frozen then To_String (Host.Profile_Text)
+            else Records.Get (Config, "profile." & Profile));
+      for Index in 1 .. Records.Field_Count (Config) loop
+         exit when Natural (Found.Length) = Natural (Wanted.Length);
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Starts (Name, "profile.") and then Name /= "profile." & Profile then
+               Take (Records.Get (Config, Name));
+            end if;
+         end;
       end loop;
    end;
    if Length (Subset) = 0 or else Time_Is_Up (Host) then

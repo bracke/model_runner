@@ -2,6 +2,7 @@ with Model_Runner.CLI.Command_Lines;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Cancellation;
+with Model_Runner.Agent;
 with Model_Runner.CLI.Options;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
@@ -57,7 +58,11 @@ package Model_Runner.CLI.Project_Commands is
       Item     : not null access constant Model_Runner.CLI.Options.Command;
       Cancel   : Model_Runner.Cancellation.Token_Reference;
       Notes    : not null access Run_Notes)
-   is new Model_Runner.Framework.Work.Parenting_Runner with null record;
+   is new Model_Runner.Framework.Work.Parenting_Runner with record
+      --  Replies taken in place of the model's, for a test of what the
+      --  session's work does around them; null for the model's own.
+      Script : Model_Runner.Agent.Script_Reference := null;
+   end record;
 
    --  Run the agent without children: a fresh conversation holding the
    --  task's context, the agent loop with the file tools, and the session
