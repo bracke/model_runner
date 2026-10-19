@@ -664,10 +664,44 @@ package body Model_Runner.Conversation is
       --  the real call's close and lost it, and a call drafted in the
       --  reasoning was run. Reasoning is what opens the reply, as
       --  llama.cpp reads it: an answer that mentions <think> further on
-      --  keeps its calls.
+      --  keeps its calls. But tagged calls that end the reasoning, nothing
+      --  after them, are what it did: qwen3-8b opened a thought, wrote its
+      --  call in it and stopped, and the call was taken for an answer
+      --  without the line the work asked for.
       function Answer_Start return Positive is
          Close : constant Natural := Ada.Strings.Fixed.Index (Reply, "</think>");
          Lead  : Positive := Reply'First;
+
+         --  Where the tagged calls that end the reply begin, or past its
+         --  end where it does not end in one.
+         function Trailing_Calls return Positive is
+            Open_Tag  : constant String := "<tool_call>";
+            Close_Tag : constant String := "</tool_call>";
+            Last      : Natural := Reply'Last;
+            Start     : Positive := Reply'Last + 1;
+         begin
+            if Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Tool_Call_JSON)
+              and then Model_Runner.Tools."/=" (Syntax, Model_Runner.Tools.Qwen_XML)
+            then
+               return Start;
+            end if;
+            loop
+               while Last >= Reply'First and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+                  Last := Last - 1;
+               end loop;
+               exit when Last - Reply'First + 1 < Close_Tag'Length
+                 or else Reply (Last - Close_Tag'Length + 1 .. Last) /= Close_Tag;
+               declare
+                  Opens : constant Natural :=
+                    Ada.Strings.Fixed.Index (Reply (Reply'First .. Last), Open_Tag, Ada.Strings.Backward);
+               begin
+                  exit when Opens = 0;
+                  Start := Opens;
+                  Last := Opens - 1;
+               end;
+            end loop;
+            return Start;
+         end Trailing_Calls;
       begin
          if Close /= 0 then
             return Close + 8;
@@ -679,7 +713,7 @@ package body Model_Runner.Conversation is
          end loop;
          if Reply'Last - Lead + 1 >= 7 and then Reply (Lead .. Lead + 6) = "<think>"
          then
-            return Reply'Last + 1;
+            return Trailing_Calls;
          end if;
          return Reply'First;
       end Answer_Start;
@@ -726,7 +760,8 @@ package body Model_Runner.Conversation is
          then
             First := Reply'First;
          end if;
-         Append_Asking (Item, Reply (First .. Last), Status);
+         --  Reasoning its calls ended, closed for the template to keep.
+         Append_Asking (Item, Closed_Reasoning (Reply (First .. Last)), Status);
 
          for Index in 1 .. Model_Runner.Tools.Count (Asked) loop
             exit when E.Is_Error (Status);

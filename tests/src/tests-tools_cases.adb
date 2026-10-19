@@ -3583,7 +3583,9 @@ package body Tests.Tools_Cases is
    --  Reasoning is what opens a reply, as llama.cpp reads it: an answer
    --  that mentions <think> further on, with no close, is an answer -- it
    --  was emptied, and the calls it made dropped -- while a reply that
-   --  opens on <think>, after any spaces, and never closes it is none.
+   --  opens on <think>, after any spaces, and never closes it is none,
+   --  but for the calls that end it: qwen3-8b wrote its call in a thought
+   --  it never closed, and the work was blocked for want of an answer.
    procedure A_Reply_Mentioning_Think_Keeps_Its_Answer
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3630,9 +3632,23 @@ package body Tests.Tools_Cases is
                   & "{""count"": 1}}</tool_call>",
             Status, Reading, Syntax => Tools.Tool_Call_JSON,
             Offered => Defs'Unchecked_Access);
+         Assert (E.Is_Ok (Reading)
+                 and then Model_Runner.Conversation.Call_Count
+                            (Talk, Model_Runner.Conversation.Length (Talk)) = 1,
+                 "a call ending reasoning that never closed was dropped");
+         Assert (Ada.Strings.Fixed.Index
+                   (Model_Runner.Conversation.Content_At
+                      (Talk, Model_Runner.Conversation.Length (Talk)), "</think>") > 0,
+                 "the reasoning a call ended was kept unclosed");
+         Model_Runner.Conversation.Append_Reply
+           (Talk, "  <think>I could call "
+                  & "<tool_call>{""name"": ""edit"", ""arguments"": "
+                  & "{""count"": 1}}</tool_call> but first I will look",
+            Status, Reading, Syntax => Tools.Tool_Call_JSON,
+            Offered => Defs'Unchecked_Access);
          Assert (Model_Runner.Conversation.Call_Count
                    (Talk, Model_Runner.Conversation.Length (Talk)) = 0,
-                 "a call inside reasoning that never closed was taken");
+                 "a call drafted inside reasoning that never closed was taken");
          Model_Runner.Conversation.Close (Talk);
       end;
       Tools.Close (Defs);

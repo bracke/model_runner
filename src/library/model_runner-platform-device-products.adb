@@ -988,6 +988,18 @@ package body Model_Runner.Platform.Device.Products is
    --    gemma-3-270m           4     1,335    6, kept  156 (3 slices: 134)
    Merged_Rows : constant := 128;
 
+   --  And that many again for every further stretch of this many cached
+   --  positions: deep in the cache a slice is long, and four slices of
+   --  4,096 positions were thirty-two workgroups for the whole part to
+   --  read the keys with. Mellum at 16,381 positions, four slices against
+   --  twelve, tokens a second: 31.17 -> 31.60; at 4,096 kept at four.
+   Merged_Stretch : constant := 4_096;
+
+   --  The most slices the heads may cut a cache of Span positions into
+   --  between them.
+   function Merged_Slices (Heads, Span : Natural) return Natural
+   is (Natural'Max (1, Merged_Rows * Natural'Max (1, Span / Merged_Stretch) / Natural'Max (1, Heads)));
+
    --  Whether a round's cache is cut into slices, which the two kernels
    --  answer differently because their workgroups cost differently.
    --
@@ -14176,7 +14188,7 @@ package body Model_Runner.Platform.Device.Products is
                           First    => 0,
                           Last     => Slice_Limit * Slice_Least,
                           Rounding => False),
-                       Natural'Max (1, Merged_Rows / Natural'Max (1, This.Heads)))
+                       Merged_Slices (This.Heads, Natural'Last))
                else 1);
 
             Most_Slices : constant Natural :=
@@ -14191,8 +14203,7 @@ package body Model_Runner.Platform.Device.Products is
                           First    => 0,
                           Last     => Slice_Limit * Slice_Least,
                           Rounding => False),
-                       Natural'Max
-                         (1, Merged_Rows / Natural'Max (1, This.Heads)))
+                       Merged_Slices (This.Heads, Natural'Last))
                else 1);
 
             Mine : constant Interfaces.Unsigned_64 :=
@@ -16289,8 +16300,8 @@ package body Model_Runner.Platform.Device.Products is
                                    * ((Count + Queries - 1) / Queries),
                                    This.First, This.Last,
                                    Rounding => False),
-                                Natural'Max
-                                  (1, Merged_Rows / Natural'Max (1, This.Heads))));
+                                Merged_Slices
+                                  (This.Heads, (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);
@@ -16451,9 +16462,8 @@ package body Model_Runner.Platform.Device.Products is
                                   (Item, Count, This.Head_Size,
                                    This.Value_Size, This.First, This.Last,
                                    Rounding => False),
-                                Natural'Max
-                                  (1, Merged_Rows
-                                        / Natural'Max (1, This.Heads))));
+                                Merged_Slices
+                                  (This.Heads, (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
