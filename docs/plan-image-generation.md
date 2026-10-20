@@ -199,7 +199,13 @@ both runs held 7 GB or more of memory free.
   rotation's sections read from `rope.dimension_sections` as Qwen3.5's
   are, held against the independent implementation on a fixture. Its
   vision tower (deepstack) is not needed for text to image and stays
-  refused. Still to do: the real 8B file generated from.
+  refused. The real 8B file (Q8_0) answers -- "The capital of Denmark is
+  Copenhagen." -- and its perplexity over the first 20 KB of the README,
+  two 512-token chunks on the processor, is 17.38 against llama.cpp's
+  18.01; llama.cpp gives 17.97 for the same weights relabelled `qwen3`,
+  so its `qwen3vl` is its `qwen3`, and this program's gap to it is the
+  one plain Qwen3-8B shows on the same text (22.04 against 22.43). The
+  sections change nothing for text: 17.3803 read or not.
 - **safetensors**: an eight-byte header length, a JSON header, raw bf16
   tensors -- read mapped, the way GGUF files are. Small, and needed by any
   diffusion VAE, which is rarely published as GGUF.
