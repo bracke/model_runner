@@ -1694,6 +1694,37 @@ package body Model_Runner.Tools is
          end loop;
       end Find_Shut;
 
+      --  Where MARK next stands from FROM outside the strings of an object:
+      --  a call's arguments may spell the form's own marker -- a file about
+      --  such calls, a doctest's ">>>" -- and taken there for the next
+      --  call's, the call was cut and lost. Quotes outside an object are
+      --  prose's and are not followed; 0 where it stands nowhere.
+      function Marker_Outside (From : Positive; Mark : String) return Natural is
+         Depth     : Natural := 0;
+         In_String : Boolean := False;
+         P         : Natural := From;
+      begin
+         while P <= Reply'Last loop
+            if In_String then
+               if Reply (P) = '\' then
+                  P := P + 1;
+               elsif Reply (P) = '"' then
+                  In_String := False;
+               end if;
+            elsif Marks (P, Mark) then
+               return P;
+            elsif Reply (P) = '{' then
+               Depth := Depth + 1;
+            elsif Reply (P) = '}' and then Depth > 0 then
+               Depth := Depth - 1;
+            elsif Reply (P) = '"' and then Depth > 0 then
+               In_String := True;
+            end if;
+            P := P + 1;
+         end loop;
+         return 0;
+      end Marker_Outside;
+
       --  The first closed call block that would not read, the rest read.
       Bad : E.Error_Info := E.Success;
 
@@ -2194,14 +2225,12 @@ package body Model_Runner.Tools is
                      Body_First : constant Natural := Name_Last + 1;
                      Body_Last  : Natural := Body_First - 1;
                   begin
-                     while Body_Last + Marker'Length <= Reply'Last
-                       and then not Marks (Body_Last + 1, Marker)
-                     loop
-                        Body_Last := Body_Last + 1;
-                     end loop;
-                     if Body_Last + Marker'Length > Reply'Last then
-                        Body_Last := Reply'Last;
-                     end if;
+                     declare
+                        Next_Block : constant Natural :=
+                          (if Body_First > Reply'Last then 0 else Marker_Outside (Body_First, Marker));
+                     begin
+                        Body_Last := (if Next_Block = 0 then Reply'Last else Next_Block - 1);
+                     end;
 
                      --  A recipient is a tool on offer, where the caller said
                      --  what was offered, and a name in any case: ">>> import
@@ -2328,7 +2357,7 @@ package body Model_Runner.Tools is
                            declare
                               Shut : constant Natural := Object_End (Open);
                               Next : constant Natural :=
-                                Ada.Strings.Fixed.Index (Reply (Open .. Reply'Last), Harmony_Recipient);
+                                Marker_Outside (Open, Harmony_Recipient);
                            begin
                               --  Not closed before the next call's header:
                               --  passed, and said after; not closed at all,
@@ -2439,7 +2468,7 @@ package body Model_Runner.Tools is
                                  --  was cut in it.
                                  Next : constant Natural :=
                                    (if Name_Last + 1 > Reply'Last then 0
-                                    else Ada.Strings.Fixed.Index (Reply (Name_Last + 1 .. Reply'Last), Mistral_Calls));
+                                    else Marker_Outside (Name_Last + 1, Mistral_Calls));
                                  Shut : constant Natural :=
                                    (if Name = "" or else Open > Reply'Last or else Reply (Open) /= '{' then 0
                                     else Object_End (Open));
@@ -2482,24 +2511,30 @@ package body Model_Runner.Tools is
                declare
                   First : constant Natural :=
                     Index + DeepSeek_Call_Begin'Length;
-                  Shut  : Natural := First;
-                  Sep   : Natural := 0;
+                  --  Its markers looked for outside the arguments' strings,
+                  --  which may spell them: its end, or the next call's
+                  --  beginning where it was never closed.
+                  Ends   : constant Natural := Marker_Outside (First, DeepSeek_Call_End);
+                  Begins : constant Natural := Marker_Outside (First, DeepSeek_Call_Begin);
+                  Shut   : constant Natural :=
+                    (if Ends = 0 and then Begins = 0 then Reply'Last + 1
+                     elsif Ends = 0 then Begins
+                     elsif Begins = 0 then Ends
+                     else Natural'Min (Ends, Begins));
+                  Sep    : Natural := 0;
                begin
-                  while Shut <= Reply'Last
-                    and then not Marks (Shut, DeepSeek_Call_End)
-                  loop
-                     if Marks (Shut, DeepSeek_Call_Begin) then
-                        --  Never closed: run to the next call's end, the
-                        --  first was stored and the next one dropped.
-                        Lose;
-                        Index := Shut;
-                        goto Next_DeepSeek;
+                  for At_Sep in First .. Shut - 1 loop
+                     if Sep = 0 and then Marks (At_Sep, DeepSeek_Sep) then
+                        Sep := At_Sep;
                      end if;
-                     if Sep = 0 and then Marks (Shut, DeepSeek_Sep) then
-                        Sep := Shut;
-                     end if;
-                     Shut := Shut + 1;
                   end loop;
+                  if Shut <= Reply'Last and then Shut = Begins then
+                     --  Never closed: run to the next call's end, the first
+                     --  was stored and the next one dropped.
+                     Lose;
+                     Index := Shut;
+                     goto Next_DeepSeek;
+                  end if;
                   if Shut > Reply'Last then
                      Malformed;
                      return;

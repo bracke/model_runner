@@ -11,6 +11,7 @@ with Ada.Text_IO;
 with AUnit.Assertions; use AUnit.Assertions;
 
 with Model_Runner.Agent;
+with Model_Runner.UTF8;
 with Model_Runner.Agent.Recall;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
@@ -212,6 +213,8 @@ package body Tests.Agent_Loop_Cases is
    --  many of its turns hold a thought left open.
    Told_Empty : Boolean := False;
    Left_Open  : Natural := 0;
+   --  Whether it was told a call of its reply could not be read at all.
+   Told_Unreadable : Boolean := False;
 
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
@@ -228,11 +231,17 @@ package body Tests.Agent_Loop_Cases is
       Pace_Tokens : Natural := 0;
       Seconds  : Duration := 0.0;
       Total    : Natural := 0;
-      Steps    : Positive := 24)
+      Steps    : Positive := 24;
+      Talk     : access Conv.History := null;
+      Syntax   : Model_Runner.Tools.Call_Syntax := Model_Runner.Tools.Tool_Call_JSON)
    is
       Under    : Harness (Image);
       Session  : L.Session;
-      Messages : Conv.History;
+      --  The conversation: the caller's where it carries one on, as /work's
+      --  rounds do; else one of its own.
+      Own      : aliased Conv.History;
+      Held     : constant access Conv.History := (if Talk = null then Own'Access else Talk);
+      Messages : Conv.History renames Held.all;
       Offered  : Model_Runner.Tools.Definitions;
       Runner   : Model_Runner.Tools.Builtin.Instance;
       Stop     : Model_Runner.Stops.Set;
@@ -247,7 +256,9 @@ package body Tests.Agent_Loop_Cases is
       Assert (E.Is_Ok (Status), "the tiny model did not prepare");
       L.Open (Session, Under.Ready, Status => Status);
       Assert (E.Is_Ok (Status), "the tiny model's session did not open");
-      Conv.Open (Messages, Status => Status);
+      if Talk = null or else Conv.Length (Messages) = 0 then
+         Conv.Open (Messages, Status => Status);
+      end if;
       Conv.Append (Messages, Conv.User_Role, "work", Status);
       Model_Runner.Tools.Read
         (Offered,
@@ -271,6 +282,7 @@ package body Tests.Agent_Loop_Cases is
          Time       => Clock'Unchecked_Access,
          Seeds      => Seeds'Unchecked_Access,
          Max_Steps  => Steps,
+         Tool_Syntax => Syntax,
          Thinking   => (if Budget > 0 then Model_Runner.Templates.Thinking_On else Model_Runner.Templates.Thinking_Off),
          Think_Budget => Budget,
          Compact    => Compact,
@@ -288,7 +300,11 @@ package body Tests.Agent_Loop_Cases is
       Told_Lost := False;
       Told_Empty := False;
       Left_Open := 0;
+      Told_Unreadable := False;
       for Index in 1 .. Conv.Length (Messages) loop
+         if Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "Your tool call could not be read") > 0 then
+            Told_Unreadable := True;
+         end if;
          if Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "ended after its reasoning") > 0 then
             Told_Empty := True;
          end if;
@@ -321,7 +337,9 @@ package body Tests.Agent_Loop_Cases is
             end;
          end if;
       end loop;
-      Conv.Close (Messages);
+      if Talk = null then
+         Conv.Close (Messages);
+      end if;
       Model_Runner.Tools.Close (Offered);
    end Run;
 
@@ -372,6 +390,39 @@ package body Tests.Agent_Loop_Cases is
          Run (Replies, Seen, Ended);
          Assert (Ada.Directories.Exists (Dir & "/whole.txt"),
                  "a whole call cut in the words after it was not run:" & Seen.Results.Length'Image);
+      end;
+
+      --  A whole call that would not read, cut in the words after it, is
+      --  told as unreadable: taken for cut in it, the model heard of no
+      --  call at all.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<tool_call>{""name"": ""write_file"", ""arguments"": {,}}</tool_call>"
+                                 & ASCII.LF & "Let me");
+         Replies.Replies.Append (Write ("read-again.txt", "w"));
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Told_Unreadable and then Ada.Directories.Exists (Dir & "/read-again.txt"),
+                 "a whole call that would not read, cut in the words after it, was not told unreadable");
+      end;
+
+      --  So too in the open form, where a bracket or a quote in the thought
+      --  or the words after the call is no call left open.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<think>f( says 5"" </think>" & Write ("open-whole.txt", "w") & ASCII.LF
+                                 & "Next (README");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (Ada.Directories.Exists (Dir & "/open-whole.txt"),
+                 "a whole open-form call, with brackets in its thought and after, was taken for cut:"
+                 & Seen.Results.Length'Image);
       end;
 
       --  A thought at its budget is closed for the reply -- shown closed --
@@ -560,6 +611,23 @@ package body Tests.Agent_Loop_Cases is
                  & " " & Told_Empty'Image);
       end;
 
+      --  Thought alone every time, its notes spent, with no limit reached:
+      --  no answer, not a budget's stop -- said to be the token limit with
+      --  no budget set.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         for Count in 1 .. 6 loop
+            Replies.Replies.Append ("<think>" & [1 .. 121 => 'a'] & " ");
+         end loop;
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Budget => 32);
+         Assert (Ended.Reason = Ag.Generation_Failed,
+                 "replies of thought alone, with no limit reached, ended as " & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
+
       --  A whole call after a block that would not read runs too, and the
       --  lost one is said: read only to the bad block, it was dropped unsaid.
       declare
@@ -736,6 +804,100 @@ package body Tests.Agent_Loop_Cases is
                  and then not Has (Seen.Results (7), "already made"),
                  "a failed change made again after a compaction dropped its error was told it was above:"
                  & Seen.Results.Length'Image);
+      end;
+
+      --  A compaction keeps the recent turns: a call whose answer is still
+      --  among them, made again, is a repeat -- every answer taken for
+      --  dropped, a run going round near a full context never stopped.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+
+         procedure Fill is
+         begin
+            Tight_Once := True;
+         end Fill;
+      begin
+         for Name of String'("abcdef") loop
+            Put ("kept-" & Name & ".txt", "text of " & Name);
+            Replies.Replies.Append (Read ("kept-" & Name & ".txt"));
+         end loop;
+         Replies.Replies.Append (Read ("kept-f.txt"));
+         Replies.Replies.Append (Read ("kept-f.txt"));
+         Replies.Replies.Append ("done");
+         Replies.Keeps := True;
+         Replies.Hook_At := 7;
+         Replies.Hook := Fill'Unrestricted_Access;
+         Run (Replies, Seen, Ended, Compact => True);
+         Assert (Ended.Compactions >= 1 and then Ended.Reason = Ag.Repeating,
+                 "a call whose answer a compaction kept, made again, was not a repeat: "
+                 & Ended.Reason'Image & Ended.Compactions'Image);
+      end;
+
+      --  A run carried on in the same conversation, as /work's rounds are:
+      --  what the first run's calls answered is still there, and the same
+      --  calls again are repeats -- begun as if none were, they were not.
+      declare
+         Kept    : aliased Model_Runner.Agent.Recall.Carried;
+         Talk    : aliased Conv.History;
+         First   : Script;
+         Second  : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         First.Replies.Append (Write ("carried.txt", "x"));
+         First.Replies.Append ("done");
+         Run (First, Seen, Ended, Carry => Kept'Unchecked_Access, Talk => Talk'Access);
+         Second.Replies.Append (Write ("carried.txt", "x"));
+         Second.Replies.Append (Write ("carried.txt", "x"));
+         Second.Replies.Append ("done");
+         Run (Second, Seen, Ended, Carry => Kept'Unchecked_Access, Talk => Talk'Access);
+         Assert (Ended.Reason = Ag.Repeating,
+                 "calls a carried run made again, their answers in the conversation, were not repeats: "
+                 & Ended.Reason'Image);
+         Conv.Close (Talk);
+      end;
+
+      --  A call made again is given the tool's answer again, and the
+      --  harness's note as the harness's: kept with the note, the repeat
+      --  gave the note back as the tool's, said as quoted.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("noted.txt", "one"));
+         Replies.Replies.Append (Write ("noted.txt", "two"));
+         Replies.Replies.Append (Edit ("noted.txt", "two", "one"));
+         Replies.Replies.Append (Edit ("noted.txt", "two", "one"));
+         Run (Replies, Seen, Ended);
+         Assert (Natural (Seen.Results.Length) = 4 and then Has (Seen.Results (3), "back to a version")
+                 and then not Has (Seen.Results (4), "quoted, not the harness"),
+                 "a repeat gave the harness's note back as the tool's:"
+                 & (if Natural (Seen.Results.Length) = 4 then " " & Seen.Results (4) else Seen.Results.Length'Image));
+      end;
+
+      --  A tool's answer cut inside a character, or of a file that is not
+      --  UTF-8, is given as text: kept as bytes, the next prompt could not
+      --  be read into tokens.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Accents : Unbounded_String;
+      begin
+         for Count in 1 .. 20_000 loop
+            Append (Accents, Character'Val (16#C3#) & Character'Val (16#A9#));
+         end loop;
+         Put ("accents.txt", To_String (Accents));
+         Put ("latin.txt", "caf" & Character'Val (16#E9#));
+         Replies.Replies.Append (Call ("read_file", "{""path"": ""accents.txt"", ""first_line"": 1}"));
+         Replies.Replies.Append (Read ("latin.txt"));
+         Run (Replies, Seen, Ended);
+         Assert (Natural (Seen.Results.Length) = 2 and then Model_Runner.UTF8.Is_Valid (Seen.Results (1))
+                 and then Model_Runner.UTF8.Is_Valid (Seen.Results (2)),
+                 "a tool's answer was given as bytes that are not UTF-8");
       end;
 
       --  A file put back as an earlier write left it is said to be.

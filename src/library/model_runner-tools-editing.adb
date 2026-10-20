@@ -472,7 +472,11 @@ package body Model_Runner.Tools.Editing is
             for Index in Block'Range loop
                Block (Index) := Stream_Element (Character'Pos (Content (Content'First + Natural (Index) - 1)));
             end loop;
-            Stream_IO.Open (Copy, Stream_IO.Out_File, Disk);
+            --  Made empty to be written: opened for output, a file keeps
+            --  what it held past the new text, and a shorter one kept the
+            --  old tail. Created over, it is the same file emptied, its
+            --  other names still its own.
+            Stream_IO.Create (Copy, Stream_IO.Out_File, Disk);
             Stream_IO.Write (Copy, Block);
             Stream_IO.Close (Copy);
             --  Durable as the file itself is made so, not as its partial was.
@@ -1293,12 +1297,24 @@ package body Model_Runner.Tools.Editing is
                      Into.Truncated := True;
                      return;
                   end if;
-                  Hits := Hits + 1;
-                  U.Append (Into.Text, Before & Image (Line) & ": "
-                            & (if Said_Line'Length > 200
-                               then Said_Line (Said_Line'First .. Said_Line'First + 199) & " ..."
-                               else Said_Line)
-                            & ASCII.LF);
+                  declare
+                     Hit : constant String :=
+                       Before & Image (Line) & ": "
+                       & (if Said_Line'Length > 200
+                          then Said_Line (Said_Line'First .. Said_Line'First + 199) & " ..."
+                          else Said_Line)
+                       & ASCII.LF;
+                  begin
+                     --  Held to what one answer holds, as a range is: a
+                     --  hundred hits of long paths and lines were an answer
+                     --  too large to return, every time it was asked.
+                     if U.Length (Into.Text) + Hit'Length > Range_Bytes then
+                        Into.Truncated := True;
+                        return;
+                     end if;
+                     Hits := Hits + 1;
+                     U.Append (Into.Text, Hit);
+                  end;
                end if;
             end;
             Line := Line + 1;
@@ -1328,7 +1344,7 @@ package body Model_Runner.Tools.Editing is
       if Hits = 0 then
          Result.Text := U.To_Unbounded_String ("no line of " & Path & " holds that");
       elsif Result.Truncated then
-         U.Append (Result.Text, "(the first" & Natural'Image (Search_Most) & " only; a longer pattern narrows it)");
+         U.Append (Result.Text, "(the first" & Natural'Image (Hits) & " only; a longer pattern narrows it)");
       end if;
       return Result;
    end Search_File;
@@ -1460,7 +1476,7 @@ package body Model_Runner.Tools.Editing is
       elsif Hits = 0 then
          Result.Text := U.To_Unbounded_String ("no file under " & Folder & " holds that");
       elsif Result.Truncated then
-         U.Append (Result.Text, "(the first" & Natural'Image (Search_Most) & " only; a longer pattern narrows it)");
+         U.Append (Result.Text, "(the first" & Natural'Image (Hits) & " only; a longer pattern narrows it)");
       end if;
       return Result;
    end Search_Code;

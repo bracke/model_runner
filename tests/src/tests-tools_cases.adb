@@ -827,6 +827,27 @@ package body Tests.Tools_Cases is
                     "a line longer than one answer was not shown in part");
          end;
       end;
+      --  A search is held to what one answer holds, as a range is: a
+      --  hundred hits of long paths and lines were too large to return.
+      declare
+         Deep  : constant String := Dir & "/" & [1 .. 140 => 'd'];
+         Lines : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Ada.Directories.Create_Path (Deep);
+         for Count in 1 .. 100 loop
+            Ada.Strings.Unbounded.Append (Lines, "needle " & [1 .. 250 => 'n'] & ASCII.LF);
+         end loop;
+         Put (Deep & "/hay.txt", Ada.Strings.Unbounded.To_String (Lines));
+         declare
+            Got : constant Ed.Said := Ed.Search_Code (Dir, "needle");
+         begin
+            Assert (not Got.Failed and then Got.Truncated
+                    and then Ada.Strings.Unbounded.Length (Got.Text) <= Model_Runner.Tools.Max_Call_Bytes - 1024,
+                    "a search of long paths and lines was not held to one answer:"
+                    & Ada.Strings.Unbounded.Length (Got.Text)'Image);
+         end;
+         Ada.Directories.Delete_Tree (Deep);
+      end;
       Assert (Has (Ed.Search_File (Path, "Twice"), "6: ")
               and then Has (Ed.Search_File (Path, "nowhere"), "no line"),
               "a search of a file did not give the lines that hold it");
@@ -2950,6 +2971,13 @@ package body Tests.Tools_Cases is
                            Status);
                Assert (Whole_File (Tree & "/hard2.txt") = "two",
                        "a file of two names written under one kept the old text under the other");
+               --  Shorter than it was: emptied first, not written over the
+               --  start and the old tail left.
+               Placed.Run ("read_file", "{""path"": ""hard.txt""}", Room, Last, Ended, Status);
+               Placed.Run ("write_file", "{""path"": ""hard.txt"", ""content"": ""a""}", Room, Last, Ended,
+                           Status);
+               Assert (Whole_File (Tree & "/hard2.txt") = "a" and then Whole_File (Tree & "/hard.txt") = "a",
+                       "a file of two names written shorter kept its old tail: " & Whole_File (Tree & "/hard.txt"));
                --  Written in place and the file would not open: its new
                --  text is kept whole in the partial, and said -- deleted,
                --  it was lost with the old. Its owner may not write it,
@@ -3873,6 +3901,25 @@ package body Tests.Tools_Cases is
       Same (Read_Kept ("<tool_call>{""name"": ""edit"", ""arguments"": {""old_string"": """
                        & [1 .. Tools.Max_Call_Bytes => 'x'] & """}}</tool_call>", Tools.Tool_Call_JSON),
             " | TOOLS_TOO_LARGE", "a call too large to read was said to be malformed");
+      --  Arguments that spell the form's own marker -- a file about such
+      --  calls, a doctest -- are the arguments: taken for the next call's
+      --  marker, the call was cut and lost.
+      Same (Read ("<|channel|>commentary " & Tools.Harmony_Recipient & "edit" & Tools.Harmony_Message
+                  & "{""old_string"": ""see " & Tools.Harmony_Recipient & "read_file""}<|call|>", Tools.Harmony_Call),
+            "edit({""old_string"": ""see " & Tools.Harmony_Recipient & "read_file""})",
+            "a harmony call whose text spells its marker was lost");
+      Same (Read (Tools.Mistral_Calls & "edit" & Tools.Mistral_Args & "{""old_string"": ""a " & Tools.Mistral_Calls
+                  & " b""}", Tools.Mistral_Call),
+            "edit({""old_string"": ""a " & Tools.Mistral_Calls & " b""})",
+            "a Mistral call whose text spells its marker was lost");
+      Same (Read (Tools.DeepSeek_Calls_Begin & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep
+                  & "{""old_string"": ""x" & Tools.DeepSeek_Call_End & "y""}" & Tools.DeepSeek_Call_End
+                  & Tools.DeepSeek_Calls_End, Tools.DeepSeek_Plain),
+            "edit({""old_string"": ""x" & Tools.DeepSeek_Call_End & "y""})",
+            "a DeepSeek call whose text spells its marker was lost");
+      Same (Read (">>>edit" & LF & "{""old_string"": "">>> f(1)""}", Tools.Recipient_JSON),
+            "edit({""old_string"": "">>> f(1)""})",
+            "a recipient call whose text spells its marker was lost");
       --  A harmony call to a function not on offer is a call, to be told
       --  no tool goes by that name: passed over, the reply was its answer.
       Same (Read ("<|channel|>commentary " & Tools.Harmony_Recipient & "reed_file" & Tools.Harmony_Message
