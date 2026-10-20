@@ -189,6 +189,11 @@ package body Tests.Image_Cases is
          Q.Close (Model);
          Assert (not Q.Is_Ready (Model), "a closed denoiser still said it was ready");
       end loop;
+      --  As the published Turbo file is: saying ComfyUI-GGUF's family name.
+      Write_Denoiser (Said => "qwen_image");
+      Q.Open (Model, Path, Status);
+      Assert (E.Is_Ok (Status), "a denoiser saying qwen_image was refused: " & E.Error_Code'Image (Status.Code));
+      Q.Close (Model);
    end The_Denoiser_Is_Read_Off_Its_Shapes;
 
    --  Shapes that are not this model's are refused, naming what is wrong,
@@ -207,6 +212,8 @@ package body Tests.Image_Cases is
    begin
       Write_Denoiser (Said => "llama");
       Expect (E.Arch_Unsupported, "a file that says it is a text model");
+      Write_Denoiser (Said => "qwen_image", Omit => "modulation.1.weight");
+      Expect (E.Arch_Unsupported, "a file of the family's other version, without the modulation");
       Write_Denoiser (Omit => "modulation.1.weight");
       Expect (E.Arch_Unsupported, "a file with no modulation");
       Write_Denoiser (Omit => "txt_in.out_layer.weight");

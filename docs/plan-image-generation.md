@@ -341,7 +341,12 @@ a steady step was products 7.5 s, attention 1.5, the work between them on
 one core 5.4; shared across the pool, a step is 9.2 s. The text encoder
 now runs on the device too (about 8 s with its load at 512); the VAE's
 convolutions too (31 s at 512 against 55; its gathering and its one
-attention on the processor). Next: the activations kept on the device
+attention on the processor). At 1024x1024 a step is about 37-42 s
+(products 26 s at about 2.2 TFLOP/s -- the engine's own Q8_0 prompt rate
+on the device is 2.6 -- attention 12.8, the rest 3.7); asking the
+attention 1,024 queries a call rather than 128 gained 0.7-2.7 s a step in
+three pairs. **Turbo** (unsloth's Q8_0, `--turbo`): a 1024 picture in 7 min
+30 s, its eight steps the reference's preset. Next: the activations kept on the device
 from one product to the next, as a language model's layer is, instead of
 crossing to the host and back for each.
 

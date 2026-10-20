@@ -326,7 +326,10 @@ package body Model_Runner.Qwen_Image is
       end if;
 
       --  Known by its names. A file that says it is something is that
-      --  something, whatever tensors it also holds.
+      --  something, whatever tensors it also holds -- unless what it says
+      --  is ComfyUI-GGUF's name for the family, qwen_image, which the
+      --  published Turbo file says; Qwen-Image's first version says it too,
+      --  and lacks the modulation the shapes are asked for below.
       declare
          Said   : constant String := Containers.String_Value (Item.Container, "general.architecture");
          Prefix : constant String :=
@@ -339,7 +342,7 @@ package body Model_Runner.Qwen_Image is
 
          Shape : Configuration renames Item.Shape;
       begin
-         if Said /= ""
+         if (Said /= "" and then Said /= "qwen_image")
            or else Containers.Find_Tensor (Item.Container, Named ("img_in.weight")) = 0
            or else Containers.Find_Tensor (Item.Container, Named ("modulation.1.weight")) = 0
          then
