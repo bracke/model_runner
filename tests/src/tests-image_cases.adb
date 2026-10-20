@@ -17,6 +17,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Qwen_Image;
 with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Tensors;
+with Model_Runner.Backend.CPU;
 with Model_Runner.Tokenizer;
 
 with Fixtures;
@@ -66,7 +67,8 @@ package body Tests.Image_Cases is
       Blocks  : Index_List := [0, 1];
       Omit    : String := "";
       Narrow  : String := "";
-      Said    : String := "")
+      Said    : String := "";
+      Eight   : Boolean := False)
    is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
@@ -85,11 +87,32 @@ package body Tests.Image_Cases is
             Seed := (Seed * 1_103 + 12_345) mod 65_521;
             Values (Index) := N.Real (Seed mod 201 - 100) / 1_000.0;
          end loop;
+         --  A matrix written in eight bits, where its rows divide into the
+         --  format's blocks; and kept as the file holds it, decoded again.
+         if Eight and then Rows > 1 and then Wide mod 32 = 0 then
+            declare
+               Bytes : B.Byte_Array_Access := new B.Byte_Array'(Fixtures.Encode_Q8_0 (Values));
+               View  : Model_Runner.Tensors.View;
+               Done  : E.Error_Info;
+            begin
+               Model_Runner.Tensors.Make
+                 (G.Type_Q8_0, N.Element_Count (Rows), N.Element_Count (Wide), Bytes, 0, View, Done);
+               for Row in 0 .. N.Element_Count (Rows) - 1 loop
+                  Model_Runner.Tensors.Dequantize_Row
+                    (View, Row, Values (Row * N.Element_Count (Wide) .. (Row + 1) * N.Element_Count (Wide) - 1),
+                     Done);
+               end loop;
+               Fixtures.Add_Tensor
+                 (Builder, Prefix & Name, [G.U64 (Wide), G.U64 (Rows)], G.Type_Q8_0, Bytes.all);
+               B.Free (Bytes);
+            end;
+         else
+            Fixtures.Add_Tensor
+              (Builder, Prefix & Name,
+               (if Rows = 1 then [G.U64 (Wide)] else [G.U64 (Wide), G.U64 (Rows)]),
+               G.Type_F32, Fixtures.Encode_F32 (Values));
+         end if;
          Written.Include (Name, Values);
-         Fixtures.Add_Tensor
-           (Builder, Prefix & Name,
-            (if Rows = 1 then [G.U64 (Wide)] else [G.U64 (Wide), G.U64 (Rows)]),
-            G.Type_F32, Fixtures.Encode_F32 (Values));
       end Tensor;
    begin
       Written.Clear;
@@ -641,19 +664,31 @@ package body Tests.Image_Cases is
          Seed := (Seed * 1_103 + 12_345) mod 65_521;
          Value := N.Real (Seed mod 401 - 200) / 50.0;
       end loop;
-      Write_Denoiser (Blocks => [0, 1]);
-      Q.Open (Model, Path, Status);
-      Assert (E.Is_Ok (Status), "the denoiser did not open");
-      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
-      Assert (E.Is_Ok (Status), "the step failed: " & E.Error_Code'Image (Status.Code));
-      Reference_Velocity (Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, 2, Wanted);
-      for Index in Answer'Range loop
-         Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
-         Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+      --  In binary32 throughout; in eight bits, the products reading the
+      --  matrices a panel of rows at a time, in binary32 and with their
+      --  activations rounded to eight bits too.
+      for Run in 1 .. 3 loop
+         Write_Denoiser (Blocks => [0, 1], Eight => Run > 1);
+         Q.Open (Model, Path, Status);
+         Assert (E.Is_Ok (Status), "the denoiser did not open");
+         if Run = 3 then
+            Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.Every_Role);
+         end if;
+         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.No_Role);
+         Assert (E.Is_Ok (Status), "the step failed: " & E.Error_Code'Image (Status.Code));
+         Reference_Velocity (Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, 2, Wanted);
+         Worst := 0.0;
+         Largest := 0.0;
+         for Index in Answer'Range loop
+            Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
+            Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+         end loop;
+         Assert (Largest > 1.0E-3 and then Worst <= (if Run = 3 then 3.0E-2 else 1.0E-4) * Largest,
+                 "a step" & Run'Image & " differs from the plain computation by" & Worst'Image & " of"
+                 & Largest'Image);
+         Q.Close (Model);
       end loop;
-      Assert (Largest > 1.0E-3 and then Worst <= 1.0E-4 * Largest,
-              "a step differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
-      Q.Close (Model);
    end A_Step_Is_The_Plain_Computation;
 
    --  The noise levels are the reference scheduler's, its own code run in

@@ -263,7 +263,13 @@ reference's own prompt rows at time 1000, it is the reference's velocity
 at a cosine of **0.99999** (0.99998 at the worst channel; root mean square
 1.5638 against 1.5647). The first run took 988 s, the attention a serial
 loop, and 457 s with it shared out across the pool; the head width is
-held to the rotation's 128.
+held to the rotation's 128. Then, timed per phase: with the activations
+rounded to eight bits, as the command's default arithmetic does, 91 s
+(cosine 0.99999 still); the matrices in panels, 85 s; the attention a
+tile of eight queries over each key and value row in binary32, 56 s --
+of which the products are 11 s and the attention most of the rest. The
+reference takes about 50 s a step on the same eight cores. Reading the
+keys a key at a time for the whole tile instead was 61 s, and refused.
 
 ### 4. The sampler and the picture's latent
 

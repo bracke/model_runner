@@ -130,11 +130,11 @@ private
    type Block is record
       --  Attention: queries, keys, values and the way out; the gains of
       --  each head's query and key normalization.
-      Query, Key, Value, Attention_Out : T.View;
+      Query, Key, Value, Attention_Out : aliased T.View;
       Query_Norm, Key_Norm             : T.Real_Array_Access;
       --  The feed-forward: the gate and the up projection in one, the gate
       --  first, then the way down.
-      Gate_Up, Feed_Out : T.View;
+      Gate_Up, Feed_Out : aliased T.View;
    end record;
 
    type Block_Array is array (Positive range <>) of Block;
@@ -150,14 +150,18 @@ private
       Shape     : Configuration;
 
       --  The latent's way in; the text's: a gain, two linears.
-      Image_In                  : T.View;
+      Image_In                  : aliased T.View;
       Text_Norm                 : T.Real_Array_Access;
-      Text_In_First, Text_In_Second : T.View;
+      Text_In_First, Text_In_Second : aliased T.View;
       --  The time: two linears after the sinusoid; the modulation every
       --  block reads; the last norm's scale and the way out.
-      Time_First, Time_Second : T.View;
-      Modulation              : T.View;
-      Norm_Out, Projection_Out : T.View;
+      Time_First, Time_Second : aliased T.View;
+      Modulation              : aliased T.View;
+      Norm_Out, Projection_Out : aliased T.View;
+
+      --  The matrices rewritten a panel of rows at a time, which the
+      --  processor's integer products read several rows of at once.
+      Panels : Model_Runner.Bytes.Byte_Array_Access;
 
       Layers : Block_Array_Access;
    end record;

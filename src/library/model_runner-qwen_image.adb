@@ -2,6 +2,8 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Platform;
+with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
 
 package body Model_Runner.Qwen_Image is
@@ -135,6 +137,167 @@ package body Model_Runner.Qwen_Image is
       end if;
       return Natural (Containers.Tensor_Dimension (Item.Container, Index, Axis));
    end Dimension_Of;
+
+
+   type View_Access is access all T.View;
+   type View_List is array (Positive range <>) of View_Access;
+
+   --  Every matrix a block or the model holds that the panel layout takes,
+   --  rewritten into one arena and its view remade over it: the processor's
+   --  integer products read a panel's rows together, where the file's
+   --  layout has them read one at a time. The file's pages are left alone;
+   --  what is not panelled stays where it lies.
+   procedure Build_Panels (Item : in out Denoiser; Status : out E.Error_Info) is
+      package Interleave renames Model_Runner.Quantization.Interleave;
+
+      function Takes (Where : View_Access) return Boolean
+      is (Interleave.Interleaves (Where.Format, Where.Rows, Where.Columns));
+
+      function Blocks_Of (Where : View_Access) return Element_Count
+      is (Where.Columns / Element_Count (Model_Runner.GGUF.Block_Elements (Where.Format)));
+
+      All_Views : constant View_List :=
+        [Item.Image_In'Unchecked_Access, Item.Text_In_First'Unchecked_Access,
+         Item.Text_In_Second'Unchecked_Access, Item.Time_First'Unchecked_Access,
+         Item.Time_Second'Unchecked_Access, Item.Modulation'Unchecked_Access, Item.Norm_Out'Unchecked_Access,
+         Item.Projection_Out'Unchecked_Access];
+      Count : Natural := 0;
+   begin
+      Status := E.Success;
+      for V of All_Views loop
+         Count := Count + (if Takes (V) then 1 else 0);
+      end loop;
+      for Layer of Item.Layers.all loop
+         for V of View_List'[Layer.Query'Unchecked_Access, Layer.Key'Unchecked_Access,
+                             Layer.Value'Unchecked_Access, Layer.Attention_Out'Unchecked_Access,
+                             Layer.Gate_Up'Unchecked_Access, Layer.Feed_Out'Unchecked_Access]
+         loop
+            Count := Count + (if Takes (V) then 1 else 0);
+         end loop;
+      end loop;
+      if Count = 0 then
+         return;
+      end if;
+
+      declare
+         Held  : View_List (1 .. Count);
+         Bases : array (1 .. Count) of B.Byte_Count;
+         Next  : Natural := 0;
+         Size  : B.Byte_Count := 0;
+
+         procedure Add (V : View_Access) is
+         begin
+            if Takes (V) then
+               Next := Next + 1;
+               Held (Next) := V;
+               Bases (Next) := Size;
+               Size := Size + Interleave.Panel_Bytes (V.Format, V.Rows, Blocks_Of (V));
+            end if;
+         end Add;
+
+         protected Shared is
+            procedure Take (Index : out Natural);
+            procedure Note (Reason : E.Error_Info);
+            function Reason return E.Error_Info;
+         private
+            Upto : Natural := 1;
+            Bad  : E.Error_Info := E.Success;
+         end Shared;
+
+         protected body Shared is
+            procedure Take (Index : out Natural) is
+            begin
+               if Upto > Held'Last or else E.Is_Error (Bad) then
+                  Index := 0;
+               else
+                  Index := Upto;
+                  Upto := Upto + 1;
+               end if;
+            end Take;
+
+            procedure Note (Reason : E.Error_Info) is
+            begin
+               if E.Is_Ok (Bad) then
+                  Bad := Reason;
+               end if;
+            end Note;
+
+            function Reason return E.Error_Info is (Bad);
+         end Shared;
+      begin
+         for V of All_Views loop
+            Add (V);
+         end loop;
+         for Layer of Item.Layers.all loop
+            Add (Layer.Query'Unchecked_Access);
+            Add (Layer.Key'Unchecked_Access);
+            Add (Layer.Value'Unchecked_Access);
+            Add (Layer.Attention_Out'Unchecked_Access);
+            Add (Layer.Gate_Up'Unchecked_Access);
+            Add (Layer.Feed_Out'Unchecked_Access);
+         end loop;
+         B.Allocate (Size, Item.Panels);
+         if Item.Panels = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+
+         declare
+            task type Panelling;
+
+            task body Panelling is
+               Which : Natural;
+            begin
+               loop
+                  Shared.Take (Which);
+                  exit when Which = 0;
+                  declare
+                     Where  : constant View_Access := Held (Which);
+                     Source : B.Byte_Array (1 .. Where.Span) with Import, Address => Where.Base;
+                     Taken  : Boolean;
+                  begin
+                     Interleave.Build
+                       (Format => Where.Format, Source => Source, From => Where.Offset,
+                        Target => Item.Panels.all, Into => Bases (Which), Rows => Where.Rows,
+                        Blocks => Blocks_Of (Where), Ok => Taken);
+                     if not Taken then
+                        Shared.Note (E.Make (E.Internal_Invariant_Violated));
+                     end if;
+                  end;
+               end loop;
+            exception
+               when others =>
+                  Shared.Note (E.Make (E.Internal_Invariant_Violated));
+            end Panelling;
+
+            Team : array (1 .. Positive'Min (Model_Runner.Platform.Core_Count, Count)) of Panelling;
+            pragma Unreferenced (Team);
+         begin
+            null;
+         end;
+
+         Status := Shared.Reason;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         for Index in Held'Range loop
+            declare
+               Fresh : T.View;
+            begin
+               T.Make_Panels
+                 (Format  => Held (Index).Format,
+                  Rows    => Held (Index).Rows,
+                  Columns => Held (Index).Columns,
+                  Data    => Item.Panels,
+                  Offset  => Bases (Index),
+                  Result  => Fresh,
+                  Status  => Status);
+               exit when E.Is_Error (Status);
+               Held (Index).all := Fresh;
+            end;
+         end loop;
+      end;
+   end Build_Panels;
 
    procedure Open (Item : in out Denoiser; Path : String; Status : out E.Error_Info) is
       procedure Fail (Condition : E.Error_Info) is
@@ -335,6 +498,11 @@ package body Model_Runner.Qwen_Image is
          end;
       end;
 
+      Build_Panels (Item, Status);
+      if E.Is_Error (Status) then
+         Fail (Status);
+         return;
+      end if;
       Item.Ready := True;
    end Open;
 
@@ -357,6 +525,7 @@ package body Model_Runner.Qwen_Image is
       Item.Norm_Out := T.Empty_View;
       Item.Projection_Out := T.Empty_View;
       B.Free (Item.Arena);
+      B.Free (Item.Panels);
       Item.Base := System.Null_Address;
       Item.Span := 0;
       Item.Shape := (others => <>);
@@ -407,9 +576,13 @@ package body Model_Runner.Qwen_Image is
    is (Item.Shape);
 
 
-   --  One evaluation's attention, a share of (row, head) items at a time:
-   --  each row's query over the keys it may see -- a prompt token the
-   --  prompt's up to itself, an image token every one -- into A.
+   --  One evaluation's attention, a share of items at a time, an item a
+   --  head and Tile query rows: each row's query over the keys it may see
+   --  -- a prompt token the prompt's up to itself, an image token every
+   --  one -- into A. The tile's rows read each key and value once between
+   --  them, and the sums are binary32, as the products' are.
+   Tile : constant := 8;
+
    type Attention_Work is new Model_Runner.Shares.Work with record
       Q, K, V, A : T.Real_Array_Access;
       Prompt, Total, Width, Head, Heads : Element_Count := 0;
@@ -419,46 +592,79 @@ package body Model_Runner.Qwen_Image is
       subtype Wide is N.Wide_Real;
       subtype Real is N.Real;
       use type Wide;
-      Scale  : constant Wide := 1.0 / N.Sqrt (Wide (Item.Head));
-      Scores : N.Wide_Real_Array (0 .. Item.Total - 1);
-      Sums   : N.Wide_Real_Array (0 .. Item.Head - 1);
+      use type Real;
+      Scale  : constant Real := Real (1.0 / N.Sqrt (Wide (Item.Head)));
+      Tiles  : constant Element_Count := (Item.Total + Tile - 1) / Tile;
+      subtype Tile_Row is Element_Count range 0 .. Tile - 1;
+      type Score_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Total - 1);
+      type Sum_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Head - 1);
+      Scores : Score_Rows;
+      Sums   : Sum_Rows;
+      Totals : array (Tile_Row) of Real;
    begin
       for Which in First .. Last loop
          declare
-            Row   : constant Element_Count := Which / Item.Heads;
-            Head  : constant Element_Count := Which mod Item.Heads;
-            Upto  : constant Element_Count := (if Row < Item.Prompt then Row else Item.Total - 1);
-            Query : constant Element_Count := Row * Item.Width + Head * Item.Head;
-            Most  : Wide := Wide'First;
-            Sum   : Wide := 0.0;
+            Head   : constant Element_Count := Which / Tiles;
+            Start  : constant Element_Count := (Which mod Tiles) * Tile;
+            Rows   : constant Element_Count := Element_Count'Min (Tile, Item.Total - Start);
+            Column : constant Element_Count := Head * Item.Head;
+            --  The furthest key any row of the tile sees.
+            Reach  : constant Element_Count :=
+              (if Start + Rows - 1 < Item.Prompt then Start + Rows - 1 else Item.Total - 1);
          begin
-            for Key in 0 .. Upto loop
+            for R in 0 .. Rows - 1 loop
                declare
-                  At_Key : constant Element_Count := Key * Item.Width + Head * Item.Head;
-                  Dot    : Real := 0.0;
-                  use type Real;
+                  Row   : constant Element_Count := Start + R;
+                  Upto  : constant Element_Count := (if Row < Item.Prompt then Row else Item.Total - 1);
+                  Query : constant Element_Count := Row * Item.Width + Column;
+                  Most  : Real := Real'First;
                begin
-                  for I in 0 .. Item.Head - 1 loop
-                     Dot := Dot + Item.Q (Query + I) * Item.K (At_Key + I);
+                  for Key in 0 .. Upto loop
+                     declare
+                        At_Key : constant Element_Count := Key * Item.Width + Column;
+                        Dot    : Real := 0.0;
+                     begin
+                        for I in 0 .. Item.Head - 1 loop
+                           Dot := Dot + Item.Q (Query + I) * Item.K (At_Key + I);
+                        end loop;
+                        Scores (R) (Key) := Dot * Scale;
+                        Most := Real'Max (Most, Scores (R) (Key));
+                     end;
                   end loop;
-                  Scores (Key) := Wide (Dot) * Scale;
-                  Most := Wide'Max (Most, Scores (Key));
+                  Totals (R) := 0.0;
+                  for Key in 0 .. Upto loop
+                     Scores (R) (Key) := Real (N.Exp (Wide (Scores (R) (Key) - Most)));
+                     Totals (R) := Totals (R) + Scores (R) (Key);
+                  end loop;
+                  for Key in Upto + 1 .. Reach loop
+                     Scores (R) (Key) := 0.0;
+                  end loop;
+                  Sums (R) := [others => 0.0];
                end;
             end loop;
-            Sums := [others => 0.0];
-            for Key in 0 .. Upto loop
+            for Key in 0 .. Reach loop
                declare
-                  Weight : constant Wide := N.Exp (Scores (Key) - Most);
-                  At_Key : constant Element_Count := Key * Item.Width + Head * Item.Head;
+                  At_Key : constant Element_Count := Key * Item.Width + Column;
                begin
-                  Sum := Sum + Weight;
-                  for I in 0 .. Item.Head - 1 loop
-                     Sums (I) := Sums (I) + Weight * Wide (Item.V (At_Key + I));
+                  for R in 0 .. Rows - 1 loop
+                     declare
+                        P : constant Real := Scores (R) (Key);
+                     begin
+                        for I in 0 .. Item.Head - 1 loop
+                           Sums (R) (I) := Sums (R) (I) + P * Item.V (At_Key + I);
+                        end loop;
+                     end;
                   end loop;
                end;
             end loop;
-            for I in 0 .. Item.Head - 1 loop
-               Item.A (Query + I) := Real (Sums (I) / Sum);
+            for R in 0 .. Rows - 1 loop
+               declare
+                  Query : constant Element_Count := (Start + R) * Item.Width + Column;
+               begin
+                  for I in 0 .. Item.Head - 1 loop
+                     Item.A (Query + I) := Sums (R) (I) / Totals (R);
+                  end loop;
+               end;
             end loop;
          end;
       end loop;
@@ -596,7 +802,8 @@ package body Model_Runner.Qwen_Image is
             Heads => Heads);
       begin
          if E.Is_Ok (Status) then
-            CPU.Dispatch_Shares (Pool, Total * Heads, Job'Unchecked_Access, Status, Cost => Total * Total * W);
+            CPU.Dispatch_Shares
+              (Pool, Heads * ((Total + Tile - 1) / Tile), Job'Unchecked_Access, Status, Cost => Total * Total * W);
          end if;
       end Attend;
    begin
