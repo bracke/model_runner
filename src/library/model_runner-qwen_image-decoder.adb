@@ -341,6 +341,77 @@ package body Model_Runner.Qwen_Image.Decoder is
       end loop;
    end Run;
 
+   --  A decode's work between its products, a share at a time: a band's
+   --  rows of 3x3 neighbourhoods gathered, zero past the edges; or pixels'
+   --  channels normalized by their root mean square and a gain, SiLU after
+   --  where asked.
+   type Pixel_Kind is (Gather_Rows, Norm_Pixels);
+
+   type Pixel_Work is new Model_Runner.Shares.Work with record
+      Kind            : Pixel_Kind := Gather_Rows;
+      Source, Target  : T.Real_Array_Access;
+      Gain            : T.Real_Array_Access;
+      Silu            : Boolean := True;
+      --  The band's first row, the picture's height and width, the
+      --  channels read.
+      Row, Height, Width, Channels : Element_Count := 0;
+   end record;
+
+   overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
+      Ins   : constant Element_Count := Item.Channels;
+      Patch : constant Element_Count := Ins * 9;
+   begin
+      case Item.Kind is
+         when Gather_Rows =>
+            for R in First .. Last loop
+               for Col in 0 .. Item.Width - 1 loop
+                  declare
+                     At_Patch : constant Element_Count := (R * Item.Width + Col) * Patch;
+                  begin
+                     for Channel in 0 .. Ins - 1 loop
+                        for DY in Element_Count range 0 .. 2 loop
+                           for DX in Element_Count range 0 .. 2 loop
+                              declare
+                                 SY : constant Element_Count := Item.Row + R + DY;
+                                 SX : constant Element_Count := Col + DX;
+                              begin
+                                 Item.Target (At_Patch + Channel * 9 + DY * 3 + DX) :=
+                                   (if SY < 1 or else SY > Item.Height or else SX < 1 or else SX > Item.Width
+                                    then 0.0
+                                    else Item.Source (((SY - 1) * Item.Width + (SX - 1)) * Ins + Channel));
+                              end;
+                           end loop;
+                        end loop;
+                     end loop;
+                  end;
+               end loop;
+            end loop;
+         when Norm_Pixels =>
+            for Pixel in First .. Last loop
+               declare
+                  Square : Wide := 0.0;
+                  Base   : constant Element_Count := Pixel * Ins;
+               begin
+                  for C in 0 .. Ins - 1 loop
+                     Square := Square + Wide (Item.Source (Base + C)) ** 2;
+                  end loop;
+                  declare
+                     Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (Ins) + 1.0E-12));
+                  begin
+                     for C in 0 .. Ins - 1 loop
+                        declare
+                           V : constant Real := Item.Source (Base + C) * Inverse * Item.Gain (C);
+                        begin
+                           Item.Target (Base + C) :=
+                             (if Item.Silu then Real (Wide (V) / (1.0 + N.Exp (-Wide (V)))) else V);
+                        end;
+                     end loop;
+                  end;
+               end;
+            end loop;
+      end case;
+   end Run;
+
    procedure Decode
      (Item    : Picture_Decoder;
       Latent  : N.Real_Array;
@@ -459,29 +530,14 @@ package body Model_Runner.Qwen_Image.Decoder is
                      declare
                         Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
                      begin
-                        for R in 0 .. Rows_Here - 1 loop
-                           for Col in 0 .. Width - 1 loop
-                              declare
-                                 At_Patch : constant Element_Count := (R * Width + Col) * Patch;
-                              begin
-                                 for Channel in 0 .. Ins - 1 loop
-                                    for DY in Element_Count range 0 .. 2 loop
-                                       for DX in Element_Count range 0 .. 2 loop
-                                          declare
-                                             SY : constant Element_Count := Row + R + DY;
-                                             SX : constant Element_Count := Col + DX;
-                                          begin
-                                             Patches (At_Patch + Channel * 9 + DY * 3 + DX) :=
-                                               (if SY < 1 or else SY > Height or else SX < 1 or else SX > Width
-                                                then 0.0
-                                                else Source (((SY - 1) * Width + (SX - 1)) * Ins + Channel));
-                                          end;
-                                       end loop;
-                                    end loop;
-                                 end loop;
-                              end;
-                           end loop;
-                        end loop;
+                        declare
+                           Job : aliased Pixel_Work :=
+                             (Kind => Gather_Rows, Source => Source, Target => Patches, Gain => null, Silu => False,
+                              Row => Row, Height => Height, Width => Width, Channels => Ins);
+                        begin
+                           CPU.Dispatch_Shares (Pool, Rows_Here, Job'Unchecked_Access, Status,
+                                                Cost => Rows_Here * Width * Patch);
+                        end;
                         Product (C.Kernel, Patches, Rows_Here * Width, Answers);
                         Target (Row * Width * Outs .. (Row + Rows_Here) * Width * Outs - 1) :=
                           Answers (0 .. Rows_Here * Width * Outs - 1);
@@ -509,28 +565,13 @@ package body Model_Runner.Qwen_Image.Decoder is
          if E.Is_Error (Status) then
             return;
          end if;
-         for Pixel in 0 .. Height * Width - 1 loop
-            declare
-               Square : Wide := 0.0;
-               Base   : constant Element_Count := Pixel * Channels;
-            begin
-               for C in 0 .. Channels - 1 loop
-                  Square := Square + Wide (Source (Base + C)) ** 2;
-               end loop;
-               declare
-                  Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (Channels) + 1.0E-12));
-               begin
-                  for C in 0 .. Channels - 1 loop
-                     declare
-                        V : constant Real := Source (Base + C) * Inverse * Gain (C);
-                     begin
-                        Target (Base + C) :=
-                          (if Silu then Real (Wide (V) / (1.0 + N.Exp (-Wide (V)))) else V);
-                     end;
-                  end loop;
-               end;
-            end;
-         end loop;
+         declare
+            Job : aliased Pixel_Work :=
+              (Kind => Norm_Pixels, Source => Source, Target => Target, Gain => Gain, Silu => Silu, Row => 0,
+               Height => Height, Width => Width, Channels => Channels);
+         begin
+            CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status, Cost => Height * Width * Channels);
+         end;
       end Norm;
 
       --  X := the residual block of X: norm, SiLU, 3x3, the same again,
