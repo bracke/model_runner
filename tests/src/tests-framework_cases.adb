@@ -7284,12 +7284,15 @@ package body Tests.Framework_Cases is
                Assert (not Holds_Key (S.Root (Store) & "/runtime"),
                        "a refused take-in read what a project's link names into the state");
             end;
-            --  Given up, the copy of the linked file is not kept.
+            --  Given up, the work on the linked file is kept: left out, it
+            --  went with the tree -- and the copy is never put back over the
+            --  link, as below.
             Kept_At := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
             Ws.Abandon (Store, Change, To_String (Made.Id), Status);
             S.Commit (Store, Change, Status);
-            Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Kept_At) & "/src/cfg.txt"),
-                    "work given up kept its copy of a file the project holds as a link: " & Code_Of (Status));
+            Assert (E.Is_Ok (Status) and then Dirs.Exists (To_String (Kept_At) & "/src/cfg.txt")
+                    and then Read_Whole (To_String (Kept_At) & "/src/cfg.txt") = "the work's",
+                    "work given up on a file the project holds as a link was lost: " & Code_Of (Status));
             --  Made a link after the journal: the putting back leaves it.
             Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
             S.Commit (Store, Change, Status);
@@ -7364,6 +7367,54 @@ package body Tests.Framework_Cases is
                     and then Hostkit.Metadata.File_Permission_Bits (Script, Known) mod 8#1000# = 8#700#
                     and then Known,
                     "a joined file lost the mode the work set: " & Code_Of (Status) & " " & Read_Whole (Script));
+            --  A file the work made a folder is not taken in, and said; and
+            --  the work is given up all the same, its files kept -- copied
+            --  as a file, the folder raised, and the workspace stayed for good.
+            declare
+               Kind_Path : constant String := Fresh_Root (Store) & "/src/kind.txt";
+               Kept_At   : Unbounded_String;
+            begin
+               Put_File (Kind_Path, "a file");
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+               S.Commit (Store, Change, Status);
+               Dirs.Delete_File (To_String (Made.Path) & "/src/kind.txt");
+               Dirs.Create_Path (To_String (Made.Path) & "/src/kind.txt");
+               Put_File (To_String (Made.Path) & "/src/kind.txt/inner.txt", "inside");
+               Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+               Change := S.No_Changes;
+               Assert (Status.Code = E.Framework_Integration_Conflict
+                       and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "a folder") > 0
+                       and then Read_Whole (Kind_Path) = "a file",
+                       "a file the work made a folder was not refused and said: " & Code_Of (Status));
+               Kept_At := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
+               Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+               S.Commit (Store, Change, Status);
+               Assert (E.Is_Ok (Status) and then Dirs.Exists (To_String (Kept_At) & "/src/kind.txt/inner.txt"),
+                       "work that made a file a folder could not be given up: " & Code_Of (Status));
+               Dirs.Delete_File (Kind_Path);
+            end;
+            --  A file the work made read-only is put back all the same when
+            --  the taking in is undone: refused as a person's read-only file,
+            --  the taking in could never be undone.
+            declare
+               Locked : constant String := Fresh_Root (Store) & "/src/locked.txt";
+            begin
+               Put_File (Locked, "the project's");
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+               S.Commit (Store, Change, Status);
+               Put_File (To_String (Made.Path) & "/src/locked.txt", "the work's");
+               Ignored := Hostkit.Metadata.Set_Permissions (To_String (Made.Path) & "/src/locked.txt", 8#444#);
+               Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+               Assert (E.Is_Ok (Status) and then Read_Whole (Locked) = "the work's",
+                       "a file the work made read-only was not taken in: " & Code_Of (Status));
+               Change := S.No_Changes;
+               Ws.Settle_Integration (Store, To_String (Made.Id), Kept => False, Status => Status);
+               Assert (E.Is_Ok (Status) and then Read_Whole (Locked) = "the project's",
+                       "a taking in of a file made read-only could not be undone: " & Code_Of (Status));
+               Ignored := Hostkit.Metadata.Set_Permissions (Locked, 8#644#);
+               Ignored := Hostkit.Metadata.Set_Permissions (To_String (Made.Path) & "/src/locked.txt", 8#644#);
+               Dirs.Delete_File (Locked);
+            end;
             Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
             S.Commit (Store, Change, Status);
          end if;
@@ -14836,6 +14887,81 @@ package body Tests.Framework_Cases is
             end if;
             if Dirs.Exists (Folder) then
                Dirs.Delete_Tree (Folder);
+            end if;
+         end;
+         --  A file put where a folder of records was, and a folder where a
+         --  record was: taken away first, and what the snapshot held put
+         --  back -- written back first, each write failed on it, and it was
+         --  then removed, the records lost.
+         declare
+            Folder : constant String := Fresh_Root (Store) & "/.model_runner/kept-folder2";
+            Record_Path : constant String := Fresh_Root (Store) & "/.model_runner/kept.rec";
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            Put_File (Record_Path, "a record of its own");
+            S.Snapshot_State (Store, Taken);
+            Dirs.Delete_Tree (Folder);
+            Put_File (Folder, "a file now");
+            Dirs.Delete_File (Record_Path);
+            Dirs.Create_Path (Record_Path);
+            Put_File (Record_Path & "/inside.txt", "x");
+            S.Restore_State (Store, Taken, Changed, Left);
+            Assert (Dirs.Exists (Folder & "/a.rec") and then Read_Whole (Folder & "/a.rec") = "a record"
+                    and then Dirs."=" (Dirs.Kind (Record_Path), Dirs.Ordinary_File)
+                    and then Read_Whole (Record_Path) = "a record of its own",
+                    "a file in a folder's place, or a folder in a record's, lost what the snapshot held: "
+                    & (if Left.Is_Empty then "" else Left.First_Element));
+            Dirs.Delete_Tree (Folder);
+            Dirs.Delete_File (Record_Path);
+         end;
+         --  A folder that will not be listed: what is under it is not put
+         --  back, and said -- raised, nothing at all was put back.
+         declare
+            Folder : constant String := Fresh_Root (Store) & "/.model_runner/locked-folder";
+            Ignored : Boolean;
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            S.Snapshot_State (Store, Taken);
+            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
+            S.Restore_State (Store, Taken, Changed, Left);
+            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+            Assert ((for some Line of Left => Ada.Strings.Fixed.Index (Line, "cannot be read") > 0)
+                    and then Read_Whole (Folder & "/a.rec") = "a record",
+                    "a folder of the state that will not be listed was not said: "
+                    & (if Left.Is_Empty then "" else Left.First_Element));
+            Dirs.Delete_Tree (Folder);
+         exception
+            when others =>
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+               Assert (False, "a folder of the state that will not be listed raised");
+         end;
+         --  A record a commit wrote through a link put in its folder's place
+         --  is said: passed over as the harness's own, it was lost unsaid.
+         declare
+            Tasks    : constant String := Fresh_Root (Store) & "/.model_runner/tasks";
+            Moved    : constant String := Away & "/tasks";
+            Made_Id  : Unbounded_String;
+            Ignored_Link : Boolean;
+         begin
+            S.Snapshot_State (Store, Taken);
+            Dirs.Rename (Tasks, Moved);
+            if Hostkit.Fs.Create_Link (Moved, Tasks) then
+               Tk.Create (Store, Change, Fields ("Through a link", "analysis"), "user", "", Made_Id, Status);
+               S.Commit (Store, Change, Status);
+               S.Restore_State (Store, Taken, Changed, Left);
+               Assert (not Hostkit.Fs.Is_Link (Tasks)
+                       and then (for some Line of Left =>
+                                   Ada.Strings.Fixed.Index (Line, "through a link put in its folder's place") > 0),
+                       "a record written through a link in its folder's place was lost unsaid: "
+                       & (if Left.Is_Empty then "" else Left.First_Element));
+            end if;
+            if Hostkit.Fs.Is_Link (Tasks) then
+               Ignored_Link := Hostkit.Fs.Delete_Link (Tasks);
+            end if;
+            if not Dirs.Exists (Tasks) then
+               Dirs.Rename (Moved, Tasks);
             end if;
          end;
          Dirs.Delete_Tree (Away);

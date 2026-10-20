@@ -1347,10 +1347,28 @@ package body Model_Runner.Framework.Workspaces is
    --  file of its own, synced, renamed over, its permissions kept -- and,
    --  made new, given Mode where one is known: a script put back keeps its
    --  executable bit.
-   procedure Put_File (Target, Text : String; Mode : Natural; Has_Mode : Boolean; Status : out E.Error_Info) is
+   procedure Put_File
+     (Target, Text : String; Mode : Natural; Has_Mode : Boolean; Status : out E.Error_Info;
+      Putting_Back : Boolean := False)
+   is
       Put : Model_Runner.Tools.Editing.Said;
    begin
       Status := E.Success;
+      --  What a taking in made read-only is put back all the same: the
+      --  mode came with the work, and refused as a person's read-only
+      --  file is, the taking in could never be undone -- its journal kept
+      --  and every opening failing on it. The mode it had is set after.
+      if Putting_Back and then Dirs.Exists (Target) and then not Hostkit.Fs.Is_Link (Target) then
+         declare
+            Known : Boolean;
+            Bits  : constant Natural := Hostkit.Metadata.File_Permission_Bits (Target, Known);
+            Ignored : Boolean;
+         begin
+            if Known and then (Bits / 8#200#) mod 2 = 0 then
+               Ignored := Hostkit.Metadata.Set_Permissions (Target, Bits + 8#200#);
+            end if;
+         end;
+      end if;
       if not Files.Make_Directory (Dirs.Containing_Directory (Target)) then
          Files.Write_Failed (Target, Status);
          return;
@@ -1529,7 +1547,8 @@ package body Model_Runner.Framework.Workspaces is
                            Put_File (Target, To_String (Was),
                                      (if Mode /= "-" and then (for all C of Mode => C in '0' .. '9')
                                       then Natural'Value (Mode) else 0),
-                                     Mode /= "-" and then (for all C of Mode => C in '0' .. '9'), Wrote);
+                                     Mode /= "-" and then (for all C of Mode => C in '0' .. '9'), Wrote,
+                                     Putting_Back => True);
                         end if;
                         Done := E.Is_Ok (Got) and then E.Is_Ok (Wrote);
                      end;
@@ -1958,6 +1977,26 @@ package body Model_Runner.Framework.Workspaces is
          if E.Is_Error (Status) then
             return;
          end if;
+         --  A file made a folder, or a folder a file: not taken in, and
+         --  said -- read as a file, it failed as a read, and could never be
+         --  taken in, with nothing to say why.
+         for Path of Wanted loop
+            declare
+               From   : constant String := Hostkit.Fs.Join (To_String (Held.Path), Path);
+               Target : constant String := Hostkit.Fs.Join (Project, Path);
+            begin
+               if (Dirs.Exists (From) and then Dirs."=" (Dirs.Kind (From), Dirs.Directory))
+                 or else (Dirs.Exists (Target) and then Dirs."=" (Dirs.Kind (Target), Dirs.Directory))
+               then
+                  Status := E.Make (E.Framework_Integration_Conflict);
+                  E.Add_Text (Status, "name", Id);
+                  E.Add_Text (Status, "detail",
+                              Path & " is a file on one side and a folder on the other, which is not taken in:"
+                              & " make it one or the other, by hand; nothing was taken in");
+                  return;
+               end if;
+            end;
+         end loop;
          Begin_Journal (Item, Id, To_String (Held.Task_Id), Wanted, Absent, Status);
          if E.Is_Error (Status) then
             return;
@@ -2802,11 +2841,15 @@ package body Model_Runner.Framework.Workspaces is
                To   : constant String := Hostkit.Fs.Join (Into, Path);
             begin
                --  Not through a link: what it named, outside the workspace,
-               --  is no work of the task's to keep -- nor the copy of a file
-               --  the project holds as a link, whose text is what the link
-               --  names, put back later over the link.
+               --  is no work of the task's to keep. A file the project holds
+               --  as a link is the work's all the same, and kept: a kept copy
+               --  is never put back over the link (Restore_Kept), and left
+               --  out, the work on it went with the tree.
+               --  Nor a folder where the project had the file: its files
+               --  are changes of their own, and copied as a file, it raised
+               --  and the workspace could never be given up.
                if Dirs.Exists (From) and then not Linked_Path (To_String (Held.Path), Path)
-                 and then not Linked_Path (Project_Of (Item), Path)
+                 and then Dirs."=" (Dirs.Kind (From), Dirs.Ordinary_File)
                then
                   Dirs.Create_Path (Dirs.Containing_Directory (To));
                   Dirs.Copy_File (From, To, Form => "preserve=all_attributes");

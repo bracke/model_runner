@@ -1870,7 +1870,16 @@ package body Model_Runner.Framework.Stores is
             end if;
          end loop;
       end if;
-      Ada.Directories.Start_Search (Search, Here, "");
+      --  A folder that will not be listed is there all the same: kept as
+      --  that, as a file that will not read is -- raised, nothing at all
+      --  was put back after a run that made one so.
+      begin
+         Ada.Directories.Start_Search (Search, Here, "");
+      exception
+         when others =>
+            Into.Include ((if Under = "" then "." else Under), To_Unbounded_String (Unread_Mark));
+            return;
+      end;
       while Ada.Directories.More_Entries (Search) loop
          Ada.Directories.Get_Next_Entry (Search, Found);
          declare
@@ -1959,6 +1968,36 @@ package body Model_Runner.Framework.Stores is
 
       --  Links made since, taken away before anything is written back.
       Unlinked : Name_Lists.Vector;
+
+      --  Whether a map holds a name below NAME, as a folder's.
+      function Holds_Below (Map : Text_Maps.Map; Name : String) return Boolean is
+         Next : constant Text_Maps.Cursor := Map.Ceiling (Name & "/");
+      begin
+         return Text_Maps.Has_Element (Next)
+           and then Text_Maps.Key (Next)'Length > Name'Length + 1
+           and then Text_Maps.Key (Next) (Text_Maps.Key (Next)'First .. Text_Maps.Key (Next)'First + Name'Length)
+                    = Name & "/";
+      end Holds_Below;
+
+      --  Whether NAME lies below one of NAMES, or in a folder now listed as
+      --  one that would not be read.
+      function Below (Names : Name_Lists.Vector; Name : String) return Boolean
+      is (for some Folder of Names =>
+            Name'Length > Folder'Length + 1
+            and then Name (Name'First .. Name'First + Folder'Length) = Folder & "/");
+
+      function Below_Unread (Name : String) return Boolean is
+      begin
+         for Index in Name'Range loop
+            if Name (Index) = '/' and then Index > Name'First
+              and then Now.Files.Contains (Name (Name'First .. Index - 1))
+              and then To_String (Now.Files (Name (Name'First .. Index - 1))) = Unread_Mark
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Below_Unread;
    begin
       Snapshot_State (Item, Now);
       Changed.Clear;
@@ -1982,8 +2021,52 @@ package body Model_Runner.Framework.Stores is
                if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Name)) then
                   Left.Append (Name & ": cannot be removed");
                end if;
+            --  So too a file where a folder of records was, and a folder
+            --  where a record was: written back after, each write failed
+            --  on it, and it was then removed -- the records it stood in
+            --  the place of lost though the snapshot held them.
+            elsif not From.Files.Contains (Name)
+              and then not Committed.Contains (Name)
+              and then not Own_Files.Holds (Root (Item), Name)
+              and then To_String (Text_Maps.Element (Position)) /= Unread_Mark
+              and then Holds_Below (From.Files, Name)
+            then
+               Unlinked.Append (Name);
+               Changed.Append (Name);
+               if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Name)) then
+                  Left.Append (Name & ": cannot be removed");
+               end if;
             end if;
          end;
+      end loop;
+      for Position in From.Files.Iterate loop
+         declare
+            Name : constant String := Text_Maps.Key (Position);
+         begin
+            if not Now.Files.Contains (Name) and then Holds_Below (Now.Files, Name)
+              and then not Below (Unlinked, Name)
+            then
+               declare
+                  Gone : E.Error_Info;
+               begin
+                  Files.Remove_Tree (Hostkit.Fs.Join (Root (Item), Name), Gone);
+                  Unlinked.Append (Name);
+                  if E.Is_Error (Gone) then
+                     Left.Append (Name & ": a folder in its place cannot be removed");
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      --  What a commit wrote under a folder made a link went where the link
+      --  named: not in the state now, and said -- passed over as the
+      --  harness's own, it was lost with nothing said.
+      for Name of Committed loop
+         if Below (Unlinked, Name) and then not Left.Contains (Name) then
+            Changed.Append (Name);
+            Left.Append (Name & ": written by the harness through a link put in its folder's place, so it is not"
+                         & " as the harness left it");
+         end if;
       end loop;
       for Position in From.Files.Iterate loop
          declare
@@ -2003,6 +2086,10 @@ package body Model_Runner.Framework.Stores is
                Left.Append (Name & ": changed after the harness wrote it, so it is not as the harness left it");
             elsif Committed.Contains (Name) or else Own_Files.Holds (Root (Item), Name) then
                null;
+            --  In a folder that will not be read now: not put back, said.
+            elsif Below_Unread (Name) then
+               Changed.Append (Name);
+               Left.Append (Name & ": its folder cannot be read, so it is not put back");
             --  A link, made again as it was -- gone, made a file, or named
             --  elsewhere: written back as text, the mark went into a file
             --  where the link was, and one named elsewhere was kept.
@@ -2064,10 +2151,20 @@ package body Model_Runner.Framework.Stores is
             Changed.Append (Text_Maps.Key (Position));
             Left.Append (Text_Maps.Key (Position)
                          & ": changed after the harness wrote it, so it is not as the harness left it");
+         --  A folder that will not be read: not removed, said.
+         elsif not From.Files.Contains (Text_Maps.Key (Position))
+           and then To_String (Text_Maps.Element (Position)) = Unread_Mark
+           and then Ada.Directories.Exists (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position)))
+           and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))),
+                                         Ada.Directories.Directory)
+         then
+            Changed.Append (Text_Maps.Key (Position));
+            Left.Append (Text_Maps.Key (Position) & ": a folder that cannot be read, so it is left as it is");
          elsif not From.Files.Contains (Text_Maps.Key (Position))
            and then not Committed.Contains (Text_Maps.Key (Position))
            and then not Own_Files.Holds (Root (Item), Text_Maps.Key (Position))
            and then not Unlinked.Contains (Text_Maps.Key (Position))
+           and then not Below (Unlinked, Text_Maps.Key (Position))
          then
             Changed.Append (Text_Maps.Key (Position));
             if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))) then
