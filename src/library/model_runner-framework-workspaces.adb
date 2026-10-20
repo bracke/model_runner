@@ -249,6 +249,23 @@ package body Model_Runner.Framework.Workspaces is
    -- Create_Whole --
    ------------------
 
+   --  Whether a path under a root is a link, or lies in a folder that is
+   --  one: a folder linked out of the project -- vendor -> ../shared --
+   --  was looked at by its last part alone, and a file made in it was
+   --  written outside, or put back there.
+   function Linked_Path (Root, Path : String) return Boolean is
+   begin
+      for Index in Path'Range loop
+         if (Path (Index) = '/' and then Index > Path'First
+             and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Root, Path (Path'First .. Index - 1))))
+           or else (Index = Path'Last and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Root, Path)))
+         then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Linked_Path;
+
    --  Where a workspace's tree is: under this store, whatever its record
    --  holds.
    function Tree_Under (Item : Stores.Store; Id : String) return String
@@ -1088,8 +1105,8 @@ package body Model_Runner.Framework.Workspaces is
             --  in as text: the workspace's brought in what it named -- a
             --  file outside, a key -- as a file of the project, and the
             --  project's, written over, was replaced or written through.
-            if (E.Is_Ok (Read_It) and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (To_String (Held.Path), Path)))
-              or else Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Project, Path))
+            if (E.Is_Ok (Read_It) and then Linked_Path (To_String (Held.Path), Path))
+              or else Linked_Path (Project, Path)
             then
                Result.Append (Path);
             --  Changed in the project since, and not to what the workspace
@@ -1961,14 +1978,17 @@ package body Model_Runner.Framework.Workspaces is
                then
                   goto Next_Path;
                end if;
-               --  A link, on either side, is never taken in -- settled by
-               --  hand or not: read through, what it named outside -- a key
-               --  -- was written into the project as a file.
-               if Hostkit.Fs.Is_Link (From) or else Hostkit.Fs.Is_Link (Target) then
+               --  A link, on either side or in a folder on the way, is never
+               --  taken in -- settled by hand or not: read through, what it
+               --  named outside -- a key -- was written into the project as
+               --  a file, and a file made in a linked folder was written
+               --  outside it.
+               if Linked_Path (To_String (Held.Path), Path) or else Linked_Path (Project, Path) then
                   Status := E.Make (E.Framework_Integration_Conflict);
                   E.Add_Text (Status, "name", Id);
                   E.Add_Text (Status, "detail",
-                              Path & " is a link, which is not taken in: make it a file, or remove it,"
+                              Path & " is a link, or in a folder that is one, which is not taken in: make it"
+                              & " a file, or remove it,"
                               & " in the workspace or the project; nothing was taken in");
                   Put_Back;
                   return;
@@ -2263,14 +2283,22 @@ package body Model_Runner.Framework.Workspaces is
                Files.Read_Text (Hostkit.Fs.Join (Home, Name), Text, Status);
                --  Never one the store has a record of: that one is the
                --  store's to settle, whatever a mark says.
-               if E.Is_Ok (Status) and then not Stores.Exists (Item, Workspaces_Area, Id) then
+               --  Nor one whose name is no workspace's: its tree is found
+               --  from the name, under this store.
+               if E.Is_Ok (Status) and then Id'Length > 3 and then Id (Id'First .. Id'First + 2) = "WS-"
+                 and then (for all C of Id (Id'First + 3 .. Id'Last) => C in '0' .. '9')
+                 and then not Stores.Exists (Item, Workspaces_Area, Id)
+               then
                   declare
                      Lines : constant Name_Lists.Vector := Lines_Of (To_String (Text));
                      Made  : Workspace;
                   begin
                      if Natural (Lines.Length) >= 2 then
                         Made.Id := To_Unbounded_String (Id);
-                        Made.Path := To_Unbounded_String (Lines (1));
+                        --  Where its tree is under this store, not where the
+                        --  mark says: a mark copied with the project named the
+                        --  original's tree, and its live work was removed.
+                        Made.Path := To_Unbounded_String (Tree_Under (Item, Id));
                         Made.Kind := (if Lines (2) = "git_worktree" then Git_Worktree
                                       else File_Copy);
                         Remove_Tree (Item, Made, Status);
@@ -2570,6 +2598,18 @@ package body Model_Runner.Framework.Workspaces is
          E.Add_Text (Status, "name", "a kept copy called " & Name);
          return;
       end if;
+      --  Not over a link, nor in a folder that is one: put back there, the
+      --  link was replaced by a file, or written through to what it named.
+      for Path of Listed loop
+         if Linked_Path (Project, Path) then
+            Status := E.Make (E.Framework_Integration_Conflict);
+            E.Add_Text (Status, "name", Name);
+            E.Add_Text (Status, "detail",
+                        Path & " is a link in the project, or in a folder that is one, which a kept copy is"
+                        & " not put back over: nothing was put back");
+            return;
+         end if;
+      end loop;
       --  What the project holds otherwise now is kept before it is
       --  overwritten: putting a copy back loses nothing either.
       for Path of Changed_Since_Kept (Item, Name) loop
@@ -2762,8 +2802,12 @@ package body Model_Runner.Framework.Workspaces is
                To   : constant String := Hostkit.Fs.Join (Into, Path);
             begin
                --  Not through a link: what it named, outside the workspace,
-               --  is no work of the task's to keep.
-               if Dirs.Exists (From) and then not Hostkit.Fs.Is_Link (From) then
+               --  is no work of the task's to keep -- nor the copy of a file
+               --  the project holds as a link, whose text is what the link
+               --  names, put back later over the link.
+               if Dirs.Exists (From) and then not Linked_Path (To_String (Held.Path), Path)
+                 and then not Linked_Path (Project_Of (Item), Path)
+               then
                   Dirs.Create_Path (Dirs.Containing_Directory (To));
                   Dirs.Copy_File (From, To, Form => "preserve=all_attributes");
                end if;

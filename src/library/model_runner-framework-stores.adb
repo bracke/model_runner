@@ -1956,11 +1956,35 @@ package body Model_Runner.Framework.Stores is
       --  process or another -- a cancel, another task's work -- and not put
       --  back.
       Committed : Name_Lists.Vector;
+
+      --  Links made since, taken away before anything is written back.
+      Unlinked : Name_Lists.Vector;
    begin
       Snapshot_State (Item, Now);
       Changed.Clear;
       Left.Clear;
       Committed := Written.Since (Root (Item), From.Logged);
+      --  A link made since is taken away first: a folder of records made
+      --  a link, the records written back went through it to where it
+      --  named, and the link was then removed with them -- the folder,
+      --  and every record in it, gone from the state, and nothing said.
+      for Position in Now.Files.Iterate loop
+         declare
+            Name : constant String := Text_Maps.Key (Position);
+         begin
+            if Is_Link_Value (Text_Maps.Element (Position))
+              and then not Committed.Contains (Name)
+              and then not Own_Files.Holds (Root (Item), Name)
+              and then (not From.Files.Contains (Name) or else From.Files (Name) /= Text_Maps.Element (Position))
+            then
+               Unlinked.Append (Name);
+               Changed.Append (Name);
+               if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Name)) then
+                  Left.Append (Name & ": cannot be removed");
+               end if;
+            end if;
+         end;
+      end loop;
       for Position in From.Files.Iterate loop
          declare
             Name : constant String := Text_Maps.Key (Position);
@@ -1984,7 +2008,9 @@ package body Model_Runner.Framework.Stores is
             --  where the link was, and one named elsewhere was kept.
             elsif Is_Link_Value (Text_Maps.Element (Position)) then
                if not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position) then
-                  Changed.Append (Name);
+                  if not Unlinked.Contains (Name) then
+                     Changed.Append (Name);
+                  end if;
                   declare
                      Was    : constant String := To_String (Text_Maps.Element (Position));
                      Target : constant String :=
@@ -2041,6 +2067,7 @@ package body Model_Runner.Framework.Stores is
          elsif not From.Files.Contains (Text_Maps.Key (Position))
            and then not Committed.Contains (Text_Maps.Key (Position))
            and then not Own_Files.Holds (Root (Item), Text_Maps.Key (Position))
+           and then not Unlinked.Contains (Text_Maps.Key (Position))
          then
             Changed.Append (Text_Maps.Key (Position));
             if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))) then

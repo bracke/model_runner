@@ -7192,6 +7192,133 @@ package body Tests.Framework_Cases is
          Dirs.Delete_File (Outside);
       end;
 
+      --  Links in the project: a folder linked out, a file that is a link.
+      --  Nothing is written through either, nor over the link -- looked at
+      --  by its last part alone, a file made in the folder was written
+      --  outside, and a refused take-in's putting back made the linked
+      --  file's text a file of the project's in the link's place; given up,
+      --  its copy was kept, to be put back over the link.
+      declare
+         --  Outside the directory the suite runs in, as a link of a
+         --  project's to a key is: one inside it is written through.
+         Away     : constant String :=
+           (if Ada.Environment_Variables.Exists ("TMPDIR") then Ada.Environment_Variables.Value ("TMPDIR")
+            else "/tmp") & "/model-runner-ws-away";
+         Secret   : constant String := Away & "/secret.txt";
+         Folder   : constant String := Fresh_Root (Store) & "/src/ext";
+         Linked   : constant String := Fresh_Root (Store) & "/src/cfg.txt";
+         Raced    : constant String := Fresh_Root (Store) & "/src/raced.txt";
+         Kept_At  : Unbounded_String;
+         Ignored  : Boolean;
+         --  To a file outside that reads as the project's did: changed
+         --  text would be a conflict of its own.
+         Same     : constant String := Away & "/same.txt";
+         procedure Link_It is
+         begin
+            Dirs.Delete_File (Raced);
+            Ignored := Hostkit.Fs.Create_Link (Same, Raced);
+         end Link_It;
+      begin
+         if Dirs.Exists (Away) then
+            Dirs.Delete_Tree (Away);
+         end if;
+         Dirs.Create_Path (Away);
+         Put_File (Secret, "a key");
+         Put_File (Same, "the project's");
+         Put_File (Raced, "the project's");
+         if Hostkit.Fs.Create_Link (Away, Folder) and then Hostkit.Fs.Create_Link (Secret, Linked) then
+            Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+            S.Commit (Store, Change, Status);
+            Dirs.Create_Path (To_String (Made.Path) & "/src/ext");
+            Put_File (To_String (Made.Path) & "/src/ext/new.md", "made");
+            Assert (Ws.Conflicts (Store, To_String (Made.Id)).Contains ("src/ext/new.md"),
+                    "a file in a folder the project links out was not a conflict");
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status, Text_Resolved => True);
+            Change := S.No_Changes;
+            Assert (Status.Code = E.Framework_Integration_Conflict and then not Dirs.Exists (Away & "/new.md"),
+                    "a file in a folder the project links out was written outside: " & Code_Of (Status));
+            Dirs.Delete_Tree (To_String (Made.Path) & "/src/ext");
+            --  The copy of the linked file, edited, settled by hand.
+            if Hostkit.Fs.Is_Link (To_String (Made.Path) & "/src/cfg.txt") then
+               Ignored := Hostkit.Fs.Delete_Link (To_String (Made.Path) & "/src/cfg.txt");
+            end if;
+            Put_File (To_String (Made.Path) & "/src/cfg.txt", "the work's");
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status, Text_Resolved => True);
+            Change := S.No_Changes;
+            Assert (Status.Code = E.Framework_Integration_Conflict and then Hostkit.Fs.Is_Link (Linked)
+                    and then Read_Whole (Secret) = "a key",
+                    "a refused take-in put a file in the place of the project's link: " & Code_Of (Status));
+            --  Nor was what the link names read into the state: refused
+            --  only after the journal, it was kept there as the file's.
+            declare
+               function Holds_Key (Under : String) return Boolean is
+                  Search : Dirs.Search_Type;
+                  Found  : Dirs.Directory_Entry_Type;
+                  Seen   : Boolean := False;
+               begin
+                  Dirs.Start_Search (Search, Under, "");
+                  while Dirs.More_Entries (Search) and then not Seen loop
+                     Dirs.Get_Next_Entry (Search, Found);
+                     declare
+                        Name : constant String := Dirs.Simple_Name (Found);
+                        Full : constant String := Dirs.Full_Name (Found);
+                     begin
+                        if Name /= "." and then Name /= ".." and then not Hostkit.Fs.Is_Link (Full) then
+                           if Dirs."=" (Dirs.Kind (Found), Dirs.Directory) then
+                              Seen := Holds_Key (Full);
+                           elsif Dirs."=" (Dirs.Kind (Found), Dirs.Ordinary_File) then
+                              Seen := Read_Whole (Full) = "a key";
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+                  Dirs.End_Search (Search);
+                  return Seen;
+               end Holds_Key;
+            begin
+               Assert (not Holds_Key (S.Root (Store) & "/runtime"),
+                       "a refused take-in read what a project's link names into the state");
+            end;
+            --  Given up, the copy of the linked file is not kept.
+            Kept_At := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
+            Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+            S.Commit (Store, Change, Status);
+            Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Kept_At) & "/src/cfg.txt"),
+                    "work given up kept its copy of a file the project holds as a link: " & Code_Of (Status));
+            --  Made a link after the journal: the putting back leaves it.
+            Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+            S.Commit (Store, Change, Status);
+            Put_File (To_String (Made.Path) & "/src/raced.txt", "the work's");
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Take_In_Writes, Link_It'Unrestricted_Access);
+            Ws.Integrate (Store, Change, To_String (Made.Id), True, Taken, Status);
+            Change := S.No_Changes;
+            Assert (Status.Code = E.Framework_Integration_Conflict,
+                    "a file made a link as the work was taken in was taken in: " & Code_Of (Status));
+            Ada.Text_IO.Put_Line ("DEBUG link after integrate: " & Boolean'Image (Hostkit.Fs.Is_Link (Raced))
+                                  & " " & E.Text_Of (Status, "detail") & " cwd " & Dirs.Current_Directory
+                                  & " raced " & Raced);
+            Ws.Settle_Integration (Store, To_String (Made.Id), Kept => False, Status => Status);
+            Assert (Hostkit.Fs.Is_Link (Raced) and then Read_Whole (Same) = "the project's",
+                    "a link made as the work was taken in was put back as a file");
+            --  A kept copy is not put back over a link either.
+            Ignored := Hostkit.Fs.Delete_Link (Raced);
+            Put_File (Raced, "the project's");
+            Kept_At := To_Unbounded_String (Ws.Kept_Copy (Store, To_String (Made.Id)));
+            Ws.Abandon (Store, Change, To_String (Made.Id), Status);
+            S.Commit (Store, Change, Status);
+            Dirs.Delete_File (Raced);
+            Ignored := Hostkit.Fs.Create_Link (Secret, Raced);
+            Ws.Restore_Kept (Store, Dirs.Simple_Name (To_String (Kept_At)), Status);
+            Assert (Status.Code = E.Framework_Integration_Conflict and then Hostkit.Fs.Is_Link (Raced)
+                    and then Read_Whole (Secret) = "a key",
+                    "a kept copy was put back over a link: " & Code_Of (Status));
+         end if;
+         Ignored := Hostkit.Fs.Delete_Link (Folder);
+         Ignored := Hostkit.Fs.Delete_Link (Linked);
+         Ignored := Hostkit.Fs.Delete_Link (Raced);
+         Dirs.Delete_Tree (Away);
+      end;
+
       --  A mode the work set alone, its text as it was, is a change, taken
       --  in: by its text alone, a script the work made one never was.
       --  And a file the work removes, changed in the project after its
@@ -13164,6 +13291,29 @@ package body Tests.Framework_Cases is
                  and then not Dirs.Exists (To_String (Home))
                  and then not Ws.Aborted (Store, To_String (Lost.Id)),
                  "a workspace marked to go was not removed when asked again");
+         --  A mark is held to the tree its name gives under this store, not
+         --  the place it names: copied with a project, it named the
+         --  original's live tree, which was removed.
+         declare
+            Victim : constant String := Dirs.Full_Name ("obj") & "/ws-victim/tree";
+            Runtime : constant String := S.Root (Store) & "/runtime";
+         begin
+            Dirs.Create_Path (Victim);
+            Put_File (Victim & "/live.txt", "live work");
+            Put_File (Runtime & "/aborted-WS-999999.txt", Victim & ASCII.LF & "file_copy" & ASCII.LF);
+            Put_File (Runtime & "/aborted-...txt", Victim & ASCII.LF & "file_copy" & ASCII.LF);
+            Ws.Discard_Aborted (Store, Removed);
+            Assert (Dirs.Exists (Victim & "/live.txt"),
+                    "a workspace mark removed the place it named, not its own tree");
+            --  Nor one whose name is no workspace's: found from its name,
+            --  ".." was the state's own folder.
+            Assert (not Removed.Contains ("..") and then Dirs.Exists (S.Root (Store) & "/workspaces"),
+                    "a mark named for no workspace was taken for one");
+            Dirs.Delete_Tree (Dirs.Containing_Directory (Victim));
+            if Dirs.Exists (Runtime & "/aborted-...txt") then
+               Dirs.Delete_File (Runtime & "/aborted-...txt");
+            end if;
+         end;
       end;
       S.Close (Store);
    end Workspaces_Start_And_End_Whole;
@@ -14227,6 +14377,33 @@ package body Tests.Framework_Cases is
          if Hostkit.Fs.Is_Link (Link) and then not Hostkit.Fs.Delete_Link (Link) then
             Assert (False, "the link could not be removed: " & Link);
          end if;
+         --  A folder of the state made a link since: its records are written
+         --  back into a folder of its own, not through the link -- and the
+         --  link then removed with them, the folder gone from the state.
+         declare
+            Folder : constant String := Fresh_Root (Store) & "/.model_runner/kept-folder";
+            Elsewhere : constant String := Away & "/elsewhere";
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            Dirs.Create_Path (Elsewhere);
+            S.Snapshot_State (Store, Taken);
+            Dirs.Delete_Tree (Folder);
+            if Hostkit.Fs.Create_Link (Elsewhere, Folder) then
+               S.Restore_State (Store, Taken, Changed, Left);
+               Assert (not Hostkit.Fs.Is_Link (Folder) and then Dirs.Exists (Folder & "/a.rec")
+                       and then not Dirs.Exists (Elsewhere & "/a.rec"),
+                       "a folder of the state made a link was written through, or lost:"
+                       & Boolean'Image (Hostkit.Fs.Is_Link (Folder)) & Boolean'Image (Dirs.Exists (Folder & "/a.rec"))
+                       & Boolean'Image (Dirs.Exists (Elsewhere & "/a.rec")));
+            end if;
+            if Hostkit.Fs.Is_Link (Folder) and then not Hostkit.Fs.Delete_Link (Folder) then
+               Assert (False, "the link could not be removed: " & Folder);
+            end if;
+            if Dirs.Exists (Folder) then
+               Dirs.Delete_Tree (Folder);
+            end if;
+         end;
          Dirs.Delete_Tree (Away);
       end;
 
