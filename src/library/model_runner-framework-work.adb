@@ -1424,8 +1424,12 @@ package body Model_Runner.Framework.Work is
       then
          return;
       end if;
-      if not Host.Edited.Contains (Path) then
-         Host.Edited.Append (Path);
+      --  By its place in the project, as a scan names it: as spelt --
+      --  ./src/a.adb, or the path from the root -- it matched nothing the
+      --  files changed are found by, and a file a check then rewrote was
+      --  taken for the check's own.
+      if not Host.Edited.Contains (Plain) then
+         Host.Edited.Append (Plain);
       end if;
       if Host.Apart or else Host.Kept_Before.Contains (Plain) then
          return;

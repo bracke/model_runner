@@ -1110,7 +1110,13 @@ package body Model_Runner.CLI.Project_Commands is
               --  retry as for the first, and together they went past it.
               Left => (if Tr.Context_Of (Self).Tokens_Left = Natural'Last then Natural'Last
                        else Tr.Context_Of (Self).Tokens_Left - Natural'Min (Tr.Context_Of (Self).Tokens_Left, Spent)));
-            if E.Is_Error (Status) then
+            --  Run once more and not made: the helper that ran failed, and
+            --  that is the call's ending -- a refusal, it read as one no
+            --  helper may be made for, after "failed, and was run once more".
+            if E.Is_Error (Status) and then Retry_Of /= Null_Unbounded_String then
+               return Fails
+                 (To_String (Told) & ASCII.LF & "error: it could not be run once more: " & Refusal (Status));
+            elsif E.Is_Error (Status) then
                return Refuses
                  ((if Told = Null_Unbounded_String then ""
                    else To_String (Told) & ASCII.LF)

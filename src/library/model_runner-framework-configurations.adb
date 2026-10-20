@@ -1749,7 +1749,9 @@ package body Model_Runner.Framework.Configurations is
          end if;
       --  A limit of nothing lets an agent do nothing: refused, with what
       --  leaving it unset gives.
-      if Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) = "0"
+      --  Every way of writing it: "00" was let through, and read as 0.
+      if Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) /= ""
+        and then (for all C of Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) => C = '0')
         and then (Name in "scalar.agents.max_steps" | "scalar.agents.max_seconds" | "scalar.agents.token_budget"
                   or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.max_seconds.")
                   or else Starts (Name, "scalar.task.token_budget."))

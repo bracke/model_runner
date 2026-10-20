@@ -1004,6 +1004,9 @@ private
 
       --  Whether the last checks run for the work failed.
       Checks_Failed : Boolean := False;
+      --  The profile whose run failed: a pass of it, or of the whole,
+      --  clears the failure; another's narrower pass does not.
+      Failed_Running : Ada.Strings.Unbounded.Unbounded_String;
 
       --  What each file the work had changed held when its checks last
       --  failed, its path, a NUL and its text: what the change that made

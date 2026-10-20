@@ -39,6 +39,11 @@ is
    Change   : Stores.Transaction;
    Evidence : Unbounded_String;
    Passed   : Boolean;
+   --  Whether this pass clears what failed: a run of the whole profile,
+   --  or of the narrower profile whose run it was.
+   function Clears return Boolean
+   is (Passed and then (not Narrow or else Length (Host.Failed_Running) = 0
+                        or else To_String (Host.Failed_Running) = Running));
    Value    : Records.Item;
    Read     : E.Error_Info;
 
@@ -126,9 +131,14 @@ begin
 
    --  A narrower run that passes says nothing of the checks it did not
    --  run: it cleared a failure of the task's whole profile, and the root
-   --  was never sent back to mend it.
-   if not Passed or else not Narrow then
-      Host.Checks_Failed := not Passed;
+   --  was never sent back to mend it. A pass of the profile that failed
+   --  clears it, narrow or whole: held to the whole alone, a narrow
+   --  failure mended narrowly was never cleared.
+   if not Passed then
+      Host.Checks_Failed := True;
+      Host.Failed_Running := To_Unbounded_String (Running);
+   elsif Clears then
+      Host.Checks_Failed := False;
    end if;
 
    --  Passing where they failed before: what failed, and what the work
@@ -175,7 +185,7 @@ begin
       end if;
       --  Mended only where what failed ran again: the narrower run passing
       --  is not the failed check passing.
-      if Passed and then not Narrow then
+      if Clears then
          declare
             Fixed  : Stores.Transaction;
             Id     : Unbounded_String;

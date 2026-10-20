@@ -5141,6 +5141,11 @@ package body Tests.Framework_Cases is
               "a project requirement state did not count as the core state it says");
 
       --  A setting read as one of some words, or as a count, is one.
+      --  A limit of nothing, however it is written: "00" was let through,
+      --  read as 0, and a task said to have no time limit.
+      Assert (Refused ("scalar.agents.max_seconds", "0") and then Refused ("scalar.agents.max_seconds", "00")
+              and then Refused ("scalar.task.max_seconds.analysis", "000"),
+              "a limit of nothing was taken, written with more than one nought");
       Assert (Refused ("scalar.bootstrap.import", "maybe")
               and then Refused ("scalar.execution.network", "sometimes")
               and then Refused ("scalar.execution.timeout", "long")
@@ -9413,12 +9418,74 @@ package body Tests.Framework_Cases is
       Report : Unbounded_String;
       Got    : E.Error_Info;
    begin
-      Children.Keep_Before_Write ("src/hello.adb", Got);
+      --  Spelt as a model may: by its place in the project all the same.
+      Children.Keep_Before_Write ("./src/hello.adb", Got);
       Dirs.Create_Path (Project & "/src");
       Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
       Children.Run_Checks ("checks", Report, Got);
       Answer := To_Unbounded_String
         ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   --  An agent whose narrower run fails and then, mended, passes: what
+   --  the second said, and whether the failure was still held after it.
+   type Narrow_Twice_Agent is new Wk.Parenting_Runner with null record;
+   Twice_Report : Unbounded_String;
+   Twice_Held   : Boolean := True;
+
+   overriding procedure Run
+     (Self        : Narrow_Twice_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Narrow_Twice_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Narrow_Twice_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("twice"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Narrow_Twice_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Narrow_Twice_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Children.Keep_Before_Write ("src/parser.ads", Got);
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure First;" & LF & "end Parser;"
+                & LF);
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      --  Mended outside what is traced: the narrower run again.
+      Put_File (Project & "/src/unit-ok.txt", "ok");
+      Children.Run_Checks ("checks", Twice_Report, Got, Affected => True);
+      Twice_Held := Children.Checks_Failing;
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: looked");
       Status := E.Success;
    end Run_Parenting;
 
@@ -10511,6 +10578,12 @@ package body Tests.Framework_Cases is
             Assert (First.Budget > 0 and then Second.Budget + 50 <= First.Budget,
                     "a helper's own helper's spending was not counted for the turn's next helper:"
                     & First.Budget'Image & Second.Budget'Image);
+            --  The grandchild run once more with no tokens left to give it:
+            --  the call failed, as its helper did -- not refused, as one no
+            --  helper may be made for.
+            Assert (Ada.Strings.Fixed.Index (To_String (Shown), "it could not be run once more") > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Shown), "no helper was made") = 0,
+                    "a helper not run once more for want of tokens was said refused: " & To_String (Shown));
          end;
          S.Close (Store);
       end;
@@ -10544,6 +10617,41 @@ package body Tests.Framework_Cases is
               & To_String (Done.Final_State) & " " & To_String (Done.Reason));
       S.Close (Store);
    end A_File_A_Check_Rewrote_Is_The_Works;
+
+   --  A narrower run that failed and then passes clears its failure: held
+   --  to a pass of the whole alone, a narrow failure mended narrowly was
+   --  never cleared, and the work was sent back to mend nothing.
+   procedure A_Narrow_Failure_Is_Mended_Narrowly (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "narrow-twice",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/done.txt" & LF & "profile unit = fine: test -f src/unit-ok.txt" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar verification.scope.certain = unit" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb", "with Parser;" & LF & "procedure Parser_Tests is"
+                & LF & "begin" & LF & "   null;" & LF & "end Parser_Tests;" & LF);
+      Tk.Create (Store, Change, Fields ("Narrow twice", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Narrow_Twice_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (Ada.Strings.Fixed.Index (To_String (Twice_Report), "scope: certain_tests") = 1
+              and then Ada.Strings.Fixed.Index (To_String (Twice_Report), "passed") > 0,
+              "the mended change did not pass the narrower run: " & To_String (Twice_Report));
+      Assert (not Twice_Held, "a narrower failure mended by a narrower pass was still held as failing");
+      S.Close (Store);
+   end A_Narrow_Failure_Is_Mended_Narrowly;
 
    --  A lesson's check of another profile is run only where the agent may
    --  run that profile: run after every write, it ran what run_checks of
@@ -18873,6 +18981,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, A_File_A_Check_Rewrote_Is_The_Works'Access,
          "a file the work wrote and a check then rewrote is the work's still");
+      Register_Routine
+        (T, A_Narrow_Failure_Is_Mended_Narrowly'Access,
+         "a narrower run that failed and then passes clears its failure");
       Register_Routine
         (T, Lesson_Checks_Keep_To_Permissions'Access,
          "a lesson's check of another profile runs only where the agent may run it");
