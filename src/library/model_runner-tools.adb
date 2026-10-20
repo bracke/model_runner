@@ -1160,7 +1160,13 @@ package body Model_Runner.Tools is
          Reading : E.Error_Info;
       begin
          Rewrite (Controls_Escaped (Object), Room, Written, Reading);
-         if E.Is_Error (Reading) then
+         --  Past the room is too large, not malformed, as an envelope's
+         --  call is: told to write it again in the format, a model wrote it
+         --  again as large.
+         if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Large) then
+            Status := Reading;
+            return;
+         elsif E.Is_Error (Reading) then
             Malformed;
             return;
          end if;
@@ -1694,35 +1700,59 @@ package body Model_Runner.Tools is
          end loop;
       end Find_Shut;
 
-      --  Where MARK next stands from FROM outside the strings of an object:
-      --  a call's arguments may spell the form's own marker -- a file about
-      --  such calls, a doctest's ">>>" -- and taken there for the next
-      --  call's, the call was cut and lost. Quotes outside an object are
-      --  prose's and are not followed; 0 where it stands nowhere.
-      function Marker_Outside (From : Positive; Mark : String) return Natural is
-         Depth     : Natural := 0;
-         In_String : Boolean := False;
-         P         : Natural := From;
+      --  Where MARK next stands from FROM outside the strings of the call's
+      --  object: a call's arguments may spell the form's own marker -- a file
+      --  about such calls, a doctest's ">>>" -- and taken there for the next
+      --  call's, the call was cut and lost. The object is the one FROM opens,
+      --  past blanks -- or, where ANYWHERE, the first brace before the mark;
+      --  prose is searched as it is, and an object that never closes too: a
+      --  brace or a quote in prose, or a string never closed, hid every mark
+      --  after it, and the calls after it were lost. 0 where it stands nowhere.
+      function Marker_Outside
+        (From : Positive; Mark : String; Anywhere : Boolean := False) return Natural
+      is
+         Plain : constant Natural :=
+           (if From > Reply'Last then 0 else Ada.Strings.Fixed.Index (Reply (From .. Reply'Last), Mark));
+         Open  : Natural := From;
       begin
-         while P <= Reply'Last loop
-            if In_String then
-               if Reply (P) = '\' then
-                  P := P + 1;
+         if Anywhere then
+            Open := (if From > Reply'Last then 0 else Ada.Strings.Fixed.Index (Reply (From .. Reply'Last), "{"));
+         else
+            while Open <= Reply'Last and then Reply (Open) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+               Open := Open + 1;
+            end loop;
+         end if;
+         if Open = 0 or else Open > Reply'Last or else Reply (Open) /= '{' or else (Plain /= 0 and then Plain < Open)
+         then
+            return Plain;
+         end if;
+         declare
+            Depth     : Natural := 0;
+            In_String : Boolean := False;
+            P         : Natural := Open;
+         begin
+            while P <= Reply'Last loop
+               if In_String then
+                  if Reply (P) = '\' then
+                     P := P + 1;
+                  elsif Reply (P) = '"' then
+                     In_String := False;
+                  end if;
                elsif Reply (P) = '"' then
-                  In_String := False;
+                  In_String := True;
+               elsif Reply (P) = '{' then
+                  Depth := Depth + 1;
+               elsif Reply (P) = '}' then
+                  Depth := Depth - 1;
+                  if Depth = 0 then
+                     return (if P >= Reply'Last then 0
+                             else Ada.Strings.Fixed.Index (Reply (P + 1 .. Reply'Last), Mark));
+                  end if;
                end if;
-            elsif Marks (P, Mark) then
-               return P;
-            elsif Reply (P) = '{' then
-               Depth := Depth + 1;
-            elsif Reply (P) = '}' and then Depth > 0 then
-               Depth := Depth - 1;
-            elsif Reply (P) = '"' and then Depth > 0 then
-               In_String := True;
-            end if;
-            P := P + 1;
-         end loop;
-         return 0;
+               P := P + 1;
+            end loop;
+            return Plain;
+         end;
       end Marker_Outside;
 
       --  The first closed call block that would not read, the rest read.
@@ -2151,7 +2181,10 @@ package body Model_Runner.Tools is
                            Reading : E.Error_Info;
                         begin
                            Rewrite (Args (1 .. Args_Last), Room, Written, Reading);
-                           if E.Is_Error (Reading) then
+                           if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Large) then
+                              Status := Reading;
+                              return;
+                           elsif E.Is_Error (Reading) then
                               Lose;
                            else
                               Store (Name (1 .. Name_Last), Room (1 .. Written));
@@ -2275,7 +2308,11 @@ package body Model_Runner.Tools is
                                     begin
                                        Rewrite (Controls_Escaped (Reply (Open .. Shut)),
                                                 Room, Written, Reading);
-                                       if E.Is_Error (Reading) then
+                                       if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Large)
+                                       then
+                                          Status := Reading;
+                                          return;
+                                       elsif E.Is_Error (Reading) then
                                           Lose;
                                        else
                                           Store (Name, Room (1 .. Written));
@@ -2468,7 +2505,7 @@ package body Model_Runner.Tools is
                                  --  was cut in it.
                                  Next : constant Natural :=
                                    (if Name_Last + 1 > Reply'Last then 0
-                                    else Marker_Outside (Name_Last + 1, Mistral_Calls));
+                                    else Marker_Outside (Open, Mistral_Calls));
                                  Shut : constant Natural :=
                                    (if Name = "" or else Open > Reply'Last or else Reply (Open) /= '{' then 0
                                     else Object_End (Open));
@@ -2514,8 +2551,8 @@ package body Model_Runner.Tools is
                   --  Its markers looked for outside the arguments' strings,
                   --  which may spell them: its end, or the next call's
                   --  beginning where it was never closed.
-                  Ends   : constant Natural := Marker_Outside (First, DeepSeek_Call_End);
-                  Begins : constant Natural := Marker_Outside (First, DeepSeek_Call_Begin);
+                  Ends   : constant Natural := Marker_Outside (First, DeepSeek_Call_End, Anywhere => True);
+                  Begins : constant Natural := Marker_Outside (First, DeepSeek_Call_Begin, Anywhere => True);
                   Shut   : constant Natural :=
                     (if Ends = 0 and then Begins = 0 then Reply'Last + 1
                      elsif Ends = 0 then Begins

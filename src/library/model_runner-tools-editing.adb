@@ -883,7 +883,9 @@ package body Model_Runner.Tools.Editing is
             else
                U.Append (After, File (Index));
             end if;
-            if Index < Natural (File.Length) then
+            --  After the block, as its last line was: at the end of a file
+            --  with no last line break, one was added.
+            if (if Index = At_Line then At_Line + Natural (Given.Length) - 1 else Index) < Natural (File.Length) then
                U.Append (After, ASCII.LF);
             end if;
             <<Next_Line>>
@@ -1161,6 +1163,15 @@ package body Model_Runner.Tools.Editing is
                Names : constant String := Declarations_In (After, From, Upto);
                Put   : Said;
             begin
+               --  The file as it was -- new lines laid out as the old --
+               --  nothing edited, said as a loose match says it: told it
+               --  edited, it was counted a change.
+               if After = Text then
+                  return (Text => U.To_Unbounded_String
+                            ("unchanged: new_text is what the file already holds there (line"
+                             & Natural'Image (From) & "), so nothing was edited"),
+                          others => <>);
+               end if;
                Replace (Path, After, Put, Base);
                if Put.Failed then
                   return Put;

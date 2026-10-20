@@ -1,6 +1,7 @@
 with AUnit.Test_Cases;
 with Ada.Strings.Fixed;
 with GNAT.OS_Lib;
+with GNAT.Sockets;
 with Ada.Real_Time;
 with Ada.Strings.Unbounded;
 with AUnit.Assertions; use AUnit.Assertions;
@@ -995,6 +996,43 @@ package body Tests.Tools_Cases is
                                (Now, "begin" & ASCII.LF & "   if X then" & ASCII.LF & "      return 2;" & ASCII.LF
                                 & "   end if;" & ASCII.LF & "end P;") = 1,
                     "new lines for an old_text of several lines were moved off the file's layout: " & Now);
+         end;
+      end;
+      --  An exact edit that leaves the file as it was is said unchanged:
+      --  told it edited, it was counted a change.
+      declare
+         Same_Path : constant String := Dir & "/same.adb";
+      begin
+         Put (Same_Path, "begin" & ASCII.LF & "    X := 1;" & ASCII.LF & "    Y := 2;" & ASCII.LF);
+         declare
+            Done : constant Ed.Said :=
+              Ed.Edit (Same_Path, "X := 1;" & ASCII.LF & "    Y := 2;", "    X := 1;" & ASCII.LF & "    Y := 2;", "");
+         begin
+            Assert (not Done.Failed and then not Done.Changed and then Has (Done, "unchanged"),
+                    "an edit that left the file as it was was said to change it: "
+                    & Ada.Strings.Unbounded.To_String (Done.Text));
+         end;
+      end;
+      --  A loose edit at the end of a file with no last line break adds
+      --  none.
+      declare
+         End_Path   : constant String := Dir & "/end.txt";
+         Bytes_File : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Directories.Delete_File (Dir & "/same.adb");
+         Ada.Streams.Stream_IO.Create (Bytes_File, Ada.Streams.Stream_IO.Out_File, End_Path);
+         String'Write (Ada.Streams.Stream_IO.Stream (Bytes_File), "a" & ASCII.LF & "b" & ASCII.LF & "c");
+         Ada.Streams.Stream_IO.Close (Bytes_File);
+         declare
+            Done : constant Ed.Said := Ed.Edit (End_Path, "b " & ASCII.LF & "c", "B" & ASCII.LF & "C", "");
+            Text : Ada.Strings.Unbounded.Unbounded_String;
+            Got  : E.Error_Info;
+         begin
+            Ed.Read_Text (End_Path, Text, Got);
+            Assert (not Done.Failed
+                    and then Ada.Strings.Unbounded.To_String (Text) = "a" & ASCII.LF & "B" & ASCII.LF & "C",
+                    "a loose edit at the end of a file with no last line break added one: "
+                    & Ada.Strings.Unbounded.To_String (Done.Text));
          end;
       end;
       --  Not there: said with the file's lines where a line of it stands.
@@ -2795,6 +2833,17 @@ package body Tests.Tools_Cases is
            (Model_Runner.Framework.Permissions.Agent_Permissions_Variable,
             Model_Runner.Framework.Permissions.Image (Model_Runner.Framework.Permissions.Unrestricted));
          Placed.Run ("read_file", "{""path"": ""/big.txt""}", Room, Last, Ended, Status);
+         --  Stamped as it is run, by the file it names in the project: as
+         --  given, it named nothing on the host, and a read of it again was
+         --  answered from memory after the file changed.
+         declare
+            Before : constant String := Placed.Stamp ("read_file", "{""path"": ""/big.txt""}");
+         begin
+            Put_Bytes (Tree & "/big.txt", "changed");
+            Assert (Before /= Placed.Stamp ("read_file", "{""path"": ""/big.txt""}")
+                    and then Ada.Strings.Fixed.Index (Before, "absent") = 0,
+                    "a read by a path from the root was stamped alike before and after its file changed: " & Before);
+         end;
          Ada.Environment_Variables.Clear (Model_Runner.Framework.Permissions.Agent_Root_Variable);
          Ada.Environment_Variables.Clear (Model_Runner.Framework.Permissions.Agent_Permissions_Variable);
          Ada.Directories.Delete_File (Tree & "/big.txt");
@@ -3152,6 +3201,61 @@ package body Tests.Tools_Cases is
             Model_Runner.Tools.Editing.Replace ("synced.txt", "last", Put, Base => Tree);
             Assert (not Put.Failed and then Put.Durable, "a change that synced was told as not durable");
             Ada.Directories.Delete_File (Tree & "/synced.txt");
+         end;
+         --  A page larger than an answer holds is given head and tail, as a
+         --  file is: held to the cap itself, the client refused it, and the
+         --  call failed. Served here, once, from a socket of its own.
+         declare
+            use GNAT.Sockets;
+            Listener : Socket_Type;
+            Address  : Sock_Addr_Type := (Family => Family_Inet, Addr => Loopback_Inet_Addr, Port => 0);
+            Page     : constant String := [1 .. 40_000 => 'p'];
+
+            task Serve_Once is
+               entry Start;
+            end Serve_Once;
+
+            task body Serve_Once is
+               Peer   : Socket_Type;
+               From   : Sock_Addr_Type;
+               Stream : Stream_Access;
+               Asked  : String (1 .. 4_096);
+               Last   : Natural := 0;
+               Ended  : Boolean := False;
+            begin
+               accept Start;
+               Accept_Socket (Listener, Peer, From);
+               Stream := GNAT.Sockets.Stream (Peer);
+               --  The request, to its blank line.
+               while not Ended and then Last < Asked'Last loop
+                  Last := Last + 1;
+                  Character'Read (Stream, Asked (Last));
+                  Ended := Last >= 4 and then Asked (Last - 3 .. Last) = ASCII.CR & ASCII.LF & ASCII.CR & ASCII.LF;
+               end loop;
+               String'Write (Stream, "HTTP/1.1 200 OK" & ASCII.CR & ASCII.LF & "Content-Type: text/plain"
+                             & ASCII.CR & ASCII.LF & "Content-Length:" & Page'Length'Image & ASCII.CR & ASCII.LF
+                             & "Connection: close" & ASCII.CR & ASCII.LF & ASCII.CR & ASCII.LF & Page);
+               Free (Stream);
+               Close_Socket (Peer);
+            exception
+               when others =>
+                  null;
+            end Serve_Once;
+         begin
+            Create_Socket (Listener);
+            Bind_Socket (Listener, Address);
+            Listen_Socket (Listener);
+            Address := Get_Socket_Name (Listener);
+            Ada.Environment_Variables.Set ("NO_PROXY", "127.0.0.1");
+            Serve_Once.Start;
+            Placed.Run ("http_get", "{""url"": ""http://127.0.0.1:" & Ada.Strings.Fixed.Trim (Address.Port'Image,
+                                                                                            Ada.Strings.Left)
+                        & "/page""}", Room, Last, Ended, Status);
+            Close_Socket (Listener);
+            Assert (E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "ppp") > 0
+                    and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "request failed") = 0,
+                    "a page larger than an answer holds was refused, not given head and tail: "
+                    & Room (Room'First .. Natural'Min (Last, Room'First + 200)));
          end;
          --  A file with no revision -- bytes, or past what is read whole --
          --  is stamped by its change: one stamp for every version of it, a
@@ -3827,6 +3931,15 @@ package body Tests.Tools_Cases is
                           & Tools.DeepSeek_Call_End & Tools.DeepSeek_Calls_End,
                           Tools.DeepSeek_Plain),
                Kept, "a DeepSeek call that would not read dropped the next");
+         --  A DeepSeek call whose string never closes is passed, and the
+         --  next read: string and all, it hid every marker after it.
+         Same (Read_Kept (Tools.DeepSeek_Calls_Begin
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""old_string"": ""x}"
+                          & Tools.DeepSeek_Call_End
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""count"": 2}"
+                          & Tools.DeepSeek_Call_End & Tools.DeepSeek_Calls_End,
+                          Tools.DeepSeek_Plain),
+               Kept, "a DeepSeek call with a string never closed took the next with it");
          Same (Read_Kept (">>>edit" & LF & "{""count"": 1" & LF & ">>>edit" & LF & "{""count"": 2}",
                           Tools.Recipient_JSON),
                Kept, "a recipient call that would not read dropped the next");
@@ -3920,6 +4033,25 @@ package body Tests.Tools_Cases is
       Same (Read (">>>edit" & LF & "{""old_string"": "">>> f(1)""}", Tools.Recipient_JSON),
             "edit({""old_string"": "">>> f(1)""})",
             "a recipient call whose text spells its marker was lost");
+      --  A brace or a quote in prose is the prose's: taken for an object,
+      --  it hid the next block's marker, and the call was lost in the words.
+      Same (Read ("all" & LF & "A dict literal starts with ""{"" in Python." & LF & ">>>edit" & LF
+                  & "{""count"": 1}", Tools.Recipient_JSON),
+            "edit({""count"": 1})",
+            "a recipient call after prose holding a brace was lost");
+      --  So too in the newer forms, where the arguments are an object of
+      --  their own: told malformed, the model wrote the call again as large.
+      declare
+         Big : constant String := "{""old_string"": """ & [1 .. Tools.Max_Call_Bytes => 'x'] & """}";
+      begin
+         Same (Read_Kept (Tools.Mistral_Calls & "edit" & Tools.Mistral_Args & Big, Tools.Mistral_Call),
+               " | TOOLS_TOO_LARGE", "a Mistral call too large to read was said to be malformed");
+         Same (Read_Kept (">>>edit" & LF & Big, Tools.Recipient_JSON),
+               " | TOOLS_TOO_LARGE", "a recipient call too large to read was said to be malformed");
+         Same (Read_Kept ("<|channel|>commentary " & Tools.Harmony_Recipient & "edit" & Tools.Harmony_Message
+                          & Big & "<|call|>", Tools.Harmony_Call),
+               " | TOOLS_TOO_LARGE", "a harmony call too large to read was said to be malformed");
+      end;
       --  A harmony call to a function not on offer is a call, to be told
       --  no tool goes by that name: passed over, the reply was its answer.
       Same (Read ("<|channel|>commentary " & Tools.Harmony_Recipient & "reed_file" & Tools.Harmony_Message

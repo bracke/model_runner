@@ -456,10 +456,25 @@ package body Model_Runner.Agent is
                --  took that call for cut short.
                if After ("<tool_call>", "</tool_call>") then
                   return True;
-               elsif Read_Syntax = Model_Runner.Tools.Python_Code
-                 and then Last_Of ("```tool_code") > 0 and then Last_Of ("```tool_code") = Last_Of ("```")
-               then
-                  return True;
+               elsif Read_Syntax = Model_Runner.Tools.Python_Code then
+                  --  Inside the last block opened, ```tool_code or
+                  --  ```tool_call, where no fence closes it: fences its
+                  --  content holds come in pairs.
+                  declare
+                     Opened : constant Natural := Natural'Max (Last_Of ("```tool_code"), Last_Of ("```tool_call"));
+                     Fences : Natural := 0;
+                  begin
+                     if Opened > 0 then
+                        for At_It in Opened + 3 .. Text'Last - 2 loop
+                           if Text (At_It .. At_It + 2) = "```" then
+                              Fences := Fences + 1;
+                           end if;
+                        end loop;
+                        if Fences mod 2 = 0 then
+                           return True;
+                        end if;
+                     end if;
+                  end;
                end if;
                declare
                   function Past (Mark : String) return Natural
@@ -593,6 +608,10 @@ package body Model_Runner.Agent is
                   exit when Gone = 0;
                   L.Reset (Session);
                   Result.Compactions := Result.Compactions + 1;
+                  --  Room made: the reply may be as long as asked again, as
+                  --  after a compaction for a full context.
+                  Reply_Cap := Natural'Last;
+                  Thought_Cap := Natural'Last;
                   Free (Rendered);
                   Render (Rendered, Status);
                end;
@@ -969,7 +988,15 @@ package body Model_Runner.Agent is
             --  loop as answered rather than erroring on the empty turn, which
             --  a model does reach when a tool's result was all it needed and
             --  it adds nothing to it.
-            if Status.Code = E.Conversation_Empty then
+            --  No turn, as a harmony reply whose only call would not read,
+            --  or was cut, keeps none: that is said below, as for any call
+            --  -- taken for reasoning alone, it was told it gave no answer.
+            if Status.Code = E.Conversation_Empty
+              and then Ada.Strings.Fixed.Trim (Reply_Text, Ada.Strings.Both) /= ""
+              and then (E.Is_Error (Reading) or else Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full)
+            then
+               Status := E.Success;
+            elsif Status.Code = E.Conversation_Empty then
                --  Its thought, where it was all thought, was generated all
                --  the same.
                Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
@@ -1099,10 +1126,19 @@ package body Model_Runner.Agent is
             --  Not where the cut call is the block that would not read: the
             --  calls before it are whole and run, and the cut one is said
             --  -- taken for the last of those read, a whole call was not run.
+            --  An open form's object never closed is no call read -- the
+            --  reader passes over it -- so it is one more call cut, not the
+            --  last of those read: taken for that, a whole call was not run
+            --  and the cut one never said.
+            Open_Form : constant Boolean :=
+              Read_Syntax not in Model_Runner.Tools.Function_XML | Model_Runner.Tools.Tool_Call_JSON
+                               | Model_Runner.Tools.Qwen_XML | Model_Runner.Tools.DeepSeek_Fenced
+                               | Model_Runner.Tools.DeepSeek_Plain;
             Lost_Cut : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
               and then Ends_Inside_Call (Reply_Text)
-              and then E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed);
+              and then ((E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed))
+                        or else Open_Form);
             Cut_Last : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
               and then Ends_Inside_Call (Reply_Text)
@@ -1114,7 +1150,7 @@ package body Model_Runner.Agent is
             procedure Tell_Lost is
                Told : E.Error_Info;
             begin
-               if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed) then
+               if Lost_Cut or else (E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed)) then
                   Conv.Append
                     (Messages, Conv.User_Role,
                      (if Lost_Cut

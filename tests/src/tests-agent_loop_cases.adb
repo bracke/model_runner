@@ -409,6 +409,39 @@ package body Tests.Agent_Loop_Cases is
                  "a whole call that would not read, cut in the words after it, was not told unreadable");
       end;
 
+      --  In the open form, a whole call and then one cut: the whole one
+      --  runs and the cut one is said -- taken for the last call read, the
+      --  whole one was not run and the cut one never named.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Put ("open-read.txt", "read me");
+         Replies.Replies.Append ("{""name"": ""read_file"", ""arguments"": {""path"": ""open-read.txt""}}" & ASCII.LF
+                                 & "{""name"": ""write_file"", ""arguments"": {""path"": ""b.txt"","
+                                 & " ""content"": ""abc");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (Natural (Seen.Results.Length) >= 1 and then Has (Seen.Results (1), "read me") and then Told_Lost,
+                 "a whole open-form call before one cut was not run, or the cut one not said:"
+                 & Seen.Results.Length'Image & " " & Told_Lost'Image);
+      end;
+
+      --  A Gemma call cut in a ```tool_call block is said to be cut, not
+      --  unreadable: told to write it again in the format, a model wrote it
+      --  again as long.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("```tool_call" & ASCII.LF & "write_file(path=""g.txt"", content=""abc");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Python_Code);
+         Assert (not Told_Unreadable, "a Gemma call cut in its block was told it could not be read");
+      end;
+
       --  So too in the open form, where a bracket or a quote in the thought
       --  or the words after the call is no call left open.
       declare
@@ -1181,6 +1214,12 @@ package body Tests.Agent_Loop_Cases is
             Runner.Set_Base (Ada.Directories.Full_Name (Dir));
             Request.Max_Tokens := 64;
             Replies.Replies.Append ("<|channel|>analysis<|message|>Only thinking.<|end|>");
+            --  And a call that will not read is told so, as in any form --
+            --  not that the reply ended after its reasoning.
+            if Tools_On then
+               Replies.Replies.Append ("<|channel|>commentary to=functions.write_file <|constrain|>json"
+                                       & "<|message|>{""path"": ""h.txt"",}<|call|>");
+            end if;
             Replies.Replies.Append
               ("<|channel|>analysis<|message|>Now.<|end|><|start|>assistant<|channel|>final<|message|>said");
             Ag.Run
@@ -1198,8 +1237,12 @@ package body Tests.Agent_Loop_Cases is
                Watch      => Seen'Unchecked_Access,
                Script     => Replies'Unchecked_Access,
                Result     => Ended);
-            Assert (Ended.Reason = Ag.Answered and then Replies.Next = 3
-                    and then Conv.Content_At (Messages, Conv.Length (Messages)) = "said",
+            Assert (Ended.Reason = Ag.Answered and then Replies.Next = (if Tools_On then 4 else 3)
+                    and then Conv.Content_At (Messages, Conv.Length (Messages)) = "said"
+                    and then (not Tools_On
+                              or else (for some Index in 1 .. Conv.Length (Messages) =>
+                                         Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index),
+                                                                  "Your tool call could not be read") > 0)),
                     "a harmony reply of its analysis alone was taken for the answer, or a reply kept raw"
                     & " (tools " & Tools_On'Image & "): " & Ended.Reason'Image & Replies.Next'Image & " ["
                     & Conv.Content_At (Messages, Conv.Length (Messages)) & "]");

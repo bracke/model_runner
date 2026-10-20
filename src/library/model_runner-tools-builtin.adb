@@ -1488,7 +1488,10 @@ package body Model_Runner.Tools.Builtin is
       Status  : HE.Result_Status;
       Gone    : Boolean;
    begin
-      Options.Max_Download_Size := Cap;
+      --  Read whole up to a size worth reading, and then held to the cap
+      --  head and tail as a file is: held to the cap itself, the client
+      --  refused any page larger, and the call failed.
+      Options.Max_Download_Size := 16_777_216;
 
       --  The streaming download writes what the stream yields and does not
       --  decode a content coding, so a body the server compressed would come
@@ -2450,9 +2453,14 @@ package body Model_Runner.Tools.Builtin is
       Fresh    : Natural;
       Has_Path : Boolean;
       Path     : constant String := Text_Argument (Arguments, "path", Has_Path);
+      --  A path from the root as the call is run with it: stamped as given,
+      --  it named nothing on the host, and a read of it was answered from
+      --  memory after the file changed.
+      Taken    : constant String := Rooted (Named, Arguments);
       Where    : constant String :=
         Model_Runner.Tools.Editing.On_Disk
-          (U.To_String (Self.Base), (if Has_Path and then Path /= "" then Path else "."));
+          (U.To_String (Self.Base),
+           (if Taken /= "" then Taken elsif Has_Path and then Path /= "" then Path else "."));
    begin
       --  Of what a file tool reads, or would change: a change that failed
       --  is stamped too, and may run again once what it found has moved.
