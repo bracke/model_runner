@@ -1,3 +1,5 @@
+with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Strings.Hash;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
@@ -284,6 +286,15 @@ package body Model_Runner.Agent is
       --  second such turn, not the first.
       Stalled : Natural := 0;
 
+      --  The calls whose answers the conversation still holds: each
+      --  answered since the last compaction. One the compaction dropped,
+      --  made again, is the model seeing it again and no repeat -- held to
+      --  be one, a run recovering what it had read stopped as repeating,
+      --  told its result was above.
+      package Key_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+        (String, Ada.Strings.Hash, "=");
+      In_View : Key_Sets.Set;
+
       --  Retries left for a generation that ends in a runtime error. Spent
       --  down as they are used; when none are left, such an error stops the
       --  loop as it always did.
@@ -331,6 +342,24 @@ package body Model_Runner.Agent is
       --  the generation after it said.
       function Reply_Text return String
       is (U.To_String (Thought_Before) & Gen.Generated_Text (Last_Result));
+
+      --  Whether the step's prompt opened a thought for the reply.
+      Prompt_Thought : Boolean := False;
+
+      --  The reply as its turn holds it: where the prompt opened a thought
+      --  the reply never closed, all of it is thought, and is kept so --
+      --  read as it stands, the calls it drafted ran, and the turn was
+      --  kept with no close, every later prompt carrying it whole.
+      function Turn_Text return String is
+         Text : constant String := Reply_Text;
+      begin
+         if Prompt_Thought and then Ada.Strings.Fixed.Index (Text, "</think>") = 0
+           and then Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Left), "<think>") /= 1
+         then
+            return "<think>" & Text;
+         end if;
+         return Text;
+      end Turn_Text;
       Reading      : E.Error_Info;
 
       --  Whether a reply's text closes the call it ends in, in the syntax the
@@ -360,6 +389,55 @@ package body Model_Runner.Agent is
             end case;
          end;
       end Closes_Call;
+
+      --  Whether a reply's text ends inside a call it opened: its last
+      --  opening after its last close, in the syntax the calls are read in
+      --  -- or, for the open forms, an object or a list of arguments left
+      --  open. A whole call with words after it ends in no call: taken by
+      --  the text's last characters alone, such a call was said to be cut
+      --  short, and not run.
+      function Ends_Inside_Call (Text : String) return Boolean is
+         function Last_Of (Mark : String) return Natural
+         is (Ada.Strings.Fixed.Index (Text, Mark, Ada.Strings.Backward));
+         function After (Opening, Closing : String) return Boolean
+         is (Last_Of (Opening) > 0 and then Last_Of (Opening) > Last_Of (Closing));
+      begin
+         case Read_Syntax is
+            when Model_Runner.Tools.Function_XML =>
+               return After ("<function", "</function>");
+            when Model_Runner.Tools.Tool_Call_JSON =>
+               return After ("<tool_call>", "</tool_call>");
+            when Model_Runner.Tools.Qwen_XML =>
+               return After ("<tool_call>", "</tool_call>") or else After ("<function=", "</function>");
+            when Model_Runner.Tools.DeepSeek_Fenced | Model_Runner.Tools.DeepSeek_Plain =>
+               return After (Model_Runner.Tools.DeepSeek_Call_Begin, Model_Runner.Tools.DeepSeek_Call_End);
+            when others =>
+               declare
+                  Depth     : Integer := 0;
+                  In_String : Boolean := False;
+                  Escaped   : Boolean := False;
+               begin
+                  for C of Text loop
+                     if In_String then
+                        if Escaped then
+                           Escaped := False;
+                        elsif C = '\' then
+                           Escaped := True;
+                        elsif C = '"' then
+                           In_String := False;
+                        end if;
+                     elsif C = '"' then
+                        In_String := True;
+                     elsif C in '{' | '(' | '[' then
+                        Depth := Depth + 1;
+                     elsif C in '}' | ')' | ']' then
+                        Depth := Integer'Max (0, Depth - 1);
+                     end if;
+                  end loop;
+                  return In_String or else Depth > 0;
+               end;
+         end case;
+      end Ends_Inside_Call;
 
       --  Render the committed conversation, with the tools in it, ready for
       --  the model to continue.
@@ -456,6 +534,7 @@ package body Model_Runner.Agent is
                   exit when Gone = 0;
                   L.Reset (Session);
                   Result.Compactions := Result.Compactions + 1;
+                  In_View.Clear;
                   Free (Rendered);
                   Render (Rendered, Status);
                end;
@@ -564,6 +643,7 @@ package body Model_Runner.Agent is
                Thought_Tokens := 0;
                --  A scripted reply, taken as a model's that ended where it
                --  meant to.
+               Prompt_Thought := Thought_Open ("", Rendered.all);
                if Script /= null and then not Script.Keeps_To_Limit then
                   declare
                      Said : constant String := Script.Next_Reply;
@@ -645,6 +725,8 @@ package body Model_Runner.Agent is
                      --  shown as markup with no call. What remains where the
                      --  context is short of room (Reply_Cap set), and never
                      --  past what the run has left to spend.
+                     --  Room for the closing is in the cap itself: set from a
+                     --  step's room, it is held Slack short of it.
                      Request.Max_Tokens :=
                        (if Reply_Cap = Natural'Last then Full else Full - Thought_Tokens);
                      if Max_Total_Tokens > 0 then
@@ -725,6 +807,7 @@ package body Model_Runner.Agent is
                      end if;
                      if Gone > 0 then
                         Result.Compactions := Result.Compactions + 1;
+                        In_View.Clear;
                         --  Room made: the reply may be as long as asked again.
                         Reply_Cap := Natural'Last;
                         Thought_Cap := Natural'Last;
@@ -760,7 +843,15 @@ package body Model_Runner.Agent is
                            Reply_Cap := Step_Room - Slack;
                            Thought_Cap := Reply_Cap - Answer_Room;
                            goto Next_Iteration;
-                        elsif Room >= 256 and then Room < Request.Max_Tokens then
+                        --  After a thought, the step's own room: what the
+                        --  thought left was set as the cap of the whole reply,
+                        --  its thought made again from nothing in it.
+                        elsif Thought_Tokens > 0 and then Step_Room - Slack >= 256
+                          and then Step_Room - Slack < Reply_Cap
+                        then
+                           Reply_Cap := Step_Room - Slack;
+                           goto Next_Iteration;
+                        elsif Thought_Tokens = 0 and then Room >= 256 and then Room < Request.Max_Tokens then
                            Reply_Cap := Room;
                            goto Next_Iteration;
                         end if;
@@ -805,12 +896,15 @@ package body Model_Runner.Agent is
             Reading := E.Success;
             if Have_Tools then
                Conv.Append_Reply
-                 (Messages, Reply_Text, Status, Reading,
+                 (Messages, Turn_Text, Status, Reading,
                   Syntax => Read_Syntax, Offered => Offered'Unchecked_Access);
             else
+               --  As a turn with calls is kept: a harmony reply as its final
+               --  message -- kept raw, its channels' markers were refused by
+               --  the template the next render.
                Conv.Append
                  (Messages, Conv.Assistant_Role,
-                  Conv.Closed_Reasoning (Reply_Text), Status);
+                  Conv.Reply_Turn (Turn_Text, Read_Syntax), Status);
             end if;
 
             --  An empty reply -- no words and no call -- is not a failure of
@@ -822,6 +916,30 @@ package body Model_Runner.Agent is
                --  Its thought, where it was all thought, was generated all
                --  the same.
                Result.Generated_Tokens := Result.Generated_Tokens + Last_Result.Generated_Tokens + Thought_Tokens;
+               --  Empty as a turn, but not as a reply: a harmony reply that
+               --  wrote its analysis alone, or was cut in it, gave no
+               --  answer -- told so and goes on, as a thought alone is,
+               --  where it was taken for an empty answer.
+               if Ada.Strings.Fixed.Trim (Reply_Text, Ada.Strings.Both) /= "" then
+                  if Cut_Notes_Left > 0 and then Result.Steps < Max_Steps
+                    and then (Max_Total_Tokens = 0 or else Spent < Max_Total_Tokens)
+                  then
+                     declare
+                        Told : E.Error_Info;
+                     begin
+                        Cut_Notes_Left := Cut_Notes_Left - 1;
+                        Conv.Append
+                          (Messages, Conv.User_Role,
+                           "Your reply ended after its reasoning, with no tool call and no answer. Go on:"
+                           & " make your next tool call, or give your answer.", Told);
+                        if E.Is_Ok (Told) then
+                           goto Next_Iteration;
+                        end if;
+                     end;
+                  end if;
+                  Result.Reason := (if Result.Steps >= Max_Steps then Step_Limit else Token_Limit);
+                  exit Step_Loop;
+               end if;
                Result.Reason := Answered;
                exit Step_Loop;
             end if;
@@ -852,7 +970,10 @@ package body Model_Runner.Agent is
          --  More calls in one reply than are read: none of them run, and
          --  told so with the limit -- the reply was taken for an answer, the
          --  run ended, and not one of its calls was said to be missing.
-         if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Many)
+         --  Calls larger than one reply's may be, the same: the reply was
+         --  kept as its text, and the run ended as answered.
+         if E.Is_Error (Reading) and then (E."=" (Reading.Code, E.Tools_Too_Many)
+                                           or else E."=" (Reading.Code, E.Tools_Too_Large))
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
            and then Result.Steps < Max_Steps and then Chances_Left > 0
          then
@@ -862,9 +983,16 @@ package body Model_Runner.Agent is
                Chances_Left := Chances_Left - 1;
                Conv.Append
                  (Messages, Conv.User_Role,
-                  "Your reply made more tool calls than one reply may --" & Natural'Image (Model_Runner.Tools.Max_Calls)
-                  & " at most -- so none of them was run. Make them over several replies, at most that"
-                  & " many in each.", Told);
+                  (if E."=" (Reading.Code, E.Tools_Too_Many)
+                   then "Your reply made more tool calls than one reply may --"
+                        & Natural'Image (Model_Runner.Tools.Max_Calls)
+                        & " at most -- so none of them was run. Make them over several replies, at most that"
+                        & " many in each."
+                   else "Your reply's tool calls were larger than one reply's may be --"
+                        & Natural'Image (Model_Runner.Tools.Max_Call_Bytes)
+                        & " bytes at most, all its calls together -- so none of them was run. Make them over"
+                        & " several replies; write a large file in parts: write_file with its first part,"
+                        & " then edit_file to add the rest."), Told);
                if E.Is_Ok (Told) then
                   goto Next_Iteration;
                end if;
@@ -921,6 +1049,7 @@ package body Model_Runner.Agent is
             Cut_Last : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
               and then not Closes_Call (Reply_Text)
+              and then Ends_Inside_Call (Reply_Text)
               and then not Lost_Cut;
 
             --  A block of the reply that would not read, beside the calls
@@ -977,8 +1106,9 @@ package body Model_Runner.Agent is
             --  work ended with no report.
             if Asked = 0 and then Last_Result.Reason not in Gen.Maximum_Tokens | Gen.Context_Full
               and then E.Is_Ok (Reading)
-              and then (Thought_Tokens > 0 or else Ada.Strings.Fixed.Index (Reply_Text, "</think>") > 0)
-              and then Ada.Strings.Fixed.Trim (Answer_Of (Reply_Text), Ada.Strings.Both) = ""
+              and then (Thought_Tokens > 0 or else Ada.Strings.Fixed.Index (Reply_Text, "</think>") > 0
+                        or else Turn_Text /= Reply_Text)
+              and then Ada.Strings.Fixed.Trim (Answer_Of (Turn_Text), Ada.Strings.Both) = ""
             then
                if Cut_Notes_Left > 0 and then Result.Steps < Max_Steps
                  and then (Max_Total_Tokens = 0 or else Spent < Max_Total_Tokens)
@@ -1018,7 +1148,8 @@ package body Model_Runner.Agent is
                --  again were spent: no answer -- the markup was handed back
                --  as one, a helper's result the broken call.
                elsif E.Is_Error (Reading)
-                 and then (Class_Of (Reading) = Unreadable_Call or else E."=" (Reading.Code, E.Tools_Too_Many))
+                 and then (Class_Of (Reading) = Unreadable_Call or else E."=" (Reading.Code, E.Tools_Too_Many)
+                           or else E."=" (Reading.Code, E.Tools_Too_Large))
                  and then (Closes_Call (Reply_Text) or else Ada.Strings.Fixed.Index (Reply_Text, "</tool_call>") > 0)
                then
                   Result.Reason := Generation_Failed;
@@ -1148,6 +1279,15 @@ package body Model_Runner.Agent is
                         Made.Forget (Key);
                      end if;
 
+                     --  Made before, its answer dropped since: a change that
+                     --  failed is let run again, its error no longer above;
+                     --  one that worked is given again below, as progress.
+                     if Made.Holds (Key) and then Made.Answered (Key) and then not In_View.Contains (Key)
+                       and then Made.Ended (Key).Answer /= Model_Runner.Tools.Runner.Answered
+                     then
+                        Made.Forget (Key);
+                     end if;
+
                      if Call = Asked and then Cut_Last then
                         --  Cut off before it was whole: told, not run.
                         Items (Call).Text := U.To_Unbounded_String
@@ -1199,6 +1339,10 @@ package body Model_Runner.Agent is
                               else Repeat_Note);
                            Items (Call).Ended :=
                              (if Worked then Made.Ended (Key) else Failed_Note);
+                           if Worked and then not In_View.Contains (Key) then
+                              Progressed := True;
+                           end if;
+                           In_View.Include (Key);
                         end;
                      else
                         --  Only a call not made before gets further: a
@@ -1465,6 +1609,7 @@ package body Model_Runner.Agent is
                            --  Kept by the call, for a repeat of it, and in the
                            --  record of the work: by the path it named, where
                            --  it named one.
+                           In_View.Include (Model_Runner.Agent.Recall.Identity (Named, Args));
                            Made.Keep (Model_Runner.Agent.Recall.Identity (Named, Args), Reply, Ended,
                                       Stamp =>
                                         (if Executor.Kind (Named) = Model_Runner.Tools.Runner.Reads

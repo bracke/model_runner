@@ -3867,6 +3867,12 @@ package body Tests.Tools_Cases is
                   & "</tool_call>", Tools.Tool_Call_JSON),
             "edit({""old_string"": ""x\ny""})",
             "arguments written as a string holding a line break were refused");
+      --  One call larger than a reply's calls may be is too large, not
+      --  malformed: told to write it again in the format, a model wrote it
+      --  again as large.
+      Same (Read_Kept ("<tool_call>{""name"": ""edit"", ""arguments"": {""old_string"": """
+                       & [1 .. Tools.Max_Call_Bytes => 'x'] & """}}</tool_call>", Tools.Tool_Call_JSON),
+            " | TOOLS_TOO_LARGE", "a call too large to read was said to be malformed");
       --  A harmony call to a function not on offer is a call, to be told
       --  no tool goes by that name: passed over, the reply was its answer.
       Same (Read ("<|channel|>commentary " & Tools.Harmony_Recipient & "reed_file" & Tools.Harmony_Message

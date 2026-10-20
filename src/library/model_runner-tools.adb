@@ -994,7 +994,11 @@ package body Model_Runner.Tools is
 
          Rewrite (Controls_Escaped (Inner), Room, Written, Reading);
          if E.Is_Error (Reading) then
-            if Announced then
+            --  Past the room is too large, not malformed: told to write it
+            --  again in the format, a model wrote it again as large.
+            if Announced and then E."=" (Reading.Code, E.Tools_Too_Large) then
+               Status := Reading;
+            elsif Announced then
                Status := E.Make (E.Tools_Call_Malformed);
                E.Add_Integer
                  (Status, "index", Long_Long_Integer (Item.Used + 1));

@@ -68,6 +68,9 @@ package body Tests.Agent_Loop_Cases is
    function Write (Path, Content : String) return String
    is (Call ("write_file", "{""path"": """ & Path & """, ""content"": """ & Content & """}"));
 
+   function Read (Path : String) return String
+   is (Call ("read_file", "{""path"": """ & Path & """}"));
+
    function Edit (Path, Old_Text, New_Text : String) return String
    is (Call ("edit_file", "{""path"": """ & Path & """, ""old_text"": """ & Old_Text
                           & """, ""new_text"": """ & New_Text & """}"));
@@ -91,7 +94,11 @@ package body Tests.Agent_Loop_Cases is
    end record;
 
    overriding function Keeps_To_Limit (Self : Script) return Boolean is (Self.Keeps);
-   overriding function Room (Self : Script) return Natural is (Self.Room_Of);
+   --  Whether the next step's room is too small for any reply, once: a
+   --  context filled, for its compaction.
+   Tight_Once : Boolean := False;
+
+   overriding function Room (Self : Script) return Natural;
 
    overriding function Cut_Off (Self : Script) return Boolean is (Self.Cut_At > 0 and then Self.Next - 1 = Self.Cut_At);
 
@@ -104,6 +111,15 @@ package body Tests.Agent_Loop_Cases is
       return (if Self.Next - 1 <= Natural (Self.Replies.Length) then Self.Replies (Self.Next - 1)
               else "done");
    end Next_Reply;
+
+   overriding function Room (Self : Script) return Natural is
+   begin
+      if Tight_Once then
+         Tight_Once := False;
+         return 10;
+      end if;
+      return Self.Room_Of;
+   end Room;
 
    --  What each call answered, in order.
    type Recorder is new Ag.Observer with record
@@ -341,6 +357,21 @@ package body Tests.Agent_Loop_Cases is
                  and then Ada.Directories.Exists (Dir & "/cut.txt"),
                  "a reply cut short mid-call was not said, or its call was taken:" & Seen.Cut_Offs'Image
                  & Seen.Results.Length'Image);
+      end;
+
+      --  Cut after a whole call, in the words after it: the call is
+      --  whole and runs -- judged by the text's last characters, it was
+      --  said to be cut short and not run.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append (Write ("whole.txt", "w") & ASCII.LF & "Now I will");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (Ada.Directories.Exists (Dir & "/whole.txt"),
+                 "a whole call cut in the words after it was not run:" & Seen.Results.Length'Image);
       end;
 
       --  A thought at its budget is closed for the reply -- shown closed --
@@ -628,6 +659,85 @@ package body Tests.Agent_Loop_Cases is
                  & Seen.Results.Length'Image & " " & Ended.Reason'Image);
       end;
 
+      --  A reply held to the room, its thought closed at its budget: what
+      --  follows the closing is asked for in the room left after it -- a
+      --  token past, it was refused every time, and the step made again
+      --  with a cap of what the old thought had left.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<think>" & [1 .. 1_200 => 'a'] & Write ("budget.txt", "q"));
+         Replies.Keeps := True;
+         Replies.Room_Of := 900;
+         Run (Replies, Seen, Ended, Budget => 256, Reply => 1_024);
+         --  Once to learn the room -- asked for the whole reply, the first
+         --  continuation is past it -- and once in it.
+         Assert (Ada.Directories.Exists (Dir & "/budget.txt") and then Ended.Thoughts_Closed = 2,
+                 "a continuation after a thought, held to the room, was refused:" & Ended.Thoughts_Closed'Image
+                 & " " & Ended.Reason'Image);
+      end;
+
+      --  After a compaction, a file read again whose answer it dropped is
+      --  read to see it again, not a repeat: held to be one, a run
+      --  recovering what it had read stopped as going round.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+
+         procedure Fill is
+         begin
+            Tight_Once := True;
+         end Fill;
+      begin
+         for Name of String'("abcdef") loop
+            Put ("seen-" & Name & ".txt", "text of " & Name);
+            Replies.Replies.Append (Read ("seen-" & Name & ".txt"));
+         end loop;
+         Replies.Replies.Append (Read ("seen-a.txt"));
+         Replies.Replies.Append (Read ("seen-b.txt"));
+         Replies.Replies.Append ("done");
+         Replies.Keeps := True;
+         Replies.Hook_At := 7;
+         Replies.Hook := Fill'Unrestricted_Access;
+         Run (Replies, Seen, Ended, Compact => True);
+         Assert (Ended.Compactions >= 1 and then Ended.Reason = Ag.Answered,
+                 "files read again after a compaction dropped them ended the run as "
+                 & Ended.Reason'Image & Ended.Compactions'Image);
+      end;
+
+      --  So too a change that failed, its error dropped: made again, it
+      --  runs again -- told its error was above, where it was not.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+
+         procedure Fill is
+         begin
+            Tight_Once := True;
+         end Fill;
+      begin
+         Put ("failed-a.txt", "text");
+         Replies.Replies.Append (Edit ("failed-a.txt", "absent", "x"));
+         for Name of String'("bcdef") loop
+            Put ("failed-" & Name & ".txt", "text of " & Name);
+            Replies.Replies.Append (Read ("failed-" & Name & ".txt"));
+         end loop;
+         Replies.Replies.Append (Edit ("failed-a.txt", "absent", "x"));
+         Replies.Replies.Append ("done");
+         Replies.Keeps := True;
+         Replies.Hook_At := 7;
+         Replies.Hook := Fill'Unrestricted_Access;
+         Run (Replies, Seen, Ended, Compact => True);
+         Assert (Natural (Seen.Results.Length) = 7 and then Has (Seen.Results (7), "is not in")
+                 and then not Has (Seen.Results (7), "already made"),
+                 "a failed change made again after a compaction dropped its error was told it was above:"
+                 & Seen.Results.Length'Image);
+      end;
+
       --  A file put back as an earlier write left it is said to be.
       declare
          Replies : Script;
@@ -747,6 +857,32 @@ package body Tests.Agent_Loop_Cases is
                  "a reply of one call too many was run, or taken for an answer, not told and asked again:"
                  & Gate_2.Asked'Image & Over.Next'Image);
       end;
+
+      --  A call larger than a reply's calls may be is told so and asked
+      --  again, and where every one is, the run fails: the markup was kept
+      --  as the reply's text, nothing said, and the run ended answered.
+      declare
+         Large   : constant String := Write ("large.txt", [1 .. Model_Runner.Tools.Max_Call_Bytes + 100 => 'x']);
+         Once    : Script;
+         Always  : Script;
+         Seen    : Recorder;
+         Seen_2  : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Once.Replies.Append (Large);
+         Once.Replies.Append ("done");
+         Run (Once, Seen, Ended);
+         Assert (Seen.Results.Is_Empty and then not Ada.Directories.Exists (Dir & "/large.txt")
+                 and then Once.Next = 3 and then Ended.Reason = Ag.Answered,
+                 "a call too large to read was not told and asked again:" & Once.Next'Image
+                 & " " & Ag.Stop_Reason'Image (Ended.Reason));
+         for Count in 1 .. 6 loop
+            Always.Replies.Append (Large);
+         end loop;
+         Run (Always, Seen_2, Ended);
+         Assert (Seen_2.Results.Is_Empty and then Ended.Reason = Ag.Generation_Failed,
+                 "calls always too large to read ended the run as " & Ag.Stop_Reason'Image (Ended.Reason));
+      end;
       Ada.Directories.Delete_Tree (Dir);
    end Loop_Keeps_To_Its_Rules;
 
@@ -846,8 +982,177 @@ package body Tests.Agent_Loop_Cases is
          Model_Runner.Tools.Close (Offered);
          L.Close (Session);
       end;
+
+      --  A harmony reply of its analysis alone gave no answer: told so and
+      --  asked again, where it ended the run answered with nothing; and
+      --  with no tools a reply is kept as its final message, as one with
+      --  calls is -- kept raw, the template refused its markers.
+      for Tools_On in Boolean loop
+         declare
+            Under    : Harness (Harmony);
+            Session  : L.Session;
+            Messages : Conv.History;
+            Offered  : Model_Runner.Tools.Definitions;
+            Runner   : Model_Runner.Tools.Builtin.Instance;
+            Stop     : Model_Runner.Stops.Set;
+            Request  : Model_Runner.Generation.Request;
+            Clock    : aliased Model_Runner.Clocks.System_Clock;
+            Seeds    : aliased Model_Runner.Entropy.Host_Source;
+            Status   : E.Error_Info;
+            Replies  : aliased Script;
+            Seen     : aliased Recorder;
+            Ended    : Ag.Outcome;
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+            L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+            L.Open (Session, Under.Ready, Status => Status);
+            Conv.Open (Messages, Status => Status);
+            Conv.Append (Messages, Conv.User_Role, "work", Status);
+            Model_Runner.Tools.Read
+              (Offered,
+               (if Tools_On
+                then Model_Runner.Tools.Registry.Offered
+                       ([Model_Runner.Tools.Registry.Write_Files => True, others => False])
+                else "[]"),
+               Status);
+            Model_Runner.Stops.Open (Stop);
+            Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+            Request.Max_Tokens := 64;
+            Replies.Replies.Append ("<|channel|>analysis<|message|>Only thinking.<|end|>");
+            Replies.Replies.Append
+              ("<|channel|>analysis<|message|>Now.<|end|><|start|>assistant<|channel|>final<|message|>said");
+            Ag.Run
+              (Source     => Under.Ready,
+               Session    => Session,
+               Messages   => Messages,
+               Offered    => Offered,
+               Executor   => Runner,
+               Generation => Request,
+               Stop_Set   => Stop,
+               Sink       => null,
+               Time       => Clock'Unchecked_Access,
+               Seeds      => Seeds'Unchecked_Access,
+               Max_Steps  => 4,
+               Watch      => Seen'Unchecked_Access,
+               Script     => Replies'Unchecked_Access,
+               Result     => Ended);
+            Assert (Ended.Reason = Ag.Answered and then Replies.Next = 3
+                    and then Conv.Content_At (Messages, Conv.Length (Messages)) = "said",
+                    "a harmony reply of its analysis alone was taken for the answer, or a reply kept raw"
+                    & " (tools " & Tools_On'Image & "): " & Ended.Reason'Image & Replies.Next'Image & " ["
+                    & Conv.Content_At (Messages, Conv.Length (Messages)) & "]");
+            Conv.Close (Messages);
+            Model_Runner.Tools.Close (Offered);
+            L.Close (Session);
+         end;
+      end loop;
       Model_Runner.Bytes.Free (Harmony);
    end An_Unnamed_Syntax_Is_The_Models_Own;
+
+   --  A thought the prompt opened and the reply never closed, the reply
+   --  cut at its length: all of it is thought, kept closed, and a call it
+   --  drafted on the way is not run -- read as an answer, the drafted call
+   --  ran, and the turn was kept unclosed, in every later prompt whole.
+   procedure A_Thought_The_Prompt_Opened_Is_Thought
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      function Template_Text return String is
+         Held : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Ada.Streams.Stream_IO.Open (Held, Ada.Streams.Stream_IO.In_File, "fixtures/qwen36-own.jinja");
+         declare
+            Room : String (1 .. Natural (Ada.Streams.Stream_IO.Size (Held)));
+         begin
+            String'Read (Ada.Streams.Stream_IO.Stream (Held), Room);
+            Ada.Streams.Stream_IO.Close (Held);
+            return Room;
+         end;
+      end Template_Text;
+
+      LF       : constant Character := ASCII.LF;
+      Opened   : Model_Runner.Bytes.Byte_Array_Access;
+
+      function Call_Of (Path : String) return String
+      is ("<tool_call>" & LF & "<function=write_file>" & LF & "<parameter=path>" & LF & Path & LF
+          & "</parameter>" & LF & "<parameter=content>" & LF & "x" & LF & "</parameter>" & LF
+          & "</function>" & LF & "</tool_call>");
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Tiny_Model.Build (Opened, Template => Template_Text);
+
+      declare
+         Under    : Harness (Opened);
+         Session  : L.Session;
+         Messages : Conv.History;
+         Offered  : Model_Runner.Tools.Definitions;
+         Runner   : Model_Runner.Tools.Builtin.Instance;
+         Stop     : Model_Runner.Stops.Set;
+         Request  : Model_Runner.Generation.Request;
+         Clock    : aliased Model_Runner.Clocks.System_Clock;
+         Seeds    : aliased Model_Runner.Entropy.Host_Source;
+         Status   : E.Error_Info;
+         Replies  : aliased Script;
+         Seen     : aliased Recorder;
+         Ended    : Ag.Outcome;
+         Closed   : Boolean := False;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+         L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         L.Open (Session, Under.Ready, Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "work", Status);
+         Model_Runner.Tools.Read
+           (Offered, Model_Runner.Tools.Registry.Offered
+                       ([Model_Runner.Tools.Registry.Write_Files => True, others => False]), Status);
+         Model_Runner.Stops.Open (Stop);
+         Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+         Request.Max_Tokens := 64;
+
+         --  Cut in its thought after a drafted call; then a thought closed
+         --  and a call made; then the answer.
+         Replies.Replies.Append ("I could write it:" & LF & Call_Of ("drafted.txt") & LF & "but first");
+         Replies.Cut_At := 1;
+         Replies.Replies.Append ("Now.</think>" & LF & Call_Of ("made.txt"));
+         Replies.Replies.Append ("Done.</think>" & LF & "written");
+
+         Ag.Run
+           (Source     => Under.Ready,
+            Session    => Session,
+            Messages   => Messages,
+            Offered    => Offered,
+            Executor   => Runner,
+            Generation => Request,
+            Stop_Set   => Stop,
+            Sink       => null,
+            Time       => Clock'Unchecked_Access,
+            Seeds      => Seeds'Unchecked_Access,
+            Max_Steps  => 6,
+            Watch      => Seen'Unchecked_Access,
+            Script     => Replies'Unchecked_Access,
+            Result     => Ended);
+
+         for Index in 1 .. Conv.Length (Messages) loop
+            if Conv."=" (Conv.Sender_At (Messages, Index), Conv.Assistant_Role) then
+               Closed := Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "but first" & LF & "</think>") > 0
+                         or else Closed;
+            end if;
+         end loop;
+         Assert (Ada.Directories.Exists (Dir & "/made.txt") and then not Ada.Directories.Exists (Dir & "/drafted.txt"),
+                 "a call drafted in a thought the prompt opened was run, or the one made after was not:"
+                 & Seen.Results.Length'Image);
+         Assert (Closed, "a thought the prompt opened, cut at the length, was kept unclosed");
+         Conv.Close (Messages);
+         Model_Runner.Tools.Close (Offered);
+         L.Close (Session);
+      end;
+      Model_Runner.Bytes.Free (Opened);
+   end A_Thought_The_Prompt_Opened_Is_Thought;
 
    --  A pace kept across runs bounds them together: a task's root run
    --  again to report or to mend was given a fresh pace each time, and so
@@ -895,6 +1200,9 @@ package body Tests.Agent_Loop_Cases is
       Register_Routine
         (T, An_Unnamed_Syntax_Is_The_Models_Own'Access,
          "a loop not told its model's call syntax reads the model's own");
+      Register_Routine
+        (T, A_Thought_The_Prompt_Opened_Is_Thought'Access,
+         "a thought the prompt opened and the reply never closed is thought");
       Register_Routine
         (T, A_Pace_Is_The_Works_Not_Each_Runs'Access,
          "a pace kept across runs bounds them together");
