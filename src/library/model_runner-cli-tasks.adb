@@ -4003,8 +4003,7 @@ package body Model_Runner.CLI.Tasks is
             begin
                Config := Model_Runner.Framework.Configurations.Required (Store);
                Grouped ("  " & "limits",
-                        T.Image (Long_Long_Integer (Seconds))
-                        & (if Seconds = 1 then " second (" else " seconds (")
+                        Model_Runner.Framework.Work.Time_Said (Seconds) & " ("
                         & (if Model_Runner.Framework.Work.Paced (Store, Argument)
                            then "at most: work.lease, as "
                                 & (if Tk.Kind_Policy (Store, Kind, "max_seconds") /= ""

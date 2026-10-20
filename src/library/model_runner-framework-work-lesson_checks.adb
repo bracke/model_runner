@@ -152,7 +152,11 @@ begin
          declare
             Name : constant String := Records.Field_Name (Config, Index);
          begin
-            if Starts (Name, "profile.") and then Name /= "profile." & Profile then
+            --  Only of a profile the agent may run: one it may not was run
+            --  for it after every write, though run_checks refused it.
+            if Starts (Name, "profile.") and then Name /= "profile." & Profile
+              and then May_Check (Host, Name (Name'First + 8 .. Name'Last))
+            then
                Take (Records.Get (Config, Name));
             end if;
          end;

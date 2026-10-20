@@ -124,7 +124,12 @@ begin
       end;
    end;
 
-   Host.Checks_Failed := not Passed;
+   --  A narrower run that passes says nothing of the checks it did not
+   --  run: it cleared a failure of the task's whole profile, and the root
+   --  was never sent back to mend it.
+   if not Passed or else not Narrow then
+      Host.Checks_Failed := not Passed;
+   end if;
 
    --  Passing where they failed before: what failed, and what the work
    --  changed that made them pass, kept for later work -- apart, so what
@@ -168,7 +173,9 @@ begin
             end;
          end loop;
       end if;
-      if Passed then
+      --  Mended only where what failed ran again: the narrower run passing
+      --  is not the failed check passing.
+      if Passed and then not Narrow then
          declare
             Fixed  : Stores.Transaction;
             Id     : Unbounded_String;
@@ -182,7 +189,11 @@ begin
             end if;
          end;
          Host.At_Failure.Clear;
-      else
+      --  Failing, what the changed files hold now is kept for the fix to
+      --  be said by; a narrower run that passed keeps what the failure
+      --  left -- taken as one, the fix was said from the files as they
+      --  stood at the narrow run.
+      elsif not Passed then
          Host.At_Failure.Clear;
          for Path of Host.Edited loop
             Host.At_Failure.Append (Path & ASCII.NUL & Text_Of (Path));

@@ -71,6 +71,13 @@ package Model_Runner.Framework.Work is
    --  @return The seconds.
    function Time_Allowed (Item : Stores.Store; Task_Id : String) return Natural;
 
+   --  A time allowed, as it is said: none at all is no limit -- said as
+   --  "0 seconds", the work was told it had no time.
+   --
+   --  @param Seconds The seconds, 0 for no limit.
+   --  @return The words.
+   function Time_Said (Seconds : Natural) return String;
+
    --  The tokens a task's work may take, at the speed its model generates
    --  at, where its time is set to model: a slow model is given longer for
    --  the same work, measured as it works, not guessed.

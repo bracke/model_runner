@@ -1950,6 +1950,15 @@ package body Model_Runner.Framework.Work is
       end;
    end Time_Allowed;
 
+   ---------------
+   -- Time_Said --
+   ---------------
+
+   function Time_Said (Seconds : Natural) return String
+   is (if Seconds = 0 then "no time limit"
+       elsif Seconds = 1 then "1 second"
+       else Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & " seconds");
+
    -----------
    -- Paced --
    -----------

@@ -611,7 +611,8 @@ package body Model_Runner.CLI.Project_Commands is
       Tokens : out Natural;
       Status : out Model_Runner.Errors.Error_Info;
       Prompt_Tokens : out Natural;
-      Tree   : String)
+      Tree   : String;
+      Spent_All : out Natural)
    is
       Messages : Conv.History;
       Offered  : Model_Runner.Tools.Definitions;
@@ -673,6 +674,7 @@ package body Model_Runner.CLI.Project_Commands is
       Guard.Watcher := Watcher'Unchecked_Access;
       Answer := Null_Unbounded_String;
       Tokens := 0;
+      Spent_All := 0;
       Prompt_Tokens := 0;
       Watcher.Stop := Self.Cancel;
       Sink.Stop := Self.Cancel;
@@ -778,6 +780,7 @@ package body Model_Runner.CLI.Project_Commands is
          Calls := Calls + Outcome.Calls;
          Steps_Taken := Steps_Taken + Outcome.Steps;
          All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;
+         Spent_All := All_Spent;
          Runner.Thoughts_Closed := Runner.Thoughts_Closed + Outcome.Thoughts_Closed;
          Tokens := Tokens + Outcome.Generated_Tokens;
          if Length (Outcome.Work_Record) > 0 then
@@ -1091,6 +1094,10 @@ package body Model_Runner.CLI.Project_Commands is
             Status  : E.Error_Info;
             Answer  : Unbounded_String;
             Tokens  : Natural;
+            --  What its run spent with its own helpers': theirs are the
+            --  parent's to count too -- of its own alone, a parent's run
+            --  went past the task's budget with every run inside its cap.
+            All_Of  : Natural;
             Prompt  : Natural;
             Ran     : E.Error_Info;
             Now     : Unbounded_String;
@@ -1098,7 +1105,11 @@ package body Model_Runner.CLI.Project_Commands is
          begin
             Self.Host.Open_Child
               (Role, Need, Brief, To_String (Retry_Of), Id, Context, Budget, Status,
-               Left => Tr.Context_Of (Self).Tokens_Left);
+               --  Less what this call's helpers spent already: set once a
+              --  step, before its calls, the same left was halved for a
+              --  retry as for the first, and together they went past it.
+              Left => (if Tr.Context_Of (Self).Tokens_Left = Natural'Last then Natural'Last
+                       else Tr.Context_Of (Self).Tokens_Left - Natural'Min (Tr.Context_Of (Self).Tokens_Left, Spent)));
             if E.Is_Error (Status) then
                return Refuses
                  ((if Told = Null_Unbounded_String then ""
@@ -1115,7 +1126,7 @@ package body Model_Runner.CLI.Project_Commands is
                                                    else Brief))]);
             Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
                       Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
-                      Prompt_Tokens => Prompt, Tree => Self.Base);
+                      Prompt_Tokens => Prompt, Tree => Self.Base, Spent_All => All_Of);
 
             --  The work cancelled while the helper ran: it is cancelled
             --  with it, however it came to stop.
@@ -1126,7 +1137,7 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
                                    Prompt_Tokens => Prompt);
-            Spent := Spent + Tokens;
+            Spent := Spent + All_Of;
             --  A run that failed and is run again is said now, before the
             --  next starts; the answer then names it, and says the last.
             if Retry then
@@ -1427,6 +1438,17 @@ package body Model_Runner.CLI.Project_Commands is
               & (if Budget = 1 then " tool call" else " tool calls") & " is spent; give your answer now");
       elsif Named = "delegate" then
          Put (Delegate (Self, Arguments, Outcome));
+         --  What is left of the run, for the turn's next helper: set once
+         --  a step, before its calls, each delegate call's helpers were
+         --  given half of the same.
+         declare
+            Now_Left : Tr.Tool_Context := Tr.Context_Of (Self);
+         begin
+            if Now_Left.Tokens_Left /= Natural'Last then
+               Now_Left.Tokens_Left := Now_Left.Tokens_Left - Natural'Min (Now_Left.Tokens_Left, Outcome.Tokens);
+               Tr.Set_Context (Self, Now_Left);
+            end if;
+         end;
          --  A helper that answered may have changed anything its
          --  permissions let it.
          Outcome.Changed := Tr."=" (Outcome.Answer, Tr.Answered);
@@ -1638,6 +1660,8 @@ package body Model_Runner.CLI.Project_Commands is
       Prompt : Unbounded_String;
       Tokens : Natural;
       Read   : Natural;
+      --  The root's run, with its helpers': its record holds them apart.
+      Whole  : Natural;
    begin
       --  The task's context, read: a context that would not read is the
       --  work failing, not an agent sent off with nothing to go on.
@@ -1652,7 +1676,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  the screen's is read back into afterwards.
       L.Reset (Self.Session.all);
       Run_Loop (Self, To_String (Prompt), Host, (if Host = null then 0 else Host.Token_Budget), True,
-                Answer, Tokens, Status, Read, Tree => Ada.Directories.Full_Name (Project));
+                Answer, Tokens, Status, Read, Tree => Ada.Directories.Full_Name (Project), Spent_All => Whole);
       --  Stopped at Ctrl-C, however the model's run then ended -- a closed
       --  backend among them: interrupted, and the task set aside.
       if E.Is_Error (Status)

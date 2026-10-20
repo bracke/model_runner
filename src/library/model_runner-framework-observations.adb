@@ -1823,7 +1823,9 @@ package body Model_Runner.Framework.Observations is
       if E.Is_Error (Read) or else Records.Get (Value, "passed") /= "true" or else Changed.Is_Empty then
          return;
       end if;
-      --  The task's verification just before this one.
+      --  The task's verification of the same profile just before this
+      --  one: another's between them -- a narrower run -- is no earlier
+      --  look at what failed.
       for Name of Stores.Names (Item, Verification_Area) loop
          if Name /= Evidence and then Later (Evidence, Name) and then Later (Name, To_String (Before)) then
             declare
@@ -1831,7 +1833,9 @@ package body Model_Runner.Framework.Observations is
                Got     : E.Error_Info;
             begin
                Stores.Read (Item, Verification_Area, Name, Earlier, Got);
-               if E.Is_Ok (Got) and then Records.Get (Earlier, "task") = Task_Id then
+               if E.Is_Ok (Got) and then Records.Get (Earlier, "task") = Task_Id
+                 and then Records.Get (Earlier, "profile") = Records.Get (Value, "profile")
+               then
                   Before := To_Unbounded_String (Name);
                end if;
             end;

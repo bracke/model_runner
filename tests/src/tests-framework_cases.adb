@@ -5331,6 +5331,11 @@ package body Tests.Framework_Cases is
       S.Commit (Store, Change, Status);
       Assert (Model_Runner.Framework.Work.Time_Allowed (Store, To_String (Id)) = 120,
               "a kind's own time was not the time it was allowed");
+      --  And said as it is: none at all is no limit, not no time.
+      Assert (Model_Runner.Framework.Work.Time_Said (0) = "no time limit"
+              and then Model_Runner.Framework.Work.Time_Said (1) = "1 second"
+              and then Model_Runner.Framework.Work.Time_Said (120) = "120 seconds",
+              "a time allowed was not said as it is: " & Model_Runner.Framework.Work.Time_Said (0));
       --  What its agent is told it may do: reading, as an analysis is let.
       Assert (Ada.Strings.Fixed.Index (Model_Runner.Framework.Work.May_Do (Store, To_String (Id)),
                                        "read the source") > 0,
@@ -7294,9 +7299,6 @@ package body Tests.Framework_Cases is
             Change := S.No_Changes;
             Assert (Status.Code = E.Framework_Integration_Conflict,
                     "a file made a link as the work was taken in was taken in: " & Code_Of (Status));
-            Ada.Text_IO.Put_Line ("DEBUG link after integrate: " & Boolean'Image (Hostkit.Fs.Is_Link (Raced))
-                                  & " " & E.Text_Of (Status, "detail") & " cwd " & Dirs.Current_Directory
-                                  & " raced " & Raced);
             Ws.Settle_Integration (Store, To_String (Made.Id), Kept => False, Status => Status);
             Assert (Hostkit.Fs.Is_Link (Raced) and then Read_Whole (Same) = "the project's",
                     "a link made as the work was taken in was put back as a file");
@@ -9313,6 +9315,188 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent that writes a file and runs the checks, which rewrite it,
+   --  as a formatter does.
+   type Formatted_Agent is new Wk.Parenting_Runner with null record;
+
+   overriding procedure Run
+     (Self        : Formatted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Formatted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Formatted_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("formatted"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Formatted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Formatted_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Children.Run_Checks ("checks", Report, Got);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   --  An agent that writes once, its lesson's checks run after: what they
+   --  said, and whether it may run the profile another of them is from.
+   type Lint_Agent is new Wk.Parenting_Runner with null record;
+   Lint_Report : Unbounded_String;
+   Lint_May    : Boolean := True;
+
+   overriding procedure Run
+     (Self        : Lint_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Lint_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Lint_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("lint"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Lint_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Lint_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Got : E.Error_Info;
+   begin
+      Lint_May := Children.May_Check ("lint");
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Children.Lesson_Checks (Lint_Report);
+      Answer := To_Unbounded_String
+        ("status: done" & LF & "summary: wrote hello" & LF & "changed_files: src/hello.adb");
+      Status := E.Success;
+   end Run_Parenting;
+
+   --  An agent whose whole checks fail, and whose change then passes a
+   --  narrower run: what that run said, and whether the failure was held.
+   type Narrowing_Agent is new Wk.Parenting_Runner with null record;
+   Narrowed_Report : Unbounded_String;
+   Narrowed_Held   : Boolean := False;
+
+   overriding procedure Run
+     (Self        : Narrowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Narrowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Narrowing_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("narrowing"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Narrowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Narrowing_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Children.Keep_Before_Write ("src/parser.ads", Got);
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure First;" & LF & "end Parser;"
+                & LF);
+      Children.Run_Checks ("checks", Report, Got);
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure Between;" & LF & "end Parser;"
+                & LF);
+      Children.Run_Checks ("checks", Narrowed_Report, Got, Affected => True);
+      Narrowed_Held := Children.Checks_Failing;
+      --  Mended at last: the fix is said from the files as the failure
+      --  left them, not as they stood at the narrow run.
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure Last;" & LF & "end Parser;"
+                & LF);
+      Children.Keep_Before_Write ("src/done.txt", Got);
+      Put_File (Project & "/src/done.txt", "done");
+      Children.Run_Checks ("checks", Report, Got);
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: looked");
+      Status := E.Success;
+   end Run_Parenting;
+
    --  An agent that checks, fails, mends and checks again, is refused a
    --  write outside the project, and finishes: what the harness sees of
    --  that, it records.
@@ -10189,6 +10373,217 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Findings_Come_Before_Notes;
 
+   --  Helpers of one turn share what the parent's run has left: each is
+   --  given half of what is left after the ones before it -- given half of
+   --  the same, set once a step, together they went past the run's budget.
+   procedure Helpers_Share_What_Is_Left (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Ag renames Model_Runner.Framework.Agents;
+      Store   : aliased S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Id      : Unbounded_String;
+      Done    : Wk.Report;
+      Replies : aliased Session_Script;
+      Shown   : Unbounded_String;
+      function Call (Asked : String) return String
+      is ("<tool_call>{""name"": ""delegate"", ""arguments"": {""task"": """ & Asked & """}}</tool_call>");
+      --  What the root says first, six hundred tokens of it: what its run
+      --  has left, not its record, is then what bounds a helper.
+      Thought : constant String := [1 .. 2_400 => 'p'] & LF;
+   begin
+      Task_Project
+        (Store, "helpers-share",
+         "map permission.project.read_source =" & LF
+         & "map permission.project.create_children = max_depth=2, max_children=4" & LF
+         & "scalar agents.max_active = 4" & LF
+         & "scalar agents.token_budget = 1000" & LF);
+      Tk.Create (Store, Change, Fields ("Look twice", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      --  Two helpers in one turn; the first spends two hundred tokens.
+      Replies.Replies := [To_Unbounded_String (Thought & Call ("look here") & LF & Call ("look there")),
+                          To_Unbounded_String ([1 .. 800 => 'x']),
+                          To_Unbounded_String ("looked")];
+      On_Session (Store, To_String (Id), Replies, Shown, Done);
+      declare
+         Helpers : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Ag.Children (Store, To_String (Done.Agent_Id));
+         First, Again, Second : Ag.Agent;
+         Got : E.Error_Info;
+      begin
+         --  The first, its answer without the status line, run once more;
+         --  then the second.
+         Assert (Natural (Helpers.Length) = 3, "the helpers were not made as asked:" & Helpers.Length'Image
+                 & " " & To_String (Shown));
+         Ag.Read (Store, Helpers (1), First, Got);
+         Ag.Read (Store, Helpers (2), Again, Got);
+         Ag.Read (Store, Helpers (3), Second, Got);
+         Assert (First.Budget > 0 and then Again.Budget + 50 <= First.Budget and then Second.Budget <= Again.Budget,
+                 "a helper was given half of what one before it in the turn was, its spending not counted:"
+                 & First.Budget'Image & Again.Budget'Image & Second.Budget'Image);
+      end;
+      S.Close (Store);
+      --  And what a helper's own helpers spent is its parent's to count:
+      --  of the helper's own alone, the turn's next helper was given as if
+      --  the grandchild had spent nothing.
+      declare
+         Deeper : aliased Session_Script;
+      begin
+         Task_Project
+           (Store, "helpers-share-deeper",
+            "map permission.project.read_source =" & LF
+            & "map permission.project.create_children = max_depth=2, max_children=4" & LF
+            & "scalar agents.max_active = 4" & LF
+            & "scalar agents.token_budget = 1000" & LF);
+         Tk.Create (Store, Change, Fields ("Look deeper", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Deeper.Replies := [To_Unbounded_String (Thought & Call ("look here") & LF & Call ("look there")),
+                            To_Unbounded_String (Call ("look below")),
+                            To_Unbounded_String ([1 .. 800 => 'x'])];
+         On_Session (Store, To_String (Id), Deeper, Shown, Done);
+         declare
+            Helpers : constant Model_Runner.Framework.Name_Lists.Vector :=
+              Ag.Children (Store, To_String (Done.Agent_Id));
+            First, Second : Ag.Agent;
+            Got : E.Error_Info;
+         begin
+            --  The first, past its budget with its own helper's, run once
+            --  more; then the second.
+            Assert (Natural (Helpers.Length) = 3, "the helpers were not made as asked:" & Helpers.Length'Image
+                    & " " & To_String (Shown));
+            Ag.Read (Store, Helpers (1), First, Got);
+            Ag.Read (Store, Helpers (3), Second, Got);
+            Assert (First.Budget > 0 and then Second.Budget + 50 <= First.Budget,
+                    "a helper's own helper's spending was not counted for the turn's next helper:"
+                    & First.Budget'Image & Second.Budget'Image);
+         end;
+         S.Close (Store);
+      end;
+   end Helpers_Share_What_Is_Left;
+
+   --  A file the work wrote and a check then rewrote is the work's still:
+   --  taken for the check's own, it fell out of the files the work changed.
+   procedure A_File_A_Check_Rewrote_Is_The_Works (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "check-rewrote",
+         "set execution.allowed = sh" & LF
+         & "profile checks = format: sh format.sh" & LF
+         & "scalar verification.default = checks" & LF);
+      Put_File (Fresh_Root (Store) & "/format.sh", "printf -- '-- formatted\n' >> src/hello.adb" & LF);
+      Tk.Create (Store, Change, Fields ("Format", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Formatted_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (Ada.Strings.Fixed.Index (Read_Whole (Fresh_Root (Store) & "/src/hello.adb"), "formatted") > 0,
+              "the check did not rewrite the file");
+      Assert (Done.Changed_Files.Contains ("src/hello.adb"),
+              "a file the work wrote and a check rewrote was not among the work's changes: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+   end A_File_A_Check_Rewrote_Is_The_Works;
+
+   --  A lesson's check of another profile is run only where the agent may
+   --  run that profile: run after every write, it ran what run_checks of
+   --  that profile was refused.
+   procedure Lesson_Checks_Keep_To_Permissions (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Lesson : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "lesson-permissions",
+         "map permission.project.read_source =" & LF & "map permission.project.write_source = roots=src/" & LF
+         & "map permission.project.run_tests =" & LF & "map permission.project.run_static_analysis = off" & LF
+         & "set execution.allowed = test" & LF & "set execution.allowed = false" & LF
+         --  Its own check fails too: said, the lesson's checks are seen to run.
+         & "profile checks = exists: test -f src/nowhere.adb" & LF & "profile lint = style: false" & LF
+         & "scalar profile_capability.lint = run_static_analysis" & LF
+         & "scalar verification.default = checks" & LF);
+      Nt.Propose (Store, Change, Nt.Decision, "LESSON", "Lesson", "Work SHALL leave the checks passing.",
+                  "checks: exists, style", "harness", "observation lesson x", "hello", Lesson, Status);
+      Nt.Move (Store, Change, Nt.Decision, To_String (Lesson), "accepted", Tr.Ordinary_Only, Status);
+      Tk.Create (Store, Change, Fields ("Greet", "analysis", "component", "hello"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Lint_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (not Lint_May, "the agent may run the lint profile, so nothing here is held to it");
+      Assert (Ada.Strings.Fixed.Index (To_String (Lint_Report), "exists") > 0
+              and then Ada.Strings.Fixed.Index (To_String (Lint_Report), "style") = 0,
+              "a lesson's check of a profile the agent may not run was run: " & To_String (Lint_Report));
+      S.Close (Store);
+   end Lesson_Checks_Keep_To_Permissions;
+
+   --  A narrower run that passes says nothing of the checks it did not
+   --  run: it cleared the whole profile's failure, and the work was never
+   --  sent back to mend it.
+   procedure A_Narrow_Pass_Mends_Nothing (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "narrow-pass",
+         "set execution.allowed = true" & LF & "set execution.allowed = false" & LF
+         & "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/done.txt" & LF & "profile unit = fine: true" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar verification.scope.certain = unit" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb", "with Parser;" & LF & "procedure Parser_Tests is"
+                & LF & "begin" & LF & "   null;" & LF & "end Parser_Tests;" & LF);
+      Tk.Create (Store, Change, Fields ("Narrow", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Narrowing_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (Ada.Strings.Fixed.Index (To_String (Narrowed_Report), "scope: certain_tests") = 1
+              and then Ada.Strings.Fixed.Index (To_String (Narrowed_Report), "passed") > 0,
+              "the change did not pass a narrower run: " & To_String (Narrowed_Report));
+      Assert (Narrowed_Held, "a narrower run that passed cleared the whole checks' failure");
+      declare
+         Said : Boolean := False;
+      begin
+         for Name of Ob.List (Store) loop
+            declare
+               Value : Ob.Observation;
+            begin
+               Ob.Read (Store, Name, Value, Status);
+               if Ob."=" (Value.Kind, Ob.Failure_Pattern)
+                 and then Ada.Strings.Fixed.Index (To_String (Value.Summary), "procedure First;") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Value.Summary), "procedure Last;") > 0
+               then
+                  Said := True;
+               end if;
+            end;
+         end loop;
+         Assert (Said, "the fix was not said from the files as the failure left them");
+      end;
+      S.Close (Store);
+   end A_Narrow_Pass_Mends_Nothing;
+
    procedure Harness_Records_What_It_Sees (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Store  : aliased S.Store;
@@ -10201,8 +10596,10 @@ package body Tests.Framework_Cases is
    begin
       Task_Project
         (Store, "harness-records",
-         "set execution.allowed = sh" & LF
+         "set execution.allowed = sh" & LF & "set execution.allowed = true" & LF
+         & "set execution.allowed = false" & LF
          & "profile checks = exists: sh check.sh; again: sh check.sh" & LF
+         & "profile failing = never: false" & LF & "profile other = fine: true" & LF
          & "scalar verification.default = checks" & LF);
       --  A check that says why it fails, as a build does.
       Put_File (Fresh_Root (Store) & "/check.sh",
@@ -10260,6 +10657,27 @@ package body Tests.Framework_Cases is
          Ob.Observe_Fix (Store, Change, To_String (First), Fixed.Evidence (2), Nothing,
                          Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
          Assert (E.Is_Ok (Status) and then Length (Id) = 0, "a pass with nothing changed was taken for a fix");
+         --  A pass of another profile mends nothing of what failed: a
+         --  narrower run that passed was taken for the failed check passing.
+         declare
+            Failed_Ev, Other_Ev : Unbounded_String;
+            Passed : Boolean;
+            Hello  : Model_Runner.Framework.Name_Lists.Vector;
+         begin
+            Hello.Append ("src/hello.adb");
+            Change := S.No_Changes;
+            Model_Runner.Framework.Verification.Run_Profile
+              (Store, Change, "failing", To_String (First), Failed_Ev, Passed, Status);
+            S.Commit (Store, Change, Status);
+            Model_Runner.Framework.Verification.Run_Profile
+              (Store, Change, "other", To_String (First), Other_Ev, Passed, Status);
+            S.Commit (Store, Change, Status);
+            Ob.Observe_Fix (Store, Change, To_String (First), To_String (Other_Ev), Hello,
+                            Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
+            Assert (E.Is_Ok (Status) and then Length (Other_Ev) > 0 and then Length (Id) = 0,
+                    "a pass of another profile was taken for what mended a failure: " & To_String (Id));
+            Change := S.No_Changes;
+         end;
          Ob.Observe_Done (Store, Change, To_String (First), Fixed.Evidence (2), Nothing,
                           Origin_Of (To_String (First), "1", "AG-1"), Id, Status);
          Assert (E.Is_Ok (Status) and then Length (Id) = 0, "work that changed nothing was recorded as done");
@@ -13584,6 +14002,22 @@ package body Tests.Framework_Cases is
                  & R.Get (Value, "changed_files") & " / " & To_String (Done.Reason));
       end;
       S.Close (Store);
+      --  The stage's files not kept: the task goes no further -- the
+      --  failed commit was not looked at, and the task was verified and
+      --  completed with a state lacking the files the stage changed.
+      declare
+         procedure Fail_It is
+         begin
+            S.Crash_At (S.Fail_After_Mark);
+         end Fail_It;
+      begin
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Stage_Files_Kept, Fail_It'Unrestricted_Access);
+         Work ("format-stage-unkept", "tidy");
+         Assert (To_String (Done.Final_State) /= "complete"
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "could not be committed") > 0,
+                 "a task whose stage's files were not kept went on, or was not told why: " & To_String (Done.Reason));
+         S.Close (Store);
+      end;
       Work ("format-stage-broken", "broken");
       Assert (To_String (Done.Final_State) = "blocked"
               and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "format stage") > 0,
@@ -18310,6 +18744,18 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Work_Apart_Is_Accounted'Access,
          "an agent run apart is accounted, and given the time the policy allows");
+      Register_Routine
+        (T, A_File_A_Check_Rewrote_Is_The_Works'Access,
+         "a file the work wrote and a check then rewrote is the work's still");
+      Register_Routine
+        (T, Lesson_Checks_Keep_To_Permissions'Access,
+         "a lesson's check of another profile runs only where the agent may run it");
+      Register_Routine
+        (T, A_Narrow_Pass_Mends_Nothing'Access,
+         "a narrower run that passes mends nothing of the checks it did not run");
+      Register_Routine
+        (T, Helpers_Share_What_Is_Left'Access,
+         "helpers of one turn share what the parent's run has left");
       Register_Routine
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"

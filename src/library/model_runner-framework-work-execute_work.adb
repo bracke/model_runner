@@ -1,3 +1,5 @@
+with Model_Runner.Race_Points;
+
 separate (Model_Runner.Framework.Work)
 procedure Execute_Work
   (Item     : aliased in out Stores.Store;
@@ -738,6 +740,8 @@ begin
         Hostkit.Fs.Join (Scratch, "prompt-" & To_String (Result.Agent_Id) & ".txt");
       Before  : constant Configurations.Value_Maps.Map := Snapshot (To_String (Place), Repository.Roots_Of (Item));
       By_Checks : Name_Lists.Vector;
+      --  And what the work itself wrote, as the harness saw it.
+      By_Work : Name_Lists.Vector;
    begin
       --  Written in the project itself: what the files were, kept for an
       --  opening after a kill to compare with.
@@ -906,6 +910,7 @@ begin
          Execution.Watch_Lease (null);
          Abandon (Host);
          By_Checks := Host.Written;
+         By_Work := Host.Edited;
          Over_Budget := Host.Root_Over;
          Not_Kept := Unkept (Host);
          Used :=
@@ -932,8 +937,12 @@ begin
             begin
                if (not Before.Contains (Path)
                    or else Before (Path) /= Configurations.Value_Maps.Element (Position))
-                 and then not By_Checks.Contains
-                                (Path & ASCII.HT & Configurations.Value_Maps.Element (Position))
+                 --  Left as a check left it, and never written by the work
+                 --  itself: a file the work edited and a formatter then
+                 --  rewrote is the work's still.
+                 and then not (By_Checks.Contains
+                                 (Path & ASCII.HT & Configurations.Value_Maps.Element (Position))
+                               and then not By_Work.Contains (Path))
                then
                   Result.Changed_Files.Append (Path);
                end if;
@@ -1965,7 +1974,14 @@ begin
                         Annotate (Item, Change, Task_Id, "taken_in", To_String (Prints));
                      end if;
                      Annotate (Item, Change, Task_Id, "changed_files", To_String (Files_Text));
+                     Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Stage_Files_Kept);
                      Stores.Commit (Item, Change, Status);
+                     --  Not kept, the task goes no further: verified and
+                     --  completed, its state lacked the files the stage
+                     --  changed.
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
                   end;
                end;
             end;
