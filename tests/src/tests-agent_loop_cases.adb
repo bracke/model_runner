@@ -87,6 +87,9 @@ package body Tests.Agent_Loop_Cases is
       --  The reply, by number, that stops at its length limit; none at 0.
       Cut_At  : Natural := 0;
 
+      --  The reply, by number, that stops where the context filled.
+      Full_At : Natural := 0;
+
       --  Whether its replies are held to each generation's limit.
       Keeps   : Boolean := False;
 
@@ -102,6 +105,8 @@ package body Tests.Agent_Loop_Cases is
    overriding function Room (Self : Script) return Natural;
 
    overriding function Cut_Off (Self : Script) return Boolean is (Self.Cut_At > 0 and then Self.Next - 1 = Self.Cut_At);
+   overriding function Context_Filled (Self : Script) return Boolean
+   is (Self.Full_At > 0 and then Self.Next - 1 = Self.Full_At);
 
    overriding function Next_Reply (Self : in out Script) return String is
    begin
@@ -440,6 +445,37 @@ package body Tests.Agent_Loop_Cases is
          Replies.Cut_At := 1;
          Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Python_Code);
          Assert (not Told_Unreadable, "a Gemma call cut in its block was told it could not be read");
+      end;
+
+      --  A call cut where the context filled is cut, as one at the reply's
+      --  length is: told it could not be read, a model wrote it again as long.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<tool_call>{""name"": ""write_file"", ""arguments"": {""path"": ""full.txt"","
+                                 & " ""content"": ""abc");
+         Replies.Full_At := 1;
+         Run (Replies, Seen, Ended);
+         Assert (not Told_Unreadable, "a call cut where the context filled was told it could not be read");
+      end;
+
+      --  A whole Gemma call, braces in its strings, and words after it cut:
+      --  no call is left open -- counted as one, the model was told one
+      --  more call was cut and not run.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Put ("braced.txt", "  if (x) {");
+         Replies.Replies.Append ("```tool_code" & ASCII.LF
+                                 & "edit_file(path=""braced.txt"", old_text=""  if (x) {"", new_text=""  if (y) {"")"
+                                 & ASCII.LF & "```" & ASCII.LF & "Then I will");
+         Replies.Cut_At := 1;
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Python_Code);
+         Assert (not Told_Lost, "a whole Gemma call with braces in its strings was taken for one left open");
       end;
 
       --  So too in the open form, where a bracket or a quote in the thought
@@ -1251,6 +1287,61 @@ package body Tests.Agent_Loop_Cases is
             L.Close (Session);
          end;
       end loop;
+
+      --  Harmony calls that never read, their chances spent: the run failed,
+      --  not answered -- the call's close is the end of the generation and
+      --  never in the text, and it ended answered with no answer.
+      declare
+         Under    : Harness (Harmony);
+         Session  : L.Session;
+         Messages : Conv.History;
+         Offered  : Model_Runner.Tools.Definitions;
+         Runner   : Model_Runner.Tools.Builtin.Instance;
+         Stop     : Model_Runner.Stops.Set;
+         Request  : Model_Runner.Generation.Request;
+         Clock    : aliased Model_Runner.Clocks.System_Clock;
+         Seeds    : aliased Model_Runner.Entropy.Host_Source;
+         Status   : E.Error_Info;
+         Replies  : aliased Script;
+         Seen     : aliased Recorder;
+         Ended    : Ag.Outcome;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+         L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+         L.Open (Session, Under.Ready, Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "work", Status);
+         Model_Runner.Tools.Read
+           (Offered, Model_Runner.Tools.Registry.Offered
+                       ([Model_Runner.Tools.Registry.Write_Files => True, others => False]), Status);
+         Model_Runner.Stops.Open (Stop);
+         Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+         Request.Max_Tokens := 64;
+         for Count in 1 .. 6 loop
+            Replies.Replies.Append ("<|channel|>commentary to=functions.write_file <|constrain|>json"
+                                    & "<|message|>{""path"": ""h.txt""");
+         end loop;
+         Ag.Run
+           (Source     => Under.Ready,
+            Session    => Session,
+            Messages   => Messages,
+            Offered    => Offered,
+            Executor   => Runner,
+            Generation => Request,
+            Stop_Set   => Stop,
+            Sink       => null,
+            Time       => Clock'Unchecked_Access,
+            Seeds      => Seeds'Unchecked_Access,
+            Max_Steps  => 8,
+            Watch      => Seen'Unchecked_Access,
+            Script     => Replies'Unchecked_Access,
+            Result     => Ended);
+         Assert (Ended.Reason = Ag.Generation_Failed,
+                 "harmony calls that never read ended the run as " & Ended.Reason'Image);
+         Conv.Close (Messages);
+         Model_Runner.Tools.Close (Offered);
+         L.Close (Session);
+      end;
       Model_Runner.Bytes.Free (Harmony);
    end An_Unnamed_Syntax_Is_The_Models_Own;
 

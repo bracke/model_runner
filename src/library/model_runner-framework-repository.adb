@@ -1638,14 +1638,22 @@ package body Model_Runner.Framework.Repository is
               ((if Prefix = "" then "." else Prefix) & ": " & Why (Failure));
       end Walk;
 
+      --  The kept files by path, found once: searched file by file for
+      --  each, a scan was the square of the files, nothing changed or not.
+      Kept_At     : Word_Places.Map;
+      Kept_Mapped : Boolean := False;
+
       function Kept_Index (Path : String) return Natural is
       begin
-         for Index in 1 .. Natural (Kept.Files.Length) loop
-            if To_String (Kept.Files (Index).Path) = Path then
-               return Index;
-            end if;
-         end loop;
-         return 0;
+         if not Kept_Mapped then
+            for Index in 1 .. Natural (Kept.Files.Length) loop
+               if not Kept_At.Contains (To_String (Kept.Files (Index).Path)) then
+                  Add_Place (Kept_At, To_String (Kept.Files (Index).Path), Index);
+               end if;
+            end loop;
+            Kept_Mapped := True;
+         end if;
+         return (if Kept_At.Contains (Path) then Kept_At (Path).First_Element else 0);
       end Kept_Index;
 
       --  Whether the walk has a file down as unread.
@@ -1761,11 +1769,18 @@ package body Model_Runner.Framework.Repository is
             end if;
          end;
       end loop;
-      for Item of Kept.Files loop
-         if not Now_Paths.Contains (To_String (Item.Path)) then
-            Gone.Append (To_String (Item.Path));
-         end if;
-      end loop;
+      declare
+         Now_Set : Name_Sets.Set;
+      begin
+         for Path of Now_Paths loop
+            Now_Set.Include (Path);
+         end loop;
+         for Item of Kept.Files loop
+            if not Now_Set.Contains (To_String (Item.Path)) then
+               Gone.Append (To_String (Item.Path));
+            end if;
+         end loop;
+      end;
       if Changed.Is_Empty and then Gone.Is_Empty then
          return Same : Graph := Kept do
             Same.Unread := Result.Unread;

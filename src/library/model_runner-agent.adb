@@ -422,6 +422,10 @@ package body Model_Runner.Agent is
                   | Model_Runner.Tools.DeepSeek_Plain =>
                   return Ends (Model_Runner.Tools.DeepSeek_Calls_End)
                     or else Ends (Model_Runner.Tools.DeepSeek_Call_End);
+               --  A harmony call ends at <|call|>, which ends the generation
+               --  and is not in the text: its header says a call was made.
+               when Model_Runner.Tools.Harmony_Call =>
+                  return Ada.Strings.Fixed.Index (Trimmed, Model_Runner.Tools.Harmony_Recipient) > 0;
                when others => return Ends ("}") or else Ends ("```");
             end case;
          end;
@@ -470,9 +474,9 @@ package body Model_Runner.Agent is
                               Fences := Fences + 1;
                            end if;
                         end loop;
-                        if Fences mod 2 = 0 then
-                           return True;
-                        end if;
+                        --  Closed, it is closed: braces in its calls' strings
+                        --  -- if (x) { -- are no object left open.
+                        return Fences mod 2 = 0;
                      end if;
                   end;
                end if;
@@ -662,7 +666,12 @@ package body Model_Runner.Agent is
                Budget   : constant Natural := Natural'Min (Think_Budget, Thought_Cap);
                Budgeted : constant Boolean :=
                  Budget > 0 and then Budget < Full
-                 and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off);
+                 and then not Model_Runner.Templates."=" (Thinking, Model_Runner.Templates.Thinking_Off)
+                 --  Not a harmony reply: its analysis is no <think> to be
+                 --  closed, and what followed the budget was asked for with
+                 --  no grammar -- calls the grammar would have shaped came
+                 --  out unreadable.
+                 and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Harmony_Call);
                Closing  : String renames Thought_Closing;
 
                --  A script that keeps to the limit, given as a model gives:
@@ -703,6 +712,7 @@ package body Model_Runner.Agent is
                   Model_Runner.Output.Emit (Shown, Taken, Shown_Closed);
                   Last_Result :=
                     (Reason           => (if Script.Out_Of_Time then Gen.Time_Limit
+                                          elsif Script.Context_Filled then Gen.Context_Full
                                           elsif Rest'Length > Most or else Script.Cut_Off then Gen.Maximum_Tokens
                                           else Gen.End_Of_Sequence),
                      Generated_Tokens => Natural'Max (1, (Taken'Length + 3) / 4),
@@ -727,6 +737,7 @@ package body Model_Runner.Agent is
                   begin
                      Last_Result :=
                        (Reason           => (if Script.Out_Of_Time then Gen.Time_Limit
+                                             elsif Script.Context_Filled then Gen.Context_Full
                                              elsif Script.Cut_Off then Gen.Maximum_Tokens
                                              else Gen.End_Of_Sequence),
                         Generated_Tokens => Natural'Max (1, Said'Length / 4),
@@ -1087,7 +1098,8 @@ package body Model_Runner.Agent is
          --  a reply cut short is -- told to write it again in the format, a
          --  model wrote it again as long, and was cut again.
          if E.Is_Error (Reading)
-           and then not (Last_Result.Reason = Gen.Maximum_Tokens and then Ends_Inside_Call (Reply_Text))
+           and then not (Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
+                         and then Ends_Inside_Call (Reply_Text))
            and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
            and then Result.Steps < Max_Steps

@@ -39,10 +39,16 @@ is
    Change   : Stores.Transaction;
    Evidence : Unbounded_String;
    Passed   : Boolean;
-   --  Whether this pass clears what failed: a run of the whole profile,
-   --  or of the narrower profile whose run it was.
+   --  How wide this run is: the whole profile, or the scope it was
+   --  narrowed to -- component tests wider than certain ones.
+   Width : constant Positive :=
+     (if not Narrow then 3 elsif To_String (Chosen.Scope) = "component_tests" then 2 else 1);
+
+   --  Whether this pass clears what failed: a run at least as wide as the
+   --  failure's, or of the profile whose run it was -- held to that one
+   --  profile alone, a wider narrow run that passed cleared nothing.
    function Clears return Boolean
-   is (Passed and then (not Narrow or else Length (Host.Failed_Running) = 0
+   is (Passed and then (Width >= Host.Failed_Width or else Length (Host.Failed_Running) = 0
                         or else To_String (Host.Failed_Running) = Running));
    Value    : Records.Item;
    Read     : E.Error_Info;
@@ -137,8 +143,9 @@ begin
    if not Passed then
       --  The widest failure stands: a narrower one after the whole's took
       --  its place, and a pass of the narrower then cleared the whole's.
-      if not Host.Checks_Failed or else not Narrow then
+      if not Host.Checks_Failed or else Width >= Host.Failed_Width then
          Host.Failed_Running := To_Unbounded_String (Running);
+         Host.Failed_Width := Width;
       end if;
       Host.Checks_Failed := True;
    elsif Clears then

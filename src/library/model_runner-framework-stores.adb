@@ -2136,7 +2136,14 @@ package body Model_Runner.Framework.Stores is
             --  elsewhere: written back as text, the mark went into a file
             --  where the link was, and one named elsewhere was kept.
             elsif Is_Link_Value (Text_Maps.Element (Position)) then
-               if not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position) then
+               --  Not through a link left in a folder's place: the link it
+               --  was made again in was in the folder the link names.
+               if (not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position))
+                 and then Through_Link (Name)
+               then
+                  Changed.Append (Name);
+                  Left.Append (Name & ": a folder on its way is a link, so it is not made again");
+               elsif not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position) then
                   if not Unlinked.Contains (Name) then
                      Changed.Append (Name);
                   end if;

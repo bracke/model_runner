@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Vectors;
 with Ada.Strings.Hash;
@@ -309,6 +310,11 @@ package body Model_Runner.Framework.Repository.Languages is
 
       Found : Relation_Vectors.Vector;
 
+      package Position_Lists is new Ada.Containers.Vectors (Positive, Positive);
+      package Word_Places is new Ada.Containers.Indefinite_Hashed_Maps
+        (String, Position_Lists.Vector, Ada.Strings.Hash, "=", Position_Lists."=");
+      Places : Word_Places.Map;
+
       --  Where this file declares a name, as NAME@LINE: a declaration is
       --  not a use of it, nor of another of the same name.
       Declared : Name_Lists.Vector;
@@ -400,6 +406,22 @@ package body Model_Runner.Framework.Repository.Languages is
          end if;
       end loop;
 
+      --  Where each word of the file stands, found once: looked for token
+      --  by token for every symbol of the graph, a C project's scan was
+      --  its symbols times its tokens, and every edit paid it again.
+      for At_Index in 1 .. Count loop
+         if Tokens (At_Index).Kind = Word then
+            declare
+               Text : constant String := To_String (Tokens (At_Index).Text);
+            begin
+               if not Places.Contains (Text) then
+                  Places.Insert (Text, Position_Lists.Empty_Vector);
+               end if;
+               Places (Text).Append (At_Index);
+            end;
+         end if;
+      end loop;
+
       for Item of Into.Symbols loop
          declare
             Full  : constant String := To_String (Item.Name);
@@ -409,8 +431,8 @@ package body Model_Runner.Framework.Repository.Languages is
          begin
             --  A module is used by importing it, which is a dependency:
             --  a variable of the same name is not a use of it.
-            if Dot > 0 and then To_String (Item.Kind) not in "module" | "unit" then
-               for At_Index in 1 .. Count loop
+            if Dot > 0 and then To_String (Item.Kind) not in "module" | "unit" and then Places.Contains (Last) then
+               for At_Index of Places (Last) loop
                   if Is_Word (Tokens (At_Index), Last)
                     and then not Declaring (Last, Tokens (At_Index).Line)
                     and then Receiver_Fits (At_Index, Owner)

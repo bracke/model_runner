@@ -2,10 +2,12 @@ with Model_Runner.Text;
 with Ada.IO_Exceptions;
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Unchecked_Deallocation;
 
 with Hostkit;
@@ -767,7 +769,11 @@ package body Model_Runner.Framework.Workspaces is
       Result   : Name_Lists.Vector;
    begin
       Read (Item, Id, Held, Status);
-      if E.Is_Error (Status) then
+      --  A tree gone -- given up by a recovery stopped before its record
+      --  moved on -- changed nothing that can be told: scanned, every file
+      --  of its baseline was its change, and the task's changed files were
+      --  the whole project.
+      if E.Is_Error (Status) or else not Dirs.Exists (To_String (Held.Path)) then
          return Result;
       end if;
       declare
@@ -1192,37 +1198,64 @@ package body Model_Runner.Framework.Workspaces is
          Ours   : constant Repository.Graph := Repository.Scan (To_String (Held.Path), Roots);
          Theirs : constant Repository.Graph := Repository.Now (Item);
 
-         function Units_Of (From : Repository.Graph; Path : String) return Name_Lists.Vector is
-            Units : Name_Lists.Vector;
+         --  What each graph says, gathered once: the units each file holds
+         --  and what each unit depends on -- worked out again for every
+         --  pair of files, a take-in after a pull of thousands of files
+         --  took longer than any work.
+         package Lists_By is new Ada.Containers.Indefinite_Hashed_Maps
+           (String, Name_Lists.Vector, Ada.Strings.Hash, "=", Name_Lists."=");
+
+         procedure Add (Into : in out Lists_By.Map; Key, Name : String) is
+         begin
+            if not Into.Contains (Key) then
+               Into.Insert (Key, Name_Lists.Empty_Vector);
+            end if;
+            if not Into (Key).Contains (Name) then
+               Into (Key).Append (Name);
+            end if;
+         end Add;
+
+         procedure Gather (From : Repository.Graph; Units, Deps : in out Lists_By.Map) is
          begin
             for Index in 1 .. Repository.Relation_Count (From) loop
                declare
                   Link : constant Repository.Relation := Repository.Relation_At (From, Index);
                begin
-                  if Link.Kind = Repository.Contains and then To_String (Link.From) = Path then
-                     Units.Append (To_String (Link.To));
+                  if Link.Kind = Repository.Contains then
+                     Add (Units, To_String (Link.From), To_String (Link.To));
+                  elsif Link.Kind = Repository.Depends_On then
+                     Add (Deps, Ada.Characters.Handling.To_Lower (To_String (Link.From)), To_String (Link.To));
                   end if;
                end;
             end loop;
-            return Units;
-         end Units_Of;
+         end Gather;
 
-         function Depends (From : Repository.Graph; Unit, On : String) return Boolean
-         is (Repository.Dependencies_Of (From, Unit).Contains (On));
+         Our_Units, Our_Deps, Their_Units, Their_Deps : Lists_By.Map;
+
+         function Units_Of (Units : Lists_By.Map; Path : String) return Name_Lists.Vector
+         is (if Units.Contains (Path) then Units (Path) else Name_Lists.Empty_Vector);
+
+         function Depends (Deps : Lists_By.Map; Unit, On : String) return Boolean
+         is (Deps.Contains (Ada.Characters.Handling.To_Lower (Unit))
+             and then Deps (Ada.Characters.Handling.To_Lower (Unit)).Contains (On));
+
+         Others_Sorted : constant Name_Lists.Vector := Sorted (There);
       begin
+         Gather (Ours, Our_Units, Our_Deps);
+         Gather (Theirs, Their_Units, Their_Deps);
          for Mine of Here loop
-            for Other of Sorted (There) loop
+            for Other of Others_Sorted loop
                declare
                   Why : Unbounded_String;
                begin
-                  for Unit of Units_Of (Ours, Mine) loop
-                     for Changed of Units_Of (Theirs, Other) loop
+                  for Unit of Units_Of (Our_Units, Mine) loop
+                     for Changed of Units_Of (Their_Units, Other) loop
                         if Why = Null_Unbounded_String then
                            if Unit = Changed then
                               Why := To_Unbounded_String ("both change " & Unit);
-                           elsif Depends (Ours, Unit, Changed) then
+                           elsif Depends (Our_Deps, Unit, Changed) then
                               Why := To_Unbounded_String (Unit & " depends on " & Changed);
-                           elsif Depends (Theirs, Changed, Unit) then
+                           elsif Depends (Their_Deps, Changed, Unit) then
                               Why := To_Unbounded_String (Changed & " depends on " & Unit);
                            end if;
                         end if;

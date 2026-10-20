@@ -1,3 +1,4 @@
+with Ada.Real_Time;
 with AUnit.Test_Cases;
 with Ada.Calendar;
 with Model_Runner.Platform.Signals;
@@ -7417,6 +7418,17 @@ package body Tests.Framework_Cases is
                        and then not Dirs.Exists (Stale),
                        "a base left by a failed making was copied into: " & To_String (Made.Path));
             end;
+            --  A workspace whose tree is gone changed nothing that can be
+            --  told: scanned, every file of its baseline was its change.
+            declare
+               Kind_Free : Ws.Workspace;
+            begin
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Kind_Free, Status);
+               S.Commit (Store, Change, Status);
+               Dirs.Delete_Tree (To_String (Kind_Free.Path));
+               Assert (Ws.Changes (Store, To_String (Kind_Free.Id)).Is_Empty,
+                       "a workspace whose tree is gone was said to have changed every file");
+            end;
             --  A file the work made read-only is put back all the same when
             --  the taking in is undone: refused as a person's read-only file,
             --  the taking in could never be undone.
@@ -9568,6 +9580,78 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent whose narrower run fails, then a wider narrower one fails
+   --  and, mended, passes: what each said, and whether a failure was held.
+   type Widening_Agent is new Wk.Parenting_Runner with null record;
+   Widening_Reports : Unbounded_String;
+   Widening_Held    : Boolean := True;
+   Widening_Direct  : Boolean := False;
+
+   overriding procedure Run
+     (Self        : Widening_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Widening_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Widening_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("widening"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Widening_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Widening_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Widening_Reports := Null_Unbounded_String;
+      Children.Keep_Before_Write ("src/hello.adb", Got);
+      Put_File (Project & "/src/hello.adb", "procedure Hello is begin null; end Hello;" & LF);
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      Append (Widening_Reports, To_String (Report) & " || ");
+      --  Where it is to pass at once, wider, with no failure of its own.
+      if Widening_Direct then
+         Put_File (Project & "/src/comp-ok.txt", "ok");
+      end if;
+      Children.Keep_Before_Write ("src/parser.ads", Got);
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure First;" & LF & "end Parser;"
+                & LF);
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      Append (Widening_Reports, To_String (Report) & " || ");
+      Put_File (Project & "/src/comp-ok.txt", "ok");
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      Append (Widening_Reports, To_String (Report));
+      Widening_Held := Children.Checks_Failing;
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: looked");
+      Status := E.Success;
+   end Run_Parenting;
+
    --  An agent that writes once, its lesson's checks run after: what they
    --  said, and whether it may run the profile another of them is from.
    type Lint_Agent is new Wk.Parenting_Runner with null record;
@@ -10704,6 +10788,100 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end A_File_A_Check_Rewrote_Is_The_Works;
 
+   --  The task's work is verified as a whole: an earlier attempt's files
+   --  left in the project are traced with this one's -- from this one's
+   --  alone, a narrower profile passed and what failed before never ran.
+   procedure Verification_Covers_Earlier_Attempts (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "earlier-verified",
+         "set execution.allowed = test" & LF & "set execution.allowed = true" & LF
+         & "profile checks = exists: test -f src/done.txt" & LF & "profile unit = fine: true" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar verification.scope.certain = unit" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/tests/hello_tests.adb", "with Hello;" & LF & "procedure Hello_Tests is"
+                & LF & "begin" & LF & "   null;" & LF & "end Hello_Tests;" & LF);
+      Tk.Create (Store, Change, Fields ("Twice over", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/early.txt"),
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) /= "complete",
+              "the first attempt passed checks that cannot pass: " & To_String (Done.Reason));
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Assert (To_String (Done.Final_State) /= "complete",
+              "a second attempt was verified from its own files alone, the earlier attempt's unchecked: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+   end Verification_Covers_Earlier_Attempts;
+
+   --  A scan keeps to time on a project of many files: each file's uses
+   --  looked for token by token for every symbol of the graph, and each
+   --  kept file found by walking them all, a scan was the square of the
+   --  project.
+   procedure Scans_Keep_To_Time (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("many-files");
+      Again   : Natural;
+      Began   : Ada.Real_Time.Time;
+      use type Ada.Real_Time.Time;
+   begin
+      Dirs.Create_Path (Project & "/src");
+      for File in 1 .. 2_000 loop
+         declare
+            Name : constant String := Ada.Strings.Fixed.Trim (File'Image, Ada.Strings.Left);
+            Text : Unbounded_String;
+         begin
+            for Fn in 1 .. 5 loop
+               Append (Text, "int f" & Name & "_" & Ada.Strings.Fixed.Trim (Fn'Image, Ada.Strings.Left)
+                       & " (void) { return f1_1 () + f2_2 (); }" & LF);
+            end loop;
+            Put_File (Project & "/src/m" & Name & ".c", To_String (Text));
+         end;
+      end loop;
+      for File in 1 .. 12_000 loop
+         Put_File (Project & "/n" & Ada.Strings.Fixed.Trim (File'Image, Ada.Strings.Left) & ".txt", "a note");
+      end loop;
+      Began := Ada.Real_Time.Clock;
+      declare
+         Found : constant Rp.Graph := Rp.Scan (Project);
+         Took  : constant Duration := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began);
+      begin
+         Assert (Rp.File_Count (Found) >= 2_000 and then Took < 15.0,
+                 "a scan of two thousand C files took" & Took'Image & " s");
+         --  Nothing changed: what was kept taken as it was, and quickly --
+         --  past two seconds, so no stamp is too recent to trust.
+         delay 2.5;
+         Began := Ada.Real_Time.Clock;
+         declare
+            Same : constant Rp.Graph := Rp.Refresh (Project, Found, Again);
+            Kept : constant Duration := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began);
+         begin
+            Assert (Again = 0 and then Rp.File_Count (Same) = Rp.File_Count (Found) and then Kept < 1.5,
+                    "a refresh of fourteen thousand unchanged files took" & Kept'Image & " s, reading"
+                    & Again'Image);
+         end;
+      end;
+      Remove_Tree (Project);
+   end Scans_Keep_To_Time;
+
    --  A narrower run that failed and then passes clears its failure: held
    --  to a pass of the whole alone, a narrow failure mended narrowly was
    --  never cleared, and the work was sent back to mend nothing.
@@ -10758,6 +10936,64 @@ package body Tests.Framework_Cases is
       Wk.Execute (Store, To_String (Id), Widest_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
       Assert (Widest_Held, "a narrower failure and pass after the whole's failure cleared the whole's");
       S.Close (Store);
+      --  And a wider narrow run that passes clears a narrower one's
+      --  failure: held to the profile that failed alone, it cleared nothing.
+      declare
+         Req : Unbounded_String;
+         Given : Tk.Field_Map;
+         procedure Set_Up (Leaf : String) is
+         begin
+            Task_Project
+              (Store, Leaf,
+               "set execution.allowed = test" & LF & "set components = parser" & LF
+               & "profile checks = exists: test -f src/done.txt" & LF
+               & "profile unit = fine: test -f src/unit-ok.txt" & LF
+               & "profile comp = fine: test -f src/comp-ok.txt" & LF
+               & "scalar verification.default = checks" & LF
+               & "scalar verification.scope.certain = unit" & LF
+               & "scalar verification.scope.component = comp" & LF);
+            Dirs.Create_Path (Fresh_Root (Store) & "/src");
+            Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+            Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                      & "end Parser;" & LF);
+            Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb", "with Parser;" & LF & "procedure Parser_Tests is"
+                      & LF & "begin" & LF & "   null;" & LF & "end Parser_Tests;" & LF);
+            Put_File (Fresh_Root (Store) & "/tests/hello_tests.adb", "with Hello;" & LF & "procedure Hello_Tests is"
+                      & LF & "begin" & LF & "   null;" & LF & "end Hello_Tests;" & LF);
+            Put_File (Fresh_Root (Store) & "/tests/acceptance.adb", "procedure Acceptance is" & LF & "begin" & LF
+                      & "   null;" & LF & "end Acceptance;" & LF);
+            Nt.Propose (Store, Change, Nt.Requirement, "PARSER", "Next", "It SHALL advance.",
+                        "", "user", "", "parser", Req, Status);
+            Nt.Move (Store, Change, Nt.Requirement, To_String (Req), "accepted", Tr.Ordinary_Only, Status);
+            Nt.Link (Store, Change, Nt.Requirement, To_String (Req), Nt.Test, "tests/acceptance.adb", Status);
+            S.Commit (Store, Change, Status);
+            Given := Fields ("Widening", "implementation", "component", "parser");
+            Given.Include ("requirements", To_String (Req));
+            Tk.Create (Store, Change, Given, "user", "", Id, Status);
+            S.Commit (Store, Change, Status);
+            Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+
+         end Set_Up;
+      begin
+         Set_Up ("narrow-widening");
+         Wk.Execute (Store, To_String (Id), Widening_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Assert (Ada.Strings.Fixed.Index (To_String (Widening_Reports), "scope: certain_tests") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Widening_Reports), "scope: component_tests") > 0,
+                 "the runs were not narrowed as meant: " & To_String (Widening_Reports));
+         Assert (not Widening_Held, "a wider narrow pass did not clear a narrower failure: "
+                 & To_String (Widening_Reports));
+         --  And where the wider run passes at once, with no failure of its
+         --  own between: held to the profile that failed, it cleared nothing.
+         S.Close (Store);
+         Set_Up ("narrow-widening-direct");
+         Widening_Direct := True;
+         Wk.Execute (Store, To_String (Id), Widening_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+         Widening_Direct := False;
+         Assert (not Widening_Held, "a wider narrow pass straight after a narrower failure did not clear it: "
+                 & To_String (Widening_Reports));
+         S.Close (Store);
+      end;
    end A_Narrow_Failure_Is_Mended_Narrowly;
 
    --  A lesson's check of another profile is run only where the agent may
@@ -15231,8 +15467,11 @@ package body Tests.Framework_Cases is
          begin
             Dirs.Create_Path (Folder);
             Put_File (Folder & "/a.rec", "a record");
+            Ignored := Hostkit.Fs.Create_Link (Away, Folder & "/held");
             Dirs.Create_Path (Elsewhere);
+            Put_File (Elsewhere & "/held", "theirs");
             S.Snapshot_State (Store, Taken);
+            Ignored := Hostkit.Fs.Delete_Link (Folder & "/held");
             Dirs.Delete_Tree (Folder);
             if Hostkit.Fs.Create_Link (Elsewhere, Folder) then
                Ignored := Hostkit.Metadata.Set_Permissions (State, 8#555#);
@@ -15240,6 +15479,10 @@ package body Tests.Framework_Cases is
                Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
                Assert (not Dirs.Exists (Elsewhere & "/a.rec"),
                        "a record was written back through a link that could not be taken away");
+               --  Nor a link made again there, over what the link names.
+               Assert (Dirs.Exists (Elsewhere & "/held") and then not Hostkit.Fs.Is_Link (Elsewhere & "/held")
+                       and then Read_Whole (Elsewhere & "/held") = "theirs",
+                       "a link was made again through a link that could not be taken away");
                Ignored := Hostkit.Fs.Delete_Link (Folder);
             end if;
          exception
@@ -19183,6 +19426,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, A_File_A_Check_Rewrote_Is_The_Works'Access,
          "a file the work wrote and a check then rewrote is the work's still");
+      Register_Routine
+        (T, Scans_Keep_To_Time'Access,
+         "a scan and a refresh keep to time on a project of many files");
+      Register_Routine
+        (T, Verification_Covers_Earlier_Attempts'Access,
+         "a task's work is verified with an earlier attempt's files left in the project");
       Register_Routine
         (T, A_Narrow_Failure_Is_Mended_Narrowly'Access,
          "a narrower run that failed and then passes clears its failure");

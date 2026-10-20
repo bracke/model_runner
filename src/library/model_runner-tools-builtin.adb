@@ -2413,7 +2413,13 @@ package body Model_Runner.Tools.Builtin is
                --  A link is not followed: one that leads back up walks the
                --  tree again at every level. It is named, so a link made or
                --  moved is seen.
-               if Name'Length > 0 and then Name (Name'First) /= '.' and then Hostkit.Fs.Is_Link (Full) then
+               --  A name that begins with a dot is named, not walked: a
+               --  listing shows it, and one made or removed beside a listing
+               --  answered from memory was not seen; walked, .git alone
+               --  would pass the bound.
+               if Name'Length > 0 and then Name (Name'First) = '.' and then Name not in "." | ".." then
+                  Mix ("named " & Full);
+               elsif Name'Length > 0 and then Name (Name'First) /= '.' and then Hostkit.Fs.Is_Link (Full) then
                   Mix ("link " & Full);
                elsif Name'Length > 0 and then Name (Name'First) /= '.' then
                   if Kind (Found) = Directory then
@@ -2452,7 +2458,10 @@ package body Model_Runner.Tools.Builtin is
 
       Fresh    : Natural;
       Has_Path : Boolean;
-      Path     : constant String := Text_Argument (Arguments, "path", Has_Path);
+      --  The folder retrieve reads from, as it names it: by "path", every
+      --  retrieve of a folder outside the base was stamped by the base.
+      Path     : constant String :=
+        Text_Argument (Arguments, (if Named = "retrieve" then "folder" else "path"), Has_Path);
       --  A path from the root as the call is run with it: stamped as given,
       --  it named nothing on the host, and a read of it was answered from
       --  memory after the file changed.

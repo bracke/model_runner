@@ -802,6 +802,48 @@ package body Tests.Tools_Cases is
               and then Has (Ed.Read_Range (Path, 2, 3), "3:    begin")
               and then not Has (Ed.Read_Range (Path, 2, 3), "A + B"),
               "a range of lines was not those lines");
+      --  An edit of a passage there many times, within the lines last
+      --  read, is chosen in time: each place's line counted from the file's
+      --  start, a file of thousands of them held the edit for minutes.
+      declare
+         Many_Path : constant String := Dir & "/many.adb";
+         Lines     : Ada.Strings.Unbounded.Unbounded_String;
+         use type Ada.Real_Time.Time;
+      begin
+         for Count in 1 .. 60_000 loop
+            Ada.Strings.Unbounded.Append (Lines, "end;" & ASCII.LF);
+         end loop;
+         Put (Many_Path, Ada.Strings.Unbounded.To_String (Lines));
+         declare
+            Began_Edit : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            Done       : constant Ed.Said := Ed.Edit (Many_Path, "end;", "end Many;", "", "", 2, 2);
+            Took       : constant Duration := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began_Edit);
+         begin
+            Assert (not Done.Failed and then Took < 1.5,
+                    "an edit among many places took" & Took'Image & " s: "
+                    & Ada.Strings.Unbounded.To_String (Done.Text));
+         end;
+         Ada.Directories.Delete_File (Many_Path);
+      end;
+      --  A file past what is read whole is read by its lines and searched
+      --  all the same: refused, each tool sent the model to the other.
+      declare
+         Huge_Path : constant String := Dir & "/huge.log";
+         Lines     : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         for Count in 1 .. 100_000 loop
+            Ada.Strings.Unbounded.Append
+              (Lines, (if Count = 70_000 then "the needle"
+                       else "a line of the log, long enough that the whole is past four mebibytes") & ASCII.LF);
+         end loop;
+         Put (Huge_Path, Ada.Strings.Unbounded.To_String (Lines));
+         Assert (Has (Ed.Search_File (Huge_Path, "needle"), "70000: the needle")
+                 and then Has (Ed.Read_Range (Huge_Path, 70_000, 70_001), "70000: the needle")
+                 and then not Ed.Read_Range (Huge_Path, 70_000, 70_001).Failed,
+                 "a file too large to read whole was not read by its lines or searched: "
+                 & Ada.Strings.Unbounded.To_String (Ed.Search_File (Huge_Path, "needle").Text));
+         Ada.Directories.Delete_File (Huge_Path);
+      end;
       --  A range of long lines is held to what one answer holds, and says
       --  where to read on; a line longer than all of it is shown in part.
       --  Held to the lines alone, it was too large to return, every time.
@@ -3257,6 +3299,28 @@ package body Tests.Tools_Cases is
                     "a page larger than an answer holds was refused, not given head and tail: "
                     & Room (Room'First .. Natural'Min (Last, Room'First + 200)));
          end;
+         --  A listing is stamped by its dot-named entries too, and retrieve
+         --  by the folder it reads: a .env made beside a listing, or a note
+         --  added to a folder outside the tree, left the answers as they were.
+         declare
+            Listed  : constant String := Placed.Stamp ("list_directory", "{""path"": "".""}");
+            Notes   : constant String := Ada.Directories.Full_Name ("obj") & "/tools-notes";
+         begin
+            Put_Bytes (Tree & "/.env", "KEY=1");
+            Assert (Listed /= Placed.Stamp ("list_directory", "{""path"": "".""}"),
+                    "a dot-named file made beside a listing left its stamp as it was");
+            Ada.Directories.Delete_File (Tree & "/.env");
+            Ada.Directories.Create_Path (Notes);
+            declare
+               Before : constant String :=
+                 Placed.Stamp ("retrieve", "{""folder"": """ & Notes & """, ""query"": ""x""}");
+            begin
+               Put_Bytes (Notes & "/note.txt", "a note");
+               Assert (Before /= Placed.Stamp ("retrieve", "{""folder"": """ & Notes & """, ""query"": ""x""}"),
+                       "a note added to the folder retrieve reads left its stamp as it was");
+            end;
+            Ada.Directories.Delete_Tree (Notes);
+         end;
          --  A file with no revision -- bytes, or past what is read whole --
          --  is stamped by its change: one stamp for every version of it, a
          --  read again was answered from memory as it first was.
@@ -4051,6 +4115,13 @@ package body Tests.Tools_Cases is
          Same (Read_Kept ("<|channel|>commentary " & Tools.Harmony_Recipient & "edit" & Tools.Harmony_Message
                           & Big & "<|call|>", Tools.Harmony_Call),
                " | TOOLS_TOO_LARGE", "a harmony call too large to read was said to be malformed");
+         --  The open form, the object naming a tool on offer: dropped as no
+         --  call, the reply was taken for the answer.
+         Same (Read_Kept ("{""name"": ""edit"", ""arguments"": " & Big & "}", Tools.Open_JSON),
+               " | TOOLS_TOO_LARGE", "an open call too large to read was taken for the answer");
+         Same (Read_Kept ("```tool_code" & LF & "edit(old_string=""" & [1 .. Tools.Max_Call_Bytes => 'x'] & """)"
+                          & LF & "```", Tools.Python_Code),
+               " | TOOLS_TOO_LARGE", "a Gemma call too large to read was said to be malformed");
       end;
       --  A harmony call to a function not on offer is a call, to be told
       --  no tool goes by that name: passed over, the reply was its answer.

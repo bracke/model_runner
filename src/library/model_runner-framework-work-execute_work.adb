@@ -180,6 +180,23 @@ is
       then Tasks.Kind_Policy (Item, Kind, "isolation")
       else Work_Setting (Item, "isolation")) = "workspace";
 
+   --  What the task's work is, for its checks to be traced from: this
+   --  attempt's files, and in the project itself an earlier attempt's
+   --  still left there -- traced from this one's alone, a narrower profile
+   --  passed and the checks that failed on the earlier never ran again.
+   function Work_Changed return Name_Lists.Vector is
+      All_Of : Name_Lists.Vector := Result.Changed_Files;
+   begin
+      if not Isolated then
+         for Path of Earlier_Changed loop
+            if not All_Of.Contains (Path) then
+               All_Of.Append (Path);
+            end if;
+         end loop;
+      end if;
+      return All_Of;
+   end Work_Changed;
+
    --  What the run is governed by, resolved once as it starts and read from
    --  here to its end: a /reconfigure from another terminal while it runs
    --  changes the next run, not this one. Recorded on its invocation as
@@ -1826,7 +1843,7 @@ begin
    then
       declare
          Chosen : constant Verification.Choice :=
-           Verification.Choose (Item, Task_Id, Result.Changed_Files,
+           Verification.Choose (Item, Task_Id, Work_Changed,
                                Own_Profile => To_String (Frozen.Verification_Profile));
          Passed : Boolean;
       begin
@@ -2069,7 +2086,7 @@ begin
       --  in on its own.
       declare
          Chosen : constant Verification.Choice :=
-           Verification.Choose (Item, Task_Id, Result.Changed_Files,
+           Verification.Choose (Item, Task_Id, Work_Changed,
                                Own_Profile => To_String (Frozen.Verification_Profile));
          Space  : Workspaces.Workspace;
          --  Passed only where checks ran and passed: with no profile to
@@ -2216,7 +2233,7 @@ begin
    --  policy: a model has no say in it.
    declare
       Chosen  : constant Verification.Choice :=
-        Verification.Choose (Item, Task_Id, Result.Changed_Files,
+        Verification.Choose (Item, Task_Id, Work_Changed,
                                Own_Profile => To_String (Frozen.Verification_Profile));
       Profile : constant String := To_String (Chosen.Profile);
       Passed  : Boolean := False;
@@ -2309,7 +2326,7 @@ begin
          Kept  : E.Error_Info;
       begin
          Observations.Observe_Fix
-           (Item, Fixed, Task_Id, To_String (Result.Evidence_Id), Result.Changed_Files,
+           (Item, Fixed, Task_Id, To_String (Result.Evidence_Id), Work_Changed,
             (Producer   => Observations.Harness_Producer,
              Task_Id    => To_Unbounded_String (Task_Id),
              Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),
@@ -2356,7 +2373,7 @@ begin
             Kept : E.Error_Info;
          begin
             Observations.Observe_Done
-              (Item, Done, Task_Id, To_String (Result.Evidence_Id), Result.Changed_Files,
+              (Item, Done, Task_Id, To_String (Result.Evidence_Id), Work_Changed,
                (Producer   => Observations.Harness_Producer,
                 Task_Id    => To_Unbounded_String (Task_Id),
                 Generation => To_Unbounded_String (Generation_Of (Item, Task_Id)),

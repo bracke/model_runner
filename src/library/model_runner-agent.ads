@@ -317,6 +317,15 @@ package Model_Runner.Agent is
    --    script says.
    function Out_Of_Time (Self : Reply_Script) return Boolean is (False);
 
+   --  Whether the reply just given stopped at the context's end, as a
+   --  model's does when the context fills: what the loop does with a reply
+   --  cut so, held to a script too.
+   --
+   --  @param Self The script.
+   --  @return True where the context filled in it; none does, unless a
+   --    script says.
+   function Context_Filled (Self : Reply_Script) return Boolean is (False);
+
    --  Whether the script's replies are held to each generation's limit as
    --  a model's are: cut where they are longer, stopped at the limit, the
    --  rest given when the reply is asked for after -- so what the loop does

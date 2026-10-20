@@ -155,6 +155,54 @@ package body Model_Runner.Tools.Editing is
    end Revision_Of;
 
    --  What a failed read is said as, to a model.
+   --  Each line of a file too large to read whole, read a slice at a time
+   --  -- what read_range and search_file give of one: refused, each sent
+   --  the model to the other, and neither read it. A line is held to a
+   --  mebibyte; True where the file could be read.
+   generic
+      with procedure Line (Number : Positive; Text : String; Stop : out Boolean);
+   function Stream_Lines (Disk : String) return Boolean;
+
+   function Stream_Lines (Disk : String) return Boolean is
+      use Ada.Streams;
+      File    : Stream_IO.File_Type;
+      Block   : Stream_Element_Array (1 .. 1024 * 1024);
+      Last    : Stream_Element_Offset;
+      Pending : U.Unbounded_String;
+      Number  : Positive := 1;
+      Stop    : Boolean := False;
+   begin
+      Stream_IO.Open (File, Stream_IO.In_File, Disk);
+      while not Stop and then not Stream_IO.End_Of_File (File) loop
+         Stream_IO.Read (File, Block, Last);
+         for Index in Block'First .. Last loop
+            declare
+               C : constant Character := Character'Val (Block (Index));
+            begin
+               if C = ASCII.LF then
+                  Line (Number, U.To_String (Pending), Stop);
+                  Pending := U.Null_Unbounded_String;
+                  exit when Stop;
+                  Number := Number + 1;
+               elsif U.Length (Pending) < 1024 * 1024 then
+                  U.Append (Pending, C);
+               end if;
+            end;
+         end loop;
+      end loop;
+      if not Stop and then U.Length (Pending) > 0 then
+         Line (Number, U.To_String (Pending), Stop);
+      end if;
+      Stream_IO.Close (File);
+      return True;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
+         end if;
+         return False;
+   end Stream_Lines;
+
    function Why_Unread (Path : String; Status : E.Error_Info) return String is
    begin
       if Status.Code = E.IO_Open_Failed then
@@ -969,12 +1017,23 @@ package body Model_Runner.Tools.Editing is
                Within : Natural := 0;
                Where  : Natural := 0;
                From   : Natural := Ada.Strings.Fixed.Index (Text, Old_Text);
+               --  The line counted on from the last start, not from the
+               --  file's first character each time: a file of thousands of
+               --  matches held the edit for minutes.
+               Line   : Positive := 1;
+               Upto   : Natural := Text'First;
             begin
                if Near_First = 0 then
                   return 0;
                end if;
                while From > 0 loop
-                  if Line_At (Text, From) in Near_First .. Near_Last then
+                  for At_Char in Upto .. From - 1 loop
+                     if Text (At_Char) = ASCII.LF then
+                        Line := Line + 1;
+                     end if;
+                  end loop;
+                  Upto := From;
+                  if Line in Near_First .. Near_Last then
                      Within := Within + 1;
                      Where := From;
                   end if;
@@ -1220,8 +1279,46 @@ package body Model_Runner.Tools.Editing is
       end if;
       Read_Text (Path, Held, Status, Base);
       if E.Is_Error (Status) and then Status.Code = E.IO_File_Too_Large then
-         return Failing (Path & " is too large to read here (" & E.Text_Of (Status, "detail")
-                         & "): search_file finds the lines you want");
+         --  Its lines read a slice at a time; too large to edit here, so
+         --  given with no revision.
+         declare
+            Upto  : constant Natural := (if Last = 0 then First + Range_Most - 1
+                                         else Natural'Min (Last, First + Range_Most - 1));
+            Shown : Natural := First - 1;
+            Total : Natural := 0;
+            Full  : Boolean := False;
+            procedure Take (Number : Positive; Text : String; Stop : out Boolean) is
+               Head : constant String := Image (Number) & ": ";
+               Room : constant Integer := Range_Bytes - Path'Length - U.Length (Result.Text) - Head'Length - 1;
+            begin
+               Stop := False;
+               Total := Number;
+               if Number in First .. Upto and then not Full then
+                  if Text'Length <= Room then
+                     U.Append (Result.Text, Head & Text & ASCII.LF);
+                     Shown := Number;
+                  else
+                     Full := True;
+                  end if;
+               end if;
+            end Take;
+            function Read_Lines is new Stream_Lines (Take);
+         begin
+            if not Read_Lines (On_Disk (Base, Path)) then
+               return Failing (Path & " could not be read");
+            elsif First > Total then
+               return Failing (Path & " has" & Natural'Image (Total) & " lines");
+            end if;
+            if Shown < (if Last = 0 then Total else Natural'Min (Last, Total)) then
+               Result.Truncated := True;
+               U.Append (Result.Text, "(" & (if Full then "as many lines as fit in one answer"
+                                             else Natural'Image (Range_Most) & " lines at most")
+                         & "; read on from line" & Natural'Image (Shown + 1) & ")" & ASCII.LF);
+            end if;
+            U.Append (Result.Text, "(" & Path & ":" & Natural'Image (Total) & " lines; too large to edit here,"
+                      & " so given with no revision)");
+            return Result;
+         end;
       elsif E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));
       end if;
@@ -1348,10 +1445,35 @@ package body Model_Runner.Tools.Editing is
          return Failing ("search_file needs a pattern: the text to find");
       end if;
       Read_Text (Path, Held, Status, Base);
-      if E.Is_Error (Status) then
+      if E.Is_Error (Status) and then Status.Code = E.IO_File_Too_Large then
+         declare
+            procedure Look (Number : Positive; Text : String; Stop : out Boolean) is
+               Hit : constant String :=
+                 Image (Number) & ": "
+                 & (if Text'Length > 200 then Text (Text'First .. Text'First + 199) & " ..." else Text) & ASCII.LF;
+            begin
+               Stop := False;
+               if Ada.Strings.Fixed.Index (Text, Pattern) > 0 then
+                  if Hits = Search_Most or else U.Length (Result.Text) + Hit'Length > Range_Bytes then
+                     Result.Truncated := True;
+                     Stop := True;
+                  else
+                     Hits := Hits + 1;
+                     U.Append (Result.Text, Hit);
+                  end if;
+               end if;
+            end Look;
+            function Search is new Stream_Lines (Look);
+         begin
+            if not Search (On_Disk (Base, Path)) then
+               return Failing (Path & " could not be read");
+            end if;
+         end;
+      elsif E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));
+      else
+         Search_Text (U.To_String (Held), Pattern, "", Result, Hits);
       end if;
-      Search_Text (U.To_String (Held), Pattern, "", Result, Hits);
       if Hits = 0 then
          Result.Text := U.To_Unbounded_String ("no line of " & Path & " holds that");
       elsif Result.Truncated then

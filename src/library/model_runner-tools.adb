@@ -996,7 +996,14 @@ package body Model_Runner.Tools is
          if E.Is_Error (Reading) then
             --  Past the room is too large, not malformed: told to write it
             --  again in the format, a model wrote it again as large.
-            if Announced and then E."=" (Reading.Code, E.Tools_Too_Large) then
+            --  And loose, where the object names a tool on offer: dropped
+            --  as no call, the reply was taken as the answer and the file
+            --  was never written.
+            if E."=" (Reading.Code, E.Tools_Too_Large)
+              and then (Announced
+                        or else (Offered /= null and then Named_Function (Inner) /= ""
+                                 and then Offers (Offered.all, Named_Function (Inner))))
+            then
                Status := Reading;
             elsif Announced then
                Status := E.Make (E.Tools_Call_Malformed);
@@ -1987,7 +1994,10 @@ package body Model_Runner.Tools is
                               Reading : E.Error_Info;
                            begin
                               Rewrite (Controls_Escaped (Args), Room, Written, Reading);
-                              if E.Is_Ok (Reading) then
+                              if E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Too_Large) then
+                                 Status := Reading;
+                                 return;
+                              elsif E.Is_Ok (Reading) then
                                  Store (Name, Room (1 .. Written));
                                  if E.Is_Error (Status) then
                                     return;
@@ -2158,7 +2168,14 @@ package body Model_Runner.Tools is
 
                               Resume : constant Natural := Next_Call_Line;
                            begin
-                              if Resume > 0 then
+                              --  Past what a call may hold: too large, not
+                              --  unreadable -- told to write it again in the
+                              --  format, a model wrote it again as large.
+                              if (if Resume > 0 then Resume else Bound + 1) - Was > Max_Call_Bytes then
+                                 Status := E.Make (E.Tools_Too_Large);
+                                 E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Call_Bytes), E.Param_Bytes);
+                                 return;
+                              elsif Resume > 0 then
                                  Lose;
                                  From := Resume;
                               elsif Fence = 0 then

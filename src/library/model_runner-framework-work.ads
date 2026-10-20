@@ -1007,6 +1007,9 @@ private
       --  The profile whose run failed: a pass of it, or of the whole,
       --  clears the failure; another's narrower pass does not.
       Failed_Running : Ada.Strings.Unbounded.Unbounded_String;
+      --  And how wide its run was: 1 certain tests, 2 component tests, 3
+      --  the whole profile.
+      Failed_Width   : Natural := 0;
 
       --  What each file the work had changed held when its checks last
       --  failed, its path, a NUL and its text: what the change that made
