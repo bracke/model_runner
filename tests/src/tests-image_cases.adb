@@ -25,6 +25,7 @@ with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Qwen_Image.Decoder;
 with Model_Runner.Tensors;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Tokenizer;
 
 with Fixtures;
@@ -1259,6 +1260,56 @@ package body Tests.Image_Cases is
               "the planes did not become the reference's bytes");
    end Planes_Become_Bytes_As_The_References;
 
+   --  The same step with the device open: its products and its attention
+   --  there -- the prompt's rows causal, the image's over every key -- the
+   --  rest here, and the plain computation still, to the half precision the
+   --  device's tiles read their operands in. Nothing to ask where no device
+   --  opens.
+   procedure A_Step_On_The_Device_Is_The_Plain_Computation (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Device renames Model_Runner.Backend.Device;
+      --  Past the 128 rows one device product and one attention take.
+      Grid_Rows    : constant := 11;
+      Grid_Columns : constant := 12;
+      Text_Rows    : constant := 5;
+      Model  : Q.Denoiser;
+      Status : E.Error_Info;
+      Latent : N.Real_Array (0 .. Latent_Channels * Grid_Rows * Grid_Columns - 1);
+      Text   : N.Real_Array (0 .. Text_Rows * Context - 1);
+      Answer : N.Real_Array (Latent'Range);
+      Wanted : N.Wide_Real_Array (Latent'Range);
+      Seed   : Natural := 77;
+      Worst, Largest : Long_Float := 0.0;
+      Ready  : Boolean;
+   begin
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+      for Value of Latent loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 100.0;
+      end loop;
+      for Value of Text loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 50.0;
+      end loop;
+      Write_Denoiser (Blocks => [0, 1], Eight => True);
+      Q.Open (Model, Path, Status, Panels => False);
+      Assert (E.Is_Ok (Status), "the denoiser did not open");
+      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
+      Q.Close (Model);
+      Device.Close;
+      Assert (E.Is_Ok (Status), "the step on the device failed: " & E.Error_Code'Image (Status.Code));
+      Reference_Velocity (Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, 2, Wanted);
+      for Index in Answer'Range loop
+         Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
+         Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+      end loop;
+      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
+              "a step on the device differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
+   end A_Step_On_The_Device_Is_The_Plain_Computation;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -1294,6 +1345,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, Planes_Become_Bytes_As_The_References'Access,
          "a decoded picture's planes become bytes as the reference makes them");
+      Register_Routine
+        (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
+         "one evaluation of the denoiser on the device is the plain computation of the same network");
       Register_Routine
         (T, The_Prompt_Template_Is_The_References'Access,
          "a prompt is read within the reference's template, character for character");

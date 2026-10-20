@@ -1,6 +1,7 @@
 with Ada.Streams.Stream_IO;
 
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.PNG_Writer;
@@ -95,11 +96,18 @@ package body Model_Runner.CLI.Execute.Image_Command is
             end if;
          end;
 
-         --  The latent, the denoiser let go after.
+         --  The latent, the denoiser let go after: on the device where one
+         --  opens, its products and attention there; on the processor in
+         --  panels otherwise.
          declare
-            Model : Q.Denoiser;
+            Model   : Q.Denoiser;
+            On_Device : Boolean;
          begin
-            Q.Open (Model, Path_Of (T.To_String (Item.Model_Path), Denoiser_Name), Condition);
+            Model_Runner.Backend.Device.Open
+              (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+               Which => Item.Device_Index);
+            Q.Open (Model, Path_Of (T.To_String (Item.Model_Path), Denoiser_Name), Condition,
+                    Panels => not On_Device);
             if E.Is_Ok (Condition) then
                Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latent);
                Q.Sample (Model, Rows, Columns, Item.Image_Steps,
@@ -107,6 +115,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                          Latent.all, Condition, Say_Step'Access);
             end if;
             Q.Close (Model);
+            Model_Runner.Backend.Device.Close;
             Tk.Free (Text);
             if E.Is_Error (Condition) then
                Fail (Condition);

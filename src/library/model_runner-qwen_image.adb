@@ -1,6 +1,7 @@
 with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
+with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Philox;
 with Model_Runner.Platform;
@@ -299,7 +300,12 @@ package body Model_Runner.Qwen_Image is
       end;
    end Build_Panels;
 
-   procedure Open (Item : in out Denoiser; Path : String; Status : out E.Error_Info) is
+   procedure Open
+     (Item   : in out Denoiser;
+      Path   : String;
+      Status : out E.Error_Info;
+      Panels : Boolean := True)
+   is
       procedure Fail (Condition : E.Error_Info) is
       begin
          Status := Condition;
@@ -498,7 +504,9 @@ package body Model_Runner.Qwen_Image is
          end;
       end;
 
-      Build_Panels (Item, Status);
+      if Panels then
+         Build_Panels (Item, Status);
+      end if;
       if E.Is_Error (Status) then
          Fail (Status);
          return;
@@ -759,20 +767,58 @@ package body Model_Runner.Qwen_Image is
       Pairs : constant Element_Count := D / 2;
       Angles_Cos, Angles_Sin : T.Real_Array_Access;
 
+      package Device renames Model_Runner.Backend.Device;
+      On_Device : constant Boolean := Device.Is_Ready;
+
+      --  How many rows one device product takes, and the room they are
+      --  copied through.
+      Device_Rows : constant Element_Count := 128;
+      Chunk_In, Chunk_Out : T.Real_Array_Access;
+
       procedure Release is
       begin
          T.Free (X); T.Free (H); T.Free (Q); T.Free (K); T.Free (V); T.Free (A); T.Free (G); T.Free (Y);
          T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Final_Scale);
          T.Free (Angles_Cos); T.Free (Angles_Sin);
+         T.Free (Chunk_In); T.Free (Chunk_Out);
       end Release;
 
       --  Target := Weight's rows times each of Count vectors.
       procedure Product
         (Weight : T.View; Vectors : T.Real_Array_Access; Count : Element_Count; Target : T.Real_Array_Access) is
       begin
-         if E.Is_Ok (Status) then
+         if E.Is_Error (Status) then
+            return;
+         elsif not On_Device then
             CPU.Dispatch_Batch (Pool, Weight, Vectors, Count, Target, Status);
+            return;
          end if;
+         declare
+            From : Element_Count := 0;
+            Ins  : constant Element_Count := Weight.Columns;
+            Outs : constant Element_Count := Weight.Rows;
+         begin
+            while From < Count and then E.Is_Ok (Status) loop
+               declare
+                  Take : constant Element_Count := Element_Count'Min (Device_Rows, Count - From);
+               begin
+                  if Chunk_In = null or else Chunk_In'Length < Take * Ins then
+                     T.Free (Chunk_In);
+                     T.Allocate (Device_Rows * Ins, Chunk_In);
+                  end if;
+                  if Chunk_Out = null or else Chunk_Out'Length < Take * Outs then
+                     T.Free (Chunk_Out);
+                     T.Allocate (Device_Rows * Outs, Chunk_Out);
+                  end if;
+                  Chunk_In (0 .. Take * Ins - 1) := Vectors (From * Ins .. (From + Take) * Ins - 1);
+                  Device.Dispatch_Batch (Weight, Chunk_In, Take, Chunk_Out, Status);
+                  if E.Is_Ok (Status) then
+                     Target (From * Outs .. (From + Take) * Outs - 1) := Chunk_Out (0 .. Take * Outs - 1);
+                  end if;
+                  From := From + Take;
+               end;
+            end loop;
+         end;
       end Product;
 
       function Silu (Value : Real) return Real
@@ -844,16 +890,63 @@ package body Model_Runner.Qwen_Image is
          end loop;
       end Norm_And_Turn;
 
-      --  A's rows := each row's attention, across the pool.
+      --  A's rows := each row's attention: on the device, the keys and
+      --  values put in its cache and the prompt's rows asked causally, the
+      --  image's over every key; or across the pool.
       procedure Attend is
          Job : aliased Attention_Work :=
            (Q => Q, K => K, V => V, A => A, Prompt => Prompt, Total => Total, Width => W, Head => D,
             Heads => Heads);
       begin
-         if E.Is_Ok (Status) then
+         if E.Is_Error (Status) then
+            return;
+         elsif not On_Device then
             CPU.Dispatch_Shares
               (Pool, Heads * ((Total + Tile - 1) / Tile), Job'Unchecked_Access, Status, Cost => Total * Total * W);
+            return;
          end if;
+         declare
+            Keys_At   : constant Element_Count := 0;
+            Values_At : constant Element_Count := Total * W;
+            Ok        : Boolean;
+            Queries   : constant Element_Count := 128;
+
+            --  Rows First .. First + Count - 1 asking, causally from the
+            --  first key or over all of them.
+            procedure Ask (First, Count : Element_Count; Causal : Boolean) is
+               From : Element_Count := First;
+            begin
+               while Ok and then From < First + Count loop
+                  declare
+                     Take : constant Element_Count := Element_Count'Min (Queries, First + Count - From);
+                  begin
+                     Device.Attend
+                       (Q (From * W .. (From + Take) * W - 1), Natural (Heads), Natural (D), Natural (D), 1,
+                        0, (if Causal then Natural (From) else Natural (Total - 1)), Keys_At, Values_At,
+                        Natural (W), Natural (W), N.Real (1.0 / N.Sqrt (N.Wide_Real (D))), 0.0,
+                        A (From * W .. (From + Take) * W - 1), Ok, Positions => Natural (Take), Causal => Causal);
+                     From := From + Take;
+                  end;
+               end loop;
+            end Ask;
+         begin
+            Device.Reserve_Cache (2 * Total * W, 2 * Total * W, Ok);
+            if Ok then
+               Device.Put_Cache (Keys_At, K (0 .. Total * W - 1), Ok);
+            end if;
+            if Ok then
+               Device.Put_Cache (Values_At, V (0 .. Total * W - 1), Ok);
+            end if;
+            if Ok and then Prompt > 0 then
+               Ask (0, Prompt, Causal => True);
+            end if;
+            if Ok then
+               Ask (Prompt, Image, Causal => False);
+            end if;
+            if not Ok then
+               Status := E.Make (E.Backend_Capability_Missing);
+            end if;
+         end;
       end Attend;
    begin
       Result := [others => 0.0];

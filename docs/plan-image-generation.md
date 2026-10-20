@@ -332,6 +332,11 @@ built yet: `--negative`/`--cfg` (guidance), and the device (step 7).
 
 ### 7. The device, and speed
 
+**Begun 2026-10-20**: the products and the attention on the device, the
+rest on the processor -- a 512 step 20.5 s (its weights' upload in it)
+against 56 on the processor, the velocity unchanged at a cosine of
+0.99999. The VAE and the text encoder are still the processor's.
+
 Measured before it is promised; what the arithmetic predicts:
 
 | | per step | 40 steps |

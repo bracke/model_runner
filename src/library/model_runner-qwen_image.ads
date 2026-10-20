@@ -63,7 +63,14 @@ package Model_Runner.Qwen_Image is
    --    where its tensors are not Qwen-Image 2.1's, Arch_Missing_Tensor or
    --    Arch_Invalid_Tensor_Shape naming one, Arch_Layer_Numbering_Gap where
    --    a block is missing below another
-   procedure Open (Item : in out Denoiser; Path : String; Status : out Model_Runner.Errors.Error_Info);
+   --  @param Panels Whether the matrices are rewritten into the processor's
+   --    panel layout: for a denoiser the processor runs, and not for one
+   --    the device does, which reads the file's own layout
+   procedure Open
+     (Item   : in out Denoiser;
+      Path   : String;
+      Status : out Model_Runner.Errors.Error_Info;
+      Panels : Boolean := True);
 
    --  Let a denoiser go: its file, its tensors, its gains.
    --
@@ -79,6 +86,9 @@ package Model_Runner.Qwen_Image is
    function Config (Item : Denoiser) return Configuration;
 
    --  One evaluation: the velocity the latent is to move by at a time.
+   --
+   --  Where a device is open (Model_Runner.Backend.Device), its products and
+   --  its attention run there, and the rest on the processor.
    --
    --  The latent is the picture's In_Channels planes of Rows by Columns,
    --  a plane a channel, row-major, as the reference lays it out; the
