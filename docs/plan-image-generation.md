@@ -130,7 +130,14 @@ built beside this program -- unsloth's card runs these three files with it.
   (`rng_mt19937.hpp`) -- and one ported here gives the same latent from the
   same seed, held to the reference's first values in a unit test. The
   command line has no noise or tensor dump of its own, so the harness is a
-  small program against its library that writes them out.
+  small program against its library that writes them out: written,
+  `examples/mr_reference` in the clone (`mr-reference`, not yet built). Its
+  eval callback dumps every graph tensor whose name or op matches `--dump`
+  as raw f32 and lists them in `index.tsv`; with no `--dump` it lists what
+  the graphs compute; the picture is written as a PAM. Graph cutting is
+  turned off so each graph is seen whole, and the callback is ignored under
+  the backend scheduler, so the reference runs on one backend -- the CPU
+  for the numbers held to.
 - Cloned at b13a48219d into `~/stable-diffusion.cpp`, beside `~/llama.cpp`.
 - The tensor layout questions, answered from its source (b13a48219d)
   before any build and written above: `gate_up` is gate first; modulation
