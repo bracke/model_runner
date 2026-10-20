@@ -1,0 +1,128 @@
+with System;
+
+with Model_Runner.Backend.CPU;
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.Bytes;
+with Model_Runner.Errors;
+with Model_Runner.Numerics;
+with Model_Runner.Safetensors;
+with Model_Runner.Tensors;
+
+--  Qwen-Image 2.1's VAE decoder: a latent to a picture
+--  (docs/plan-image-generation.md, step 5).
+--
+--  Wan 2.2's decoder used for one frame, its kernels already 2-D in the
+--  file: the latent unnormalized by its 64 means and deviations and turned
+--  by post_quant_conv; conv_in, a mid block of a residual block, one
+--  attention over every position and another residual block; five levels
+--  of three residual blocks, the first four doubling the picture --
+--  nearest 2x and a 3x3 -- with a weightless shortcut from the level's
+--  input that keeps Wan's temporal factor even for one frame; a channel
+--  RMS norm, SiLU and conv_out to red, green, blue and alpha.
+--
+--  Task safety: one task opens, decodes and closes a Decoder.
+package Model_Runner.Qwen_Image.Decoder is
+
+   type Picture_Decoder is tagged limited private;
+
+   --  Read the decoder's tensors.
+   --
+   --  @param Item closed first, then open on success
+   --  @param Path the safetensors file
+   --  @param Status success; the file's own refusal; Arch_Missing_Tensor or
+   --    Arch_Invalid_Tensor_Shape naming a tensor not this model's
+   procedure Open (Item : in out Picture_Decoder; Path : String; Status : out Model_Runner.Errors.Error_Info);
+
+   --  Let a decoder go.
+   --
+   --  @param Item closed; closing a closed one does nothing
+   procedure Close (Item : in out Picture_Decoder);
+
+   --  @param Item a decoder
+   --  @return whether it is open
+   function Is_Ready (Item : Picture_Decoder) return Boolean;
+
+   --  The latent's channels, and the picture's.
+   Latent_Channels  : constant := 64;
+   Picture_Channels : constant := 4;
+
+   --  How much larger a side the picture is than the latent.
+   Upscale : constant := 16;
+
+   --  Decode a latent.
+   --
+   --  @param Item an open decoder
+   --  @param Latent Latent_Channels planes of Rows by Columns, as the
+   --    sampler leaves them
+   --  @param Rows the latent's height
+   --  @param Columns its width
+   --  @param Pool the processor's workers, or null for this task alone
+   --  @param Picture Picture_Channels planes of Rows * Upscale by Columns *
+   --    Upscale -- red, green, blue, alpha -- as the decoder leaves them,
+   --    about -1 to 1
+   --  @param Status success, Tensor_Shape_Mismatch where an array is not
+   --    its length, or the products' failure
+   procedure Decode
+     (Item    : Picture_Decoder;
+      Latent  : Model_Runner.Numerics.Real_Array;
+      Rows    : Positive;
+      Columns : Positive;
+      Pool    : Model_Runner.Backend.CPU.Pool_Reference;
+      Picture : out Model_Runner.Numerics.Real_Array;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+private
+
+   package T renames Model_Runner.Tensors;
+
+   --  A convolution: its kernel as rows of an output channel each, a row
+   --  its input channels' kernels side by side; and its bias.
+   type Convolution is record
+      Kernel   : T.View;
+      Bias     : T.Real_Array_Access;
+      Inputs   : Natural := 0;
+      Outputs  : Natural := 0;
+      Size     : Natural := 0;
+   end record;
+
+   type Residual is record
+      Norm_1, Norm_2   : T.Real_Array_Access;
+      Conv_1, Conv_2   : Convolution;
+      --  Where the width changes; Outputs nought where it does not.
+      Shortcut         : Convolution;
+   end record;
+
+   type Residual_Array is array (1 .. 3) of Residual;
+
+   type Level is record
+      Blocks   : Residual_Array;
+      --  The doubling's 3x3; Outputs nought on the last level.
+      Up       : Convolution;
+      --  Wan's temporal factor for the shortcut: two, or one.
+      Temporal : Positive := 1;
+   end record;
+
+   type Level_Array is array (1 .. 5) of Level;
+
+   type Width_Array is array (0 .. 5) of Positive;
+
+   type Picture_Decoder is tagged limited record
+      File     : Model_Runner.Byte_Sources.Files.File_Source;
+      Table    : Model_Runner.Safetensors.Table;
+      Arena    : Model_Runner.Bytes.Byte_Array_Access;
+      Base     : System.Address := System.Null_Address;
+      Span     : Model_Runner.Bytes.Byte_Count := 0;
+      Ready    : Boolean := False;
+      --  The mid block's width, then each level's out.
+      Widths   : Width_Array := [others => 1];
+
+      Post_Quant, Conv_In     : Convolution;
+      Mid_1, Mid_2            : Residual;
+      Attention_Norm          : T.Real_Array_Access;
+      Joint, Attention_Out    : Convolution;
+      Levels                  : Level_Array;
+      Norm_Out                : T.Real_Array_Access;
+      Conv_Out                : Convolution;
+   end record;
+
+end Model_Runner.Qwen_Image.Decoder;

@@ -2,6 +2,7 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Philox;
 with Model_Runner.Platform;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
@@ -568,6 +569,56 @@ package body Model_Runner.Qwen_Image is
       Result (Result'Last) := 0.0;
       return Result;
    end Sigmas;
+
+   procedure Sample
+     (Item      : Denoiser;
+      Rows      : Positive;
+      Columns   : Positive;
+      Steps     : Positive;
+      Seed      : Interfaces.Unsigned_64;
+      Text      : N.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Latent    : out N.Real_Array;
+      Status    : out E.Error_Info;
+      Progress  : Progress_Note := null)
+   is
+      use type N.Real;
+      Levels : constant N.Real_Array := Sigmas (Steps, Rows * Columns);
+      Noise  : Model_Runner.Philox.Generator := Model_Runner.Philox.Seeded (Seed);
+      Speed  : T.Real_Array_Access;
+   begin
+      Latent := [others => 0.0];
+      if Item.Shape.In_Channels /= Item.Shape.Out_Channels
+        or else Latent'Length /= Element_Count (Item.Shape.Out_Channels) * Element_Count (Rows * Columns)
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      Model_Runner.Philox.Draw (Noise, Latent);
+      T.Allocate (Latent'Length, Speed);
+      if Speed = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+      Status := E.Success;
+      for Step in 1 .. Steps loop
+         declare
+            Sigma : constant N.Real := Levels (Levels'First + Element_Count (Step) - 1);
+            Next  : constant N.Real := Levels (Levels'First + Element_Count (Step));
+         begin
+            Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status);
+            exit when E.Is_Error (Status);
+            for I in Latent'Range loop
+               Latent (I) := Latent (I) + (Next - Sigma) * Speed (Speed'First + (I - Latent'First));
+            end loop;
+         end;
+         if Progress /= null then
+            Progress (Step, Steps);
+         end if;
+      end loop;
+      T.Free (Speed);
+   end Sample;
 
    function Is_Ready (Item : Denoiser) return Boolean
    is (Item.Ready);

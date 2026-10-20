@@ -1,3 +1,4 @@
+with Interfaces;
 with System;
 
 with Model_Runner.Backend.CPU;
@@ -122,6 +123,37 @@ package Model_Runner.Qwen_Image is
    --  @return Steps + 1 levels, from one down to nought
    function Sigmas (Steps : Positive; Image_Tokens : Positive) return Model_Runner.Numerics.Real_Array
    with Post => Sigmas'Result'Length = Steps + 1;
+
+   --  Told after each step of a picture.
+   type Progress_Note is access procedure (Step : Positive; Steps : Positive);
+
+   --  A picture's latent, drawn from its seed: the seed's noise, then an
+   --  Euler step a noise level, x + (next - sigma) * v, through Sigmas.
+   --
+   --  @param Item an open denoiser
+   --  @param Rows the latent's height, a sixteenth of the picture's
+   --  @param Columns its width
+   --  @param Steps how many evaluations
+   --  @param Seed the noise's, as the reference's Philox draws it
+   --  @param Text the prompt's rows, Text_Rows of Context values each
+   --  @param Text_Rows how many
+   --  @param Pool the processor's workers, or null for this task alone
+   --  @param Latent Out_Channels planes of Rows by Columns, as the decoder
+   --    reads them
+   --  @param Status success, or the step's failure
+   --  @param Progress told after each step, where it is given
+   procedure Sample
+     (Item      : Denoiser;
+      Rows      : Positive;
+      Columns   : Positive;
+      Steps     : Positive;
+      Seed      : Interfaces.Unsigned_64;
+      Text      : Model_Runner.Numerics.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Latent    : out Model_Runner.Numerics.Real_Array;
+      Status    : out Model_Runner.Errors.Error_Info;
+      Progress  : Progress_Note := null);
 
 private
 

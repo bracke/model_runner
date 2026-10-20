@@ -282,6 +282,12 @@ cached prompt.
 
 Held to the reference's latent after 40 steps from the same noise.
 
+**Done 2026-10-20** (Model_Runner.Philox, Qwen_Image.Sample): the noise is
+the reference's to the bit; the latent after 40 steps, from seed 42 and
+the reference's prompt rows, is the reference's at a cosine of 0.99997
+(0.8 per cent root mean square apart), each step's own rounding carried
+through forty. Guidance with a negative prompt is not built yet.
+
 ### 5. The VAE decoder
 
 New kernels: a 3x3 convolution (lowered to the matrix product the engine
@@ -294,6 +300,14 @@ the reference tiles, so a 1024x1024 picture never holds its full-size
 activations at once (144 channels at full size are 600 MB a tensor).
 
 Held to the reference's picture from the same latent: 40 dB PSNR.
+
+**Done 2026-10-20** (Qwen_Image.Decoder, binary32 on the processor, not
+yet tiled): the plain binary64 computation on a fixture to 1e-4; on the
+published VAE, from the reference's own 40-step latent (rebuilt from its
+noise, its levels and its 40 velocities), the reference's picture at 78.3,
+76.4 and 78.4 dB in red, green and blue and 100.7 in alpha. 77 s at
+512x512 on eight cores, the 3x3 convolutions a product over each pixel's
+gathered neighbourhood.
 
 ### 6. The command
 
