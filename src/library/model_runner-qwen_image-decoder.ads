@@ -49,7 +49,8 @@ package Model_Runner.Qwen_Image.Decoder is
    --  How much larger a side the picture is than the latent.
    Upscale : constant := 16;
 
-   --  Decode a latent.
+   --  Decode a latent: its convolutions on the device where one is open
+   --  (Model_Runner.Backend.Device), the rest on the processor.
    --
    --  @param Item an open decoder
    --  @param Latent Latent_Channels planes of Rows by Columns, as the

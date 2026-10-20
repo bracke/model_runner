@@ -142,9 +142,9 @@ package body Model_Runner.CLI.Execute.Image_Command is
                          Latent.all, Condition, Say_Step'Access);
             end if;
             Q.Close (Model);
-            Model_Runner.Backend.Device.Close;
             Tk.Free (Text);
             if E.Is_Error (Condition) then
+               Model_Runner.Backend.Device.Close;
                Fail (Condition);
                return;
             end if;
@@ -165,6 +165,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
                Dec.Decode (VAE, Latent.all, Rows, Columns, Team, Planes.all, Condition);
             end if;
             Dec.Close (VAE);
+            --  Open since the denoiser's, and its convolutions' too.
+            Model_Runner.Backend.Device.Close;
             if E.Is_Ok (Condition) then
                Model_Runner.PNG_Writer.Encode
                  (Width, Height, Dec.Picture_Channels, Dec.To_Pixels (Planes.all, Pixels), File, Condition);

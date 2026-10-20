@@ -1310,6 +1310,50 @@ package body Tests.Image_Cases is
               "a step on the device differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
    end A_Step_On_The_Device_Is_The_Plain_Computation;
 
+   --  The same latent decoded with the device open, its convolutions there:
+   --  the plain computation still, to the half precision the device's tiles
+   --  read their operands in. Nothing to ask where no device opens.
+   procedure A_Latent_Decodes_On_The_Device_As_The_Plain_Computation
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      Grid_Rows    : constant := 2;
+      Grid_Columns : constant := 3;
+      Latent  : N.Real_Array (0 .. 64 * Grid_Rows * Grid_Columns - 1);
+      Picture : N.Real_Array (0 .. 4 * 256 * Grid_Rows * Grid_Columns - 1);
+      Wanted  : N.Wide_Real_Array (Picture'Range);
+      Decoder : Dec.Picture_Decoder;
+      Status  : E.Error_Info;
+      Seed    : Natural := 3;
+      Worst, Largest : Long_Float := 0.0;
+      Ready   : Boolean;
+   begin
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+      for Value of Latent loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 150.0;
+      end loop;
+      Write_VAE;
+      Dec.Open (Decoder, VAE_Path, Status);
+      Assert (E.Is_Ok (Status), "the decoder did not open");
+      Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, Picture, Status);
+      Dec.Close (Decoder);
+      Model_Runner.Backend.Device.Close;
+      Assert (E.Is_Ok (Status), "the latent was not decoded on the device: " & E.Error_Code'Image (Status.Code));
+      Reference_Decode (Latent, Grid_Rows, Grid_Columns, Wanted);
+      for Index in Picture'Range loop
+         Worst := Long_Float'Max (Worst, abs (Long_Float (Picture (Index)) - Long_Float (Wanted (Index))));
+         Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+      end loop;
+      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
+              "a picture decoded on the device differs from the plain computation by" & Worst'Image & " of"
+              & Largest'Image);
+   end A_Latent_Decodes_On_The_Device_As_The_Plain_Computation;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -1348,6 +1392,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
          "one evaluation of the denoiser on the device is the plain computation of the same network");
+      Register_Routine
+        (T, A_Latent_Decodes_On_The_Device_As_The_Plain_Computation'Access,
+         "a latent decoded with the device open is the plain computation of the same VAE decoder");
       Register_Routine
         (T, The_Prompt_Template_Is_The_References'Access,
          "a prompt is read within the reference's template, character for character");

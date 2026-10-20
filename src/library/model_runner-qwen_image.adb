@@ -516,6 +516,10 @@ package body Model_Runner.Qwen_Image is
 
    procedure Close (Item : in out Denoiser) is
    begin
+      --  The device remembers a matrix by where its bytes lie, and these
+      --  are about to go: another file mapped there would be answered with
+      --  these weights.
+      Model_Runner.Backend.Device.Forget_Matrices;
       if Item.Layers /= null then
          for Layer of Item.Layers.all loop
             T.Free (Layer.Query_Norm);

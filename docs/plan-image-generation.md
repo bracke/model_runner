@@ -339,8 +339,9 @@ against 56 on the processor, the velocity unchanged at a cosine of
 picture the reference's at 48 dB PSNR from the same seed. Timed per phase,
 a steady step was products 7.5 s, attention 1.5, the work between them on
 one core 5.4; shared across the pool, a step is 9.2 s. The text encoder
-now runs on the device too (about 25 s with its load); the VAE is still
-the processor's (55 s at 512). Next: the activations kept on the device
+now runs on the device too (about 8 s with its load at 512); the VAE's
+convolutions too (31 s at 512 against 55; its gathering and its one
+attention on the processor). Next: the activations kept on the device
 from one product to the next, as a language model's layer is, instead of
 crossing to the host and back for each.
 

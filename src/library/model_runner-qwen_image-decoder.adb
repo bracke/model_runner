@@ -1,5 +1,6 @@
 with System.Storage_Elements;
 
+with Model_Runner.Backend.Device;
 with Model_Runner.GGUF;
 with Model_Runner.Shares;
 
@@ -245,6 +246,9 @@ package body Model_Runner.Qwen_Image.Decoder is
          Let_Go (R.Shortcut);
       end Let_Go;
    begin
+      --  The device remembers a matrix by where its bytes lie, and these
+      --  are about to go.
+      Model_Runner.Backend.Device.Forget_Matrices;
       Let_Go (Item.Post_Quant);
       Let_Go (Item.Conv_In);
       Let_Go (Item.Mid_1);
@@ -371,6 +375,53 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
       end Room;
 
+      package Device renames Model_Runner.Backend.Device;
+      On_Device : constant Boolean := Device.Is_Ready;
+
+      --  How many pixels one device product takes, and the room they are
+      --  copied through.
+      Device_Rows : constant Element_Count := 128;
+      Chunk_In, Chunk_Out : T.Real_Array_Access;
+
+      --  Target := Weight times each of Count vectors: on the device where
+      --  one is open, a chunk at a time; across the pool otherwise.
+      procedure Product
+        (Weight : T.View; Vectors : T.Real_Array_Access; Count : Element_Count; Target : T.Real_Array_Access) is
+      begin
+         if E.Is_Error (Status) then
+            return;
+         elsif not On_Device then
+            CPU.Dispatch_Batch (Pool, Weight, Vectors, Count, Target, Status);
+            return;
+         end if;
+         declare
+            From : Element_Count := 0;
+            Ins  : constant Element_Count := Weight.Columns;
+            Outs : constant Element_Count := Weight.Rows;
+         begin
+            while From < Count and then E.Is_Ok (Status) loop
+               declare
+                  Take : constant Element_Count := Element_Count'Min (Device_Rows, Count - From);
+               begin
+                  if Chunk_In = null or else Chunk_In'Length < Take * Ins then
+                     T.Free (Chunk_In);
+                     T.Allocate (Device_Rows * Ins, Chunk_In);
+                  end if;
+                  if Chunk_Out = null or else Chunk_Out'Length < Take * Outs then
+                     T.Free (Chunk_Out);
+                     T.Allocate (Device_Rows * Outs, Chunk_Out);
+                  end if;
+                  Chunk_In (0 .. Take * Ins - 1) := Vectors (From * Ins .. (From + Take) * Ins - 1);
+                  Device.Dispatch_Batch (Weight, Chunk_In, Take, Chunk_Out, Status);
+                  if E.Is_Ok (Status) then
+                     Target (From * Outs .. (From + Take) * Outs - 1) := Chunk_Out (0 .. Take * Outs - 1);
+                  end if;
+                  From := From + Take;
+               end;
+            end loop;
+         end;
+      end Product;
+
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a
       --  product, a 3x3 as a product over each pixel's neighbourhood,
       --  gathered a band of rows at a time, zero past the edges.
@@ -384,7 +435,7 @@ package body Model_Runner.Qwen_Image.Decoder is
             return;
          end if;
          if C.Size = 1 then
-            CPU.Dispatch_Batch (Pool, C.Kernel, Source, Pixels, Target, Status);
+            Product (C.Kernel, Source, Pixels, Target);
          else
             declare
                Patch : constant Element_Count := Ins * 9;
@@ -431,7 +482,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                               end;
                            end loop;
                         end loop;
-                        CPU.Dispatch_Batch (Pool, C.Kernel, Patches, Rows_Here * Width, Answers, Status);
+                        Product (C.Kernel, Patches, Rows_Here * Width, Answers);
                         Target (Row * Width * Outs .. (Row + Rows_Here) * Width * Outs - 1) :=
                           Answers (0 .. Rows_Here * Width * Outs - 1);
                         Row := Row + Rows_Here;
@@ -647,6 +698,8 @@ package body Model_Runner.Qwen_Image.Decoder is
       T.Free (X);
       T.Free (Y);
       T.Free (Z);
+      T.Free (Chunk_In);
+      T.Free (Chunk_Out);
    end Decode;
 
 end Model_Runner.Qwen_Image.Decoder;
