@@ -134,7 +134,13 @@ built beside this program -- unsloth's card runs these three files with it.
   small -- `--rng cuda`, its default, is Philox in 96 lines
   (`src/core/rng_philox.hpp`); `cpu` is torch's MT19937 with Box-Muller
   (`rng_mt19937.hpp`) -- and one ported here gives the same latent from the
-  same seed, held to the reference's first values in a unit test. The
+  same seed, held to the reference's first values in a unit test. Done
+  for Philox: `Philox_Noise` (in `examples/mr_reference/ada` of the clone,
+  waiting for step 4) matches it **bit for bit** -- seeds 0, 42, 2^64-1
+  and 123456789012, up to 262,144 values, three draws running -- once its
+  logarithm, root and sine are taken in binary64 as the C++ overloads do;
+  in binary32 they differ by up to 3 ulp. Seed 42 begins 0.19401887,
+  2.1613739, -0.1720506, 0.8490601 -- torch's CUDA randn. The
   command line has no noise or tensor dump of its own, so the harness is a
   small program against its library that writes them out: written,
   `examples/mr_reference` in the clone (`mr-reference`, not yet built). Its
