@@ -839,10 +839,10 @@ package body Tests.Image_Cases is
 
       function Img (V : Natural) return String is (Ada.Strings.Fixed.Trim (V'Image, Ada.Strings.Left));
 
-      procedure Conv (Name : String; Ins, Outs, Size : Positive) is
+      procedure Conv (Name : String; Ins, Outs, Size : Positive; Spread : Long_Float := 0.6) is
       begin
          Tensor (Name & ".weight", "[" & Img (Outs) & "," & Img (Ins) & "," & Img (Size) & "," & Img (Size) & "]",
-                 Outs * Ins * Size * Size, 0.6 / Long_Float (Ins * Size));
+                 Outs * Ins * Size * Size, Spread / Long_Float (Ins * Size));
          Tensor (Name & ".bias", "[" & Img (Outs) & "]", Outs, 0.05);
       end Conv;
 
@@ -868,7 +868,9 @@ package body Tests.Image_Cases is
       Conv ("decoder.conv_in", 64, VAE_Widths (0), 3);
       Residual ("decoder.mid_block.resnets.0", VAE_Widths (0), VAE_Widths (0));
       Gain ("decoder.mid_block.attentions.0.norm.gamma", VAE_Widths (0));
-      Conv ("decoder.mid_block.attentions.0.to_qkv", VAE_Widths (0), 3 * VAE_Widths (0), 1);
+      --  Wide enough that the scores tell the positions apart: a nearly
+      --  even softmax reads the same whatever its keys are.
+      Conv ("decoder.mid_block.attentions.0.to_qkv", VAE_Widths (0), 3 * VAE_Widths (0), 1, Spread => 12.0);
       Conv ("decoder.mid_block.attentions.0.proj", VAE_Widths (0), VAE_Widths (0), 1);
       Residual ("decoder.mid_block.resnets.1", VAE_Widths (0), VAE_Widths (0));
       for L in 1 .. 5 loop
