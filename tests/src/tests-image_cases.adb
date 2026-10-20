@@ -795,6 +795,56 @@ package body Tests.Image_Cases is
          end loop;
       end loop;
       Assert (N."=" (Drawn, Wanted), "the latent drawn is not its steps taken one at a time");
+
+      --  Turbo: its own eight levels, whatever the steps asked.
+      declare
+         Steps_Taken : Natural := 0;
+         procedure Count (Step : Positive; Steps : Positive) is
+         begin
+            Steps_Taken := Steps_Taken + 1;
+            Assert (Steps = 8 and then Step = Steps_Taken, "a turbo step was told otherwise than one of eight");
+         end Count;
+      begin
+         Q.Sample (Model, Grid_Rows, Grid_Columns, 40, 7, Text, Text_Rows, null, Drawn, Status, Count'Access,
+                   Turbo => True);
+         Assert (E.Is_Ok (Status) and then Steps_Taken = 8, "a turbo picture was not drawn in eight steps");
+         Noise := Model_Runner.Philox.Seeded (7);
+         Model_Runner.Philox.Draw (Noise, Wanted);
+         for Step in 0 .. 7 loop
+            Q.Velocity (Model, Wanted, Grid_Rows, Grid_Columns, Q.Turbo_Levels (N.Element_Count (Step)) * 1000.0,
+                        Text, Text_Rows, null, Speed, Status);
+            for I in Wanted'Range loop
+               Wanted (I) := Wanted (I)
+                 + (Q.Turbo_Levels (N.Element_Count (Step + 1)) - Q.Turbo_Levels (N.Element_Count (Step))) * Speed (I);
+            end loop;
+         end loop;
+         Assert (N."=" (Drawn, Wanted), "a turbo latent is not its eight levels' steps");
+      end;
+
+      --  Guided: each step's velocity the negative's plus the scale times
+      --  the difference, the negative here the prompt's last two rows.
+      declare
+         Negative : constant N.Real_Array := Text (2 * Context .. 4 * Context - 1);
+         Away     : N.Real_Array (Speed'Range);
+         Scale    : constant N.Real := 3.0;
+      begin
+         Q.Sample (Model, Grid_Rows, Grid_Columns, Steps, 7, Text, Text_Rows, null, Drawn, Status,
+                   Guidance => Scale, Negative => Negative, Negative_Rows => 2);
+         Assert (E.Is_Ok (Status), "a guided picture was not drawn");
+         Noise := Model_Runner.Philox.Seeded (7);
+         Model_Runner.Philox.Draw (Noise, Wanted);
+         for Step in 0 .. Steps - 1 loop
+            Q.Velocity (Model, Wanted, Grid_Rows, Grid_Columns, Levels (N.Element_Count (Step)) * 1000.0, Text,
+                        Text_Rows, null, Speed, Status);
+            Q.Velocity (Model, Wanted, Grid_Rows, Grid_Columns, Levels (N.Element_Count (Step)) * 1000.0, Negative,
+                        2, null, Away, Status);
+            for I in Wanted'Range loop
+               Wanted (I) := Wanted (I) + (Levels (N.Element_Count (Step + 1)) - Levels (N.Element_Count (Step)))
+                 * (Away (I) + Scale * (Speed (I) - Away (I)));
+            end loop;
+         end loop;
+         Assert (N."=" (Drawn, Wanted), "a guided latent is not its steps leaning from the negative");
+      end;
       Q.Close (Model);
    end A_Latent_Is_Its_Steps;
 

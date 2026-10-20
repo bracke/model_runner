@@ -27,6 +27,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
    --  The files a picture is drawn with, by the names they are published
    --  under, found in the models directory unless named.
    Denoiser_Name     : constant String := "qwen-image-2.1-Q8_0.gguf";
+   Turbo_Name        : constant String := "qwen-image-2.1-turbo-Q8_0.gguf";
    Text_Encoder_Name : constant String := "Qwen3-VL-8B-Instruct-Q8_0.gguf";
    VAE_Name          : constant String := "qwen_image_2.1_vae_bf16.safetensors";
 
@@ -54,6 +55,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
       Latent  : Tk.Real_Array_Access;
       Text    : Tk.Real_Array_Access;
       Text_Rows : Natural := 0;
+      Away      : Tk.Real_Array_Access;
+      Away_Rows : Natural := 0;
       Condition : E.Error_Info;
 
       procedure Fail (Reason : E.Error_Info) is
@@ -62,6 +65,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
          Status := E.Exit_Status (Reason);
          Tk.Free (Latent);
          Tk.Free (Text);
+         Tk.Free (Away);
       end Fail;
 
       procedure Draw (Team : Model_Runner.Backend.CPU.Pool_Reference) is
@@ -110,6 +114,11 @@ package body Model_Runner.CLI.Execute.Image_Command is
             if E.Is_Ok (Condition) then
                Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition);
             end if;
+            --  What the picture is not to be, where guidance leans from it:
+            --  the empty prompt unless said, as the reference reads it.
+            if E.Is_Ok (Condition) and then N."/=" (Item.Image_Guidance, 1.0) then
+               Q.Prompts.Encode (Prepared, T.To_String (Item.Image_Negative), Away, Away_Rows, Condition);
+            end if;
             L.Close (Prepared, Ignored);
             Containers.Close (Container);
             Shards.Close (Source);
@@ -132,17 +141,22 @@ package body Model_Runner.CLI.Execute.Image_Command is
             Model_Runner.Backend.Device.Open
               (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
                Which => Item.Device_Index);
-            Q.Open (Model, Path_Of (T.To_String (Item.Model_Path), Denoiser_Name), Condition,
+            Q.Open (Model,
+                    Path_Of (T.To_String (Item.Model_Path), (if Item.Image_Turbo then Turbo_Name else Denoiser_Name)),
+                    Condition,
                     Panels => not On_Device);
             if E.Is_Ok (Condition) then
                Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latent);
                Last_Step := Ada.Calendar.Clock;
                Q.Sample (Model, Rows, Columns, Item.Image_Steps,
                          (if Item.Has_Seed then Item.Seed else Default_Seed), Text.all, Text_Rows, Team,
-                         Latent.all, Condition, Say_Step'Access);
+                         Latent.all, Condition, Say_Step'Access, Turbo => Item.Image_Turbo,
+                         Guidance => Item.Image_Guidance,
+                         Negative => (if Away = null then Q.No_Rows else Away.all), Negative_Rows => Away_Rows);
             end if;
             Q.Close (Model);
             Tk.Free (Text);
+            Tk.Free (Away);
             if E.Is_Error (Condition) then
                Model_Runner.Backend.Device.Close;
                Fail (Condition);

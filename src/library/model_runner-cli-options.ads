@@ -477,6 +477,13 @@ package Model_Runner.CLI.Options is
       Image_Width        : Positive := 1024;
       Image_Height       : Positive := 1024;
       Image_Steps        : Positive := 40;
+      Image_Steps_Set    : Boolean := False;
+      --  The distilled denoiser and its eight fixed levels.
+      Image_Turbo        : Boolean := False;
+      --  Guidance: what the picture is not to be, and how far from it the
+      --  step leans; one leans nowhere and costs no second pass.
+      Image_Negative     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Image_Guidance     : Model_Runner.Numerics.Real := 1.0;
       Text_Encoder_Path  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       VAE_Path           : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 

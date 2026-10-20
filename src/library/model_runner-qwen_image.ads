@@ -134,6 +134,14 @@ package Model_Runner.Qwen_Image is
    function Sigmas (Steps : Positive; Image_Tokens : Positive) return Model_Runner.Numerics.Real_Array
    with Post => Sigmas'Result'Length = Steps + 1;
 
+   --  No prompt rows: what Sample reads as its negative where none is asked.
+   No_Rows : constant Model_Runner.Numerics.Real_Array (1 .. 0) := [others => 0.0];
+
+   --  The distilled model's own levels, eight steps, as the reference's
+   --  qwen-image-2.1-turbo preset gives them.
+   Turbo_Levels : constant Model_Runner.Numerics.Real_Array :=
+     [1.0, 0.978_453, 0.954_18, 0.926_626, 0.895_08, 0.845_148, 0.704_534, 0.414_568, 0.0];
+
    --  A picture's latent, drawn from its seed: the seed's noise, then an
    --  Euler step a noise level, x + (next - sigma) * v, through Sigmas.
    --
@@ -149,6 +157,15 @@ package Model_Runner.Qwen_Image is
    --    reads them
    --  @param Status success, or the step's failure
    --  @param Progress told after each step, where it is given
+   --  @param Turbo through Turbo_Levels, eight steps whatever Steps says,
+   --    for the distilled model
+   --  @param Guidance how far each step leans from the negative prompt
+   --    toward Text: the velocity is the negative's plus Guidance times the
+   --    difference, as the reference's guidance takes it; at one there is
+   --    no lean and no second evaluation
+   --  @param Negative the negative prompt's rows, Negative_Rows of them,
+   --    read where Guidance is not one
+   --  @param Negative_Rows how many
    procedure Sample
      (Item      : Denoiser;
       Rows      : Positive;
@@ -160,7 +177,11 @@ package Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Latent    : out Model_Runner.Numerics.Real_Array;
       Status    : out Model_Runner.Errors.Error_Info;
-      Progress  : access procedure (Step : Positive; Steps : Positive) := null);
+      Progress  : access procedure (Step : Positive; Steps : Positive) := null;
+      Turbo     : Boolean := False;
+      Guidance  : Model_Runner.Numerics.Real := 1.0;
+      Negative  : Model_Runner.Numerics.Real_Array := No_Rows;
+      Negative_Rows : Natural := 0);
 
 private
 

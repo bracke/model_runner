@@ -592,10 +592,17 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Latent    : out N.Real_Array;
       Status    : out E.Error_Info;
-      Progress  : access procedure (Step : Positive; Steps : Positive) := null)
+      Progress  : access procedure (Step : Positive; Steps : Positive) := null;
+      Turbo     : Boolean := False;
+      Guidance  : N.Real := 1.0;
+      Negative  : N.Real_Array := No_Rows;
+      Negative_Rows : Natural := 0)
    is
       use type N.Real;
-      Levels : constant N.Real_Array := Sigmas (Steps, Rows * Columns);
+      Levels : constant N.Real_Array := (if Turbo then Turbo_Levels else Sigmas (Steps, Rows * Columns));
+      Taken  : constant Positive := Levels'Length - 1;
+      --  The negative prompt's velocity, where guidance asks for it.
+      Away   : T.Real_Array_Access;
       Noise  : Model_Runner.Philox.Generator := Model_Runner.Philox.Seeded (Seed);
       Speed  : T.Real_Array_Access;
    begin
@@ -613,22 +620,34 @@ package body Model_Runner.Qwen_Image is
          return;
       end if;
       Status := E.Success;
-      for Step in 1 .. Steps loop
+      for Step in 1 .. Taken loop
          declare
             Sigma : constant N.Real := Levels (Levels'First + Element_Count (Step) - 1);
             Next  : constant N.Real := Levels (Levels'First + Element_Count (Step));
          begin
             Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status);
             exit when E.Is_Error (Status);
+            if Guidance /= 1.0 then
+               if Away = null then
+                  T.Allocate (Speed'Length, Away);
+               end if;
+               Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Negative, Negative_Rows, Pool, Away.all,
+                         Status);
+               exit when E.Is_Error (Status);
+               for I in Speed'Range loop
+                  Speed (I) := Away (I) + Guidance * (Speed (I) - Away (I));
+               end loop;
+            end if;
             for I in Latent'Range loop
                Latent (I) := Latent (I) + (Next - Sigma) * Speed (Speed'First + (I - Latent'First));
             end loop;
          end;
          if Progress /= null then
-            Progress (Step, Steps);
+            Progress (Step, Taken);
          end if;
       end loop;
       T.Free (Speed);
+      T.Free (Away);
    end Sample;
 
    function Is_Ready (Item : Denoiser) return Boolean
@@ -982,7 +1001,7 @@ package body Model_Runner.Qwen_Image is
             Keys_At   : constant Element_Count := 0;
             Values_At : constant Element_Count := Total * W;
             Ok        : Boolean;
-            Queries   : constant Element_Count := 128;
+            Queries   : constant Element_Count := 1024;
 
             --  Rows First .. First + Count - 1 asking, causally from the
             --  first key or over all of them.

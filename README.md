@@ -824,9 +824,17 @@ model_runner image --prompt "a red apple on a wooden table" --out apple.png --si
 The picture is an RGBA PNG; the same `--seed` (42 unless said) draws the
 same picture. Each part is held to stable-diffusion.cpp on the published
 files: the prompt's rows, a step's velocity (cosine 0.99999), the latent
-after forty steps (0.99997) and the decoded picture (76-78 dB). It runs on
-the processor for now, a step of a 512 picture in about a minute; the
-device path is the plan's next step (docs/plan-image-generation.md).
+after forty steps (0.99997) and the decoded picture (76-78 dB); the whole
+command's 512 picture is the reference's at 48 dB from the same seed.
+
+`--turbo` draws with Qwen-Image 2.1 Turbo (`qwen-image-2.1-turbo-Q8_0.gguf`)
+through its own eight levels instead of forty. `--negative TEXT --cfg
+SCALE` leans each step away from what the picture is not to be -- two
+evaluations a step; at the default scale of one, none.
+
+Where a device opens, the text encoder, the denoiser's products and
+attention, and the VAE's convolutions run there: a 512 step about 9 s, a
+1024 step about 42 s (docs/plan-image-generation.md, step 7).
 
 `embed` prints what the model made of a text rather than what it would say
 next: the hidden state after the final normalization, before the projection

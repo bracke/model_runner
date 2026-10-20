@@ -15846,6 +15846,21 @@ package body Tests.CLI_Cases is
       Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--steps"),
                          S ("0")], Item);
       Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a picture of no steps was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--negative"),
+                         S ("blurry"), S ("--cfg"), S ("4.5")], Item);
+      Assert (E.Is_Ok (Status) and then T.To_String (Item.Image_Negative) = "blurry"
+              and then Item.Image_Guidance = 4.5, "guidance's options were not kept");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--cfg"), S ("0.5")],
+                        Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a guidance below one was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--turbo")], Item);
+      Assert (E.Is_Ok (Status) and then Item.Image_Turbo, "--turbo was not taken");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--turbo"),
+                         S ("--steps"), S ("8")], Item);
+      Assert (E.Is_Ok (Status), "--turbo's own eight steps, named, were refused");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--turbo"),
+                         S ("--steps"), S ("20")], Item);
+      Assert (Status.Code = E.CLI_Option_Combination, "--turbo took steps other than its own eight");
       Status := Parsed ([S ("run"), S ("m.gguf"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png")], Item);
       Assert (Status.Code = E.CLI_Option_Not_For_Command and then Item.Kind = Opt.Command_Run,
               "run took the image command's --out");

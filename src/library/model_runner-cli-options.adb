@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 123) of Registry_Row :=
+   Registry : constant array (1 .. 126) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -35,6 +35,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--steps"), [Command_Image => True, others => False], Text ("steps")),
       (Text ("--text-encoder"), [Command_Image => True, others => False], Text ("text_encoder")),
       (Text ("--vae"), [Command_Image => True, others => False], Text ("vae")),
+      (Text ("--turbo"), [Command_Image => True, others => False], Text ("turbo")),
+      (Text ("--negative"), [Command_Image => True, others => False], Text ("negative")),
+      (Text ("--cfg"), [Command_Image => True, others => False], Text ("cfg")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--prompt-parts"), [Command_Run => True, others => False],
@@ -906,7 +909,8 @@ package body Model_Runner.CLI.Options is
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
          Flag_Device_Index,
          Flag_Logprobs,
-         Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE,
+         Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
+         Flag_Negative, Flag_Guidance,
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
@@ -2293,6 +2297,44 @@ package body Model_Runner.CLI.Options is
                      Result.Text_Encoder_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--negative" then
+                     Mark (Flag_Negative, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Image_Negative := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--cfg" then
+                     declare
+                        Scale : Model_Runner.Numerics.Real;
+                     begin
+                        Real_Value (Flag_Guidance, Scale, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        if Scale < 1.0 or else Scale > 30.0 then
+                           Fail (E.CLI_Option_Out_Of_Range, Name);
+                           return;
+                        end if;
+                        Result.Image_Guidance := Scale;
+                     end;
+
+                  elsif Name = "--turbo" then
+                     No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Turbo, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Image_Turbo := True;
+
                   elsif Name = "--vae" then
                      Mark (Flag_VAE, Name, Good);
                      if not Good then
@@ -2314,6 +2356,7 @@ package body Model_Runner.CLI.Options is
                            return;
                         end if;
                         Result.Image_Steps := Count;
+                        Result.Image_Steps_Set := True;
                      end;
 
                   elsif Name = "--size" then
@@ -3211,6 +3254,10 @@ package body Model_Runner.CLI.Options is
             --  nobody's.
             First := T.To_Bounded ("--lora-scale");
             Second := T.To_Bounded ("--lora");
+         elsif Result.Image_Turbo and then Result.Image_Steps_Set and then Result.Image_Steps /= 8 then
+            --  The distilled model is drawn through its own eight levels.
+            First := T.To_Bounded ("--steps");
+            Second := T.To_Bounded ("--turbo");
          elsif Result.Kind in Command_Embed | Command_Image and then Result.Prompt_Count > 1 then
             --  embed reads one text, and image draws one; the second was
             --  read by nobody.
