@@ -335,7 +335,14 @@ built yet: `--negative`/`--cfg` (guidance), and the device (step 7).
 **Begun 2026-10-20**: the products and the attention on the device, the
 rest on the processor -- a 512 step 20.5 s (its weights' upload in it)
 against 56 on the processor, the velocity unchanged at a cosine of
-0.99999. The VAE and the text encoder are still the processor's.
+0.99999. The whole command at 512x512 in 40 steps: 11 min 30 s, its
+picture the reference's at 48 dB PSNR from the same seed. Timed per phase,
+a steady step was products 7.5 s, attention 1.5, the work between them on
+one core 5.4; shared across the pool, a step is 9.2 s. The text encoder
+now runs on the device too (about 25 s with its load); the VAE is still
+the processor's (55 s at 512). Next: the activations kept on the device
+from one product to the next, as a language model's layer is, instead of
+crossing to the host and back for each.
 
 Measured before it is promised; what the arithmetic predicts:
 

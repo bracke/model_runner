@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Streams.Stream_IO;
 
 with Model_Runner.Backend.CPU;
@@ -65,31 +66,56 @@ package body Model_Runner.CLI.Execute.Image_Command is
 
       procedure Draw (Team : Model_Runner.Backend.CPU.Pool_Reference) is
 
+         --  When the last step ended, or the steps began.
+         Last_Step : Ada.Calendar.Time := Ada.Calendar.Clock;
+
          procedure Say_Step (Step : Positive; Steps : Positive) is
+            use type Ada.Calendar.Time;
+            Now   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            Tenth : constant Natural := Natural (10.0 * Float (Now - Last_Step));
+            Took  : constant String := Natural'Image (Tenth / 10) & "." & Natural'Image (Tenth mod 10) (2);
          begin
+            Last_Step := Now;
             if Item.Level /= Opt.Quiet then
                Pres.Put_Note
                  (Screen, "cli.image.step",
                   [Model_Runner.Localization.Named ("count", Step'Image (2 .. Step'Image'Last)),
-                   Model_Runner.Localization.Named ("total", Steps'Image (2 .. Steps'Image'Last))]);
+                   Model_Runner.Localization.Named ("total", Steps'Image (2 .. Steps'Image'Last)),
+                   Model_Runner.Localization.Named ("value", Took (2 .. Took'Last))]);
             end if;
          end Say_Step;
       begin
-         --  The prompt's rows, the encoder let go after.
+         --  The prompt's rows, the encoder let go after: on the device
+         --  where one opens and the encoder fits it, as run takes a model.
          declare
             Source    : Shards.Shard_Set;
             Container : Containers.Container;
             Prepared  : L.Model;
             Ignored   : E.Error_Info;
+            Asked     : Opt.Command := Item;
+            Ready     : Boolean := False;
          begin
-            Load (Item, Screen, Source, Container, Prepared, True, null, null, Condition,
-                  Instead => Path_Of (T.To_String (Item.Text_Encoder_Path), Text_Encoder_Name));
+            Asked.Model_Path := T.To_Bounded (Path_Of (T.To_String (Item.Text_Encoder_Path), Text_Encoder_Name));
+            declare
+               Chosen : constant Opt.Command := Resolved_Backend (Asked, Screen);
+            begin
+               if Model_Runner.Backend."=" (Chosen.Backend, Model_Runner.Backend.Backend_Device) then
+                  Model_Runner.Backend.Device.Open
+                    (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+                     Which => Item.Device_Index);
+               end if;
+               Load ((if Ready then Chosen else Asked), Screen, Source, Container, Prepared, True, null, null,
+                     Condition);
+            end;
             if E.Is_Ok (Condition) then
                Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition);
             end if;
             L.Close (Prepared, Ignored);
             Containers.Close (Container);
             Shards.Close (Source);
+            if Ready then
+               Model_Runner.Backend.Device.Close;
+            end if;
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;
@@ -110,6 +136,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                     Panels => not On_Device);
             if E.Is_Ok (Condition) then
                Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latent);
+               Last_Step := Ada.Calendar.Clock;
                Q.Sample (Model, Rows, Columns, Item.Image_Steps,
                          (if Item.Has_Seed then Item.Seed else Default_Seed), Text.all, Text_Rows, Team,
                          Latent.all, Condition, Say_Step'Access);

@@ -202,7 +202,7 @@ en.help.image.quiet =   --quiet                 suppress progress, notes and war
 en.help.image.verbose =   --verbose               report progress and detail on standard error
 en.help.image.locale =   --locale NAME           locale for program messages
 en.help.image.color =   --color=MODE            colour output: {value}
-en.cli.image.step = step {count} of {total}
+en.cli.image.step = step {count} of {total}, {value} s
 en.cli.image.written = wrote {path}
 en.help.embed.streams = The vector goes to standard output, one component a line. Diagnostics go to standard error.
 en.help.embed.rope_scaling =   --rope-scaling NAME     stretch the rotation: none, linear, yarn
@@ -1592,7 +1592,7 @@ da.help.image.quiet =   --quiet                 undertryk fremdrift, noter og ad
 da.help.image.verbose =   --verbose               rapportér fremdrift og detaljer på standardfejl
 da.help.image.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.image.color =   --color=TILSTAND        farvelæg output: {value}
-da.cli.image.step = trin {count} af {total}
+da.cli.image.step = trin {count} af {total}, {value} s
 da.cli.image.written = skrev {path}
 da.help.embed.streams = Vektoren går til standard ud, én komponent pr. linje. Diagnostik går til standard fejl.
 da.help.embed.rope_scaling = --rope-scaling NAVN     stræk rotationen: none, linear, yarn
@@ -3072,7 +3072,7 @@ qps.help.image.quiet = ⟦  --quiet                 ßúppŕéßß pŕógŕéß�
 qps.help.image.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß áñð ðéŧáíĺ óñ ßŧáñðáŕð éŕŕóŕ⟧
 qps.help.image.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.image.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
-qps.cli.image.step = ⟦ßŧép {count} óf {total}⟧
+qps.cli.image.step = ⟦ßŧép {count} óf {total}, {value} ß⟧
 qps.cli.image.written = ⟦wŕóŧé {path}⟧
 qps.help.embed.streams = ⟦Ŧhé véçŧór góéß ŧó ßŧáñðárð óúŧþúŧ, óñé çómþóñéñŧ á ĺíñé.⟧
 qps.help.embed.rope_scaling = ⟦  --rope-scaling NAME     ßŧŕéŧçh ŧhé ŕóŧáŧíóñ: ñóñé, ĺíñéáŕ, ýáŕñ⟧

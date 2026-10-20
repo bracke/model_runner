@@ -727,6 +727,115 @@ package body Model_Runner.Qwen_Image is
       end loop;
    end Run;
 
+   --  The step's work between its products, a share of rows at a time:
+   --  each row's modulated norm into H; its heads' norms and turns in Q and
+   --  K; its gated add of Y into X; its gated SiLU of G into Y.
+   type Host_Kind is (Norm_Rows, Turn_Rows, Gate_Add, Gated_Silu);
+
+   type Host_Work is new Model_Runner.Shares.Work with record
+      Kind : Host_Kind := Norm_Rows;
+      --  Which quarter of the modulation: 0 and 2 scales, 1 and 3 gates.
+      Part : Element_Count := 0;
+      X, H, Y, Q, K, G : T.Real_Array_Access;
+      --  The modulation's two rows, the step's then nought's, and the tanh
+      --  of each; the heads' gains; the rows' angles.
+      Modulation, Gates, Gain_Q, Gain_K, Cosines, Sines : T.Real_Array_Access;
+      W, F, D, Heads, Pairs, Prompt : Element_Count := 0;
+   end record;
+
+   overriding procedure Run (Item : in out Host_Work; First : Element_Count; Last : Element_Count) is
+      subtype Wide is N.Wide_Real;
+      subtype Real is N.Real;
+      use type Wide;
+      use type Real;
+      Epsilon : constant Wide := 1.0E-6;
+      W : constant Element_Count := Item.W;
+
+      --  The modulation's offset for a row: the prompt's read nought's.
+      function At_Row (Row : Element_Count) return Element_Count
+      is ((if Row < Item.Prompt then 4 * W else 0) + Item.Part * W);
+
+      procedure Heads_Of (Source, Gain : T.Real_Array_Access; Row : Element_Count) is
+      begin
+         for Head in 0 .. Item.Heads - 1 loop
+            declare
+               Base   : constant Element_Count := Row * W + Head * Item.D;
+               Square : Wide := 0.0;
+            begin
+               for I in 0 .. Item.D - 1 loop
+                  Square := Square + Wide (Source (Base + I)) ** 2;
+               end loop;
+               declare
+                  Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (Item.D) + Epsilon));
+               begin
+                  for I in 0 .. Item.D - 1 loop
+                     Source (Base + I) := Source (Base + I) * Inverse * Gain (I);
+                  end loop;
+               end;
+               for Pair in 0 .. Item.Pairs - 1 loop
+                  declare
+                     C  : constant Real := Item.Cosines (Row * Item.Pairs + Pair);
+                     S  : constant Real := Item.Sines (Row * Item.Pairs + Pair);
+                     X0 : constant Real := Source (Base + 2 * Pair);
+                     X1 : constant Real := Source (Base + 2 * Pair + 1);
+                  begin
+                     Source (Base + 2 * Pair) := C * X0 - S * X1;
+                     Source (Base + 2 * Pair + 1) := S * X0 + C * X1;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end Heads_Of;
+   begin
+      for Row in First .. Last loop
+         case Item.Kind is
+            when Norm_Rows =>
+               declare
+                  Base : constant Element_Count := Row * W;
+                  Scale : constant Element_Count := At_Row (Row);
+                  Mean, Square : Wide := 0.0;
+               begin
+                  for I in 0 .. W - 1 loop
+                     Mean := Mean + Wide (Item.X (Base + I));
+                  end loop;
+                  Mean := Mean / Wide (W);
+                  for I in 0 .. W - 1 loop
+                     Square := Square + (Wide (Item.X (Base + I)) - Mean) ** 2;
+                  end loop;
+                  declare
+                     Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (W) + Epsilon));
+                     Centre  : constant Real := Real (Mean);
+                  begin
+                     for I in 0 .. W - 1 loop
+                        Item.H (Base + I) :=
+                          (Item.X (Base + I) - Centre) * Inverse * (1.0 + Item.Modulation (Scale + I));
+                     end loop;
+                  end;
+               end;
+            when Turn_Rows =>
+               Heads_Of (Item.Q, Item.Gain_Q, Row);
+               Heads_Of (Item.K, Item.Gain_K, Row);
+            when Gate_Add =>
+               declare
+                  Gate : constant Element_Count := At_Row (Row);
+               begin
+                  for I in 0 .. W - 1 loop
+                     Item.X (Row * W + I) := Item.X (Row * W + I) + Item.Gates (Gate + I) * Item.Y (Row * W + I);
+                  end loop;
+               end;
+            when Gated_Silu =>
+               for I in 0 .. Item.F - 1 loop
+                  declare
+                     Z : constant Real := Item.G (Row * 2 * Item.F + I);
+                  begin
+                     Item.Y (Row * Item.F + I) :=
+                       Real (Wide (Z) / (1.0 + N.Exp (-Wide (Z)))) * Item.G (Row * 2 * Item.F + Item.F + I);
+                  end;
+               end loop;
+         end case;
+      end loop;
+   end Run;
+
    ---------------
    -- Velocity --
    ---------------
@@ -763,7 +872,7 @@ package body Model_Runner.Qwen_Image is
       X, H, Q, K, V, A, G, Y : T.Real_Array_Access;
       --  The time's two rows: the step's, then nought's; and what the
       --  modulation and the last norm make of them.
-      Times, Hidden, Modulation, Final_Scale : T.Real_Array_Access;
+      Times, Hidden, Modulation, Final_Scale, Gates : T.Real_Array_Access;
       Pairs : constant Element_Count := D / 2;
       Angles_Cos, Angles_Sin : T.Real_Array_Access;
 
@@ -778,7 +887,7 @@ package body Model_Runner.Qwen_Image is
       procedure Release is
       begin
          T.Free (X); T.Free (H); T.Free (Q); T.Free (K); T.Free (V); T.Free (A); T.Free (G); T.Free (Y);
-         T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Final_Scale);
+         T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Final_Scale); T.Free (Gates);
          T.Free (Angles_Cos); T.Free (Angles_Sin);
          T.Free (Chunk_In); T.Free (Chunk_Out);
       end Release;
@@ -850,46 +959,6 @@ package body Model_Runner.Qwen_Image is
          end;
       end Modulated_Norm;
 
-      --  Which of the time's rows a token reads: nought's for the prompt.
-      function Time_Row (Row : Element_Count) return Element_Count
-      is (if Row < Prompt then 1 else 0);
-
-      --  Each head of a row normalized by its root mean square and Gain,
-      --  then turned by the row's angles.
-      procedure Norm_And_Turn (Source : T.Real_Array_Access; Gain : T.Real_Array_Access) is
-      begin
-         for Row in 0 .. Total - 1 loop
-            for Head in 0 .. Heads - 1 loop
-               declare
-                  Base   : constant Element_Count := Row * W + Head * D;
-                  Square : Wide := 0.0;
-               begin
-                  for I in 0 .. D - 1 loop
-                     Square := Square + Wide (Source (Base + I)) ** 2;
-                  end loop;
-                  declare
-                     Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (D) + Epsilon);
-                  begin
-                     for I in 0 .. D - 1 loop
-                        Source (Base + I) := Real (Wide (Source (Base + I)) * Inverse * Wide (Gain (I)));
-                     end loop;
-                  end;
-                  for Pair in 0 .. Pairs - 1 loop
-                     declare
-                        C  : constant Real := Angles_Cos (Row * Pairs + Pair);
-                        S  : constant Real := Angles_Sin (Row * Pairs + Pair);
-                        X0 : constant Real := Source (Base + 2 * Pair);
-                        X1 : constant Real := Source (Base + 2 * Pair + 1);
-                     begin
-                        Source (Base + 2 * Pair) := C * X0 - S * X1;
-                        Source (Base + 2 * Pair + 1) := S * X0 + C * X1;
-                     end;
-                  end loop;
-               end;
-            end loop;
-         end loop;
-      end Norm_And_Turn;
-
       --  A's rows := each row's attention: on the device, the keys and
       --  values put in its cache and the prompt's rows asked causally, the
       --  image's over every key; or across the pool.
@@ -948,6 +1017,29 @@ package body Model_Runner.Qwen_Image is
             end if;
          end;
       end Attend;
+
+      --  The rows' work of one kind, across the pool.
+      procedure Share (Kind : Host_Kind; Part : Element_Count := 0) is
+         Job : aliased Host_Work :=
+           (Kind => Kind, Part => Part, X => X, H => H, Y => (if Part = 3 then A else Y), Q => Q, K => K, G => G,
+            Modulation => Modulation, Gates => Gates, Gain_Q => null, Gain_K => null, Cosines => Angles_Cos,
+            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Prompt => Prompt);
+      begin
+         if E.Is_Ok (Status) then
+            CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 8);
+         end if;
+      end Share;
+
+      procedure Share_Turns (Gain_Q, Gain_K : T.Real_Array_Access) is
+         Job : aliased Host_Work :=
+           (Kind => Turn_Rows, Part => 0, X => X, H => H, Y => Y, Q => Q, K => K, G => G,
+            Modulation => Modulation, Gates => Gates, Gain_Q => Gain_Q, Gain_K => Gain_K, Cosines => Angles_Cos,
+            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Prompt => Prompt);
+      begin
+         if E.Is_Ok (Status) then
+            CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 8);
+         end if;
+      end Share_Turns;
    begin
       Result := [others => 0.0];
       Status := E.Success;
@@ -971,12 +1063,13 @@ package body Model_Runner.Qwen_Image is
       T.Allocate (2 * W, Times);
       T.Allocate (2 * W, Hidden);
       T.Allocate (2 * 4 * W, Modulation);
+      T.Allocate (2 * 4 * W, Gates);
       T.Allocate (W, Final_Scale);
       T.Allocate (Total * Pairs, Angles_Cos);
       T.Allocate (Total * Pairs, Angles_Sin);
       if X = null or else H = null or else Q = null or else K = null or else V = null or else A = null
         or else G = null or else Y = null or else Times = null or else Hidden = null or else Modulation = null
-        or else Final_Scale = null or else Angles_Cos = null or else Angles_Sin = null
+        or else Final_Scale = null or else Angles_Cos = null or else Angles_Sin = null or else Gates = null
       then
          Release;
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -1016,6 +1109,11 @@ package body Model_Runner.Qwen_Image is
       end loop;
       Product (Item.Modulation, Times, 2, Modulation);
       Product (Item.Norm_Out, Times, 1, Final_Scale);
+      if E.Is_Ok (Status) then
+         for I in 0 .. 2 * 4 * W - 1 loop
+            Gates (I) := Real (N.Tanh (Wide (Modulation (I))));
+         end loop;
+      end if;
 
       --  The prompt's rows: a gain of one plus the stored one, then two
       --  linears with the tanh form of the Gaussian unit between.
@@ -1108,54 +1206,20 @@ package body Model_Runner.Qwen_Image is
       --  The blocks.
       for Layer of Item.Layers.all loop
          exit when E.Is_Error (Status);
-         for Row in 0 .. Total - 1 loop
-            Modulated_Norm (X, H, Row, Modulation, Time_Row (Row) * 4 * W);
-         end loop;
+         Share (Norm_Rows, Part => 0);
          Product (Layer.Query, H, Total, Q);
          Product (Layer.Key, H, Total, K);
          Product (Layer.Value, H, Total, V);
-         exit when E.Is_Error (Status);
-         Norm_And_Turn (Q, Layer.Query_Norm);
-         Norm_And_Turn (K, Layer.Key_Norm);
+         Share_Turns (Layer.Query_Norm, Layer.Key_Norm);
          Attend;
          Product (Layer.Attention_Out, A, Total, Y);
-         exit when E.Is_Error (Status);
-         for Row in 0 .. Total - 1 loop
-            declare
-               Gate : constant Element_Count := Time_Row (Row) * 4 * W + W;
-            begin
-               for I in 0 .. W - 1 loop
-                  X (Row * W + I) :=
-                    Real (Wide (X (Row * W + I))
-                          + N.Tanh (Wide (Modulation (Gate + I))) * Wide (Y (Row * W + I)));
-               end loop;
-            end;
-         end loop;
-
-         for Row in 0 .. Total - 1 loop
-            Modulated_Norm (X, H, Row, Modulation, Time_Row (Row) * 4 * W + 2 * W);
-         end loop;
-         Product (Layer.Gate_Up, H, Total, G);
-         exit when E.Is_Error (Status);
+         Share (Gate_Add, Part => 1);
+         Share (Norm_Rows, Part => 2);
          --  The gate's half first, the up projection's second.
-         for Row in 0 .. Total - 1 loop
-            for I in 0 .. F - 1 loop
-               Y (Row * F + I) := Silu (G (Row * 2 * F + I)) * G (Row * 2 * F + F + I);
-            end loop;
-         end loop;
+         Product (Layer.Gate_Up, H, Total, G);
+         Share (Gated_Silu);
          Product (Layer.Feed_Out, Y, Total, A);
-         exit when E.Is_Error (Status);
-         for Row in 0 .. Total - 1 loop
-            declare
-               Gate : constant Element_Count := Time_Row (Row) * 4 * W + 3 * W;
-            begin
-               for I in 0 .. W - 1 loop
-                  X (Row * W + I) :=
-                    Real (Wide (X (Row * W + I))
-                          + N.Tanh (Wide (Modulation (Gate + I))) * Wide (A (Row * W + I)));
-               end loop;
-            end;
-         end loop;
+         Share (Gate_Add, Part => 3);
       end loop;
 
       --  The image's rows out: the last norm scaled by the step's time,
