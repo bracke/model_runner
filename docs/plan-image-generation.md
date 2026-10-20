@@ -93,14 +93,25 @@ is a raw template, not the chat template:
     {prompt}<|im_end|>
     <|im_start|>assistant
 
-**The VAE** is Wan 2.2's shape, used for one frame: 64 latent channels, a
-sixteenth spatially; a decoder of base width 144 through 1, 2, 4, 8, 8
-times, two residual blocks a level, a mid block with one attention, a
-channel RMS norm, SiLU, and duplicating up-samplers (repeat and pixel
-shuffle). Its "causal 3-D" convolutions are written as 2-D convolutions,
-so a picture needs only 3x3 convolutions. The latent is unnormalized
-before decoding with 64 means and 64 deviations from its config. bf16,
-safetensors -- a format this program does not read yet.
+**The VAE** is Wan 2.2's shape, used for one frame, its file (238 BF16
+tensors, diffusers names, 102 of them the encoder, not needed) already
+holding **2-D 3x3 kernels**. The decoder, as the reference runs it for one
+frame:
+
+1. Unnormalize, `z * std + mean`, 64 values each from its config; then
+   `post_quant_conv`, a 1x1 convolution 64 to 64.
+2. `conv_in`, 3x3, 64 to 1152; the mid block: a residual block, one
+   attention -- a single head 1152 wide over every position, its q, k, v
+   and output 1x1 convolutions with biases -- and a residual block.
+3. Five levels, out widths 1152, 1152, 576, 288, 144, each three residual
+   blocks (RMS norm over channels with gamma, SiLU, 3x3, the same again,
+   added; a 1x1 `conv_shortcut` where the width changes). Levels 0-3 then
+   double the picture: nearest-neighbour 2x and a 3x3 (`resample.1`),
+   plus a weightless shortcut from the level's input (`DupUp3D`: channels
+   repeated and laid out into the 2x2 pixels) added to it. The `time_conv`
+   tensors are never used for a single frame.
+4. RMS norm, SiLU, `conv_out` 3x3, 144 to 4; pixels are
+   `clamp ((x + 1) / 2, 0, 1)`.
 
 Two traps the reference knows of:
 
@@ -108,8 +119,10 @@ Two traps the reference knows of:
   model decides from the prompt whether a picture is transparent ("This is
   an RGBA image with transparency. ..."); the PNG is written RGBA.
 - The up-samplers keep Wan's temporal factors (`true, true, true, false`)
-  even for one frame: they change how channels are grouped when
-  duplicated, so a 2-D reading that drops them reorders channels silently.
+  even for one frame: the shortcut of levels 0-2 duplicates as if into two
+  frames and keeps the second, so which input channel feeds each output
+  pixel differs from level 3's; a 2-D reading that drops the factor
+  reorders channels silently.
   The reference also scales every convolution by 1/128 to keep the
   activations within binary16 -- a sign of their range, which matters for
   a binary16 device path.
@@ -222,8 +235,9 @@ Held to the reference's latent after 40 steps from the same noise.
 ### 5. The VAE decoder
 
 New kernels: a 3x3 convolution (lowered to the matrix product the engine
-already has -- the input's neighbourhoods gathered into rows), the channel
-RMS norm, the duplicating up-sampler. The mid block's attention is 4096
+already has -- the input's neighbourhoods gathered into rows), a 1x1 one
+(a matrix product as it is), the channel RMS norm, nearest 2x, the
+duplicating shortcut. The mid block's attention is 4096
 positions at width 1152 -- the encoder's attention, told that no position
 comes before another. Decoded in tiles of 256 with a 64-pixel overlap, as
 the reference tiles, so a 1024x1024 picture never holds its full-size
