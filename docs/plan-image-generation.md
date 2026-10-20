@@ -267,6 +267,7 @@ Measured before it is promised; what the arithmetic predicts:
 | on the 780M at the 4-5 TFLOP/s a prompt batch runs at | 12-15 s | 8-10 min |
 | 512x512 (1024 image tokens) | about 15 TFLOP, 3-4 s | 2-2.5 min |
 | on eight cores | about ten times slower | |
+| VAE decode, 1024x1024, once a picture | about 17 TFLOP, 3-4 s | |
 
 The linear products are a prompt batch's -- 4096 rows against Q8_0 weights
 -- which is the device's fastest path already (the 64-row tile). Attention
