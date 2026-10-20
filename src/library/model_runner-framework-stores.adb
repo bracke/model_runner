@@ -1986,6 +1986,36 @@ package body Model_Runner.Framework.Stores is
             Name'Length > Folder'Length + 1
             and then Name (Name'First .. Name'First + Folder'Length) = Folder & "/");
 
+      --  Whether NAME lies in a folder the snapshot could not list: what
+      --  it held then is unknown, and what is there now is left as it is --
+      --  taken for a folder that held nothing, all of it was removed.
+      function Unknown_Before (Name : String) return Boolean is
+      begin
+         for Index in Name'Range loop
+            if Name (Index) = '/' and then Index > Name'First
+              and then From.Files.Contains (Name (Name'First .. Index - 1))
+              and then To_String (From.Files (Name (Name'First .. Index - 1))) = Unread_Mark
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Unknown_Before;
+
+      --  Whether a folder on NAME's way is a link: written back there, the
+      --  record went where the link names.
+      function Through_Link (Name : String) return Boolean is
+      begin
+         for Index in Name'Range loop
+            if Name (Index) = '/' and then Index > Name'First
+              and then Hostkit.Fs.Is_Link (Hostkit.Fs.Join (Root (Item), Name (Name'First .. Index - 1)))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Through_Link;
+
       function Below_Unread (Name : String) return Boolean is
       begin
          for Index in Name'Range loop
@@ -2002,6 +2032,15 @@ package body Model_Runner.Framework.Stores is
       Snapshot_State (Item, Now);
       Changed.Clear;
       Left.Clear;
+      --  The state not listed at all, before or now: nothing is known to
+      --  put back or take away -- taken for a state that held nothing,
+      --  every record was removed.
+      if (From.Files.Contains (".") and then To_String (From.Files (".")) = Unread_Mark)
+        or else (Now.Files.Contains (".") and then To_String (Now.Files (".")) = Unread_Mark)
+      then
+         Left.Append ("the state could not be listed, before the run or now, so nothing of it is put back");
+         return;
+      end if;
       Committed := Written.Since (Root (Item), From.Logged);
       --  A link made since is taken away first: a folder of records made
       --  a link, the records written back went through it to where it
@@ -2011,7 +2050,9 @@ package body Model_Runner.Framework.Stores is
          declare
             Name : constant String := Text_Maps.Key (Position);
          begin
-            if Is_Link_Value (Text_Maps.Element (Position))
+            if Unknown_Before (Name) then
+               null;
+            elsif Is_Link_Value (Text_Maps.Element (Position))
               and then not Committed.Contains (Name)
               and then not Own_Files.Holds (Root (Item), Name)
               and then (not From.Files.Contains (Name) or else From.Files (Name) /= Text_Maps.Element (Position))
@@ -2044,6 +2085,7 @@ package body Model_Runner.Framework.Stores is
             Name : constant String := Text_Maps.Key (Position);
          begin
             if not Now.Files.Contains (Name) and then Holds_Below (Now.Files, Name)
+              and then To_String (Text_Maps.Element (Position)) /= Unread_Mark
               and then not Below (Unlinked, Name)
             then
                declare
@@ -2123,6 +2165,13 @@ package body Model_Runner.Framework.Stores is
                --  What it was, or is, cannot be read: not put back, said.
                Changed.Append (Name);
                Left.Append (Name & ": it could not be read, before or now, so it is not put back");
+            elsif (not Now.Files.Contains (Name) or else Now.Files (Name) /= Text_Maps.Element (Position))
+              and then Through_Link (Name)
+            then
+               --  A link left in a folder's place, that could not be taken
+               --  away: not written through.
+               Changed.Append (Name);
+               Left.Append (Name & ": a folder on its way is a link, so it is not put back");
             elsif not Now.Files.Contains (Name)
               or else Now.Files (Name) /= Text_Maps.Element (Position)
             then
@@ -2165,6 +2214,7 @@ package body Model_Runner.Framework.Stores is
            and then not Own_Files.Holds (Root (Item), Text_Maps.Key (Position))
            and then not Unlinked.Contains (Text_Maps.Key (Position))
            and then not Below (Unlinked, Text_Maps.Key (Position))
+           and then not Unknown_Before (Text_Maps.Key (Position))
          then
             Changed.Append (Text_Maps.Key (Position));
             if not Files.Delete_If_Present (Hostkit.Fs.Join (Root (Item), Text_Maps.Key (Position))) then

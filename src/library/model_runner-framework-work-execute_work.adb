@@ -57,6 +57,33 @@ is
 
    Earlier_Changed : constant Name_Lists.Vector := Changed_Before;
 
+   --  What the task's record holds of how an earlier attempt's files were
+   --  taken in, for those this attempt did not write again: written from
+   --  this attempt's alone, the earlier ones were no longer known as the
+   --  task's by their content.
+   function Earlier_Prints (Now_Changed : Name_Lists.Vector) return String is
+      Held   : Records.Item;
+      Got    : E.Error_Info;
+      Prints : Unbounded_String;
+   begin
+      Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Got);
+      if E.Is_Error (Got) then
+         return "";
+      end if;
+      for Line of Lines_Of (Records.Get (Held, "taken_in")) loop
+         declare
+            Tab : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+         begin
+            if Tab > Line'First and then Earlier_Changed.Contains (Line (Line'First .. Tab - 1))
+              and then not Now_Changed.Contains (Line (Line'First .. Tab - 1))
+            then
+               Append (Prints, Line & ASCII.LF);
+            end if;
+         end;
+      end loop;
+      return To_String (Prints);
+   end Earlier_Prints;
+
    --  What it changed that its permissions do not let it write.
    function Beyond_Permissions return String is
       Held_Agent : Agents.Agent;
@@ -1054,7 +1081,7 @@ begin
       if not Isolated then
          declare
             Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
-            Prints  : Unbounded_String;
+            Prints  : Unbounded_String := To_Unbounded_String (Earlier_Prints (Result.Changed_Files));
          begin
             for Path of Result.Changed_Files loop
                Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
@@ -1968,6 +1995,7 @@ begin
                                                    else [1 => ASCII.LF]) & Path);
                            end if;
                         end loop;
+                        Append (Prints, Earlier_Prints (Result.Changed_Files));
                         for Path of Result.Changed_Files loop
                            Append (Prints, Path & ASCII.HT & File_Print (Hostkit.Fs.Join (Project, Path)) & ASCII.LF);
                         end loop;

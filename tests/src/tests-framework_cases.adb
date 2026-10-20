@@ -7398,6 +7398,25 @@ package body Tests.Framework_Cases is
                        "work that made a file a folder could not be given up: " & Code_Of (Status));
                Dirs.Delete_File (Kind_Path);
             end;
+            --  A base left by a failed making of a workspace by the next
+            --  number is not joined from: begun empty, not copied into.
+            declare
+               Next_Number : constant Natural :=
+                 Natural'Value (Dirs.Simple_Name (Dirs.Containing_Directory (To_String (Made.Path)))
+                                  (4 .. 9)) + 1;
+               Next_Id     : constant String :=
+                 "WS-" & [1 .. 6 - Ada.Strings.Fixed.Trim (Next_Number'Image, Ada.Strings.Left)'Length => '0']
+                 & Ada.Strings.Fixed.Trim (Next_Number'Image, Ada.Strings.Left);
+               Stale       : constant String := S.Root (Store) & "/workspaces/" & Next_Id & "/base/stale.txt";
+            begin
+               Dirs.Create_Path (Dirs.Containing_Directory (Stale));
+               Put_File (Stale, "left by a failed making");
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Made, Status);
+               S.Commit (Store, Change, Status);
+               Assert (E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (To_String (Made.Path), Next_Id) > 0
+                       and then not Dirs.Exists (Stale),
+                       "a base left by a failed making was copied into: " & To_String (Made.Path));
+            end;
             --  A file the work made read-only is put back all the same when
             --  the taking in is undone: refused as a person's read-only file,
             --  the taking in could never be undone.
@@ -9489,6 +9508,66 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent whose whole checks fail, then a narrower run fails and,
+   --  mended, passes: whether the whole's failure was still held.
+   type Widest_Agent is new Wk.Parenting_Runner with null record;
+   Widest_Held : Boolean := False;
+
+   overriding procedure Run
+     (Self        : Widest_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Widest_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Widest_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("widest"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Widest_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Widest_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Report : Unbounded_String;
+      Got    : E.Error_Info;
+   begin
+      Children.Run_Checks ("checks", Report, Got);
+      Children.Keep_Before_Write ("src/parser.ads", Got);
+      Put_File (Project & "/src/parser.ads", "package Parser is" & LF & "   procedure First;" & LF & "end Parser;"
+                & LF);
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      Put_File (Project & "/src/unit-ok.txt", "ok");
+      Children.Run_Checks ("checks", Report, Got, Affected => True);
+      Widest_Held := Children.Checks_Failing;
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: looked");
+      Status := E.Success;
+   end Run_Parenting;
+
    --  An agent that writes once, its lesson's checks run after: what they
    --  said, and whether it may run the profile another of them is from.
    type Lint_Agent is new Wk.Parenting_Runner with null record;
@@ -10581,6 +10660,13 @@ package body Tests.Framework_Cases is
             --  The grandchild run once more with no tokens left to give it:
             --  the call failed, as its helper did -- not refused, as one no
             --  helper may be made for.
+            --  Told the run that failed, not that it was run once more.
+            Assert (Ada.Strings.Fixed.Index
+                      (To_String (Shown), "failed, and was run once more" & LF & "error: it could not be run") = 0
+                    and then Ada.Strings.Fixed.Index
+                               (To_String (Shown), "the agent's token budget is at its limit") > 0,
+                    "a helper not run once more was said to have been, or why it failed was not said: "
+                    & To_String (Shown));
             Assert (Ada.Strings.Fixed.Index (To_String (Shown), "it could not be run once more") > 0
                     and then Ada.Strings.Fixed.Index (To_String (Shown), "no helper was made") = 0,
                     "a helper not run once more for want of tokens was said refused: " & To_String (Shown));
@@ -10650,6 +10736,27 @@ package body Tests.Framework_Cases is
               and then Ada.Strings.Fixed.Index (To_String (Twice_Report), "passed") > 0,
               "the mended change did not pass the narrower run: " & To_String (Twice_Report));
       Assert (not Twice_Held, "a narrower failure mended by a narrower pass was still held as failing");
+      S.Close (Store);
+      --  But one after the whole's failed takes nothing from it: the
+      --  narrower then passing cleared the whole's failure unrun.
+      Task_Project
+        (Store, "narrow-after-whole",
+         "set execution.allowed = test" & LF
+         & "profile checks = exists: test -f src/done.txt" & LF & "profile unit = fine: test -f src/unit-ok.txt" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar verification.scope.certain = unit" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/tests");
+      Put_File (Fresh_Root (Store) & "/src/parser.ads", "package Parser is" & LF & "   procedure Next;" & LF
+                & "end Parser;" & LF);
+      Put_File (Fresh_Root (Store) & "/tests/parser_tests.adb", "with Parser;" & LF & "procedure Parser_Tests is"
+                & LF & "begin" & LF & "   null;" & LF & "end Parser_Tests;" & LF);
+      Tk.Create (Store, Change, Fields ("Widest", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id), Widest_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Assert (Widest_Held, "a narrower failure and pass after the whole's failure cleared the whole's");
       S.Close (Store);
    end A_Narrow_Failure_Is_Mended_Narrowly;
 
@@ -14159,6 +14266,10 @@ package body Tests.Framework_Cases is
          Assert (Ada.Strings.Fixed.Index (R.Get (Value, "changed_files"), "src/early.adb") > 0,
                  "an earlier attempt's file went from the task's work after its stage: "
                  & R.Get (Value, "changed_files") & " / " & To_String (Done.Reason));
+         --  And how it was taken in, by its content: written from this
+         --  attempt's files alone, the earlier one was no longer the task's.
+         Assert (Ada.Strings.Fixed.Index (R.Get (Value, "taken_in"), "src/early.adb" & ASCII.HT) > 0,
+                 "an earlier attempt's file went from what the task took in: " & R.Get (Value, "taken_in"));
       end;
       S.Close (Store);
       --  The stage's files not kept: the task goes no further -- the
@@ -14175,6 +14286,38 @@ package body Tests.Framework_Cases is
          Assert (To_String (Done.Final_State) /= "complete"
                  and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "could not be committed") > 0,
                  "a task whose stage's files were not kept went on, or was not told why: " & To_String (Done.Reason));
+         S.Close (Store);
+      end;
+      --  The same with no stage to run.
+      declare
+         Again : Unbounded_String;
+         Value : R.Item;
+         Got   : E.Error_Info;
+      begin
+         Task_Project
+           (Store, "no-stage",
+            "set execution.allowed = test" & LF & "profile checks = exists: test -f src/hello.adb" & LF
+            & "scalar verification.default = checks" & LF);
+         Tk.Create (Store, Change, Fields ("Twice unstaged", "analysis"), "user", "", Again, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Again), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Again),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/early.adb"),
+                                     Answer => To_Unbounded_String ("status: blocked" & LF & "summary: stuck"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Tk.Move (Store, Change, To_String (Again), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Again),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Again) & ".state", Value, Got);
+         Assert (Ada.Strings.Fixed.Index (R.Get (Value, "taken_in"), "src/early.adb" & ASCII.HT) > 0,
+                 "an earlier attempt's file went from what the task took in, with no stage: "
+                 & R.Get (Value, "taken_in") & " / " & To_String (Done.Reason));
          S.Close (Store);
       end;
       Work ("format-stage-broken", "broken");
@@ -15044,6 +15187,65 @@ package body Tests.Framework_Cases is
             when others =>
                Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
                Assert (False, "a folder of the state that will not be listed raised");
+         end;
+         --  One that would not be listed when the snapshot was taken, and is
+         --  now: what it holds is unknown, and left -- taken for a folder
+         --  that held nothing, it was removed; and the whole state so.
+         declare
+            Folder  : constant String := Fresh_Root (Store) & "/.model_runner/locked-before";
+            State   : constant String := Fresh_Root (Store) & "/.model_runner";
+            Ignored : Boolean;
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            Ignored := Hostkit.Fs.Create_Link (Away, Folder & "/held.lnk");
+            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
+            S.Snapshot_State (Store, Taken);
+            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+            Put_File (Folder & "/b.rec", "made since");
+            S.Restore_State (Store, Taken, Changed, Left);
+            Assert (Dirs.Exists (Folder & "/a.rec") and then Dirs.Exists (Folder & "/b.rec")
+                    and then Hostkit.Fs.Is_Link (Folder & "/held.lnk"),
+                    "a folder the snapshot could not list was emptied at the restore");
+            Ignored := Hostkit.Fs.Delete_Link (Folder & "/held.lnk");
+            Dirs.Delete_Tree (Folder);
+            Ignored := Hostkit.Metadata.Set_Permissions (State, 8#000#);
+            S.Snapshot_State (Store, Taken);
+            Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
+            S.Restore_State (Store, Taken, Changed, Left);
+            Assert (Dirs.Exists (State & "/tasks") and then not Left.Is_Empty,
+                    "a state the snapshot could not list was emptied at the restore");
+         exception
+            when others =>
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+               Assert (False, "a state the snapshot could not list raised at the restore");
+         end;
+         --  A link in a folder's place that cannot be taken away: nothing is
+         --  written back through it, to where it names.
+         declare
+            Folder    : constant String := Fresh_Root (Store) & "/.model_runner/linked-recs";
+            State     : constant String := Fresh_Root (Store) & "/.model_runner";
+            Elsewhere : constant String := Away & "/elsewhere2";
+            Ignored   : Boolean;
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            Dirs.Create_Path (Elsewhere);
+            S.Snapshot_State (Store, Taken);
+            Dirs.Delete_Tree (Folder);
+            if Hostkit.Fs.Create_Link (Elsewhere, Folder) then
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#555#);
+               S.Restore_State (Store, Taken, Changed, Left);
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
+               Assert (not Dirs.Exists (Elsewhere & "/a.rec"),
+                       "a record was written back through a link that could not be taken away");
+               Ignored := Hostkit.Fs.Delete_Link (Folder);
+            end if;
+         exception
+            when others =>
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
+               raise;
          end;
          --  A record a commit wrote through a link put in its folder's place
          --  is said: passed over as the harness's own, it was lost unsaid.

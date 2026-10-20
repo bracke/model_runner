@@ -1059,6 +1059,7 @@ package body Model_Runner.CLI.Project_Commands is
       Need     : constant String := To_String (Contract.Need);
       Retry_Of : Unbounded_String;
       Told     : Unbounded_String;
+      Before_Retry, Failed_Run : Unbounded_String;
    begin
       Ended := Tr.Done;
       if not Found or else Asked = "" then
@@ -1113,9 +1114,12 @@ package body Model_Runner.CLI.Project_Commands is
             --  Run once more and not made: the helper that ran failed, and
             --  that is the call's ending -- a refusal, it read as one no
             --  helper may be made for, after "failed, and was run once more".
+            --  Said as it is: the run that failed, and why, and that it
+            --  could not be run once more -- not that it was.
             if E.Is_Error (Status) and then Retry_Of /= Null_Unbounded_String then
                return Fails
-                 (To_String (Told) & ASCII.LF & "error: it could not be run once more: " & Refusal (Status));
+                 ((if Before_Retry = Null_Unbounded_String then "" else To_String (Before_Retry) & ASCII.LF)
+                  & To_String (Failed_Run) & ASCII.LF & "error: it could not be run once more: " & Refusal (Status));
             elsif E.Is_Error (Status) then
                return Refuses
                  ((if Told = Null_Unbounded_String then ""
@@ -1148,6 +1152,10 @@ package body Model_Runner.CLI.Project_Commands is
             --  next starts; the answer then names it, and says the last.
             if Retry then
                Pres.Put_Tool_Result (Self.Agent.Screen.all, To_String (Now));
+               --  As it was before this line, and the run that failed, for
+               --  where the next cannot be made.
+               Before_Retry := Told;
+               Failed_Run := Now;
                Told := (if Told = Null_Unbounded_String then Null_Unbounded_String else Told & ASCII.LF)
                  & To_Unbounded_String (To_String (Id) & " failed, and was run once more");
             else

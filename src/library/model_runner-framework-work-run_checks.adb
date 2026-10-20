@@ -135,8 +135,12 @@ begin
    --  clears it, narrow or whole: held to the whole alone, a narrow
    --  failure mended narrowly was never cleared.
    if not Passed then
+      --  The widest failure stands: a narrower one after the whole's took
+      --  its place, and a pass of the narrower then cleared the whole's.
+      if not Host.Checks_Failed or else not Narrow then
+         Host.Failed_Running := To_Unbounded_String (Running);
+      end if;
       Host.Checks_Failed := True;
-      Host.Failed_Running := To_Unbounded_String (Running);
    elsif Clears then
       Host.Checks_Failed := False;
    end if;

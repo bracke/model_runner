@@ -454,6 +454,14 @@ package body Model_Runner.Framework.Workspaces is
          declare
             Kept : E.Error_Info;
          begin
+            --  Begun empty: one a failed making of a workspace by this number
+            --  left behind was copied into, and its stale files joined from.
+            if Dirs.Exists (Hostkit.Fs.Join (Home, "base")) then
+               Files.Remove_Tree (Hostkit.Fs.Join (Home, "base"), Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
             Copy_Tree (Tree, Hostkit.Fs.Join (Home, "base"), Repository.Roots_Of (Item), Kept);
             --  And a partial one left behind would be joined from: gone,
             --  or the workspace is not made.
