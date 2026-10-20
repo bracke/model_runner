@@ -74,7 +74,9 @@ interleaved 24/20/20 at theta 5,000,000. The file's architecture key is
 `qwen3vl`, which this build refuses by name today (`MR-ARCH-0002`). For a
 prompt of text alone the multimodal rotation reads as the plain one. What
 the denoiser is given is the **last layer's output before the final norm**,
-for every token of the prompt, the system turn's tokens dropped. The prompt
+for every token of the prompt, the system turn's tokens dropped -- the
+reference asks for layer 36's output (`out_layers = {num_layers}`) and
+counts the dropped tokens by tokenizing the system turn alone. The prompt
 is a raw template, not the chat template:
 
     <|im_start|>system
@@ -106,10 +108,14 @@ Two traps the reference knows of:
 
 
 **The sampler** is flow matching, Euler: `x <- x + (sigma_next - sigma) *
-v`, sigmas shifted by the image's token count (base 256, max 8192, shift
-0.5 to 0.9, exponential, terminal 0.02). The pipeline's default is 40
-steps. Guidance (`true_cfg_scale` with a negative prompt) is optional and
-doubles a step.
+v`. The sigmas, as the reference's `FluxScheduler` works them out for this
+model: `mu` linear in the image's token count, 0.5 at 256 and 0.9 at 8192;
+for `t = 1 - i/n`, `sigma = e^mu / (e^mu + 1/t - 1)`; then every sigma
+but the last stretched, `1 - (1 - sigma) / k`, so the last one the model is
+run at is 0.02; the last is 0. The model's time is the sigma times 1000.
+The pipeline's default is 40 steps. Guidance (a negative prompt, the
+reference's `--cfg-scale`, 6 in its example) is optional and doubles a
+step.
 
 ---
 
