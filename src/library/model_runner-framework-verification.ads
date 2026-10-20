@@ -354,8 +354,10 @@ package Model_Runner.Framework.Verification is
    --
    --  @param Item The store.
    --  @param Task_Id The task.
+   --  @param Profile The profile its work was verified by, held from when
+   --    the work began; "" for the configuration's own now.
    --  @return Each gate and whether it passes.
-   function Gates (Item : Stores.Store; Task_Id : String) return Gate_List;
+   function Gates (Item : Stores.Store; Task_Id : String; Profile : String := "") return Gate_List;
 
    --  Complete a task through its gates, and mark the requirements it
    --  serves implemented. A task not in verification -- accepted, failed,
@@ -368,11 +370,13 @@ package Model_Runner.Framework.Verification is
    --  @param Task_Id The task.
    --  @param Status Framework_Task_Not_Ready naming the gates that did not
    --    pass.
+   --  @param Profile As Gates takes it.
    procedure Complete_Task
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
       Task_Id : String;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Profile : String := "");
 
    --  Verify a requirement itself by the project's profile for
    --  requirements, scalar verification.requirements: {requirement} in a

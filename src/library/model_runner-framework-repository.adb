@@ -1591,6 +1591,11 @@ package body Model_Runner.Framework.Repository is
       --  What was read again, and the text of every Ada file whose
       --  references may have to be found again.
       Changed : Name_Lists.Vector;
+      --  The same as a set, and the kept skipped lines: looked up file by
+      --  file, each was a search of them all, and a refresh the square of
+      --  a project's binary files, or of a branch switch's changes.
+      Changed_Set : Name_Sets.Set;
+      Skipped_Set : Name_Sets.Set;
 
       procedure Walk (Directory, Prefix : String) is
          Search : Dirs.Search_Type;
@@ -1720,13 +1725,15 @@ package body Model_Runner.Framework.Repository is
       is (Kind in References | Calls);
 
       --  The units a set of files hold, from a graph.
-      function Units_Of (From : Graph; Paths : Name_Lists.Vector) return Name_Lists.Vector is
+      function Units_Of (From : Graph; Paths : Name_Sets.Set) return Name_Lists.Vector is
          Units : Name_Lists.Vector;
+         Seen  : Name_Sets.Set;
       begin
          for Link of From.Relations loop
             if Link.Kind = Contains and then Paths.Contains (To_String (Link.From))
-              and then not Units.Contains (To_String (Link.To))
+              and then not Seen.Contains (To_String (Link.To))
             then
+               Seen.Include (To_String (Link.To));
                Units.Append (To_String (Link.To));
             end if;
          end loop;
@@ -1750,6 +1757,9 @@ package body Model_Runner.Framework.Repository is
       Read_Again := 0;
       Walk (Project_Directory, "");
 
+      for Line of Kept.Skipped loop
+         Skipped_Set.Include (Line);
+      end loop;
       --  What changed, and what went.
       for Index in 1 .. Natural (Now_Paths.Length) loop
          declare
@@ -1758,7 +1768,7 @@ package body Model_Runner.Framework.Repository is
             --  left out again, unread.
             Skip_Line : constant String := Now_Paths (Index) & ASCII.HT & Now_Stamps (Index);
          begin
-            if Held = 0 and then Kept.Skipped.Contains (Skip_Line) and then not Recent (Now_Stamps (Index)) then
+            if Held = 0 and then Skipped_Set.Contains (Skip_Line) and then not Recent (Now_Stamps (Index)) then
                Result.Skipped.Append (Skip_Line);
             elsif Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
               or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
@@ -1766,6 +1776,7 @@ package body Model_Runner.Framework.Repository is
               or else Role_Moved (Kept.Files (Held).Role, Now_Paths (Index))
             then
                Changed.Append (Now_Paths (Index));
+               Changed_Set.Include (Now_Paths (Index));
             end if;
          end;
       end loop;
@@ -1803,7 +1814,7 @@ package body Model_Runner.Framework.Repository is
             Path : constant String := Now_Paths (Index);
          begin
             Result.Reading := To_Unbounded_String (Path);
-            if Changed.Contains (Path) then
+            if Changed_Set.Contains (Path) then
                declare
                   Text  : constant String := Text_Of (Path);
                   Print : constant String := Print_Of (Path, Text);
@@ -1867,12 +1878,25 @@ package body Model_Runner.Framework.Repository is
       --  that can see a changed or removed unit; taken as they were for
       --  the rest.
       declare
-         Moved   : Name_Lists.Vector := Units_Of (Result, Changed);
-         Removed : constant Name_Lists.Vector := Units_Of (Kept, Gone);
+         Moved   : Name_Lists.Vector := Units_Of (Result, Changed_Set);
+         Gone_Set : Name_Sets.Set;
+         function Gone_Units return Name_Lists.Vector is
+         begin
+            for Path of Gone loop
+               Gone_Set.Include (Path);
+            end loop;
+            return Units_Of (Kept, Gone_Set);
+         end Gone_Units;
+         Removed : constant Name_Lists.Vector := Gone_Units;
+         Moved_Set : Name_Sets.Set;
       begin
+         for Unit of Moved loop
+            Moved_Set.Include (Unit);
+         end loop;
          for Unit of Removed loop
-            if not Moved.Contains (Unit) then
+            if not Moved_Set.Contains (Unit) then
                Moved.Append (Unit);
+               Moved_Set.Include (Unit);
             end if;
          end loop;
 
@@ -1896,7 +1920,7 @@ package body Model_Runner.Framework.Repository is
                   Own    : constant Name_Lists.Vector :=
                     (if Units_In.Contains (Path) then Units_In.Element (Path)
                      else Name_Lists.Empty_Vector);
-                  Sees   : Boolean := Changed.Contains (Path);
+                  Sees   : Boolean := Changed_Set.Contains (Path);
                begin
                   for Unit of Own loop
                      exit when Sees;
@@ -1904,7 +1928,7 @@ package body Model_Runner.Framework.Repository is
                         --  A unit it depends on, or one of that unit's
                         --  parents, which a with of a child sees as well.
                         for Target of Depends.Constant_Reference (Unit) loop
-                           if Moved.Contains (Target)
+                           if Moved_Set.Contains (Target)
                              or else (for some One of Moved =>
                                         Target'Length > One'Length
                                         and then Target (Target'First .. Target'First + One'Length) = One & ".")
@@ -1915,7 +1939,7 @@ package body Model_Runner.Framework.Repository is
                         end loop;
                      end if;
                   end loop;
-                  Sees := Sees or else (for some Unit of Own => Moved.Contains (Unit))
+                  Sees := Sees or else (for some Unit of Own => Moved_Set.Contains (Unit))
                     --  A reader that finds what is called by its name, not by
                     --  what the file depends on -- x.method (), a prefix of
                     --  a module -- may see any unit that changed: read again
@@ -1923,7 +1947,7 @@ package body Model_Runner.Framework.Repository is
                     or else (not Moved.Is_Empty and then Language_Of (Path) /= "Ada");
                   Result.Reading := To_Unbounded_String (Path);
                   if Sees then
-                     if not Changed.Contains (Path) then
+                     if not Changed_Set.Contains (Path) then
                         Read_Again := Read_Again + 1;
                      end if;
                      Languages.Adapter_For (Language_Of (Path)).Read_References

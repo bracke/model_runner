@@ -31,7 +31,9 @@ package Model_Runner.Tools.Python_Calls is
    --  @param Name The function's name.
    --  @param Name_Last Length of the name in Name.
    --  @param Args The arguments, a JSON object.
-   --  @param Args_Last Length of the object in Args.
+   --  @param Args_Last Length of the object in Args; one past Args'Length
+   --    where the arguments, written as JSON, would not fit in it -- a call
+   --    too large, told so rather than as one that will not read.
    --  @param Found Whether there was a call left; False with Ok True when
    --    only whitespace, or the closing fence, was.
    --  @param Ok False when what stands there is not a call this reads.

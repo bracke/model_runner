@@ -2060,6 +2060,20 @@ package body Tests.Template_Cases is
          Conv.Open (Talk, Status => Status);
          Conv.Append_Parts (Talk, Conv.User_Role, Parts, Status);
          Assert (E.Is_Ok (Status), "the parts turn was refused");
+         --  A turn of a picture alone, its text none, survives the system
+         --  prompt set after it: rebuilt, it was refused as empty, and the
+         --  system prompt could not be changed.
+         declare
+            Alone : Conv.History;
+         begin
+            Conv.Open (Alone, Status => Status);
+            Conv.Append_Parts (Alone, Conv.User_Role, "[{""type"": ""image""}]", Status);
+            Assert (E.Is_Ok (Status), "a picture-only turn was refused");
+            Conv.Set_System (Alone, "be brief", Status);
+            Assert (E.Is_Ok (Status) and then Conv.Length (Alone) = 2,
+                    "a system prompt could not be set over a picture-only turn: " & E.Error_Code'Image (Status.Code));
+            Conv.Close (Alone);
+         end;
 
          Tmpl.Compile (Own, Body_T, Status => Status);
          Assert (E.Is_Ok (Status), "the content-adding template did not compile");

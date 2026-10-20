@@ -2254,7 +2254,7 @@ package body Model_Runner.Framework.Verification is
    -- Gates --
    -----------
 
-   function Gates (Item : Stores.Store; Task_Id : String) return Gate_List is
+   function Gates (Item : Stores.Store; Task_Id : String; Profile : String := "") return Gate_List is
       Result   : Gate_List;
       Defined  : Records.Item;
       Read     : E.Error_Info;
@@ -2298,16 +2298,19 @@ package body Model_Runner.Framework.Verification is
       for Name of Tasks.Gate_Names (Item, Records.Get (Defined, "kind")) loop
          if Name = "verification" then
             declare
-               Profile  : constant String := Profile_Of (Item, Task_Id);
-               Evidence : constant String :=
-                 (if Profile = "" then "" else Latest (Item, Task_Id, Profile));
+               --  The one the work was verified by, as it began: read live,
+               --  a profile reconfigured meanwhile was said never to have run.
+               Judged_By : constant String :=
+                 (if Gates.Profile /= "" then Gates.Profile else Profile_Of (Item, Task_Id));
+               Evidence  : constant String :=
+                 (if Judged_By = "" then "" else Latest (Item, Task_Id, Judged_By));
                Value    : Records.Item;
                Status   : E.Error_Info;
             begin
-               if Profile = "" then
+               if Judged_By = "" then
                   Judge (Name, False, "no verification profile applies to it");
                elsif Evidence = "" then
-                  Judge (Name, False, "profile " & Profile & " has not been run for it");
+                  Judge (Name, False, "profile " & Judged_By & " has not been run for it");
                else
                   Stores.Read (Item, Verification_Area, Evidence, Value, Status);
                   --  Not to be read is not failed: said as what it is, the
@@ -2460,9 +2463,10 @@ package body Model_Runner.Framework.Verification is
      (Item    : Stores.Store;
       Change  : in out Stores.Transaction;
       Task_Id : String;
-      Status  : out Model_Runner.Errors.Error_Info)
+      Status  : out Model_Runner.Errors.Error_Info;
+      Profile : String := "")
    is
-      Judged : constant Gate_List := Gates (Item, Task_Id);
+      Judged : constant Gate_List := Gates (Item, Task_Id, Profile);
       Failed : Unbounded_String;
       Defined : Records.Item;
       Was     : constant String := Tasks.State_Of (Item, Task_Id);

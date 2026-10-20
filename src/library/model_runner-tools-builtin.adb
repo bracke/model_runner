@@ -2423,6 +2423,9 @@ package body Model_Runner.Tools.Builtin is
                   Mix ("link " & Full);
                elsif Name'Length > 0 and then Name (Name'First) /= '.' then
                   if Kind (Found) = Directory then
+                     --  Named too: an empty folder made or removed changes
+                     --  no file below it, and a listing kept was given again.
+                     Mix ("folder " & Full);
                      Walk (Full, Depth + 1);
                   else
                      Files := Files + 1;
@@ -2667,7 +2670,8 @@ package body Model_Runner.Tools.Builtin is
                   then
                      return Failure
                        (Spelt & " is there and cannot be read whole -- too large, or not text -- so it is"
-                        & " not written over whole: change a part of it with edit_file");
+                        & " not written over whole, nor edited: read_range and search_file read it, and no"
+                        & " tool here changes it");
                   elsif There /= "" and then not (Self.Whole.Has (Path) and then Self.Whole.Get (Path) = There)
                   then
                      declare

@@ -4,6 +4,9 @@ package body Model_Runner.Tools.Python_Calls is
    --  never leaves it.
    Not_A_Call : exception;
 
+   --  The arguments past the room given for them: too large, not no call.
+   Too_Large : exception;
+
    Max_Depth : constant := 32;
 
    ---------------
@@ -27,7 +30,7 @@ package body Model_Runner.Tools.Python_Calls is
       procedure Put (Item : String) is
       begin
          if Used + Item'Length > Args'Length then
-            raise Not_A_Call;
+            raise Too_Large;
          end if;
          Args (Args'First + Used .. Args'First + Used + Item'Length - 1) :=
            Item;
@@ -486,6 +489,12 @@ package body Model_Runner.Tools.Python_Calls is
       Args_Last := Used;
       From := P;
    exception
+      when Too_Large =>
+         Ok        := False;
+         Found     := True;
+         Name_Last := 0;
+         Args_Last := Args'Length + 1;
+         From      := Text'Last + 1;
       when Not_A_Call | Constraint_Error =>
          Ok        := False;
          Found     := True;

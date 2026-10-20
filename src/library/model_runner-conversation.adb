@@ -1065,7 +1065,8 @@ package body Model_Runner.Conversation is
                   --  stops being one.
                   Add (Item, Row.Sender,
                        Scratch (Row.Offset + 1 .. Row.Offset + Row.Length),
-                       Allow_Empty => Row.Calls > 0, Status => Status);
+                       --  Nor a turn of a picture alone, whose text is none.
+                       Allow_Empty => Row.Calls > 0 or else Row.Parts_Length > 0, Status => Status);
                   if E.Is_Error (Status) then
                      Put_Back;
                      return;

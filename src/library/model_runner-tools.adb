@@ -1925,7 +1925,11 @@ package body Model_Runner.Tools is
                               Item.Loose := Index;
                            end if;
                         end if;
-                        Index := (if Taken then Shut + 1 else Index + 1);
+                        --  Past an object read and not taken, as past one
+                        --  taken: its own braces counted each against the
+                        --  bound, an example of sixty-four of them hid the
+                        --  call after it.
+                        Index := (if Shut > 0 then Shut + 1 else Index + 1);
                      end;
                   else
                      Index := Index + 1;
@@ -2171,7 +2175,9 @@ package body Model_Runner.Tools is
                               --  Past what a call may hold: too large, not
                               --  unreadable -- told to write it again in the
                               --  format, a model wrote it again as large.
-                              if (if Resume > 0 then Resume else Bound + 1) - Was > Max_Call_Bytes then
+                              if Args_Last > Args'Length
+                                or else (if Resume > 0 then Resume else Bound + 1) - Was > Max_Call_Bytes
+                              then
                                  Status := E.Make (E.Tools_Too_Large);
                                  E.Add_Integer (Status, "limit", Long_Long_Integer (Max_Call_Bytes), E.Param_Bytes);
                                  return;

@@ -158,13 +158,18 @@ package body Model_Runner.Tools.Editing is
    --  Each line of a file too large to read whole, read a slice at a time
    --  -- what read_range and search_file give of one: refused, each sent
    --  the model to the other, and neither read it. A line is held to a
-   --  mebibyte; True where the file could be read.
+   --  mebibyte, and Cut says where one was longer. A NUL is no
+   --  text: Not_Text, as a file read whole says it.
+   type Stream_Outcome is (Lines_Read, Not_Text, Not_Read);
+
    generic
       with procedure Line (Number : Positive; Text : String; Stop : out Boolean);
-   function Stream_Lines (Disk : String) return Boolean;
+   function Stream_Lines (Disk : String; Cut : out Boolean) return Stream_Outcome;
 
-   function Stream_Lines (Disk : String) return Boolean is
+   function Stream_Lines (Disk : String; Cut : out Boolean) return Stream_Outcome is
       use Ada.Streams;
+      --  Held to a mebibyte: a line is one string, on a worker's stack.
+      Line_Most : constant := 1024 * 1024;
       File    : Stream_IO.File_Type;
       Block   : Stream_Element_Array (1 .. 1024 * 1024);
       Last    : Stream_Element_Offset;
@@ -172,6 +177,7 @@ package body Model_Runner.Tools.Editing is
       Number  : Positive := 1;
       Stop    : Boolean := False;
    begin
+      Cut := False;
       Stream_IO.Open (File, Stream_IO.In_File, Disk);
       while not Stop and then not Stream_IO.End_Of_File (File) loop
          Stream_IO.Read (File, Block, Last);
@@ -179,13 +185,18 @@ package body Model_Runner.Tools.Editing is
             declare
                C : constant Character := Character'Val (Block (Index));
             begin
-               if C = ASCII.LF then
+               if C = ASCII.NUL then
+                  Stream_IO.Close (File);
+                  return Not_Text;
+               elsif C = ASCII.LF then
                   Line (Number, U.To_String (Pending), Stop);
                   Pending := U.Null_Unbounded_String;
                   exit when Stop;
                   Number := Number + 1;
-               elsif U.Length (Pending) < 1024 * 1024 then
+               elsif U.Length (Pending) < Line_Most then
                   U.Append (Pending, C);
+               else
+                  Cut := True;
                end if;
             end;
          end loop;
@@ -194,13 +205,13 @@ package body Model_Runner.Tools.Editing is
          Line (Number, U.To_String (Pending), Stop);
       end if;
       Stream_IO.Close (File);
-      return True;
+      return Lines_Read;
    exception
       when others =>
          if Stream_IO.Is_Open (File) then
             Stream_IO.Close (File);
          end if;
-         return False;
+         return Not_Read;
    end Stream_Lines;
 
    function Why_Unread (Path : String; Status : E.Error_Info) return String is
@@ -211,7 +222,9 @@ package body Model_Runner.Tools.Editing is
          return Path & " is a directory: list_directory lists it";
       elsif Status.Code = E.IO_File_Too_Large then
          return Path & " is too large to read whole (" & E.Text_Of (Status, "detail")
-           & "): read_range reads lines of it, search_file finds them";
+           --  And that no tool here changes it: told to edit it, the model
+           --  went round write_file, edit_file and read_range.
+           & "): read_range reads lines of it and search_file finds them, but no tool here changes it";
       elsif E.Text_Of (Status, "detail") /= "" then
          return Path & " cannot be read as text: " & E.Text_Of (Status, "detail");
       end if;
@@ -1285,38 +1298,56 @@ package body Model_Runner.Tools.Editing is
             Upto  : constant Natural := (if Last = 0 then First + Range_Most - 1
                                          else Natural'Min (Last, First + Range_Most - 1));
             Shown : Natural := First - 1;
-            Total : Natural := 0;
+            Seen  : Natural := 0;
             Full  : Boolean := False;
+            --  Read no further than a line past the range: read to the end
+            --  to count it, a range of a file of gigabytes held the call for
+            --  the whole of it.
             procedure Take (Number : Positive; Text : String; Stop : out Boolean) is
                Head : constant String := Image (Number) & ": ";
                Room : constant Integer := Range_Bytes - Path'Length - U.Length (Result.Text) - Head'Length - 1;
             begin
-               Stop := False;
-               Total := Number;
+               Seen := Number;
+               Stop := Number > Upto or else Full;
                if Number in First .. Upto and then not Full then
                   if Text'Length <= Room then
                      U.Append (Result.Text, Head & Text & ASCII.LF);
                      Shown := Number;
                   else
+                     --  A line longer than all the room is shown in part, so
+                     --  that it can be read at all: shown as nothing, it was
+                     --  asked for again and again.
+                     if Shown < First and then Room > 0 then
+                        U.Append (Result.Text, Head & Text (Text'First .. Text'First + Room - 1) & ASCII.LF
+                                  & "(line" & Natural'Image (Number) & " is longer than can be shown: its first"
+                                  & Natural'Image (Room) & " characters)" & ASCII.LF);
+                        Shown := Number;
+                     end if;
                      Full := True;
+                     Stop := True;
                   end if;
                end if;
             end Take;
             function Read_Lines is new Stream_Lines (Take);
+            Cut : Boolean;
          begin
-            if not Read_Lines (On_Disk (Base, Path)) then
-               return Failing (Path & " could not be read");
-            elsif First > Total then
-               return Failing (Path & " has" & Natural'Image (Total) & " lines");
+            case Read_Lines (On_Disk (Base, Path), Cut) is
+               when Not_Read => return Failing (Path & " could not be read");
+               when Not_Text => return Failing (Path & " is not text, so it is not read by its lines");
+               when Lines_Read => null;
+            end case;
+            if First > Seen then
+               return Failing (Path & " has" & Natural'Image (Seen) & " lines");
             end if;
-            if Shown < (if Last = 0 then Total else Natural'Min (Last, Total)) then
+            if Seen > Shown and then (Last = 0 or else Shown < Last) then
                Result.Truncated := True;
                U.Append (Result.Text, "(" & (if Full then "as many lines as fit in one answer"
-                                             else Natural'Image (Range_Most) & " lines at most")
+                                             elsif Shown - First + 1 >= Range_Most
+                                             then Natural'Image (Range_Most) & " lines at most"
+                                             else "more lines follow")
                          & "; read on from line" & Natural'Image (Shown + 1) & ")" & ASCII.LF);
             end if;
-            U.Append (Result.Text, "(" & Path & ":" & Natural'Image (Total) & " lines; too large to edit here,"
-                      & " so given with no revision)");
+            U.Append (Result.Text, "(" & Path & ": too large to edit here, so given with no revision)");
             return Result;
          end;
       elsif E.Is_Error (Status) then
@@ -1464,10 +1495,20 @@ package body Model_Runner.Tools.Editing is
                end if;
             end Look;
             function Search is new Stream_Lines (Look);
+            Cut : Boolean;
          begin
-            if not Search (On_Disk (Base, Path)) then
-               return Failing (Path & " could not be read");
-            end if;
+            case Search (On_Disk (Base, Path), Cut) is
+               when Not_Read => return Failing (Path & " could not be read");
+               when Not_Text => return Failing (Path & " is not text, so it is not searched");
+               when Lines_Read =>
+                  --  A line read in part leaves no "no line holds that".
+                  if Cut and then Hits = 0 then
+                     return (Text => U.To_Unbounded_String
+                               ("no line of " & Path & " holds that, in what was read: a line longer than"
+                                & " a mebibyte was read only to there"),
+                             Incomplete => True, others => <>);
+                  end if;
+            end case;
          end;
       elsif E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));

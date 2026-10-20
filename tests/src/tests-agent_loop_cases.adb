@@ -447,6 +447,26 @@ package body Tests.Agent_Loop_Cases is
          Assert (not Told_Unreadable, "a Gemma call cut in its block was told it could not be read");
       end;
 
+      --  A call cut right at its body's opener is the call cut: read whole
+      --  with no arguments, a list or a check ran that was never written.
+      declare
+         procedure Cut_At (Reply : String; Syntax : Model_Runner.Tools.Call_Syntax; Why : String) is
+            Replies : Script;
+            Seen    : Recorder;
+            Ended   : Ag.Outcome;
+         begin
+            Replies.Replies.Append (Reply);
+            Replies.Cut_At := 1;
+            Run (Replies, Seen, Ended, Syntax => Syntax);
+            Assert (Seen.Results.Is_Empty or else Has (Seen.Results (1), "length limit"), Why);
+         end Cut_At;
+      begin
+         Cut_At ("<|channel|>commentary to=functions.list_directory <|constrain|>json<|message|>",
+                 Model_Runner.Tools.Harmony_Call, "a harmony call cut at its body's opener ran with none");
+         Cut_At (">>>list_directory" & ASCII.LF, Model_Runner.Tools.Recipient_JSON,
+                 "a recipient call cut at its body's opener ran with none");
+      end;
+
       --  A call cut where the context filled is cut, as one at the reply's
       --  length is: told it could not be read, a model wrote it again as long.
       declare
@@ -967,6 +987,38 @@ package body Tests.Agent_Loop_Cases is
          Assert (Natural (Seen.Results.Length) = 2 and then Model_Runner.UTF8.Is_Valid (Seen.Results (1))
                  and then Model_Runner.UTF8.Is_Valid (Seen.Results (2)),
                  "a tool's answer was given as bytes that are not UTF-8");
+      end;
+
+      --  A run of many calls keeps its history: held to 256 calls, one of
+      --  two calls a step was told its history was too long near its
+      --  128th step, whatever room it had.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Lines   : Unbounded_String;
+      begin
+         for Line in 1 .. 400 loop
+            Append (Lines, "line" & Line'Image & ASCII.LF);
+         end loop;
+         Put ("long.txt", To_String (Lines));
+         for Step in 1 .. 150 loop
+            declare
+               At_Line : constant String := Ada.Strings.Fixed.Trim (Natural'Image (2 * Step), Ada.Strings.Left);
+               Next    : constant String := Ada.Strings.Fixed.Trim (Natural'Image (2 * Step + 1), Ada.Strings.Left);
+            begin
+               Replies.Replies.Append
+                 (Call ("read_file", "{""path"": ""long.txt"", ""first_line"": " & At_Line & ", ""last_line"": "
+                        & At_Line & "}")
+                  & ASCII.LF
+                  & Call ("read_file", "{""path"": ""long.txt"", ""first_line"": " & Next & ", ""last_line"": "
+                          & Next & "}"));
+            end;
+         end loop;
+         Replies.Replies.Append ("done");
+         Run (Replies, Seen, Ended, Steps => 200);
+         Assert (Ended.Reason = Ag.Answered and then Natural (Seen.Results.Length) = 300,
+                 "a run of three hundred calls ended " & Ended.Reason'Image & " after" & Seen.Results.Length'Image);
       end;
 
       --  A file put back as an earlier write left it is said to be.

@@ -7418,6 +7418,46 @@ package body Tests.Framework_Cases is
                        and then not Dirs.Exists (Stale),
                        "a base left by a failed making was copied into: " & To_String (Made.Path));
             end;
+            --  Given up in part -- a folder in it that would not go -- it is
+            --  never taken in: read as it stood, every file it lost was a
+            --  deletion, and the project lost them all. Gone whole, the same:
+            --  taken in, it was nothing changed and the task went on. And not
+            --  given up while a taking in of it is unsettled.
+            declare
+               Half    : Ws.Workspace;
+               Gone    : Ws.Workspace;
+               Ignored : Boolean;
+               Journal : constant String := S.Root (Store) & "/runtime/integrating-";
+            begin
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Half, Status);
+               S.Commit (Store, Change, Status);
+               Dirs.Create_Path (To_String (Half.Path) & "/stuck");
+               Put_File (To_String (Half.Path) & "/stuck/held.txt", "held");
+               Ignored := Hostkit.Metadata.Set_Permissions (To_String (Half.Path) & "/stuck", 8#555#);
+               Ws.Abandon (Store, Change, To_String (Half.Id), Status);
+               Change := S.No_Changes;
+               Ignored := Hostkit.Metadata.Set_Permissions (To_String (Half.Path) & "/stuck", 8#755#);
+               Ws.Integrate (Store, Change, To_String (Half.Id), True, Taken, Status);
+               Change := S.No_Changes;
+               Assert (Status.Code = E.Framework_Transition_Invalid and then Taken.Is_Empty
+                       and then Dirs.Exists (Fresh_Root (Store) & "/src/hello.adb"),
+                       "a workspace given up in part was taken in: " & Code_Of (Status));
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Gone, Status);
+               S.Commit (Store, Change, Status);
+               Dirs.Delete_Tree (To_String (Gone.Path));
+               Ws.Integrate (Store, Change, To_String (Gone.Id), True, Taken, Status);
+               Change := S.No_Changes;
+               Assert (Status.Code = E.Framework_Transition_Invalid,
+                       "a workspace whose tree is gone was taken in: " & Code_Of (Status));
+               Ws.Create (Store, Change, To_String (Other), "AG-TEST", "1", False, Gone, Status);
+               S.Commit (Store, Change, Status);
+               Put_File (Journal & To_String (Gone.Id), "task" & ASCII.HT & "TASK-X" & LF);
+               Ws.Abandon (Store, Change, To_String (Gone.Id), Status);
+               Change := S.No_Changes;
+               Assert (E.Is_Error (Status) and then Dirs.Exists (To_String (Gone.Path)),
+                       "a workspace was given up while a taking in of it was unsettled");
+               Dirs.Delete_File (Journal & To_String (Gone.Id));
+            end;
             --  A workspace whose tree is gone changed nothing that can be
             --  told: scanned, every file of its baseline was its change.
             declare
@@ -9652,6 +9692,68 @@ package body Tests.Framework_Cases is
       Status := E.Success;
    end Run_Parenting;
 
+   --  An agent whose task's profile is reconfigured as it works, then runs
+   --  its checks scoped to what it changed: what they said.
+   type Reprofile_Agent is new Wk.Parenting_Runner with null record;
+   Reprofiling_In : access S.Store := null;
+   Reprofiled_Report : Unbounded_String;
+
+   overriding procedure Run
+     (Self        : Reprofile_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Reprofile_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Reprofile_Agent) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("reprofile"), Context_Limit => 16_384, others => <>));
+
+   overriding procedure Run
+     (Self        : Reprofile_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: nothing");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Reprofile_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path);
+      Got      : E.Error_Info;
+      Changes  : Model_Runner.Framework.Configurations.Value_Maps.Map;
+      Planned  : Model_Runner.Framework.Configurations.Change_Plan;
+      Revision : Natural;
+   begin
+      Changes.Include ("profile.other", "never: false");
+      Changes.Include ("scalar.verification.default", "other");
+      Model_Runner.Framework.Configurations.Plan_Change (Reprofiling_In.all, Changes, Planned, Got);
+      Model_Runner.Framework.Configurations.Reconfigure (Reprofiling_In.all, Planned, Revision, Got);
+      Children.Keep_Before_Write ("notes.txt", Got);
+      Put_File (Project & "/notes.txt", "notes");
+      Children.Run_Checks (Children.Task_Profile, Reprofiled_Report, Got, Affected => True);
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: noted" & LF & "changed_files: notes.txt");
+      Status := E.Success;
+   end Run_Parenting;
+
    --  An agent that writes once, its lesson's checks run after: what they
    --  said, and whether it may run the profile another of them is from.
    type Lint_Agent is new Wk.Parenting_Runner with null record;
@@ -10748,6 +10850,8 @@ package body Tests.Framework_Cases is
             Assert (Ada.Strings.Fixed.Index
                       (To_String (Shown), "failed, and was run once more" & LF & "error: it could not be run") = 0
                     and then Ada.Strings.Fixed.Index
+                               (To_String (Shown), "It is run once more." & LF & "error: it could not be run") = 0
+                    and then Ada.Strings.Fixed.Index
                                (To_String (Shown), "the agent's token budget is at its limit") > 0,
                     "a helper not run once more was said to have been, or why it failed was not said: "
                     & To_String (Shown));
@@ -10859,6 +10963,13 @@ package body Tests.Framework_Cases is
       for File in 1 .. 12_000 loop
          Put_File (Project & "/n" & Ada.Strings.Fixed.Trim (File'Image, Ada.Strings.Left) & ".txt", "a note");
       end loop;
+      --  Files of bytes, left out of the graph and kept as skipped: each
+      --  found among those skipped before by walking them all, a refresh
+      --  took seconds.
+      for File in 1 .. 40_000 loop
+         Put_File (Project & "/b" & Ada.Strings.Fixed.Trim (File'Image, Ada.Strings.Left) & ".dat",
+                   "x" & ASCII.NUL & "y");
+      end loop;
       Began := Ada.Real_Time.Clock;
       declare
          Found : constant Rp.Graph := Rp.Scan (Project);
@@ -10875,12 +10986,104 @@ package body Tests.Framework_Cases is
             Kept : constant Duration := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began);
          begin
             Assert (Again = 0 and then Rp.File_Count (Same) = Rp.File_Count (Found) and then Kept < 1.5,
-                    "a refresh of fourteen thousand unchanged files took" & Kept'Image & " s, reading"
+                    "a refresh of fifty-four thousand unchanged files took" & Kept'Image & " s, reading"
                     & Again'Image);
          end;
       end;
       Remove_Tree (Project);
    end Scans_Keep_To_Time;
+
+   --  What a task's work is judged by is what the work began with: a
+   --  profile reconfigured as it ran was taken for a narrower one by its
+   --  checks, and the gate asked for its evidence, never run.
+   procedure Work_Is_Judged_As_It_Began (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Id     : Unbounded_String;
+      Done   : Wk.Report;
+   begin
+      Task_Project
+        (Store, "judged-as-began",
+         "set execution.allowed = true" & LF & "set execution.allowed = false" & LF
+         & "profile checks = fine: true" & LF & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Note it", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Reprofiling_In := Store'Unchecked_Access;
+      Wk.Execute (Store, To_String (Id), Reprofile_Agent'(null record), Cx.Profile (Store, ""), Done, Status);
+      Reprofiling_In := null;
+      Assert (Ada.Strings.Fixed.Index (To_String (Reprofiled_Report), "never") = 0
+              and then Ada.Strings.Fixed.Index (To_String (Reprofiled_Report), "fine") > 0,
+              "a profile reconfigured as the work ran was run for its checks: " & To_String (Reprofiled_Report));
+      Assert (To_String (Done.Final_State) = "complete",
+              "a task verified by the profile it began with was held to the one reconfigured: "
+              & To_String (Done.Final_State) & " " & To_String (Done.Reason));
+      S.Close (Store);
+
+      --  Work a restore undid is no earlier attempt's: taken for one, the
+      --  task named the restored file its own again.
+      Task_Project
+        (Store, "undone-earlier",
+         "set execution.allowed = true" & LF & "profile checks = fine: true" & LF
+         & "scalar verification.default = checks" & LF);
+      Tk.Create (Store, Change, Fields ("Twice undone", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/early.txt"),
+                                  Answer => To_Unbounded_String ("status: blocked" & LF & "summary: stuck"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      Model_Runner.Framework.Work.Note_Undone (Store, To_String (Id), "given-up-x", Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String ("status: done" & LF & "summary: x"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      declare
+         Value : R.Item;
+         Got   : E.Error_Info;
+      begin
+         S.Read (Store, Model_Runner.Framework.Tasks_Area, To_String (Id) & ".state", Value, Got);
+         Assert (Ada.Strings.Fixed.Index (R.Get (Value, "changed_files"), "src/early.txt") = 0,
+                 "work a restore undid was taken for the task's again: " & R.Get (Value, "changed_files"));
+      end;
+      S.Close (Store);
+
+      --  A verify: yes answer from work apart is checked in its workspace:
+      --  checked in the project, it was judged by code it never touched.
+      Task_Project
+        (Store, "verify-apart",
+         "set execution.allowed = test" & LF & "profile checks = exists: test -f src/hello.adb" & LF
+         & "scalar verification.default = checks" & LF & "scalar work.isolation = workspace" & LF);
+      Tk.Create (Store, Change, Fields ("Check apart", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Wk.Execute (Store, To_String (Id),
+                  Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                  Answer => To_Unbounded_String ("status: blocked" & LF & "summary: unsure"
+                                                                 & LF & "verify: yes"),
+                                  Broken => False),
+                  Cx.Profile (Store, ""), Done, Status);
+      declare
+         Value : R.Item;
+         Got   : E.Error_Info;
+      begin
+         S.Read (Store, Model_Runner.Framework.Verification_Area, To_String (Done.Evidence_Id), Value, Got);
+         Assert (Length (Done.Evidence_Id) > 0 and then R.Get (Value, "passed") = "true"
+                 and then R.Get (Value, "workspace") /= "",
+                 "a verify: yes answer from work apart was checked in the project: "
+                 & To_String (Done.Evidence_Id) & " " & R.Get (Value, "passed") & " " & To_String (Done.Reason));
+      end;
+      S.Close (Store);
+   end Work_Is_Judged_As_It_Began;
 
    --  A narrower run that failed and then passes clears its failure: held
    --  to a pass of the whole alone, a narrow failure mended narrowly was
@@ -15424,6 +15627,28 @@ package body Tests.Framework_Cases is
                Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
                Assert (False, "a folder of the state that will not be listed raised");
          end;
+         --  A file that will not read put in a folder's place is a file:
+         --  taken for a folder that will not be listed, the records under it
+         --  were not put back, and the file then removed with them gone.
+         declare
+            Folder  : constant String := Fresh_Root (Store) & "/.model_runner/unread-place";
+            Ignored : Boolean;
+         begin
+            Dirs.Create_Path (Folder);
+            Put_File (Folder & "/a.rec", "a record");
+            S.Snapshot_State (Store, Taken);
+            Dirs.Delete_Tree (Folder);
+            Put_File (Folder, "in its place");
+            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
+            S.Restore_State (Store, Taken, Changed, Left);
+            if Dirs.Exists (Folder) and then Dirs."/=" (Dirs.Kind (Folder), Dirs.Directory) then
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#644#);
+            end if;
+            Assert (Dirs.Exists (Folder & "/a.rec") and then Read_Whole (Folder & "/a.rec") = "a record",
+                    "a file that will not read, put in a folder's place, lost the records under it: "
+                    & (if Left.Is_Empty then "" else Left.First_Element));
+            Dirs.Delete_Tree (Folder);
+         end;
          --  One that would not be listed when the snapshot was taken, and is
          --  now: what it holds is unknown, and left -- taken for a folder
          --  that held nothing, it was removed; and the whole state so.
@@ -19426,6 +19651,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, A_File_A_Check_Rewrote_Is_The_Works'Access,
          "a file the work wrote and a check then rewrote is the work's still");
+      Register_Routine
+        (T, Work_Is_Judged_As_It_Began'Access,
+         "a task's work is judged by what it began with, in the tree it was written in");
       Register_Routine
         (T, Scans_Keep_To_Time'Access,
          "a scan and a refresh keep to time on a project of many files");

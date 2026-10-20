@@ -828,6 +828,21 @@ package body Tests.Tools_Cases is
       --  A file past what is read whole is read by its lines and searched
       --  all the same: refused, each tool sent the model to the other.
       declare
+         --  A file of COUNT of one character and then TAIL, written a slice at
+         --  a time: whole, it was more than a stack holds.
+         procedure Put_Repeated (Name : String; C : Character; Count : Natural; Tail : String) is
+            F     : Ada.Streams.Stream_IO.File_Type;
+            Slice : constant String (1 .. 65_536) := [others => C];
+            Left  : Natural := Count;
+         begin
+            Ada.Streams.Stream_IO.Create (F, Ada.Streams.Stream_IO.Out_File, Name);
+            while Left > 0 loop
+               String'Write (Ada.Streams.Stream_IO.Stream (F), Slice (1 .. Natural'Min (Left, Slice'Length)));
+               Left := Left - Natural'Min (Left, Slice'Length);
+            end loop;
+            String'Write (Ada.Streams.Stream_IO.Stream (F), Tail);
+            Ada.Streams.Stream_IO.Close (F);
+         end Put_Repeated;
          Huge_Path : constant String := Dir & "/huge.log";
          Lines     : Ada.Strings.Unbounded.Unbounded_String;
       begin
@@ -842,6 +857,28 @@ package body Tests.Tools_Cases is
                  and then not Ed.Read_Range (Huge_Path, 70_000, 70_001).Failed,
                  "a file too large to read whole was not read by its lines or searched: "
                  & Ada.Strings.Unbounded.To_String (Ed.Search_File (Huge_Path, "needle").Text));
+         --  Its first line longer than an answer holds is shown in part:
+         --  shown as nothing, it was asked for again and again. And one
+         --  past what a line is held to says so, where nothing was found.
+         Put_Repeated (Huge_Path, 'x', 5_000_000, ASCII.LF & "second" & ASCII.LF);
+         Assert (Has (Ed.Read_Range (Huge_Path, 1, 1), "is longer than can be shown"),
+                 "a long first line of a large file was not shown in part: "
+                 & Ada.Strings.Unbounded.To_String (Ed.Read_Range (Huge_Path, 1, 1).Text)
+                     (1 .. Natural'Min (200, Ada.Strings.Unbounded.Length (Ed.Read_Range (Huge_Path, 1, 1).Text))));
+         Put_Repeated (Huge_Path, 'y', 17_000_000, "needle" & ASCII.LF);
+         Assert (Has (Ed.Search_File (Huge_Path, "needle"), "in what was read"),
+                 "a search of a line read only in part said no line holds it");
+         --  Bytes are not text, however large: given as lines, a binary
+         --  file was handed to the model raw.
+         Put_Repeated (Huge_Path, 'z', 5_000_000, ASCII.NUL & "tail" & ASCII.LF);
+         Assert (Ed.Read_Range (Huge_Path, 1, 2).Failed and then Has (Ed.Read_Range (Huge_Path, 1, 2), "not text")
+                 and then Has (Ed.Search_File (Huge_Path, "tail"), "not text"),
+                 "a large file of bytes was read by its lines");
+         --  Nor sent round to tools that cannot change it.
+         Assert (Has (Ed.Edit (Huge_Path, "z", "y", ""), "no tool here changes it")
+                 or else Has (Ed.Edit (Huge_Path, "z", "y", ""), "not text"),
+                 "a file too large to edit sent the model to another tool: "
+                 & Ada.Strings.Unbounded.To_String (Ed.Edit (Huge_Path, "z", "y", "").Text));
          Ada.Directories.Delete_File (Huge_Path);
       end;
       --  A range of long lines is held to what one answer holds, and says
@@ -3306,6 +3343,10 @@ package body Tests.Tools_Cases is
             Listed  : constant String := Placed.Stamp ("list_directory", "{""path"": "".""}");
             Notes   : constant String := Ada.Directories.Full_Name ("obj") & "/tools-notes";
          begin
+            Ada.Directories.Create_Path (Tree & "/out");
+            Assert (Listed /= Placed.Stamp ("list_directory", "{""path"": "".""}"),
+                    "an empty folder made beside a listing left its stamp as it was");
+            Ada.Directories.Delete_Directory (Tree & "/out");
             Put_Bytes (Tree & "/.env", "KEY=1");
             Assert (Listed /= Placed.Stamp ("list_directory", "{""path"": "".""}"),
                     "a dot-named file made beside a listing left its stamp as it was");
@@ -4122,6 +4163,25 @@ package body Tests.Tools_Cases is
          Same (Read_Kept ("```tool_code" & LF & "edit(old_string=""" & [1 .. Tools.Max_Call_Bytes => 'x'] & """)"
                           & LF & "```", Tools.Python_Code),
                " | TOOLS_TOO_LARGE", "a Gemma call too large to read was said to be malformed");
+      end;
+      --  A Gemma call whose arguments grow past the room as JSON is too
+      --  large, though its source fits: quotes are escaped, and it was told
+      --  malformed, and written again the same.
+      Same (Read_Kept ("```tool_code" & LF & "edit(old_string='" & [1 .. 20_000 => '"'] & "')" & LF & "```",
+                       Tools.Python_Code),
+            " | TOOLS_TOO_LARGE", "a Gemma call grown too large as JSON was said to be malformed");
+      --  An example of many braces before a bare call: each of its own
+      --  counted against the bound, the call after it was never reached.
+      declare
+         Example : Ada.Strings.Unbounded.Unbounded_String := Ada.Strings.Unbounded.To_Unbounded_String ("{""x"": [");
+      begin
+         for Count in 1 .. 80 loop
+            Ada.Strings.Unbounded.Append (Example, (if Count = 1 then "" else ", ") & "{}");
+         end loop;
+         Ada.Strings.Unbounded.Append (Example, "]}");
+         Same (Read (Ada.Strings.Unbounded.To_String (Example) & LF
+                     & "{""name"": ""edit"", ""arguments"": {""count"": 1}}", Tools.Open_JSON),
+               "edit({""count"": 1})", "a call after an example of many braces was not reached");
       end;
       --  A harmony call to a function not on offer is a call, to be told
       --  no tool goes by that name: passed over, the reply was its answer.

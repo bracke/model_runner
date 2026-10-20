@@ -437,6 +437,34 @@ package body Model_Runner.Agent is
       --  open. A whole call with words after it ends in no call: taken by
       --  the text's last characters alone, such a call was said to be cut
       --  short, and not run.
+      --  Whether a reply's text ends in a call's header, or right after its
+      --  body's opener with nothing yet: a harmony call before or just past
+      --  its <|message|>, a recipient block's name and no body. Read as whole,
+      --  such a call ran with no arguments at all; it is the call cut.
+      function Cut_At_Opener (Text : String) return Boolean is
+         function Last_Of (Mark : String) return Natural
+         is (Ada.Strings.Fixed.Index (Text, Mark, Ada.Strings.Backward));
+         function Blank_After (Mark : String) return Boolean
+         is (Last_Of (Mark) > 0
+             and then (for all C of Text (Last_Of (Mark) + Mark'Length .. Text'Last) =>
+                         C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR));
+      begin
+         if Read_Syntax = Model_Runner.Tools.Harmony_Call then
+            return (Last_Of (Model_Runner.Tools.Harmony_Recipient) > 0
+                    and then Last_Of (Model_Runner.Tools.Harmony_Recipient)
+                             > Last_Of (Model_Runner.Tools.Harmony_Message))
+              or else Blank_After (Model_Runner.Tools.Harmony_Message);
+         elsif Read_Syntax = Model_Runner.Tools.Recipient_JSON and then Last_Of (">>>") > 0 then
+            declare
+               Rest : constant String := Text (Last_Of (">>>") + 3 .. Text'Last);
+            begin
+               return Rest /= "" and then (for all C of Rest => C /= '{')
+                 and then Ada.Strings.Fixed.Index (Rest, "all") /= Rest'First;
+            end;
+         end if;
+         return False;
+      end Cut_At_Opener;
+
       function Ends_Inside_Call (Text : String) return Boolean is
          function Last_Of (Mark : String) return Natural
          is (Ada.Strings.Fixed.Index (Text, Mark, Ada.Strings.Backward));
@@ -458,6 +486,9 @@ package body Model_Runner.Agent is
                --  are objects -- counted over the whole reply, a bracket or
                --  a quote in its thought or in the prose after a whole call
                --  took that call for cut short.
+               if Cut_At_Opener (Text) then
+                  return True;
+               end if;
                if After ("<tool_call>", "</tool_call>") then
                   return True;
                elsif Read_Syntax = Model_Runner.Tools.Python_Code then
@@ -1146,9 +1177,15 @@ package body Model_Runner.Agent is
               Read_Syntax not in Model_Runner.Tools.Function_XML | Model_Runner.Tools.Tool_Call_JSON
                                | Model_Runner.Tools.Qwen_XML | Model_Runner.Tools.DeepSeek_Fenced
                                | Model_Runner.Tools.DeepSeek_Plain;
+            --  Cut at a call's opener, the call read is the cut one: its
+            --  form read it whole, with no arguments.
+            Opener_Cut : constant Boolean :=
+              Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full and then Cut_At_Opener (Reply_Text)
+              and then E.Is_Ok (Reading);
             Lost_Cut : constant Boolean :=
               Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
               and then Ends_Inside_Call (Reply_Text)
+              and then not Opener_Cut
               and then ((E.Is_Error (Reading) and then E."=" (Reading.Code, E.Tools_Call_Malformed))
                         or else Open_Form);
             Cut_Last : constant Boolean :=

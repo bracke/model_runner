@@ -1155,7 +1155,16 @@ package body Model_Runner.CLI.Project_Commands is
                --  As it was before this line, and the run that failed, for
                --  where the next cannot be made.
                Before_Retry := Told;
-               Failed_Run := Now;
+               --  Without its last line, which says it is run once more.
+               declare
+                  Said : constant String := To_String (Now);
+                  Once : constant Natural := Ada.Strings.Fixed.Index (Said, "It is run once more.");
+               begin
+                  Failed_Run := To_Unbounded_String
+                    (if Once = 0 then Said
+                     elsif Once > Said'First and then Said (Once - 1) = ASCII.LF then Said (Said'First .. Once - 2)
+                     else Said (Said'First .. Once - 1));
+               end;
                Told := (if Told = Null_Unbounded_String then Null_Unbounded_String else Told & ASCII.LF)
                  & To_Unbounded_String (To_String (Id) & " failed, and was run once more");
             else

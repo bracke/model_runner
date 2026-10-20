@@ -2019,9 +2019,16 @@ package body Model_Runner.Framework.Stores is
       function Below_Unread (Name : String) return Boolean is
       begin
          for Index in Name'Range loop
+            --  A folder that will not be listed, not a file that will not
+            --  read: one of those put in a folder's place hid the records
+            --  the snapshot held under it, and was then removed.
             if Name (Index) = '/' and then Index > Name'First
               and then Now.Files.Contains (Name (Name'First .. Index - 1))
               and then To_String (Now.Files (Name (Name'First .. Index - 1))) = Unread_Mark
+              and then Ada.Directories.Exists (Hostkit.Fs.Join (Root (Item), Name (Name'First .. Index - 1)))
+              and then Ada.Directories."=" (Ada.Directories.Kind (Hostkit.Fs.Join (Root (Item),
+                                                                                    Name (Name'First .. Index - 1))),
+                                            Ada.Directories.Directory)
             then
                return True;
             end if;
@@ -2069,7 +2076,12 @@ package body Model_Runner.Framework.Stores is
             elsif not From.Files.Contains (Name)
               and then not Committed.Contains (Name)
               and then not Own_Files.Holds (Root (Item), Name)
-              and then To_String (Text_Maps.Element (Position)) /= Unread_Mark
+              --  A file that will not read is a file still: only a folder
+              --  that will not be listed is left.
+              and then (To_String (Text_Maps.Element (Position)) /= Unread_Mark
+                        or else not Ada.Directories.Exists (Hostkit.Fs.Join (Root (Item), Name))
+                        or else Ada.Directories."/=" (Ada.Directories.Kind (Hostkit.Fs.Join (Root (Item), Name)),
+                                                      Ada.Directories.Directory))
               and then Holds_Below (From.Files, Name)
             then
                Unlinked.Append (Name);

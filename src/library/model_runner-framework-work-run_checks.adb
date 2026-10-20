@@ -15,7 +15,9 @@ is
      (if Affected then Changed_So_Far else Name_Lists.Empty_Vector);
    Chosen  : constant Verification.Choice :=
      (if Affected and then not Changed.Is_Empty
-      then Verification.Choose (Host.Item.all, To_String (Host.Task_Id), Changed)
+      --  Against the profile the work began with: read live, a profile
+      --  reconfigured meanwhile was taken for a narrower one, and ran.
+      then Verification.Choose (Host.Item.all, To_String (Host.Task_Id), Changed, Own_Profile => Profile)
       else (others => <>));
    --  Narrower only where the agent may run that profile too, as it may
    --  now: what it takes is its own, not the task's profile's.
@@ -42,7 +44,8 @@ is
    --  How wide this run is: the whole profile, or the scope it was
    --  narrowed to -- component tests wider than certain ones.
    Width : constant Positive :=
-     (if not Narrow then 3 elsif To_String (Chosen.Scope) = "component_tests" then 2 else 1);
+     (if not Narrow or else To_String (Chosen.Scope) = "full_suite" then 3
+      elsif To_String (Chosen.Scope) = "component_tests" then 2 else 1);
 
    --  Whether this pass clears what failed: a run at least as wide as the
    --  failure's, or of the profile whose run it was -- held to that one

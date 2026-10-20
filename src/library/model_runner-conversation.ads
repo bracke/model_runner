@@ -363,10 +363,11 @@ private
 
    Max_Messages : constant := 4096;
 
-   --  How many tool calls one history holds, over every message in it. A
-   --  model asks for a handful at a time, and a table this size is a
-   --  kilobyte beside a history whose content is bounded in megabytes.
-   Max_Calls : constant := 256;
+   --  How many tool calls one history holds, over every message in it:
+   --  as many as its messages can answer, each call's answer a message of
+   --  its own. Held to 256, a run of two calls a step ended near its 128th
+   --  step with the history said too long, room or no room; this is 32 KB.
+   Max_Calls : constant := Max_Messages / 2;
 
    type Message is record
       Sender : Role := User_Role;

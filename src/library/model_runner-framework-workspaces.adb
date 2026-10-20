@@ -273,6 +273,12 @@ package body Model_Runner.Framework.Workspaces is
    function Tree_Under (Item : Stores.Store; Id : String) return String
    is (Hostkit.Fs.Join (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"), Id), "tree"));
 
+   --  Beside a workspace, where its giving up began: a tree removed in
+   --  part -- a folder that would not go, a stop part way -- read as the
+   --  deletion of every file it lost, and was taken in as that.
+   function Giving_Up_Mark (Item : Stores.Store; Id : String) return String
+   is (Hostkit.Fs.Join (Hostkit.Fs.Join (Stores.Root (Item), "workspaces"), Id & ".giving-up"));
+
    --  Create's work; Create below takes away what it leaves on failure.
    procedure Create_Whole
      (Item       : Stores.Store;
@@ -773,7 +779,9 @@ package body Model_Runner.Framework.Workspaces is
       --  moved on -- changed nothing that can be told: scanned, every file
       --  of its baseline was its change, and the task's changed files were
       --  the whole project.
-      if E.Is_Error (Status) or else not Dirs.Exists (To_String (Held.Path)) then
+      if E.Is_Error (Status) or else not Dirs.Exists (To_String (Held.Path))
+        or else Dirs.Exists (Giving_Up_Mark (Item, Id))
+      then
          return Result;
       end if;
       declare
@@ -1892,6 +1900,16 @@ package body Model_Runner.Framework.Workspaces is
          Status := E.Make (E.Framework_Integration_Refused);
          E.Add_Text (Status, "name", Id);
          return;
+      --  Its tree gone, or given up in part: nothing of it is taken in --
+      --  taken in, it was nothing changed, or every file it lost deleted.
+      elsif not Dirs.Exists (To_String (Held.Path)) or else Dirs.Exists (Giving_Up_Mark (Item, Id)) then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         E.Add_Text (Status, "value", "given up");
+         E.Add_Text (Status, "expected", "integrated");
+         E.Add_Text (Status, "detail", "its tree was given up, in whole or in part, so nothing of it is taken in;"
+                     & " what it changed is in its kept copy");
+         return;
       end if;
 
       --  Nothing taken in by a baseline that cannot be believed: what the
@@ -2940,6 +2958,22 @@ package body Model_Runner.Framework.Workspaces is
                null;
          end;
       end;
+      --  Not while a taking in of it is unsettled: its journal is put back
+      --  from the tree, and with the tree gone it never could be.
+      if Dirs.Exists (Journal_Of (Item, Id)) then
+         Status := E.Make (E.Framework_Transaction_Failed);
+         E.Add_Text (Status, "path", Journal_Of (Item, Id), E.Param_Path);
+         E.Add_Text (Status, "detail", "a taking in of " & Id & " is not settled, so it is not given up yet;"
+                     & " opening the project again settles it");
+         return;
+      end if;
+      --  Marked first: removed in part, it is never taken in after. The
+      --  harness's own, which a restore of the state leaves.
+      Stores.Hold_Own (Item, "workspaces/" & Id & ".giving-up");
+      Files.Write_Text (Giving_Up_Mark (Item, Id), "given up", Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
       --  Its tree gone, or not given up: a workspace said to be abandoned
       --  whose tree is still there would be one nothing removes again.
       Remove_Tree (Item, Held, Status);

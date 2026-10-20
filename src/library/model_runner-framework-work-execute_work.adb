@@ -51,7 +51,10 @@ is
       Read : E.Error_Info;
    begin
       Stores.Read (Item, Tasks_Area, Task_Id & ".state", Held, Read);
-      return (if E.Is_Ok (Read) then Lines_Of (Records.Get (Held, "changed_files"))
+      --  None where a restore undid it: put back out of the project, it was
+      --  taken for this attempt's work again, and its holder named anew.
+      return (if E.Is_Ok (Read) and then Records.Get (Held, "undone_by") = ""
+              then Lines_Of (Records.Get (Held, "changed_files"))
               else Name_Lists.Empty_Vector);
    end Changed_Before;
 
@@ -1848,9 +1851,12 @@ begin
          Passed : Boolean;
       begin
          if To_String (Chosen.Profile) /= "" then
+            --  In the tree the work was written in: run in the project, a
+            --  workspace's work was judged by code it never touched.
             Verification.Run_Profile
               (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed,
                Held, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+               Workspace => (if Isolated then To_String (Place) else ""),
                Definition => Frozen_Definition (To_String (Chosen.Profile)),
                Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
             if E.Is_Ok (Held) then
@@ -2337,7 +2343,7 @@ begin
          end if;
       end;
 
-      Verification.Complete_Task (Item, Change, Task_Id, Held);
+      Verification.Complete_Task (Item, Change, Task_Id, Held, Profile => To_String (Frozen.Verification_Profile));
       if E.Is_Error (Held) then
          Change := Stores.No_Changes;
          declare
