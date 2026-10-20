@@ -124,9 +124,6 @@ package Model_Runner.Qwen_Image is
    function Sigmas (Steps : Positive; Image_Tokens : Positive) return Model_Runner.Numerics.Real_Array
    with Post => Sigmas'Result'Length = Steps + 1;
 
-   --  Told after each step of a picture.
-   type Progress_Note is access procedure (Step : Positive; Steps : Positive);
-
    --  A picture's latent, drawn from its seed: the seed's noise, then an
    --  Euler step a noise level, x + (next - sigma) * v, through Sigmas.
    --
@@ -153,7 +150,7 @@ package Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Latent    : out Model_Runner.Numerics.Real_Array;
       Status    : out Model_Runner.Errors.Error_Info;
-      Progress  : Progress_Note := null);
+      Progress  : access procedure (Step : Positive; Steps : Positive) := null);
 
 private
 

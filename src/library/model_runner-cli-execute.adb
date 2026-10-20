@@ -12,6 +12,7 @@ with Model_Runner.CLI.Execute.Support;
 with Model_Runner.CLI.Execute.Help_Command;
 with Model_Runner.CLI.Execute.Inspect_Command;
 with Model_Runner.CLI.Execute.Embed_Command;
+with Model_Runner.CLI.Execute.Image_Command;
 with Model_Runner.CLI.Execute.Run_Command;
 with Model_Runner.CLI.Execute.Models_Command;
 
@@ -21,6 +22,7 @@ package body Model_Runner.CLI.Execute is
    use Model_Runner.CLI.Execute.Help_Command;
    use Model_Runner.CLI.Execute.Inspect_Command;
    use Model_Runner.CLI.Execute.Embed_Command;
+   use Model_Runner.CLI.Execute.Image_Command;
    use Model_Runner.CLI.Execute.Run_Command;
    use Model_Runner.CLI.Execute.Models_Command;
    use type Opt.Command_Kind;
@@ -161,6 +163,10 @@ package body Model_Runner.CLI.Execute is
             --  it: a sixteen-bit embedding model read a 400-token text in
             --  1.9 s on the processor and 0.25 s on the device.
             Do_Embed (Resolved_Backend (Item, Screen), Screen, Status);
+
+         when Opt.Command_Image =>
+            --  On the processor: the device path is not built yet.
+            Do_Image (Item, Screen, Status);
 
          when Opt.Command_None =>
             Pres.Report (Screen, E.Make (E.CLI_Missing_Command));

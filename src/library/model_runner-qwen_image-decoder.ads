@@ -71,6 +71,17 @@ package Model_Runner.Qwen_Image.Decoder is
       Picture : out Model_Runner.Numerics.Real_Array;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  A decoded picture's planes as bytes, a pixel's four together, as the
+   --  reference turns them: (x + 1) / 2, held to 0 .. 1, times 255, cut.
+   --
+   --  @param Picture Picture_Channels planes of Pixels each
+   --  @param Pixels how many a plane
+   --  @return Pixels * Picture_Channels bytes, red, green, blue, alpha
+   function To_Pixels
+     (Picture : Model_Runner.Numerics.Real_Array; Pixels : Model_Runner.Numerics.Element_Count)
+      return Model_Runner.Bytes.Byte_Array
+   with Pre => Model_Runner.Numerics."=" (Picture'Length, Model_Runner.Numerics."*" (Pixels, Picture_Channels));
+
 private
 
    package T renames Model_Runner.Tensors;

@@ -321,6 +321,15 @@ already compresses. The suite's own PNG reader reads the result back.
 The text encoder is loaded, used and **let go before the denoiser loads**:
 the two together are 16 GB, and this box has 30.
 
+**Done 2026-10-20** (`model_runner image`, Model_Runner.PNG_Writer):
+the three files by their published names in the models directory unless
+named; `--seed` 42 unless said; a picture of nothing or with nowhere to go
+refused by name. Its first picture, "a red apple on a wooden table" at
+256x256 in 8 steps, is an apple on a wooden table -- 7 min 35 s and 14.9 GB
+at its peak, from a binary built in the development profile; the image
+command's own timing in the release profile is still to be taken. Not
+built yet: `--negative`/`--cfg` (guidance), and the device (step 7).
+
 ### 7. The device, and speed
 
 Measured before it is promised; what the arithmetic predicts:

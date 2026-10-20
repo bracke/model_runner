@@ -66,6 +66,7 @@ model_runner [MODEL]         a session on a terminal: the model named, the
                              models directory
 model_runner run MODEL       generate text from a model file
 model_runner embed MODEL     reduce a text to one vector
+model_runner image [MODEL]   draw a picture from a prompt (Qwen-Image 2.1)
 model_runner inspect MODEL   report what a model file contains
 model_runner models          list the models on hand, or remove one
 model_runner help [COMMAND]  show help for a command
@@ -810,6 +811,23 @@ copied at all. `tests benchmark` reports both figures.
 
 ### Embedding
 
+`image` draws a picture from a prompt with Qwen-Image 2.1: its denoiser,
+Qwen3-VL-8B as its text encoder, and its VAE, each found in the models
+directory by its published name -- `qwen-image-2.1-Q8_0.gguf`,
+`Qwen3-VL-8B-Instruct-Q8_0.gguf`, `qwen_image_2.1_vae_bf16.safetensors` --
+unless named with MODEL, `--text-encoder` and `--vae`.
+
+```
+model_runner image --prompt "a red apple on a wooden table" --out apple.png --size 512x512
+```
+
+The picture is an RGBA PNG; the same `--seed` (42 unless said) draws the
+same picture. Each part is held to stable-diffusion.cpp on the published
+files: the prompt's rows, a step's velocity (cosine 0.99999), the latent
+after forty steps (0.99997) and the decoded picture (76-78 dB). It runs on
+the processor for now, a step of a 512 picture in about a minute; the
+device path is the plan's next step (docs/plan-image-generation.md).
+
 `embed` prints what the model made of a text rather than what it would say
 next: the hidden state after the final normalization, before the projection
 that turns a state into a distribution over tokens. That projection is where
@@ -916,7 +934,7 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation. `--tools` offers the model tools and the calls it writes back are read out of the reply and reported; `--assistant` and `--tool-result` put the earlier turns back, in the order they are written, which is how one run closes the loop another opened |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]` `/tools` `/tool TEXT` `/save PATH` `/load PATH`, `/system` removing the system message when no text follows it, `/tool` handing back what a tool answered as a turn of its own, and `/save`/`/load` writing the conversation to a file and replacing it with one, blank-line submission. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 222 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a complete Danish translation, and a generated pseudo-locale, with per-key inheritance for a locale that is not yet whole; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 223 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a complete Danish translation, and a generated pseudo-locale, with per-key inheritance for a locale that is not yet whole; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the sixteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the nine others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |

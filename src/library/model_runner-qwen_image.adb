@@ -139,7 +139,6 @@ package body Model_Runner.Qwen_Image is
       return Natural (Containers.Tensor_Dimension (Item.Container, Index, Axis));
    end Dimension_Of;
 
-
    type View_Access is access all T.View;
    type View_List is array (Positive range <>) of View_Access;
 
@@ -581,7 +580,7 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Latent    : out N.Real_Array;
       Status    : out E.Error_Info;
-      Progress  : Progress_Note := null)
+      Progress  : access procedure (Step : Positive; Steps : Positive) := null)
    is
       use type N.Real;
       Levels : constant N.Real_Array := Sigmas (Steps, Rows * Columns);
@@ -625,7 +624,6 @@ package body Model_Runner.Qwen_Image is
 
    function Config (Item : Denoiser) return Configuration
    is (Item.Shape);
-
 
    --  One evaluation's attention, a share of items at a time, an item a
    --  head and Tile query rows: each row's query over the keys it may see

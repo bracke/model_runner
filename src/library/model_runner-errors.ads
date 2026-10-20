@@ -97,6 +97,7 @@ package Model_Runner.Errors is
       --  type image in --prompt-parts, and no --mmproj naming the model's
       --  vision projector.
       CLI_Picture_Needs_Projector,
+      CLI_Option_Required,
 
       --  Host input and output.
       IO_Open_Failed,

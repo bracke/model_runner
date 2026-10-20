@@ -241,7 +241,7 @@ package body Model_Runner.CLI.Execute.Help_Command is
       --  already named exactly those four, so a fifth command would have
       --  compiled, dispatched, taken options -- and had no help.
       case Opt.Command_Of (Topic) is
-         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Inspect =>
+         when Opt.Command_Run | Opt.Command_Embed | Opt.Command_Image | Opt.Command_Inspect =>
             declare
                Kind : constant Opt.Command_Kind := Opt.Command_Of (Topic);
                Word : constant String := Opt.Command_Word (Kind);

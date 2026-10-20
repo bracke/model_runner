@@ -18,6 +18,8 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Philox;
+with Model_Runner.PNG_Writer;
+with Model_Runner.Images;
 with Model_Runner.Qwen_Image;
 with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Qwen_Image.Decoder;
@@ -1203,6 +1205,60 @@ package body Tests.Image_Cases is
       Dec.Close (Decoder);
    end A_Latent_Decodes_As_The_Plain_Computation;
 
+   --  A picture written as PNG reads back as the same pixels, with alpha
+   --  or without: its rows, its checksums and its deflated stream are what
+   --  a reader takes.
+   procedure A_PNG_Reads_Back_As_Written (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type B.Byte;
+      use type B.Byte_Count;
+      use type B.Byte_Array_Access;
+      Width  : constant := 37;
+      Height : constant := 23;
+   begin
+      for Channels in Model_Runner.PNG_Writer.Channel_Count loop
+         declare
+            Pixels : B.Byte_Array (0 .. B.Byte_Count (Width * Height * Channels) - 1);
+            File   : B.Byte_Array_Access;
+            Back   : Model_Runner.Images.Raster;
+            Status : E.Error_Info;
+         begin
+            for Index in Pixels'Range loop
+               Pixels (Index) := B.Byte ((Natural (Index) * 7 + Natural (Index) / 13) mod 256);
+            end loop;
+            Model_Runner.PNG_Writer.Encode (Width, Height, Channels, Pixels, File, Status);
+            Assert (E.Is_Ok (Status) and then File /= null, "the picture was not encoded");
+            Model_Runner.Images.Decode (File.all, "written", Back, Status);
+            Assert (E.Is_Ok (Status), "the written picture did not read back: " & E.Error_Code'Image (Status.Code));
+            Assert (Back.Width = Width and then Back.Height = Height, "the picture read back another size");
+            for Pixel in 0 .. Width * Height - 1 loop
+               for C in 0 .. 2 loop
+                  if Channels = 3 then
+                     Assert (Back.Pixels (B.Byte_Count (3 * Pixel + C)) = Pixels (B.Byte_Count (3 * Pixel + C)),
+                             "a pixel read back otherwise than written");
+                  end if;
+               end loop;
+            end loop;
+            B.Free (File);
+            Model_Runner.Images.Free (Back);
+         end;
+      end loop;
+   end A_PNG_Reads_Back_As_Written;
+
+   --  A decoded picture's planes become bytes as the reference makes them:
+   --  (x + 1) / 2, held to nought and one, times 255 and cut, a pixel's
+   --  red, green, blue and alpha together.
+   procedure Planes_Become_Bytes_As_The_References (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type B.Byte_Array;
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      --  Two pixels, each channel's plane in turn.
+      Planes : constant N.Real_Array (0 .. 7) := [-1.0, 1.0, 0.0, 3.0, -2.0, 0.999, 0.002, -0.5];
+   begin
+      Assert (Dec.To_Pixels (Planes, 2) = [0, 127, 0, 127, 255, 255, 254, 63],
+              "the planes did not become the reference's bytes");
+   end Planes_Become_Bytes_As_The_References;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -1232,6 +1288,12 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Latent_Decodes_As_The_Plain_Computation'Access,
          "a latent decoded is the plain binary64 computation of the same VAE decoder");
+      Register_Routine
+        (T, A_PNG_Reads_Back_As_Written'Access,
+         "a picture written as PNG reads back as the same pixels, with alpha or without");
+      Register_Routine
+        (T, Planes_Become_Bytes_As_The_References'Access,
+         "a decoded picture's planes become bytes as the reference makes them");
       Register_Routine
         (T, The_Prompt_Template_Is_The_References'Access,
          "a prompt is read within the reference's template, character for character");

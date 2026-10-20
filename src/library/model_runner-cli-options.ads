@@ -62,6 +62,7 @@ package Model_Runner.CLI.Options is
      (Command_None,
       Command_Run,
       Command_Embed,
+      Command_Image,
       Command_Inspect,
       Command_Models,
       Command_Help,
@@ -469,6 +470,15 @@ package Model_Runner.CLI.Options is
 
       Seed     : Interfaces.Unsigned_64 := 0;
       Has_Seed : Boolean := False;
+
+      --  image: the picture's file, its size in pixels, the denoiser's
+      --  steps, and the text encoder and VAE beside the denoiser.
+      Image_Out          : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Image_Width        : Positive := 1024;
+      Image_Height       : Positive := 1024;
+      Image_Steps        : Positive := 40;
+      Text_Encoder_Path  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      VAE_Path           : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
       Stop_Strings : Model_Runner.Text.Bounded_List (1 .. 16) :=
         [others => Model_Runner.Text.Empty];

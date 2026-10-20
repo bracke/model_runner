@@ -40,6 +40,7 @@ ordinal is never reused, not because they might appear.
 | `MR-CLI-0020` | `error.cli.option_not_for_command` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0021` | `error.cli.option_combination` | recovery_user_correctable | 2 | raised |
 | `MR-CLI-0022` | `error.cli.picture_needs_projector` | recovery_user_correctable | 2 | raised |
+| `MR-CLI-0023` | `error.cli.option_required` | recovery_user_correctable | 2 | raised |
 
 ## IO
 

@@ -26,10 +26,15 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 118) of Registry_Row :=
+   Registry : constant array (1 .. 123) of Registry_Row :=
      [
       (Text ("--prompt"),
-       [Command_Run | Command_Embed => True, others => False], Text ("prompt")),
+       [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
+      (Text ("--out"), [Command_Image => True, others => False], Text ("out")),
+      (Text ("--size"), [Command_Image => True, others => False], Text ("size")),
+      (Text ("--steps"), [Command_Image => True, others => False], Text ("steps")),
+      (Text ("--text-encoder"), [Command_Image => True, others => False], Text ("text_encoder")),
+      (Text ("--vae"), [Command_Image => True, others => False], Text ("vae")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--prompt-parts"), [Command_Run => True, others => False],
@@ -152,7 +157,7 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed => True, others => False],
        Text ("yarn_beta_slow")),
       (Text ("--threads"),
-       [Command_Run | Command_Embed | Command_Inspect => True,
+       [Command_Run | Command_Embed | Command_Image | Command_Inspect => True,
         others => False],
        Text ("threads")),
       (Text ("--backend"),
@@ -184,7 +189,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--frequency-penalty"), [Command_Run => True, others => False], Text ("frequency_penalty")),
       (Text ("--presence-penalty"), [Command_Run => True, others => False], Text ("presence_penalty")),
       (Text ("--repeat-window"), [Command_Run => True, others => False], Text ("repeat_window")),
-      (Text ("--seed"), [Command_Run => True, others => False], Text ("seed")),
+      (Text ("--seed"), [Command_Run | Command_Image => True, others => False], Text ("seed")),
       (Text ("--stop"), [Command_Run => True, others => False], Text ("stop")),
       (Text ("--stop-token"), [Command_Run => True, others => False], Text ("stop_token")),
       (Text ("--logit-bias"),
@@ -277,6 +282,7 @@ package body Model_Runner.CLI.Options is
          when Command_None    => "",
          when Command_Run     => "run",
          when Command_Embed   => "embed",
+         when Command_Image   => "image",
          when Command_Inspect => "inspect",
          when Command_Models  => "models",
          when Command_Help    => "help",
@@ -900,6 +906,7 @@ package body Model_Runner.CLI.Options is
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
          Flag_Device_Index,
          Flag_Logprobs,
+         Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE,
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
@@ -2262,6 +2269,96 @@ package body Model_Runner.CLI.Options is
                      Result.Draft_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--out" then
+                     Mark (Flag_Picture_Out, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Image_Out := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--text-encoder" then
+                     Mark (Flag_Text_Encoder, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Text_Encoder_Path := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--vae" then
+                     Mark (Flag_VAE, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.VAE_Path := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--steps" then
+                     declare
+                        Count : Natural;
+                     begin
+                        Natural_Value (Flag_Picture_Steps, 1, 1_000, Count, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Result.Image_Steps := Count;
+                     end;
+
+                  elsif Name = "--size" then
+                     --  WIDTHxHEIGHT, each a whole number of the latent's
+                     --  sixteen pixels.
+                     Mark (Flag_Picture_Size, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     declare
+                        Value : constant String := Held.all;
+                        Cross : Natural := 0;
+                        Wide, High : Interfaces.Unsigned_64;
+                        Wide_Read, High_Read : Boolean := False;
+                     begin
+                        for Index in Value'Range loop
+                           if Value (Index) = 'x' and then Cross = 0 then
+                              Cross := Index;
+                           end if;
+                        end loop;
+                        if Cross > Value'First and then Cross < Value'Last then
+                           To_Unsigned (Value (Value'First .. Cross - 1), Wide, Wide_Read);
+                           To_Unsigned (Value (Cross + 1 .. Value'Last), High, High_Read);
+                        end if;
+                        if not Wide_Read or else not High_Read then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Value);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        if Wide < 16 or else High < 16 or else Wide > 4096 or else High > 4096
+                          or else Wide mod 16 /= 0 or else High mod 16 /= 0
+                        then
+                           Fail (E.CLI_Option_Out_Of_Range, Name, Value);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        Result.Image_Width := Positive (Wide);
+                        Result.Image_Height := Positive (High);
+                     end;
+                     Free_Text (Held);
+
                   elsif Name = "--mmproj" then
                      Mark (Flag_Projector, Name, Good);
                      if not Good then
@@ -2741,6 +2838,8 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Run;
                   elsif Argument = "embed" then
                      Result.Kind := Command_Embed;
+                  elsif Argument = "image" then
+                     Result.Kind := Command_Image;
                   elsif Argument = "inspect" then
                      Result.Kind := Command_Inspect;
                   elsif Argument = "models" then
@@ -2773,7 +2872,7 @@ package body Model_Runner.CLI.Options is
 
                elsif Operands = 2 then
                   case Result.Kind is
-                     when Command_Run | Command_Embed | Command_Inspect =>
+                     when Command_Run | Command_Embed | Command_Image | Command_Inspect =>
                         Result.Model_Path := Kept ("", Argument);
                      when Command_Help =>
                         --  A topic is a command name. `help inspekt` used
@@ -3112,10 +3211,11 @@ package body Model_Runner.CLI.Options is
             --  nobody's.
             First := T.To_Bounded ("--lora-scale");
             Second := T.To_Bounded ("--lora");
-         elsif Result.Kind = Command_Embed and then Result.Prompt_Count > 1 then
-            --  embed reads one text; the second was embedded by nobody.
+         elsif Result.Kind in Command_Embed | Command_Image and then Result.Prompt_Count > 1 then
+            --  embed reads one text, and image draws one; the second was
+            --  read by nobody.
             First := T.To_Bounded ("--prompt");
-            Second := T.To_Bounded ("embed");
+            Second := T.To_Bounded (Command_Word (Result.Kind));
          end if;
          if not T.Is_Empty (First) then
             Status := E.Make (E.CLI_Option_Combination);
@@ -3124,6 +3224,17 @@ package body Model_Runner.CLI.Options is
             return;
          end if;
       end;
+
+      --  A picture needs what to draw and where to put it; neither has a
+      --  default that would not surprise somebody.
+      if Result.Kind = Command_Image
+        and then (Result.Prompt_Count = 0 or else T.Is_Empty (Result.Image_Out))
+      then
+         Status := E.Make (E.CLI_Option_Required);
+         E.Add_Text (Status, "option", (if Result.Prompt_Count = 0 then "--prompt" else "--out"), E.Param_Identifier);
+         E.Add_Text (Status, "other", "image", E.Param_Identifier);
+         return;
+      end if;
 
       --  Raw text is the prompt as given: no template renders it, so what
       --  a template would have written -- a developer turn, thinking on or

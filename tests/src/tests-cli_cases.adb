@@ -15789,6 +15789,68 @@ package body Tests.CLI_Cases is
       end;
    end Command_Line_Helpers_Answer_As_Said;
 
+   --  image takes what a picture needs: a prompt and a file, a size in
+   --  sixteens, steps, a seed and the two files beside the denoiser; it
+   --  refuses a picture with nowhere to go, a size no latent has, two
+   --  prompts, and its options under another command.
+   procedure The_Image_Command_Takes_Its_Options (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T2);
+      type String_Access is access String;
+      type String_Array is array (Positive range <>) of String_Access;
+
+      function Parsed (Words : String_Array; Item : out Opt.Command) return E.Error_Info is
+         Source : Fixed_Arguments;
+         Status : E.Error_Info;
+      begin
+         for W of Words loop
+            Add (Source, W.all);
+         end loop;
+         Opt.Parse (Source, Item, Status);
+         return Status;
+      end Parsed;
+
+      function S (Value : String) return String_Access is (new String'(Value));
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+   begin
+      Status := Parsed ([S ("image"), S ("dit.gguf"), S ("--prompt"), S ("an apple"), S ("--out"), S ("a.png"),
+                         S ("--size"), S ("512x768"), S ("--steps"), S ("8"), S ("--seed"), S ("7"),
+                         S ("--text-encoder"), S ("te.gguf"), S ("--vae"), S ("vae.safetensors")], Item);
+      Assert (E.Is_Ok (Status), "a whole image command was refused: " & E.Error_Code'Image (Status.Code));
+      Assert (Item.Kind = Opt.Command_Image and then T.To_String (Item.Model_Path) = "dit.gguf"
+              and then T.To_String (Item.Image_Out) = "a.png" and then Item.Image_Width = 512
+              and then Item.Image_Height = 768 and then Item.Image_Steps = 8 and then Item.Has_Seed
+              and then Item.Seed = 7 and then T.To_String (Item.Text_Encoder_Path) = "te.gguf"
+              and then T.To_String (Item.VAE_Path) = "vae.safetensors" and then Item.Prompt_Count = 1,
+              "the image command's options were not kept as given");
+
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("an apple"), S ("--out"), S ("a.png")], Item);
+      Assert (E.Is_Ok (Status) and then Item.Image_Width = 1024 and then Item.Image_Height = 1024
+              and then Item.Image_Steps = 40 and then not Item.Has_Seed
+              and then T.To_String (Item.Model_Path) = "",
+              "the image command's defaults are not a 1024 picture in forty steps from the store's files");
+
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("an apple")], Item);
+      Assert (Status.Code = E.CLI_Option_Required, "a picture with nowhere to go was accepted");
+      Status := Parsed ([S ("image"), S ("--out"), S ("a.png")], Item);
+      Assert (Status.Code = E.CLI_Option_Required, "a picture of nothing was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--size"),
+                         S ("100x100")], Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a size no latent has was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--size"),
+                         S ("512")], Item);
+      Assert (Status.Code = E.CLI_Invalid_Option_Value, "a size of one number was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--prompt"), S ("y"), S ("--out"),
+                         S ("a.png")], Item);
+      Assert (Status.Code = E.CLI_Option_Combination, "two prompts for one picture were accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--steps"),
+                         S ("0")], Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a picture of no steps was accepted");
+      Status := Parsed ([S ("run"), S ("m.gguf"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png")], Item);
+      Assert (Status.Code = E.CLI_Option_Not_For_Command and then Item.Kind = Opt.Command_Run,
+              "run took the image command's --out");
+   end The_Image_Command_Takes_Its_Options;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -16145,6 +16207,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Command_Line_Helpers_Answer_As_Said'Access,
          "the command line's helpers answer as their documentation says");
+      Register_Routine
+        (T, The_Image_Command_Takes_Its_Options'Access,
+         "image takes a prompt, a file, a size in sixteens, steps, a seed and the files beside the denoiser");
    end Register_Tests;
 
 end Tests.CLI_Cases;

@@ -270,6 +270,22 @@ package body Model_Runner.Qwen_Image.Decoder is
    function Is_Ready (Item : Picture_Decoder) return Boolean
    is (Item.Ready);
 
+   function To_Pixels (Picture : N.Real_Array; Pixels : Element_Count) return B.Byte_Array is
+      Result : B.Byte_Array (0 .. B.Byte_Count (Pixels) * Picture_Channels - 1);
+   begin
+      for Pixel in 0 .. Pixels - 1 loop
+         for Channel in Element_Count range 0 .. Picture_Channels - 1 loop
+            declare
+               V : constant Real :=
+                 Real'Min (1.0, Real'Max (0.0, (Picture (Picture'First + Channel * Pixels + Pixel) + 1.0) * 0.5));
+            begin
+               Result (B.Byte_Count (Pixel * Picture_Channels + Channel)) := B.Byte (Real'Truncation (V * 255.0));
+            end;
+         end loop;
+      end loop;
+      return Result;
+   end To_Pixels;
+
    ------------
    -- Decode --
    ------------
