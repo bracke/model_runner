@@ -208,7 +208,9 @@ both runs held 7 GB or more of memory free.
   sections change nothing for text: 17.3803 read or not.
 - **safetensors**: an eight-byte header length, a JSON header, raw bf16
   tensors -- read mapped, the way GGUF files are. Small, and needed by any
-  diffusion VAE, which is rarely published as GGUF.
+  diffusion VAE, which is rarely published as GGUF. **The table is read**
+  (2026-10-20, Model_Runner.Safetensors): the VAE's 238 tensors, their
+  bytes from 27,848; the bytes are the decoder's to map when it is built.
 
 ### 2. The prompt's rows
 

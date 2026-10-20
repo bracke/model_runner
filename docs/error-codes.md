@@ -78,7 +78,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GGUF-0015` | `error.gguf.invalid_tensor_rank` | recovery_none | 3 | raised |
 | `MR-GGUF-0016` | `error.gguf.invalid_tensor_dimension` | recovery_none | 3 | raised |
 | `MR-GGUF-0017` | `error.gguf.unknown_tensor_type` | recovery_none | 3 | raised |
-| `MR-GGUF-0018` | `error.gguf.unsupported_tensor_type` | recovery_unsupported | 4 | reserved |
+| `MR-GGUF-0018` | `error.gguf.unsupported_tensor_type` | recovery_unsupported | 4 | raised |
 | `MR-GGUF-0019` | `error.gguf.block_misalignment` | recovery_none | 3 | raised |
 | `MR-GGUF-0020` | `error.gguf.invalid_alignment` | recovery_none | 3 | raised |
 | `MR-GGUF-0021` | `error.gguf.tensor_offset_misaligned` | recovery_none | 3 | raised |
@@ -95,6 +95,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GGUF-0032` | `error.gguf.shard_name_unusable` | recovery_none | 3 | raised |
 | `MR-GGUF-0033` | `error.gguf.shard_out_of_order` | recovery_none | 3 | raised |
 | `MR-GGUF-0034` | `error.gguf.shard_count_disagrees` | recovery_none | 3 | raised |
+| `MR-GGUF-0035` | `error.gguf.safetensors_header_invalid` | recovery_none | 3 | raised |
 
 ## TOK
 

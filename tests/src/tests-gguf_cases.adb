@@ -31,6 +31,7 @@ with Model_Runner.Platform;
 with Model_Runner.Quantization;
 with Model_Runner.Quantization.Integers;
 with Model_Runner.Quantization.Interleave;
+with Model_Runner.Safetensors;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
 with Model_Runner.UTF8;
@@ -9394,6 +9395,135 @@ package body Tests.GGUF_Cases is
    -- A_Model_In_Several_Files_Reads_As_One --
    -------------------------------------------
 
+   --  A safetensors file: eight bytes of length, a JSON header, then the
+   --  bytes the header names, each range counted from the header's end.
+   function Safetensors_Image (Header : String; Data : B.Byte_Array) return B.Byte_Array is
+      Image : B.Byte_Array (0 .. 7 + B.Byte_Count (Header'Length) + Data'Length);
+      Left  : Interfaces.Unsigned_64 := Header'Length;
+   begin
+      for Index in B.Byte_Count range 0 .. 7 loop
+         Image (Index) := B.Byte (Left and 16#FF#);
+         Left := Interfaces.Shift_Right (Left, 8);
+      end loop;
+      for Index in Header'Range loop
+         Image (7 + B.Byte_Count (Index - Header'First + 1)) := Character'Pos (Header (Index));
+      end loop;
+      Image (8 + B.Byte_Count (Header'Length) .. Image'Last) := Data;
+      return Image;
+   end Safetensors_Image;
+
+   procedure Read_Safetensors
+     (Image : B.Byte_Array; Into : in out Model_Runner.Safetensors.Table; Status : out E.Error_Info)
+   is
+      Copy   : aliased constant B.Byte_Array := Image;
+      Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Copy'Access);
+   begin
+      Model_Runner.Safetensors.Read (Into, Source, Status);
+   end Read_Safetensors;
+
+   --  A VAE published as safetensors is read by its table: each tensor's
+   --  type, shape and bytes where the header says, the metadata passed over.
+   procedure Safetensors_Are_Read_By_Their_Table (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package S renames Model_Runner.Safetensors;
+      Header : constant String :=
+        "{""__metadata__"":{""format"":""pt""},"
+        & """decoder.conv_out.weight"":{""dtype"":""BF16"",""shape"":[2,1,1,2],""data_offsets"":[8,16]},"
+        & """decoder.conv_out.bias"":{""dtype"":""F32"",""shape"":[2],""data_offsets"":[0,8]}}   ";
+      Data   : B.Byte_Array (0 .. 15);
+      Table  : S.Table;
+      Status : E.Error_Info;
+   begin
+      for Index in Data'Range loop
+         Data (Index) := B.Byte (Index + 1);
+      end loop;
+      Read_Safetensors (Safetensors_Image (Header, Data), Table, Status);
+      Assert (E.Is_Ok (Status), "a well-made header was refused: " & E.Error_Code'Image (Status.Code));
+      Assert (S.Count (Table) = 2, "the metadata was taken for a tensor, or a tensor was lost");
+      Assert (S.Data_Start (Table) = 8 + B.Byte_Count (Header'Length), "the data were not found after the header");
+      declare
+         Weight : constant Natural := S.Find (Table, "decoder.conv_out.weight");
+         Bias   : constant Natural := S.Find (Table, "decoder.conv_out.bias");
+      begin
+         Assert (Weight > 0 and then Bias > 0 and then S.Find (Table, "decoder.conv_in.weight") = 0,
+                 "a tensor was not found by its name, or one not there was");
+         Assert (S.Name (Table, Weight) = "decoder.conv_out.weight", "a tensor's name was not kept");
+         declare
+            W : constant S.Tensor_Info := S.Info (Table, Weight);
+            V : constant S.Tensor_Info := S.Info (Table, Bias);
+         begin
+            Assert (W.Element = Model_Runner.GGUF.Type_BF16 and then W.Rank = 4
+                    and then S."=" (W.Shape, [2, 1, 1, 2]) and then W.Elements = 4,
+                    "a convolution's type and shape were not read as written");
+            Assert (W.Data_Offset = S.Data_Start (Table) + 8 and then W.Data_Length = 8
+                    and then V.Data_Offset = S.Data_Start (Table) and then V.Data_Length = 8
+                    and then V.Element = Model_Runner.GGUF.Type_F32 and then V.Rank = 1,
+                    "a tensor's bytes were not placed where its range says");
+         end;
+      end;
+   end Safetensors_Are_Read_By_Their_Table;
+
+   --  A header the format does not allow is refused, saying what is wrong,
+   --  and leaves no table behind: not read as far as it goes.
+   procedure Safetensors_Headers_Are_Held_To_The_File (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package S renames Model_Runner.Safetensors;
+      Data : constant B.Byte_Array (0 .. 15) := [others => 0];
+
+      function Entry_Of (Name, Kind, Shape, Offsets : String) return String
+      is ("""" & Name & """:{""dtype"":""" & Kind & """,""shape"":" & Shape & ",""data_offsets"":" & Offsets & "}");
+
+      procedure Expect (Header : String; Code : E.Error_Code; What : String; With_Data : B.Byte_Array := Data) is
+         Table  : S.Table;
+         Status : E.Error_Info;
+      begin
+         Read_Safetensors (Safetensors_Image (Header, With_Data), Table, Status);
+         Assert (Status.Code = Code, What & ": " & E.Error_Code'Image (Status.Code));
+         if Code = E.No_Error then
+            Assert (S.Count (Table) = 1 and then S.Find (Table, "a") = 1, What & ": its tensor was not kept");
+         else
+            Assert (S.Count (Table) = 0 and then S.Find (Table, "a") = 0, What & ": a table was left behind");
+         end if;
+      end Expect;
+
+      Good : constant String := Entry_Of ("a", "F32", "[2]", "[0,8]");
+   begin
+      Expect ("{" & Good & "}", E.No_Error, "a good header");
+      declare
+         Table  : S.Table;
+         Status : E.Error_Info;
+      begin
+         Read_Safetensors ([1, 0, 0], Table, Status);
+         Assert (Status.Code = E.GGUF_Truncated, "a file shorter than its length was read");
+         Read_Safetensors (Safetensors_Image ("{}", Data) (0 .. 8), Table, Status);
+         Assert (Status.Code = E.GGUF_Truncated, "a header past the file's end was read");
+      end;
+      Expect ("{" & Good & ",", E.GGUF_Safetensors_Header_Invalid, "a header that is not JSON");
+      Expect ("[1]", E.GGUF_Safetensors_Header_Invalid, "a header that is not an object");
+      Expect ("{" & Good & "," & Good & "}", E.GGUF_Safetensors_Header_Invalid, "a tensor named twice");
+      Expect ("{""a"":{""dtype"":""F32"",""shape"":[2]}}", E.GGUF_Safetensors_Header_Invalid, "a tensor with no range");
+      Expect ("{" & Entry_Of ("a", "F64", "[1]", "[0,8]") & "}", E.GGUF_Unsupported_Tensor_Type,
+              "an element type not read here");
+      Expect ("{" & Entry_Of ("a", "F32", "[1,1,1,1,1]", "[0,4]") & "}", E.GGUF_Invalid_Tensor_Rank,
+              "five dimensions");
+      Expect ("{" & Entry_Of ("a", "F32", "[-1]", "[0,4]") & "}", E.GGUF_Safetensors_Header_Invalid,
+              "a negative dimension");
+      Expect ("{" & Entry_Of ("a", "F32", "[1.5]", "[0,4]") & "}", E.GGUF_Safetensors_Header_Invalid,
+              "a dimension that is not whole");
+      Expect ("{" & Entry_Of ("a", "F32", "[3]", "[0,8]") & "}", E.GGUF_Safetensors_Header_Invalid,
+              "a range shorter than the shape");
+      Expect ("{" & Entry_Of ("a", "F32", "[2]", "[8,0]") & "}", E.GGUF_Safetensors_Header_Invalid,
+              "a range that ends before it begins");
+      Expect ("{" & Entry_Of ("a", "F32", "[6]", "[0,24]") & "}", E.GGUF_Tensor_Out_Of_Bounds,
+              "a range past the file's end");
+      Expect ("{" & Good & "," & Entry_Of ("b", "F16", "[4]", "[4,12]") & "}", E.GGUF_Tensor_Overlap,
+              "two ranges that overlap");
+      Expect ("{"""":{""dtype"":""F32"",""shape"":[2],""data_offsets"":[0,8]}}", E.GGUF_Empty_Tensor_Name,
+              "a tensor with no name");
+      Expect ("{""__metadata__"":[1]," & Good & "}", E.GGUF_Safetensors_Header_Invalid,
+              "metadata that is not an object");
+   end Safetensors_Headers_Are_Held_To_The_File;
+
    --  A model cut into shards is read as the model it was cut from.
    --
    --  Above a few tens of gigabytes a published model is not one file: the
@@ -10471,6 +10601,12 @@ package body Tests.GGUF_Cases is
         (T, Newer_Formats_Match_An_Element_Wise_Reading'Access,
          "the formats added most recently place every element where reading "
          & "the layout element by element says it goes");
+      Register_Routine
+        (T, Safetensors_Are_Read_By_Their_Table'Access,
+         "a safetensors file is read by its table: each tensor's type, shape and bytes where its header says");
+      Register_Routine
+        (T, Safetensors_Headers_Are_Held_To_The_File'Access,
+         "a safetensors header the format does not allow is refused, saying what is wrong, and leaves no table");
       Register_Routine
         (T, A_Model_In_Several_Files_Reads_As_One'Access,
          "a model split across files is read as the model it was split "

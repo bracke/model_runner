@@ -7,6 +7,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **safetensors files are read by their table:** Model_Runner.Safetensors reads the eight-byte length and the JSON header of a safetensors file -- what a diffusion model's VAE is published as -- and names each tensor's element type (F32, F16, BF16), shape and byte range, held to the file: a range past its end, as long as its type and shape do not say, or over another's is refused, as are a fifth dimension, a negative or fractional one, a name given twice and a header that is not JSON (`MR-GGUF-0035`); a refused header leaves no table. Qwen-Image 2.1's VAE reads whole: 238 tensors (docs/plan-image-generation.md, step 1).
 - **Qwen3-VL's language model is read:** a file that says `qwen3vl` is Qwen3 dense under its own prefix -- each query and key head normalized, the rotation split, its sections read as Qwen3.5's are and the same as the plain rotation for text -- where it was refused by name; it is what Qwen-Image 2.1 encodes a prompt with (docs/plan-image-generation.md, step 1). Its pictures need the deepstack projector, which stays refused.
 - **A model file's own sampling settings are used:** `general.sampling.*` -- temperature, top-k, top-p, min-p, XTC, the repeat penalty and its window, mirostat -- as llama.cpp writes them from a model's generation configuration, stand where the command line names none (Options.Sampling_For: run, the session's turns and /settings, /work's agents); each one named still wins, and a file that says none is sampled as before. The sampler order (`general.sampling.sequence`) is not read. A file that asks for mirostat has the truncation filters the command line does not name set aside, as llama.cpp does, and a merge the sampler would refuse falls back to what was named: a file's settings never make a run fail. A draft model beside a grammar or a schema is refused, where the run samples, with the file's settings known: on the command line where a temperature above nought is named, else once the model is open and before the draft loads -- a file that makes the run greedy no longer has it refused.
 - **The session's /work held to a script:** Session_Agent takes replies in place of the model's (Script), so what the session does around a reply -- the lesson's checks after a write, the note of a call the work's time cut off -- is tested on the tiny model, not only in trials.
@@ -20326,7 +20327,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 221 diagnostic
+- Localization through `messages`, with a catalog entry for all 222 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

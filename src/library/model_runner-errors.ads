@@ -154,6 +154,7 @@ package Model_Runner.Errors is
       GGUF_Shard_Name_Unusable,
       GGUF_Shard_Out_Of_Order,
       GGUF_Shard_Count_Disagrees,
+      GGUF_Safetensors_Header_Invalid,
 
       --  Tokenizer.
       Tokenizer_Missing_Model,
