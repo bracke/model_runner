@@ -255,10 +255,21 @@ blocks, width 64) by a fixture encoder, as the vision encoders are tested.
 Held to the reference's velocity at step 1: a cosine of 0.999 over the
 latent on the real file, the rest being Q8_0.
 
+**Done 2026-10-20** (Qwen_Image.Velocity, binary32 on the processor, every
+prompt row run with the image's each call -- the keys and values not yet
+kept). On the fixture it is the plain binary64 computation to 1e-4 of the
+largest value; on the real file, from the seed's noise and the
+reference's own prompt rows at time 1000, it is the reference's velocity
+at a cosine of **0.99999** (0.99998 at the worst channel; root mean square
+1.5638 against 1.5647). The first run took 988 s, the attention a serial
+loop, and 457 s with it shared out across the pool; the head width is
+held to the rotation's 128.
+
 ### 4. The sampler and the picture's latent
 
 The sigmas worked out as the scheduler does, held to its values to 1e-6 in
-a unit test. Euler steps. Gaussian noise from a seed through the reference's
+a unit test -- **done** (Qwen_Image.Sigmas, against the reference's own
+scheduler code compiled and run). Euler steps. Gaussian noise from a seed through the reference's
 own generator, ported, so a seed gives its picture on both. Guidance
 with a negative prompt, where asked: two passes a step, each with its own
 cached prompt.

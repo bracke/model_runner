@@ -59,6 +59,12 @@ package body Library_Surface is
       --  the way works.
       new String'("Register_Migration"),
 
+      --  Making a picture from a prompt, built a step at a time
+      --  (docs/plan-image-generation.md): the denoiser's evaluation, which
+      --  the image command will call once it exists, and the suite holds
+      --  to the reference until then.
+      new String'("Velocity"),
+
       new String'("Get_F16"),
       new String'("Tensor_Code"),
       new String'("Value_Code"),

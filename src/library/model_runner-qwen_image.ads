@@ -1,9 +1,11 @@
 with System;
 
+with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
+with Model_Runner.Numerics;
 with Model_Runner.Tensors;
 
 --  Qwen-Image 2.1's denoiser, read from its GGUF (docs/plan-image-
@@ -74,6 +76,52 @@ package Model_Runner.Qwen_Image is
    --  @param Item an open denoiser
    --  @return its configuration
    function Config (Item : Denoiser) return Configuration;
+
+   --  One evaluation: the velocity the latent is to move by at a time.
+   --
+   --  The latent is the picture's In_Channels planes of Rows by Columns,
+   --  a plane a channel, row-major, as the reference lays it out; the
+   --  velocity comes back the same way, Out_Channels planes. The prompt's
+   --  rows go in with the image's: they attend causally among themselves
+   --  and see no image, take the modulation of time nought, and are not
+   --  answered; every image row sees all of them and every other.
+   --
+   --  @param Item an open denoiser
+   --  @param Latent In_Channels * Rows * Columns values
+   --  @param Rows the latent's height
+   --  @param Columns its width
+   --  @param Timestep the time, as the sampler gives it: the noise level
+   --    times a thousand
+   --  @param Text the prompt's rows, Text_Rows of Context values each
+   --  @param Text_Rows how many
+   --  @param Pool the processor's workers, or null for this task alone
+   --  @param Result Out_Channels * Rows * Columns values
+   --  @param Status success, Tensor_Shape_Mismatch where the arrays are not
+   --    those lengths, or the products' failure
+   procedure Velocity
+     (Item      : Denoiser;
+      Latent    : Model_Runner.Numerics.Real_Array;
+      Rows      : Positive;
+      Columns   : Positive;
+      Timestep  : Model_Runner.Numerics.Real;
+      Text      : Model_Runner.Numerics.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Result    : out Model_Runner.Numerics.Real_Array;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The noise levels a picture is drawn through, as the reference's flow
+   --  scheduler works them out for this model: t = 1 - i / Steps shifted by
+   --  mu, linear in the image's token count from 0.5 at 256 to 0.9 at 8192,
+   --  sigma = e^mu / (e^mu + 1 / t - 1); every level but the last then
+   --  stretched, 1 - (1 - sigma) / k, so the last one the model is run at
+   --  is 0.02; and nought after it.
+   --
+   --  @param Steps how many evaluations
+   --  @param Image_Tokens the latent's pixels, rows times columns
+   --  @return Steps + 1 levels, from one down to nought
+   function Sigmas (Steps : Positive; Image_Tokens : Positive) return Model_Runner.Numerics.Real_Array
+   with Post => Sigmas'Result'Length = Steps + 1;
 
 private
 
