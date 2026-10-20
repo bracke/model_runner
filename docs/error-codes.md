@@ -180,7 +180,7 @@ ordinal is never reused, not because they might appear.
 | `MR-ARCH-0013` | `error.architecture.invalid_tensor_format` | recovery_none | 3 | raised |
 | `MR-ARCH-0014` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 | reserved |
 | `MR-ARCH-0015` | `error.architecture.context_too_large` | recovery_none | 3 | raised |
-| `MR-ARCH-0016` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | reserved |
+| `MR-ARCH-0016` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | raised |
 | `MR-ARCH-0017` | `error.architecture.no_output_head` | recovery_unsupported | 4 | raised |
 | `MR-ARCH-0018` | `error.architecture.text_not_whole` | recovery_unsupported | 4 | raised |
 | `MR-ARCH-0019` | `error.architecture.unsupported_projector` | recovery_unsupported | 4 | raised |

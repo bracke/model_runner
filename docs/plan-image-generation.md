@@ -193,7 +193,10 @@ both runs held 7 GB or more of memory free.
   configuration read off the shapes (layers counted, width from `img_in`,
   head width from `norm_q`, feed-forward from `out`), and refused by name
   where a shape is not this model's. It is no text model and goes nowhere
-  near `Llama.Prepare`; it gets a package of its own.
+  near `Llama.Prepare`; it gets a package of its own. **Done** 2026-10-20
+  (Model_Runner.Qwen_Image): the Q8_0 file reads as 32 blocks of 4096,
+  32 heads of 128, feed-forward 12288, 64 latent channels in and out, a
+  text 4096 wide, every matrix bound where it lies.
 - **Qwen3-VL's text half** -- done 2026-10-20: `qwen3vl` taken by the
   Qwen3 dense path (its own architecture, as `qwen3moe` is), the
   rotation's sections read from `rope.dimension_sections` as Qwen3.5's
