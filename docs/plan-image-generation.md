@@ -124,8 +124,14 @@ built beside this program -- unsloth's card runs these three files with it.
 - A small harness that writes, for one prompt and one seed: the encoder's
   rows, the denoiser's velocity at step 1, the latent after N steps, and the
   decoded picture.
-- The **initial noise read from a file** on both sides, so nothing rests on
-  two random number generators agreeing.
+- The **same noise on both sides by seed**: the reference's generators are
+  small -- `--rng cuda`, its default, is Philox in 96 lines
+  (`src/core/rng_philox.hpp`); `cpu` is torch's MT19937 with Box-Muller
+  (`rng_mt19937.hpp`) -- and one ported here gives the same latent from the
+  same seed, held to the reference's first values in a unit test. The
+  command line has no noise or tensor dump of its own, so the harness is a
+  small program against its library that writes them out.
+- Cloned at b13a48219d into `~/stable-diffusion.cpp`, beside `~/llama.cpp`.
 - The tensor layout questions, answered from its source (b13a48219d)
   before any build and written above: `gate_up` is gate first; modulation
   is shared by all blocks; the VAE's four channels are RGBA.
@@ -179,8 +185,8 @@ latent on the real file, the rest being Q8_0.
 ### 4. The sampler and the picture's latent
 
 The sigmas worked out as the scheduler does, held to its values to 1e-6 in
-a unit test. Euler steps. Gaussian noise from a seed through this program's
-own generator, and `--noise-file` to start from the reference's. Guidance
+a unit test. Euler steps. Gaussian noise from a seed through the reference's
+own generator, ported, so a seed gives its picture on both. Guidance
 with a negative prompt, where asked: two passes a step, each with its own
 cached prompt.
 
