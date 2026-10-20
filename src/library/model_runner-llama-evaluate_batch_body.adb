@@ -8,6 +8,7 @@ procedure Evaluate_Batch_Body
    Every  : T.Real_Array_Access := null;
    Cancel : Model_Runner.Cancellation.Token_Reference := null;
    Given  : Given_Rows := No_Given_Rows;
+   Normalized : Boolean := True;
    Status : out E.Error_Info)
 is
    Settings  : constant Configuration := Source.Settings;
@@ -3147,10 +3148,15 @@ begin
          declare
             Origin : constant Element_Count := Slot (Which, Width);
          begin
-            Final_State
-              (Source, Acts.all (Origin .. Origin + Width - 1),
-               States.all (States.all'First + Origin
-                           .. States.all'First + Origin + Width - 1));
+            if Normalized then
+               Final_State
+                 (Source, Acts.all (Origin .. Origin + Width - 1),
+                  States.all (States.all'First + Origin
+                              .. States.all'First + Origin + Width - 1));
+            else
+               States.all (States.all'First + Origin .. States.all'First + Origin + Width - 1) :=
+                 Acts.all (Origin .. Origin + Width - 1);
+            end if;
          end;
       end loop;
    end if;

@@ -2083,6 +2083,10 @@ package Model_Runner.Llama is
    --    reads them where it would have read the marker's embedding.
    --  @param Givens For a round, the rows given a member in the members'
    --    order, read in place of Given; see Evaluate_Round.
+   --  @param Normalized Whether States are each position's state through
+   --    the final normalization, as an embedding pools them, or as the
+   --    last layer left them, as a diffusion model's text encoder hands
+   --    them on: Qwen-Image 2.1 reads Qwen3-VL's rows before its norm.
    procedure Evaluate_Batch
      (Item   : in out Session;
       Source : Model'Class;
@@ -2092,6 +2096,7 @@ package Model_Runner.Llama is
       Every  : Model_Runner.Tensors.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Given  : Given_Rows := No_Given_Rows;
+      Normalized : Boolean := True;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  Score a text a reranker has embedded: the pooled state through the

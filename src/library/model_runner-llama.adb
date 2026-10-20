@@ -11086,6 +11086,7 @@ package body Model_Runner.Llama is
       Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Given  : Given_Rows := No_Given_Rows;
+      Normalized : Boolean := True;
       Status : out E.Error_Info)
    is separate;
 
@@ -11101,6 +11102,7 @@ package body Model_Runner.Llama is
       Every  : T.Real_Array_Access := null;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
       Given  : Given_Rows := No_Given_Rows;
+      Normalized : Boolean := True;
       Status : out E.Error_Info)
    is
       Was    : constant Boolean := Item.Host_Feed;
@@ -11112,7 +11114,7 @@ package body Model_Runner.Llama is
       Item.On_Host := Hosted;
       Item.Host_Feed := Was or else Hosted;
       Evaluate_Batch_Body
-        (Item, Source, Tokens, Logits, States, Every, Cancel, Given, Status);
+        (Item, Source, Tokens, Logits, States, Every, Cancel, Given, Normalized, Status);
       Item.On_Host := False;
       Item.Host_Feed := Was;
    exception

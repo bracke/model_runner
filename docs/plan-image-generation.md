@@ -225,6 +225,17 @@ found by tokenizing the system turn alone, as the reference does).
 Held to the reference's rows at a cosine of 0.9999 a row on the Q8_0 file.
 The encoder runs once a picture: about 0.2 s of prefill on the device.
 
+**Done 2026-10-20** (Model_Runner.Qwen_Image.Prompts; Evaluate_Batch's
+States before the final norm). "a red apple on a wooden table" is 29
+tokens, 14 of them the system turn; the 15 kept agree with the
+reference's at a cosine of 0.9995 on average, 0.9985 at worst. 0.9999
+was the wrong bar: this program read in binary32 and read with its
+activations rounded to eight bits are 0.9995 apart on average (0.9977 at
+worst), and ggml rounds its activations to eight bits on this path -- two
+readings of one Q8_0 file can be no closer than their rounding. Whether
+that distance matters is the picture's to say, at step 4. On eight cores
+the encoder took about 45 s, the load of 8.7 GB included.
+
 ### 3. One step of the denoiser
 
 Every piece above, in binary32 on the host first, held to a binary64
