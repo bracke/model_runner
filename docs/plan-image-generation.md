@@ -64,9 +64,17 @@ the file is known by its tensor names (`model.diffusion_model.img_in`,
 - The attention is **block-causal**: text tokens attend causally among
   themselves and see no image; the image's tokens attend to all the text
   and to each other both ways.
-- Positions: text tokens advance one position on all three axes; the image
-  sits at the frame position the text reached, its rows and columns laid
-  out on a grid centred on zero.
+- Positions, as the reference lays them out: the prompt's tokens (the
+  system turn already dropped) at `(p, p, p)` for p = 0, 1, ...; the image
+  at frame `n`, the prompt's length, row `h - (H - H/2)` and column
+  `w - (W - W/2)` -- a 64x64 latent from -32 to 31. The rotation pairs
+  **neighbouring** elements (2i, 2i+1), its 128 split 16/56/56 over frame,
+  row and column. The GELU in `txt_in` is ggml's tanh form.
+
+**What the denoiser file holds** (unsloth's Q8_0, read 2026-10-20): every
+block's products Q8_0; `img_in`, `txt_in`'s two linears and its norm
+BF16; `norm_out.linear` and the q/k norms F32; no biases at all, the time
+embedder's two linears included. BF16 the GGUF reader takes already.
 
 **The text encoder** is Qwen3-VL-8B's language model -- Qwen3 dense, 36
 layers, 4096 wide, grouped attention 32/8, the multimodal rotation
