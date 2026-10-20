@@ -176,7 +176,16 @@ built beside this program -- unsloth's card runs these three files with it.
   before any build and written above: `gate_up` is gate first; modulation
   is shared by all blocks; the VAE's four channels are RGBA.
 
-Done when the harness writes all four for a 512x512 prompt.
+Done when the harness writes all four for a 512x512 prompt. **Done
+2026-10-20**: built for the processor, run at 512x512, 40 steps, seed 42,
+"a red apple on a wooden table" -- an apple on a table, as asked -- in 34
+minutes (about 50 s a step on eight cores). Kept in
+`~/.local/share/model_runner/reference/qwen-image-2.1/apple-512-seed42-40steps`:
+the encoder's 29 rows (the 14 of the system turn among them), the velocity
+of every step (32x32x64), and the picture (RGBA, alpha 253-255 for a
+prompt that asks for none). The latent after any step follows from the
+seed's noise, these velocities and the sigmas. A 256x256 step took 19 s;
+both runs held 7 GB or more of memory free.
 
 ### 1. Reading the files
 
@@ -185,10 +194,12 @@ Done when the harness writes all four for a 512x512 prompt.
   head width from `norm_q`, feed-forward from `out`), and refused by name
   where a shape is not this model's. It is no text model and goes nowhere
   near `Llama.Prepare`; it gets a package of its own.
-- **Qwen3-VL's text half**: `qwen3vl` taken by the Qwen3 dense path, the
-  rotation's sections read from `rope.dimension_sections` as Qwen3.5's are.
-  Its vision tower (deepstack) is not needed for text to image and stays
-  refused.
+- **Qwen3-VL's text half** -- done 2026-10-20: `qwen3vl` taken by the
+  Qwen3 dense path (its own architecture, as `qwen3moe` is), the
+  rotation's sections read from `rope.dimension_sections` as Qwen3.5's
+  are, held against the independent implementation on a fixture. Its
+  vision tower (deepstack) is not needed for text to image and stays
+  refused. Still to do: the real 8B file generated from.
 - **safetensors**: an eight-byte header length, a JSON header, raw bf16
   tensors -- read mapped, the way GGUF files are. Small, and needed by any
   diffusion VAE, which is rarely published as GGUF.

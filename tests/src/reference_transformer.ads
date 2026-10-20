@@ -186,7 +186,7 @@ private
    --  and a reference that added it again agreed with an engine that did
    --  the same for a month.
    type Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Qwen3_VL, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
       Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6,

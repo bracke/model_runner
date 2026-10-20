@@ -503,6 +503,7 @@ package body Tiny_Model is
            when Qwen2     => "qwen2",
            when Qwen3     => "qwen3",
            when Qwen3_MoE => "qwen3moe",
+           when Qwen3_VL  => "qwen3vl",
            when GPT_OSS   => "gpt-oss",
            when Gemma     => "gemma",
            when Gemma2    => "gemma2",
@@ -1825,7 +1826,7 @@ package body Tiny_Model is
             end;
          end if;
 
-         if (Kind in Qwen3 | Qwen3_MoE | Gemma3 | Mellum
+         if (Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
              or else (Kind = Qwen35 and then not Linear_Block (Index)))
            and then not Omit_Biases
          then

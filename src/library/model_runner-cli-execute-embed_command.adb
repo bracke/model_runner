@@ -197,7 +197,7 @@ package body Model_Runner.CLI.Execute.Embed_Command is
                else (case Settings.Pooling is
                        when L.Pool_Cls  => Opt.Pool_Cls,
                        when L.Pool_Rank =>
-                         (if Settings.Kind in L.Qwen3 then Opt.Pool_Last
+                         (if Settings.Kind in L.Qwen3 | L.Qwen3_VL then Opt.Pool_Last
                           else Opt.Pool_Cls),
                        when L.Pool_Last => Opt.Pool_Last,
                        when others      => Opt.Pool_Mean));

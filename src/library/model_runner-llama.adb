@@ -11181,7 +11181,7 @@ package body Model_Runner.Llama is
             --  Qwen3's head is its own vocabulary's "yes" and "no" rows,
             --  and the score the chance of "yes": a softmax over the two,
             --  as the other runtime takes it for that architecture.
-            if Source.Settings.Kind in Qwen3 and then Classes > 1 then
+            if Source.Settings.Kind in Qwen3 | Qwen3_VL and then Classes > 1 then
                declare
                   Most : Real := Out_Row.all (0);
                   Sum  : N.Wide_Real := 0.0;

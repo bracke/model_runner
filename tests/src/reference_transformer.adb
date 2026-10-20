@@ -2633,6 +2633,7 @@ package body Reference_Transformer is
          when Qwen2     => "qwen2.",
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
+         when Qwen3_VL  => "qwen3vl.",
          when Mellum => "mellum.",
          when GPT_OSS   => "gpt-oss.",
          when Gemma     => "gemma.",
@@ -3184,6 +3185,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3;
          elsif Named = "qwen3moe" then
             Item.Kind := Qwen3_MoE;
+         elsif Named = "qwen3vl" then
+            Item.Kind := Qwen3_VL;
          elsif Named = "mellum" then
             Item.Kind := Mellum;
          elsif Named = "gpt-oss" then
@@ -4414,7 +4417,7 @@ package body Reference_Transformer is
             --  than on the architecture, so loading it is all that this
             --  needs -- which is why the engine and this disagreed by two
             --  logits in three when only the engine loaded it.
-            if Item.Kind in Qwen3 | Qwen3_MoE | Gemma3 | Mellum
+            if Item.Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
               or else (Item.Kind in Qwen35 | Qwen35_MoE and then not Is_Linear)
             then
                Current.Query_Norm :=

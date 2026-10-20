@@ -81,7 +81,7 @@ package Tiny_Model is
    --  long -- and its second attends in full with a gate beside each head
    --  and a normalization of every query and key head, as Qwen3 does.
    type Fixture_Architecture is
-     (Llama, Qwen2, Qwen3, Qwen3_MoE, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
+     (Llama, Qwen2, Qwen3, Qwen3_MoE, Qwen3_VL, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite,
       Olmo2, Glm4, Starcoder2, Stablelm, Gptneox, Internlm2, Baichuan, Mpt,
       Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba, Deepseek2, Mellum);

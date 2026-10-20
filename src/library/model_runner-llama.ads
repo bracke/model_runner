@@ -195,7 +195,7 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum);
+      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -326,7 +326,8 @@ package Model_Runner.Llama is
          when Rwkv6      => "rwkv6",
          when Jamba      => "jamba",
          when Deepseek2  => "deepseek2",
-         when Mellum     => "mellum");
+         when Mellum     => "mellum",
+         when Qwen3_VL   => "qwen3vl");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -707,7 +708,7 @@ package Model_Runner.Llama is
    --  @param Kind Architecture to ask about.
    --  @return True where its block drafts.
    function Block_Drafts (Kind : Architecture) return Boolean
-   is (Kind in Llama | Qwen3 | Qwen3_MoE | Mellum | Qwen35 | Qwen35_MoE);
+   is (Kind in Llama | Qwen3 | Qwen3_MoE | Qwen3_VL | Mellum | Qwen35 | Qwen35_MoE);
 
    --  Whether an architecture's linear layers read one state, never a
    --  slot of a ring: the Mamba family, RWKV6 and Jamba scan the state

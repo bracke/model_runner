@@ -89,7 +89,7 @@ begin
                     | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                    | Mamba2 | Rwkv6 | Jamba | Mellum =>
+                    | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL =>
                    K.Split);
 
             --  What a position may see. Every architecture here
@@ -1736,12 +1736,12 @@ begin
         (if E.Is_Ok (Local) then Natural (Number) else 0);
    end if;
 
-   --  The three parts a Qwen3.5 position has, and how many pairs each
+   --  The three parts a Qwen3.5 or Qwen3-VL position has, and how many pairs each
    --  turns: stated as four counts, the fourth unused, and dealt
    --  interleaved. A text token has the three parts equal, so a model
    --  read without them rotates the same; they matter to a picture's
    --  rows, which have a row and a column of their own.
-   if Settings.Kind in Qwen35 | Qwen35_MoE then
+   if Settings.Kind in Qwen35 | Qwen35_MoE | Qwen3_VL then
       declare
          Key    : constant String :=
            Model_Key (Settings.Kind, "rope.dimension_sections");
