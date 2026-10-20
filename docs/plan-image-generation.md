@@ -1,6 +1,7 @@
 # Text to image: Qwen-Image 2.1
 
-**A plan, written 2026-10-20. Nothing of it is built yet.**
+**A plan, written 2026-10-20. Nothing of it is built yet.** The reference is
+stable-diffusion.cpp, which supports this model (`docs/qwen_image_2.1.md`).
 
 What this program does today with pictures is read them: a projector turns
 a picture into rows a text model attends to. This plan is the other way
@@ -32,7 +33,8 @@ Read from the files and from the reference implementation (diffusers
 
 **The denoiser** is a single-stream transformer: 32 blocks, width 4096, 32
 heads of 128, a SwiGLU feed-forward three times the width (`gate_up` fused,
-24576 wide, then `out`), no biases anywhere. 7.1 billion parameters, 265
+24576 wide, its **first half the gate** that takes the SiLU, its second
+the up, then `out`), no biases anywhere. 7.1 billion parameters, 265
 tensors, and **no metadata at all** -- no architecture key, no shapes said:
 the file is known by its tensor names (`model.diffusion_model.img_in`,
 `txt_in`, `time_text_embed`, `modulation.1`, `transformer_blocks.N.*`,
@@ -45,12 +47,16 @@ the file is known by its tensor names (`model.diffusion_model.img_in`,
   linear.
 - The time is a 256-wide sinusoid (cosines first, the time times 1000),
   through two linears with a SiLU between.
-- Modulation is not per block: one linear of the SiLU'd time embedding,
-  4 x 4096 wide, split into two (scale, gate) pairs that **every block**
-  reads -- to be confirmed against the reference, since the docstring says
-  each block "slices its own" from a tensor only 4 x 4096 wide.
-- `causal_condition`: the modulation has a second row, at time 0, which the
-  **text** tokens take; image tokens take the step's own.
+- Modulation is not per block: one linear (`modulation.1`) of the SiLU'd
+  time embedding, 4 x 4096 wide, cut into four in order -- attention's
+  scale, attention's gate, feed-forward's scale, feed-forward's gate --
+  which **every block** reads (stable-diffusion.cpp `qwen_image_2_1.hpp`
+  at b13a48219d passes the same four to all 32).
+- `causal_condition`: the time is embedded twice, the step's and 0, so
+  each of the four has two rows: image tokens take the step's row, text
+  tokens the time-0 row. Scales are applied as `1 + scale`, gates as
+  `tanh (gate)`. The output norm's scale is `norm_out.linear` of the
+  step's row alone.
 - A block: LayerNorm without affine, times `1 + scale`; attention (q, k, v,
   an RMS norm on each head's q and k, a three-axis rotation 16/56/56 at
   theta 10000), its output through `tanh (gate)` added back; the same again
@@ -86,6 +92,19 @@ so a picture needs only 3x3 convolutions. The latent is unnormalized
 before decoding with 64 means and 64 deviations from its config. bf16,
 safetensors -- a format this program does not read yet.
 
+Two traps the reference knows of:
+
+- The decoder writes **four channels: red, green, blue and alpha**. The
+  model decides from the prompt whether a picture is transparent ("This is
+  an RGBA image with transparency. ..."); the PNG is written RGBA.
+- The up-samplers keep Wan's temporal factors (`true, true, true, false`)
+  even for one frame: they change how channels are grouped when
+  duplicated, so a 2-D reading that drops them reorders channels silently.
+  The reference also scales every convolution by 1/128 to keep the
+  activations within binary16 -- a sign of their range, which matters for
+  a binary16 device path.
+
+
 **The sampler** is flow matching, Euler: `x <- x + (sigma_next - sigma) *
 v`, sigmas shifted by the image's token count (base 256, max 8192, shift
 0.5 to 0.9, exponential, terminal 0.02). The pipeline's default is 40
@@ -107,9 +126,9 @@ built beside this program -- unsloth's card runs these three files with it.
   decoded picture.
 - The **initial noise read from a file** on both sides, so nothing rests on
   two random number generators agreeing.
-- The tensor layout questions answered from it before any code: the order
-  of the fused `gate_up` halves, whether modulation is shared, which of the
-  VAE's four output channels are the picture.
+- The tensor layout questions, answered from its source (b13a48219d)
+  before any build and written above: `gate_up` is gate first; modulation
+  is shared by all blocks; the VAE's four channels are RGBA.
 
 Done when the harness writes all four for a 512x512 prompt.
 
@@ -224,13 +243,12 @@ on time, and needs no new code once this works.
 
 ## Risks and open questions
 
-1. **The reference's support.** unsloth's card names stable-diffusion.cpp
-   for these files; if its build does not run Qwen-Image 2.1 correctly,
-   the reference falls back to diffusers on a machine with torch and the
-   RAM for it, which is not this one.
-2. **The layout questions in step 0.** Three are open, and each is a
-   silent wrong picture if guessed: the fused `gate_up` order, shared
-   modulation, the VAE's fourth channel.
+1. **The reference's support.** stable-diffusion.cpp runs this model and
+   these three files by name, prompt-prefix cache included; what is left is
+   building it here and checking its CPU picture against its Vulkan one.
+2. **The layout questions in step 0** are answered from the reference's
+   source; each still gets held to the reference's numbers, since a
+   misread is a silent wrong picture.
 3. **Memory.** 7.6 GB of denoiser on the device is within its budget; the
    encoder must be gone first. The VAE at full size is held in by tiling.
 4. **Time.** A 1024x1024 picture at 40 steps is minutes on this machine.
