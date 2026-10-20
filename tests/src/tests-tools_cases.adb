@@ -801,6 +801,32 @@ package body Tests.Tools_Cases is
               and then Has (Ed.Read_Range (Path, 2, 3), "3:    begin")
               and then not Has (Ed.Read_Range (Path, 2, 3), "A + B"),
               "a range of lines was not those lines");
+      --  A range of long lines is held to what one answer holds, and says
+      --  where to read on; a line longer than all of it is shown in part.
+      --  Held to the lines alone, it was too large to return, every time.
+      declare
+         Long_Path : constant String := Dir & "/long.txt";
+         Long_Line : constant String := [1 .. 20_000 => 'x'];
+      begin
+         Put (Long_Path, Long_Line & ASCII.LF & Long_Line & ASCII.LF & Long_Line & ASCII.LF);
+         declare
+            Got : constant Ed.Said := Ed.Read_Range (Long_Path, 1, 3);
+         begin
+            Assert (not Got.Failed and then Got.Truncated and then Has (Got, "1: x")
+                    and then not Has (Got, "2: x") and then Has (Got, "read on from line 2")
+                    and then Ada.Strings.Unbounded.Length (Got.Text) <= Model_Runner.Tools.Max_Call_Bytes - 1024,
+                    "a range of long lines was not held to one answer");
+         end;
+         Put (Long_Path, [1 .. 40_000 => 'y'] & ASCII.LF & "z" & ASCII.LF);
+         declare
+            Got : constant Ed.Said := Ed.Read_Range (Long_Path, 1, 2);
+         begin
+            Assert (not Got.Failed and then Has (Got, "1: y") and then Has (Got, "is longer than can be shown")
+                    and then Has (Got, "read on from line 2")
+                    and then Ada.Strings.Unbounded.Length (Got.Text) <= Model_Runner.Tools.Max_Call_Bytes - 1024,
+                    "a line longer than one answer was not shown in part");
+         end;
+      end;
       Assert (Has (Ed.Search_File (Path, "Twice"), "6: ")
               and then Has (Ed.Search_File (Path, "nowhere"), "no line"),
               "a search of a file did not give the lines that hold it");
@@ -935,6 +961,20 @@ package body Tests.Tools_Cases is
               "new lines given with an indentation of their own went in at twice it");
          Try ("return A + B;" & ASCII.LF & "   null;", "   return A + B;" & ASCII.LF & "   null;",
               "new lines given already standing at the line's indentation were moved");
+         --  An old_text of more than one line, matched exactly, gives its
+         --  later lines as the file has them, and the new ones alike: a
+         --  later line left of the first's indentation is where it stands.
+         Put (Laid_Path, "begin" & ASCII.LF & Laid & ASCII.LF & "end P;" & ASCII.LF);
+         declare
+            Done : constant Ed.Said :=
+              Ed.Edit (Laid_Path, "return 1;" & ASCII.LF & "   end if;", "return 2;" & ASCII.LF & "   end if;", "");
+         begin
+            Assert (not Done.Failed
+                    and then Ada.Strings.Fixed.Index
+                               (Now, "begin" & ASCII.LF & "   if X then" & ASCII.LF & "      return 2;" & ASCII.LF
+                                & "   end if;" & ASCII.LF & "end P;") = 1,
+                    "new lines for an old_text of several lines were moved off the file's layout: " & Now);
+         end;
       end;
       --  Not there: said with the file's lines where a line of it stands.
       declare
@@ -2725,6 +2765,21 @@ package body Tests.Tools_Cases is
                  "a read was not of the tree named: " & Room (Room'First .. Last));
          Assert (Ended.After_Revision = Tr.Mark (Model_Runner.Tools.Editing.Revision ("placed")),
                  "a read did not say, as a value, the revision it read");
+         --  A path from the root, a file near the cap: the note of the
+         --  path taken is room held under the call's answer, and with 64
+         --  bytes held the read was an answer too large to return.
+         Put_Bytes (Tree & "/big.txt", [1 .. Tools.Max_Call_Bytes - 64 => 'b']);
+         Ada.Environment_Variables.Set (Model_Runner.Framework.Permissions.Agent_Root_Variable, Tree);
+         Ada.Environment_Variables.Set
+           (Model_Runner.Framework.Permissions.Agent_Permissions_Variable,
+            Model_Runner.Framework.Permissions.Image (Model_Runner.Framework.Permissions.Unrestricted));
+         Placed.Run ("read_file", "{""path"": ""/big.txt""}", Room, Last, Ended, Status);
+         Ada.Environment_Variables.Clear (Model_Runner.Framework.Permissions.Agent_Root_Variable);
+         Ada.Environment_Variables.Clear (Model_Runner.Framework.Permissions.Agent_Permissions_Variable);
+         Ada.Directories.Delete_File (Tree & "/big.txt");
+         Assert (E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "taken as") > 0,
+                 "a rooted read of a file near the cap was too large to return: "
+                 & E.Error_Code'Image (Status.Code));
 
          --  Shown before any call, at the revision it was read at: written
          --  over as it stands, and refused where it changed since.
@@ -3756,8 +3811,81 @@ package body Tests.Tools_Cases is
          Same (Read_Kept ("```tool_code" & LF & "edit(count=)" & LF & "```" & LF
                           & "```tool_code" & LF & "edit(count=2)" & LF & "```", Tools.Python_Code),
                Kept, "a Python call that would not read dropped the next");
+         --  A call whose close was never written ends where the next
+         --  opens: run to the next one's close, the two were read as one,
+         --  or the next dropped.
+         Same (Read_Kept ("<function name=""edit""><param name=""count"">1</param>"
+                          & "<function name=""edit""><param name=""count"">2</param></function>",
+                          Tools.Function_XML),
+               Kept, "a Llama function call never closed took the next with it");
+         Same (Read_Kept ("<function=edit>" & LF & "<parameter=count>" & LF & "1" & LF & "</parameter>" & LF
+                          & "<function=edit>" & LF & "<parameter=count>" & LF & "2" & LF & "</parameter>" & LF
+                          & "</function>",
+                          Tools.Qwen_XML),
+               Kept, "a Qwen3-Coder call never closed took the next with it");
+         Same (Read_Kept (Tools.DeepSeek_Calls_Begin
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""count"": 1}"
+                          & Tools.DeepSeek_Call_Begin & "edit" & Tools.DeepSeek_Sep & "{""count"": 2}"
+                          & Tools.DeepSeek_Call_End & Tools.DeepSeek_Calls_End,
+                          Tools.DeepSeek_Plain),
+               Kept, "a DeepSeek call never closed took the next with it");
+         --  A Mistral call with no arguments before the next, and a Python
+         --  call that will not read before another in the same block.
+         Same (Read_Kept (Tools.Mistral_Calls & "edit"
+                          & Tools.Mistral_Calls & "edit" & Tools.Mistral_Args & "{""count"": 2}",
+                          Tools.Mistral_Call),
+               Kept, "a Mistral call with no arguments dropped the next");
+         Same (Read_Kept ("```tool_code" & LF & "edit(count=)" & LF & "edit(count=2)" & LF & "```",
+                          Tools.Python_Code),
+               Kept, "a Python call that would not read dropped the next in its block");
+      end;
+      --  A Llama function value that spells the call's close is the value
+      --  whole, and one never closed runs to the call's end: cut at the
+      --  spelled close, the file was written short, and an open one lost
+      --  its last seven characters.
+      declare
+         Kept : constant String := "edit({""old_string"": ""a</function>b""}) | NO_ERROR";
+      begin
+         Same (Read_Kept ("<function name=""edit""><param name=""old_string"">a</function>b</param></function>",
+                          Tools.Function_XML),
+               Kept, "a Llama function value spelling </function> cut the call there");
+         Same (Read_Kept ("<function name=""edit""><param name=""old_string"">abcdefghij</function>",
+                          Tools.Function_XML),
+               "edit({""old_string"": ""abcdefghij""}) | NO_ERROR", "a Llama function value left open lost its end");
       end;
 
+      --  The shape the tools are offered in, its arguments inside its
+      --  "function" beside its name: looked for at the top alone, the call
+      --  ran with none.
+      Same (Read ("<tool_call>{""type"": ""function"", ""function"": {""name"": ""edit"", "
+                  & """arguments"": {""count"": 1}}}</tool_call>", Tools.Tool_Call_JSON),
+            "edit({""count"": 1})",
+            "a call's arguments inside its ""function"" were not read");
+      --  Arguments written as a string whose text holds a line break: read
+      --  back out, the break is raw, and is escaped as every call's is.
+      Same (Read ("<tool_call>{""name"": ""edit"", ""arguments"": ""{\""old_string\"": \""x\ny\""}""}"
+                  & "</tool_call>", Tools.Tool_Call_JSON),
+            "edit({""old_string"": ""x\ny""})",
+            "arguments written as a string holding a line break were refused");
+      --  A harmony call to a function not on offer is a call, to be told
+      --  no tool goes by that name: passed over, the reply was its answer.
+      Same (Read ("<|channel|>commentary " & Tools.Harmony_Recipient & "reed_file" & Tools.Harmony_Message
+                  & "{}<|call|>", Tools.Harmony_Call),
+            "reed_file({})",
+            "a harmony call to a function not on offer was passed over");
+      --  Where a call read standing loose began, and none for one in its
+      --  envelope.
+      declare
+         Asked  : Tools.Calls;
+         Loose  : constant String := "Sure: {""name"": ""edit"", ""arguments"": {""count"": 1}}";
+      begin
+         Tools.Read_Calls (Asked, Loose, Status, Syntax => Tools.Open_JSON, Offered => Defs'Unchecked_Access);
+         Assert (Tools.Loose_Start (Asked) = Loose'First + 6, "a loose call's start was not where it began");
+         Tools.Read_Calls (Asked, "<tool_call>" & Loose (Loose'First + 6 .. Loose'Last) & "</tool_call>", Status,
+                           Syntax => Tools.Open_JSON, Offered => Defs'Unchecked_Access);
+         Assert (Tools.Loose_Start (Asked) = 0, "a call in its envelope was said to stand loose");
+         Tools.Close (Asked);
+      end;
       --  Llama 3's own spelling.
       Same (Read ("{""name"": ""edit"", ""parameters"": {""count"": 1}}",
                   Tools.Open_JSON),
@@ -4106,6 +4234,30 @@ package body Tests.Tools_Cases is
                             (Model_Runner.Conversation.Content_At (Talk, Model_Runner.Conversation.Length (Talk)),
                              """count""") = 0,
                  "a call written out over lines was kept as the prose too");
+         --  A call read standing loose anywhere is the call, not the
+         --  prose: mid-line, in the tagged <name> form, or Gemma's open
+         --  JSON with no fence -- each was kept as the turn's text too.
+         declare
+            procedure Once (Reply : String; Syntax : Tools.Call_Syntax; Why : String) is
+            begin
+               Model_Runner.Conversation.Append_Reply
+                 (Talk, Reply, Status, Reading, Syntax => Syntax, Offered => Defs'Unchecked_Access);
+               Assert (E.Is_Ok (Reading)
+                       and then Model_Runner.Conversation.Call_Count
+                                  (Talk, Model_Runner.Conversation.Length (Talk)) = 1
+                       and then Model_Runner.Conversation.Content_At
+                                  (Talk, Model_Runner.Conversation.Length (Talk)) = "Sure:",
+                       Why & ": [" & Model_Runner.Conversation.Content_At
+                                       (Talk, Model_Runner.Conversation.Length (Talk)) & "]");
+            end Once;
+         begin
+            Once ("Sure: {""name"": ""edit"", ""arguments"": {""count"": 6}}", Tools.Open_JSON,
+                  "a call in the middle of a line was kept as the prose too");
+            Once ("Sure:" & LF & "<name>edit</name><arguments>{""count"": 7}</arguments>", Tools.Open_JSON,
+                  "a call in the <name> form was kept as the prose too");
+            Once ("Sure: {""name"": ""edit"", ""arguments"": {""count"": 8}}", Tools.Python_Code,
+                  "Gemma's open call with no fence was kept as the prose too");
+         end;
          --  A call quoted whole in a thought the template opened, the real
          --  one after its close: the close is the thought's, and the call after it read.
          --  Read from the quoted call, the close was taken for inside one.

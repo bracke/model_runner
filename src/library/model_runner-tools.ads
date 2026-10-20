@@ -291,6 +291,16 @@ package Model_Runner.Tools is
       First  : out Natural;
       Last   : out Natural);
 
+   --  Where in the text read the first call standing loose began: an
+   --  object with no envelope, or a <name> and its <arguments>, as the open
+   --  form reads them. Spoken_Span cuts the prose at a line that opens one;
+   --  one in the middle of a line, or in the tagged form, is a call all the
+   --  same, and kept as the turn's text too, the next prompt held it twice.
+   --
+   --  @param Item The calls read.
+   --  @return The index in the text read, or 0 where no call stood loose.
+   function Loose_Start (Item : Calls) return Natural;
+
    --  Write a value back in the spelling this engine uses.
    --
    --  Exposed because a template renders text this produced and a test has
@@ -348,6 +358,8 @@ private
       Used   : Natural := 0;
       Pool   : Storage_Access := null;
       Filled : Natural := 0;
+      --  Where the first call read standing loose began, or 0.
+      Loose  : Natural := 0;
    end record;
 
    overriding procedure Finalize (Item : in out Calls);

@@ -1054,12 +1054,25 @@ package body Model_Runner.Tools.Editing is
                --  first line stands at the line's indentation and the rest
                --  keep where they stood from it. Lines that already stand at
                --  or right of the line's indentation, after a first line that
-               --  has none, are as the model meant them, and put in as given.
+               --  has none, are as the model meant them, and put in as given;
+               --  so are all of them where old_text has lines after its first:
+               --  matched exactly, those stand as the file has them, and the
+               --  new ones were given in the same layout.
                Moved   : U.Unbounded_String;
                Shifted : Boolean := False;
 
                function Blank (Line : String) return Boolean
                is (for all C of Line => C in ' ' | ASCII.HT | ASCII.CR);
+
+               --  Whether old_text has a line after its first with more than
+               --  blanks on it.
+               function Old_Laid_Out return Boolean is
+                  Break : constant Natural := Ada.Strings.Fixed.Index (Old_Text, [1 => ASCII.LF]);
+               begin
+                  return Break > 0
+                    and then (for some C of Old_Text (Break + 1 .. Old_Text'Last) =>
+                                C not in ' ' | ASCII.HT | ASCII.CR | ASCII.LF);
+               end Old_Laid_Out;
 
                procedure Lay_Out is
                   package Text_Lines is new Ada.Containers.Indefinite_Vectors (Positive, String);
@@ -1081,7 +1094,9 @@ package body Model_Runner.Tools.Editing is
                         Leftmost := Natural'Min (Leftmost, Indent_Of (Lines (Index)));
                      end if;
                   end loop;
-                  if First_Indent = 0 and then (Leftmost = Natural'Last or else Leftmost >= Lead) then
+                  if First_Indent = 0
+                    and then (Leftmost = Natural'Last or else Leftmost >= Lead or else Old_Laid_Out)
+                  then
                      return;
                   end if;
                   Shift := Lead - First_Indent;
@@ -1202,6 +1217,11 @@ package body Model_Runner.Tools.Editing is
            Natural'Min (Natural'Min ((if Last = 0 then Total else Last), Total), First + Range_Most - 1);
          Line  : Positive := 1;
          Start : Positive := Text'First;
+         --  The last line given, and whether the bytes, not the lines,
+         --  ended the range: held to the lines alone, a range of long ones
+         --  was an answer too large to return, every time it was asked.
+         Shown : Natural := First - 1;
+         Full  : Boolean := False;
       begin
          if First > Total then
             return Failing (Path & " has" & Natural'Image (Total) & " lines");
@@ -1209,21 +1229,42 @@ package body Model_Runner.Tools.Editing is
          for Index in Text'First .. Text'Last + 1 loop
             if Index > Text'Last or else Text (Index) = ASCII.LF then
                if Line >= First and then Line <= Upto then
-                  --  The number, a colon and a space before the line: a tab
-                  --  there was copied into old_text, where JSON allows no raw
-                  --  tab; the space a model may copy into the indentation is
-                  --  one an edit matched loosely takes in its stride.
-                  U.Append (Result.Text, Image (Line) & ": " & Text (Start .. Index - 1) & ASCII.LF);
+                  declare
+                     --  The number, a colon and a space before the line: a
+                     --  tab there was copied into old_text, where JSON
+                     --  allows no raw tab; the space a model may copy into
+                     --  the indentation is one an edit matched loosely takes
+                     --  in its stride.
+                     Head : constant String := Image (Line) & ": ";
+                     Room : constant Integer :=
+                       Range_Bytes - Path'Length - U.Length (Result.Text) - Head'Length - 1;
+                  begin
+                     if Index - Start <= Room then
+                        U.Append (Result.Text, Head & Text (Start .. Index - 1) & ASCII.LF);
+                        Shown := Line;
+                     else
+                        --  A line longer than all the room is shown in part,
+                        --  so that it can be read at all.
+                        if Shown < First and then Room > 0 then
+                           U.Append (Result.Text, Head & Text (Start .. Start + Room - 1) & ASCII.LF
+                                     & "(line" & Natural'Image (Line) & " is longer than can be shown: its first"
+                                     & Natural'Image (Room) & " characters)" & ASCII.LF);
+                           Shown := Line;
+                        end if;
+                        Full := True;
+                     end if;
+                  end;
                end if;
-               exit when Line >= Upto;
+               exit when Line >= Upto or else Full;
                Line := Line + 1;
                Start := Index + 1;
             end if;
          end loop;
-         if Upto < (if Last = 0 then Total else Natural'Min (Last, Total)) then
+         if Shown < (if Last = 0 then Total else Natural'Min (Last, Total)) then
             Result.Truncated := True;
-            U.Append (Result.Text, "(" & Natural'Image (Range_Most) & " lines at most; read on from line"
-                      & Natural'Image (Upto + 1) & ")" & ASCII.LF);
+            U.Append (Result.Text, "(" & (if Full then "as many lines as fit in one answer"
+                                          else Natural'Image (Range_Most) & " lines at most")
+                      & "; read on from line" & Natural'Image (Shown + 1) & ")" & ASCII.LF);
          end if;
          U.Append (Result.Text, "(" & Path & ":" & Natural'Image (Total) & " lines, revision "
                    & Revision (Text) & ")");

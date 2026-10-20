@@ -920,7 +920,14 @@ package body Model_Runner.Tools is
       Item.Rows := [others => <>];
       Item.Used := 0;
       Item.Filled := 0;
+      Item.Loose := 0;
    end Close;
+
+   -----------------
+   -- Loose_Start --
+   -----------------
+
+   function Loose_Start (Item : Calls) return Natural is (Item.Loose);
 
    --------------
    -- Finalize --
@@ -1002,10 +1009,18 @@ package body Model_Runner.Tools is
             --  own templates ask for them, and llama.cpp reads them -- under
             --  "parameters". Every call such a model wrote was printed as
             --  its answer and none ran.
-            Named_Args : constant String := Member (Object, "arguments");
+            --  Either at the top, or inside the "function" member where the
+            --  name was found there -- the shape the tools are offered in:
+            --  looked for at the top alone, such a call ran with none.
+            Inner      : constant String := Member (Object, "function");
+            Holder     : constant String :=
+              (if Member (Object, "arguments") = "" and then Member (Object, "parameters") = ""
+                 and then Inner /= "" and then Inner (Inner'First) = '{'
+               then Inner else Object);
+            Named_Args : constant String := Member (Holder, "arguments");
             Given      : constant String :=
               (if Named_Args /= "" then Named_Args
-               else Member (Object, "parameters"));
+               else Member (Holder, "parameters"));
             Name_At   : Span;
             Where     : Span;
          begin
@@ -1044,7 +1059,9 @@ package body Model_Runner.Tools is
                   Used_2  : Natural;
                   Second  : E.Error_Info;
                begin
-                  Rewrite (Plain, Room_2, Used_2, Second);
+                  --  With the raw tabs and line breaks a model writes in a
+                  --  string escaped, as every other call's are.
+                  Rewrite (Controls_Escaped (Plain), Room_2, Used_2, Second);
                   if E.Is_Error (Second) then
                      Status := E.Make (E.Tools_Call_Malformed);
                      E.Add_Integer
@@ -1421,8 +1438,10 @@ package body Model_Runner.Tools is
                      end loop;
                      V_First := Tag_End + 1;
                      V_Last  := V_First - 1;
-                     while V_Last + 8 <= Last
-                       and then Reply (V_Last + 1 .. V_Last + 8) /= "</param>"
+                     --  A value never closed runs to the call's end: held
+                     --  to a whole close ahead, its last seven were lost.
+                     while V_Last < Last
+                       and then (V_Last + 8 > Last or else Reply (V_Last + 1 .. V_Last + 8) /= "</param>")
                      loop
                         V_Last := V_Last + 1;
                      end loop;
@@ -1600,6 +1619,77 @@ package body Model_Runner.Tools is
          end;
       end Take_Qwen;
 
+      --  Where the call opened at FROM is closed, in an XML form whose
+      --  calls are OPEN_TAG ... CLOSE_TAG around parameters PARAM_OPENS ...
+      --  PARAM_SHUTS: each parameter's text stepped over to its close, not
+      --  past where the call ends -- a CLOSE_TAG the envelope's close, the
+      --  next call or the reply's end follows. A file's content may spell
+      --  CLOSE_TAG, and the call was cut there, its content written short;
+      --  a parameter left open swallowed the call after it. SHUT is past
+      --  the reply where no close is; UNCLOSED, where the next call opens
+      --  first -- run to the next one's close, the two were one call.
+      procedure Find_Shut
+        (From                    : Natural;
+         Open_Tag, Close_Tag     : String;
+         Param_Opens, Param_Shuts : String;
+         Shut                    : out Natural;
+         Unclosed                : out Boolean)
+      is
+         --  An opening at AT, and not a word it begins: an XML tag's name
+         --  is ended by a blank or its '>'.
+         function Opens (At_Index : Natural) return Boolean
+         is (Marks (At_Index, Open_Tag)
+             and then (Open_Tag (Open_Tag'Last) = '='
+                       or else (At_Index + Open_Tag'Length <= Reply'Last
+                                and then Reply (At_Index + Open_Tag'Length) in ' ' | '>')));
+
+         function Call_End return Natural is
+            Look : Natural := Shut;
+         begin
+            loop
+               declare
+                  Found : constant Natural :=
+                    (if Look > Reply'Last then 0
+                     else Ada.Strings.Fixed.Index (Reply (Look .. Reply'Last), Close_Tag));
+                  After : Natural := Found + Close_Tag'Length;
+               begin
+                  exit when Found = 0;
+                  while After <= Reply'Last
+                    and then Reply (After) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
+                  loop
+                     After := After + 1;
+                  end loop;
+                  if After > Reply'Last or else Marks (After, "</tool_call>")
+                    or else Marks (After, "<tool_call>") or else Opens (After)
+                  then
+                     return Found - 1;
+                  end if;
+                  Look := Found + 1;
+               end;
+            end loop;
+            return Reply'Last;
+         end Call_End;
+      begin
+         Shut := From + 1;
+         Unclosed := False;
+         while Shut <= Reply'Last and then not Marks (Shut, Close_Tag) loop
+            if Opens (Shut) then
+               Unclosed := True;
+               return;
+            elsif Marks (Shut, Param_Opens) then
+               declare
+                  Bound     : constant Natural := Call_End;
+                  Param_End : constant Natural :=
+                    (if Shut > Bound then 0 else Ada.Strings.Fixed.Index (Reply (Shut .. Bound), Param_Shuts));
+               begin
+                  Shut := (if Param_End = 0 then Shut + 1 else Param_End + Param_Shuts'Length);
+               end;
+            else
+               Shut := Shut + 1;
+            end if;
+         end loop;
+      end Find_Shut;
+
       --  The first closed call block that would not read, the rest read.
       Bad : E.Error_Info := E.Success;
 
@@ -1759,6 +1849,9 @@ package body Model_Runner.Tools is
                            if E.Is_Error (Status) then
                               return;
                            end if;
+                           if Taken and then Item.Loose = 0 then
+                              Item.Loose := Index;
+                           end if;
                         end if;
                         Index := (if Taken then Shut + 1 else Index + 1);
                      end;
@@ -1834,6 +1927,9 @@ package body Model_Runner.Tools is
                                  if E.Is_Error (Status) then
                                     return;
                                  end if;
+                                 if Item.Loose = 0 then
+                                    Item.Loose := N_Open;
+                                 end if;
                               end if;
                            end;
                         end if;
@@ -1858,25 +1954,27 @@ package body Model_Runner.Tools is
                  and then Reply (Index + Open_Tag'Length) in ' ' | '>'
                then
                   declare
-                     Shut : Natural := Index;
+                     Shut     : Natural;
+                     Unclosed : Boolean;
                   begin
-                     while Shut <= Reply'Last
-                       and then not Marks (Shut, Close_Tag)
-                     loop
-                        Shut := Shut + 1;
-                     end loop;
-                     if Shut > Reply'Last then
+                     Find_Shut (Index, Open_Tag, Close_Tag, "<param", "</param>", Shut, Unclosed);
+                     if Unclosed then
+                        --  Never closed, and the next call read as its own.
+                        Lose;
+                        Index := Shut;
+                     elsif Shut > Reply'Last then
                         Status := E.Make (E.Tools_Call_Malformed);
                         E.Add_Integer
                           (Status, "index",
                            Long_Long_Integer (Item.Used + 1));
                         return;
+                     else
+                        Take_Function (Index, Shut - 1);
+                        if not Read_On then
+                           return;
+                        end if;
+                        Index := Shut + Close_Tag'Length;
                      end if;
-                     Take_Function (Index, Shut - 1);
-                     if not Read_On then
-                        return;
-                     end if;
-                     Index := Shut + Close_Tag'Length;
                   end;
                else
                   Index := Index + 1;
@@ -1895,69 +1993,27 @@ package body Model_Runner.Tools is
             while Index <= Reply'Last loop
                if Marks (Index, Open_Tag) then
                   declare
-                     Shut : Natural := Index;
+                     Shut     : Natural;
+                     Unclosed : Boolean;
                   begin
-                     --  Each parameter's text stepped over to its close: a
-                     --  file's content may spell </function>, and the call
-                     --  was cut there, its content written short.
-                     while Shut <= Reply'Last
-                       and then not Marks (Shut, Close_Tag)
-                     loop
-                        if Marks (Shut, Param_Opens) then
-                           declare
-                              --  Not past where the call ends: a </function> the
-                              --  envelope's close, the next call, or the reply's
-                              --  end follows -- a parameter left open swallowed
-                              --  the call after it, and one whose text spells
-                              --  </tool_call> must still be read whole.
-                              function Call_End return Natural is
-                                 Look : Natural := Shut;
-                              begin
-                                 loop
-                                    declare
-                                       Found : constant Natural :=
-                                         (if Look > Reply'Last then 0
-                                          else Ada.Strings.Fixed.Index (Reply (Look .. Reply'Last), Close_Tag));
-                                       After : Natural := Found + Close_Tag'Length;
-                                    begin
-                                       exit when Found = 0;
-                                       while After <= Reply'Last
-                                         and then Reply (After) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR
-                                       loop
-                                          After := After + 1;
-                                       end loop;
-                                       if After > Reply'Last or else Marks (After, "</tool_call>")
-                                         or else Marks (After, "<tool_call>") or else Marks (After, Open_Tag)
-                                       then
-                                          return Found - 1;
-                                       end if;
-                                       Look := Found + 1;
-                                    end;
-                                 end loop;
-                                 return Reply'Last;
-                              end Call_End;
-                              Bound : constant Natural := Call_End;
-                              Param_End : constant Natural :=
-                                Ada.Strings.Fixed.Index (Reply (Shut .. Bound), Param_Shuts);
-                           begin
-                              Shut := (if Param_End = 0 then Shut + 1 else Param_End + Param_Shuts'Length);
-                           end;
-                        else
-                           Shut := Shut + 1;
-                        end if;
-                     end loop;
-                     if Shut > Reply'Last then
+                     Find_Shut (Index, Open_Tag, Close_Tag, Param_Opens, Param_Shuts, Shut, Unclosed);
+                     if Unclosed then
+                        --  Never closed, and the next call read as its own.
+                        Lose;
+                        Index := Shut;
+                     elsif Shut > Reply'Last then
                         Status := E.Make (E.Tools_Call_Malformed);
                         E.Add_Integer
                           (Status, "index",
                            Long_Long_Integer (Item.Used + 1));
                         return;
+                     else
+                        Take_Qwen (Index, Shut - 1);
+                        if not Read_On then
+                           return;
+                        end if;
+                        Index := Shut + Close_Tag'Length;
                      end if;
-                     Take_Qwen (Index, Shut - 1);
-                     if not Read_On then
-                        return;
-                     end if;
-                     Index := Shut + Close_Tag'Length;
                   end;
                else
                   Index := Index + 1;
@@ -1996,41 +2052,79 @@ package body Model_Runner.Tools is
                            Found, Read, Offered);
                         exit when not Found;
                         --  One that will not read: the block read on from
-                        --  its close, where there is one -- the reader went
-                        --  to the reply's end, and the calls after it were
-                        --  dropped.
+                        --  the next line that opens a call of a tool on
+                        --  offer, else from its close, where there is one --
+                        --  the reader went to the reply's end, and the calls
+                        --  after it were dropped. A line of the bad call's
+                        --  own text is not taken for one: only a tool's name
+                        --  at a line's start, its '(' after it.
                         if not Read then
                            declare
                               Fence : constant Natural :=
                                 (if Was > Rest'Last then 0
                                  else Ada.Strings.Fixed.Index (Rest (Was .. Rest'Last), Code_Closes));
+                              Bound : constant Natural := (if Fence = 0 then Rest'Last else Fence - 1);
+
+                              function Next_Call_Line return Natural is
+                                 Line : Natural :=
+                                   (if Was > Bound then 0
+                                    else Ada.Strings.Fixed.Index (Rest (Was .. Bound), [1 => ASCII.LF]));
+                              begin
+                                 while Line > 0 and then Line < Bound and then Offered /= null loop
+                                    declare
+                                       Start : constant Positive := Line + 1;
+                                       Stop  : Natural := Start;
+                                    begin
+                                       while Stop <= Bound
+                                         and then Rest (Stop) in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_'
+                                       loop
+                                          Stop := Stop + 1;
+                                       end loop;
+                                       if Stop > Start and then Stop <= Bound and then Rest (Stop) = '('
+                                         and then Offers (Offered.all, Rest (Start .. Stop - 1))
+                                       then
+                                          return Start;
+                                       end if;
+                                       Line := Ada.Strings.Fixed.Index (Rest (Start .. Bound), [1 => ASCII.LF]);
+                                    end;
+                                 end loop;
+                                 return 0;
+                              end Next_Call_Line;
+
+                              Resume : constant Natural := Next_Call_Line;
                            begin
-                              if Fence = 0 then
+                              if Resume > 0 then
+                                 Lose;
+                                 From := Resume;
+                              elsif Fence = 0 then
                                  Status := E.Make (E.Tools_Call_Malformed);
                                  E.Add_Integer
                                    (Status, "index", Long_Long_Integer (Item.Used + 1));
                                  return;
+                              else
+                                 Lose;
+                                 From := Fence;
+                                 exit;
                               end if;
-                              Lose;
-                              From := Fence;
-                              exit;
                            end;
                         end if;
                      end;
-                     declare
-                        Room    : String (1 .. Max_Call_Bytes);
-                        Written : Natural;
-                        Reading : E.Error_Info;
-                     begin
-                        Rewrite (Args (1 .. Args_Last), Room, Written, Reading);
-                        if E.Is_Error (Reading) then
-                           Lose;
-                        else
-                           Store (Name (1 .. Name_Last), Room (1 .. Written));
+                     if Read then
+                        declare
+                           Room    : String (1 .. Max_Call_Bytes);
+                           Written : Natural;
+                           Reading : E.Error_Info;
+                        begin
+                           Rewrite (Args (1 .. Args_Last), Room, Written, Reading);
+                           if E.Is_Error (Reading) then
+                              Lose;
+                           else
+                              Store (Name (1 .. Name_Last), Room (1 .. Written));
+                           end if;
+                        end;
+                        if not Read_On then
+                           return;
                         end if;
-                     end;
-                     if not Read_On then
-                        return;
                      end if;
                   end loop;
 
@@ -2209,50 +2303,48 @@ package body Model_Runner.Tools is
 
                      Body_At := Body_At + Harmony_Message'Length;
 
-                     if Offered /= null and then not Offers (Offered.all, Name)
-                     then
-                        Index := Body_At;
-                     else
-                        declare
-                           Open : Natural := Body_At;
-                        begin
-                           while Open <= Reply'Last
-                             and then Reply (Open) in ' ' | ASCII.LF
-                                                    | ASCII.CR | ASCII.HT
-                           loop
-                              Open := Open + 1;
-                           end loop;
+                     --  A function not on offer is a call all the same, and
+                     --  the model told no tool goes by that name: passed
+                     --  over, the reply was taken as its answer.
+                     declare
+                        Open : Natural := Body_At;
+                     begin
+                        while Open <= Reply'Last
+                          and then Reply (Open) in ' ' | ASCII.LF
+                                                 | ASCII.CR | ASCII.HT
+                        loop
+                           Open := Open + 1;
+                        end loop;
 
-                           if Open > Reply'Last or else Reply (Open) /= '{'
-                           then
-                              Store (Name, "{}");
-                              Index := Open;
-                           else
-                              declare
-                                 Shut : constant Natural := Object_End (Open);
-                                 Next : constant Natural :=
-                                   Ada.Strings.Fixed.Index (Reply (Open .. Reply'Last), Harmony_Recipient);
-                              begin
-                                 --  Not closed before the next call's header:
-                                 --  passed, and said after; not closed at all,
-                                 --  a reply cut in it.
-                                 if Shut = 0 or else (Next /= 0 and then Shut > Next) then
-                                    if Next = 0 then
-                                       Malformed;
-                                       return;
-                                    end if;
-                                    Lose;
-                                    Index := Next;
-                                 else
-                                    Store_Object (Name, Reply (Open .. Shut));
-                                    Index := Shut + 1;
+                        if Open > Reply'Last or else Reply (Open) /= '{'
+                        then
+                           Store (Name, "{}");
+                           Index := Open;
+                        else
+                           declare
+                              Shut : constant Natural := Object_End (Open);
+                              Next : constant Natural :=
+                                Ada.Strings.Fixed.Index (Reply (Open .. Reply'Last), Harmony_Recipient);
+                           begin
+                              --  Not closed before the next call's header:
+                              --  passed, and said after; not closed at all,
+                              --  a reply cut in it.
+                              if Shut = 0 or else (Next /= 0 and then Shut > Next) then
+                                 if Next = 0 then
+                                    Malformed;
+                                    return;
                                  end if;
-                              end;
-                           end if;
-                        end;
-                        if not Read_On then
-                           return;
+                                 Lose;
+                                 Index := Next;
+                              else
+                                 Store_Object (Name, Reply (Open .. Shut));
+                                 Index := Shut + 1;
+                              end if;
+                           end;
                         end if;
+                     end;
+                     if not Read_On then
+                        return;
                      end if;
                   end;
                end;
@@ -2316,51 +2408,55 @@ package body Model_Runner.Tools is
                         loop
                            Name_Last := Name_Last + 1;
                         end loop;
-                        if Name_Last > Reply'Last
-                          or else not Marks (Name_Last, Mistral_Args)
-                        then
+                        if Name_Last > Reply'Last then
                            Malformed;
                            return;
-                        end if;
-                        declare
-                           Name : constant String :=
-                             Trimmed (Reply (Name_First .. Name_Last - 1));
-                           Open : Natural := Name_Last + Mistral_Args'Length;
-                        begin
-                           while Open <= Reply'Last
-                             and then Reply (Open) in ' ' | ASCII.LF
-                                                    | ASCII.CR | ASCII.HT
-                           loop
-                              Open := Open + 1;
-                           end loop;
+                        elsif not Marks (Name_Last, Mistral_Args) then
+                           --  The next call before this one's arguments:
+                           --  passed, and said after.
+                           Lose;
+                           Index := Name_Last;
+                        else
                            declare
-                              --  The next call's marker bounds this one: a
-                              --  call that will not read before it is passed,
-                              --  and said after; with none after, the reply
-                              --  was cut in it.
-                              Next : constant Natural :=
-                                (if Name_Last + 1 > Reply'Last then 0
-                                 else Ada.Strings.Fixed.Index (Reply (Name_Last + 1 .. Reply'Last), Mistral_Calls));
-                              Shut : constant Natural :=
-                                (if Name = "" or else Open > Reply'Last or else Reply (Open) /= '{' then 0
-                                 else Object_End (Open));
+                              Name : constant String :=
+                                Trimmed (Reply (Name_First .. Name_Last - 1));
+                              Open : Natural := Name_Last + Mistral_Args'Length;
                            begin
-                              if Shut = 0 or else (Next /= 0 and then Shut > Next) then
-                                 if Next = 0 then
-                                    Malformed;
-                                    return;
+                              while Open <= Reply'Last
+                                and then Reply (Open) in ' ' | ASCII.LF
+                                                       | ASCII.CR | ASCII.HT
+                              loop
+                                 Open := Open + 1;
+                              end loop;
+                              declare
+                                 --  The next call's marker bounds this one: a
+                                 --  call that will not read before it is passed,
+                                 --  and said after; with none after, the reply
+                                 --  was cut in it.
+                                 Next : constant Natural :=
+                                   (if Name_Last + 1 > Reply'Last then 0
+                                    else Ada.Strings.Fixed.Index (Reply (Name_Last + 1 .. Reply'Last), Mistral_Calls));
+                                 Shut : constant Natural :=
+                                   (if Name = "" or else Open > Reply'Last or else Reply (Open) /= '{' then 0
+                                    else Object_End (Open));
+                              begin
+                                 if Shut = 0 or else (Next /= 0 and then Shut > Next) then
+                                    if Next = 0 then
+                                       Malformed;
+                                       return;
+                                    end if;
+                                    Lose;
+                                    Index := Next;
+                                 else
+                                    Store_Object (Name, Reply (Open .. Shut));
+                                    if not Read_On then
+                                       return;
+                                    end if;
+                                    Index := Shut + 1;
                                  end if;
-                                 Lose;
-                                 Index := Next;
-                              else
-                                 Store_Object (Name, Reply (Open .. Shut));
-                                 if not Read_On then
-                                    return;
-                                 end if;
-                                 Index := Shut + 1;
-                              end if;
+                              end;
                            end;
-                        end;
+                        end if;
                      end;
                   end if;
                end;
@@ -2388,6 +2484,13 @@ package body Model_Runner.Tools is
                   while Shut <= Reply'Last
                     and then not Marks (Shut, DeepSeek_Call_End)
                   loop
+                     if Marks (Shut, DeepSeek_Call_Begin) then
+                        --  Never closed: run to the next call's end, the
+                        --  first was stored and the next one dropped.
+                        Lose;
+                        Index := Shut;
+                        goto Next_DeepSeek;
+                     end if;
                      if Sep = 0 and then Marks (Shut, DeepSeek_Sep) then
                         Sep := Shut;
                      end if;

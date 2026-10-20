@@ -910,9 +910,10 @@ package body Model_Runner.Conversation is
       function Without_Lead (First, Last : Natural) return String
       is (if Lead.From = 0 or else Lead.From < First or else Lead.Upto > Last then Reply (First .. Last)
           else Reply (First .. Lead.From - 1) & Reply (Lead.Upto + 1 .. Last));
+      Lead_Text : constant String := Leading_Calls;
    begin
       Model_Runner.Tools.Read_Calls
-        (Asked, Leading_Calls & Reply (Answer_At .. Reply'Last), Reading,
+        (Asked, Lead_Text & Reply (Answer_At .. Reply'Last), Reading,
          Syntax => Syntax, Offered => Offered);
 
       --  One block that would not read leaves the calls that did: they
@@ -945,6 +946,15 @@ package body Model_Runner.Conversation is
          --  blocks being handed back as text.
          Model_Runner.Tools.Spoken_Span
            (Reply (Answer_At .. Reply'Last), Syntax, First, Last);
+         --  Not past a call read standing loose, wherever it stood: kept
+         --  as the words too, the next prompt held it twice. Read with no
+         --  leading calls before it, the text read is the answer's own.
+         if Lead_Text = "" and then Model_Runner.Tools.Loose_Start (Asked) in Answer_At .. Last then
+            Last := Model_Runner.Tools.Loose_Start (Asked) - 1;
+            while Last >= First and then Reply (Last) in ' ' | ASCII.HT | ASCII.LF | ASCII.CR loop
+               Last := Last - 1;
+            end loop;
+         end if;
 
          --  And the reasoning before it, which is the turn's too.
          if Answer_At > Reply'First

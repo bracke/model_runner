@@ -45,8 +45,10 @@ package body Model_Runner.Tools.Builtin is
    use type N.Element_Count;
 
    --  The most a tool answers with, leaving room under the call buffer for
-   --  a truncation note.
-   Cap : constant := Model_Runner.Tools.Max_Call_Bytes - 64;
+   --  a truncation note, a stamp, and the note of a path taken as the
+   --  project's: with 64 bytes held, a rooted read of a file near the cap
+   --  was an answer too large to return.
+   Cap : constant := Model_Runner.Tools.Max_Call_Bytes - 1024;
 
    --  How long a spawned command -- a shell, python, curl, sqlite -- may run
    --  before it is stopped. A tool that hangs would hang the whole loop,
@@ -2770,7 +2772,11 @@ package body Model_Runner.Tools.Builtin is
                --  Its path given anew, and only its path: a content that
                --  happens to spell it stays as it is.
                Moved : constant String := With_Text_Argument (Arguments, "path", Taken);
-               Taken_As : constant String := "(" & Given & " is taken as the project's " & Taken & ") ";
+               --  Short, as the room held for it is: past it, a read that
+               --  fit its cap was an answer too large to return.
+               Taken_As : constant String :=
+                 (if Given'Length + Taken'Length <= 400 then "(" & Given & " is taken as the project's " & Taken & ") "
+                  else "(the path is taken as the project's own) ");
             begin
                if Moved = "" then
                   return Failure ("the call's arguments could not be read again with " & Taken & " as its path");

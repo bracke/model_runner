@@ -24,6 +24,11 @@ package Model_Runner.Tools.Editing is
    Range_Most  : constant := 400;
    Search_Most : constant := 100;
 
+   --  The bytes of lines a range gives at most, with its path's: what is
+   --  left of a call's answer is its notes', and a note of a path taken as
+   --  the project's.
+   Range_Bytes : constant := Model_Runner.Tools.Max_Call_Bytes - 2 * 1024;
+
    --  Where a path is on disk: under Base where it is relative and a Base
    --  is given; as it is otherwise, which the process's directory then
    --  resolves.
