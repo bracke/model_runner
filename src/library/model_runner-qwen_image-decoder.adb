@@ -118,9 +118,53 @@ package body Model_Runner.Qwen_Image.Decoder is
             return;
          end if;
          View_Of (Index, Element_Count (Outputs), Columns, Result.Kernel);
-         if E.Is_Ok (Status) then
-            Vector (Name & ".bias", Outputs, Result.Bias);
+         if E.Is_Error (Status) then
+            return;
          end if;
+         Vector (Name & ".bias", Outputs, Result.Bias);
+
+         --  Laid out again, tap after tap, and padded to the multiples of
+         --  32, where it is a 3x3 or its rows fall short of one.
+         declare
+            Taps      : constant Element_Count := Element_Count (Size * Size);
+            Ins       : constant Element_Count := Element_Count (Inputs);
+            Rows_To   : constant Element_Count := (Element_Count (Outputs) + 31) / 32 * 32;
+            --  A 1x1 reads the pixels as they lie, so its columns stay.
+            Across    : constant Element_Count := (if Size = 1 then Columns else (Columns + 31) / 32 * 32);
+            Element   : constant B.Byte_Count := T.Row_Bytes (Result.Kernel) / B.Byte_Count (Columns);
+            Row_From  : constant B.Byte_Count := T.Row_Bytes (Result.Kernel);
+            Row_To    : constant B.Byte_Count := B.Byte_Count (Across) * Element;
+            Start     : constant B.Byte_Count :=
+              S.Info (Item.Table, Index).Data_Offset - S.Data_Start (Item.Table);
+            From      : B.Byte_Array (0 .. Row_From * B.Byte_Count (Outputs) - 1)
+              with Import, Address => System.Storage_Elements.To_Address
+                (System.Storage_Elements.To_Integer (Item.Base) + System.Storage_Elements.Integer_Address (Start));
+         begin
+            if (Size = 1 and then Rows_To = Element_Count (Outputs))
+              or else Row_From /= B.Byte_Count (Columns) * Element
+            then
+               return;
+            end if;
+            B.Allocate (B.Byte_Count (Rows_To) * Row_To, Result.Owned);
+            if Result.Owned = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+               for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                  for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                     declare
+                        Here  : constant B.Byte_Count := O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
+                        There : constant B.Byte_Count :=
+                          Result.Owned'First + O * Row_To + (Tap * B.Byte_Count (Ins) + Channel) * Element;
+                     begin
+                        Result.Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
+                     end;
+                  end loop;
+               end loop;
+            end loop;
+            T.Make (Result.Kernel.Format, Rows_To, Across, Result.Owned, 0, Result.Kernel, Status);
+         end;
       end Convolve;
 
       procedure Residual_Of (Name : String; Inputs, Outputs : Positive; Result : out Residual) is
@@ -234,6 +278,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       procedure Let_Go (C : in out Convolution) is
       begin
          T.Free (C.Bias);
+         B.Free (C.Owned);
          C := (others => <>);
       end Let_Go;
 
@@ -342,48 +387,99 @@ package body Model_Runner.Qwen_Image.Decoder is
    end Run;
 
    --  A decode's work between its products, a share at a time: a band's
-   --  rows of 3x3 neighbourhoods gathered, zero past the edges; or pixels'
-   --  channels normalized by their root mean square and a gain, SiLU after
-   --  where asked.
-   type Pixel_Kind is (Gather_Rows, Norm_Pixels);
+   --  pixels' 3x3 neighbourhoods gathered, a tap's channels together and
+   --  zero past the edges; or pixels' channels normalized by their root
+   --  mean square and a gain, SiLU after where asked; or a product's
+   --  answers put in their pixels, a bias added and the padding dropped;
+   --  or Source's pixels added to Target's; or Source doubled into
+   --  Target, nearest; or a level's input added to its doubled pixels as
+   --  the shortcut, as Decode says.
+   type Pixel_Kind is (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels);
 
    type Pixel_Work is new Model_Runner.Shares.Work with record
       Kind            : Pixel_Kind := Gather_Rows;
       Source, Target  : T.Real_Array_Access;
       Gain            : T.Real_Array_Access;
       Silu            : Boolean := True;
-      --  The band's first row, the picture's height and width, the
-      --  channels read.
-      Row, Height, Width, Channels : Element_Count := 0;
+      --  The band's first row (its first pixel, putting), the picture's
+      --  height and width, the channels read or put, and how far apart two
+      --  pixels' neighbourhoods or answers lie.
+      Row, Height, Width, Channels, Across : Element_Count := 0;
+      --  The shortcut's: the level's input channels, the doubled pixels'
+      --  channel count each input channel's value repeats over, and which
+      --  of the 2x2 frames' subpixels a single frame keeps.
+      Inputs, Factor, Repeats, Frame : Element_Count := 0;
    end record;
 
    overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
-      Ins   : constant Element_Count := Item.Channels;
-      Patch : constant Element_Count := Ins * 9;
+      Ins : constant Element_Count := Item.Channels;
    begin
       case Item.Kind is
          when Gather_Rows =>
-            for R in First .. Last loop
-               for Col in 0 .. Item.Width - 1 loop
-                  declare
-                     At_Patch : constant Element_Count := (R * Item.Width + Col) * Patch;
-                  begin
-                     for Channel in 0 .. Ins - 1 loop
-                        for DY in Element_Count range 0 .. 2 loop
-                           for DX in Element_Count range 0 .. 2 loop
+            --  First .. Last count the band's pixels; what lies past the
+            --  nine taps in a neighbourhood stays the zero it was given.
+            for Pixel in First .. Last loop
+               declare
+                  At_Patch : constant Element_Count := Pixel * Item.Across;
+                  Y        : constant Element_Count := Item.Row + Pixel / Item.Width;
+                  X        : constant Element_Count := Pixel rem Item.Width;
+               begin
+                  for DY in Element_Count range 0 .. 2 loop
+                     for DX in Element_Count range 0 .. 2 loop
+                        declare
+                           Into : constant Element_Count := At_Patch + (DY * 3 + DX) * Ins;
+                        begin
+                           --  The tap's pixel, one up or left of Y + DY, X + DX.
+                           if Y + DY < 1 or else Y + DY > Item.Height or else X + DX < 1 or else X + DX > Item.Width
+                           then
+                              Item.Target (Into .. Into + Ins - 1) := [others => 0.0];
+                           else
                               declare
-                                 SY : constant Element_Count := Item.Row + R + DY;
-                                 SX : constant Element_Count := Col + DX;
+                                 From : constant Element_Count := ((Y + DY - 1) * Item.Width + X + DX - 1) * Ins;
                               begin
-                                 Item.Target (At_Patch + Channel * 9 + DY * 3 + DX) :=
-                                   (if SY < 1 or else SY > Item.Height or else SX < 1 or else SX > Item.Width
-                                    then 0.0
-                                    else Item.Source (((SY - 1) * Item.Width + (SX - 1)) * Ins + Channel));
+                                 Item.Target (Into .. Into + Ins - 1) := Item.Source (From .. From + Ins - 1);
                               end;
-                           end loop;
-                        end loop;
+                           end if;
+                        end;
                      end loop;
-                  end;
+                  end loop;
+               end;
+            end loop;
+         when Add_Pixels =>
+            for I in First * Ins .. (Last + 1) * Ins - 1 loop
+               Item.Target (I) := Item.Target (I) + Item.Source (I);
+            end loop;
+         when Double_Pixels =>
+            --  First .. Last count the doubled pixels; Width is the narrow
+            --  picture's.
+            for Pixel in First .. Last loop
+               declare
+                  Into : constant Element_Count := Pixel * Ins;
+                  From : constant Element_Count :=
+                    ((Pixel / (2 * Item.Width) / 2) * Item.Width + Pixel rem (2 * Item.Width) / 2) * Ins;
+               begin
+                  Item.Target (Into .. Into + Ins - 1) := Item.Source (From .. From + Ins - 1);
+               end;
+            end loop;
+         when Shortcut_Pixels =>
+            for Pixel in First .. Last loop
+               declare
+                  Row  : constant Element_Count := Pixel / (2 * Item.Width);
+                  Col  : constant Element_Count := Pixel rem (2 * Item.Width);
+                  Sub  : constant Element_Count := Item.Frame * 4 + (Row rem 2) * 2 + (Col rem 2);
+                  From : constant Element_Count := ((Row / 2) * Item.Width + Col / 2) * Item.Inputs;
+                  Into : constant Element_Count := Pixel * Ins;
+               begin
+                  for C in 0 .. Ins - 1 loop
+                     Item.Target (Into + C) :=
+                       Item.Target (Into + C) + Item.Source (From + (C * Item.Factor + Sub) / Item.Repeats);
+                  end loop;
+               end;
+            end loop;
+         when Put_Answers =>
+            for Pixel in First .. Last loop
+               for C in 0 .. Ins - 1 loop
+                  Item.Target ((Item.Row + Pixel) * Ins + C) := Item.Source (Pixel * Item.Across + C) + Item.Gain (C);
                end loop;
             end loop;
          when Norm_Pixels =>
@@ -450,12 +546,16 @@ package body Model_Runner.Qwen_Image.Decoder is
       On_Device : constant Boolean := Device.Is_Ready;
 
       --  How many pixels one device product takes, and the room they are
-      --  copied through.
-      Device_Rows : constant Element_Count := 128;
+      --  copied through. A 3x3's band of rows is cut to it, so a product
+      --  takes its gathered patches as they lie. A 512 picture decoded in
+      --  7.5 to 7.9 s at 1,024 and 7.9 to 8.5 at 4,096, whose patches lie
+      --  past the caches.
+      Device_Rows : constant Element_Count := 1_024;
       Chunk_In, Chunk_Out : T.Real_Array_Access;
 
       --  Target := Weight times each of Count vectors: on the device where
-      --  one is open, a chunk at a time; across the pool otherwise.
+      --  one is open, as they lie where they are one chunk and a chunk at a
+      --  time otherwise; across the pool where none is.
       procedure Product
         (Weight : T.View; Vectors : T.Real_Array_Access; Count : Element_Count; Target : T.Real_Array_Access) is
       begin
@@ -463,6 +563,9 @@ package body Model_Runner.Qwen_Image.Decoder is
             return;
          elsif not On_Device then
             CPU.Dispatch_Batch (Pool, Weight, Vectors, Count, Target, Status);
+            return;
+         elsif Count <= Device_Rows then
+            Device.Dispatch_Batch (Weight, Vectors, Count, Target, Status);
             return;
          end if;
          declare
@@ -495,65 +598,88 @@ package body Model_Runner.Qwen_Image.Decoder is
 
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a
       --  product, a 3x3 as a product over each pixel's neighbourhood,
-      --  gathered a band of rows at a time, zero past the edges.
+      --  gathered a band of rows at a time, zero past the edges; the bias
+      --  added and the padding's channels dropped as the answers are put.
       procedure Apply (C : Convolution; Source : T.Real_Array_Access; Target : in out T.Real_Array_Access) is
          Pixels : constant Element_Count := Height * Width;
          Outs   : constant Element_Count := Element_Count (C.Outputs);
          Ins    : constant Element_Count := Element_Count (C.Inputs);
+         --  The kernel's rows and columns, padded.
+         Fitted : constant Element_Count := C.Kernel.Rows;
+         Across : constant Element_Count := C.Kernel.Columns;
+         Answers : T.Real_Array_Access;
+
+         --  Target's pixels First .. First + Count - 1 := Answers' first
+         --  Count, their bias added.
+         procedure Put (First, Count : Element_Count) is
+            Job : aliased Pixel_Work :=
+              (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
+               Row => First, Height => Height, Width => Width, Channels => Outs, Across => Fitted, others => 0);
+         begin
+            if E.Is_Ok (Status) then
+               CPU.Dispatch_Shares (Pool, Count, Job'Unchecked_Access, Status, Cost => Count * Outs);
+            end if;
+         end Put;
       begin
          Room (Target, Pixels * Outs);
          if E.Is_Error (Status) then
             return;
          end if;
          if C.Size = 1 then
-            Product (C.Kernel, Source, Pixels, Target);
-         else
-            declare
-               Patch : constant Element_Count := Ins * 9;
-               --  A band of rows whose patches are about 64 MB.
-               Band  : constant Element_Count :=
-                 Element_Count'Max (1, Element_Count'Min (Height, 16_777_216 / (Patch * Width)));
-               Patches, Answers : T.Real_Array_Access;
-            begin
-               T.Allocate (Band * Width * Patch, Patches);
-               T.Allocate (Band * Width * Outs, Answers);
-               if Patches = null or else Answers = null then
-                  T.Free (Patches);
-                  T.Free (Answers);
-                  Status := E.Make (E.Memory_Allocation_Failed);
-                  return;
-               end if;
-               declare
-                  Row : Element_Count := 0;
-               begin
-                  while Row < Height and then E.Is_Ok (Status) loop
-                     declare
-                        Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
-                     begin
-                        declare
-                           Job : aliased Pixel_Work :=
-                             (Kind => Gather_Rows, Source => Source, Target => Patches, Gain => null, Silu => False,
-                              Row => Row, Height => Height, Width => Width, Channels => Ins);
-                        begin
-                           CPU.Dispatch_Shares (Pool, Rows_Here, Job'Unchecked_Access, Status,
-                                                Cost => Rows_Here * Width * Patch);
-                        end;
-                        Product (C.Kernel, Patches, Rows_Here * Width, Answers);
-                        Target (Row * Width * Outs .. (Row + Rows_Here) * Width * Outs - 1) :=
-                          Answers (0 .. Rows_Here * Width * Outs - 1);
-                        Row := Row + Rows_Here;
-                     end;
-                  end loop;
-               end;
+            if Fitted = Outs then
+               Answers := Target;
+               Product (C.Kernel, Source, Pixels, Target);
+               Put (0, Pixels);
+               return;
+            end if;
+            T.Allocate (Pixels * Fitted, Answers);
+            if Answers = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            Product (C.Kernel, Source, Pixels, Answers);
+            Put (0, Pixels);
+            T.Free (Answers);
+            return;
+         end if;
+         declare
+            --  A band of rows: what one device product takes, or on the
+            --  processor patches of about 64 MB.
+            Band  : constant Element_Count :=
+              Element_Count'Max
+                (1, Element_Count'Min
+                   (Height, (if On_Device then Device_Rows / Width else 16_777_216 / (Across * Width))));
+            Patches : T.Real_Array_Access;
+         begin
+            T.Allocate (Band * Width * Across, Patches);
+            T.Allocate (Band * Width * Fitted, Answers);
+            if Patches = null or else Answers = null then
                T.Free (Patches);
                T.Free (Answers);
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            declare
+               Row : Element_Count := 0;
+            begin
+               while Row < Height and then E.Is_Ok (Status) loop
+                  declare
+                     Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
+                     Job       : aliased Pixel_Work :=
+                       (Kind => Gather_Rows, Source => Source, Target => Patches, Gain => null, Silu => False,
+                        Row => Row, Height => Height, Width => Width, Channels => Ins, Across => Across, others => 0);
+                  begin
+                              CPU.Dispatch_Shares (Pool, Rows_Here * Width, Job'Unchecked_Access, Status,
+                                          Cost => Rows_Here * Width * Across);
+                     Product (C.Kernel, Patches, Rows_Here * Width, Answers);
+                     Put (Row * Width, Rows_Here * Width);
+                     Row := Row + Rows_Here;
+                  end;
+               end loop;
             end;
-         end if;
-         for Pixel in 0 .. Pixels - 1 loop
-            for O in 0 .. Outs - 1 loop
-               Target (Pixel * Outs + O) := Target (Pixel * Outs + O) + C.Bias (O);
-            end loop;
-         end loop;
+            T.Free (Patches);
+            T.Free (Answers);
+         end;
       end Apply;
 
       --  Each pixel's channels by their root mean square and Gain, then
@@ -568,11 +694,22 @@ package body Model_Runner.Qwen_Image.Decoder is
          declare
             Job : aliased Pixel_Work :=
               (Kind => Norm_Pixels, Source => Source, Target => Target, Gain => Gain, Silu => Silu, Row => 0,
-               Height => Height, Width => Width, Channels => Channels);
+               Height => Height, Width => Width, Channels => Channels, others => 0);
          begin
             CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status, Cost => Height * Width * Channels);
          end;
       end Norm;
+
+      --  Target's pixels plus Source's, Channels each, across the pool.
+      procedure Add (Target, Source : T.Real_Array_Access; Channels : Element_Count) is
+         Job : aliased Pixel_Work :=
+           (Kind => Add_Pixels, Source => Source, Target => Target, Gain => null, Silu => False, Row => 0,
+            Height => Height, Width => Width, Channels => Channels, others => 0);
+      begin
+         if E.Is_Ok (Status) then
+            CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status, Cost => Height * Width * Channels);
+         end if;
+      end Add;
 
       --  X := the residual block of X: norm, SiLU, 3x3, the same again,
       --  and the input (through a 1x1 where the width changes) added.
@@ -590,16 +727,10 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
          if R.Shortcut.Outputs > 0 then
             Apply (R.Shortcut, X, Kept);
-            if E.Is_Ok (Status) then
-               for I in 0 .. Height * Width * Outs - 1 loop
-                  Z (I) := Z (I) + Kept (I);
-               end loop;
-            end if;
+            Add (Z, Kept, Outs);
             T.Free (Kept);
          else
-            for I in 0 .. Height * Width * Outs - 1 loop
-               Z (I) := Z (I) + X (I);
-            end loop;
+            Add (Z, X, Outs);
          end if;
          Swap (X, Z);
       end Block;
@@ -640,18 +771,14 @@ package body Model_Runner.Qwen_Image.Decoder is
             Room (Y, Height * Width * C);
             if E.Is_Ok (Status) then
                Job := (Joint => Z, Answer => Y, Positions => Height * Width, Width => C);
-               CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
+                  CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
                                     Cost => Height * Width * Height * Width * C);
             end if;
             declare
                Out_Rows : T.Real_Array_Access;
             begin
                Apply (Item.Attention_Out, Y, Out_Rows);
-               if E.Is_Ok (Status) then
-                  for I in 0 .. Height * Width * C - 1 loop
-                     X (I) := X (I) + Out_Rows (I);
-                  end loop;
-               end if;
+               Add (X, Out_Rows, C);
                T.Free (Out_Rows);
             end;
          end;
@@ -682,41 +809,35 @@ package body Model_Runner.Qwen_Image.Decoder is
             if Level_Of.Up.Outputs > 0 and then E.Is_Ok (Status) then
                --  Doubled, nearest; then its 3x3.
                Room (Y, 4 * Height * Width * Outs);
-               if E.Is_Ok (Status) then
-                  for Row in 0 .. 2 * Height - 1 loop
-                     for Col in 0 .. 2 * Width - 1 loop
-                        Y ((Row * 2 * Width + Col) * Outs .. (Row * 2 * Width + Col) * Outs + Outs - 1) :=
-                          X (((Row / 2) * Width + Col / 2) * Outs .. ((Row / 2) * Width + Col / 2) * Outs + Outs - 1);
-                     end loop;
-                  end loop;
-               end if;
                declare
-                  Narrow_Width  : constant Element_Count := Width;
-                  Factor        : constant Element_Count := Element_Count (Level_Of.Temporal) * 4;
-                  Repeats       : constant Element_Count := Outs * Factor / Ins;
+                  Job : aliased Pixel_Work :=
+                    (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
+                     Height => Height, Width => Width, Channels => Outs, others => 0);
                begin
-                  Height := 2 * Height;
-                  Width := 2 * Width;
-                  Apply (Level_Of.Up, Y, X);
+                  if E.Is_Ok (Status) then
+                     CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
+                                          Cost => 4 * Height * Width * Outs);
+                  end if;
+               end;
+               declare
+                  Factor : constant Element_Count := Element_Count (Level_Of.Temporal) * 4;
                   --  The shortcut: the level's input, its channels repeated
                   --  and laid out into the 2x2 pixels -- and, with a temporal
                   --  factor of two, into the second of two frames, which is
                   --  the one a single frame keeps.
+                  Job    : aliased Pixel_Work :=
+                    (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
+                     Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
+                     Factor => Factor, Repeats => Outs * Factor / Ins,
+                     Frame => Element_Count (Level_Of.Temporal) - 1);
+               begin
+                  Height := 2 * Height;
+                  Width := 2 * Width;
+                  Apply (Level_Of.Up, Y, X);
+                  Job.Target := X;
                   if E.Is_Ok (Status) then
-                     for Row in 0 .. Height - 1 loop
-                        for Col in 0 .. Width - 1 loop
-                           declare
-                              Sub : constant Element_Count :=
-                                (Element_Count (Level_Of.Temporal) - 1) * 4 + (Row rem 2) * 2 + (Col rem 2);
-                              From : constant Element_Count := ((Row / 2) * Narrow_Width + Col / 2) * Ins;
-                              Into : constant Element_Count := (Row * Width + Col) * Outs;
-                           begin
-                              for C in 0 .. Outs - 1 loop
-                                 X (Into + C) := X (Into + C) + Input (From + (C * Factor + Sub) / Repeats);
-                              end loop;
-                           end;
-                        end loop;
-                     end loop;
+                     CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
+                                          Cost => Height * Width * Outs);
                   end if;
                end;
             end if;

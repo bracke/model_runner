@@ -87,10 +87,17 @@ private
 
    package T renames Model_Runner.Tensors;
 
-   --  A convolution: its kernel as rows of an output channel each, a row
-   --  its input channels' kernels side by side; and its bias.
+   --  A convolution: its kernel as rows of an output channel each, and its
+   --  bias. A 1x1's row is its input channels as the file has them; a
+   --  3x3's is laid out again, its nine taps one after another, each tap
+   --  every input channel, so that a pixel's neighbourhood is nine runs of
+   --  channels copied whole. Where the rows or the columns are not a
+   --  multiple of 32 they are made so with zeros, which the device's
+   --  matrix kernel wants and the answers' extra channels are dropped
+   --  after; Owned holds such a kernel, null where the file's own is used.
    type Convolution is record
       Kernel   : T.View;
+      Owned    : Model_Runner.Bytes.Byte_Array_Access;
       Bias     : T.Real_Array_Access;
       Inputs   : Natural := 0;
       Outputs  : Natural := 0;

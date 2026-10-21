@@ -1252,6 +1252,9 @@ package body Tests.Image_Cases is
       Dec.Open (Decoder, VAE_Path, Status);
       Assert (E.Is_Ok (Status), "the decoder did not open: " & E.Error_Code'Image (Status.Code));
       Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, Picture, Status);
+      --  Closed before anything is asserted, so a failure leaves the file
+      --  free for the tests that write it again.
+      Dec.Close (Decoder);
       Assert (E.Is_Ok (Status), "the latent was not decoded: " & E.Error_Code'Image (Status.Code));
       Reference_Decode (Latent, Grid_Rows, Grid_Columns, Wanted);
       for Index in Picture'Range loop
@@ -1260,7 +1263,6 @@ package body Tests.Image_Cases is
       end loop;
       Assert (Largest > 1.0E-3 and then Worst <= 1.0E-4 * Largest,
               "a decoded picture differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
-      Dec.Close (Decoder);
    end A_Latent_Decodes_As_The_Plain_Computation;
 
    --  A picture written as PNG reads back as the same pixels, with alpha

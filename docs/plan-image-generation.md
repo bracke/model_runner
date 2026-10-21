@@ -346,7 +346,12 @@ attention on the processor). At 1024x1024 a step is about 37-42 s
 on the device is 2.6 -- attention 12.8, the rest 3.7); asking the
 attention 1,024 queries a call rather than 128 gained 0.7-2.7 s a step in
 three pairs. **Turbo** (unsloth's Q8_0, `--turbo`): a 1024 picture in 7 min
-30 s, its eight steps the reference's preset. Next: the activations kept on the device
+30 s, its eight steps the reference's preset. The VAE's kernels since
+refitted -- each 3x3 tap-major, so a neighbourhood is nine whole runs of
+channels, and every kernel padded to rows and columns of 32, which took
+the full-size level's 144-channel products off the row kernel onto the
+matrix tile -- a 512 picture decodes in 7.5 s against 18-20, a 1024 one in
+about 34 s against 83; a 1024 Turbo picture in 6 min 6 s. Next: the activations kept on the device
 from one product to the next, as a language model's layer is, instead of
 crossing to the host and back for each.
 
