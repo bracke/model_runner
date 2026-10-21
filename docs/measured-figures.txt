@@ -27417,4 +27417,5 @@ panels BE443BE004C17F22 src/library/model_runner-quantization-interleave.ads src
 # re-measured: the figures above
 # re-measured: the figures above
 # re-measured: the figures above
-image 37A2A9AE1BD8156E src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# the image command looks in a cache of prompt rows before reading the text encoder; the figures were taken with the encoder read, which a prompt not seen before still is, so they stand for such a prompt -- a prompt drawn again skips the encoder's 5-6 s
+image 8267014793F70151 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb

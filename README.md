@@ -827,6 +827,10 @@ files: the prompt's rows, a step's velocity (cosine 0.99999), the latent
 after forty steps (0.99997) and the decoded picture (76-78 dB); the whole
 command's 512 picture is the reference's at 48 dB from the same seed.
 
+What the text encoder makes of a prompt is kept in the cache home's
+`prompts` directory, so a picture drawn again from the same prompt does
+not read the encoder (`--no-cache` passes the cache by).
+
 `--turbo` draws with Qwen-Image 2.1 Turbo (`qwen-image-2.1-turbo-Q8_0.gguf`)
 through its own eight levels instead of forty. `--negative TEXT --cfg
 SCALE` leans each step away from what the picture is not to be -- two

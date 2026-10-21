@@ -450,6 +450,31 @@ package body Model_Runner.Platform is
          return "";
    end Panel_File;
 
+   -----------------
+   -- Prompt_File --
+   -----------------
+
+   function Prompt_File (Key : String) return String is
+      Prefill : constant String := Cache_Directory;
+   begin
+      if Prefill = "" then
+         return "";
+      end if;
+      declare
+         Image : constant String :=
+           Ada.Containers.Hash_Type'Image (Ada.Strings.Hash (Key));
+      begin
+         return Hostkit.Fs.Join
+                  (Hostkit.Fs.Join
+                     (Ada.Directories.Containing_Directory (Prefill),
+                      "prompts"),
+                   Image (Image'First + 1 .. Image'Last) & ".rows");
+      end;
+   exception
+      when others =>
+         return "";
+   end Prompt_File;
+
    ---------------
    -- Mark_Used --
    ---------------

@@ -1,5 +1,9 @@
 with Ada.Calendar;
+with Ada.Calendar.Formatting;
+with Ada.Directories;
 with Ada.Streams.Stream_IO;
+
+with Hostkit.Metadata;
 
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -89,42 +93,82 @@ package body Model_Runner.CLI.Execute.Image_Command is
             end if;
          end Say_Step;
       begin
-         --  The prompt's rows, the encoder let go after: on the device
-         --  where one opens and the encoder fits it, as run takes a model.
+         --  The prompt's rows, from the cache where they are kept; else read
+         --  by the encoder, let go after -- on the device where one opens
+         --  and the encoder fits it, as run takes a model -- and kept.
          declare
-            Source    : Shards.Shard_Set;
-            Container : Containers.Container;
-            Prepared  : L.Model;
-            Ignored   : E.Error_Info;
             Asked     : Opt.Command := Item;
-            Ready     : Boolean := False;
+            Encoder   : constant String := Path_Of (T.To_String (Item.Text_Encoder_Path), Text_Encoder_Name);
+            Leaning   : constant Boolean := N."/=" (Item.Image_Guidance, 1.0);
+            Negative  : constant String := T.To_String (Item.Image_Negative);
          begin
-            Asked.Model_Path := T.To_Bounded (Path_Of (T.To_String (Item.Text_Encoder_Path), Text_Encoder_Name));
+            Asked.Model_Path := T.To_Bounded (Encoder);
             declare
-               Chosen : constant Opt.Command := Resolved_Backend (Asked, Screen);
+               Chosen    : constant Opt.Command := Resolved_Backend (Asked, Screen);
+               On_Device : constant Boolean :=
+                 Model_Runner.Backend."=" (Chosen.Backend, Model_Runner.Backend.Backend_Device);
+
+               --  Everything the rows depend on: the encoder file as it is,
+               --  this build, the backend, the template and the prompt.
+               function Key_Of (Prompt : String) return String is
+                  Known : Boolean;
+                  Stamp : constant String :=
+                    (if Ada.Directories.Exists (Encoder) then Hostkit.Metadata.Change_Stamp (Encoder, Known) else "");
+               begin
+                  return "qwen-image-prompt|1|" & Model_Runner.Platform.Program_Stamp & "|" & Encoder & "|"
+                    & (if Ada.Directories.Exists (Encoder)
+                       then Ada.Directories.File_Size'Image (Ada.Directories.Size (Encoder)) & "|"
+                            & Ada.Calendar.Formatting.Image
+                                (Ada.Directories.Modification_Time (Encoder), Include_Time_Fraction => True)
+                       else "")
+                    & "|" & Stamp & "|" & (if On_Device then "device" else "cpu") & "|" & Q.Prompts.Template (Prompt);
+               end Key_Of;
             begin
-               if Model_Runner.Backend."=" (Chosen.Backend, Model_Runner.Backend.Backend_Device) then
-                  Model_Runner.Backend.Device.Open
-                    (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-                     Which => Item.Device_Index);
+               if not Item.No_Cache then
+                  Q.Prompts.Find_Kept (Key_Of (Item.Prompts (1).all), Text, Text_Rows);
+                  if Leaning then
+                     Q.Prompts.Find_Kept (Key_Of (Negative), Away, Away_Rows);
+                  end if;
                end if;
-               Load ((if Ready then Chosen else Asked), Screen, Source, Container, Prepared, True, null, null,
-                     Condition);
+               if Text = null or else (Leaning and then Away = null) then
+                  declare
+                     Source    : Shards.Shard_Set;
+                     Container : Containers.Container;
+                     Prepared  : L.Model;
+                     Ignored   : E.Error_Info;
+                     Ready     : Boolean := False;
+                  begin
+                     if On_Device then
+                        Model_Runner.Backend.Device.Open
+                          (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+                           Which => Item.Device_Index);
+                     end if;
+                     Load ((if Ready then Chosen else Asked), Screen, Source, Container, Prepared, True, null, null,
+                           Condition);
+                     if E.Is_Ok (Condition) and then Text = null then
+                        Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition);
+                        if E.Is_Ok (Condition) and then not Item.No_Cache then
+                           Q.Prompts.Keep (Key_Of (Item.Prompts (1).all), Text.all, Text_Rows);
+                        end if;
+                     end if;
+                     --  What the picture is not to be, where guidance leans
+                     --  from it: the empty prompt unless said, as the
+                     --  reference reads it.
+                     if E.Is_Ok (Condition) and then Leaning and then Away = null then
+                        Q.Prompts.Encode (Prepared, Negative, Away, Away_Rows, Condition);
+                        if E.Is_Ok (Condition) and then not Item.No_Cache then
+                           Q.Prompts.Keep (Key_Of (Negative), Away.all, Away_Rows);
+                        end if;
+                     end if;
+                     L.Close (Prepared, Ignored);
+                     Containers.Close (Container);
+                     Shards.Close (Source);
+                     if Ready then
+                        Model_Runner.Backend.Device.Close;
+                     end if;
+                  end;
+               end if;
             end;
-            if E.Is_Ok (Condition) then
-               Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition);
-            end if;
-            --  What the picture is not to be, where guidance leans from it:
-            --  the empty prompt unless said, as the reference reads it.
-            if E.Is_Ok (Condition) and then N."/=" (Item.Image_Guidance, 1.0) then
-               Q.Prompts.Encode (Prepared, T.To_String (Item.Image_Negative), Away, Away_Rows, Condition);
-            end if;
-            L.Close (Prepared, Ignored);
-            Containers.Close (Container);
-            Shards.Close (Source);
-            if Ready then
-               Model_Runner.Backend.Device.Close;
-            end if;
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;

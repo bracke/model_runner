@@ -131,6 +131,19 @@ package Model_Runner.Platform is
    --  @return The path, or an empty string when there is no directory.
    function Panel_File (Key : String) return String;
 
+   --  A prompt rows cache file path for a key: the key hashed, under the
+   --  cache home's prompts directory beside the panels. Empty when no home
+   --  is known. What a picture's text encoder made of a prompt, kept so the
+   --  encoder need not be read again for it.
+   --
+   --  @param Key What the rows are of.
+   --  @return The path, or an empty string when there is no directory.
+   function Prompt_File (Key : String) return String;
+
+   --  The most the prompt rows cache keeps, in bytes: a prompt's rows are a
+   --  quarter of a megabyte, so a thousand prompts.
+   Prompt_Cache_Most : constant := 256 * 1024 ** 2;
+
    --  The most the prefill cache and the panel cache each keep, in bytes.
    --  Neither was bounded: a run wrote its context and a load its panels,
    --  each to a file of its own, and on the machine this was built on the

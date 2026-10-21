@@ -1,4 +1,11 @@
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
+with Interfaces;
+
+with Hostkit.Fs;
+
 with Model_Runner.Numerics;
+with Model_Runner.Platform;
 
 package body Model_Runner.Qwen_Image.Prompts is
 
@@ -102,5 +109,111 @@ package body Model_Runner.Qwen_Image.Prompts is
          T.Free (Rows);
       end if;
    end Rows_Of;
+
+   Magic : constant String := "MRPROWS1";
+
+   ---------------
+   -- Find_Kept --
+   ---------------
+
+   procedure Find_Kept
+     (Key   : String;
+      Rows  : out Model_Runner.Tensors.Real_Array_Access;
+      Count : out Natural)
+   is
+      use Ada.Streams.Stream_IO;
+      use type Interfaces.Unsigned_32;
+      Path   : constant String := Model_Runner.Platform.Prompt_File (Key);
+      Handle : File_Type;
+   begin
+      Rows := null;
+      Count := 0;
+      if Path = "" or else not Ada.Directories.Exists (Path) then
+         return;
+      end if;
+      Open (Handle, In_File, Path);
+      declare
+         Data  : constant Stream_Access := Stream (Handle);
+         Said  : String (Magic'Range);
+         Long  : Interfaces.Unsigned_32;
+      begin
+         String'Read (Data, Said);
+         Interfaces.Unsigned_32'Read (Data, Long);
+         if Said /= Magic or else Long /= Interfaces.Unsigned_32 (Key'Length) then
+            Close (Handle);
+            return;
+         end if;
+         declare
+            Kept_Key : String (1 .. Key'Length);
+            Many, Wide : Interfaces.Unsigned_32;
+         begin
+            String'Read (Data, Kept_Key);
+            Interfaces.Unsigned_32'Read (Data, Many);
+            Interfaces.Unsigned_32'Read (Data, Wide);
+            if Kept_Key /= Key or else Many = 0 or else Wide = 0 or else Many > Max_Tokens
+              or else Wide > 1_048_576
+            then
+               Close (Handle);
+               return;
+            end if;
+            Model_Runner.Tensors.Allocate
+              (Model_Runner.Numerics.Element_Count (Many) * Model_Runner.Numerics.Element_Count (Wide), Rows);
+            Model_Runner.Numerics.Real_Array'Read (Data, Rows.all);
+            Count := Natural (Many);
+         end;
+      end;
+      Close (Handle);
+      Model_Runner.Platform.Mark_Used (Path);
+   exception
+      when others =>
+         if Is_Open (Handle) then
+            Close (Handle);
+         end if;
+         Model_Runner.Tensors.Free (Rows);
+         Count := 0;
+   end Find_Kept;
+
+   ----------
+   -- Keep --
+   ----------
+
+   procedure Keep
+     (Key   : String;
+      Rows  : Model_Runner.Tensors.Real_Array;
+      Count : Natural)
+   is
+      use Ada.Streams.Stream_IO;
+      Path   : constant String := Model_Runner.Platform.Prompt_File (Key);
+      Part   : constant String := Path & ".part";
+      Handle : File_Type;
+   begin
+      if Path = "" or else Count = 0 or else Rows'Length mod Model_Runner.Numerics.Element_Count (Count) /= 0 then
+         return;
+      end if;
+      Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
+      Create (Handle, Out_File, Part);
+      declare
+         Data : constant Stream_Access := Stream (Handle);
+      begin
+         String'Write (Data, Magic);
+         Interfaces.Unsigned_32'Write (Data, Interfaces.Unsigned_32 (Key'Length));
+         String'Write (Data, Key);
+         Interfaces.Unsigned_32'Write (Data, Interfaces.Unsigned_32 (Count));
+         Interfaces.Unsigned_32'Write
+           (Data, Interfaces.Unsigned_32 (Rows'Length / Model_Runner.Numerics.Element_Count (Count)));
+         Model_Runner.Numerics.Real_Array'Write (Data, Rows);
+      end;
+      Close (Handle);
+      if Hostkit.Fs.Replace_File (Part, Path) then
+         Model_Runner.Platform.Trim_Directory
+           (Ada.Directories.Containing_Directory (Path), "*.rows", Model_Runner.Platform.Prompt_Cache_Most,
+            Keep => Path);
+      end if;
+   exception
+      when others =>
+         if Is_Open (Handle) then
+            Close (Handle);
+         end if;
+   end Keep;
 
 end Model_Runner.Qwen_Image.Prompts;

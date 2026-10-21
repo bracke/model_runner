@@ -63,4 +63,31 @@ package Model_Runner.Qwen_Image.Prompts is
       Rows    : out Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  The rows a prompt was read as, kept on disk under a key that says
+   --  everything they depend on -- the encoder file as it is, the program's
+   --  build, the backend, the template and the prompt -- so that a picture
+   --  drawn again from the same prompt need not read the encoder again.
+   --  The key is written whole into the file and compared on reading, so
+   --  two keys that hash alike cannot be confused.
+   --
+   --  @param Key What the rows depend on.
+   --  @param Rows The rows kept, each Width values; null where none are.
+   --  @param Count How many.
+   procedure Find_Kept
+     (Key   : String;
+      Rows  : out Model_Runner.Tensors.Real_Array_Access;
+      Count : out Natural);
+
+   --  Keep a prompt's rows under Key, the cache trimmed after to
+   --  Platform.Prompt_Cache_Most; nothing is kept where the cache cannot
+   --  be written, and nothing is said.
+   --
+   --  @param Key What the rows depend on.
+   --  @param Rows The rows, Count of them.
+   --  @param Count How many.
+   procedure Keep
+     (Key   : String;
+      Rows  : Model_Runner.Tensors.Real_Array;
+      Count : Natural);
+
 end Model_Runner.Qwen_Image.Prompts;

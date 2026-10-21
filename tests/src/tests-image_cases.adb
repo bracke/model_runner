@@ -1,3 +1,6 @@
+with Model_Runner.Platform;
+with Ada.Directories;
+with Ada.Environment_Variables;
 with System;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Numerics.Long_Elementary_Functions;
@@ -1508,6 +1511,53 @@ package body Tests.Image_Cases is
       end if;
    end Kept_Prompt_Rows_Give_The_Plain_Computation;
 
+   --  A prompt's rows kept on disk read back as they were kept, under their
+   --  own key alone: another key finds nothing, and a file that stands where
+   --  another key's would, as two keys hashing alike would leave it, is not
+   --  read as that key's.
+   procedure Kept_Prompt_Rows_Read_Back (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Env renames Ada.Environment_Variables;
+      Had   : constant Boolean := Env.Exists ("XDG_CACHE_HOME");
+      Was   : constant String := (if Had then Env.Value ("XDG_CACHE_HOME") else "");
+      Home  : constant String := Ada.Directories.Current_Directory & "/image-prompt-cache-test";
+      Rows  : N.Real_Array (0 .. 3 * 8 - 1);
+      Back  : Model_Runner.Tensors.Real_Array_Access;
+      Count : Natural;
+      use type Model_Runner.Tensors.Real_Array_Access;
+      use type N.Real_Array;
+   begin
+      for I in Rows'Range loop
+         Rows (I) := N.Real (I) * 0.25 - 1.5;
+      end loop;
+      Env.Set ("XDG_CACHE_HOME", Home);
+      Q.Prompts.Keep ("key one", Rows, 3);
+      Q.Prompts.Find_Kept ("key one", Back, Count);
+      Assert (Back /= null and then Count = 3 and then Back.all = Rows, "the kept rows did not read back as kept");
+      Model_Runner.Tensors.Free (Back);
+      Q.Prompts.Find_Kept ("key two", Back, Count);
+      Assert (Back = null and then Count = 0, "another key found rows");
+      Ada.Directories.Copy_File
+        (Model_Runner.Platform.Prompt_File ("key one"), Model_Runner.Platform.Prompt_File ("key two"));
+      Q.Prompts.Find_Kept ("key two", Back, Count);
+      Assert (Back = null and then Count = 0, "a file at another key's place was read as that key's");
+      Model_Runner.Tensors.Free (Back);
+      if Had then
+         Env.Set ("XDG_CACHE_HOME", Was);
+      else
+         Env.Clear ("XDG_CACHE_HOME");
+      end if;
+      Ada.Directories.Delete_Tree (Home);
+   exception
+      when others =>
+         if Had then
+            Env.Set ("XDG_CACHE_HOME", Was);
+         else
+            Env.Clear ("XDG_CACHE_HOME");
+         end if;
+         raise;
+   end Kept_Prompt_Rows_Read_Back;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -1546,6 +1596,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
          "one evaluation of the denoiser on the device is the plain computation of the same network");
+      Register_Routine
+        (T, Kept_Prompt_Rows_Read_Back'Access,
+         "a prompt's rows kept on disk read back as kept, under their own key alone");
       Register_Routine
         (T, Kept_Prompt_Rows_Give_The_Plain_Computation'Access,
          "a step with the prompt's rows kept from an earlier one is the plain computation at its own time");
