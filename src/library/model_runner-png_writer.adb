@@ -154,4 +154,22 @@ package body Model_Runner.PNG_Writer is
       Status := E.Success;
    end Encode;
 
+   function Numbered (Path : String; Index : Positive; Count : Positive) return String is
+      Dot   : Natural := 0;
+      Image : constant String := Index'Image;
+   begin
+      if Count = 1 then
+         return Path;
+      end if;
+      for At_Char in reverse Path'Range loop
+         exit when Path (At_Char) = '/';
+         if Path (At_Char) = '.' then
+            Dot := At_Char;
+            exit;
+         end if;
+      end loop;
+      return (if Dot = 0 then Path & "-" & Image (2 .. Image'Last)
+              else Path (Path'First .. Dot - 1) & "-" & Image (2 .. Image'Last) & Path (Dot .. Path'Last));
+   end Numbered;
+
 end Model_Runner.PNG_Writer;

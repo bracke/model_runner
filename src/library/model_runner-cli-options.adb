@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 126) of Registry_Row :=
+   Registry : constant array (1 .. 127) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -38,6 +38,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--turbo"), [Command_Image => True, others => False], Text ("turbo")),
       (Text ("--negative"), [Command_Image => True, others => False], Text ("negative")),
       (Text ("--cfg"), [Command_Image => True, others => False], Text ("cfg")),
+      (Text ("--count"), [Command_Image => True, others => False], Text ("count")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--prompt-parts"), [Command_Run => True, others => False],
@@ -910,7 +911,7 @@ package body Model_Runner.CLI.Options is
          Flag_Device_Index,
          Flag_Logprobs,
          Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
-         Flag_Negative, Flag_Guidance,
+         Flag_Negative, Flag_Guidance, Flag_Picture_Count,
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
@@ -2346,6 +2347,17 @@ package body Model_Runner.CLI.Options is
                      end if;
                      Result.VAE_Path := Kept (Name, Held.all);
                      Free_Text (Held);
+
+                  elsif Name = "--count" then
+                     declare
+                        Count : Natural;
+                     begin
+                        Natural_Value (Flag_Picture_Count, 1, 100, Count, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Result.Image_Count := Count;
+                     end;
 
                   elsif Name = "--steps" then
                      declare

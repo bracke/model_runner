@@ -32,4 +32,15 @@ package Model_Runner.PNG_Writer is
       Result   : out Model_Runner.Bytes.Byte_Array_Access;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Where the picture Index of Count goes, Path given for them all: Path
+   --  itself for one picture; for more, Path with -Index set before its
+   --  extension -- apple.png, apple-1.png -- or after it where the name
+   --  has none. A dot in a directory's name is not an extension's.
+   --
+   --  @param Path The name given.
+   --  @param Index Which picture, from one.
+   --  @param Count How many.
+   --  @return The picture's name.
+   function Numbered (Path : String; Index : Positive; Count : Positive) return String;
+
 end Model_Runner.PNG_Writer;

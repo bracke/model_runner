@@ -477,6 +477,8 @@ package Model_Runner.CLI.Options is
       Image_Width        : Positive := 1024;
       Image_Height       : Positive := 1024;
       Image_Steps        : Positive := 40;
+      --  How many pictures, each from the seed after the one before's.
+      Image_Count        : Positive := 1;
       Image_Steps_Set    : Boolean := False;
       --  The distilled denoiser and its eight fixed levels.
       Image_Turbo        : Boolean := False;

@@ -15861,6 +15861,17 @@ package body Tests.CLI_Cases is
       Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--turbo"),
                          S ("--steps"), S ("20")], Item);
       Assert (Status.Code = E.CLI_Option_Combination, "--turbo took steps other than its own eight");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--count"), S ("3")],
+                        Item);
+      Assert (E.Is_Ok (Status) and then Item.Image_Count = 3, "--count was not kept");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png")], Item);
+      Assert (E.Is_Ok (Status) and then Item.Image_Count = 1, "a picture unasked was not one");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--count"), S ("0")],
+                        Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "no pictures at all were accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--count"),
+                         S ("101")], Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a hundred and one pictures were accepted");
       Status := Parsed ([S ("run"), S ("m.gguf"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png")], Item);
       Assert (Status.Code = E.CLI_Option_Not_For_Command and then Item.Kind = Opt.Command_Run,
               "run took the image command's --out");

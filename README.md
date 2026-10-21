@@ -827,6 +827,10 @@ files: the prompt's rows, a step's velocity (cosine 0.99999), the latent
 after forty steps (0.99997) and the decoded picture (76-78 dB); the whole
 command's 512 picture is the reference's at 48 dB from the same seed.
 
+`--count N` draws N pictures in one run, from the seed given and the
+ones after it, as FILE-1.png and on; the models are read once for all of
+them.
+
 What the text encoder makes of a prompt is kept in the cache home's
 `prompts` directory, so a picture drawn again from the same prompt does
 not read the encoder (`--no-cache` passes the cache by).

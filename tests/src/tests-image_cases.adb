@@ -1530,6 +1530,9 @@ package body Tests.Image_Cases is
       for I in Rows'Range loop
          Rows (I) := N.Real (I) * 0.25 - 1.5;
       end loop;
+      if Ada.Directories.Exists (Home) then
+         Ada.Directories.Delete_Tree (Home);
+      end if;
       Env.Set ("XDG_CACHE_HOME", Home);
       Q.Prompts.Keep ("key one", Rows, 3);
       Q.Prompts.Find_Kept ("key one", Back, Count);
@@ -1557,6 +1560,19 @@ package body Tests.Image_Cases is
          end if;
          raise;
    end Kept_Prompt_Rows_Read_Back;
+
+   --  Several pictures are numbered beside the name given, before its
+   --  extension; one keeps the name.
+   procedure Pictures_Are_Numbered (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      function Named (Path : String; Index, Count : Positive) return String
+        renames Model_Runner.PNG_Writer.Numbered;
+   begin
+      Assert (Named ("apple.png", 1, 1) = "apple.png", "one picture was renamed");
+      Assert (Named ("apple.png", 1, 3) = "apple-1.png", "the first of three was not apple-1.png");
+      Assert (Named ("out/apple.png", 12, 12) = "out/apple-12.png", "the twelfth was not out/apple-12.png");
+      Assert (Named ("my.dir/apple", 2, 2) = "my.dir/apple-2", "a dot in a directory was taken for an extension");
+   end Pictures_Are_Numbered;
 
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
@@ -1596,6 +1612,8 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
          "one evaluation of the denoiser on the device is the plain computation of the same network");
+      Register_Routine
+        (T, Pictures_Are_Numbered'Access, "several pictures are numbered beside the name given, one keeps it");
       Register_Routine
         (T, Kept_Prompt_Rows_Read_Back'Access,
          "a prompt's rows kept on disk read back as kept, under their own key alone");

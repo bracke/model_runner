@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
@@ -56,7 +57,9 @@ package body Model_Runner.CLI.Execute.Image_Command is
 
       Rows    : constant Positive := Item.Image_Height / Dec.Upscale;
       Columns : constant Positive := Item.Image_Width / Dec.Upscale;
-      Latent  : Tk.Real_Array_Access;
+      --  A latent a picture, each drawn from the seed after the one
+      --  before's.
+      Latents : array (1 .. Item.Image_Count) of Tk.Real_Array_Access;
       Text    : Tk.Real_Array_Access;
       Text_Rows : Natural := 0;
       Away      : Tk.Real_Array_Access;
@@ -67,7 +70,9 @@ package body Model_Runner.CLI.Execute.Image_Command is
       begin
          Pres.Report (Screen, Reason);
          Status := E.Exit_Status (Reason);
-         Tk.Free (Latent);
+         for Latent of Latents loop
+            Tk.Free (Latent);
+         end loop;
          Tk.Free (Text);
          Tk.Free (Away);
       end Fail;
@@ -189,15 +194,18 @@ package body Model_Runner.CLI.Execute.Image_Command is
                     Path_Of (T.To_String (Item.Model_Path), (if Item.Image_Turbo then Turbo_Name else Denoiser_Name)),
                     Condition,
                     Panels => not On_Device);
-            if E.Is_Ok (Condition) then
-               Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latent);
+            for Index in Latents'Range loop
+               exit when E.Is_Error (Condition);
+               Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latents (Index));
                Last_Step := Ada.Calendar.Clock;
                Q.Sample (Model, Rows, Columns, Item.Image_Steps,
-                         (if Item.Has_Seed then Item.Seed else Default_Seed), Text.all, Text_Rows, Team,
-                         Latent.all, Condition, Say_Step'Access, Turbo => Item.Image_Turbo,
+                         Interfaces."+" ((if Item.Has_Seed then Item.Seed else Default_Seed),
+                                         Interfaces.Unsigned_64 (Index - Latents'First)),
+                         Text.all, Text_Rows, Team,
+                         Latents (Index).all, Condition, Say_Step'Access, Turbo => Item.Image_Turbo,
                          Guidance => Item.Image_Guidance,
                          Negative => (if Away = null then Q.No_Rows else Away.all), Negative_Rows => Away_Rows);
-            end if;
+            end loop;
             Q.Close (Model);
             Tk.Free (Text);
             Tk.Free (Away);
@@ -208,52 +216,69 @@ package body Model_Runner.CLI.Execute.Image_Command is
             end if;
          end;
 
-         --  The picture, written.
+         --  The pictures, written: one where one is asked for, under the
+         --  name given; FILE-1.png and on where more are.
          declare
             VAE     : Dec.Picture_Decoder;
             Planes  : Tk.Real_Array_Access;
             Width   : constant Positive := Columns * Dec.Upscale;
             Height  : constant Positive := Rows * Dec.Upscale;
             Pixels  : constant N.Element_Count := N.Element_Count (Width * Height);
-            File    : Model_Runner.Bytes.Byte_Array_Access;
+            Named   : constant String := T.To_String (Item.Image_Out);
+
+            --  The name of the picture Index of them.
+            function Name_Of (Index : Positive) return String
+            is (Model_Runner.PNG_Writer.Numbered (Named, Index, Latents'Length));
          begin
             Dec.Open (VAE, Path_Of (T.To_String (Item.VAE_Path), VAE_Name), Condition);
             if E.Is_Ok (Condition) then
                Tk.Allocate (Pixels * Dec.Picture_Channels, Planes);
-               Dec.Decode (VAE, Latent.all, Rows, Columns, Team, Planes.all, Condition);
             end if;
+            for Index in Latents'Range loop
+               exit when E.Is_Error (Condition);
+               declare
+                  File : Model_Runner.Bytes.Byte_Array_Access;
+               begin
+                  Dec.Decode (VAE, Latents (Index).all, Rows, Columns, Team, Planes.all, Condition);
+                  if E.Is_Ok (Condition) then
+                     Model_Runner.PNG_Writer.Encode
+                       (Width, Height, Dec.Picture_Channels, Dec.To_Pixels (Planes.all, Pixels), File, Condition);
+                  end if;
+                  if E.Is_Ok (Condition) then
+                     declare
+                        use Ada.Streams.Stream_IO;
+                        Handle : File_Type;
+                        Block  : Ada.Streams.Stream_Element_Array
+                          (1 .. Ada.Streams.Stream_Element_Offset (File'Length))
+                          with Import, Address => File.all'Address;
+                     begin
+                        Create (Handle, Out_File, Name_Of (Index));
+                        Write (Handle, Block);
+                        Close (Handle);
+                     exception
+                        when others =>
+                           Condition := E.Make (E.IO_Open_Failed);
+                           E.Add_Text (Condition, "path", Name_Of (Index), E.Param_Path);
+                     end;
+                  end if;
+                  Model_Runner.Bytes.Free (File);
+                  if E.Is_Ok (Condition) then
+                     Pres.Put_Note (Screen, "cli.image.written",
+                                    [Model_Runner.Localization.Named ("path", Name_Of (Index))]);
+                  end if;
+               end;
+            end loop;
             Dec.Close (VAE);
             --  Open since the denoiser's, and its convolutions' too.
             Model_Runner.Backend.Device.Close;
-            if E.Is_Ok (Condition) then
-               Model_Runner.PNG_Writer.Encode
-                 (Width, Height, Dec.Picture_Channels, Dec.To_Pixels (Planes.all, Pixels), File, Condition);
-            end if;
             Tk.Free (Planes);
-            Tk.Free (Latent);
-            if E.Is_Ok (Condition) then
-               declare
-                  use Ada.Streams.Stream_IO;
-                  Handle : File_Type;
-                  Block  : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (File'Length))
-                    with Import, Address => File.all'Address;
-               begin
-                  Create (Handle, Out_File, T.To_String (Item.Image_Out));
-                  Write (Handle, Block);
-                  Close (Handle);
-               exception
-                  when others =>
-                     Condition := E.Make (E.IO_Open_Failed);
-                     E.Add_Text (Condition, "path", T.To_String (Item.Image_Out), E.Param_Path);
-               end;
-            end if;
-            Model_Runner.Bytes.Free (File);
             if E.Is_Error (Condition) then
                Fail (Condition);
                return;
             end if;
-            Pres.Put_Note (Screen, "cli.image.written",
-                           [Model_Runner.Localization.Named ("path", T.To_String (Item.Image_Out))]);
+            for Latent of Latents loop
+               Tk.Free (Latent);
+            end loop;
          end;
          Status := E.Exit_Success;
       end Draw;

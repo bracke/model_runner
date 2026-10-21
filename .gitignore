@@ -10,6 +10,7 @@
 /tests/config/
 
 # Generated fixtures
+/tests/image-prompt-cache-test/
 /tests/fixtures/*.gguf
 /tools/obj/
 /tools/bin/
