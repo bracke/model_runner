@@ -1,4 +1,5 @@
 with Interfaces;
+with System;
 
 with Model_Runner.Bytes;
 
@@ -773,6 +774,32 @@ package Model_Runner.Backend.Device is
      (At_Value : Model_Runner.Numerics.Element_Count;
       Words    : Word_List;
       Ok       : out Boolean);
+
+   --  Whether a batch of this many positions attends through the matrix
+   --  instruction, which reads the cache's half-precision copy alone.
+   --
+   --  @param Positions How many positions attend at once.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @return False where no device is open or it would take another
+   --    kernel.
+   function Attends_By_Matrix
+     (Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean;
+
+   --  Where Put_Cache would write a run; see Products.Cache_Places. Both
+   --  Null_Address where no device is open.
+   --
+   --  @param At_Value Where in the cache the run begins.
+   --  @param Count How many values.
+   --  @param Proper Count binary32 values in the cache proper, or none.
+   --  @param Copy Count halves in its half-precision copy, or none.
+   procedure Cache_Places
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Proper   : out System.Address;
+      Copy     : out System.Address);
 
    --  Write one position's keys or values into that cache.
    --

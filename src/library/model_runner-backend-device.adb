@@ -1,7 +1,6 @@
 with Ada.Characters.Latin_1;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Conversion;
-with System;
 with System.Storage_Elements;
 
 package body Model_Runner.Backend.Device is
@@ -1604,6 +1603,31 @@ package body Model_Runner.Backend.Device is
 
       Products.Put_Cache (Engine, At_Value, Values, Ok);
    end Put_Cache;
+
+   function Attends_By_Matrix
+     (Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Ready_Now
+       and then Products.Attends_By_Matrix
+                  (Engine, Positions, Head_Size, Value_Size));
+
+   ------------------
+   -- Cache_Places --
+   ------------------
+
+   procedure Cache_Places
+     (At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Proper   : out System.Address;
+      Copy     : out System.Address) is
+   begin
+      Proper := System.Null_Address;
+      Copy := System.Null_Address;
+      if Ready_Now then
+         Products.Cache_Places (Engine, At_Value, Count, Proper, Copy);
+      end if;
+   end Cache_Places;
 
    ---------------------
    -- Put_Cache_Bytes --

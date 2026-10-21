@@ -1327,10 +1327,12 @@ package body Tests.Image_Cases is
    procedure A_Step_On_The_Device_Is_The_Plain_Computation (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       package Device renames Model_Runner.Backend.Device;
-      --  Past the 128 rows one device product and one attention take.
+      --  Past 128 rows; and a prompt of the eight to fifteen queries the
+      --  tiled kernel takes, which reads the cache's binary32 rows where
+      --  the image's queries read its halves, so both must be written.
       Grid_Rows    : constant := 11;
       Grid_Columns : constant := 12;
-      Text_Rows    : constant := 5;
+      Text_Rows    : constant := 9;
       Model  : Q.Denoiser;
       Status : E.Error_Info;
       Latent : N.Real_Array (0 .. Latent_Channels * Grid_Rows * Grid_Columns - 1);
@@ -1356,7 +1358,17 @@ package body Tests.Image_Cases is
       Write_Denoiser (Blocks => [0, 1], Eight => True);
       Q.Open (Model, Path, Status, Panels => False);
       Assert (E.Is_Ok (Status), "the denoiser did not open");
-      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
+      --  Across a pool, so the rows put into the cache are put a share at a
+      --  time, each where its own rows go: shares of four or five rows, so
+      --  the prompt's are cut between several.
+      declare
+         Team : aliased Model_Runner.Backend.CPU.Pool (31);
+      begin
+         Model_Runner.Backend.CPU.Open (Team);
+         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, Team'Unchecked_Access, Answer,
+                     Status);
+         Model_Runner.Backend.CPU.Close (Team);
+      end;
       Q.Close (Model);
       Device.Close;
       Assert (E.Is_Ok (Status), "the step on the device failed: " & E.Error_Code'Image (Status.Code));
@@ -1365,7 +1377,11 @@ package body Tests.Image_Cases is
          Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
          Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
       end loop;
-      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
+      --  Within a fifth of a percent: the halves the matrix attention
+      --  reads leave it at 0.064 of one, a prompt attending to keys never
+      --  written moved it past one, and to some of its keys put in the
+      --  wrong rows to 0.26.
+      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-3 * Largest,
               "a step on the device differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
    end A_Step_On_The_Device_Is_The_Plain_Computation;
 

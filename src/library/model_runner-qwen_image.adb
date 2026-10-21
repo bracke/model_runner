@@ -3,6 +3,7 @@ with System.Storage_Elements;
 
 with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Kernels;
 with Model_Runner.Philox;
 with Model_Runner.Platform;
 with Model_Runner.Quantization.Interleave;
@@ -753,6 +754,41 @@ package body Model_Runner.Qwen_Image is
       end loop;
    end Run;
 
+   --  Keys or values into the device's cache, a share of rows at a time:
+   --  every row halved into the copy the matrix attention reads, and the
+   --  first Exact rows in binary32 too, for the prompt's few queries that
+   --  attend through the kernel reading the cache proper. Across the pool,
+   --  as Put_Cache would do it on one core.
+   type Cache_Work is new Model_Runner.Shares.Work with record
+      Source        : T.Real_Array_Access;
+      Proper, Copy  : System.Address := System.Null_Address;
+      Width, Exact  : Element_Count := 0;
+   end record;
+
+   overriding procedure Run (Item : in out Cache_Work; First : Element_Count; Last : Element_Count) is
+      Span : constant Element_Count := (Last - First + 1) * Item.Width;
+      From : constant Element_Count := First * Item.Width;
+      Halves : N.Half_Array (0 .. Span - 1)
+        with Import,
+             Address => System.Storage_Elements.To_Address
+                          (System.Storage_Elements.To_Integer (Item.Copy)
+                           + System.Storage_Elements.Integer_Address (From * 2));
+   begin
+      Model_Runner.Kernels.To_Halves (Item.Source (From .. From + Span - 1), Halves);
+      if First < Item.Exact and then Item.Proper /= System.Null_Address then
+         declare
+            Upto : constant Element_Count := Element_Count'Min (Last + 1, Item.Exact) * Item.Width;
+            Room : N.Real_Array (From .. Upto - 1)
+              with Import,
+                   Address => System.Storage_Elements.To_Address
+                                (System.Storage_Elements.To_Integer (Item.Proper)
+                                 + System.Storage_Elements.Integer_Address (From * 4));
+         begin
+            Room := Item.Source (From .. Upto - 1);
+         end;
+      end if;
+   end Run;
+
    --  The step's work between its products, a share of rows at a time:
    --  each row's modulated norm into H; its heads' norms and turns in Q and
    --  K; its gated add of Y into X; its gated SiLU of G into Y.
@@ -905,9 +941,13 @@ package body Model_Runner.Qwen_Image is
       package Device renames Model_Runner.Backend.Device;
       On_Device : constant Boolean := Device.Is_Ready;
 
-      --  How many rows one device product takes, and the room they are
-      --  copied through.
-      Device_Rows : constant Element_Count := 128;
+      --  How many rows one device product takes at most, and the room
+      --  longer batches are copied through. A step's whole batch goes as
+      --  one call: at 1024x1024 a step's products took 19.8 s so against
+      --  26.6 in calls of 128 rows, the same picture to the pixel -- the
+      --  copies in and out of the room were 4 s of it, and the rest is
+      --  the wider tiles a long batch runs on.
+      Device_Rows : constant Element_Count := 8192;
       Chunk_In, Chunk_Out : T.Real_Array_Access;
 
       procedure Release is
@@ -926,6 +966,9 @@ package body Model_Runner.Qwen_Image is
             return;
          elsif not On_Device then
             CPU.Dispatch_Batch (Pool, Weight, Vectors, Count, Target, Status);
+            return;
+         elsif Count <= Device_Rows then
+            Device.Dispatch_Batch (Weight, Vectors, Count, Target, Status);
             return;
          end if;
          declare
@@ -1024,13 +1067,39 @@ package body Model_Runner.Qwen_Image is
                   end;
                end loop;
             end Ask;
+            --  Rows into the cache at Into: across the pool, halved, where
+            --  the image's queries read the copy alone; through Put_Cache
+            --  otherwise.
+            procedure Place (Into : Element_Count; Rows : T.Real_Array_Access) is
+               Proper, Copy : System.Address;
+            begin
+               Device.Cache_Places (Into, Total * W, Proper, Copy);
+               if Copy = System.Null_Address
+                 or else (Prompt > 0 and then Proper = System.Null_Address)
+                 or else not Device.Attends_By_Matrix
+                               (Natural (Element_Count'Min (Queries, Image)), Natural (D), Natural (D))
+                 or else (Image > Queries and then Image mod Queries > 0
+                          and then not Device.Attends_By_Matrix
+                                         (Natural (Image mod Queries), Natural (D), Natural (D)))
+               then
+                  Device.Put_Cache (Into, Rows (0 .. Total * W - 1), Ok);
+                  return;
+               end if;
+               declare
+                  Job : aliased Cache_Work :=
+                    (Source => Rows, Proper => Proper, Copy => Copy, Width => W, Exact => Prompt);
+               begin
+                  CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 4);
+                  Ok := E.Is_Ok (Status);
+               end;
+            end Place;
          begin
             Device.Reserve_Cache (2 * Total * W, 2 * Total * W, Ok);
             if Ok then
-               Device.Put_Cache (Keys_At, K (0 .. Total * W - 1), Ok);
+               Place (Keys_At, K);
             end if;
             if Ok then
-               Device.Put_Cache (Values_At, V (0 .. Total * W - 1), Ok);
+               Place (Values_At, V);
             end if;
             if Ok and then Prompt > 0 then
                Ask (0, Prompt, Causal => True);

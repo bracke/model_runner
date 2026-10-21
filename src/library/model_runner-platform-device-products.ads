@@ -1,4 +1,5 @@
 with Interfaces;
+with System;
 
 with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
@@ -2597,6 +2598,26 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Item Engine.
    procedure Release_Cache (Item : in out Engine);
+
+   --  Where Put_Cache would write a run of Count values: the cache
+   --  proper's room in binary32 and the half-precision copy's, each
+   --  Null_Handle where that place does not hold the run. For a caller
+   --  that writes a long run itself, from many tasks at once, rather than
+   --  through Put_Cache on one: the rooms are mapped memory, written with
+   --  no call to the driver, and what is in flight is the caller's to have
+   --  waited for, as it is before Put_Cache.
+   --
+   --  @param Item Ready engine with a cache reserved.
+   --  @param At_Value Where in the cache the run begins.
+   --  @param Count How many values.
+   --  @param Proper Count binary32 values, or Null_Handle.
+   --  @param Copy Count halves, or Null_Handle.
+   procedure Cache_Places
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Proper   : out System.Address;
+      Copy     : out System.Address);
 
    --  Write a run of values into that cache.
    --

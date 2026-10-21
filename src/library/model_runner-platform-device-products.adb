@@ -9967,6 +9967,62 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Cache;
 
+   ------------------
+   -- Cache_Places --
+   ------------------
+
+   procedure Cache_Places
+     (Item     : Engine;
+      At_Value : Model_Runner.Numerics.Element_Count;
+      Count    : Model_Runner.Numerics.Element_Count;
+      Proper   : out System.Address;
+      Copy     : out System.Address)
+   is
+      use type System.Storage_Elements.Integer_Address;
+
+      At_Byte : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (At_Value) * 4;
+      Span    : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Count) * 4;
+
+      --  As Put_Cache reads them: rows past a front go to the copy alone,
+      --  and a split copy's values have a buffer of their own.
+      Past_Front : constant Boolean :=
+        Item.Cache_Front > 0
+        and then Interfaces.Unsigned_64 (At_Value) >= Item.Cache_Front;
+      Into_Values : constant Boolean :=
+        Item.Copy_Split
+        and then Interfaces.Unsigned_64 (At_Value) >= Item.Copy_Keys_Halves;
+      At_Half : constant Interfaces.Unsigned_64 :=
+        (if Into_Values
+         then Interfaces.Unsigned_64 (At_Value) - Item.Copy_Keys_Halves
+         else Interfaces.Unsigned_64 (At_Value)) * 2;
+      Base_At : constant Address :=
+        (if Into_Values then Item.Copy_Values_At else Item.Copy_At);
+      Room_Bytes : constant Interfaces.Unsigned_64 :=
+        (if Into_Values then Item.Copy_Values_Bytes else Item.Copy_Bytes);
+   begin
+      Proper := Null_Handle;
+      Copy := Null_Handle;
+      if not Is_Ready (Item) or else Count = 0 or else At_Value >= Second_Copy then
+         return;
+      end if;
+      if Item.Cache_At /= Null_Handle and then not Past_Front
+        and then At_Byte + Span <= Item.Cache_Bytes
+      then
+         Proper := System.Storage_Elements.To_Address
+           (System.Storage_Elements.To_Integer (Item.Cache_At)
+            + System.Storage_Elements.Integer_Address (At_Byte));
+      end if;
+      if Base_At /= Null_Handle
+        and then At_Half + Interfaces.Unsigned_64 (Count) * 2 <= Room_Bytes
+      then
+         Copy := System.Storage_Elements.To_Address
+           (System.Storage_Elements.To_Integer (Base_At)
+            + System.Storage_Elements.Integer_Address (At_Half));
+      end if;
+   end Cache_Places;
+
    ---------------
    -- Put_Bytes --
    ---------------
