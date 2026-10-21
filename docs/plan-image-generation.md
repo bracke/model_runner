@@ -360,11 +360,20 @@ first step, as the reference's prefix cache keeps them; the gated
 feed-forward as one submission (30.9 -> 24.5), the queries, keys and
 values as one (22.8), and the image's queries asked at once with the
 blend projected on the device (20.1). The reference's own Vulkan build
-takes 4.1 s a 512 step. Next: the rest of the block on the device -- the
-modulated norms, the gated joins and the heads' turns -- which needs a
-step reading the step's modulation out of the cache, as a sink is read;
-what crosses to the host now is the norms' input and output and the
-queries, keys and values.
+takes 4.1 s a 512 step. Since then each block runs on the device whole
+-- the modulated norms, the gated joins and the heads' turns there too,
+the activation carried from block to block -- and the prompt's rows are
+worked out once before the first step: a 1024 step 15 s, a 1024 Turbo
+picture 2 min 30 s, a 512 picture in forty steps 2 min 30 s (3.2 s a
+step, where the reference's Vulkan build takes 4.1). A block is 458 ms on
+the device: its products 6 TFLOP/s, about the part's peak, and its
+attention 2.2 -- 1.5 times what llama.cpp's own attention reaches at the
+same shape (1.45), measured in alternated rounds; four variants of the
+attention kernel measured no better. Batching a guided step's two
+evaluations would run the products at 1024 rows a half as at 2048: 4.5
+TFLOP/s against about 5.3 at 512, nothing at 1024, for an engine change;
+not built. Past 8,192 latent rows the blocks go in chunks and the decoder
+in stripes.
 
 Measured before it is promised; what the arithmetic predicts:
 

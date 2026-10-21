@@ -72,6 +72,22 @@ package Model_Runner.Qwen_Image.Decoder is
       Picture : out Model_Runner.Numerics.Real_Array;
       Status  : out Model_Runner.Errors.Error_Info);
 
+   --  How large a buffer the full-size level may take before a picture is
+   --  decoded a stripe of latent rows at a time: 2 GB unless said, which a
+   --  picture of 2048 on a side passes. Past the mid block the decoder is
+   --  local -- its 3x3s, norms and doublings reach under thirteen latent
+   --  rows -- so each stripe is decoded with Stripe_Halo rows either side
+   --  and its middle rows are the whole picture's, while memory holds a
+   --  stripe's buffers rather than the picture's. A test sets it small.
+   --
+   --  Task safety: set before the decodes it should govern.
+   --
+   --  @param Bytes The full-size level's most bytes a buffer.
+   procedure Set_Stripes (Bytes : Long_Long_Integer := 2 * 1024 ** 3);
+
+   --  Latent rows a stripe is decoded with on either side.
+   Stripe_Halo : constant := 14;
+
    --  A decoded picture's planes as bytes, a pixel's four together, as the
    --  reference turns them: (x + 1) / 2, held to 0 .. 1, times 255, cut.
    --

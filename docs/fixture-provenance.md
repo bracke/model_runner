@@ -49,7 +49,11 @@ of "a red apple on a wooden table" at 512x512 from seed 42: three of the
 text encoder's rows, every second value, and the first two steps'
 velocities, every 32nd -- `apple-512.expect` for `qwen-image-2.1-Q8_0.gguf`
 at forty steps, `turbo-apple-512.expect` for the Turbo file at eight on
-the default scheduler. `tests image --expect` holds this build to them.
+the default scheduler; `apple-1024.expect` at 1024 and
+`cfg4-apple-512.expect` with guidance 4 from "blurry, dark", both the first
+two steps of a forty-step run stopped there, and
+`turbo-levels-apple-512.expect` through the Turbo file's own eight levels
+(the harness's `--sigmas`). `tests image --expect` holds this build to them.
 `record.py` writes one afresh from a run's dump; the runs themselves --
 every velocity, the picture, a Vulkan run beside the processor's -- are
 kept outside the repository, in

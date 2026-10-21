@@ -720,6 +720,13 @@ package body Model_Runner.Qwen_Image.Decoder is
       end case;
    end Run;
 
+   Stripe_Bytes : Long_Long_Integer := 2 * 1024 ** 3;
+
+   procedure Set_Stripes (Bytes : Long_Long_Integer := 2 * 1024 ** 3) is
+   begin
+      Stripe_Bytes := Bytes;
+   end Set_Stripes;
+
    procedure Decode
      (Item    : Picture_Decoder;
       Latent  : N.Real_Array;
@@ -1152,6 +1159,92 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
          Swap (X, V);
       end Block;
+      --  The levels and the head over X, Height by Width latent pixels, the
+      --  picture's planes into Z; and the rows From .. From + Count - 1 of
+      --  what that made put in Picture's rows from Into on.
+      procedure Upper is
+      begin
+         --  The levels.
+         for L in Item.Levels'Range loop
+            exit when E.Is_Error (Status);
+            declare
+               Level_Of : Level renames Item.Levels (L);
+               Ins      : constant Element_Count := Element_Count (Widths (L - 1));
+               Outs     : constant Element_Count := Element_Count (Widths (L));
+               Input    : T.Real_Array_Access;
+            begin
+               if Level_Of.Up.Outputs > 0 then
+                  Room (Input, Height * Width * Ins);
+                  if E.Is_Ok (Status) then
+                     Input (0 .. Height * Width * Ins - 1) := X (0 .. Height * Width * Ins - 1);
+                  end if;
+               end if;
+               for R of Level_Of.Blocks loop
+                  exit when E.Is_Error (Status);
+                  Block (R);
+               end loop;
+               if Level_Of.Up.Outputs > 0 and then E.Is_Ok (Status) then
+                  --  Doubled, nearest; then its 3x3.
+                  Room (Y, 4 * Height * Width * Outs);
+                  declare
+                     Job : aliased Pixel_Work :=
+                       (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
+                        Height => Height, Width => Width, Channels => Outs, others => 0);
+                  begin
+                     if E.Is_Ok (Status) then
+                        CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
+                                             Cost => 4 * Height * Width * Outs);
+                     end if;
+                  end;
+                  declare
+                     Factor : constant Element_Count := Element_Count (Level_Of.Temporal) * 4;
+                     --  The shortcut: the level's input, its channels repeated
+                     --  and laid out into the 2x2 pixels -- and, with a temporal
+                     --  factor of two, into the second of two frames, which is
+                     --  the one a single frame keeps.
+                     Job    : aliased Pixel_Work :=
+                       (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
+                        Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
+                        Factor => Factor, Repeats => Outs * Factor / Ins,
+                        Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0);
+                  begin
+                     Height := 2 * Height;
+                     Width := 2 * Width;
+                     Apply (Level_Of.Up, Y, X);
+                     Job.Target := X;
+                     if E.Is_Ok (Status) then
+                        CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
+                                             Cost => Height * Width * Outs);
+                     end if;
+                  end;
+               end if;
+               T.Free (Input);
+            end;
+         end loop;
+         if E.Is_Ok (Status) then
+            Normed_Apply (Item.Conv_Out, X, Element_Count (Widths (5)), Item.Norm_Out, Z);
+         end if;
+      end Upper;
+
+      procedure Put_Rows (From, Count, Into : Element_Count) is
+         Whole : constant Element_Count := Element_Count (Rows) * Upscale * Width;
+      begin
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         for Row in 0 .. Count - 1 loop
+            for Column in 0 .. Width - 1 loop
+               declare
+                  Pixel : constant Element_Count := (From + Row) * Width + Column;
+                  Out_At : constant Element_Count := (Into + Row) * Width + Column;
+               begin
+                  for C in 0 .. Element_Count (Picture_Channels) - 1 loop
+                     Picture (Picture'First + C * Whole + Out_At) := Z (Pixel * Picture_Channels + C);
+                  end loop;
+               end;
+            end loop;
+         end loop;
+      end Put_Rows;
    begin
       Picture := [others => 0.0];
       Status := E.Success;
@@ -1207,75 +1300,51 @@ package body Model_Runner.Qwen_Image.Decoder is
          Block (Item.Mid_2);
       end if;
 
-      --  The levels.
-      for L in Item.Levels'Range loop
-         exit when E.Is_Error (Status);
-         declare
-            Level_Of : Level renames Item.Levels (L);
-            Ins      : constant Element_Count := Element_Count (Widths (L - 1));
-            Outs     : constant Element_Count := Element_Count (Widths (L));
-            Input    : T.Real_Array_Access;
-         begin
-            if Level_Of.Up.Outputs > 0 then
-               Room (Input, Height * Width * Ins);
-               if E.Is_Ok (Status) then
-                  Input (0 .. Height * Width * Ins - 1) := X (0 .. Height * Width * Ins - 1);
+      --  Past the mid block, the whole picture at once, or a stripe of
+      --  latent rows at a time with Stripe_Halo rows either side, where the
+      --  full-size level's buffers would pass the budget.
+      declare
+         Pixel_Bytes : constant Long_Long_Integer :=
+           Long_Long_Integer (Upscale * Upscale) * Long_Long_Integer (Widths (5)) * 4;
+         Full        : constant Long_Long_Integer :=
+           Long_Long_Integer (Rows) * Long_Long_Integer (Columns) * Pixel_Bytes;
+      begin
+         if Full <= Stripe_Bytes then
+            Upper;
+            Put_Rows (0, Height, 0);
+         else
+            declare
+               Each  : constant Element_Count :=
+                 Element_Count'Max
+                   (1, Element_Count (Stripe_Bytes / (Long_Long_Integer (Columns) * Pixel_Bytes)) - 2 * Stripe_Halo);
+               Mid   : T.Real_Array_Access;
+               C     : constant Element_Count := Element_Count (Widths (0));
+               Start : Element_Count := 0;
+            begin
+               T.Allocate (Element_Count (Rows) * Element_Count (Columns) * C, Mid);
+               if Mid = null then
+                  Status := E.Make (E.Memory_Allocation_Failed);
+               else
+                  Mid.all := X (0 .. Mid'Length - 1);
                end if;
-            end if;
-            for R of Level_Of.Blocks loop
-               exit when E.Is_Error (Status);
-               Block (R);
-            end loop;
-            if Level_Of.Up.Outputs > 0 and then E.Is_Ok (Status) then
-               --  Doubled, nearest; then its 3x3.
-               Room (Y, 4 * Height * Width * Outs);
-               declare
-                  Job : aliased Pixel_Work :=
-                    (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
-                     Height => Height, Width => Width, Channels => Outs, others => 0);
-               begin
-                  if E.Is_Ok (Status) then
-                     CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
-                                          Cost => 4 * Height * Width * Outs);
-                  end if;
-               end;
-               declare
-                  Factor : constant Element_Count := Element_Count (Level_Of.Temporal) * 4;
-                  --  The shortcut: the level's input, its channels repeated
-                  --  and laid out into the 2x2 pixels -- and, with a temporal
-                  --  factor of two, into the second of two frames, which is
-                  --  the one a single frame keeps.
-                  Job    : aliased Pixel_Work :=
-                    (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
-                     Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
-                     Factor => Factor, Repeats => Outs * Factor / Ins,
-                     Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0);
-               begin
-                  Height := 2 * Height;
-                  Width := 2 * Width;
-                  Apply (Level_Of.Up, Y, X);
-                  Job.Target := X;
-                  if E.Is_Ok (Status) then
-                     CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
-                                          Cost => Height * Width * Outs);
-                  end if;
-               end;
-            end if;
-            T.Free (Input);
-         end;
-      end loop;
-
-      --  The head: norm, SiLU, conv_out; the planes out.
-      if E.Is_Ok (Status) then
-         Normed_Apply (Item.Conv_Out, X, Element_Count (Widths (5)), Item.Norm_Out, Z);
-      end if;
-      if E.Is_Ok (Status) then
-         for Pixel in 0 .. Height * Width - 1 loop
-            for C in 0 .. Element_Count (Picture_Channels) - 1 loop
-               Picture (Picture'First + C * Height * Width + Pixel) := Z (Pixel * Picture_Channels + C);
-            end loop;
-         end loop;
-      end if;
+               while Start < Element_Count (Rows) and then E.Is_Ok (Status) loop
+                  declare
+                     Stop  : constant Element_Count := Element_Count'Min (Element_Count (Rows), Start + Each);
+                     Lead  : constant Element_Count := Element_Count'Max (0, Start - Stripe_Halo);
+                     Trail : constant Element_Count := Element_Count'Min (Element_Count (Rows), Stop + Stripe_Halo);
+                  begin
+                     Height := Trail - Lead;
+                     Width := Element_Count (Columns);
+                     X (0 .. Height * Width * C - 1) := Mid (Lead * Width * C .. Trail * Width * C - 1);
+                     Upper;
+                     Put_Rows ((Start - Lead) * Upscale, (Stop - Start) * Upscale, Start * Upscale);
+                     Start := Stop;
+                  end;
+               end loop;
+               T.Free (Mid);
+            end;
+         end if;
+      end;
       T.Free (X);
       T.Free (Y);
       T.Free (Z);

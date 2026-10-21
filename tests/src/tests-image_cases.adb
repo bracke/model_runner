@@ -1271,6 +1271,50 @@ package body Tests.Image_Cases is
               "a decoded picture differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
    end A_Latent_Decodes_As_The_Plain_Computation;
 
+   --  A latent decoded a stripe of rows at a time, each with its halo of
+   --  rows either side, is the latent decoded whole: one-row stripes over
+   --  thirty-four rows, every stripe past the first and before the last
+   --  cut off from the picture's edges, on the processor.
+   procedure Stripes_Decode_As_The_Whole (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      Grid_Rows    : constant := 34;
+      Grid_Columns : constant := 2;
+      Latent  : N.Real_Array (0 .. 64 * Grid_Rows * Grid_Columns - 1);
+      Whole, Striped : N.Real_Array (0 .. 4 * 256 * Grid_Rows * Grid_Columns - 1);
+      Decoder : Dec.Picture_Decoder;
+      Status  : E.Error_Info;
+      Seed    : Natural := 5;
+      Worst, Largest : Long_Float := 0.0;
+   begin
+      for Value of Latent loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 150.0;
+      end loop;
+      Write_VAE;
+      Dec.Open (Decoder, VAE_Path, Status);
+      if E.Is_Ok (Status) then
+         Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, Whole, Status);
+      end if;
+      if E.Is_Ok (Status) then
+         Dec.Set_Stripes (Bytes => 1);
+         Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, Striped, Status);
+         Dec.Set_Stripes;
+      end if;
+      Dec.Close (Decoder);
+      Assert (E.Is_Ok (Status), "the latent was not decoded: " & E.Error_Code'Image (Status.Code));
+      for Index in Whole'Range loop
+         Worst := Long_Float'Max (Worst, abs (Long_Float (Striped (Index)) - Long_Float (Whole (Index))));
+         Largest := Long_Float'Max (Largest, abs Long_Float (Whole (Index)));
+      end loop;
+      Assert (Largest > 1.0E-3 and then Worst <= 1.0E-6 * Largest,
+              "a picture decoded in stripes differs from the whole by" & Worst'Image & " of" & Largest'Image);
+   exception
+      when others =>
+         Dec.Set_Stripes;
+         raise;
+   end Stripes_Decode_As_The_Whole;
+
    --  A picture written as PNG reads back as the same pixels, with alpha
    --  or without: its rows, its checksums and its deflated stream are what
    --  a reader takes.
@@ -1502,6 +1546,13 @@ package body Tests.Image_Cases is
             Held (Text, 300.0, Prefix, "a step reading them at another time", Reading);
             Held (Other, 300.0, Prefix, "a step for another prompt", Within);
             Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Reading);
+            --  And through each block a chunk of rows at a time, the way a
+            --  large picture goes: 132 rows as 50, 50 and 32.
+            if On_Device then
+               Q.Set_Chunking (Past => 64, Rows => 50);
+               Held (Other, 400.0, Prefix, "a step in chunks", Reading);
+               Q.Set_Chunking;
+            end if;
             Q.Forget (Prefix);
          end;
          Q.Close (Model);
@@ -1561,6 +1612,28 @@ package body Tests.Image_Cases is
          raise;
    end Kept_Prompt_Rows_Read_Back;
 
+   --  A picture past what a process's first stack holds encodes: 1536 on a
+   --  side, 9.4 MB of pixels, which the zlib crate's deflate takes onto the
+   --  stack whole and which overflowed the 8 MB a process starts with.
+   procedure A_Large_PNG_Encodes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use type B.Byte_Count;
+      use type B.Byte_Array_Access;
+      Side   : constant := 1536;
+      Pixels : B.Byte_Array_Access := new B.Byte_Array (1 .. Side * Side * 4);
+      File   : B.Byte_Array_Access;
+      Status : E.Error_Info;
+   begin
+      for I in Pixels'Range loop
+         Pixels (I) := B.Byte ((I * 7 + I / 4096) mod 256);
+      end loop;
+      Model_Runner.PNG_Writer.Encode (Side, Side, 4, Pixels.all, File, Status);
+      Assert (E.Is_Ok (Status) and then File /= null and then File'Length > 1000,
+              "a 1536 picture did not encode: " & E.Error_Code'Image (Status.Code));
+      B.Free (File);
+      B.Free (Pixels);
+   end A_Large_PNG_Encodes;
+
    --  Several pictures are numbered beside the name given, before its
    --  extension; one keeps the name.
    procedure Pictures_Are_Numbered (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -1612,6 +1685,11 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
          "one evaluation of the denoiser on the device is the plain computation of the same network");
+      Register_Routine
+        (T, A_Large_PNG_Encodes'Access, "a picture past what a process's first stack holds encodes");
+      Register_Routine
+        (T, Stripes_Decode_As_The_Whole'Access,
+         "a latent decoded a stripe of rows at a time is the latent decoded whole");
       Register_Routine
         (T, Pictures_Are_Numbered'Access, "several pictures are numbered beside the name given, one keeps it");
       Register_Routine

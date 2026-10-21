@@ -168,6 +168,18 @@ package Model_Runner.Qwen_Image is
       Status    : out Model_Runner.Errors.Error_Info;
       Prefix    : in out Prefix_Cache);
 
+   --  How large a picture's latent is before each block goes to the device
+   --  a chunk of its rows at a time rather than in one sequence, and how
+   --  large a chunk is: 8,192 rows and 4,096 unless said -- a 1440 picture
+   --  and half. A test sets them small to take the chunked way on a small
+   --  picture.
+   --
+   --  Task safety: set before the evaluations it should govern.
+   --
+   --  @param Past Rows past which the blocks go in chunks.
+   --  @param Rows Rows a chunk holds.
+   procedure Set_Chunking (Past : Positive := 8_192; Rows : Positive := 4_096);
+
    --  The noise levels a picture is drawn through, as the reference's flow
    --  scheduler works them out for this model: t = 1 - i / Steps shifted by
    --  mu, linear in the image's token count from 0.5 at 256 to 0.9 at 8192,

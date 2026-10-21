@@ -203,7 +203,15 @@ package body Library_Surface is
       --  session, asks.
       new String'("Holds_Pages"),
       new String'("Pages_Held"),
-      new String'("Set_Page_Size")];
+      new String'("Set_Page_Size"),
+
+      --  Where a picture counts as large: the latent rows past which each
+      --  denoiser block goes to the device a chunk at a time, and the bytes
+      --  past which the decoder works in stripes. The engine's own defaults
+      --  are the ones a run wants; a test lowers them so a small fixture
+      --  takes the large-picture road and can be set against the whole.
+      new String'("Set_Chunking"),
+      new String'("Set_Stripes")];
 
    ---------------
    -- Is_Listed --

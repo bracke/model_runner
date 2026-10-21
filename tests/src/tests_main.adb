@@ -877,7 +877,10 @@ begin
                    Model => To_Unbounded_String (Option ("--model")),
                    Text_Encoder => To_Unbounded_String (Option ("--text-encoder")),
                    VAE => To_Unbounded_String (Option ("--vae")),
-                   Reference => To_Unbounded_String (Option ("--reference")))) /= 0
+                   Reference => To_Unbounded_String (Option ("--reference")),
+                   Stripe_Bytes =>
+                     (if Option ("--stripe-bytes") = "" then 0
+                      else Long_Long_Integer'Value (Option ("--stripe-bytes"))))) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

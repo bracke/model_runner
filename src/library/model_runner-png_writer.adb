@@ -1,3 +1,4 @@
+with System.Storage_Elements;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
@@ -39,7 +40,50 @@ package body Model_Runner.PNG_Writer is
    type Raw_Access is access Zlib.Byte_Array;
    procedure Free is new Ada.Unchecked_Deallocation (Zlib.Byte_Array, Raw_Access);
 
+   --  Encode's work, on whatever stack it is given.
+   procedure Encode_Here
+     (Width    : Positive;
+      Height   : Positive;
+      Channels : Channel_Count;
+      Pixels   : B.Byte_Array;
+      Result   : out B.Byte_Array_Access;
+      Status   : out E.Error_Info);
+
    procedure Encode
+     (Width    : Positive;
+      Height   : Positive;
+      Channels : Channel_Count;
+      Pixels   : B.Byte_Array;
+      Result   : out B.Byte_Array_Access;
+      Status   : out E.Error_Info)
+   is
+      --  On a stack of its own, sized to the picture: the zlib crate's
+      --  deflate builds arrays as large as its input on the stack, and a
+      --  picture of 1536 on a side -- 9.4 MB of pixels -- overflowed the
+      --  8 MB a process starts with.
+      task type Encoder (Stack : System.Storage_Elements.Storage_Count) with Storage_Size => Stack;
+
+      task body Encoder is
+      begin
+         Encode_Here (Width, Height, Channels, Pixels, Result, Status);
+      exception
+         when others =>
+            Result := null;
+            Status := E.Make (E.Memory_Allocation_Failed);
+      end Encoder;
+   begin
+      Result := null;
+      Status := E.Success;
+      declare
+         Worker : Encoder
+           (System.Storage_Elements.Storage_Count (Long_Long_Integer (Pixels'Length) * 8 + 16 * 1024 ** 2));
+         pragma Unreferenced (Worker);
+      begin
+         null;
+      end;
+   end Encode;
+
+   procedure Encode_Here
      (Width    : Positive;
       Height   : Positive;
       Channels : Channel_Count;
@@ -152,7 +196,7 @@ package body Model_Runner.PNG_Writer is
          end;
       end;
       Status := E.Success;
-   end Encode;
+   end Encode_Here;
 
    function Numbered (Path : String; Index : Positive; Count : Positive) return String is
       Dot   : Natural := 0;

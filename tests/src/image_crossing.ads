@@ -32,6 +32,9 @@ package Image_Crossing is
       On_Device : Boolean := False;
       Model, Text_Encoder, VAE : Ada.Strings.Unbounded.Unbounded_String;
       Reference : Ada.Strings.Unbounded.Unbounded_String;
+      --  The decoder's stripe budget for the reference's latent, or nought
+      --  for its own.
+      Stripe_Bytes : Long_Long_Integer := 0;
    end record;
 
    --  Run the check, saying each figure as it is had.

@@ -61,6 +61,14 @@ package body Image_Crossing is
       Cosine_Floor  : N.Wide_Real := 0.9999;
       Rows_Seen     : Recorded_List (1 .. 8);
       Speeds_Seen   : Recorded_List (1 .. 2);
+      --  With guidance: the negative's velocities, the negative prompt
+      --  and how far each step leans; and the levels where the run named
+      --  its own.
+      Aways_Seen    : Recorded_List (1 .. 2);
+      Away_Count    : Natural := 0;
+      Negative      : U.Unbounded_String;
+      Guidance      : N.Real := 1.0;
+      Named_Levels  : Wide_Access;
       Row_Count, Speed_Count : Natural := 0;
       Failed : Boolean := False;
 
@@ -184,6 +192,19 @@ package body Image_Crossing is
                   elsif Key = "row" and then Row_Count < Rows_Seen'Last then
                      Row_Count := Row_Count + 1;
                      Rows_Seen (Row_Count) := Read_Run (Line, At_Word);
+                  elsif Key = "negative" then
+                     Negative := U.To_Unbounded_String (Rest);
+                  elsif Key = "cfg" then
+                     Guidance := N.Real'Value (Rest);
+                  elsif Key = "sigmas" then
+                     declare
+                        Read : constant Recorded := Read_Run ("x 0 stride 1 " & Rest, 2);
+                     begin
+                        Named_Levels := Read.Values;
+                     end;
+                  elsif Key = "away" and then Away_Count < Aways_Seen'Last then
+                     Away_Count := Away_Count + 1;
+                     Aways_Seen (Away_Count) := Read_Run (Line, At_Word);
                   elsif Key = "velocity" and then Speed_Count < Speeds_Seen'Last then
                      Speed_Count := Speed_Count + 1;
                      Speeds_Seen (Speed_Count) := Read_Run (Line, At_Word);
@@ -214,6 +235,8 @@ package body Image_Crossing is
          Pool : constant Model_Runner.Backend.CPU.Pool_Reference := Team'Unchecked_Access;
          Text : Tk.Real_Array_Access;
          Text_Rows : Natural := 0;
+         Away_Text : Tk.Real_Array_Access;
+         Away_Rows : Natural := 0;
          Ready : Boolean := False;
 
          procedure Open_Device is
@@ -258,6 +281,9 @@ package body Image_Crossing is
             if E.Is_Ok (Status) then
                Q.Prompts.Encode (Encoder, U.To_String (Prompt), Text, Text_Rows, Status);
             end if;
+            if E.Is_Ok (Status) and then Guidance /= 1.0 then
+               Q.Prompts.Encode (Encoder, U.To_String (Negative), Away_Text, Away_Rows, Status);
+            end if;
             Model_Runner.Llama.Close (Encoder, Ignored);
             Model_Runner.GGUF.Containers.Close (Container);
             Model_Runner.Byte_Sources.Files.Close (Source);
@@ -296,15 +322,17 @@ package body Image_Crossing is
          Open_Device;
          declare
             Model  : Q.Denoiser;
-            Prefix : Q.Prefix_Cache;
+            Prefix, Away_Prefix : Q.Prefix_Cache;
          begin
             Q.Open (Model, Denoiser_Path, Status, Panels => not Ready);
             if E.Is_Ok (Status) then
                declare
                   Image  : constant N.Element_Count := N.Element_Count (Latent_Rows * Latent_Columns);
                   Planes : constant N.Element_Count := N.Element_Count (Q.Config (Model).Out_Channels) * Image;
-                  Levels : constant N.Real_Array := Q.Sigmas (Steps, Latent_Rows * Latent_Columns);
-                  Latent, Speed : N.Real_Array (0 .. Planes - 1);
+                  Levels : constant N.Real_Array :=
+                    (if Named_Levels = null then Q.Sigmas (Steps, Latent_Rows * Latent_Columns)
+                     else [for I in Named_Levels'Range => N.Real (Named_Levels (I))]);
+                  Latent, Speed, Away_Speed : N.Real_Array (0 .. Planes - 1);
                   Noise  : Model_Runner.Philox.Generator := Model_Runner.Philox.Seeded (Interfaces.Unsigned_64 (Seed));
                   Apart, Cosine : N.Wide_Real;
                begin
@@ -327,6 +355,26 @@ package body Image_Crossing is
                               end if;
                            end if;
                         end loop;
+                        --  And the negative's, where guidance leans from it,
+                        --  the step taken along the guided velocity.
+                        if Guidance /= 1.0 then
+                           Q.Velocity (Model, Latent, Latent_Rows, Latent_Columns, Sigma * 1000.0, Away_Text.all,
+                                       Away_Rows, Pool, Away_Speed, Status, Away_Prefix);
+                           exit when E.Is_Error (Status);
+                           for Seen of Aways_Seen (1 .. Away_Count) loop
+                              if Seen.Which = Step then
+                                 Against (Away_Speed, 0, Seen, Apart, Cosine);
+                                 Ada.Text_IO.Put_Line
+                                   ("away" & Step'Image & ": cosine" & Cosine'Image & ", apart by" & Apart'Image);
+                                 if Cosine < Cosine_Floor then
+                                    Fail ("the negative's velocity at step" & Step'Image & " is below the cosine");
+                                 end if;
+                              end if;
+                           end loop;
+                           for I in Speed'Range loop
+                              Speed (I) := Away_Speed (I) + Guidance * (Speed (I) - Away_Speed (I));
+                           end loop;
+                        end if;
                         for I in Latent'Range loop
                            Latent (I) := Latent (I) + (Next - Sigma) * Speed (I);
                         end loop;
@@ -335,9 +383,11 @@ package body Image_Crossing is
                end;
             end if;
             Q.Forget (Prefix);
+            Q.Forget (Away_Prefix);
             Q.Close (Model);
          end;
          Tk.Free (Text);
+         Tk.Free (Away_Text);
          if E.Is_Error (Status) then
             Ada.Text_IO.Put_Line ("image: the denoiser failed: " & E.Error_Code'Image (Status.Code));
             if Ready then
@@ -375,9 +425,13 @@ package body Image_Crossing is
                   end;
                   Tk.Allocate (Pixels * Dec.Picture_Channels, Planes);
                   Dec.Open (VAE, VAE_Path, Status);
+                  if Given.Stripe_Bytes > 0 then
+                     Dec.Set_Stripes (Given.Stripe_Bytes);
+                  end if;
                   if E.Is_Ok (Status) then
                      Dec.Decode (VAE, Latent, Latent_Rows, Latent_Columns, Pool, Planes.all, Status);
                   end if;
+                  Dec.Set_Stripes;
                   Dec.Close (VAE);
                   if E.Is_Error (Status) then
                      Fail ("the decoder failed: " & E.Error_Code'Image (Status.Code));
