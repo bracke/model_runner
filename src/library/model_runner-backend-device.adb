@@ -2307,6 +2307,21 @@ package body Model_Runner.Backend.Device is
          Added, Key => At_Offset (Weight.Base, Weight.Offset), Kept => Kept, From_Step => From_Step);
    end Add_View_Product;
 
+   procedure Activation_Room
+     (Values : Model_Runner.Numerics.Element_Count;
+      Where  : out System.Address;
+      Ok     : out Boolean) is
+   begin
+      Where := System.Null_Address;
+      Ok := False;
+      if Ready_Now then
+         Products.Activation_Room (Engine, Interfaces.Unsigned_64 (Values) * 4, Where, Ok);
+      end if;
+   end Activation_Room;
+
+   function Kept_Answer return System.Address
+   is (if Ready_Now then Products.Kept_Answer (Engine) else System.Null_Address);
+
    -------------------------
    -- Add_View_Product_At --
    -------------------------
@@ -2342,7 +2357,8 @@ package body Model_Runner.Backend.Device is
       Into      : System.Address;
       Status    : out E.Error_Info;
       Carry_In  : Boolean := False;
-      Carry_Out : Boolean := False)
+      Carry_Out : Boolean := False;
+      In_Place  : Boolean := False)
    is
       Ok        : Boolean;
       Cancelled : Boolean := False;
@@ -2355,8 +2371,10 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
       Products.Run
-        (Engine, Steps, Vectors, Count, None, Ok, Cancelled, null, Carry_In => Carry_In, Carry_Out => Carry_Out,
-         Kept_Into => (if Into = System.Null_Address then Products.No_Places else One));
+        (Engine, Steps, Vectors, Count, None, Ok, Cancelled, null, Carry_In => Carry_In or else In_Place,
+         Carry_Out => Carry_Out,
+         Kept_Into => (if Into = System.Null_Address or else In_Place then Products.No_Places else One),
+         Leave_Kept => In_Place);
       if Ok then
          Note_Timeline (Steps, Count);
       elsif Products.Is_Stalled (Engine) then

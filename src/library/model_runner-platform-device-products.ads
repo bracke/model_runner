@@ -2203,6 +2203,9 @@ package Model_Runner.Platform.Device.Products is
    --    only copy Target on to rows of its own saves that copy -- the
    --    vocabulary's logits, a token's widest answer. Any other count of
    --    places is refused.
+   --  @param Leave_Kept True to copy no kept answer anywhere and leave it
+   --    in the mapped result buffer, where Kept_Answer says the first lies
+   --    and the host reads it in place; Target then need hold nothing.
    --
    --  A layer's answer is the next layer's activation, and between them it
    --  went to the host and came back: a megabyte a layer out of the mapped
@@ -2221,7 +2224,32 @@ package Model_Runner.Platform.Device.Products is
       Cancel    : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
-      Kept_Into : Address_List := No_Places);
+      Kept_Into : Address_List := No_Places;
+      Leave_Kept : Boolean := False);
+
+   --  Where the first answer the last Run kept lies in the mapped result
+   --  buffer, where that Run was told to leave its answers there: the host
+   --  reads it in place, until the next Run.
+   --
+   --  @param Item Engine to ask.
+   --  @return The address, or Null_Address where the last Run left none.
+   function Kept_Answer (Item : Engine) return System.Address;
+
+   --  Room for a sequence's activation, mapped, at the front of the result
+   --  buffer, where a sequence carrying in reads it: the caller writes the
+   --  activation there itself -- from many tasks at once, say -- and runs
+   --  the sequence with Carry_In, which then copies nothing over. Waits for
+   --  what is in flight first, which may be reading it.
+   --
+   --  @param Item Ready engine.
+   --  @param Bytes How much room.
+   --  @param Where The room, or Null_Address with Ok False.
+   --  @param Ok False where the room could not be had.
+   procedure Activation_Room
+     (Item  : in out Engine;
+      Bytes : Interfaces.Unsigned_64;
+      Where : out System.Address;
+      Ok    : out Boolean);
 
    --  The activation the last sequence left on the device, read back.
    --
@@ -3442,6 +3470,9 @@ private
      array (1 .. 4, 1 .. 3) of System.Address;
 
    type Engine is limited record
+      --  Where the last Run told to leave its answers left the first.
+      Kept_At : System.Address := System.Null_Address;
+
       --  The instance every entry point this engine uses is found through.
       --  An engine outlives no instance and each names its own.
       Instance : System.Address := System.Null_Address;

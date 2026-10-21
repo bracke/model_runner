@@ -731,58 +731,73 @@ package body Model_Runner.Qwen_Image.Decoder is
          Wide    : constant Element_Count := Width + 2;
          Band    : constant Element_Count :=
            Element_Count'Max (1, Element_Count'Min (Height, Element_Count'Max (Tap_Rows, Tap_Answers / Fitted) / Wide));
-         Padded, Answers : T.Real_Array_Access;
          Row     : Element_Count := 0;
       begin
-         T.Allocate ((Band + 2) * Wide * Ins_To, Padded);
-         T.Allocate (Band * Wide * Fitted, Answers);
-         if Padded = null or else Answers = null then
-            Status := E.Make (E.Memory_Allocation_Failed);
-         end if;
+         --  The band is laid out straight into the device's own memory and
+         --  the answers put from where the device left them: neither goes
+         --  through a copy on one core.
          while Row < Height and then E.Is_Ok (Status) loop
             declare
                Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
                Count     : constant Element_Count := Rows_Here * Wide - 2;
-               Lay       : aliased Pixel_Work :=
-                 (Kind => Pad_Rows, Source => Source, Target => Padded, Gain => Gain, Silu => True, Row => Row,
-                  Height => Height, Width => Width, Channels => Ins, Across => Ins_To, others => 0);
-               Put       : aliased Pixel_Work :=
-                 (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
-                  Row => Row * Width, Height => Height, Width => Width, Channels => Outs, Across => Fitted,
-                  Padded => Wide, others => 0);
+               Values    : constant Element_Count := (Rows_Here + 2) * Wide * Ins_To;
+               Room_At   : System.Address;
+               Ok        : Boolean;
                Steps     : P.Sequence;
                Added     : Boolean := True;
                Sum       : Natural := 0;
             begin
-               CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
-                                    Cost => (Rows_Here + 2) * Wide * Ins_To);
-               P.Open_Sequence (Steps);
-               for Tap in C.Taps'Range loop
-                  exit when not Added;
-                  Device.Add_View_Product_At
-                    (Steps, C.Taps (Tap),
-                     Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
-                  if Added and then Tap > 0 then
-                     P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum,
-                                 Kept => Tap = C.Taps'Last);
-                  end if;
-                  Sum := P.Length (Steps);
-               end loop;
-               if not Added then
+               Device.Activation_Room (Values, Room_At, Ok);
+               if not Ok then
                   Status := E.Make (E.Backend_Capability_Missing);
-               elsif E.Is_Ok (Status) then
-                  Device.Run_Steps (Steps, Padded (0 .. (Rows_Here + 2) * Wide * Ins_To - 1), Positive (Count),
-                                    Answers (0)'Address, Status);
+                  return;
+               end if;
+               declare
+                  Padded : aliased N.Real_Array (0 .. Values - 1) with Import, Address => Room_At;
+                  Lay    : aliased Pixel_Work :=
+                    (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access, Gain => Gain,
+                     Silu => True, Row => Row, Height => Height, Width => Width, Channels => Ins, Across => Ins_To,
+                     others => 0);
+               begin
+                  CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
+                                       Cost => (Rows_Here + 2) * Wide * Ins_To);
+                  P.Open_Sequence (Steps);
+                  for Tap in C.Taps'Range loop
+                     exit when not Added;
+                     Device.Add_View_Product_At
+                       (Steps, C.Taps (Tap),
+                        Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
+                     if Added and then Tap > 0 then
+                        P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum,
+                                    Kept => Tap = C.Taps'Last);
+                     end if;
+                     Sum := P.Length (Steps);
+                  end loop;
+                  if not Added then
+                     Status := E.Make (E.Backend_Capability_Missing);
+                  elsif E.Is_Ok (Status) then
+                     Device.Run_Steps (Steps, Padded, Positive (Count), System.Null_Address, Status, In_Place => True);
+                  end if;
+               end;
+               if E.Is_Ok (Status) and then Device.Kept_Answer = System.Null_Address then
+                  Status := E.Make (E.Backend_Capability_Missing);
                end if;
                if E.Is_Ok (Status) then
-                  CPU.Dispatch_Shares (Pool, Rows_Here * Width, Put'Unchecked_Access, Status,
-                                       Cost => Rows_Here * Width * Outs);
+                  declare
+                     Answers : aliased N.Real_Array (0 .. Count * Fitted - 1)
+                       with Import, Address => Device.Kept_Answer;
+                     Put     : aliased Pixel_Work :=
+                       (Kind => Put_Answers, Source => Answers'Unrestricted_Access, Target => Target,
+                        Gain => C.Bias, Silu => False, Row => Row * Width, Height => Height, Width => Width,
+                        Channels => Outs, Across => Fitted, Padded => Wide, others => 0);
+                  begin
+                     CPU.Dispatch_Shares (Pool, Rows_Here * Width, Put'Unchecked_Access, Status,
+                                          Cost => Rows_Here * Width * Outs);
+                  end;
                end if;
                Row := Row + Rows_Here;
             end;
          end loop;
-         T.Free (Padded);
-         T.Free (Answers);
       end Apply_Taps;
 
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a

@@ -1,3 +1,4 @@
+with System;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Numerics.Long_Elementary_Functions;
 with Ada.Streams.Stream_IO;
@@ -32,6 +33,8 @@ with Fixtures;
 with Tiny_Model;
 
 package body Tests.Image_Cases is
+
+   use type System.Address;
 
    use AUnit.Assertions;
    use AUnit.Test_Cases.Registration;
@@ -1416,6 +1419,10 @@ package body Tests.Image_Cases is
       Dec.Open (Decoder, VAE_Path, Status);
       Assert (E.Is_Ok (Status), "the decoder did not open");
       Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, Picture, Status);
+      --  Its last 3x3 left its answers where the device wrote them, for the
+      --  host to put from there.
+      Assert (Model_Runner.Backend.Device.Kept_Answer /= System.Null_Address,
+              "the head's 3x3 did not leave its answers on the device");
       Dec.Close (Decoder);
       Model_Runner.Backend.Device.Close;
       Assert (E.Is_Ok (Status), "the latent was not decoded on the device: " & E.Error_Code'Image (Status.Code));

@@ -9967,6 +9967,44 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Cache;
 
+   function Kept_Answer (Item : Engine) return System.Address
+   is (Item.Kept_At);
+
+   ---------------------
+   -- Activation_Room --
+   ---------------------
+
+   procedure Activation_Room
+     (Item  : in out Engine;
+      Bytes : Interfaces.Unsigned_64;
+      Where : out System.Address;
+      Ok    : out Boolean)
+   is
+      Wanted : constant Interfaces.Unsigned_64 := (Bytes + 255) / 256 * 256;
+   begin
+      Where := Null_Handle;
+      Item.Kept_At := Null_Handle;
+      Settle (Item, Ok);
+      if not Ok then
+         return;
+      end if;
+      if Item.Result_Bytes < Wanted then
+         Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
+         Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+         Item.Result_Bytes := 0;
+         Take (Item, Wanted, Item.Result_Buffer, Item.Result_Memory, Ok, Read => True);
+         if not Ok then
+            Give_Back_Buffer (Item, Item.Result_Buffer, Item.Result_Memory);
+            return;
+         end if;
+         Item.Result_Bytes := Wanted;
+      end if;
+      Standing (Item, Item.Result_Memory, Item.Result_At, Item.Result_Bytes, Ok);
+      if Ok then
+         Where := Item.Result_At;
+      end if;
+   end Activation_Room;
+
    procedure Finish_All (Item : in out Engine; Ok : out Boolean) is
    begin
       Settle (Item, Ok);
@@ -13777,7 +13815,8 @@ package body Model_Runner.Platform.Device.Products is
       Cancel    : Model_Runner.Cancellation.Token_Reference := null;
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
-      Kept_Into : Address_List := No_Places)
+      Kept_Into : Address_List := No_Places;
+      Leave_Kept : Boolean := False)
    is
       use type System.Storage_Elements.Integer_Address;
 
@@ -14760,7 +14799,7 @@ package body Model_Runner.Platform.Device.Products is
         --  Room for every step's answer where any is kept, since each is
         --  indexed past the ones before it; a sequence keeping none, whose
         --  answer stays on the device, writes nothing there.
-        or else (Kept_Into'Length = 0 and then Target'Length < Wanted
+        or else (Kept_Into'Length = 0 and then Target'Length < Wanted and then not Leave_Kept
                  and then (for some Index in 1 .. Steps.Held => Steps.Items (Index).Kept))
       then
          return;
@@ -18165,6 +18204,7 @@ package body Model_Runner.Platform.Device.Products is
       end if;
 
       --  And what came out, product by product, out of the one mapping.
+      Item.Kept_At := Null_Handle;
       declare
          Good_Map : Boolean;
          Filled   : Model_Runner.Numerics.Element_Count := Target'First;
@@ -18198,7 +18238,11 @@ package body Model_Runner.Platform.Device.Products is
                --  over, so what a caller indexes does not depend on what it
                --  kept -- and for a gated feed-forward that is three
                --  answers of the four left where they were written.
-               if Steps.Items (Index).Kept and then Kept_Into'Length > 0
+               if Steps.Items (Index).Kept and then Leave_Kept then
+                  if Item.Kept_At = Null_Handle then
+                     Item.Kept_At := Slice'Address;
+                  end if;
+               elsif Steps.Items (Index).Kept and then Kept_Into'Length > 0
                then
                   Placed := Placed + 1;
                   declare

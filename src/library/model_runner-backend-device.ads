@@ -1361,6 +1361,9 @@ package Model_Runner.Backend.Device is
    --  @param Carry_In Whether the activation is the one left on the device.
    --  @param Carry_Out Whether the last step's answer stays there for the
    --    next sequence.
+   --  @param In_Place Whether the activation is what the caller wrote into
+   --    Activation_Room -- Vectors goes unread -- and the kept answer is left
+   --    where Kept_Answer says, not copied to Into.
    procedure Run_Steps
      (Steps     : Model_Runner.Platform.Device.Products.Sequence;
       Vectors   : Model_Runner.Tensors.Real_Array;
@@ -1368,7 +1371,25 @@ package Model_Runner.Backend.Device is
       Into      : System.Address;
       Status    : out Model_Runner.Errors.Error_Info;
       Carry_In  : Boolean := False;
-      Carry_Out : Boolean := False);
+      Carry_Out : Boolean := False;
+      In_Place  : Boolean := False);
+
+   --  Room for a sequence's activation in the device's own mapped memory,
+   --  for the caller to write and Run_Steps In_Place to read; see
+   --  Products.Activation_Room.
+   --
+   --  @param Values How many binary32 values.
+   --  @param Where The room, or Null_Address with Ok False.
+   --  @param Ok False where no device is open or the room could not be had.
+   procedure Activation_Room
+     (Values : Model_Runner.Numerics.Element_Count;
+      Where  : out System.Address;
+      Ok     : out Boolean);
+
+   --  Where the answer a Run_Steps In_Place kept lies, until the next run.
+   --
+   --  @return The address, or Null_Address where none was left.
+   function Kept_Answer return System.Address;
 
    --  An empty table, for a caller that rotates nothing.
    No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=
