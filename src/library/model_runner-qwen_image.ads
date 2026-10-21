@@ -88,7 +88,8 @@ package Model_Runner.Qwen_Image is
    --  One evaluation: the velocity the latent is to move by at a time.
    --
    --  Where a device is open (Model_Runner.Backend.Device), its products and
-   --  its attention run there, and the rest on the processor.
+   --  its attention run there, and the rest on the processor. The prompt's
+   --  rows are worked out afresh; see the Velocity with a Prefix_Cache.
    --
    --  The latent is the picture's In_Channels planes of Rows by Columns,
    --  a plane a channel, row-major, as the reference lays it out; the
@@ -120,6 +121,52 @@ package Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out Model_Runner.Numerics.Real_Array;
       Status    : out Model_Runner.Errors.Error_Info);
+
+   --  What a prompt's rows leave in each block -- their keys, normalized
+   --  and turned, and their values -- kept from one evaluation to the next.
+   --  The prompt's rows see no image and take the modulation of time
+   --  nought, so every block makes the same of them at every step: the
+   --  first evaluation keeps them, and the later ones carry the image's
+   --  rows alone, the kept rows standing in front of their keys and values
+   --  where the prompt's are attended to. The reference keeps them so too.
+   --
+   --  Task safety: read and written by the one task evaluating with it.
+   type Prefix_Cache is limited private;
+
+   --  Let what a cache holds go; it is empty after, and the next
+   --  evaluation with it keeps afresh.
+   --
+   --  @param Cache emptied
+   procedure Forget (Cache : in out Prefix_Cache);
+
+   --  Velocity, with the prompt's rows kept in Prefix: kept by the first
+   --  evaluation with an empty cache, read by every later one with the same
+   --  prompt rows, and kept again where the rows differ. A prompt so long
+   --  its rows would take more than a gigabyte is not kept.
+   --
+   --  @param Item an open denoiser
+   --  @param Latent In_Channels * Rows * Columns values
+   --  @param Rows the latent's height
+   --  @param Columns its width
+   --  @param Timestep the noise level times a thousand
+   --  @param Text the prompt's rows, Text_Rows of Context values each
+   --  @param Text_Rows how many
+   --  @param Pool the processor's workers, or null for this task alone
+   --  @param Result Out_Channels * Rows * Columns values
+   --  @param Status as the Velocity without a cache says
+   --  @param Prefix the prompt's kept rows, for this denoiser alone
+   procedure Velocity
+     (Item      : Denoiser;
+      Latent    : Model_Runner.Numerics.Real_Array;
+      Rows      : Positive;
+      Columns   : Positive;
+      Timestep  : Model_Runner.Numerics.Real;
+      Text      : Model_Runner.Numerics.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Result    : out Model_Runner.Numerics.Real_Array;
+      Status    : out Model_Runner.Errors.Error_Info;
+      Prefix    : in out Prefix_Cache);
 
    --  The noise levels a picture is drawn through, as the reference's flow
    --  scheduler works them out for this model: t = 1 - i / Steps shifted by
@@ -199,6 +246,15 @@ private
 
    type Block_Array is array (Positive range <>) of Block;
    type Block_Array_Access is access Block_Array;
+
+   type Prefix_Cache is limited record
+      --  The prompt's rows it was kept from, and how many; their keys and
+      --  values, a block after another, the rows of each one after
+      --  another.
+      Text         : T.Real_Array_Access;
+      Rows         : Natural := 0;
+      Keys, Values : T.Real_Array_Access;
+   end record;
 
    type Denoiser is tagged limited record
       File      : Model_Runner.Byte_Sources.Files.File_Source;

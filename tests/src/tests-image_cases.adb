@@ -1429,6 +1429,74 @@ package body Tests.Image_Cases is
               & Largest'Image);
    end A_Latent_Decodes_On_The_Device_As_The_Plain_Computation;
 
+   --  A step with the prompt's rows kept from an earlier one is the plain
+   --  computation at its own time: kept at one time, read at another, and
+   --  kept afresh for another prompt rather than read -- on the processor
+   --  and, where one opens, on the device.
+   procedure Kept_Prompt_Rows_Give_The_Plain_Computation (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Device renames Model_Runner.Backend.Device;
+      Grid_Rows    : constant := 11;
+      Grid_Columns : constant := 12;
+      Text_Rows    : constant := 9;
+      Model  : Q.Denoiser;
+      Status : E.Error_Info;
+      Latent : N.Real_Array (0 .. Latent_Channels * Grid_Rows * Grid_Columns - 1);
+      Text, Other : N.Real_Array (0 .. Text_Rows * Context - 1);
+      Answer : N.Real_Array (Latent'Range);
+      Wanted : N.Wide_Real_Array (Latent'Range);
+      Seed   : Natural := 91;
+      Ready  : Boolean := False;
+
+      procedure Held (Prompt : N.Real_Array; Time : N.Real; Prefix : in out Q.Prefix_Cache; What : String;
+                      Within : Long_Float) is
+         Worst, Largest : Long_Float := 0.0;
+      begin
+         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, Time, Prompt, Text_Rows, null, Answer, Status, Prefix);
+         Assert (E.Is_Ok (Status), What & " failed: " & E.Error_Code'Image (Status.Code));
+         Reference_Velocity (Latent, Grid_Rows, Grid_Columns, Long_Float (Time), Prompt, Text_Rows, 2, Wanted);
+         for Index in Answer'Range loop
+            Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
+            Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+         end loop;
+         Assert (Largest > 1.0E-3 and then Worst <= Within * Largest,
+                 What & " differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
+      end Held;
+   begin
+      for Value of Latent loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 100.0;
+      end loop;
+      for Index in Text'Range loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Text (Index) := N.Real (Seed mod 401 - 200) / 50.0;
+         Other (Index) := N.Real ((Seed / 7) mod 401 - 200) / 50.0;
+      end loop;
+      Write_Denoiser (Blocks => [0, 1], Eight => True);
+      for On_Device in Boolean loop
+         if On_Device then
+            Device.Open (Ready);
+            exit when not Ready;
+         end if;
+         Q.Open (Model, Path, Status, Panels => not On_Device);
+         Assert (E.Is_Ok (Status), "the denoiser did not open");
+         declare
+            Prefix : Q.Prefix_Cache;
+            Within : constant Long_Float := (if On_Device then 2.0E-3 else 1.0E-4);
+         begin
+            Held (Text, 500.0, Prefix, "a step keeping the prompt's rows", Within);
+            Held (Text, 300.0, Prefix, "a step reading them at another time", Within);
+            Held (Other, 300.0, Prefix, "a step for another prompt", Within);
+            Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Within);
+            Q.Forget (Prefix);
+         end;
+         Q.Close (Model);
+      end loop;
+      if Ready then
+         Device.Close;
+      end if;
+   end Kept_Prompt_Rows_Give_The_Plain_Computation;
+
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -1467,6 +1535,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_On_The_Device_Is_The_Plain_Computation'Access,
          "one evaluation of the denoiser on the device is the plain computation of the same network");
+      Register_Routine
+        (T, Kept_Prompt_Rows_Give_The_Plain_Computation'Access,
+         "a step with the prompt's rows kept from an earlier one is the plain computation at its own time");
       Register_Routine
         (T, A_Latent_Decodes_On_The_Device_As_The_Plain_Computation'Access,
          "a latent decoded with the device open is the plain computation of the same VAE decoder");

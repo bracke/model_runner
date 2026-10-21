@@ -609,6 +609,8 @@ package body Model_Runner.Qwen_Image is
       Away   : T.Real_Array_Access;
       Noise  : Model_Runner.Philox.Generator := Model_Runner.Philox.Seeded (Seed);
       Speed  : T.Real_Array_Access;
+      --  The prompt's rows and the negative's, kept by the first step.
+      Toward, From : Prefix_Cache;
    begin
       Latent := [others => 0.0];
       if Item.Shape.In_Channels /= Item.Shape.Out_Channels
@@ -629,14 +631,14 @@ package body Model_Runner.Qwen_Image is
             Sigma : constant N.Real := Levels (Levels'First + Element_Count (Step) - 1);
             Next  : constant N.Real := Levels (Levels'First + Element_Count (Step));
          begin
-            Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status);
+            Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status, Toward);
             exit when E.Is_Error (Status);
             if Guidance /= 1.0 then
                if Away = null then
                   T.Allocate (Speed'Length, Away);
                end if;
                Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Negative, Negative_Rows, Pool, Away.all,
-                         Status);
+                         Status, From);
                exit when E.Is_Error (Status);
                for I in Speed'Range loop
                   Speed (I) := Away (I) + Guidance * (Speed (I) - Away (I));
@@ -652,6 +654,8 @@ package body Model_Runner.Qwen_Image is
       end loop;
       T.Free (Speed);
       T.Free (Away);
+      Forget (Toward);
+      Forget (From);
    end Sample;
 
    function Is_Ready (Item : Denoiser) return Boolean
@@ -662,14 +666,17 @@ package body Model_Runner.Qwen_Image is
 
    --  One evaluation's attention, a share of items at a time, an item a
    --  head and Tile query rows: each row's query over the keys it may see
-   --  -- a prompt token the prompt's up to itself, an image token every
-   --  one -- into A. The tile's rows read each key and value once between
-   --  them, and the sums are binary32, as the products' are.
+   --  -- an image token every one, a prompt token the prompt's up to
+   --  itself -- into A. The rows are the image's first, Image of them,
+   --  then the prompt's; Asking of them ask, which is all Total of them or
+   --  the image's alone, where the prompt's are kept. The tile's rows read
+   --  each key and value once between them, and the sums are binary32, as
+   --  the products' are.
    Tile : constant := 8;
 
    type Attention_Work is new Model_Runner.Shares.Work with record
       Q, K, V, A : T.Real_Array_Access;
-      Prompt, Total, Width, Head, Heads : Element_Count := 0;
+      Image, Asking, Total, Width, Head, Heads : Element_Count := 0;
    end record;
 
    overriding procedure Run (Item : in out Attention_Work; First : Element_Count; Last : Element_Count) is
@@ -678,7 +685,7 @@ package body Model_Runner.Qwen_Image is
       use type Wide;
       use type Real;
       Scale  : constant Real := Real (1.0 / N.Sqrt (Wide (Item.Head)));
-      Tiles  : constant Element_Count := (Item.Total + Tile - 1) / Tile;
+      Tiles  : constant Element_Count := (Item.Asking + Tile - 1) / Tile;
       subtype Tile_Row is Element_Count range 0 .. Tile - 1;
       type Score_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Total - 1);
       type Sum_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Head - 1);
@@ -690,20 +697,26 @@ package body Model_Runner.Qwen_Image is
          declare
             Head   : constant Element_Count := Which / Tiles;
             Start  : constant Element_Count := (Which mod Tiles) * Tile;
-            Rows   : constant Element_Count := Element_Count'Min (Tile, Item.Total - Start);
+            Rows   : constant Element_Count := Element_Count'Min (Tile, Item.Asking - Start);
             Column : constant Element_Count := Head * Item.Head;
-            --  The furthest key any row of the tile sees.
+            --  The nearest and the furthest key any row of the tile sees: a
+            --  tile of the prompt's rows alone, the prompt's up to its last.
+            Low    : constant Element_Count := (if Start >= Item.Image then Item.Image else 0);
             Reach  : constant Element_Count :=
-              (if Start + Rows - 1 < Item.Prompt then Start + Rows - 1 else Item.Total - 1);
+              (if Start >= Item.Image then Start + Rows - 1 else Item.Total - 1);
          begin
             for R in 0 .. Rows - 1 loop
                declare
                   Row   : constant Element_Count := Start + R;
-                  Upto  : constant Element_Count := (if Row < Item.Prompt then Row else Item.Total - 1);
+                  From  : constant Element_Count := (if Row >= Item.Image then Item.Image else 0);
+                  Upto  : constant Element_Count := (if Row >= Item.Image then Row else Item.Total - 1);
                   Query : constant Element_Count := Row * Item.Width + Column;
                   Most  : Real := Real'First;
                begin
-                  for Key in 0 .. Upto loop
+                  for Key in Low .. From - 1 loop
+                     Scores (R) (Key) := 0.0;
+                  end loop;
+                  for Key in From .. Upto loop
                      declare
                         At_Key : constant Element_Count := Key * Item.Width + Column;
                         Dot    : Real := 0.0;
@@ -716,7 +729,7 @@ package body Model_Runner.Qwen_Image is
                      end;
                   end loop;
                   Totals (R) := 0.0;
-                  for Key in 0 .. Upto loop
+                  for Key in From .. Upto loop
                      Scores (R) (Key) := Real (N.Exp (Wide (Scores (R) (Key) - Most)));
                      Totals (R) := Totals (R) + Scores (R) (Key);
                   end loop;
@@ -726,7 +739,7 @@ package body Model_Runner.Qwen_Image is
                   Sums (R) := [others => 0.0];
                end;
             end loop;
-            for Key in 0 .. Reach loop
+            for Key in Low .. Reach loop
                declare
                   At_Key : constant Element_Count := Key * Item.Width + Column;
                begin
@@ -756,9 +769,9 @@ package body Model_Runner.Qwen_Image is
 
    --  Keys or values into the device's cache, a share of rows at a time:
    --  every row halved into the copy the matrix attention reads, and the
-   --  first Exact rows in binary32 too, for the prompt's few queries that
-   --  attend through the kernel reading the cache proper. Across the pool,
-   --  as Put_Cache would do it on one core.
+   --  rows from Exact on -- the prompt's -- in binary32 too, for the
+   --  prompt's few queries that attend through the kernel reading the cache
+   --  proper. Across the pool, as Put_Cache would do it on one core.
    type Cache_Work is new Model_Runner.Shares.Work with record
       Source        : T.Real_Array_Access;
       Proper, Copy  : System.Address := System.Null_Address;
@@ -775,16 +788,17 @@ package body Model_Runner.Qwen_Image is
                            + System.Storage_Elements.Integer_Address (From * 2));
    begin
       Model_Runner.Kernels.To_Halves (Item.Source (From .. From + Span - 1), Halves);
-      if First < Item.Exact and then Item.Proper /= System.Null_Address then
+      if Last >= Item.Exact and then Item.Proper /= System.Null_Address then
          declare
-            Upto : constant Element_Count := Element_Count'Min (Last + 1, Item.Exact) * Item.Width;
-            Room : N.Real_Array (From .. Upto - 1)
+            Since : constant Element_Count := Element_Count'Max (First, Item.Exact) * Item.Width;
+            Upto  : constant Element_Count := (Last + 1) * Item.Width;
+            Room  : N.Real_Array (Since .. Upto - 1)
               with Import,
                    Address => System.Storage_Elements.To_Address
                                 (System.Storage_Elements.To_Integer (Item.Proper)
-                                 + System.Storage_Elements.Integer_Address (From * 4));
+                                 + System.Storage_Elements.Integer_Address (Since * 4));
          begin
-            Room := Item.Source (From .. Upto - 1);
+            Room := Item.Source (Since .. Upto - 1);
          end;
       end if;
    end Run;
@@ -802,7 +816,8 @@ package body Model_Runner.Qwen_Image is
       --  The modulation's two rows, the step's then nought's, and the tanh
       --  of each; the heads' gains; the rows' angles.
       Modulation, Gates, Gain_Q, Gain_K, Cosines, Sines : T.Real_Array_Access;
-      W, F, D, Heads, Pairs, Prompt : Element_Count := 0;
+      --  Image is where the prompt's rows begin, past the image's.
+      W, F, D, Heads, Pairs, Image : Element_Count := 0;
    end record;
 
    overriding procedure Run (Item : in out Host_Work; First : Element_Count; Last : Element_Count) is
@@ -815,7 +830,7 @@ package body Model_Runner.Qwen_Image is
 
       --  The modulation's offset for a row: the prompt's read nought's.
       function At_Row (Row : Element_Count) return Element_Count
-      is ((if Row < Item.Prompt then 4 * W else 0) + Item.Part * W);
+      is ((if Row >= Item.Image then 4 * W else 0) + Item.Part * W);
 
       procedure Heads_Of (Source, Gain : T.Real_Array_Access; Row : Element_Count) is
       begin
@@ -898,9 +913,20 @@ package body Model_Runner.Qwen_Image is
       end loop;
    end Run;
 
-   ---------------
+   procedure Forget (Cache : in out Prefix_Cache) is
+   begin
+      T.Free (Cache.Text);
+      T.Free (Cache.Keys);
+      T.Free (Cache.Values);
+      Cache.Rows := 0;
+   end Forget;
+
+   --  The most a prefix cache holds, keys and values together, in bytes.
+   Most_Kept : constant := 1_073_741_824;
+
+   --------------
    -- Velocity --
-   ---------------
+   --------------
 
    procedure Velocity
      (Item      : Denoiser;
@@ -913,6 +939,25 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out N.Real_Array;
       Status    : out E.Error_Info)
+   is
+      Prefix : Prefix_Cache;
+   begin
+      Velocity (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Status, Prefix);
+      Forget (Prefix);
+   end Velocity;
+
+   procedure Velocity
+     (Item      : Denoiser;
+      Latent    : N.Real_Array;
+      Rows      : Positive;
+      Columns   : Positive;
+      Timestep  : N.Real;
+      Text      : N.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Result    : out N.Real_Array;
+      Status    : out E.Error_Info;
+      Prefix    : in out Prefix_Cache)
    is
       package CPU renames Model_Runner.Backend.CPU;
       subtype Real is N.Real;
@@ -930,7 +975,19 @@ package body Model_Runner.Qwen_Image is
       Total   : constant Element_Count := Prompt + Image;
       Epsilon : constant Wide := 1.0E-6;
 
-      --  Every row a token, Total of them: the prompt's, then the image's.
+      --  Every row a token: the image's, then the prompt's. Where the
+      --  prompt's rows are kept from an earlier evaluation the image's
+      --  alone are carried -- Live rows -- and the kept keys and values
+      --  stand behind the image's in K and V, which hold Total rows always.
+      Blocks  : constant Element_Count := Element_Count (Shape.Blocks);
+      Kept    : constant Element_Count := Blocks * Prompt * W;
+      Reuse   : constant Boolean :=
+        Prompt > 0 and then Prefix.Rows = Natural (Prompt) and then Prefix.Text /= null
+        and then Prefix.Text'Length = Text'Length and then N."=" (Prefix.Text.all, Text)
+        and then Prefix.Keys /= null and then Prefix.Keys'Length = Kept;
+      Keep    : constant Boolean :=
+        not Reuse and then Prompt > 0 and then Kept * 8 <= Most_Kept;
+      Live    : constant Element_Count := (if Reuse then Image else Total);
       X, H, Q, K, V, A, G, Y : T.Real_Array_Access;
       --  The time's two rows: the step's, then nought's; and what the
       --  modulation and the last norm make of them.
@@ -1028,19 +1085,19 @@ package body Model_Runner.Qwen_Image is
          end;
       end Modulated_Norm;
 
-      --  A's rows := each row's attention: on the device, the keys and
-      --  values put in its cache and the prompt's rows asked causally, the
-      --  image's over every key; or across the pool.
+      --  A's rows := each live row's attention: on the device, the keys and
+      --  values put in its cache, the image's rows asked over every key and
+      --  the prompt's causally from the first of theirs; or across the pool.
       procedure Attend is
          Job : aliased Attention_Work :=
-           (Q => Q, K => K, V => V, A => A, Prompt => Prompt, Total => Total, Width => W, Head => D,
-            Heads => Heads);
+           (Q => Q, K => K, V => V, A => A, Image => Image, Asking => Live, Total => Total, Width => W,
+            Head => D, Heads => Heads);
       begin
          if E.Is_Error (Status) then
             return;
          elsif not On_Device then
             CPU.Dispatch_Shares
-              (Pool, Heads * ((Total + Tile - 1) / Tile), Job'Unchecked_Access, Status, Cost => Total * Total * W);
+              (Pool, Heads * ((Live + Tile - 1) / Tile), Job'Unchecked_Access, Status, Cost => Live * Total * W);
             return;
          end if;
          declare
@@ -1050,7 +1107,7 @@ package body Model_Runner.Qwen_Image is
             Queries   : constant Element_Count := 1024;
 
             --  Rows First .. First + Count - 1 asking, causally from the
-            --  first key or over all of them.
+            --  prompt's first key or over all of them.
             procedure Ask (First, Count : Element_Count; Causal : Boolean) is
                From : Element_Count := First;
             begin
@@ -1060,7 +1117,8 @@ package body Model_Runner.Qwen_Image is
                   begin
                      Device.Attend
                        (Q (From * W .. (From + Take) * W - 1), Natural (Heads), Natural (D), Natural (D), 1,
-                        0, (if Causal then Natural (From) else Natural (Total - 1)), Keys_At, Values_At,
+                        (if Causal then Natural (Image) else 0),
+                        (if Causal then Natural (From) else Natural (Total - 1)), Keys_At, Values_At,
                         Natural (W), Natural (W), N.Real (1.0 / N.Sqrt (N.Wide_Real (D))), 0.0,
                         A (From * W .. (From + Take) * W - 1), Ok, Positions => Natural (Take), Causal => Causal);
                      From := From + Take;
@@ -1087,7 +1145,7 @@ package body Model_Runner.Qwen_Image is
                end if;
                declare
                   Job : aliased Cache_Work :=
-                    (Source => Rows, Proper => Proper, Copy => Copy, Width => W, Exact => Prompt);
+                    (Source => Rows, Proper => Proper, Copy => Copy, Width => W, Exact => Image);
                begin
                   CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 4);
                   Ok := E.Is_Ok (Status);
@@ -1101,11 +1159,11 @@ package body Model_Runner.Qwen_Image is
             if Ok then
                Place (Values_At, V);
             end if;
-            if Ok and then Prompt > 0 then
-               Ask (0, Prompt, Causal => True);
-            end if;
             if Ok then
-               Ask (Prompt, Image, Causal => False);
+               Ask (0, Image, Causal => False);
+            end if;
+            if Ok and then not Reuse and then Prompt > 0 then
+               Ask (Image, Prompt, Causal => True);
             end if;
             if not Ok then
                Status := E.Make (E.Backend_Capability_Missing);
@@ -1118,10 +1176,10 @@ package body Model_Runner.Qwen_Image is
          Job : aliased Host_Work :=
            (Kind => Kind, Part => Part, X => X, H => H, Y => (if Part = 3 then A else Y), Q => Q, K => K, G => G,
             Modulation => Modulation, Gates => Gates, Gain_Q => null, Gain_K => null, Cosines => Angles_Cos,
-            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Prompt => Prompt);
+            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Image => Image);
       begin
          if E.Is_Ok (Status) then
-            CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 8);
+            CPU.Dispatch_Shares (Pool, Live, Job'Unchecked_Access, Status, Cost => Live * W * 8);
          end if;
       end Share;
 
@@ -1129,10 +1187,10 @@ package body Model_Runner.Qwen_Image is
          Job : aliased Host_Work :=
            (Kind => Turn_Rows, Part => 0, X => X, H => H, Y => Y, Q => Q, K => K, G => G,
             Modulation => Modulation, Gates => Gates, Gain_Q => Gain_Q, Gain_K => Gain_K, Cosines => Angles_Cos,
-            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Prompt => Prompt);
+            Sines => Angles_Sin, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Image => Image);
       begin
          if E.Is_Ok (Status) then
-            CPU.Dispatch_Shares (Pool, Total, Job'Unchecked_Access, Status, Cost => Total * W * 8);
+            CPU.Dispatch_Shares (Pool, Live, Job'Unchecked_Access, Status, Cost => Live * W * 8);
          end if;
       end Share_Turns;
    begin
@@ -1210,42 +1268,48 @@ package body Model_Runner.Qwen_Image is
          end loop;
       end if;
 
-      --  The prompt's rows: a gain of one plus the stored one, then two
-      --  linears with the tanh form of the Gaussian unit between.
-      declare
-         C : constant Element_Count := Element_Count (Shape.Context);
-      begin
-         for Row in 0 .. Prompt - 1 loop
-            declare
-               Square : Wide := 0.0;
-            begin
-               for I in 0 .. C - 1 loop
-                  Square := Square + Wide (Text (Text'First + Row * C + I)) ** 2;
-               end loop;
+      --  The prompt's rows, behind the image's, unless they are kept: a
+      --  gain of one plus the stored one, then two linears with the tanh
+      --  form of the Gaussian unit between.
+      if not Reuse then
+         declare
+            C : constant Element_Count := Element_Count (Shape.Context);
+         begin
+            for Row in 0 .. Prompt - 1 loop
                declare
-                  Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (C) + Epsilon);
+                  Square : Wide := 0.0;
                begin
                   for I in 0 .. C - 1 loop
-                     H (Row * C + I) := Real (Wide (Text (Text'First + Row * C + I)) * Inverse
-                                              * (1.0 + Wide (Item.Text_Norm (I))));
+                     Square := Square + Wide (Text (Text'First + Row * C + I)) ** 2;
                   end loop;
-               end;
-            end;
-         end loop;
-         if Prompt > 0 then
-            Product (Item.Text_In_First, H, Prompt, Y);
-            for I in 0 .. Prompt * W - 1 loop
-               declare
-                  Z : constant Wide := Wide (Y (I));
-               begin
-                  Y (I) := Real (0.5 * Z * (1.0 + N.Tanh (0.797_884_560_802_865_4 * (Z + 0.044_715 * Z ** 3))));
+                  declare
+                     Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (C) + Epsilon);
+                  begin
+                     for I in 0 .. C - 1 loop
+                        H (Row * C + I) := Real (Wide (Text (Text'First + Row * C + I)) * Inverse
+                                                 * (1.0 + Wide (Item.Text_Norm (I))));
+                     end loop;
+                  end;
                end;
             end loop;
-            Product (Item.Text_In_Second, Y, Prompt, X);
-         end if;
-      end;
+            if Prompt > 0 then
+               Product (Item.Text_In_First, H, Prompt, Y);
+               for I in 0 .. Prompt * W - 1 loop
+                  declare
+                     Z : constant Wide := Wide (Y (I));
+                  begin
+                     Y (I) := Real (0.5 * Z * (1.0 + N.Tanh (0.797_884_560_802_865_4 * (Z + 0.044_715 * Z ** 3))));
+                  end;
+               end loop;
+               Product (Item.Text_In_Second, Y, Prompt, A);
+               if E.Is_Ok (Status) then
+                  X (Image * W .. Total * W - 1) := A (0 .. Prompt * W - 1);
+               end if;
+            end if;
+         end;
+      end if;
 
-      --  The image's rows, a latent pixel's channels each, behind them.
+      --  The image's rows, a latent pixel's channels each, in front.
       declare
          Channels : constant Element_Count := Element_Count (Shape.In_Channels);
          Pixels   : T.Real_Array_Access;
@@ -1259,23 +1323,26 @@ package body Model_Runner.Qwen_Image is
             end loop;
          end loop;
          Product (Item.Image_In, Pixels, Image, Rows_Out);
-         X (Prompt * W .. Total * W - 1) := Rows_Out (0 .. Image * W - 1);
+         if E.Is_Ok (Status) then
+            X (0 .. Image * W - 1) := Rows_Out (0 .. Image * W - 1);
+         end if;
          T.Free (Pixels);
          T.Free (Rows_Out);
       end;
 
-      --  Where each token is: a prompt token at (p, p, p), the image at
-      --  the frame the prompt reached, its rows and columns about nought.
-      for Row in 0 .. Total - 1 loop
+      --  Where each live token is: the image at the frame the prompt
+      --  reached, its rows and columns about nought; a prompt token at
+      --  (p, p, p).
+      for Row in 0 .. Live - 1 loop
          declare
             Place : array (0 .. 2) of Wide;
             Pair  : Element_Count := 0;
          begin
-            if Row < Prompt then
-               Place := [others => Wide (Row)];
+            if Row >= Image then
+               Place := [others => Wide (Row - Image)];
             else
                declare
-                  Pixel : constant Element_Count := Row - Prompt;
+                  Pixel : constant Element_Count := Row;
                   Down  : constant Integer := Integer (Pixel / Element_Count (Columns));
                   Along : constant Integer := Integer (Pixel mod Element_Count (Columns));
                begin
@@ -1298,24 +1365,56 @@ package body Model_Runner.Qwen_Image is
          end;
       end loop;
 
-      --  The blocks.
-      for Layer of Item.Layers.all loop
+      if Keep then
+         Forget (Prefix);
+         T.Allocate (Kept, Prefix.Keys);
+         T.Allocate (Kept, Prefix.Values);
+         T.Allocate (Text'Length, Prefix.Text);
+         if Prefix.Keys = null or else Prefix.Values = null or else Prefix.Text = null then
+            Forget (Prefix);
+         end if;
+      end if;
+
+      --  The blocks: the prompt's keys and values kept from each, or put
+      --  back behind the image's.
+      for Index in Item.Layers'Range loop
          exit when E.Is_Error (Status);
-         Share (Norm_Rows, Part => 0);
-         Product (Layer.Query, H, Total, Q);
-         Product (Layer.Key, H, Total, K);
-         Product (Layer.Value, H, Total, V);
-         Share_Turns (Layer.Query_Norm, Layer.Key_Norm);
-         Attend;
-         Product (Layer.Attention_Out, A, Total, Y);
-         Share (Gate_Add, Part => 1);
-         Share (Norm_Rows, Part => 2);
-         --  The gate's half first, the up projection's second.
-         Product (Layer.Gate_Up, H, Total, G);
-         Share (Gated_Silu);
-         Product (Layer.Feed_Out, Y, Total, A);
-         Share (Gate_Add, Part => 3);
+         declare
+            Layer  : Block renames Item.Layers (Index);
+            Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
+            Tail    : constant Element_Count := Image * W;
+         begin
+            Share (Norm_Rows, Part => 0);
+            Product (Layer.Query, H, Live, Q);
+            Product (Layer.Key, H, Live, K);
+            Product (Layer.Value, H, Live, V);
+            Share_Turns (Layer.Query_Norm, Layer.Key_Norm);
+            if E.Is_Ok (Status) and then Reuse then
+               K (Tail .. Total * W - 1) := Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1);
+               V (Tail .. Total * W - 1) := Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1);
+            elsif E.Is_Ok (Status) and then Keep and then Prefix.Keys /= null then
+               Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1) := K (Tail .. Total * W - 1);
+               Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1) := V (Tail .. Total * W - 1);
+            end if;
+            Attend;
+            Product (Layer.Attention_Out, A, Live, Y);
+            Share (Gate_Add, Part => 1);
+            Share (Norm_Rows, Part => 2);
+            --  The gate's half first, the up projection's second.
+            Product (Layer.Gate_Up, H, Live, G);
+            Share (Gated_Silu);
+            Product (Layer.Feed_Out, Y, Live, A);
+            Share (Gate_Add, Part => 3);
+         end;
       end loop;
+      if Keep and then Prefix.Keys /= null then
+         if E.Is_Ok (Status) then
+            Prefix.Text.all := Text;
+            Prefix.Rows := Natural (Prompt);
+         else
+            Forget (Prefix);
+         end if;
+      end if;
 
       --  The image's rows out: the last norm scaled by the step's time,
       --  then the way out, a latent pixel's channels each.
@@ -1327,12 +1426,8 @@ package body Model_Runner.Qwen_Image is
             T.Allocate (Image * W, Normed);
             T.Allocate (Image * Channels, Answer);
             for Pixel in 0 .. Image - 1 loop
-               declare
-                  Row : constant Element_Count := Prompt + Pixel;
-               begin
-                  Modulated_Norm (X, H, Row, Final_Scale, 0);
-                  Normed (Pixel * W .. Pixel * W + W - 1) := H (Row * W .. Row * W + W - 1);
-               end;
+               Modulated_Norm (X, H, Pixel, Final_Scale, 0);
+               Normed (Pixel * W .. Pixel * W + W - 1) := H (Pixel * W .. Pixel * W + W - 1);
             end loop;
             Product (Item.Projection_Out, Normed, Image, Answer);
             if E.Is_Ok (Status) then
