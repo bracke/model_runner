@@ -27377,14 +27377,18 @@ panels BE443BE004C17F22 src/library/model_runner-quantization-interleave.ads src
 # wooden table"` timed whole by /usr/bin/time, the device opened unasked,
 # each block of a step reading the kept prompt rows one device sequence:
 #
-#   --turbo --size 1024x1024   181.1 s, peak 5.5 GB resident; steps 28.9,
-#                              15.3 ... 15.2 s
-#   --size 512x512 --steps 40  152.5 s, peak 2.2 GB; steps 11.9, 3.3 ...
-#                              3.2 s; its picture 48.9-49.9 dB PSNR from
+#   --turbo --size 1024x1024   173.8 s, peak 5.4 GB resident; steps 22.9
+#                              (the prompt's rows worked out first, and
+#                              the weights' upload, 5.7 s of it), 15.3 ...
+#                              15.4 s
+#   --size 512x512 --steps 40  150.5 s, peak 2.2 GB; steps 9.2, 3.1 ...
+#                              3.2 s; its picture 48.8-49.8 dB PSNR from
 #                              the reference's processor picture
 #
-#   Earlier the same day, before the blocks went whole: 222.2 s and 213.3 s,
-#   steps of 20-22 and 4.2-5.3 s.
+#   Earlier the same day: before the blocks went whole 222.2 s and 213.3 s,
+#   steps of 20-22 and 4.2-5.3 s; with them whole and the first step still
+#   keeping the prompt's rows beside the image's, 181.1 s and 152.5 s, a
+#   first step of 28.9 and 11.9 s.
 #
 #   stable-diffusion.cpp b13a48219d, Vulkan, through mr-reference, the 512
 #   picture in forty steps: 196.4 s, 4.13 s a step.
@@ -27394,8 +27398,9 @@ panels BE443BE004C17F22 src/library/model_runner-quantization-interleave.ads src
 #   the gated feed-forward 24.5; the queries, keys and values grouped 22.8;
 #   the blend projected on the device 20.1; the block whole 15.0.
 #
-# load: one-minute average 2.16 before the runs; nothing else on the device
+# load: one-minute average 2.25 before the Turbo run, 7.61 before the 512 one (falling)
 # model: qwen-image-2.1-Q8_0.gguf, qwen-image-2.1-turbo-Q8_0.gguf, Qwen3-VL-8B-Instruct-Q8_0.gguf, qwen_image_2.1_vae_bf16.safetensors
-# Re-measured 2026-10-21 with the blocks whole on the device.
+# Re-measured 2026-10-21 with the prompt's rows worked out before the first step.
 # re-measured: the figures above
-image 8192F96D2F8FD788 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# re-measured: the figures above
+image AFEA25CB098CAA42 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb

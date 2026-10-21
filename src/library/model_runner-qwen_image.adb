@@ -955,7 +955,292 @@ package body Model_Runner.Qwen_Image is
       Forget (Prefix);
    end Velocity;
 
+   --  Whether a cache holds these prompt rows' keys and values.
+   function Holds (Item : Denoiser; Prefix : Prefix_Cache; Text : N.Real_Array; Text_Rows : Natural) return Boolean
+   is (Text_Rows > 0 and then Prefix.Rows = Text_Rows and then Prefix.Text /= null
+       and then Prefix.Text'Length = Text'Length and then N."=" (Prefix.Text.all, Text)
+       and then Prefix.Keys /= null
+       and then Prefix.Keys'Length
+                = Element_Count (Item.Shape.Blocks) * Element_Count (Text_Rows) * Element_Count (Item.Shape.Width));
+
+   -----------------
+   -- Fill_Prefix --
+   -----------------
+
+   --  The prompt's keys and values in every block, worked out on its rows
+   --  alone: they see no image -- each attends to the prompt up to itself
+   --  -- and take the modulation of time nought, so what a block makes of
+   --  them is what it makes of them beside any image at any step. A dozen
+   --  rows through every block: the products on the device where one is
+   --  open, the rest across the pool. Prefix is emptied first and holds
+   --  them after, unless Status says why not.
+   procedure Fill_Prefix
+     (Item      : Denoiser;
+      Text      : N.Real_Array;
+      Text_Rows : Positive;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Prefix    : in out Prefix_Cache;
+      Status    : out E.Error_Info)
+   is
+      package CPU renames Model_Runner.Backend.CPU;
+      package Device renames Model_Runner.Backend.Device;
+      subtype Real is N.Real;
+      subtype Wide is N.Wide_Real;
+      use type Real;
+      use type Wide;
+
+      Shape   : Configuration renames Item.Shape;
+      W       : constant Element_Count := Element_Count (Shape.Width);
+      F       : constant Element_Count := Element_Count (Shape.Feed);
+      D       : constant Element_Count := Element_Count (Shape.Head_Size);
+      C       : constant Element_Count := Element_Count (Shape.Context);
+      Heads   : constant Element_Count := Element_Count (Shape.Heads);
+      Pairs   : constant Element_Count := D / 2;
+      Prompt  : constant Element_Count := Element_Count (Text_Rows);
+      Epsilon : constant Wide := 1.0E-6;
+      On_Device : constant Boolean := Device.Is_Ready;
+
+      --  The rows; the modulation and its gates, nought's in the second
+      --  half where the host's work reads a prompt row's; the angles.
+      X, H, Q, K, V, A, G, Y, Times, Hidden, Modulation, Gates, Cosines, Sines : T.Real_Array_Access;
+
+      procedure Release is
+      begin
+         T.Free (X); T.Free (H); T.Free (Q); T.Free (K); T.Free (V); T.Free (A); T.Free (G); T.Free (Y);
+         T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Gates); T.Free (Cosines); T.Free (Sines);
+      end Release;
+
+      procedure Product (Weight : T.View; Vectors : T.Real_Array_Access; Count : Element_Count;
+                         Target : T.Real_Array_Access) is
+      begin
+         if E.Is_Error (Status) then
+            return;
+         elsif On_Device then
+            Device.Dispatch_Batch (Weight, Vectors, Count, Target, Status);
+         else
+            CPU.Dispatch_Batch (Pool, Weight, Vectors, Count, Target, Status);
+         end if;
+      end Product;
+
+      procedure Share (Kind : Host_Kind; Part : Element_Count := 0; Gain_Q, Gain_K : T.Real_Array_Access := null) is
+         Job : aliased Host_Work :=
+           (Kind => Kind, Part => Part, X => X, H => H, Y => (if Part = 3 then A else Y), Q => Q, K => K, G => G,
+            Modulation => Modulation, Gates => Gates, Gain_Q => Gain_Q, Gain_K => Gain_K, Cosines => Cosines,
+            Sines => Sines, W => W, F => F, D => D, Heads => Heads, Pairs => Pairs, Image => 0);
+      begin
+         if E.Is_Ok (Status) then
+            CPU.Dispatch_Shares (Pool, Prompt, Job'Unchecked_Access, Status, Cost => Prompt * W * 8);
+         end if;
+      end Share;
+
+      Kept : constant Element_Count := Element_Count (Shape.Blocks) * Prompt * W;
+   begin
+      Status := E.Success;
+      Forget (Prefix);
+      T.Allocate (Prompt * Element_Count'Max (W, C), X);
+      T.Allocate (Prompt * Element_Count'Max (W, C), H);
+      T.Allocate (Prompt * W, Q);
+      T.Allocate (Prompt * W, K);
+      T.Allocate (Prompt * W, V);
+      T.Allocate (Prompt * W, A);
+      T.Allocate (Prompt * 2 * F, G);
+      T.Allocate (Prompt * Element_Count'Max (W, F), Y);
+      T.Allocate (W, Times);
+      T.Allocate (W, Hidden);
+      T.Allocate (8 * W, Modulation);
+      T.Allocate (8 * W, Gates);
+      T.Allocate (Prompt * Pairs, Cosines);
+      T.Allocate (Prompt * Pairs, Sines);
+      T.Allocate (Kept, Prefix.Keys);
+      T.Allocate (Kept, Prefix.Values);
+      T.Allocate (Text'Length, Prefix.Text);
+      if X = null or else H = null or else Q = null or else K = null or else V = null or else A = null
+        or else G = null or else Y = null or else Times = null or else Hidden = null or else Modulation = null
+        or else Gates = null or else Cosines = null or else Sines = null or else Prefix.Keys = null
+        or else Prefix.Values = null or else Prefix.Text = null
+      then
+         Release;
+         Forget (Prefix);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+
+      --  Time nought through the two linears: the sinusoid's cosines are
+      --  one and its sines nought.
+      declare
+         Sinusoid : T.Real_Array_Access;
+      begin
+         T.Allocate (Time_Width, Sinusoid);
+         Sinusoid.all := [others => 0.0];
+         Sinusoid (0 .. Time_Width / 2 - 1) := [others => 1.0];
+         Product (Item.Time_First, Sinusoid, 1, Hidden);
+         T.Free (Sinusoid);
+      end;
+      for I in 0 .. W - 1 loop
+         Hidden (I) := Real (Wide (Hidden (I)) / (1.0 + N.Exp (-Wide (Hidden (I)))));
+      end loop;
+      Product (Item.Time_Second, Hidden, 1, Times);
+      for I in 0 .. W - 1 loop
+         Times (I) := Real (Wide (Times (I)) / (1.0 + N.Exp (-Wide (Times (I)))));
+      end loop;
+      declare
+         Nought : T.Real_Array_Access;
+      begin
+         T.Allocate (4 * W, Nought);
+         Product (Item.Modulation, Times, 1, Nought);
+         if E.Is_Ok (Status) then
+            Modulation (4 * W .. 8 * W - 1) := Nought.all;
+            for I in 4 * W .. 8 * W - 1 loop
+               Gates (I) := Real (N.Tanh (Wide (Modulation (I))));
+            end loop;
+         end if;
+         T.Free (Nought);
+      end;
+
+      --  The prompt's rows in, as Velocity takes them.
+      for Row in 0 .. Prompt - 1 loop
+         declare
+            Square : Wide := 0.0;
+         begin
+            for I in 0 .. C - 1 loop
+               Square := Square + Wide (Text (Text'First + Row * C + I)) ** 2;
+            end loop;
+            declare
+               Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (C) + Epsilon);
+            begin
+               for I in 0 .. C - 1 loop
+                  H (Row * C + I) :=
+                    Real (Wide (Text (Text'First + Row * C + I)) * Inverse * (1.0 + Wide (Item.Text_Norm (I))));
+               end loop;
+            end;
+         end;
+      end loop;
+      Product (Item.Text_In_First, H, Prompt, Y);
+      if E.Is_Ok (Status) then
+         for I in 0 .. Prompt * W - 1 loop
+            declare
+               Z : constant Wide := Wide (Y (I));
+            begin
+               Y (I) := Real (0.5 * Z * (1.0 + N.Tanh (0.797_884_560_802_865_4 * (Z + 0.044_715 * Z ** 3))));
+            end;
+         end loop;
+      end if;
+      Product (Item.Text_In_Second, Y, Prompt, X);
+
+      --  A prompt token at (p, p, p).
+      for Row in 0 .. Prompt - 1 loop
+         declare
+            Pair : Element_Count := 0;
+         begin
+            for Axis in Axis_Pairs'Range loop
+               for J in 0 .. Axis_Pairs (Axis) - 1 loop
+                  declare
+                     Omega : constant Real :=
+                       Real (1.0 / N.Exp (N.Log (10_000.0) * Wide (2 * J) / Wide (2 * Axis_Pairs (Axis))));
+                     Angle : constant Real := Real (Row) * Omega;
+                  begin
+                     Cosines (Row * Pairs + Pair) := Real (N.Cos (Wide (Angle)));
+                     Sines (Row * Pairs + Pair) := Real (N.Sin (Wide (Angle)));
+                     Pair := Pair + 1;
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+
+      for Index in Item.Layers'Range loop
+         exit when E.Is_Error (Status);
+         declare
+            Layer   : Block renames Item.Layers (Index);
+            Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
+            Job     : aliased Attention_Work :=
+              (Q => Q, K => K, V => V, A => A, Image => 0, Asking => Prompt, Total => Prompt, Width => W,
+               Head => D, Heads => Heads);
+         begin
+            Share (Norm_Rows, Part => 0);
+            Product (Layer.Query, H, Prompt, Q);
+            Product (Layer.Key, H, Prompt, K);
+            Product (Layer.Value, H, Prompt, V);
+            Share (Turn_Rows, Gain_Q => Layer.Query_Norm, Gain_K => Layer.Key_Norm);
+            if E.Is_Ok (Status) then
+               Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1) := K (0 .. Prompt * W - 1);
+               Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1) := V (0 .. Prompt * W - 1);
+               CPU.Dispatch_Shares
+                 (Pool, Heads * ((Prompt + Tile - 1) / Tile), Job'Unchecked_Access, Status,
+                  Cost => Prompt * Prompt * W);
+            end if;
+            Product (Layer.Attention_Out, A, Prompt, Y);
+            Share (Gate_Add, Part => 1);
+            Share (Norm_Rows, Part => 2);
+            --  On the device through the gate's and the up's rows apart,
+            --  the matrices the whole blocks keep there, not the two in
+            --  one a second time.
+            if On_Device then
+               if E.Is_Ok (Status) then
+                  Device.Dispatch_Gated (Layer.Gate, Layer.Up, Layer.Feed_Out, H, Prompt, 0, A, Status);
+               end if;
+            else
+               Product (Layer.Gate_Up, H, Prompt, G);
+               Share (Gated_Silu);
+               Product (Layer.Feed_Out, Y, Prompt, A);
+            end if;
+            Share (Gate_Add, Part => 3);
+         end;
+      end loop;
+      Release;
+      if E.Is_Ok (Status) then
+         Prefix.Text.all := Text;
+         Prefix.Rows := Text_Rows;
+      else
+         Forget (Prefix);
+      end if;
+   end Fill_Prefix;
+
+   procedure Velocity_Body
+     (Item      : Denoiser;
+      Latent    : N.Real_Array;
+      Rows      : Positive;
+      Columns   : Positive;
+      Timestep  : N.Real;
+      Text      : N.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Result    : out N.Real_Array;
+      Status    : out E.Error_Info;
+      Prefix    : in out Prefix_Cache);
+
    procedure Velocity
+     (Item      : Denoiser;
+      Latent    : N.Real_Array;
+      Rows      : Positive;
+      Columns   : Positive;
+      Timestep  : N.Real;
+      Text      : N.Real_Array;
+      Text_Rows : Natural;
+      Pool      : Model_Runner.Backend.CPU.Pool_Reference;
+      Result    : out N.Real_Array;
+      Status    : out E.Error_Info;
+      Prefix    : in out Prefix_Cache) is
+   begin
+      --  The prompt's rows kept before the step that would keep them, so
+      --  that every step carries the image's alone -- unless they would
+      --  take too much room, or the denoiser or the rows are not what the
+      --  step is given, which the step itself then says.
+      if Item.Ready and then Text_Rows > 0 and then not Holds (Item, Prefix, Text, Text_Rows)
+        and then Text'Length = Element_Count (Text_Rows) * Element_Count (Item.Shape.Context)
+        and then Element_Count (Item.Shape.Blocks) * Element_Count (Text_Rows) * Element_Count (Item.Shape.Width) * 8
+                 <= Most_Kept
+      then
+         Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status);
+         if E.Is_Error (Status) then
+            Result := [others => 0.0];
+            return;
+         end if;
+      end if;
+      Velocity_Body (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Status, Prefix);
+   end Velocity;
+
+   procedure Velocity_Body
      (Item      : Denoiser;
       Latent    : N.Real_Array;
       Rows      : Positive;
@@ -1721,6 +2006,6 @@ package body Model_Runner.Qwen_Image is
          end;
       end if;
       Release;
-   end Velocity;
+   end Velocity_Body;
 
 end Model_Runner.Qwen_Image;
