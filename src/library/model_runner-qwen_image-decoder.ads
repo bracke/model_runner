@@ -95,9 +95,19 @@ private
    --  multiple of 32 they are made so with zeros, which the device's
    --  matrix kernel wants and the answers' extra channels are dropped
    --  after; Owned holds such a kernel, null where the file's own is used.
+   --  A 3x3's nine taps, each a matrix of its own.
+   type Tap_Views is array (0 .. 8) of T.View;
+
    type Convolution is record
       Kernel   : T.View;
       Owned    : Model_Runner.Bytes.Byte_Array_Access;
+      --  And a 3x3's taps apart, each a matrix of the output channels by
+      --  the input channels, both padded to 32, which Tap_Owned holds: the
+      --  device's form, where each tap reads the pixels shifted rather
+      --  than a neighbourhood gathered nine times over. Null for a 1x1, or
+      --  a kernel of a format laid out otherwise.
+      Tap_Owned : Model_Runner.Bytes.Byte_Array_Access;
+      Taps      : Tap_Views;
       Bias     : T.Real_Array_Access;
       Inputs   : Natural := 0;
       Outputs  : Natural := 0;

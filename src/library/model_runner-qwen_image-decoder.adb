@@ -2,6 +2,8 @@ with System.Storage_Elements;
 
 with Model_Runner.Backend.Device;
 with Model_Runner.GGUF;
+with Model_Runner.Kernels;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Shares;
 
 package body Model_Runner.Qwen_Image.Decoder is
@@ -164,6 +166,40 @@ package body Model_Runner.Qwen_Image.Decoder is
                end loop;
             end loop;
             T.Make (Result.Kernel.Format, Rows_To, Across, Result.Owned, 0, Result.Kernel, Status);
+
+            --  A 3x3's taps apart, for the device.
+            if Size = 3 and then E.Is_Ok (Status) then
+               declare
+                  Ins_To    : constant Element_Count := (Ins + 31) / 32 * 32;
+                  Tap_Bytes : constant B.Byte_Count := B.Byte_Count (Rows_To * Ins_To) * Element;
+               begin
+                  B.Allocate (Tap_Bytes * B.Byte_Count (Taps), Result.Tap_Owned);
+                  if Result.Tap_Owned = null then
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                     return;
+                  end if;
+                  for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+                     for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                        for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                           declare
+                              Here  : constant B.Byte_Count :=
+                                O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
+                              There : constant B.Byte_Count :=
+                                Result.Tap_Owned'First + Tap * Tap_Bytes
+                                + (O * B.Byte_Count (Ins_To) + Channel) * Element;
+                           begin
+                              Result.Tap_Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
+                           end;
+                        end loop;
+                     end loop;
+                  end loop;
+                  for Tap in Result.Taps'Range loop
+                     exit when E.Is_Error (Status);
+                     T.Make (Result.Kernel.Format, Rows_To, Ins_To, Result.Tap_Owned, B.Byte_Count (Tap) * Tap_Bytes,
+                             Result.Taps (Tap), Status);
+                  end loop;
+               end;
+            end if;
          end;
       end Convolve;
 
@@ -279,6 +315,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       begin
          T.Free (C.Bias);
          B.Free (C.Owned);
+         B.Free (C.Tap_Owned);
          C := (others => <>);
       end Let_Go;
 
@@ -386,6 +423,41 @@ package body Model_Runner.Qwen_Image.Decoder is
       end loop;
    end Run;
 
+   --  Each row of scores, Positions of Across, turned into the attention's
+   --  weights in place: scaled, less the row's most, exponentiated and
+   --  divided by their sum, the padding past Positions left nought.
+   type Softmax_Work is new Model_Runner.Shares.Work with record
+      Scores    : T.Real_Array_Access;
+      Positions, Across : Element_Count := 0;
+      Scale     : Real := 1.0;
+   end record;
+
+   overriding procedure Run (Item : in out Softmax_Work; First : Element_Count; Last : Element_Count) is
+   begin
+      for Row in First .. Last loop
+         declare
+            Base  : constant Element_Count := Row * Item.Across;
+            Most  : Real := Real'First;
+            Total : Real := 0.0;
+         begin
+            for Key in 0 .. Item.Positions - 1 loop
+               Item.Scores (Base + Key) := Item.Scores (Base + Key) * Item.Scale;
+               Most := Real'Max (Most, Item.Scores (Base + Key));
+            end loop;
+            for Key in 0 .. Item.Positions - 1 loop
+               Item.Scores (Base + Key) := Real (N.Exp (Wide (Item.Scores (Base + Key) - Most)));
+               Total := Total + Item.Scores (Base + Key);
+            end loop;
+            for Key in 0 .. Item.Positions - 1 loop
+               Item.Scores (Base + Key) := Item.Scores (Base + Key) / Total;
+            end loop;
+            for Key in Item.Positions .. Item.Across - 1 loop
+               Item.Scores (Base + Key) := 0.0;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
    --  A decode's work between its products, a share at a time: a band's
    --  pixels' 3x3 neighbourhoods gathered, a tap's channels together and
    --  zero past the edges; or pixels' channels normalized by their root
@@ -394,7 +466,10 @@ package body Model_Runner.Qwen_Image.Decoder is
    --  or Source's pixels added to Target's; or Source doubled into
    --  Target, nearest; or a level's input added to its doubled pixels as
    --  the shortcut, as Decode says.
-   type Pixel_Kind is (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels);
+   --  Or, for the device's 3x3, a band's rows laid out padded: a pixel of
+   --  zeros either side of each row and a row of them above and below, each
+   --  pixel's channels padded to Across with zeros.
+   type Pixel_Kind is (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows);
 
    type Pixel_Work is new Model_Runner.Shares.Work with record
       Kind            : Pixel_Kind := Gather_Rows;
@@ -409,10 +484,36 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  channel count each input channel's value repeats over, and which
       --  of the 2x2 frames' subpixels a single frame keeps.
       Inputs, Factor, Repeats, Frame : Element_Count := 0;
+      --  Putting answers laid out a padded row at a time: how many pixels
+      --  a row of them holds; nought for answers a pixel after another.
+      Padded : Element_Count := 0;
    end record;
 
    overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
       Ins : constant Element_Count := Item.Channels;
+
+      --  A pixel's channels from Source at From into Target at Into, by
+      --  their root mean square and the gain, SiLU after where asked -- in
+      --  binary32 through the kernels' own exponential, as a language
+      --  model's gate takes it: in binary64 through the library's it was
+      --  most of a 1024 picture's 2.9 s of norms.
+      procedure Norm_Into (From, Into : Element_Count) is
+         Square : Wide := 0.0;
+      begin
+         for C in 0 .. Ins - 1 loop
+            Square := Square + Wide (Item.Source (From + C)) ** 2;
+         end loop;
+         declare
+            Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (Ins) + 1.0E-12));
+         begin
+            for C in 0 .. Ins - 1 loop
+               Item.Target (Into + C) := Item.Source (From + C) * Inverse * Item.Gain (C);
+            end loop;
+         end;
+         if Item.Silu then
+            Model_Runner.Kernels.SiLU (Item.Target (Into .. Into + Ins - 1));
+         end if;
+      end Norm_Into;
    begin
       case Item.Kind is
          when Gather_Rows =>
@@ -443,6 +544,31 @@ package body Model_Runner.Qwen_Image.Decoder is
                         end;
                      end loop;
                   end loop;
+               end;
+            end loop;
+         when Pad_Rows =>
+            --  First .. Last count the padded band's pixels, Width + 2 a
+            --  row, the first row the one above the band's first.
+            for Pixel in First .. Last loop
+               declare
+                  Y    : constant Element_Count := Item.Row + Pixel / (Item.Width + 2);
+                  X    : constant Element_Count := Pixel rem (Item.Width + 2);
+                  Into : constant Element_Count := Pixel * Item.Across;
+               begin
+                  if Y < 1 or else Y > Item.Height or else X < 1 or else X > Item.Width then
+                     Item.Target (Into .. Into + Item.Across - 1) := [others => 0.0];
+                  else
+                     declare
+                        From : constant Element_Count := ((Y - 1) * Item.Width + X - 1) * Ins;
+                     begin
+                        if Item.Gain /= null then
+                           Norm_Into (From, Into);
+                        else
+                           Item.Target (Into .. Into + Ins - 1) := Item.Source (From .. From + Ins - 1);
+                        end if;
+                        Item.Target (Into + Ins .. Into + Item.Across - 1) := [others => 0.0];
+                     end;
+                  end if;
                end;
             end loop;
          when Add_Pixels =>
@@ -479,31 +605,16 @@ package body Model_Runner.Qwen_Image.Decoder is
          when Put_Answers =>
             for Pixel in First .. Last loop
                for C in 0 .. Ins - 1 loop
-                  Item.Target ((Item.Row + Pixel) * Ins + C) := Item.Source (Pixel * Item.Across + C) + Item.Gain (C);
+                  Item.Target ((Item.Row + Pixel) * Ins + C) :=
+                    Item.Source
+                      ((if Item.Padded > 0 then (Pixel / Item.Width) * Item.Padded + Pixel rem Item.Width else Pixel)
+                       * Item.Across + C)
+                    + Item.Gain (C);
                end loop;
             end loop;
          when Norm_Pixels =>
             for Pixel in First .. Last loop
-               declare
-                  Square : Wide := 0.0;
-                  Base   : constant Element_Count := Pixel * Ins;
-               begin
-                  for C in 0 .. Ins - 1 loop
-                     Square := Square + Wide (Item.Source (Base + C)) ** 2;
-                  end loop;
-                  declare
-                     Inverse : constant Real := Real (1.0 / N.Sqrt (Square / Wide (Ins) + 1.0E-12));
-                  begin
-                     for C in 0 .. Ins - 1 loop
-                        declare
-                           V : constant Real := Item.Source (Base + C) * Inverse * Item.Gain (C);
-                        begin
-                           Item.Target (Base + C) :=
-                             (if Item.Silu then Real (Wide (V) / (1.0 + N.Exp (-Wide (V)))) else V);
-                        end;
-                     end loop;
-                  end;
-               end;
+               Norm_Into (Pixel * Ins, Pixel * Ins);
             end loop;
       end case;
    end Run;
@@ -521,7 +632,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  Activations a pixel at a time, a pixel's channels together.
       Height : Element_Count := Element_Count (Rows);
       Width  : Element_Count := Element_Count (Columns);
-      X, Y, Z : T.Real_Array_Access;
+      X, Y, Z, V : T.Real_Array_Access;
 
       procedure Swap (A, B_Side : in out T.Real_Array_Access) is
          Held : constant T.Real_Array_Access := A;
@@ -552,6 +663,11 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  past the caches.
       Device_Rows : constant Element_Count := 1_024;
       Chunk_In, Chunk_Out : T.Real_Array_Access;
+
+      --  How many pixels a 3x3's band holds on the device, its padding
+      --  included: the band goes over once, not nine times.
+      Tap_Rows : constant Element_Count := 4_096;
+      Tap_Answers : constant Element_Count := 4_194_304;
 
       --  Target := Weight times each of Count vectors: on the device where
       --  one is open, as they lie where they are one chunk and a chunk at a
@@ -595,6 +711,79 @@ package body Model_Runner.Qwen_Image.Decoder is
             end loop;
          end;
       end Product;
+
+      --  Target := C, a 3x3, applied to Source's pixels on the device, a
+      --  band of rows at a time -- each pixel normed by Gain first, SiLU
+      --  after, where Gain is given: the band laid out padded -- a pixel of
+      --  zeros either side, a row above and below -- and sent over once;
+      --  each tap a product reading it shifted, Width + 2 pixels to a row
+      --  down and one to a column across, and the nine summed on the
+      --  device as they are made; the answers in the padding columns
+      --  dropped as they are put.
+      procedure Apply_Taps
+        (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
+         Gain : T.Real_Array_Access := null) is
+         package P renames Model_Runner.Platform.Device.Products;
+         Ins     : constant Element_Count := Element_Count (C.Inputs);
+         Outs    : constant Element_Count := Element_Count (C.Outputs);
+         Ins_To  : constant Element_Count := C.Taps (0).Columns;
+         Fitted  : constant Element_Count := C.Taps (0).Rows;
+         Wide    : constant Element_Count := Width + 2;
+         Band    : constant Element_Count :=
+           Element_Count'Max (1, Element_Count'Min (Height, Element_Count'Max (Tap_Rows, Tap_Answers / Fitted) / Wide));
+         Padded, Answers : T.Real_Array_Access;
+         Row     : Element_Count := 0;
+      begin
+         T.Allocate ((Band + 2) * Wide * Ins_To, Padded);
+         T.Allocate (Band * Wide * Fitted, Answers);
+         if Padded = null or else Answers = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+         end if;
+         while Row < Height and then E.Is_Ok (Status) loop
+            declare
+               Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
+               Count     : constant Element_Count := Rows_Here * Wide - 2;
+               Lay       : aliased Pixel_Work :=
+                 (Kind => Pad_Rows, Source => Source, Target => Padded, Gain => Gain, Silu => True, Row => Row,
+                  Height => Height, Width => Width, Channels => Ins, Across => Ins_To, others => 0);
+               Put       : aliased Pixel_Work :=
+                 (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
+                  Row => Row * Width, Height => Height, Width => Width, Channels => Outs, Across => Fitted,
+                  Padded => Wide, others => 0);
+               Steps     : P.Sequence;
+               Added     : Boolean := True;
+               Sum       : Natural := 0;
+            begin
+               CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
+                                    Cost => (Rows_Here + 2) * Wide * Ins_To);
+               P.Open_Sequence (Steps);
+               for Tap in C.Taps'Range loop
+                  exit when not Added;
+                  Device.Add_View_Product_At
+                    (Steps, C.Taps (Tap),
+                     Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
+                  if Added and then Tap > 0 then
+                     P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum,
+                                 Kept => Tap = C.Taps'Last);
+                  end if;
+                  Sum := P.Length (Steps);
+               end loop;
+               if not Added then
+                  Status := E.Make (E.Backend_Capability_Missing);
+               elsif E.Is_Ok (Status) then
+                  Device.Run_Steps (Steps, Padded (0 .. (Rows_Here + 2) * Wide * Ins_To - 1), Positive (Count),
+                                    Answers (0)'Address, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  CPU.Dispatch_Shares (Pool, Rows_Here * Width, Put'Unchecked_Access, Status,
+                                       Cost => Rows_Here * Width * Outs);
+               end if;
+               Row := Row + Rows_Here;
+            end;
+         end loop;
+         T.Free (Padded);
+         T.Free (Answers);
+      end Apply_Taps;
 
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a
       --  product, a 3x3 as a product over each pixel's neighbourhood,
@@ -640,6 +829,10 @@ package body Model_Runner.Qwen_Image.Decoder is
             Product (C.Kernel, Source, Pixels, Answers);
             Put (0, Pixels);
             T.Free (Answers);
+            return;
+         end if;
+         if On_Device and then C.Tap_Owned /= null then
+            Apply_Taps (C, Source, Target);
             return;
          end if;
          declare
@@ -711,6 +904,94 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
       end Add;
 
+      --  Answer := the mid block's attention over Joint's Positions rows of
+      --  queries, keys and values, C each, as two products on the device:
+      --  the scores, every query against the keys laid out as a matrix of
+      --  halves, and the answer, the weights against the values laid out
+      --  transposed -- each matrix's rows padded with zeros to the 32 the
+      --  device's tile takes, the padding's scores dropped. The softmax
+      --  between them across the pool; both matrices given back after.
+      procedure Attend_On_Device (Joint, Answer : T.Real_Array_Access; Positions, C : Element_Count) is
+         Across  : constant Element_Count := (Positions + 31) / 32 * 32;
+         Keys_Of, Values_Of : B.Byte_Array_Access;
+         Keys, Values : T.View;
+         Queries, Scores : T.Real_Array_Access;
+      begin
+         B.Allocate (B.Byte_Count (Across * C * 2), Keys_Of);
+         B.Allocate (B.Byte_Count (C * Across * 2), Values_Of);
+         T.Allocate (Positions * C, Queries);
+         T.Allocate (Positions * Across, Scores);
+         if Keys_Of = null or else Values_Of = null or else Queries = null or else Scores = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+         else
+            declare
+               Key_Halves   : N.Half_Array (0 .. Across * C - 1) with Import, Address => Keys_Of.all'Address;
+               Value_Halves : N.Half_Array (0 .. C * Across - 1) with Import, Address => Values_Of.all'Address;
+               Row          : N.Real_Array (0 .. Across - 1);
+               Halves       : N.Half_Array (0 .. Across - 1);
+               Zeros        : N.Half_Array (0 .. C - 1);
+            begin
+               Model_Runner.Kernels.To_Halves ([for I in 0 .. C - 1 => 0.0], Zeros);
+               for P in 0 .. Positions - 1 loop
+                  Queries (P * C .. P * C + C - 1) := Joint (P * 3 * C .. P * 3 * C + C - 1);
+                  Model_Runner.Kernels.To_Halves
+                    (Joint (P * 3 * C + C .. P * 3 * C + 2 * C - 1), Key_Halves (P * C .. P * C + C - 1));
+               end loop;
+               for P in Positions .. Across - 1 loop
+                  Key_Halves (P * C .. P * C + C - 1) := Zeros;
+               end loop;
+               for Channel in 0 .. C - 1 loop
+                  Row := [others => 0.0];
+                  for P in 0 .. Positions - 1 loop
+                     Row (P) := Joint (P * 3 * C + 2 * C + Channel);
+                  end loop;
+                  Model_Runner.Kernels.To_Halves (Row, Halves);
+                  Value_Halves (Channel * Across .. Channel * Across + Across - 1) := Halves;
+               end loop;
+            end;
+            T.Make (Model_Runner.GGUF.Type_F16, Across, C, Keys_Of, 0, Keys, Status);
+            if E.Is_Ok (Status) then
+               T.Make (Model_Runner.GGUF.Type_F16, C, Across, Values_Of, 0, Values, Status);
+            end if;
+            Product (Keys, Queries, Positions, Scores);
+            if E.Is_Ok (Status) then
+               declare
+                  Job : aliased Softmax_Work :=
+                    (Scores => Scores, Positions => Positions, Across => Across,
+                     Scale => Real (1.0 / N.Sqrt (Wide (C))));
+               begin
+                  CPU.Dispatch_Shares (Pool, Positions, Job'Unchecked_Access, Status, Cost => Positions * Across * 4);
+               end;
+            end if;
+            Product (Values, Scores, Positions, Answer);
+            Device.Forget (Keys);
+            Device.Forget (Values);
+         end if;
+         B.Free (Keys_Of);
+         B.Free (Values_Of);
+         T.Free (Queries);
+         T.Free (Scores);
+      end Attend_On_Device;
+
+      --  Target := C applied to Source's pixels normed by Gain, SiLU
+      --  after: on the device the norm made as each band is laid out, which
+      --  is the one pass over the pixels rather than two; here into Y
+      --  first. Source, Target and Y are three buffers.
+      procedure Normed_Apply
+        (C : Convolution; Source : T.Real_Array_Access; Channels : Element_Count; Gain : T.Real_Array_Access;
+         Target : in out T.Real_Array_Access) is
+      begin
+         if On_Device and then C.Tap_Owned /= null then
+            Room (Target, Height * Width * Element_Count (C.Outputs));
+            if E.Is_Ok (Status) then
+               Apply_Taps (C, Source, Target, Gain);
+            end if;
+         else
+            Norm (Source, Channels, Gain, Y);
+            Apply (C, Y, Target);
+         end if;
+      end Normed_Apply;
+
       --  X := the residual block of X: norm, SiLU, 3x3, the same again,
       --  and the input (through a 1x1 where the width changes) added.
       procedure Block (R : Residual) is
@@ -718,21 +999,19 @@ package body Model_Runner.Qwen_Image.Decoder is
          Outs : constant Element_Count := Element_Count (R.Conv_1.Outputs);
          Kept : T.Real_Array_Access;
       begin
-         Norm (X, Ins, R.Norm_1, Y);
-         Apply (R.Conv_1, Y, Z);
-         Norm (Z, Outs, R.Norm_2, Y);
-         Apply (R.Conv_2, Y, Z);
+         Normed_Apply (R.Conv_1, X, Ins, R.Norm_1, Z);
+         Normed_Apply (R.Conv_2, Z, Outs, R.Norm_2, V);
          if E.Is_Error (Status) then
             return;
          end if;
          if R.Shortcut.Outputs > 0 then
             Apply (R.Shortcut, X, Kept);
-            Add (Z, Kept, Outs);
+            Add (V, Kept, Outs);
             T.Free (Kept);
          else
-            Add (Z, X, Outs);
+            Add (V, X, Outs);
          end if;
-         Swap (X, Z);
+         Swap (X, V);
       end Block;
    begin
       Picture := [others => 0.0];
@@ -769,7 +1048,9 @@ package body Model_Runner.Qwen_Image.Decoder is
             Norm (X, C, Item.Attention_Norm, Y, Silu => False);
             Apply (Item.Joint, Y, Z);
             Room (Y, Height * Width * C);
-            if E.Is_Ok (Status) then
+            if E.Is_Ok (Status) and then On_Device then
+               Attend_On_Device (Z, Y, Height * Width, C);
+            elsif E.Is_Ok (Status) then
                Job := (Joint => Z, Answer => Y, Positions => Height * Width, Width => C);
                   CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
                                     Cost => Height * Width * Height * Width * C);
@@ -829,7 +1110,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                     (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
                      Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
                      Factor => Factor, Repeats => Outs * Factor / Ins,
-                     Frame => Element_Count (Level_Of.Temporal) - 1);
+                     Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0);
                begin
                   Height := 2 * Height;
                   Width := 2 * Width;
@@ -847,8 +1128,7 @@ package body Model_Runner.Qwen_Image.Decoder is
 
       --  The head: norm, SiLU, conv_out; the planes out.
       if E.Is_Ok (Status) then
-         Norm (X, Element_Count (Widths (5)), Item.Norm_Out, Y);
-         Apply (Item.Conv_Out, Y, Z);
+         Normed_Apply (Item.Conv_Out, X, Element_Count (Widths (5)), Item.Norm_Out, Z);
       end if;
       if E.Is_Ok (Status) then
          for Pixel in 0 .. Height * Width - 1 loop
@@ -860,6 +1140,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       T.Free (X);
       T.Free (Y);
       T.Free (Z);
+      T.Free (V);
       T.Free (Chunk_In);
       T.Free (Chunk_Out);
    end Decode;

@@ -2307,6 +2307,30 @@ package body Model_Runner.Backend.Device is
          Added, Key => At_Offset (Weight.Base, Weight.Offset), Kept => Kept, From_Step => From_Step);
    end Add_View_Product;
 
+   -------------------------
+   -- Add_View_Product_At --
+   -------------------------
+
+   procedure Add_View_Product_At
+     (Steps     : in out Products.Sequence;
+      Weight    : T.View;
+      At_Vector : Natural;
+      Added     : out Boolean;
+      Kept      : Boolean := False)
+   is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+   begin
+      Packing_Of (Weight.Format, Packing, Known);
+      if not Known or else Weight.Base = System.Null_Address then
+         Added := False;
+         return;
+      end if;
+      Products.Add_Product
+        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing, Natural (Weight.Rows), Natural (Weight.Columns),
+         Added, Key => At_Offset (Weight.Base, Weight.Offset), Kept => Kept, At_Vector => At_Vector);
+   end Add_View_Product_At;
+
    ---------------
    -- Run_Steps --
    ---------------

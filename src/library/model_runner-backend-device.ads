@@ -1331,6 +1331,24 @@ package Model_Runner.Backend.Device is
       Added     : out Boolean;
       Kept      : Boolean := False);
 
+   --  A product step reading the caller's activation from At_Vector on,
+   --  each of Count vectors Weight's columns apart from there: a 3x3's tap
+   --  reading the pixels shifted, say.
+   --
+   --  @param Steps The sequence.
+   --  @param Weight The matrix.
+   --  @param At_Vector Where in the activation its first vector begins,
+   --    in elements.
+   --  @param Added False where the format is not one the device reads or
+   --    the sequence refused the step.
+   --  @param Kept Whether the host reads its answer.
+   procedure Add_View_Product_At
+     (Steps     : in out Model_Runner.Platform.Device.Products.Sequence;
+      Weight    : Model_Runner.Tensors.View;
+      At_Vector : Natural;
+      Added     : out Boolean;
+      Kept      : Boolean := False);
+
    --  Run a sequence the caller built, Count positions of it.
    --
    --  @param Steps The sequence.
