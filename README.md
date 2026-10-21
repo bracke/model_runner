@@ -832,9 +832,13 @@ through its own eight levels instead of forty. `--negative TEXT --cfg
 SCALE` leans each step away from what the picture is not to be -- two
 evaluations a step; at the default scale of one, none.
 
-Where a device opens, the text encoder, the denoiser's products and
-attention, and the VAE's convolutions run there: a 512 step about 9 s, a
-1024 step about 42 s (docs/plan-image-generation.md, step 7).
+Where a device opens, the text encoder, the denoiser's products,
+attention and feed-forward, and the VAE's convolutions run there. On the
+Radeon 780M a 1024 Turbo picture takes 3 min 42 s (steps of 20-22 s, the
+first 29 s) and a 512 picture in forty steps 3 min 33 s (steps of 4.2-5.3
+s) -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one,
+4.1 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
+image).
 
 `embed` prints what the model made of a text rather than what it would say
 next: the hidden state after the final normalization, before the projection
