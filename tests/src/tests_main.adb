@@ -85,6 +85,7 @@ with Tokenizer_Cross;
 with Quantize_Run;
 with Speed_Run;
 with Crossing;
+with Image_Crossing;
 with Tool_Commands;
 with Fuzzing;
 with Text_Fuzzing;
@@ -845,6 +846,40 @@ begin
          Model_Runner.Images.Free (Picture);
          if On_Device then
             Model_Runner.Backend.Device.Close;
+         end if;
+      end;
+   elsif Command = "image" then
+      --  Qwen-Image 2.1's rows and first steps against the reference's;
+      --  see Image_Crossing.
+      declare
+         function Option (Name : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return "";
+         end Option;
+
+         use Ada.Strings.Unbounded;
+         Expect : constant String := Option ("--expect");
+         Device : Boolean := False;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            Device := Device or else Ada.Command_Line.Argument (Index) = "--device";
+         end loop;
+         if Expect = "" then
+            Ada.Text_IO.Put_Line ("image: --expect FILE is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         elsif Image_Crossing.Run
+                 ((Expect => To_Unbounded_String (Expect), On_Device => Device,
+                   Model => To_Unbounded_String (Option ("--model")),
+                   Text_Encoder => To_Unbounded_String (Option ("--text-encoder")),
+                   VAE => To_Unbounded_String (Option ("--vae")),
+                   Reference => To_Unbounded_String (Option ("--reference")))) /= 0
+         then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
    elsif Command = "fuzz" then

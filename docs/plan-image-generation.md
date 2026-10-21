@@ -351,9 +351,20 @@ refitted -- each 3x3 tap-major, so a neighbourhood is nine whole runs of
 channels, and every kernel padded to rows and columns of 32, which took
 the full-size level's 144-channel products off the row kernel onto the
 matrix tile -- a 512 picture decodes in 7.5 s against 18-20, a 1024 one in
-about 34 s against 83; a 1024 Turbo picture in 6 min 6 s. Next: the activations kept on the device
-from one product to the next, as a language model's layer is, instead of
-crossing to the host and back for each.
+about 34 s against 83; a 1024 Turbo picture in 6 min 6 s. Then, on
+2026-10-21, a 1024 step from 38-39 s to 20.1: a step's whole batch in one
+device product rather than chunks of 128 (products 26.6 -> 19.8 s, the
+picture the same to the pixel); the keys and values halved into the
+cache across the pool (3.3 -> 0.55 s); the prompt's rows kept from the
+first step, as the reference's prefix cache keeps them; the gated
+feed-forward as one submission (30.9 -> 24.5), the queries, keys and
+values as one (22.8), and the image's queries asked at once with the
+blend projected on the device (20.1). The reference's own Vulkan build
+takes 4.1 s a 512 step. Next: the rest of the block on the device -- the
+modulated norms, the gated joins and the heads' turns -- which needs a
+step reading the step's modulation out of the cache, as a sink is read;
+what crosses to the host now is the norms' input and output and the
+queries, keys and values.
 
 Measured before it is promised; what the arithmetic predicts:
 
@@ -379,7 +390,10 @@ on time, and needs no new code once this works.
   noise: cosine 0.999 on the latent, 40 dB on the picture.
 - The suite holds each part to a binary64 computation on small fixtures,
   and the real model to `tests image --expect` with the reference's numbers
-  recorded, as `tests see` holds the vision encoders.
+  recorded, as `tests see` holds the vision encoders. **Done 2026-10-21**:
+  `tests/fixtures/image-crossing/`, the base file and Turbo, the encoder's
+  rows, the first two velocities and the decoded picture, on the processor
+  and the device.
 - The support matrix, the changelog and the measured figures say what was
   built and what it costs.
 
@@ -388,8 +402,11 @@ on time, and needs no new code once this works.
 ## Risks and open questions
 
 1. **The reference's support.** stable-diffusion.cpp runs this model and
-   these three files by name, prompt-prefix cache included; what is left is
-   building it here and checking its CPU picture against its Vulkan one.
+   these three files by name, prompt-prefix cache included. Built for
+   Vulkan too (`build-vulkan`, 2026-10-21): its 512 picture is 43.6-46.0
+   dB from its processor picture in red, green and blue, its velocities at
+   cosines of 0.9994 or better -- this program's device picture is closer
+   to the processor reference (48 dB) than the reference's own device one.
 2. **The layout questions in step 0** are answered from the reference's
    source; each still gets held to the reference's numbers, since a
    misread is a silent wrong picture.

@@ -240,8 +240,10 @@ private
       Query, Key, Value, Attention_Out : aliased T.View;
       Query_Norm, Key_Norm             : T.Real_Array_Access;
       --  The feed-forward: the gate and the up projection in one, the gate
-      --  first, then the way down.
+      --  first, then the way down; and the gate's rows and the up's apart,
+      --  views over the same bytes, for the device's gated block.
       Gate_Up, Feed_Out : aliased T.View;
+      Gate, Up          : T.View;
    end record;
 
    type Block_Array is array (Positive range <>) of Block;

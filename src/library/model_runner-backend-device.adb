@@ -2275,6 +2275,97 @@ package body Model_Runner.Backend.Device is
    -- Dispatch_Group --
    --------------------
 
+   --------------------------
+   -- Dispatch_Batch_Group --
+   --------------------------
+
+   procedure Dispatch_Batch_Group
+     (Weights : T.View_Group;
+      Vectors : T.Real_Array_Access;
+      Count   : Model_Runner.Numerics.Element_Count;
+      Into    : T.Target_Group;
+      Status  : out E.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Steps  : Products.Sequence;
+      Added  : Boolean;
+      Ok     : Boolean;
+      Cancelled : Boolean := False;
+      Asked  : Interfaces.Unsigned_64 := 0;
+      Places : Products.Address_List (1 .. Weights'Length);
+      None   : Model_Runner.Numerics.Real_Array (1 .. 0);
+   begin
+      Status := E.Success;
+
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+
+      if Weights'Length = 0 or else Weights'Length /= Into'Length or else Count < 1
+        or else Vectors = null
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      Products.Open_Sequence (Steps);
+      for Index in Weights'Range loop
+         declare
+            This    : T.View renames Weights (Index);
+            Answer  : T.Real_Array_Access renames Into (Into'First + (Index - Weights'First));
+            Packing : Products.Weight_Packing;
+            Known   : Boolean;
+         begin
+            Packing_Of (This.Format, Packing, Known);
+            if not Known then
+               Status := E.Make (E.Backend_Capability_Missing);
+               E.Add_Text
+                 (Status, "capability", Model_Runner.GGUF.Type_Name (This.Format), E.Param_Identifier);
+               E.Add_Text (Status, "backend", Backend_Name (Backend_Device), E.Param_Identifier);
+               return;
+            end if;
+            if This.Base = System.Null_Address
+              or else This.Columns /= Weights (Weights'First).Columns
+              or else Vectors.all'Length < Count * This.Columns
+              or else Answer = null
+              or else Answer.all'Length < Count * This.Rows
+            then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+            Products.Add_Product
+              (Steps, This.Base, This.Span, This.Offset, Packing, Natural (This.Rows), Natural (This.Columns),
+               Added, Key => At_Offset (This.Base, This.Offset));
+            if not Added then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               return;
+            end if;
+            Places (Index - Weights'First + 1) := Answer.all (Answer.all'First)'Address;
+            Asked := Interfaces.Unsigned_64'Max
+              (Asked, Interfaces.Unsigned_64 (This.Rows) * Products.Row_Bytes (Packing, Natural (This.Columns)));
+         end;
+      end loop;
+
+      Products.Run
+        (Engine, Steps,
+         Vectors.all (Vectors.all'First .. Vectors.all'First + Count * Weights (Weights'First).Columns - 1),
+         Positive (Count), None, Ok, Cancelled, Cancel, Kept_Into => Places);
+
+      if Ok then
+         Note_Timeline (Steps, Positive (Count));
+      end if;
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif Products.Is_Stalled (Engine) then
+         Status := E.Make (E.Backend_Device_Stalled);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device), E.Param_Identifier);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
+      elsif not Ok then
+         Declined (Status, Asked);
+      end if;
+   end Dispatch_Batch_Group;
+
    procedure Dispatch_Group
      (Weights : T.View_Group;
       Vector  : T.Real_Array_Access;

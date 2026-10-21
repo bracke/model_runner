@@ -41,6 +41,23 @@ generation rather than prompt evaluation, which is what the figure is about.
 
 No test reads it either. `tests speed` does.
 
+### `tests/fixtures/image-crossing/`
+
+What stable-diffusion.cpp (b13a48219d, through the `mr-reference`
+harness of docs/plan-image-generation.md, step 0, on the processor) made
+of "a red apple on a wooden table" at 512x512 from seed 42: three of the
+text encoder's rows, every second value, and the first two steps'
+velocities, every 32nd -- `apple-512.expect` for `qwen-image-2.1-Q8_0.gguf`
+at forty steps, `turbo-apple-512.expect` for the Turbo file at eight on
+the default scheduler. `tests image --expect` holds this build to them.
+`record.py` writes one afresh from a run's dump; the runs themselves --
+every velocity, the picture, a Vulkan run beside the processor's -- are
+kept outside the repository, in
+`~/.local/share/model_runner/reference/qwen-image-2.1/`, each with a
+README saying how it was made. The numbers are the reference's output on
+the published files, a few thousand values of activations; no weight is in
+them. Of the three files only Qwen3-VL's states a licence, Apache-2.0.
+
 ## Models that are **not** committed
 
 The following model is used for the optional `tests external-model` comparison.

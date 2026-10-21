@@ -15,6 +15,7 @@ package body Tool_Commands is
    Name_Render         : aliased constant String := "render";
    Name_Cross          : aliased constant String := "cross";
    Name_See            : aliased constant String := "see";
+   Name_Image          : aliased constant String := "image";
    Name_Records        : aliased constant String := "records";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
@@ -286,7 +287,16 @@ package body Tool_Commands is
      " --mmproj --image --frames --fps --threads --device --dump --expect"
      & " --repeats ";
 
-   Held : constant array (1 .. 35) of Command :=
+   Says_Image  : aliased constant String :=
+     "draw a picture's first two steps with Qwen-Image 2.1 and hold its "
+     & "rows and velocities to the reference's";
+   Takes_Image : aliased constant String :=
+     "--expect FILE [--device] [--model PATH] [--text-encoder PATH] "
+     & "[--vae PATH] [--reference DIR]";
+   Opts_Image  : aliased constant String :=
+     " --expect --device --model --text-encoder --vae --reference ";
+
+   Held : constant array (1 .. 36) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -322,6 +332,8 @@ package body Tool_Commands is
        Opts_Cross'Access),
       (Name_See'Access, Takes_See'Access, Says_See'Access,
        Opts_See'Access),
+      (Name_Image'Access, Takes_Image'Access, Says_Image'Access,
+       Opts_Image'Access),
       (Name_Records'Access, Takes_Records'Access, Says_Records'Access,
        Opts_Records'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,

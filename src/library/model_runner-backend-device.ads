@@ -1287,6 +1287,27 @@ package Model_Runner.Backend.Device is
       Cancel  : Model_Runner.Cancellation.Token_Reference := null;
       Apart   : Model_Runner.Numerics.Element_Count := 0);
 
+   --  Several products of the same batch, in one submission: Dispatch_Group
+   --  for Count vectors, each matrix's Count answers copied straight to its
+   --  own array. A batch's queries, keys and values read one normalized
+   --  input, which then goes over once rather than once a matrix.
+   --
+   --  @param Weights The matrices, in the order their results are wanted.
+   --  @param Vectors Count activations of the matrices' common width, one
+   --    after another.
+   --  @param Count How many.
+   --  @param Into Receives each matrix's Count results, one array apiece and
+   --    in the same order, each with room for its rows times Count.
+   --  @param Status Success, or why not, as Dispatch_Group says it.
+   --  @param Cancel Token a caller may set to ask for a stop.
+   procedure Dispatch_Batch_Group
+     (Weights : Model_Runner.Tensors.View_Group;
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count   : Model_Runner.Numerics.Element_Count;
+      Into    : Model_Runner.Tensors.Target_Group;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
    --  An empty table, for a caller that rotates nothing.
    No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=
      [others => 0.0];

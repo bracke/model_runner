@@ -354,6 +354,25 @@ trained to see the date was being shown July 2024 forever.
 | Rolling context | Implemented: `--context-shift N` drops the oldest N positions when the context fills and slides the rest down, `--context-keep N` leaves that many at the front in place. The keys move with the text -- each moved key is turned back by the angle those N positions stand for -- and a drafted run shifts both contexts together. What stays was computed while the dropped tokens were still there, so a rolling context is an approximation of the same text read afresh rather than an equivalent. Without the option a run that fills its context ends there |
 | Prompt cache | Implemented and on by default for a one-shot run -- `run` with `--prompt`, not the interactive session and not an agent turn. The prompt's committed prefix is snapshotted to `<cache home>/model_runner/prefill/<key>.kv` after the run and adopted before the next, so a second run sharing the first's opening reuses it rather than reading it again; the engine's own `Reuse_Committed_Prefix` finds how much of the two prefixes still matches. The key is the model, the key cache's precision and the value cache's, the context and the arithmetic, so a run whose geometry differs cannot read another's. `--no-cache` turns it off. A snapshot or an adoption that fails is caught and costs the next run a cache, never this one its answer |
 
+## Image generation
+
+`model_runner image` draws a picture from a prompt (docs/plan-image-generation.md).
+
+| Feature | State |
+| --- | --- |
+| Qwen-Image 2.1 | Implemented: its denoiser read from its GGUF -- a file that states nothing, known by its tensors' names under ComfyUI's `model.diffusion_model.` prefix or none and configured off their shapes (32 blocks of 4096, 32 heads of 128, a feed-forward of 12288, 64 latent channels on the published Q8_0 file) -- whose matrices may be any format this program reads. A file that says it is something else, lacks the modulation, misses a tensor or a block, or has one of the wrong shape is refused naming it (`MR-ARCH-*`); Qwen-Image's first version, which says `qwen_image` as the Turbo file does, is refused by its missing modulation |
+| Qwen-Image 2.1 Turbo | Implemented, `--turbo`: the distilled file (`qwen-image-2.1-turbo-Q8_0.gguf`) through its own eight levels, the reference's `qwen-image-2.1-turbo` preset; `--steps` other than eight is refused |
+| Text encoder | Implemented: Qwen3-VL-8B's language model (`qwen3vl`), the prompt in the reference's raw template, every token's state before the final norm kept and the system turn's dropped; on the device where it fits. Read, used and let go before the denoiser loads, the two together being 16 GB. Prompts of up to 4,096 tokens |
+| Sampling | Implemented: the reference's flow scheduler (the shift linear in the image's tokens, the levels stretched to end at 0.02), an Euler step a level, the seed's noise drawn by Philox as stable-diffusion.cpp's `--rng cuda` draws it, to the bit; `--steps` (40), `--seed` (42) |
+| Guidance | Implemented: `--negative TEXT --cfg SCALE` (1 to 30, 1 unless said), the velocity the negative's plus the scale times the difference, as the reference takes it; two evaluations a step, none extra at one |
+| The prompt's rows kept | Implemented: the prompt's keys and values in every block are kept from a picture's first step and the later steps carry the image's rows alone, as the reference's prefix cache does; a prompt whose rows would take more than a gigabyte is worked out afresh each step |
+| VAE decoder | Implemented: Qwen-Image 2.1's (Wan2.2-style) VAE read from its safetensors, BF16, F16 or F32; a latent decoded whole -- the mid block's residual blocks and attention, five levels doubling four times, the weightless shortcut, the head. Its convolutions on the device where one opens. No tiling: a 1024 picture's largest level is 1.2 GB of activations |
+| Device | Implemented: the denoiser's products, its attention, its feed-forward whole and its queries', keys' and values' products as one submission each; the cache written across the processor's workers; the norms, the modulation, the gates and the turns on the processor. A 1024 step on the 780M: 20.1 s with the prompt's rows kept, about 31 s the first. Whole pictures: see the README |
+| Sizes | Multiples of 16 a side; 1024x1024 unless said (`--size WxH`) |
+| Output | An RGBA PNG, each channel turned to a byte as the reference turns it, deflated through the zlib crate |
+| Checked against the reference | `tests image --expect` (the encoder's rows, the first two steps' velocities, the reference's 40-step latent decoded) on the processor and the device; the suite holds each part to a binary64 computation on small fixtures |
+| Not implemented | Pictures from pictures (editing, inpainting, a reference image), LoRA, other diffusion models, more than one picture a run, the VAE's encoder, tiled decoding |
+
 ## Backend
 
 Three, selected with `--backend`. The rows below say which of them each

@@ -499,6 +499,14 @@ package body Model_Runner.Qwen_Image is
                   Gain (Block_Named (At_Block, "attn.norm_k.weight"), Head, Layer.Key_Norm);
                   Matrix (Block_Named (At_Block, "img_mlp.out.weight"), Width, Feed, Layer.Feed_Out);
                   Matrix (Block_Named (At_Block, "img_mlp.gate_up.weight"), 2 * Feed, Width, Layer.Gate_Up);
+                  if E.Is_Ok (Status) then
+                     T.Make (Layer.Gate_Up.Format, Feed, Width, Item.Base, Item.Span, Layer.Gate_Up.Offset,
+                             Layer.Gate, Status);
+                  end if;
+                  if E.Is_Ok (Status) then
+                     T.Make (Layer.Gate_Up.Format, Feed, Width, Item.Base, Item.Span,
+                             Layer.Gate_Up.Offset + Layer.Gate_Up.Length / 2, Layer.Up, Status);
+                  end if;
                end;
             end loop;
             if E.Is_Error (Status) then
@@ -1088,11 +1096,16 @@ package body Model_Runner.Qwen_Image is
       --  A's rows := each live row's attention: on the device, the keys and
       --  values put in its cache, the image's rows asked over every key and
       --  the prompt's causally from the first of theirs; or across the pool.
-      procedure Attend is
+      --  On the device the image's rows ask in one call that projects the
+      --  blend through Way_Out as well, into Y, and Projected says so: the
+      --  blend never comes back. The prompt's rows, where they ask, ask
+      --  after, and theirs is projected from a copy of their few rows.
+      procedure Attend (Way_Out : T.View; Projected : out Boolean) is
          Job : aliased Attention_Work :=
            (Q => Q, K => K, V => V, A => A, Image => Image, Asking => Live, Total => Total, Width => W,
             Head => D, Heads => Heads);
       begin
+         Projected := False;
          if E.Is_Error (Status) then
             return;
          elsif not On_Device then
@@ -1159,11 +1172,32 @@ package body Model_Runner.Qwen_Image is
             if Ok then
                Place (Values_At, V);
             end if;
-            if Ok then
+            if Ok and then Image <= Device_Rows then
+               Device.Attend_And_Project
+                 (Q (0 .. Image * W - 1), Natural (Heads), Natural (D), Natural (D), 1, 0, Natural (Total - 1),
+                  Keys_At, Values_At, Natural (W), Natural (W), N.Real (1.0 / N.Sqrt (N.Wide_Real (D))), 0.0,
+                  Way_Out, Y, Ok, Positions => Natural (Image), Causal => False);
+               Projected := Ok;
+            elsif Ok then
                Ask (0, Image, Causal => False);
             end if;
             if Ok and then not Reuse and then Prompt > 0 then
                Ask (Image, Prompt, Causal => True);
+               if Ok and then Projected then
+                  declare
+                     Blend, Answer : T.Real_Array_Access;
+                  begin
+                     T.Allocate (Prompt * W, Blend);
+                     T.Allocate (Prompt * W, Answer);
+                     Blend.all := A (Image * W .. Total * W - 1);
+                     Product (Way_Out, Blend, Prompt, Answer);
+                     if E.Is_Ok (Status) then
+                        Y (Image * W .. Total * W - 1) := Answer.all;
+                     end if;
+                     T.Free (Blend);
+                     T.Free (Answer);
+                  end;
+               end if;
             end if;
             if not Ok then
                Status := E.Make (E.Backend_Capability_Missing);
@@ -1383,11 +1417,20 @@ package body Model_Runner.Qwen_Image is
             Layer  : Block renames Item.Layers (Index);
             Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
             Tail    : constant Element_Count := Image * W;
+            Projected : Boolean;
          begin
             Share (Norm_Rows, Part => 0);
-            Product (Layer.Query, H, Live, Q);
-            Product (Layer.Key, H, Live, K);
-            Product (Layer.Value, H, Live, V);
+            --  On the device the three read their input as one submission.
+            if On_Device and then Live <= Device_Rows then
+               if E.Is_Ok (Status) then
+                  Device.Dispatch_Batch_Group
+                    ([Layer.Query, Layer.Key, Layer.Value], H, Live, [Q, K, V], Status);
+               end if;
+            else
+               Product (Layer.Query, H, Live, Q);
+               Product (Layer.Key, H, Live, K);
+               Product (Layer.Value, H, Live, V);
+            end if;
             Share_Turns (Layer.Query_Norm, Layer.Key_Norm);
             if E.Is_Ok (Status) and then Reuse then
                K (Tail .. Total * W - 1) := Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1);
@@ -1396,14 +1439,24 @@ package body Model_Runner.Qwen_Image is
                Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1) := K (Tail .. Total * W - 1);
                Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1) := V (Tail .. Total * W - 1);
             end if;
-            Attend;
-            Product (Layer.Attention_Out, A, Live, Y);
+            Attend (Layer.Attention_Out, Projected);
+            if not Projected then
+               Product (Layer.Attention_Out, A, Live, Y);
+            end if;
             Share (Gate_Add, Part => 1);
             Share (Norm_Rows, Part => 2);
-            --  The gate's half first, the up projection's second.
-            Product (Layer.Gate_Up, H, Live, G);
-            Share (Gated_Silu);
-            Product (Layer.Feed_Out, Y, Live, A);
+            --  The gate's half first, the up projection's second: on the
+            --  device as one submission, the arms and their product never
+            --  coming back.
+            if On_Device and then Live <= Device_Rows then
+               if E.Is_Ok (Status) then
+                  Device.Dispatch_Gated (Layer.Gate, Layer.Up, Layer.Feed_Out, H, Live, 0, A, Status);
+               end if;
+            else
+               Product (Layer.Gate_Up, H, Live, G);
+               Share (Gated_Silu);
+               Product (Layer.Feed_Out, Y, Live, A);
+            end if;
             Share (Gate_Add, Part => 3);
          end;
       end loop;
