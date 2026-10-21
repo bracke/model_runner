@@ -5,6 +5,7 @@ with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Model_Runner.Philox;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.Platform;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
@@ -996,6 +997,8 @@ package body Model_Runner.Qwen_Image is
       Keep    : constant Boolean :=
         not Reuse and then Prompt > 0 and then Kept * 8 <= Most_Kept;
       Live    : constant Element_Count := (if Reuse then Image else Total);
+      --  Whether the blocks ran on the device whole.
+      Resident : Boolean := False;
       X, H, Q, K, V, A, G, Y : T.Real_Array_Access;
       --  The time's two rows: the step's, then nought's; and what the
       --  modulation and the last norm make of them.
@@ -1205,6 +1208,225 @@ package body Model_Runner.Qwen_Image is
          end;
       end Attend;
 
+      --  Every block on the device as one submission, the activation left
+      --  there from one to the next and back after the last: the norms are
+      --  the device's centred one with a gain of one plus the step's scale
+      --  and no shift, and a gated join is the gate broadcast into an arm
+      --  -- a norm whose gain is nought and whose shift is the gate --
+      --  multiplied into the projection and added to the residual. The
+      --  four vectors are the step's, made resident afresh each step. For
+      --  a step that reads the kept prompt rows, whose keys and values are
+      --  put behind the image's in the cache before each block. Done is
+      --  False, and nothing changed, where the device would not take the
+      --  first block.
+      procedure Resident_Blocks (Done : out Boolean) is
+         package P renames Model_Runner.Platform.Device.Products;
+         Keys_At   : constant Element_Count := 0;
+         Values_At : constant Element_Count := Total * W;
+         Vectors   : T.Real_Array_Access;
+         Ok        : Boolean := True;
+
+         type Wide_Access is access N.Wide_Real_Array;
+         procedure Free_Table is new Ada.Unchecked_Deallocation (N.Wide_Real_Array, Wide_Access);
+         Turns : Wide_Access;
+
+         --  Where the k-th of the four vectors begins: gain and shift.
+         function Vector_At (K : Element_Count) return System.Address is (Vectors (K * 2 * W)'Address);
+
+         procedure Forget_Vectors is
+         begin
+            for K in Element_Count range 0 .. 3 loop
+               declare
+                  Held : T.View;
+               begin
+                  Held.Base := Vector_At (K);
+                  Held.Offset := 0;
+                  Device.Forget (Held);
+               end;
+            end loop;
+         end Forget_Vectors;
+
+         --  Halves of the kept rows into the copy, behind the image's.
+         procedure Put_Kept (Into : Element_Count; From : T.Real_Array_Access; At_Kept : Element_Count) is
+            Proper, Copy : System.Address;
+         begin
+            Device.Cache_Places (Into + Image * W, Prompt * W, Proper, Copy);
+            if Copy = System.Null_Address then
+               Ok := False;
+               return;
+            end if;
+            declare
+               Halves : N.Half_Array (0 .. Prompt * W - 1) with Import, Address => Copy;
+            begin
+               Model_Runner.Kernels.To_Halves (From (At_Kept .. At_Kept + Prompt * W - 1), Halves);
+            end;
+         end Put_Kept;
+      begin
+         Done := False;
+         if not Device.Attends_By_Matrix (Natural (Image), Natural (D), Natural (D)) then
+            return;
+         end if;
+         T.Allocate (8 * W, Vectors);
+         Turns := new N.Wide_Real_Array (0 .. Image * Pairs * 2 - 1);
+         for I in 0 .. W - 1 loop
+            Vectors (I) := 1.0 + Modulation (I);
+            Vectors (W + I) := 0.0;
+            Vectors (2 * W + I) := 0.0;
+            Vectors (3 * W + I) := Gates (W + I);
+            Vectors (4 * W + I) := 1.0 + Modulation (2 * W + I);
+            Vectors (5 * W + I) := 0.0;
+            Vectors (6 * W + I) := 0.0;
+            Vectors (7 * W + I) := Gates (3 * W + I);
+         end loop;
+         for I in 0 .. Image * Pairs - 1 loop
+            Turns (2 * I) := N.Wide_Real (Angles_Cos (I));
+            Turns (2 * I + 1) := N.Wide_Real (Angles_Sin (I));
+         end loop;
+         Forget_Vectors;
+         Device.Reserve_Cache (2 * Total * W, 2 * Total * W, Ok);
+         for Index in Item.Layers'Range loop
+            exit when not Ok or else E.Is_Error (Status);
+            declare
+               Layer   : Block renames Item.Layers (Index);
+               First   : constant Boolean := Index = Item.Layers'First;
+               Last    : constant Boolean := Index = Item.Layers'Last;
+               At_Kept : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
+               Steps   : P.Sequence;
+               Added   : Boolean := True;
+               Normed, Query, Key, Value, Turned, Blend, Answer, Gated, Joined, Gate, Up, Down : Natural := 0;
+               Vector_Bytes : constant Model_Runner.Bytes.Byte_Count := Model_Runner.Bytes.Byte_Count (2 * W * 4);
+
+               procedure Mark (Into : out Natural) is
+               begin
+                  Into := P.Length (Steps);
+               end Mark;
+
+               --  The gate K broadcast into an arm, laid on the step Arm.
+               procedure Gate_Of (K : Element_Count; Arm : Natural) is
+                  Broad : Natural;
+               begin
+                  if Added then
+                     P.Add_Norm (Steps, Vector_At (K), Vector_Bytes, 0, Natural (W), N.Real (Epsilon), Added,
+                                 From_Step => Arm, Key => Vector_At (K), Kept => False, Shift => True);
+                     Mark (Broad);
+                  end if;
+                  if Added then
+                     P.Add_Combination (Steps, 8, Added, Kept => False, From_Step => Arm, Other_Step => Broad);
+                  end if;
+               end Gate_Of;
+            begin
+               --  The block before may still be running, reading the
+               --  cache these rows go into.
+               if not First then
+                  Device.Finish_All (Ok);
+                  if not Ok then
+                     Status := E.Make (E.Backend_Capability_Missing);
+                     exit;
+                  end if;
+               end if;
+               Put_Kept (Keys_At, Prefix.Keys, At_Kept);
+               Put_Kept (Values_At, Prefix.Values, At_Kept);
+               exit when not Ok;
+               P.Open_Sequence (Steps);
+               P.Add_Norm (Steps, Vector_At (0), Vector_Bytes, 0, Natural (W), N.Real (Epsilon), Added,
+                           Key => Vector_At (0), Kept => False, Shift => True);
+               Mark (Normed);
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Query, Normed, Added);
+                  Mark (Query);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Key, Normed, Added);
+                  Mark (Key);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Value, Normed, Added);
+                  Mark (Value);
+               end if;
+               if Added then
+                  P.Add_Heads
+                    (Steps, Query, Positive (Heads), Positive (D), Natural (D), P.Interleaved, Turns.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Turns'Length) * 8, N.Real (Epsilon), Added,
+                     Weight => Layer.Query_Norm.all'Address,
+                     Weight_Span => Model_Runner.Bytes.Byte_Count (D) * 4,
+                     Key => Layer.Query_Norm.all'Address, Kept => False);
+                  Mark (Turned);
+               end if;
+               if Added then
+                  P.Add_Heads
+                    (Steps, Key, Positive (Heads), Positive (D), Natural (D), P.Interleaved, Turns.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Turns'Length) * 8, N.Real (Epsilon), Added,
+                     Weight => Layer.Key_Norm.all'Address,
+                     Weight_Span => Model_Runner.Bytes.Byte_Count (D) * 4,
+                     Key => Layer.Key_Norm.all'Address,
+                     Into_Cache => True, At_First => Keys_At, Stride => Natural (W),
+                     V_Step => Value, V_At_First => Values_At, V_Stride => Natural (W), Kept => False);
+               end if;
+               if Added then
+                  P.Add_Attention
+                    (Steps, Natural (Heads), Natural (D), Natural (D), 1, 0, Natural (Total - 1), Keys_At, Values_At,
+                     Natural (W), Natural (W), N.Real (1.0 / N.Sqrt (N.Wide_Real (D))), 0.0, Added,
+                     Chained => True, Causal => False, Kept => False, From_Step => Turned);
+                  Mark (Blend);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Attention_Out, Blend, Added);
+                  Mark (Answer);
+               end if;
+               Gate_Of (1, Answer);
+               Mark (Gated);
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => Gated, From_Vector => 0, Kept => False);
+                  Mark (Joined);
+               end if;
+               if Added then
+                  P.Add_Norm (Steps, Vector_At (2), Vector_Bytes, 0, Natural (W), N.Real (Epsilon), Added,
+                              From_Step => Joined, Key => Vector_At (2), Kept => False, Shift => True);
+                  Mark (Normed);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Gate, Normed, Added);
+                  Mark (Gate);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Up, Normed, Added);
+                  Mark (Up);
+               end if;
+               if Added then
+                  P.Add_Combination (Steps, 0, Added, Kept => False, From_Step => Gate, Other_Step => Up);
+               end if;
+               if Added then
+                  Device.Add_View_Product (Steps, Layer.Feed_Out, P.Length (Steps), Added);
+                  Mark (Down);
+               end if;
+               Gate_Of (3, Down);
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Joined, Kept => Last);
+               end if;
+               if not Added then
+                  if First then
+                     Ok := False;
+                  else
+                     Status := E.Make (E.Backend_Capability_Missing);
+                  end if;
+                  exit;
+               end if;
+               Device.Run_Steps
+                 (Steps, X (0 .. Image * W - 1), Positive (Image),
+                  (if Last then X (0)'Address else System.Null_Address), Status,
+                  Carry_In => not First, Carry_Out => not Last);
+               if E.Is_Error (Status) and then First then
+                  Status := E.Success;
+                  Ok := False;
+               end if;
+            end;
+         end loop;
+         Forget_Vectors;
+         T.Free (Vectors);
+         Free_Table (Turns);
+         Done := Ok;
+      end Resident_Blocks;
+
       --  The rows' work of one kind, across the pool.
       procedure Share (Kind : Host_Kind; Part : Element_Count := 0) is
          Job : aliased Host_Work :=
@@ -1409,10 +1631,14 @@ package body Model_Runner.Qwen_Image is
          end if;
       end if;
 
-      --  The blocks: the prompt's keys and values kept from each, or put
+      --  The blocks: on the device whole where the prompt's rows are kept;
+      --  else here, the prompt's keys and values kept from each, or put
       --  back behind the image's.
+      if On_Device and then Reuse and then Image <= Device_Rows and then E.Is_Ok (Status) then
+         Resident_Blocks (Resident);
+      end if;
       for Index in Item.Layers'Range loop
-         exit when E.Is_Error (Status);
+         exit when E.Is_Error (Status) or else Resident;
          declare
             Layer  : Block renames Item.Layers (Index);
             Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;

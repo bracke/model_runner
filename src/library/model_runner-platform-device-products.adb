@@ -9967,6 +9967,11 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Cache;
 
+   procedure Finish_All (Item : in out Engine; Ok : out Boolean) is
+   begin
+      Settle (Item, Ok);
+   end Finish_All;
+
    ------------------
    -- Cache_Places --
    ------------------
@@ -13266,7 +13271,7 @@ package body Model_Runner.Platform.Device.Products is
                  elsif not Alone
                  then Steps.Items (First).Rows /= Steps.Items (Second).Rows
                  else False)
-        or else Unit > 7
+        or else Unit > 8
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -14752,7 +14757,11 @@ package body Model_Runner.Platform.Device.Products is
       if Vectors'Length
            < Model_Runner.Numerics.Element_Count (Steps.Items (1).Columns)
              * Model_Runner.Numerics.Element_Count (Count)
-        or else (Kept_Into'Length = 0 and then Target'Length < Wanted)
+        --  Room for every step's answer where any is kept, since each is
+        --  indexed past the ones before it; a sequence keeping none, whose
+        --  answer stays on the device, writes nothing there.
+        or else (Kept_Into'Length = 0 and then Target'Length < Wanted
+                 and then (for some Index in 1 .. Steps.Held => Steps.Items (Index).Kept))
       then
          return;
       end if;

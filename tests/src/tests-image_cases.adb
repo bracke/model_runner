@@ -1483,11 +1483,15 @@ package body Tests.Image_Cases is
          declare
             Prefix : Q.Prefix_Cache;
             Within : constant Long_Float := (if On_Device then 2.0E-3 else 1.0E-4);
+            --  A step reading kept rows runs every block on the device as
+            --  one sequence: 2.2e-4 of the largest value, where turning by
+            --  the angles' sines and cosines swapped made 1.2e-3.
+            Reading : constant Long_Float := (if On_Device then 6.0E-4 else 1.0E-4);
          begin
             Held (Text, 500.0, Prefix, "a step keeping the prompt's rows", Within);
-            Held (Text, 300.0, Prefix, "a step reading them at another time", Within);
+            Held (Text, 300.0, Prefix, "a step reading them at another time", Reading);
             Held (Other, 300.0, Prefix, "a step for another prompt", Within);
-            Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Within);
+            Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Reading);
             Q.Forget (Prefix);
          end;
          Q.Close (Model);

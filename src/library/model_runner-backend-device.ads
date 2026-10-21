@@ -788,6 +788,12 @@ package Model_Runner.Backend.Device is
       Head_Size  : Natural;
       Value_Size : Natural) return Boolean;
 
+   --  Wait for everything in flight on the device; see Products.Finish_All.
+   --
+   --  @param Ok False where no device is open, a submission failed or the
+   --    device stalled.
+   procedure Finish_All (Ok : out Boolean);
+
    --  Where Put_Cache would write a run; see Products.Cache_Places. Both
    --  Null_Address where no device is open.
    --
@@ -1307,6 +1313,44 @@ package Model_Runner.Backend.Device is
       Into    : Model_Runner.Tensors.Target_Group;
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  A product step reading a step before it, added to a sequence the
+   --  caller builds with Products' own calls -- the matrix named by its
+   --  view, kept on the device by where it lies, as every product here is.
+   --
+   --  @param Steps The sequence.
+   --  @param Weight The matrix.
+   --  @param From_Step The step whose answer it reads.
+   --  @param Added False where the format is not one the device reads or the
+   --    sequence refused the step.
+   --  @param Kept Whether the host reads its answer.
+   procedure Add_View_Product
+     (Steps     : in out Model_Runner.Platform.Device.Products.Sequence;
+      Weight    : Model_Runner.Tensors.View;
+      From_Step : Positive;
+      Added     : out Boolean;
+      Kept      : Boolean := False);
+
+   --  Run a sequence the caller built, Count positions of it.
+   --
+   --  @param Steps The sequence.
+   --  @param Vectors Count activations, unread where Carry_In says the
+   --    activation is the one the last sequence left on the device.
+   --  @param Count How many positions.
+   --  @param Into Where the one step the sequence keeps is copied, or
+   --    Null_Address where it keeps none.
+   --  @param Status Success; or why not, as a product says it.
+   --  @param Carry_In Whether the activation is the one left on the device.
+   --  @param Carry_Out Whether the last step's answer stays there for the
+   --    next sequence.
+   procedure Run_Steps
+     (Steps     : Model_Runner.Platform.Device.Products.Sequence;
+      Vectors   : Model_Runner.Tensors.Real_Array;
+      Count     : Positive;
+      Into      : System.Address;
+      Status    : out Model_Runner.Errors.Error_Info;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False);
 
    --  An empty table, for a caller that rotates nothing.
    No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=

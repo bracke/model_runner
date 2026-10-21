@@ -2599,6 +2599,14 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine.
    procedure Release_Cache (Item : in out Engine);
 
+   --  Wait for everything in flight, as the host must before it writes
+   --  what a submission may still be reading -- the cache, through
+   --  Cache_Places, while a carried sequence runs on.
+   --
+   --  @param Item Ready engine.
+   --  @param Ok False where a submission failed or the device stalled.
+   procedure Finish_All (Item : in out Engine; Ok : out Boolean);
+
    --  Where Put_Cache would write a run of Count values: the cache
    --  proper's room in binary32 and the half-precision copy's, each
    --  Null_Handle where that place does not hold the run. For a caller

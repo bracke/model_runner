@@ -834,10 +834,10 @@ evaluations a step; at the default scale of one, none.
 
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
-Radeon 780M a 1024 Turbo picture takes 3 min 42 s (steps of 20-22 s, the
-first 29 s) and a 512 picture in forty steps 3 min 33 s (steps of 4.2-5.3
-s) -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one,
-4.1 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
+Radeon 780M a 1024 Turbo picture takes 3 min 1 s (steps of 15 s, the
+first 29 s) and a 512 picture in forty steps 2 min 32 s (steps of 3.2 s)
+-- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1
+s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
 image).
 
 `embed` prints what the model made of a text rather than what it would say

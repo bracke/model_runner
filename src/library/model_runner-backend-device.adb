@@ -1612,6 +1612,14 @@ package body Model_Runner.Backend.Device is
        and then Products.Attends_By_Matrix
                   (Engine, Positions, Head_Size, Value_Size));
 
+   procedure Finish_All (Ok : out Boolean) is
+   begin
+      Ok := False;
+      if Ready_Now then
+         Products.Finish_All (Engine, Ok);
+      end if;
+   end Finish_All;
+
    ------------------
    -- Cache_Places --
    ------------------
@@ -2274,6 +2282,69 @@ package body Model_Runner.Backend.Device is
    --------------------
    -- Dispatch_Group --
    --------------------
+
+   ----------------------
+   -- Add_View_Product --
+   ----------------------
+
+   procedure Add_View_Product
+     (Steps     : in out Products.Sequence;
+      Weight    : T.View;
+      From_Step : Positive;
+      Added     : out Boolean;
+      Kept      : Boolean := False)
+   is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+   begin
+      Packing_Of (Weight.Format, Packing, Known);
+      if not Known or else Weight.Base = System.Null_Address then
+         Added := False;
+         return;
+      end if;
+      Products.Add_Chained_Product
+        (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing, Natural (Weight.Rows), Natural (Weight.Columns),
+         Added, Key => At_Offset (Weight.Base, Weight.Offset), Kept => Kept, From_Step => From_Step);
+   end Add_View_Product;
+
+   ---------------
+   -- Run_Steps --
+   ---------------
+
+   procedure Run_Steps
+     (Steps     : Products.Sequence;
+      Vectors   : T.Real_Array;
+      Count     : Positive;
+      Into      : System.Address;
+      Status    : out E.Error_Info;
+      Carry_In  : Boolean := False;
+      Carry_Out : Boolean := False)
+   is
+      Ok        : Boolean;
+      Cancelled : Boolean := False;
+      None      : Model_Runner.Numerics.Real_Array (1 .. 0);
+      One       : constant Products.Address_List (1 .. 1) := [Into];
+   begin
+      Status := E.Success;
+      if not Ready_Now then
+         Status := E.Make (E.Backend_Closed);
+         return;
+      end if;
+      Products.Run
+        (Engine, Steps, Vectors, Count, None, Ok, Cancelled, null, Carry_In => Carry_In, Carry_Out => Carry_Out,
+         Kept_Into => (if Into = System.Null_Address then Products.No_Places else One));
+      if Ok then
+         Note_Timeline (Steps, Count);
+      elsif Products.Is_Stalled (Engine) then
+         Status := E.Make (E.Backend_Device_Stalled);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device), E.Param_Identifier);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Opened_Patience));
+      else
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "sequence", E.Param_Identifier);
+         E.Add_Text (Status, "backend", Backend_Name (Backend_Device), E.Param_Identifier);
+      end if;
+   end Run_Steps;
 
    --------------------------
    -- Dispatch_Batch_Group --
