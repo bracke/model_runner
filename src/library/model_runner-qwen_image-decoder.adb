@@ -203,12 +203,36 @@ package body Model_Runner.Qwen_Image.Decoder is
          end;
       end Convolve;
 
+      --  C's Fit, out of the gain of the norm before it.
+      procedure Fit (Gain : T.Real_Array_Access; C : in out Convolution) is
+      begin
+         if E.Is_Error (Status) or else Gain = null or else C.Tap_Owned = null then
+            return;
+         end if;
+         declare
+            Ins    : constant Element_Count := Element_Count (C.Inputs);
+            Ins_To : constant Element_Count := C.Taps (0).Columns;
+            Root   : constant Real := Real (N.Sqrt (Wide (Ins) / Wide (Ins_To)));
+         begin
+            T.Allocate (Ins_To, C.Fit);
+            if C.Fit = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            for I in 0 .. Ins_To - 1 loop
+               C.Fit (I) := (if I < Ins then Gain (Gain'First + I) * Root else 0.0);
+            end loop;
+         end;
+      end Fit;
+
       procedure Residual_Of (Name : String; Inputs, Outputs : Positive; Result : out Residual) is
       begin
          Vector (Name & ".norm1.gamma", Inputs, Result.Norm_1);
          Convolve (Name & ".conv1", Inputs, Outputs, 3, Result.Conv_1);
+         Fit (Result.Norm_1, Result.Conv_1);
          Vector (Name & ".norm2.gamma", Outputs, Result.Norm_2);
          Convolve (Name & ".conv2", Outputs, Outputs, 3, Result.Conv_2);
+         Fit (Result.Norm_2, Result.Conv_2);
          if Inputs /= Outputs then
             Convolve (Name & ".conv_shortcut", Inputs, Outputs, 1, Result.Shortcut);
          end if;
@@ -294,6 +318,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       end loop;
       Vector ("decoder.norm_out.gamma", Widths (5), Item.Norm_Out);
       Convolve ("decoder.conv_out", Widths (5), Picture_Channels, 3, Item.Conv_Out);
+      Fit (Item.Norm_Out, Item.Conv_Out);
       if E.Is_Error (Status) then
          declare
             Kept : constant E.Error_Info := Status;
@@ -316,6 +341,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          T.Free (C.Bias);
          B.Free (C.Owned);
          B.Free (C.Tap_Owned);
+         T.Free (C.Fit);
          C := (others => <>);
       end Let_Go;
 
@@ -604,13 +630,19 @@ package body Model_Runner.Qwen_Image.Decoder is
             end loop;
          when Put_Answers =>
             for Pixel in First .. Last loop
-               for C in 0 .. Ins - 1 loop
-                  Item.Target ((Item.Row + Pixel) * Ins + C) :=
-                    Item.Source
-                      ((if Item.Padded > 0 then (Pixel / Item.Width) * Item.Padded + Pixel rem Item.Width else Pixel)
-                       * Item.Across + C)
-                    + Item.Gain (C);
-               end loop;
+               declare
+                  From : constant Element_Count :=
+                    (if Item.Padded > 0 then (Pixel / Item.Width) * Item.Padded + Pixel rem Item.Width else Pixel)
+                    * Item.Across;
+                  Into : constant Element_Count := (Item.Row + Pixel) * Ins;
+                  Answer : N.Real_Array renames Item.Source (From .. From + Ins - 1);
+                  Put_In : N.Real_Array renames Item.Target (Into .. Into + Ins - 1);
+                  Bias   : N.Real_Array renames Item.Gain (Item.Gain'First .. Item.Gain'First + Ins - 1);
+               begin
+                  for C in 0 .. Ins - 1 loop
+                     Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C);
+                  end loop;
+               end;
             end loop;
          when Norm_Pixels =>
             for Pixel in First .. Last loop
@@ -732,6 +764,8 @@ package body Model_Runner.Qwen_Image.Decoder is
          Band    : constant Element_Count :=
            Element_Count'Max (1, Element_Count'Min (Height, Element_Count'Max (Tap_Rows, Tap_Answers / Fitted) / Wide));
          Row     : Element_Count := 0;
+         --  Whether the norm is the device's, ahead of the taps.
+         On_Device_Norm : constant Boolean := Gain /= null and then C.Fit /= null;
       begin
          --  The band is laid out straight into the device's own memory and
          --  the answers put from where the device left them: neither goes
@@ -755,12 +789,33 @@ package body Model_Runner.Qwen_Image.Decoder is
                declare
                   Padded : aliased N.Real_Array (0 .. Values - 1) with Import, Address => Room_At;
                   Lay    : aliased Pixel_Work :=
-                    (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access, Gain => Gain,
-                     Silu => True, Row => Row, Height => Height, Width => Width, Channels => Ins, Across => Ins_To,
-                     others => 0);
+                    (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access,
+                     Gain => (if On_Device_Norm then null else Gain), Silu => True, Row => Row, Height => Height,
+                     Width => Width, Channels => Ins, Across => Ins_To, others => 0);
                begin
                   CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
                                        Cost => (Rows_Here + 2) * Wide * Ins_To);
+                  --  The band normed and its SiLU taken on the device, where
+                  --  the gain is fitted for it, and left there for the taps:
+                  --  a pixel of zeros stays zeros.
+                  if On_Device_Norm and then E.Is_Ok (Status) then
+                     declare
+                        First : P.Sequence;
+                     begin
+                        P.Open_Sequence (First);
+                        P.Add_Norm (First, C.Fit.all'Address, B.Byte_Count (Ins_To) * 4, 0, Natural (Ins_To),
+                                    1.0E-12, Added, Key => C.Fit.all'Address, Kept => False);
+                        if Added then
+                           P.Add_Combination (First, 4, Added, Kept => False);
+                        end if;
+                        if Added then
+                           Device.Run_Steps (First, Padded, Positive ((Rows_Here + 2) * Wide), System.Null_Address,
+                                             Status, Carry_In => True, Carry_Out => True);
+                        else
+                           Status := E.Make (E.Backend_Capability_Missing);
+                        end if;
+                     end;
+                  end if;
                   P.Open_Sequence (Steps);
                   for Tap in C.Taps'Range loop
                      exit when not Added;

@@ -108,6 +108,11 @@ private
       --  a kernel of a format laid out otherwise.
       Tap_Owned : Model_Runner.Bytes.Byte_Array_Access;
       Taps      : Tap_Views;
+      --  The gain of the norm before a 3x3, where one is, fitted to the
+      --  taps' padded channels for the device's norm: times the root of the
+      --  channels over the padded channels, since that norm's mean is over
+      --  the padded ones, and nought past the channels. Null for none.
+      Fit       : T.Real_Array_Access;
       Bias     : T.Real_Array_Access;
       Inputs   : Natural := 0;
       Outputs  : Natural := 0;
