@@ -27381,13 +27381,14 @@ panels BE443BE004C17F22 src/library/model_runner-quantization-interleave.ads src
 # wooden table"` timed whole by /usr/bin/time, the device opened unasked,
 # each block of a step reading the kept prompt rows one device sequence:
 #
-#   --turbo --size 1024x1024   153.4 s, peak 6.5 GB resident; steps 22.4,
-#                              15.0-15.1 s; the decoder 14.1-15.6 s timed
-#                              apart in two one-step runs (the device's
-#                              own time varies 9.4-10.8 s between them),
-#                              against 15.8-15.9 with the norms on the
-#                              host and 17.2 before the bands went
-#                              straight into the device's memory
+#   --turbo --size 1024x1024   149.9 s, peak 6.5 GB resident; steps 22.2,
+#                              15.0-15.1 s; of the rest, the text encoder
+#                              about 5.6 s, the decoder about 13.5-15.6,
+#                              its opening 1.1 (1.8 before its relayouts
+#                              moved words) and the PNG 0.36 (2.13 before
+#                              the Sub filter and the fixed codes); 153.4
+#                              s with the norms on the device and the old
+#                              PNG
 #   --size 512x512 --steps 40  146.7 s, peak 2.8 GB; steps 9.1, 3.2 s
 #
 #   Before the VAE's 3x3s went as nine shifted products and its attention
@@ -27407,12 +27408,13 @@ panels BE443BE004C17F22 src/library/model_runner-quantization-interleave.ads src
 #   the gated feed-forward 24.5; the queries, keys and values grouped 22.8;
 #   the blend projected on the device 20.1; the block whole 15.0.
 #
-# load: one-minute average 0.94 before the Turbo run, 1.64 before the 512 one
+# load: one-minute average 0.93 before the Turbo run, 1.64 before the 512 one
 # model: qwen-image-2.1-Q8_0.gguf, qwen-image-2.1-turbo-Q8_0.gguf, Qwen3-VL-8B-Instruct-Q8_0.gguf, qwen_image_2.1_vae_bf16.safetensors
-# Re-measured 2026-10-21 with the VAE's norms on the device; the 512 run is the one before.
+# Re-measured 2026-10-21 with the faster PNG and decoder opening; the 512 run is an earlier one.
 # re-measured: the figures above
 # re-measured: the figures above
 # re-measured: the figures above
 # re-measured: the figures above
 # re-measured: the figures above
-image D52C49A34EEC681C src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# re-measured: the figures above
+image 37A2A9AE1BD8156E src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb

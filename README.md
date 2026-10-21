@@ -834,7 +834,7 @@ evaluations a step; at the default scale of one, none.
 
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
-Radeon 780M a 1024 Turbo picture takes 2 min 33 s (steps of 15 s, the
+Radeon 780M a 1024 Turbo picture takes 2 min 30 s (steps of 15 s, the
 first 22 s with the weights' upload, the decoder about 15 s) and a
 512 picture in forty steps 2 min 27 s (steps of 3.2 s)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1

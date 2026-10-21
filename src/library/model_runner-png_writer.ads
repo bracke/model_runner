@@ -2,8 +2,9 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 
 --  A picture written as PNG: eight bits a channel, red, green and blue with
---  alpha or without, every row unfiltered and the whole deflated by the
---  zlib crate. What the image command writes and any viewer reads.
+--  alpha or without, every row through the Sub filter and the whole deflated
+--  by the zlib crate with its fixed codes. What the image command writes and
+--  any viewer reads.
 --
 --  Task safety: pure; Encode allocates its result.
 package Model_Runner.PNG_Writer is

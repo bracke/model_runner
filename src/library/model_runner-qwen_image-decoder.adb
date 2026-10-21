@@ -1,3 +1,4 @@
+with Interfaces;
 with System.Storage_Elements;
 
 with Model_Runner.Backend.Device;
@@ -141,6 +142,61 @@ package body Model_Runner.Qwen_Image.Decoder is
             From      : B.Byte_Array (0 .. Row_From * B.Byte_Count (Outputs) - 1)
               with Import, Address => System.Storage_Elements.To_Address
                 (System.Storage_Elements.To_Integer (Item.Base) + System.Storage_Elements.Integer_Address (Start));
+
+            --  The two relayouts, moving an element at a time as a word of
+            --  its own size -- most of opening a decoder, where moving each
+            --  as a slice of bytes took half again as long: the 3x3's taps
+            --  one after another a row, and the taps apart. Rows and taps
+            --  are in bytes.
+            generic
+               type Word is mod <>;
+            procedure Gathered (Source : B.Byte_Array; Into : in out B.Byte_Array; From_Row, To_Row : B.Byte_Count);
+
+            procedure Gathered (Source : B.Byte_Array; Into : in out B.Byte_Array; From_Row, To_Row : B.Byte_Count) is
+               type Words is array (B.Byte_Count range <>) of Word;
+               Size     : constant B.Byte_Count := Word'Size / 8;
+               From_W   : Words (0 .. Source'Length / Size - 1) with Import, Address => Source'Address;
+               Into_W   : Words (0 .. Into'Length / Size - 1) with Import, Address => Into'Address;
+            begin
+               for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+                  for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                     for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                        Into_W (O * (To_Row / Size) + Tap * B.Byte_Count (Ins) + Channel) :=
+                          From_W (O * (From_Row / Size) + Channel * B.Byte_Count (Taps) + Tap);
+                     end loop;
+                  end loop;
+               end loop;
+            end Gathered;
+
+            generic
+               type Word is mod <>;
+            procedure Apart
+              (Source : B.Byte_Array; Into : in out B.Byte_Array; From_Row, Tap_Span : B.Byte_Count;
+               Ins_To : Element_Count);
+
+            procedure Apart
+              (Source : B.Byte_Array; Into : in out B.Byte_Array; From_Row, Tap_Span : B.Byte_Count;
+               Ins_To : Element_Count)
+            is
+               type Words is array (B.Byte_Count range <>) of Word;
+               Size     : constant B.Byte_Count := Word'Size / 8;
+               From_W   : Words (0 .. Source'Length / Size - 1) with Import, Address => Source'Address;
+               Into_W   : Words (0 .. Into'Length / Size - 1) with Import, Address => Into'Address;
+            begin
+               for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+                  for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                     for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                        Into_W (Tap * (Tap_Span / Size) + O * B.Byte_Count (Ins_To) + Channel) :=
+                          From_W (O * (From_Row / Size) + Channel * B.Byte_Count (Taps) + Tap);
+                     end loop;
+                  end loop;
+               end loop;
+            end Apart;
+
+            procedure Gathered_Words_16 is new Gathered (Interfaces.Unsigned_16);
+            procedure Gathered_Words_32 is new Gathered (Interfaces.Unsigned_32);
+            procedure Tap_Words_16 is new Apart (Interfaces.Unsigned_16);
+            procedure Tap_Words_32 is new Apart (Interfaces.Unsigned_32);
          begin
             if (Size = 1 and then Rows_To = Element_Count (Outputs))
               or else Row_From /= B.Byte_Count (Columns) * Element
@@ -152,19 +208,26 @@ package body Model_Runner.Qwen_Image.Decoder is
                Status := E.Make (E.Memory_Allocation_Failed);
                return;
             end if;
-            for O in 0 .. B.Byte_Count (Outputs) - 1 loop
-               for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
-                  for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
-                     declare
-                        Here  : constant B.Byte_Count := O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
-                        There : constant B.Byte_Count :=
-                          Result.Owned'First + O * Row_To + (Tap * B.Byte_Count (Ins) + Channel) * Element;
-                     begin
-                        Result.Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
-                     end;
+            if Element = 2 then
+               Gathered_Words_16 (From, Result.Owned.all, Row_From, Row_To);
+            elsif Element = 4 then
+               Gathered_Words_32 (From, Result.Owned.all, Row_From, Row_To);
+            else
+               for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+                  for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                     for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                        declare
+                           Here  : constant B.Byte_Count :=
+                             O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
+                           There : constant B.Byte_Count :=
+                             Result.Owned'First + O * Row_To + (Tap * B.Byte_Count (Ins) + Channel) * Element;
+                        begin
+                           Result.Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
+                        end;
+                     end loop;
                   end loop;
                end loop;
-            end loop;
+            end if;
             T.Make (Result.Kernel.Format, Rows_To, Across, Result.Owned, 0, Result.Kernel, Status);
 
             --  A 3x3's taps apart, for the device.
@@ -178,21 +241,27 @@ package body Model_Runner.Qwen_Image.Decoder is
                      Status := E.Make (E.Memory_Allocation_Failed);
                      return;
                   end if;
-                  for O in 0 .. B.Byte_Count (Outputs) - 1 loop
-                     for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
-                        for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
-                           declare
-                              Here  : constant B.Byte_Count :=
-                                O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
-                              There : constant B.Byte_Count :=
-                                Result.Tap_Owned'First + Tap * Tap_Bytes
-                                + (O * B.Byte_Count (Ins_To) + Channel) * Element;
-                           begin
-                              Result.Tap_Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
-                           end;
+                  if Element = 2 then
+                     Tap_Words_16 (From, Result.Tap_Owned.all, Row_From, Tap_Bytes, Ins_To);
+                  elsif Element = 4 then
+                     Tap_Words_32 (From, Result.Tap_Owned.all, Row_From, Tap_Bytes, Ins_To);
+                  else
+                     for O in 0 .. B.Byte_Count (Outputs) - 1 loop
+                        for Channel in 0 .. B.Byte_Count (Ins) - 1 loop
+                           for Tap in 0 .. B.Byte_Count (Taps) - 1 loop
+                              declare
+                                 Here  : constant B.Byte_Count :=
+                                   O * Row_From + (Channel * B.Byte_Count (Taps) + Tap) * Element;
+                                 There : constant B.Byte_Count :=
+                                   Result.Tap_Owned'First + Tap * Tap_Bytes
+                                   + (O * B.Byte_Count (Ins_To) + Channel) * Element;
+                              begin
+                                 Result.Tap_Owned (There .. There + Element - 1) := From (Here .. Here + Element - 1);
+                              end;
+                           end loop;
                         end loop;
                      end loop;
-                  end loop;
+                  end if;
                   for Tap in Result.Taps'Range loop
                      exit when E.Is_Error (Status);
                      T.Make (Result.Kernel.Format, Rows_To, Ins_To, Result.Tap_Owned, B.Byte_Count (Tap) * Tap_Bytes,
