@@ -62,6 +62,16 @@ project Model_Runner is
       --  where the baseline rounds twice and move a decoded block off the
       --  bits every other path produces; what is wanted here is the shift
       --  and the gather, and this says so.
+      --  The engine's Run is one procedure of thousands of lines, past
+      --  what GCC tracks variables' places through for the debugger: it
+      --  says so and compiles it again without, a note the repository
+      --  check takes for a warning. Asked without at the start, it says
+      --  nothing; the code is the same.
+      for Switches ("model_runner-platform-device-products.adb") use
+        Model_Runner_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+           "-fno-var-tracking-assignments");
+
       for Switches ("model_runner-quantization-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
         & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",

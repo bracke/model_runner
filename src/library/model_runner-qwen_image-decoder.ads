@@ -208,6 +208,9 @@ private
       --  a kernel of a format laid out otherwise.
       Tap_Owned : Model_Runner.Bytes.Byte_Array_Access;
       Taps      : Tap_Views;
+      --  And the nine as one matrix, nine taps' rows tall, for the device's
+      --  tile to run as one product (Backend.Device.Add_View_Taps).
+      Tap_Stack : T.View;
       --  The gain of the norm before a 3x3, where one is, fitted to the
       --  taps' padded channels for the device's norm: times the root of the
       --  channels over the padded channels, since that norm's mean is over

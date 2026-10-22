@@ -1331,6 +1331,33 @@ package Model_Runner.Backend.Device is
       Added     : out Boolean;
       Kept      : Boolean := False);
 
+   --  A 3x3's nine taps as one product step of the caller's activation, a
+   --  band padded a pixel round (Products.Add_Tap_Product).
+   --
+   --  @param Steps The sequence.
+   --  @param Stack The nine taps one after another: nine times one tap's
+   --    rows, each tap's columns a pixel's values.
+   --  @param Row Values a padded row of the band holds.
+   --  @param Added False where the format is not one the device reads or
+   --    the sequence refused the step.
+   --  @param Kept Whether the host reads its answer.
+   procedure Add_View_Taps
+     (Steps : in out Model_Runner.Platform.Device.Products.Sequence;
+      Stack : Model_Runner.Tensors.View;
+      Row   : Natural;
+      Added : out Boolean;
+      Kept  : Boolean := False);
+
+   --  Whether a band of Count pixels runs as one tap product of Stack's
+   --  taps (Add_View_Taps): on the matrix tile, the only kernel that
+   --  reads one.
+   --
+   --  @param Stack The nine taps, as Add_View_Taps takes them.
+   --  @param Count Pixels in the band, padding included.
+   --  @return True where the step would run.
+   function Takes_Taps
+     (Stack : Model_Runner.Tensors.View; Count : Positive) return Boolean;
+
    --  A product step reading the caller's activation from At_Vector on,
    --  each of Count vectors Weight's columns apart from there: a 3x3's tap
    --  reading the pixels shifted, say.

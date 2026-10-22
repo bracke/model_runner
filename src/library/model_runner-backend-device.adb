@@ -2346,6 +2346,48 @@ package body Model_Runner.Backend.Device is
          Added, Key => At_Offset (Weight.Base, Weight.Offset), Kept => Kept, At_Vector => At_Vector);
    end Add_View_Product_At;
 
+   -------------------
+   -- Add_View_Taps --
+   -------------------
+
+   procedure Add_View_Taps
+     (Steps : in out Products.Sequence;
+      Stack : T.View;
+      Row   : Natural;
+      Added : out Boolean;
+      Kept  : Boolean := False)
+   is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+   begin
+      Packing_Of (Stack.Format, Packing, Known);
+      if not Known or else Stack.Base = System.Null_Address
+        or else Stack.Rows mod 9 /= 0
+      then
+         Added := False;
+         return;
+      end if;
+      Products.Add_Tap_Product
+        (Steps, Stack.Base, Stack.Span, Stack.Offset, Packing, Natural (Stack.Rows / 9),
+         Natural (Stack.Columns), Row, Added, Key => At_Offset (Stack.Base, Stack.Offset), Kept => Kept);
+   end Add_View_Taps;
+
+   ----------------
+   -- Takes_Taps --
+   ----------------
+
+   function Takes_Taps (Stack : T.View; Count : Positive) return Boolean is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+   begin
+      Packing_Of (Stack.Format, Packing, Known);
+      return Known
+        and then Ready_Now
+        and then Stack.Rows mod 9 = 0
+        and then Products.Takes_Taps
+                   (Engine, Packing, Natural (Stack.Rows / 9), Natural (Stack.Columns), Count);
+   end Takes_Taps;
+
    ---------------
    -- Run_Steps --
    ---------------

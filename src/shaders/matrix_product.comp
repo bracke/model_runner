@@ -1971,6 +1971,39 @@ void main() {
     }
 #endif
 
+    //  A 3x3's taps, where members[3] counts them: tap t's matrix lies
+    //  members[4] bytes a tap further on, and it reads the band from
+    //  (t / 3) rows of members[5] values and t % 3 vectors further on.
+    //  Each tap's products are added to the same accumulators and the
+    //  sum is stored once, where nine products stored and read back a
+    //  sum eight times: a VAE's full-size 3x3 of 160 rows ran at 1.5
+    //  teraflops so, against 3.4 for its wide ones. Nought is one plain
+    //  product, as every other caller asks.
+#ifdef LISTED
+    const uint taps = 1u;
+#else
+    uint taps = max(shape.members[3], 1u);
+#endif
+    for (uint tap = 0u; tap < taps; ++tap) {
+#ifdef LISTED
+    const uint tap_w = 0u;
+    const uint tap_x = 0u;
+#else
+    uint tap_w = tap * shape.members[4];
+    uint tap_x = (tap / 3u) * shape.members[5] + (tap % 3u) * shape.columns;
+#endif
+    //  The block scales the narrow tiles hold are a row's, and a tap's
+    //  rows are another matrix's: read afresh.
+#if defined(NARROW) && !defined(LOW_BITS) && !defined(MORE_FORMATS)
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        q6k_block[it] = 0xFFFFFFFFu;
+    }
+#endif
+#if defined(MORE_FORMATS) && defined(NARROW)
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        q3k_block[it] = 0xFFFFFFFFu;
+    }
+#endif
     for (uint kb = 0u; kb < shape.columns; kb += KCH * CHUNKS) {
         barrier();
 
@@ -2017,7 +2050,7 @@ void main() {
             uint r       = rr + ((gl_LocalInvocationID.x & 63u) >> 1u);
             uint into    = chunk * TILE_R * WT_STRIDE
                            + r * WT_STRIDE + half_of * 16u;
-            uint row     = shape.base + slice
+            uint row     = shape.base + slice + tap_w
                            + min(row0 + r, shape.rows - 1u) * rb;
 
 #if defined(LOW_BITS)
@@ -2723,7 +2756,7 @@ void main() {
     #ifndef LISTED
                                 shape.stride +
     #endif
-                                (vec0 + j * 16u) * shape.columns + kb + step,
+                                tap_x + (vec0 + j * 16u) * shape.columns + kb + step,
                                 shape.columns,
                                 gl_CooperativeMatrixLayoutColumnMajor);
                 }
@@ -2762,7 +2795,7 @@ void main() {
     #ifndef LISTED
                                 shape.stride +
     #endif
-                                (vec0 + j * 16u) * shape.columns + kb + step,
+                                tap_x + (vec0 + j * 16u) * shape.columns + kb + step,
                                 shape.columns,
                                 gl_CooperativeMatrixLayoutColumnMajor);
                 }
@@ -2774,6 +2807,8 @@ void main() {
                 }
             }
         }
+    }
+
     }
 
     //  And out the same way: the answers of one vector are contiguous, so

@@ -777,6 +777,59 @@ package Model_Runner.Platform.Device.Products is
       At_Vector : Natural := 0;
       Exact   : Boolean := False);
 
+   --  Name a 3x3's nine taps as one product of the activation.
+   --
+   --  The activation is a band of pixels padded a pixel round, Row values
+   --  a padded row; the nine matrices -- Rows by Columns each, Columns a
+   --  pixel's values -- lie one after another from At_Byte, tap t the
+   --  one for the neighbour t / 3 rows down and t mod 3 across. Answer p
+   --  is the sum over the taps of tap t times the Columns values from
+   --  (t / 3) * Row + (t mod 3 + p) * Columns: the band's pixel p's 3x3,
+   --  p counted along the padded rows. Made on the matrix tile, the nine
+   --  summed where they are made and stored once; a batch the tile does
+   --  not take is refused when the sequence runs (Takes_Taps says which
+   --  do).
+   --
+   --  @param Steps The sequence.
+   --  @param Base First byte of the storage the taps lie in.
+   --  @param Span Bytes that storage holds.
+   --  @param At_Byte Where the first tap begins.
+   --  @param Packing How each row is packed.
+   --  @param Rows Rows of one tap.
+   --  @param Columns Columns of one tap.
+   --  @param Row Values a padded row of the band holds.
+   --  @param Added False when the sequence is full.
+   --  @param Key Identifies the nine so the device may keep them.
+   --  @param Kept Whether the host reads the answer.
+   procedure Add_Tap_Product
+     (Steps   : in out Sequence;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Row     : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True);
+
+   --  Whether a batch of Count goes to the matrix tile, which a tap
+   --  product needs.
+   --
+   --  @param Item The engine.
+   --  @param Packing How each row is packed.
+   --  @param Rows Rows of one tap.
+   --  @param Columns Columns of one tap.
+   --  @param Count Vectors in the batch.
+   --  @return True where Add_Tap_Product's step would run.
+   function Takes_Taps
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Count   : Natural) return Boolean;
+
    --  Name one product over a few slices of a stack of matrices.
    --
    --  A mixture of experts stores every expert's matrix of one kind in one
@@ -4549,6 +4602,10 @@ private
       --  begin. Nought rows is the matrix alone.
       Region_Rows : Natural := 0;
       Region_At   : Natural := 0;
+
+      --  A 3x3's nine taps as one product (Add_Tap_Product): the values
+      --  a padded row of its band holds, or nought for a plain product.
+      Tap_Row : Natural := 0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

@@ -1429,6 +1429,12 @@ package body Model_Runner.Platform.Device.Products is
    is (Listed_Wide_Pipeline (Item, Packing) /= Null_Handle
        and then Count * Used >= Listed_Wide_Run * Natural'Max (Experts, 1));
 
+   --  How many values past its own vectors a tap product reads: two padded
+   --  rows and two pixels, the last tap's neighbour; nought for any other
+   --  step.
+   function Tap_Reach (This : Step) return Natural
+   is (if This.Tap_Row = 0 then 0 else 2 * This.Tap_Row + 2 * This.Columns);
+
    function Uses_Matrix
      (Item    : Engine;
       Packing : Weight_Packing;
@@ -8244,7 +8250,13 @@ package body Model_Runner.Platform.Device.Products is
       --  plus one, and which unit goes on it: its answer is then the gated
       --  middle rather than the up arm. Zero for every other product.
       Gate_At : Interfaces.Unsigned_64 := 0;
-      Unit    : Natural := 0)
+      Unit    : Natural := 0;
+
+      --  A 3x3's taps as one product: the values a padded row of the band
+      --  holds, and the bytes from one tap's matrix to the next; nought
+      --  for a plain product.
+      Tap_Row   : Natural := 0;
+      Tap_Bytes : Interfaces.Unsigned_64 := 0)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
         To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
@@ -8321,6 +8333,11 @@ package body Model_Runner.Platform.Device.Products is
             Members : Member_Words := [others => 0];
          begin
             Members (2) := C.unsigned (Start);
+            if Tap_Row > 0 then
+               Members (3) := 9;
+               Members (4) := C.unsigned (Tap_Bytes);
+               Members (5) := C.unsigned (Tap_Row);
+            end if;
             Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Pipeline);
             declare
                Shape : aliased Shape_Constants :=
@@ -12152,6 +12169,54 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Chained_Product;
 
+   ---------------------
+   -- Add_Tap_Product --
+   ---------------------
+
+   procedure Add_Tap_Product
+     (Steps   : in out Sequence;
+      Base    : System.Address;
+      Span    : Model_Runner.Bytes.Byte_Count;
+      At_Byte : Model_Runner.Bytes.Byte_Count;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Row     : Natural;
+      Added   : out Boolean;
+      Key     : System.Address := System.Null_Address;
+      Kept    : Boolean := True) is
+   begin
+      if Steps.Held = Sequence_Limit
+        or else Base = System.Null_Address
+        or else Row < 3 * Columns
+      then
+         Added := False;
+         return;
+      end if;
+
+      --  Uploaded as the nine together, from the first.
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
+         Rows => Rows, Columns => Columns, Key => Key, Chained => False,
+         Reads => 0, Kept => Kept, Blends => False, Unit => 0,
+         Attends => False, Region_Rows => 9 * Rows, Tap_Row => Row,
+         others => <>);
+      Added := True;
+   end Add_Tap_Product;
+
+   ----------------
+   -- Takes_Taps --
+   ----------------
+
+   function Takes_Taps
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Rows    : Natural;
+      Columns : Natural;
+      Count   : Natural) return Boolean
+   is (Uses_Matrix (Item, Packing, Rows, Columns, Count));
+
    ----------------
    -- Pairs_Gate --
    ----------------
@@ -13868,6 +13933,15 @@ package body Model_Runner.Platform.Device.Products is
            * Model_Runner.Numerics.Element_Count (Count);
       begin
          for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Tap_Row > 0 then
+               Most := Model_Runner.Numerics.Element_Count'Max
+                 (Most,
+                  Model_Runner.Numerics.Element_Count
+                    (Tap_Reach (Steps.Items (Index)))
+                  + Model_Runner.Numerics.Element_Count
+                      (Steps.Items (Index).Columns)
+                    * Model_Runner.Numerics.Element_Count (Count));
+            end if;
             if Steps.Items (Index).At_Vector > 0 then
                --  What a step reads from the activation is its COLUMNS,
                --  which for a join is its width and for a product is the
@@ -13985,6 +14059,16 @@ package body Model_Runner.Platform.Device.Products is
                       Steps.Items (Which).Rows,
                       Steps.Items (Which).Columns, Count,
                       Rounded => Steps.Items (Which).Rounded));
+
+      --  Bytes from one tap's matrix to the next, for a tap product.
+      function Tap_Stride (Which : Positive) return Interfaces.Unsigned_64
+      is (Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
+          * Row_Bytes (Steps.Items (Which).Packing, Steps.Items (Which).Columns));
+
+      --  Whether a tap product would go anywhere but the tile.
+      function Taps_Untiled return Boolean
+      is (for some Index in 1 .. Steps.Held =>
+            Steps.Items (Index).Tap_Row > 0 and then not Tiled (Index));
 
       --  A gate-and-up step's walk as integers, or none: Q4_K's over
       --  whole super-blocks, Q8_0's at two to four positions.
@@ -14244,6 +14328,12 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
+      --  A tap product is the tile's alone: no other kernel reads its
+      --  nine matrices.
+      if Taps_Untiled then
+         return;
+      end if;
+
       --  What the whole run needs, and whether it is askable at all. Every
       --  product reads the same activation, so they must agree about how
       --  wide it is; they may differ in every other way.
@@ -14338,7 +14428,8 @@ package body Model_Runner.Platform.Device.Products is
                      (Interfaces.Unsigned_64 (This.Columns),
                       Interfaces.Unsigned_64 (This.Rows))
                    * Interfaces.Unsigned_64 (Room)
-                   + Interfaces.Unsigned_64 (This.At_Vector)) * 2);
+                   + Interfaces.Unsigned_64 (This.At_Vector)
+                   + Interfaces.Unsigned_64 (Tap_Reach (This))) * 2);
             elsif Listed_Tiled (Index) then
                --  The runs' vectors, laid out by slot.
                Half_Bytes := Interfaces.Unsigned_64'Max
@@ -15862,6 +15953,12 @@ package body Model_Runner.Platform.Device.Products is
            [others => 0];
          Shifted   : array (1 .. Sequence_Limit) of Boolean :=
            [others => False];
+
+         --  How far past its own vectors a product's fresh copy reaches:
+         --  for the taps after it, or a tap product's own last tap.
+         function Copy_Reach (Which : Positive) return Interfaces.Unsigned_64
+         is (Interfaces.Unsigned_64
+               (Natural'Max (Reach (Which), Tap_Reach (Steps.Items (Which)))));
 
          --  The combining steps of gated feed-forwards whose projection up
          --  makes the combination itself, in its own store: such a step is
@@ -17809,7 +17906,7 @@ package body Model_Runner.Platform.Device.Products is
                         Whole_Tiles (Count), This.Packing,
                         Places (Index).Base + Slice_Base (Index),
                         Fresh => not Again,
-                        Reach => Interfaces.Unsigned_64 (Reach (Index)),
+                        Reach => Copy_Reach (Index),
                         Into =>
                           (if Halved (Index)
                            then Interfaces.Unsigned_64 (Region (Index))
@@ -17833,7 +17930,9 @@ package body Model_Runner.Platform.Device.Products is
                            else 0),
                         Unit =>
                           (if Gated (Index) /= 0
-                           then Steps.Items (Index + 1).Unit else 0));
+                           then Steps.Items (Index + 1).Unit else 0),
+                        Tap_Row => This.Tap_Row,
+                        Tap_Bytes => Tap_Stride (Index));
 
                      if not Done then
                         Release_All;

@@ -260,6 +260,9 @@ package body Model_Runner.Qwen_Image.Decoder is
                      T.Make (Result.Kernel.Format, Rows_To, Ins_To, Result.Tap_Owned, B.Byte_Count (Tap) * Tap_Bytes,
                              Result.Taps (Tap), Status);
                   end loop;
+                  if E.Is_Ok (Status) and then Taps = 9 then
+                     T.Make (Result.Kernel.Format, 9 * Rows_To, Ins_To, Result.Tap_Owned, 0, Result.Tap_Stack, Status);
+                  end if;
                end;
             end if;
          end;
@@ -1011,6 +1014,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                Steps     : P.Sequence;
                Added     : Boolean := True;
                Sum       : Natural := 0;
+               As_One    : Boolean := False;
             begin
                Device.Activation_Room (Values, Room_At, Ok);
                if not Ok then
@@ -1048,8 +1052,14 @@ package body Model_Runner.Qwen_Image.Decoder is
                      end;
                   end if;
                   P.Open_Sequence (Steps);
+                  --  The nine as one product where the device's tile takes
+                  --  the band: summed where they are made and stored once.
+                  if T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count)) then
+                     Device.Add_View_Taps (Steps, C.Tap_Stack, Natural (Wide * Ins_To), Added, Kept => True);
+                     As_One := True;
+                  end if;
                   for Tap in C.Taps'Range loop
-                     exit when not Added;
+                     exit when not Added or else As_One;
                      Device.Add_View_Product_At
                        (Steps, C.Taps (Tap),
                         Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
