@@ -214,6 +214,9 @@ package Model_Runner.CLI.Options is
    --  this is asking for a batch runner, which is a different program.
    Max_Prompts : constant := 16;
 
+   --  The most pictures an edit is drawn beside.
+   Max_References : constant := 4;
+
    type Prompt_List is array (1 .. Max_Prompts) of Text_Access;
 
    --  How many turns of a conversation one command may carry beside its
@@ -494,6 +497,11 @@ package Model_Runner.CLI.Options is
       Image_Init         : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Image_Strength     : Model_Runner.Numerics.Real := 0.75;
       Image_Strength_Set : Boolean := False;
+      --  The pictures an edit is drawn beside, in order, each seen by the
+      --  text encoder through --mmproj and laid in the denoiser's prefix.
+      Image_Refs         : Model_Runner.Text.Bounded_List (1 .. Max_References) :=
+        [others => Model_Runner.Text.Empty];
+      Image_Ref_Count    : Natural := 0;
       Text_Encoder_Path  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       VAE_Path           : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 

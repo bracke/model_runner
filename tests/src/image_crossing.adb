@@ -21,6 +21,8 @@ with Model_Runner.Qwen_Image;
 with Model_Runner.Qwen_Image.Decoder;
 with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Tensors;
+with Model_Runner.Vision;
+with Ada.Unchecked_Deallocation;
 
 package body Image_Crossing is
 
@@ -37,11 +39,16 @@ package body Image_Crossing is
    use type N.Real;
    use type N.Wide_Real;
    use type Tk.Real_Array_Access;
+   use type Model_Runner.Qwen_Image.Prompts.Slots_Access;
 
    --  The files by their published names, as `model_runner image` finds
    --  them.
    Encoder_Name : constant String := "Qwen3-VL-8B-Instruct-Q8_0.gguf";
    VAE_Name     : constant String := "qwen_image_2.1_vae_bf16.safetensors";
+   Projector_Name : constant String := "mmproj-Qwen3VL-8B-Instruct-F16.gguf";
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Model_Runner.Qwen_Image.Slot_List, Model_Runner.Qwen_Image.Prompts.Slots_Access);
 
    type Wide_Access is access N.Wide_Real_Array;
 
@@ -61,6 +68,7 @@ package body Image_Crossing is
       Width, Height, Seed, Steps, Kept_Rows : Natural := 0;
       Row_Tolerance : N.Wide_Real := 0.08;
       Cosine_Floor  : N.Wide_Real := 0.9999;
+      Referenced_Floor : N.Wide_Real := 0.9999;
       Rows_Seen     : Recorded_List (1 .. 8);
       Speeds_Seen   : Recorded_List (1 .. 2);
       --  With guidance: the negative's velocities, the negative prompt
@@ -77,6 +85,11 @@ package body Image_Crossing is
       Strength      : N.Real := 1.0;
       Encoded_Seen  : Recorded;
       Init_Latent   : Tk.Real_Array_Access;
+      --  An edit: the pictures beside it, by their files beside the
+      --  expectation, and the encoder's mean of the first recorded.
+      Reference_Names : array (1 .. 4) of U.Unbounded_String;
+      Reference_Count : Natural := 0;
+      Referenced_Seen : Recorded;
       Row_Count, Speed_Count : Natural := 0;
       Failed : Boolean := False;
 
@@ -214,6 +227,13 @@ package body Image_Crossing is
                      Init_Name := U.To_Unbounded_String (Rest);
                   elsif Key = "strength" then
                      Strength := N.Real'Value (Rest);
+                  elsif Key = "reference" and then Reference_Count < Reference_Names'Last then
+                     Reference_Count := Reference_Count + 1;
+                     Reference_Names (Reference_Count) := U.To_Unbounded_String (Rest);
+                  elsif Key = "referenced-cosine" then
+                     Referenced_Floor := N.Wide_Real'Value (Rest);
+                  elsif Key = "referenced" then
+                     Referenced_Seen := Read_Run ("x 0 " & Rest, 2);
                   elsif Key = "encoded" then
                      Encoded_Seen := Read_Run ("x 0 " & Rest, 2);
                   elsif Key = "away" and then Away_Count < Aways_Seen'Last then
@@ -252,6 +272,21 @@ package body Image_Crossing is
          Away_Text : Tk.Real_Array_Access;
          Away_Rows : Natural := 0;
          Ready : Boolean := False;
+         --  An edit's pictures at their sizes, their latents, and the slots
+         --  of the prompt's rows and the negative's.
+         Sized   : Q.Prompts.Picture_List (1 .. Reference_Count);
+         Latents : array (1 .. Reference_Count) of Tk.Real_Array_Access;
+         Slots, Away_Slots : Q.Prompts.Slots_Access;
+
+         function Pictured return Q.Reference_List is
+            Result : Q.Reference_List (1 .. Reference_Count);
+         begin
+            for Index in Result'Range loop
+               Result (Index) := (Latent => Latents (Index), Rows => Sized (Index).Height / Dec.Upscale,
+                                  Columns => Sized (Index).Width / Dec.Upscale);
+            end loop;
+            return Result;
+         end Pictured;
 
          procedure Open_Device is
          begin
@@ -292,11 +327,46 @@ package body Image_Crossing is
                   Threads => Model_Runner.Platform.Core_Count, Status => Status,
                   Context => Q.Prompts.Max_Tokens);
             end if;
-            if E.Is_Ok (Status) then
+            --  An edit's pictures, read and sized as the reference sizes
+            --  them, then the prompt read beside them.
+            for Index in 1 .. Reference_Count loop
+               exit when E.Is_Error (Status);
+               declare
+                  Raster : Model_Runner.Images.Raster;
+                  Wide, Tall : Positive;
+               begin
+                  Model_Runner.Images.Load
+                    (Ada.Directories.Containing_Directory (U.To_String (Given.Expect)) & "/"
+                     & U.To_String (Reference_Names (Index)), Raster, Status);
+                  if E.Is_Ok (Status) then
+                     Q.Reference_Size (Width, Height, Raster.Width, Raster.Height, Wide, Tall);
+                     Model_Runner.Images.Nearest (Raster, Wide, Tall, Sized (Index));
+                     Ada.Text_IO.Put_Line ("reference" & Index'Image & " at" & Wide'Image & " by" & Tall'Image);
+                  end if;
+                  Model_Runner.Images.Free (Raster);
+               end;
+            end loop;
+            if E.Is_Ok (Status) and then Reference_Count > 0 then
+               declare
+                  Eyes : Model_Runner.Vision.Encoder;
+               begin
+                  Model_Runner.Vision.Open (Eyes, Path_Of (Given.Projector, Projector_Name), Status);
+                  if E.Is_Ok (Status) then
+                     Q.Prompts.Encode_With_Pictures
+                       (Encoder, Eyes, U.To_String (Prompt), Sized, Text, Text_Rows, Slots, Status, Pool);
+                  end if;
+                  if E.Is_Ok (Status) and then Guidance /= 1.0 then
+                     Q.Prompts.Encode_With_Pictures
+                       (Encoder, Eyes, U.To_String (Negative), Sized, Away_Text, Away_Rows, Away_Slots, Status,
+                        Pool);
+                  end if;
+                  Model_Runner.Vision.Close (Eyes);
+               end;
+            elsif E.Is_Ok (Status) then
                Q.Prompts.Encode (Encoder, U.To_String (Prompt), Text, Text_Rows, Status, Pool);
-            end if;
-            if E.Is_Ok (Status) and then Guidance /= 1.0 then
-               Q.Prompts.Encode (Encoder, U.To_String (Negative), Away_Text, Away_Rows, Status, Pool);
+               if E.Is_Ok (Status) and then Guidance /= 1.0 then
+                  Q.Prompts.Encode (Encoder, U.To_String (Negative), Away_Text, Away_Rows, Status, Pool);
+               end if;
             end if;
             Model_Runner.Llama.Close (Encoder, Ignored);
             Model_Runner.GGUF.Containers.Close (Container);
@@ -331,6 +401,47 @@ package body Image_Crossing is
                end loop;
             end;
          end if;
+
+         --  An edit's pictures through the VAE's encoder, the first's mean
+         --  against the reference's.
+         for Index in 1 .. Reference_Count loop
+            exit when E.Is_Error (Status);
+            declare
+               Tall   : constant Positive := Sized (Index).Height;
+               Wide   : constant Positive := Sized (Index).Width;
+               Planes : Tk.Real_Array_Access;
+               VAE    : Dec.Picture_Decoder;
+               Cells  : constant N.Element_Count := N.Element_Count ((Tall / Dec.Upscale) * (Wide / Dec.Upscale));
+               Apart, Cosine : N.Wide_Real;
+            begin
+               Tk.Allocate (N.Element_Count (Dec.Picture_Channels * Tall * Wide), Planes);
+               Dec.From_Raster (Sized (Index), Tall, Wide, Planes.all);
+               Dec.Open (VAE, VAE_Path, Status, Encoder => True);
+               if E.Is_Ok (Status) then
+                  Tk.Allocate (N.Element_Count (Dec.Latent_Channels) * Cells, Latents (Index));
+                  Dec.Encode (VAE, Planes.all, Tall, Wide, Pool, Latents (Index).all, Status);
+               end if;
+               Dec.Close (VAE);
+               Tk.Free (Planes);
+               if E.Is_Error (Status) then
+                  Fail ("a reference was not encoded: " & E.Error_Code'Image (Status.Code));
+               elsif Index = 1 and then Referenced_Seen.Values /= null then
+                  declare
+                     Mean : N.Real_Array (Latents (Index)'Range);
+                  begin
+                     for I in Mean'Range loop
+                        Mean (I) := Latents (Index) (I) * Dec.Latent_Deviations (Natural (I / Cells))
+                          + Dec.Latent_Means (Natural (I / Cells));
+                     end loop;
+                     Against (Mean, 0, Referenced_Seen, Apart, Cosine);
+                     Ada.Text_IO.Put_Line ("referenced: cosine" & Cosine'Image & ", apart by" & Apart'Image);
+                     if Cosine < Referenced_Floor then
+                        Fail ("the reference's latent is below the cosine");
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
 
          --  A picture drawn from another: the picture read and encoded, its
          --  mean against the reference's.
@@ -411,7 +522,8 @@ package body Image_Crossing is
                         Next  : constant N.Real := Levels (Levels'First + N.Element_Count (Step));
                      begin
                         Q.Velocity (Model, Latent, Latent_Rows, Latent_Columns, Sigma * 1000.0, Text.all, Text_Rows,
-                                    Pool, Speed, Status, Prefix);
+                                    Pool, Speed, Status, Prefix, Pictured,
+                                    (if Slots = null then Q.No_Slots else Slots.all));
                         exit when E.Is_Error (Status);
                         for Seen of Speeds_Seen loop
                            if Seen.Which = Step then
@@ -427,7 +539,8 @@ package body Image_Crossing is
                         --  the step taken along the guided velocity.
                         if Guidance /= 1.0 then
                            Q.Velocity (Model, Latent, Latent_Rows, Latent_Columns, Sigma * 1000.0, Away_Text.all,
-                                       Away_Rows, Pool, Away_Speed, Status, Away_Prefix);
+                                       Away_Rows, Pool, Away_Speed, Status, Away_Prefix, Pictured,
+                                       (if Away_Slots = null then Q.No_Slots else Away_Slots.all));
                            exit when E.Is_Error (Status);
                            for Seen of Aways_Seen (1 .. Away_Count) loop
                               if Seen.Which = Step then
@@ -457,6 +570,12 @@ package body Image_Crossing is
          Tk.Free (Text);
          Tk.Free (Away_Text);
          Tk.Free (Init_Latent);
+         for Index in 1 .. Reference_Count loop
+            Tk.Free (Latents (Index));
+            Model_Runner.Images.Free (Sized (Index));
+         end loop;
+         Free (Slots);
+         Free (Away_Slots);
          if E.Is_Error (Status) then
             Ada.Text_IO.Put_Line ("image: the denoiser failed: " & E.Error_Code'Image (Status.Code));
             if Ready then

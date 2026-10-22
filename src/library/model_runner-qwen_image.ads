@@ -55,6 +55,46 @@ package Model_Runner.Qwen_Image is
 
    type Denoiser is tagged limited private;
 
+   --  A reference picture an edit is drawn beside, as the VAE's encoder
+   --  leaves its latent: In_Channels planes of Rows by Columns. Its latent
+   --  pixels stand in the prompt where the picture's vision rows stood --
+   --  its slot -- read through the latent's way in, at time nought, each
+   --  seeing every row before its picture and the whole picture, and are
+   --  not answered.
+   type Reference is record
+      Latent  : access constant Model_Runner.Numerics.Real_Array;
+      Rows    : Positive := 1;
+      Columns : Positive := 1;
+   end record;
+
+   type Reference_List is array (Positive range <>) of Reference;
+
+   No_References : constant Reference_List (1 .. 0) := [others => <>];
+
+   --  The size a reference picture is encoded at, as the reference sizes
+   --  it for this model: the picture's area -- Width by Height of the
+   --  picture drawn -- at the reference's own shape, the width the root of
+   --  that area times its width over its height in whole numbers, the
+   --  height the width at its shape, each rounded to a multiple of 32.
+   --
+   --  @param Width the picture drawn's width
+   --  @param Height its height
+   --  @param From_Width the reference's width
+   --  @param From_Height its height
+   --  @param To_Width receives the width it is encoded at, at least 32
+   --  @param To_Height and the height
+   procedure Reference_Size
+     (Width, Height           : Positive;
+      From_Width, From_Height : Positive;
+      To_Width, To_Height     : out Positive);
+
+   --  Each prompt row's slot: nought for a token of the text, K for one of
+   --  the vision rows of reference K, which a run of them a quarter of its
+   --  latent pixels long stands for.
+   type Slot_List is array (Natural range <>) of Natural;
+
+   No_Slots : constant Slot_List (1 .. 0) := [others => 0];
+
    --  Read a denoiser.
    --
    --  @param Item closed first, then open on success
@@ -155,6 +195,14 @@ package Model_Runner.Qwen_Image is
    --  @param Result Out_Channels * Rows * Columns values
    --  @param Status as the Velocity without a cache says
    --  @param Prefix the prompt's kept rows, for this denoiser alone
+   --  @param References the pictures an edit is drawn beside, whose
+   --    latents stand in the prompt's slots; with them the prompt's rows
+   --    are always kept, whatever their room, since only kept rows carry
+   --    them -- a megabyte a latent pixel at the published model's width
+   --  @param Slots each of the Text_Rows prompt rows' slot, read where
+   --    References are given: Tensor_Shape_Mismatch where a run of slots is
+   --    not a quarter of its picture's latent pixels, or the pictures are
+   --    not met in order
    procedure Velocity
      (Item      : Denoiser;
       Latent    : Model_Runner.Numerics.Real_Array;
@@ -166,7 +214,9 @@ package Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out Model_Runner.Numerics.Real_Array;
       Status    : out Model_Runner.Errors.Error_Info;
-      Prefix    : in out Prefix_Cache);
+      Prefix    : in out Prefix_Cache;
+      References : Reference_List := No_References;
+      Slots      : Slot_List := No_Slots);
 
    --  How large a picture's latent is before each block goes to the device
    --  a chunk of its rows at a time rather than in one sequence, and how
@@ -242,6 +292,10 @@ package Model_Runner.Qwen_Image is
    --  @param Strength how much of Init is drawn anew: the levels from
    --    First_Level on, and the first a mix of Init and the noise -- the
    --    noise times that level, Init times one less it
+   --  @param References the pictures an edit is drawn beside, in the
+   --    prompt's slots and the negative's alike, as Velocity takes them
+   --  @param Slots the prompt's slots
+   --  @param Negative_Slots the negative prompt's
    procedure Sample
      (Item      : Denoiser;
       Rows      : Positive;
@@ -259,7 +313,10 @@ package Model_Runner.Qwen_Image is
       Negative  : Model_Runner.Numerics.Real_Array := No_Rows;
       Negative_Rows : Natural := 0;
       Init      : Model_Runner.Numerics.Real_Array := No_Rows;
-      Strength  : Model_Runner.Numerics.Real := 1.0);
+      Strength  : Model_Runner.Numerics.Real := 1.0;
+      References : Reference_List := No_References;
+      Slots      : Slot_List := No_Slots;
+      Negative_Slots : Slot_List := No_Slots);
 
    --  Where a picture drawn from another starts on its levels, as the
    --  reference starts it: Steps times Strength in binary32, truncated, is
@@ -291,13 +348,24 @@ private
    type Block_Array is array (Positive range <>) of Block;
    type Block_Array_Access is access Block_Array;
 
+   type Slot_Access is access Slot_List;
+
    type Prefix_Cache is limited record
-      --  The prompt's rows it was kept from, and how many; their keys and
-      --  values, a block after another, the rows of each one after
-      --  another.
+      --  The prompt's rows it was kept from, and how many rows the kept
+      --  prefix is -- the prompt's, a reference's latent pixels in place of
+      --  its slot's rows; their keys and values, a block after another, the
+      --  rows of each one after another.
       Text         : T.Real_Array_Access;
       Rows         : Natural := 0;
       Keys, Values : T.Real_Array_Access;
+
+      --  With references: how many prompt rows, their slots, the
+      --  references' latents one after another with each one's rows and
+      --  columns before it, and the frame the image stands at after them.
+      Text_Rows    : Natural := 0;
+      Slots        : Slot_Access;
+      Pictures     : T.Real_Array_Access;
+      Place        : Natural := 0;
    end record;
 
    type Denoiser is tagged limited record

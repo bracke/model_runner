@@ -3,6 +3,8 @@ with Model_Runner.Errors;
 with Model_Runner.Llama;
 with Model_Runner.Tensors;
 with Model_Runner.Tokenizer;
+with Model_Runner.Images;
+with Model_Runner.Vision;
 
 --  The rows Qwen-Image 2.1's denoiser reads a prompt as: Qwen3-VL's state
 --  of every token of it after the last layer, before the final norm
@@ -51,6 +53,52 @@ package Model_Runner.Qwen_Image.Prompts is
       Status  : out Model_Runner.Errors.Error_Info;
       Workers : Model_Runner.Backend.CPU.Pool_Reference := null);
 
+   --  The pictures an edit is drawn beside, as the encoder sees them: each
+   --  already its size for the VAE, every side a multiple of thirty-two.
+   type Picture_List is array (Positive range <>) of Model_Runner.Images.Raster;
+
+   --  Each kept row's slot, as the denoiser reads them.
+   type Slots_Access is access Model_Runner.Qwen_Image.Slot_List;
+
+   --  The template with pictures, as the reference writes it: after the
+   --  user's opening, each picture as <imageN><|vision_start|>, a vision
+   --  row's worth of <|image_pad|> each, <|vision_end|>, a space between
+   --  two; then the prompt, or a space where there is none.
+   --
+   --  @param Prompt what the picture is to be
+   --  @param Counts each picture's vision rows
+   --  @return the template
+   function Template_With (Prompt : String; Counts : Model_Runner.Qwen_Image.Slot_List) return String;
+
+   --  Encode a prompt beside pictures: each picture through the vision
+   --  tower at its own size, composited on white, its rows -- the deepstack
+   --  beside them -- standing in for its <|image_pad|> tokens, placed by
+   --  its row and column as Qwen3-VL places a picture; the rows of every
+   --  token after the system turn kept, and each kept row's slot: nought
+   --  for the text, N for picture N's.
+   --
+   --  @param Encoder the text encoder, prepared
+   --  @param Eyes the vision tower, open
+   --  @param Prompt what the picture is to be
+   --  @param Pictures the pictures, in order
+   --  @param Rows the rows, Count of them, each the encoder's width
+   --  @param Count how many
+   --  @param Slots each row's slot
+   --  @param Status success, Tensor_Shape_Mismatch where a picture's sides
+   --    are not multiples of thirty-two, or the tower's or the session's
+   --    refusal
+   --  @param Workers the pool, or null
+   procedure Encode_With_Pictures
+     (Encoder  : in out Model_Runner.Llama.Model'Class;
+      Eyes     : in out Model_Runner.Vision.Encoder;
+      Prompt   : String;
+      Pictures : Picture_List;
+      Rows     : out Model_Runner.Tensors.Real_Array_Access;
+      Count    : out Natural;
+      Slots    : out Slots_Access;
+      Status   : out Model_Runner.Errors.Error_Info;
+      Workers  : Model_Runner.Backend.CPU.Pool_Reference := null);
+
    --  Encode's reading, once the template is tokens: every token read,
    --  in as many batches as the encoder takes, and the rows of those
    --  after the first Dropped kept.
@@ -64,13 +112,16 @@ package Model_Runner.Qwen_Image.Prompts is
    --  @param Workers the pool the encoder's products are shared across;
    --    null reads the prompt on this task alone, eight times slower on
    --    eight cores
+   --  @param Given rows standing in for a token's positions -- a picture's
+   --    -- the first of them First for each batch worked out here
    procedure Rows_Of
      (Encoder : in out Model_Runner.Llama.Model'Class;
       Tokens  : Model_Runner.Tokenizer.Token_Array;
       Dropped : Natural;
       Rows    : out Model_Runner.Tensors.Real_Array_Access;
       Status  : out Model_Runner.Errors.Error_Info;
-      Workers : Model_Runner.Backend.CPU.Pool_Reference := null);
+      Workers : Model_Runner.Backend.CPU.Pool_Reference := null;
+      Given   : Model_Runner.Llama.Given_Rows := Model_Runner.Llama.No_Given_Rows);
 
    --  The rows a prompt was read as, kept on disk under a key that says
    --  everything they depend on -- the encoder file as it is, the program's

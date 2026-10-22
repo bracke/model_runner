@@ -100,6 +100,20 @@ package Model_Runner.Images is
       Result : out Raster;
       Filter : Resample_Filter := Triangle);
 
+   --  A picture resized to the nearest pixel, as stable-diffusion.cpp's
+   --  interpolate does: each pixel the source's at the floor of its place
+   --  scaled, the alpha with it.
+   --
+   --  @param Source The picture.
+   --  @param Width Wanted width.
+   --  @param Height Wanted height.
+   --  @param Result The picture, or an empty raster when Source is empty.
+   procedure Nearest
+     (Source : Raster;
+      Width  : Positive;
+      Height : Positive;
+      Result : out Raster);
+
    --  A rectangle of a picture, copied out.
    --
    --  @param Source The picture.

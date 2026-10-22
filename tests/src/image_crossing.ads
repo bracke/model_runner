@@ -31,6 +31,8 @@ package Image_Crossing is
       Expect    : Ada.Strings.Unbounded.Unbounded_String;
       On_Device : Boolean := False;
       Model, Text_Encoder, VAE : Ada.Strings.Unbounded.Unbounded_String;
+      --  The vision projector an edit's pictures are read with.
+      Projector : Ada.Strings.Unbounded.Unbounded_String;
       Reference : Ada.Strings.Unbounded.Unbounded_String;
       --  The decoder's stripe budget for the reference's latent, or nought
       --  for its own.

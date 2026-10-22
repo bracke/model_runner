@@ -1200,6 +1200,51 @@ package body Model_Runner.Images is
          E.Add_Text (Status, "detail", Ada.Exceptions.Exception_Information (Occurrence), E.Param_Identifier);
    end Load;
 
+   -------------
+   -- Nearest --
+   -------------
+
+   procedure Nearest
+     (Source : Raster;
+      Width  : Positive;
+      Height : Positive;
+      Result : out Raster)
+   is
+   begin
+      Result := (others => <>);
+      if Source.Pixels = null or else Source.Width = 0 or else Source.Height = 0 then
+         return;
+      end if;
+      Result.Width := Width;
+      Result.Height := Height;
+      --  From nought, as every raster here is.
+      Result.Pixels := new Model_Runner.Bytes.Byte_Array (0 .. Model_Runner.Bytes.Byte_Count (3 * Width * Height) - 1);
+      if Source.Alpha /= null then
+         Result.Alpha := new Model_Runner.Bytes.Byte_Array (0 .. Model_Runner.Bytes.Byte_Count (Width * Height) - 1);
+      end if;
+      for Y in 0 .. Height - 1 loop
+         for X in 0 .. Width - 1 loop
+            declare
+               From_Y : constant Natural :=
+                 Natural (Long_Long_Integer (Y) * Long_Long_Integer (Source.Height) / Long_Long_Integer (Height));
+               From_X : constant Natural :=
+                 Natural (Long_Long_Integer (X) * Long_Long_Integer (Source.Width) / Long_Long_Integer (Width));
+               From   : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (From_Y * Source.Width + From_X);
+               Into   : constant Model_Runner.Bytes.Byte_Count := Model_Runner.Bytes.Byte_Count (Y * Width + X);
+            begin
+               for Channel in Model_Runner.Bytes.Byte_Count range 0 .. 2 loop
+                  Result.Pixels (Result.Pixels'First + 3 * Into + Channel) :=
+                    Source.Pixels (Source.Pixels'First + 3 * From + Channel);
+               end loop;
+               if Source.Alpha /= null then
+                  Result.Alpha (Result.Alpha'First + Into) := Source.Alpha (Source.Alpha'First + From);
+               end if;
+            end;
+         end loop;
+      end loop;
+   end Nearest;
+
    --------------
    -- Resample --
    --------------

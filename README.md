@@ -866,6 +866,17 @@ through its own eight levels instead of forty. `--negative TEXT --cfg
 SCALE` leans each step away from what the picture is not to be -- two
 evaluations a step; at the default scale of one, none.
 
+`--ref-image FILE` edits beside a picture -- up to four, in order -- as
+stable-diffusion.cpp's Qwen-Image 2.1 edit does: the text encoder sees
+each through Qwen3-VL's vision tower (`--mmproj`, by its published name
+unless said) and the denoiser reads its latent beside the prompt. The
+first sets the size unless `--size` does. A 512 edit in 20 steps takes
+2 min 31 s on the device:
+
+```
+model_runner image --prompt "make the apple green" --ref-image apple.png --out green.png
+```
+
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
 Radeon 780M a 1024 Turbo picture takes 2 min 30 s (steps of 15 s, the

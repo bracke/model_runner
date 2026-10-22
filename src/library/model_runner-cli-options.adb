@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 129) of Registry_Row :=
+   Registry : constant array (1 .. 130) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -41,6 +41,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--count"), [Command_Image => True, others => False], Text ("count")),
       (Text ("--init-image"), [Command_Image => True, others => False], Text ("init_image")),
       (Text ("--strength"), [Command_Image => True, others => False], Text ("strength")),
+      (Text ("--ref-image"), [Command_Image => True, others => False], Text ("ref_image")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--prompt-parts"), [Command_Run => True, others => False],
@@ -211,7 +212,7 @@ package body Model_Runner.CLI.Options is
       (Text ("--draft-model"),
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--mmproj"),
-       [Command_Run => True, others => False], Text ("mmproj")),
+       [Command_Run | Command_Image => True, others => False], Text ("mmproj")),
       (Text ("--pan-and-scan"),
        [Command_Run => True, others => False], Text ("pan_and_scan")),
       (Text ("--embed-model"),
@@ -2337,6 +2338,20 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Image_Init := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--ref-image" then
+                     --  Several, in order: an edit beside each.
+                     if Result.Image_Ref_Count = Max_References then
+                        Fail (E.CLI_Option_Out_Of_Range, Name);
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Image_Ref_Count := Result.Image_Ref_Count + 1;
+                     Result.Image_Refs (Result.Image_Ref_Count) := Kept (Name, Held.all);
                      Free_Text (Held);
 
                   elsif Name = "--strength" then

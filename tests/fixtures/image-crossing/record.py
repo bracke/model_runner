@@ -15,7 +15,10 @@ second value of each; and the first two steps' velocities, every 32nd value
 -- with --cfg, the negative's too, as "away" lines; with --sigmas, the levels
 the run was drawn through. With --init, a picture drawn from another: the
 dump begins with the VAE encoder's mean, every 8th value of which is kept as
-the "encoded" line, and the rest follows it one file on.
+the "encoded" line, and the rest follows it one file on. With --ref, an
+edit beside that picture: the dump begins with its VAE encoder's mean, kept
+as the "referenced" line, then the vision tower's rows of it, and the rest
+follows them two files on.
 """
 import argparse
 import array
@@ -48,12 +51,15 @@ def main():
     parser.add_argument("--init", default="",
                         help="the picture the run was drawn from, beside the expectation")
     parser.add_argument("--strength", type=float, default=1.0)
+    parser.add_argument("--ref", default="",
+                        help="the picture the edit was drawn beside, beside the expectation")
     parser.add_argument("--away-second", action="store_true",
                         help="a guided run's negative velocity is the second of each step's two")
     args = parser.parse_args()
 
     width, height = (int(side) for side in args.size.split("x"))
-    base = 1 if args.init else 0
+    assert not (args.init and args.ref), "an edit drawn from a picture is not recorded"
+    base = 1 if args.init else (2 if args.ref else 0)
     rows = floats(args.run + "/t%06d.f32" % base)
     count = len(rows) // args.width - args.dropped
     with open(args.out, "w") as out:
@@ -72,10 +78,23 @@ def main():
             out.write("strength %g\n" % args.strength)
             mean = floats(args.run + "/t000000.f32")
             out.write("encoded stride 8 %s\n" % " ".join("%.7g" % v for v in mean[::8]))
+        if args.ref:
+            out.write("reference %s\n" % args.ref)
+            mean = floats(args.run + "/t000000.f32")
+            out.write("referenced stride 8 %s\n" % " ".join("%.7g" % v for v in mean[::8]))
+            # The reference's own path for an edit's picture: its encoder's
+            # mean of a picture as a reference agrees with this program's at
+            # 0.99988 (256) and 0.99998 (512), where the same picture drawn
+            # from agrees at 0.9999998 -- the difference is on its side.
+            out.write("referenced-cosine 0.9998\n")
         if args.cfg != 1.0:
             out.write("cfg %g\n" % args.cfg)
             out.write("negative %s\n" % args.negative)
-        out.write("row-tolerance 0.08\n")
+        # On the device a prompt beside a picture puts its first kept row
+        # 0.10 of its norm from the reference's, where the same row of a
+        # prompt alone is 0.055 and the processor's 0.042 both ways: the
+        # batch that carries the picture's rows is read otherwise there.
+        out.write("row-tolerance %s\n" % ("0.12" if args.ref else "0.08"))
         out.write("velocity-cosine 0.9999\n")
         for kept in sorted({0, count // 2, count - 1}):
             start = (args.dropped + kept) * args.width

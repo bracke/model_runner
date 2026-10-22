@@ -1,4 +1,5 @@
 with Interfaces;
+with Ada.Unchecked_Deallocation;
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
@@ -16,6 +17,7 @@ with Model_Runner.Qwen_Image;
 with Model_Runner.Qwen_Image.Decoder;
 with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Tensors;
+with Model_Runner.Vision;
 with Model_Runner.CLI.Execute.Acquisition;
 
 package body Model_Runner.CLI.Execute.Image_Command is
@@ -29,6 +31,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
    package Tk renames Model_Runner.Tensors;
 
    use type Tk.Real_Array_Access;
+   use type Model_Runner.Qwen_Image.Prompts.Slots_Access;
 
    --  The files a picture is drawn with, by the names they are published
    --  under, found in the models directory unless named.
@@ -36,6 +39,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
    Turbo_Name        : constant String := "qwen-image-2.1-turbo-Q8_0.gguf";
    Text_Encoder_Name : constant String := "Qwen3-VL-8B-Instruct-Q8_0.gguf";
    VAE_Name          : constant String := "qwen_image_2.1_vae_bf16.safetensors";
+   Projector_Name    : constant String := "mmproj-Qwen3VL-8B-Instruct-F16.gguf";
 
    --  The seed a picture is drawn from where none is named: the reference's
    --  examples', so that a picture asked for twice is the same picture.
@@ -68,18 +72,46 @@ package body Model_Runner.CLI.Execute.Image_Command is
          return Result;
       end Read_Init;
 
+      --  The pictures an edit is drawn beside, read before anything else
+      --  is too.
+      type Raster_Array is array (Positive range <>) of Model_Runner.Images.Raster;
+
+      function Read_References (Read : in out E.Error_Info) return Raster_Array is
+         Result : Raster_Array (1 .. Item.Image_Ref_Count);
+      begin
+         for Index in Result'Range loop
+            exit when E.Is_Error (Read);
+            Model_Runner.Images.Load (T.To_String (Item.Image_Refs (Index)), Result (Index), Read);
+         end loop;
+         return Result;
+      end Read_References;
+
       function Side (Given : Positive; Found : Natural) return Positive
-      is (if T.Is_Empty (Item.Image_Init) or else Item.Picture_Size_Set or else Found = 0 then Given
+      is (if Item.Picture_Size_Set or else Found = 0 then Given
           else Positive'Min (4_096, (Found + Dec.Upscale - 1) / Dec.Upscale * Dec.Upscale));
 
       Init_Read    : E.Error_Info := E.Success;
       Init_Picture : Model_Runner.Images.Raster := Read_Init (Init_Read);
-      Height  : constant Positive := Side (Item.Image_Height, Init_Picture.Height);
-      Width   : constant Positive := Side (Item.Image_Width, Init_Picture.Width);
+      References   : Raster_Array := Read_References (Init_Read);
+      --  The picture drawn from sets the size, else the first reference,
+      --  as the reference takes it, unless --size says.
+      Height  : constant Positive :=
+        Side (Item.Image_Height,
+              (if Init_Picture.Height > 0 then Init_Picture.Height
+               elsif References'Length > 0 then References (1).Height else 0));
+      Width   : constant Positive :=
+        Side (Item.Image_Width,
+              (if Init_Picture.Width > 0 then Init_Picture.Width
+               elsif References'Length > 0 then References (1).Width else 0));
       Rows    : constant Positive := Height / Dec.Upscale;
       Columns : constant Positive := Width / Dec.Upscale;
       --  What the picture drawn from is to the latent, encoded.
       Init_Latent : Tk.Real_Array_Access;
+      --  Each reference at the size it is encoded at, its latent, and each
+      --  prompt row's slot, the prompt's and the negative's.
+      Sized       : Raster_Array (References'Range);
+      Ref_Latents : array (References'Range) of Tk.Real_Array_Access;
+      Text_Slots, Away_Slots : Q.Prompts.Slots_Access;
       --  A latent a picture, each drawn from the seed after the one
       --  before's.
       Latents : array (1 .. Item.Image_Count) of Tk.Real_Array_Access;
@@ -88,6 +120,19 @@ package body Model_Runner.CLI.Execute.Image_Command is
       Away      : Tk.Real_Array_Access;
       Away_Rows : Natural := 0;
       Condition : E.Error_Info;
+
+      procedure Free is new Ada.Unchecked_Deallocation (Q.Slot_List, Q.Prompts.Slots_Access);
+
+      procedure Release_References is
+      begin
+         for Index in References'Range loop
+            Model_Runner.Images.Free (References (Index));
+            Model_Runner.Images.Free (Sized (Index));
+            Tk.Free (Ref_Latents (Index));
+         end loop;
+         Free (Text_Slots);
+         Free (Away_Slots);
+      end Release_References;
 
       procedure Fail (Reason : E.Error_Info) is
       begin
@@ -100,6 +145,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
          Tk.Free (Away);
          Tk.Free (Init_Latent);
          Model_Runner.Images.Free (Init_Picture);
+         Release_References;
       end Fail;
 
       procedure Draw (Team : Model_Runner.Backend.CPU.Pool_Reference) is
@@ -154,7 +200,9 @@ package body Model_Runner.CLI.Execute.Image_Command is
                     & "|" & Stamp & "|" & (if On_Device then "device" else "cpu") & "|" & Q.Prompts.Template (Prompt);
                end Key_Of;
             begin
-               if not Item.No_Cache then
+               --  Beside pictures the rows are read afresh: what the pictures
+               --  are is no part of the key.
+               if not Item.No_Cache and then References'Length = 0 then
                   Q.Prompts.Find_Kept (Key_Of (Item.Prompts (1).all), Text, Text_Rows);
                   if Leaning then
                      Q.Prompts.Find_Kept (Key_Of (Negative), Away, Away_Rows);
@@ -178,6 +226,30 @@ package body Model_Runner.CLI.Execute.Image_Command is
                      --  from a cold cache 7 s against 24.
                      Load ((if Ready then Chosen else Model_Runner.CLI.Execute.Support.With_Panels (Asked)), Screen,
                            Source, Container, Prepared, True, null, null, Condition);
+                     if E.Is_Ok (Condition) and then References'Length > 0 then
+                        --  The prompt and the negative alike read beside the
+                        --  pictures, each through the vision tower.
+                        declare
+                           Eyes  : Model_Runner.Vision.Encoder;
+                           Shown : Q.Prompts.Picture_List (Sized'Range);
+                        begin
+                           for Index in Sized'Range loop
+                              Shown (Index) := Sized (Index);
+                           end loop;
+                           Model_Runner.Vision.Open
+                             (Eyes, Path_Of (T.To_String (Item.Projector_Path), Projector_Name), Condition);
+                           if E.Is_Ok (Condition) then
+                              Q.Prompts.Encode_With_Pictures
+                                (Prepared, Eyes, Item.Prompts (1).all, Shown, Text, Text_Rows, Text_Slots,
+                                 Condition, Team);
+                           end if;
+                           if E.Is_Ok (Condition) and then Leaning then
+                              Q.Prompts.Encode_With_Pictures
+                                (Prepared, Eyes, Negative, Shown, Away, Away_Rows, Away_Slots, Condition, Team);
+                           end if;
+                           Model_Runner.Vision.Close (Eyes);
+                        end;
+                     end if;
                      if E.Is_Ok (Condition) and then Text = null then
                         Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition, Team);
                         if E.Is_Ok (Condition) and then not Item.No_Cache then
@@ -207,6 +279,37 @@ package body Model_Runner.CLI.Execute.Image_Command is
                return;
             end if;
          end;
+
+         --  Each reference at its size through the VAE's encoder, as the
+         --  picture drawn from is.
+         for Index in References'Range loop
+            exit when E.Is_Error (Condition);
+            declare
+               Planes : Tk.Real_Array_Access;
+               VAE    : Dec.Picture_Decoder;
+               Tall   : constant Positive := Sized (Index).Height;
+               Wide   : constant Positive := Sized (Index).Width;
+            begin
+               Tk.Allocate (N.Element_Count (Dec.Picture_Channels * Tall * Wide), Planes);
+               Tk.Allocate (N.Element_Count (Dec.Latent_Channels * (Tall / Dec.Upscale) * (Wide / Dec.Upscale)),
+                            Ref_Latents (Index));
+               if Planes = null or else Ref_Latents (Index) = null then
+                  Condition := E.Make (E.Memory_Allocation_Failed);
+               else
+                  Dec.From_Raster (Sized (Index), Tall, Wide, Planes.all);
+                  Dec.Open (VAE, Path_Of (T.To_String (Item.VAE_Path), VAE_Name), Condition, Encoder => True);
+               end if;
+               if E.Is_Ok (Condition) then
+                  Dec.Encode (VAE, Planes.all, Tall, Wide, Team, Ref_Latents (Index).all, Condition);
+               end if;
+               Dec.Close (VAE);
+               Tk.Free (Planes);
+            end;
+         end loop;
+         if E.Is_Error (Condition) then
+            Fail (Condition);
+            return;
+         end if;
 
          --  The picture drawn from, encoded on the processor, the encoder let
          --  go after.
@@ -242,6 +345,19 @@ package body Model_Runner.CLI.Execute.Image_Command is
          declare
             Model   : Q.Denoiser;
             On_Device : Boolean := False;
+
+            --  The references' latents as the denoiser takes them.
+            function Pictured return Q.Reference_List is
+               Result : Q.Reference_List (References'Range);
+            begin
+               for Index in Result'Range loop
+                  Result (Index) :=
+                    (Latent  => Ref_Latents (Index),
+                     Rows    => Sized (Index).Height / Dec.Upscale,
+                     Columns => Sized (Index).Width / Dec.Upscale);
+               end loop;
+               return Result;
+            end Pictured;
          begin
             --  Unless --backend names the processor; the decoder follows,
             --  since it uses the device only where it is open.
@@ -267,7 +383,10 @@ package body Model_Runner.CLI.Execute.Image_Command is
                          Guidance => Item.Image_Guidance,
                          Negative => (if Away = null then Q.No_Rows else Away.all), Negative_Rows => Away_Rows,
                          Init => (if Init_Latent = null then Q.No_Rows else Init_Latent.all),
-                         Strength => Item.Image_Strength);
+                         Strength => Item.Image_Strength,
+                         References => Pictured,
+                         Slots => (if Text_Slots = null then Q.No_Slots else Text_Slots.all),
+                         Negative_Slots => (if Away_Slots = null then Q.No_Slots else Away_Slots.all));
             end loop;
             Q.Close (Model);
             Tk.Free (Text);
@@ -344,6 +463,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                Tk.Free (Latent);
             end loop;
          end;
+         Release_References;
          Status := E.Exit_Success;
       end Draw;
    begin
@@ -352,6 +472,15 @@ package body Model_Runner.CLI.Execute.Image_Command is
          Fail (Init_Read);
          return;
       end if;
+      --  Each reference at the size it is encoded at.
+      for Index in References'Range loop
+         declare
+            Wide, Tall : Positive;
+         begin
+            Q.Reference_Size (Width, Height, References (Index).Width, References (Index).Height, Wide, Tall);
+            Model_Runner.Images.Nearest (References (Index), Wide, Tall, Sized (Index));
+         end;
+      end loop;
       --  The arithmetic the step was measured in: activations rounded to
       --  eight bits, its velocity the reference's at a cosine of 0.99999.
       Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.Every_Role);

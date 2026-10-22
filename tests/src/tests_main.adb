@@ -879,6 +879,7 @@ begin
                    Model => To_Unbounded_String (Option ("--model")),
                    Text_Encoder => To_Unbounded_String (Option ("--text-encoder")),
                    VAE => To_Unbounded_String (Option ("--vae")),
+                   Projector => To_Unbounded_String (Option ("--mmproj")),
                    Reference => To_Unbounded_String (Option ("--reference")),
                    Stripe_Bytes =>
                      (if Option ("--stripe-bytes") = "" then 0

@@ -337,15 +337,47 @@ package body Tests.Image_Cases is
    --  The denoiser computed plainly in binary64, from the weights written,
    --  as the reference implementation's description has it
    --  (stable-diffusion.cpp's qwen_image_2_1.hpp): nothing of the engine's.
+   --  With references, as its QwenImage21Layout lays the prefix out: a run
+   --  of slot K's prompt rows gives way to picture K's latent pixels, read
+   --  through img_in, at (p, row - ceil (rows / 2), column - ceil (columns
+   --  / 2)), each seeing up to its picture's last pixel; p on by the
+   --  picture's longer side; the text at (p, p, p), p on by one.
    procedure Reference_Velocity
      (Latent : N.Real_Array; Rows, Columns : Positive; Time : Long_Float; Text : N.Real_Array;
-      Text_Rows : Natural; Blocks : Natural; Answer : out N.Wide_Real_Array)
+      Text_Rows : Natural; Blocks : Natural; Answer : out N.Wide_Real_Array;
+      Refs  : Q.Reference_List := Q.No_References;
+      Slots : Q.Slot_List := Q.No_Slots)
    is
       use Ada.Numerics.Long_Elementary_Functions;
       type Matrix is array (Natural range <>, Natural range <>) of Long_Float;
       Image : constant Natural := Rows * Columns;
-      Total : constant Natural := Text_Rows + Image;
       Heads : constant Natural := Width / Head;
+
+      --  The prefix's length, then each of its rows: the prompt row it is,
+      --  or the picture and pixel; its place; the last key it sees.
+      function Prefix_Rows return Natural is
+         Count : Natural := 0;
+      begin
+         for R in 0 .. Text_Rows - 1 loop
+            if Refs'Length = 0 or else Slots (Slots'First + R) = 0 then
+               Count := Count + 1;
+            elsif R = 0 or else Slots (Slots'First + R - 1) /= Slots (Slots'First + R) then
+               Count := Count + Refs (Slots (Slots'First + R)).Rows * Refs (Slots (Slots'First + R)).Columns;
+            end if;
+         end loop;
+         return Count;
+      end Prefix_Rows;
+
+      Prefix : constant Natural := Prefix_Rows;
+      Total  : constant Natural := Prefix + Image;
+      type Row_Facts is record
+         From_Text : Integer := -1;
+         Picture, Pixel : Natural := 0;
+         Place : Matrix (0 .. 0, 0 .. 2);
+         Last  : Natural := 0;
+      end record;
+      Facts : array (0 .. Total - 1) of Row_Facts;
+      Frame : Natural := 0;
 
       function Weight (Name : String; Index : Natural) return Long_Float
       is (Long_Float (Written.Constant_Reference (Name) (N.Element_Count (Index))));
@@ -421,26 +453,13 @@ package body Tests.Image_Cases is
       --  feed-forward's scale, 3 its gate), element I: the prompt's rows
       --  read time nought's.
       function Modulation (R, Part, I : Natural) return Long_Float
-      is (if R < Text_Rows then Zero_Mod (0, Part * Width + I) else Step_Mod (0, Part * Width + I));
+      is (if R < Prefix then Zero_Mod (0, Part * Width + I) else Step_Mod (0, Part * Width + I));
 
       X : Matrix (0 .. Total - 1, 0 .. Width - 1);
 
       --  Position of a row on the three axes.
-      function Place (R, Axis : Natural) return Long_Float is
-      begin
-         if R < Text_Rows then
-            return Long_Float (R);
-         end if;
-         declare
-            Pixel : constant Natural := R - Text_Rows;
-         begin
-            case Axis is
-               when 0 => return Long_Float (Text_Rows);
-               when 1 => return Long_Float (Pixel / Columns) - Long_Float (Rows - Rows / 2);
-               when others => return Long_Float (Pixel mod Columns) - Long_Float (Columns - Columns / 2);
-            end case;
-         end;
-      end Place;
+      function Place (R, Axis : Natural) return Long_Float
+      is (Facts (R).Place (0, Axis));
 
       --  Head normalization and rotation of one projection, in place.
       procedure Normalize_And_Rotate (P : in out Matrix; Gain : String) is
@@ -482,6 +501,44 @@ package body Tests.Image_Cases is
          end loop;
       end Normalize_And_Rotate;
    begin
+      --  The layout.
+      declare
+         At_Row : Natural := 0;
+      begin
+         for R in 0 .. Text_Rows - 1 loop
+            if Refs'Length = 0 or else Slots (Slots'First + R) = 0 then
+               Facts (At_Row).From_Text := R;
+               Facts (At_Row).Place := [0 => [others => Long_Float (Frame)]];
+               Facts (At_Row).Last := At_Row;
+               Frame := Frame + 1;
+               At_Row := At_Row + 1;
+            elsif R = 0 or else Slots (Slots'First + R - 1) /= Slots (Slots'First + R) then
+               declare
+                  K  : constant Positive := Slots (Slots'First + R);
+                  RH : constant Positive := Refs (K).Rows;
+                  RW : constant Positive := Refs (K).Columns;
+               begin
+                  for P in 0 .. RH * RW - 1 loop
+                     Facts (At_Row + P).Picture := K;
+                     Facts (At_Row + P).Pixel := P;
+                     Facts (At_Row + P).Place :=
+                       [0 => [Long_Float (Frame), Long_Float (P / RW) - Long_Float (RH - RH / 2),
+                              Long_Float (P mod RW) - Long_Float (RW - RW / 2)]];
+                     Facts (At_Row + P).Last := At_Row + RH * RW - 1;
+                  end loop;
+                  At_Row := At_Row + RH * RW;
+                  Frame := Frame + Natural'Max (RH, RW);
+               end;
+            end if;
+         end loop;
+         for P in 0 .. Image - 1 loop
+            Facts (Prefix + P).Place :=
+              [0 => [Long_Float (Frame), Long_Float (P / Columns) - Long_Float (Rows - Rows / 2),
+                     Long_Float (P mod Columns) - Long_Float (Columns - Columns / 2)]];
+            Facts (Prefix + P).Last := Total - 1;
+         end loop;
+      end;
+
       --  The prompt: zero-centred root-mean-square norm, linear, tanh GELU,
       --  linear.
       declare
@@ -512,10 +569,12 @@ package body Tests.Image_Cases is
             declare
                Second : constant Matrix := Linear ("txt_in.out_layer.weight", First, Width);
             begin
-               for R in Second'Range (1) loop
-                  for I in Second'Range (2) loop
-                     X (R, I) := Second (R, I);
-                  end loop;
+               for R in 0 .. Prefix - 1 loop
+                  if Facts (R).From_Text >= 0 then
+                     for I in Second'Range (2) loop
+                        X (R, I) := Second (Facts (R).From_Text, I);
+                     end loop;
+                  end if;
                end loop;
             end;
          end;
@@ -534,11 +593,34 @@ package body Tests.Image_Cases is
          begin
             for P in 0 .. Image - 1 loop
                for I in 0 .. Width - 1 loop
-                  X (Text_Rows + P, I) := Rows_In (P, I);
+                  X (Prefix + P, I) := Rows_In (P, I);
                end loop;
             end loop;
          end;
       end;
+      --  Each picture's pixels through img_in too.
+      for R in 0 .. Prefix - 1 loop
+         if Facts (R).From_Text < 0 then
+            declare
+               K      : constant Positive := Facts (R).Picture;
+               Count  : constant Natural := Refs (K).Rows * Refs (K).Columns;
+               Pixels : Matrix (0 .. 0, 0 .. Latent_Channels - 1);
+            begin
+               for C in 0 .. Latent_Channels - 1 loop
+                  Pixels (0, C) :=
+                    Long_Float (Refs (K).Latent (Refs (K).Latent'First
+                                                 + N.Element_Count (C * Count + Facts (R).Pixel)));
+               end loop;
+               declare
+                  Row_In : constant Matrix := Linear ("img_in.weight", Pixels, Width);
+               begin
+                  for I in 0 .. Width - 1 loop
+                     X (R, I) := Row_In (0, I);
+                  end loop;
+               end;
+            end;
+         end if;
+      end loop;
 
       for B_Index in 0 .. Blocks - 1 loop
          declare
@@ -568,7 +650,7 @@ package body Tests.Image_Cases is
                for R in X'Range (1) loop
                   for Hd in 0 .. Heads - 1 loop
                      declare
-                        Last  : constant Natural := (if R < Text_Rows then R else Total - 1);
+                        Last  : constant Natural := Facts (R).Last;
                         Score : array (0 .. Last) of Long_Float;
                         Most, Sum : Long_Float := 0.0;
                      begin
@@ -640,7 +722,7 @@ package body Tests.Image_Cases is
       begin
          for P in 0 .. Image - 1 loop
             declare
-               L : constant Matrix := Layer_Norm (X, Text_Rows + P);
+               L : constant Matrix := Layer_Norm (X, Prefix + P);
             begin
                for I in 0 .. Width - 1 loop
                   Final (P, I) := L (0, I) * (1.0 + Scale (0, I));
@@ -730,6 +812,130 @@ package body Tests.Image_Cases is
          Q.Close (Model);
       end loop;
    end A_Step_Is_The_Plain_Computation;
+
+   --  A step beside pictures: two references of their own shapes in the
+   --  prompt's slots, held to the plain computation laid out as the
+   --  reference lays it out -- once with the prefix worked out, once more
+   --  at another time reading it kept, and across a pool; slots that do
+   --  not match their pictures refused. And the reference's size rule, its
+   --  nearest pixels, and the template that names the pictures.
+   procedure A_Step_Beside_Pictures_Is_The_Plain_Computation (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Grid_Rows    : constant := 3;
+      Grid_Columns : constant := 4;
+      Text_Rows    : constant := 7;
+      Model  : Q.Denoiser;
+      Status : E.Error_Info;
+      Latent : N.Real_Array (0 .. Latent_Channels * Grid_Rows * Grid_Columns - 1);
+      Text   : N.Real_Array (0 .. Text_Rows * Context - 1);
+      First_Ref  : aliased N.Real_Array := [0 .. Latent_Channels * 2 * 2 - 1 => 0.0];
+      Second_Ref : aliased N.Real_Array := [0 .. Latent_Channels * 2 * 4 - 1 => 0.0];
+      Refs   : constant Q.Reference_List :=
+        [(Latent => First_Ref'Unchecked_Access, Rows => 2, Columns => 2),
+         (Latent => Second_Ref'Unchecked_Access, Rows => 2, Columns => 4)];
+      Slots  : constant Q.Slot_List (0 .. Text_Rows - 1) := [0, 1, 0, 2, 2, 0, 0];
+      Answer : N.Real_Array (Latent'Range);
+      Wanted : N.Wide_Real_Array (Latent'Range);
+      Seed   : Natural := 91;
+      Prefix : Q.Prefix_Cache;
+
+      procedure Fill (Values : out N.Real_Array; Scale : N.Real) is
+      begin
+         for Value of Values loop
+            Seed := (Seed * 1_103 + 12_345) mod 65_521;
+            Value := N.Real (Seed mod 401 - 200) / Scale;
+         end loop;
+      end Fill;
+
+      procedure Hold (Time : Long_Float; What : String) is
+         Worst, Largest : Long_Float := 0.0;
+      begin
+         Assert (E.Is_Ok (Status), What & ": the step failed: " & E.Error_Code'Image (Status.Code));
+         Reference_Velocity (Latent, Grid_Rows, Grid_Columns, Time, Text, Text_Rows, 2, Wanted, Refs, Slots);
+         for Index in Answer'Range loop
+            Worst := Long_Float'Max (Worst, abs (Long_Float (Answer (Index)) - Long_Float (Wanted (Index))));
+            Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
+         end loop;
+         Assert (Largest > 1.0E-3 and then Worst <= 1.0E-4 * Largest,
+                 What & " differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
+      end Hold;
+   begin
+      Fill (Latent, 100.0);
+      Fill (Text, 50.0);
+      Fill (First_Ref, 100.0);
+      Fill (Second_Ref, 100.0);
+      Write_Denoiser (Blocks => [0, 1], Eight => False);
+      Q.Open (Model, Path, Status);
+      Assert (E.Is_Ok (Status), "the denoiser did not open");
+
+      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status, Prefix,
+                  Refs, Slots);
+      Hold (500.0, "a step beside pictures");
+      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 250.0, Text, Text_Rows, null, Answer, Status, Prefix,
+                  Refs, Slots);
+      Hold (250.0, "a step reading the pictures kept");
+      Q.Forget (Prefix);
+      declare
+         Team : aliased Model_Runner.Backend.CPU.Pool (3);
+      begin
+         Model_Runner.Backend.CPU.Open (Team);
+         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, Team'Unchecked_Access, Answer,
+                     Status, Prefix, Refs, Slots);
+         Model_Runner.Backend.CPU.Close (Team);
+      end;
+      Hold (500.0, "a step beside pictures across a pool");
+      Q.Forget (Prefix);
+
+      --  A run of slots not a quarter of its picture, and pictures met out
+      --  of order, are refused.
+      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status, Prefix,
+                  Refs, [0, 1, 1, 2, 2, 0, 0]);
+      Assert (Status.Code = E.Tensor_Shape_Mismatch, "a slot run longer than its picture was taken");
+      Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status, Prefix,
+                  Refs, [0, 2, 2, 1, 0, 0, 0]);
+      Assert (Status.Code = E.Tensor_Shape_Mismatch, "pictures met out of order were taken");
+      Q.Forget (Prefix);
+      Q.Close (Model);
+
+      --  The reference's sizes: its own at the picture's area, to 32.
+      declare
+         Wide, Tall : Positive;
+      begin
+         Q.Reference_Size (256, 256, 512, 512, Wide, Tall);
+         Assert (Wide = 256 and then Tall = 256, "a square reference was not sized to the picture");
+         Q.Reference_Size (1024, 1024, 640, 480, Wide, Tall);
+         Assert (Wide = 1184 and then Tall = 896,
+                 "a reference was sized" & Wide'Image & " by" & Tall'Image & ", not 1184 by 896");
+      end;
+
+      --  The nearest pixel: two by two to four by four, each pixel its
+      --  source's at the floor of its place halved.
+      declare
+         use type B.Byte_Count;
+         use type B.Byte;
+         Small, Large : Model_Runner.Images.Raster;
+      begin
+         Small.Width := 2;
+         Small.Height := 2;
+         Small.Pixels := new B.Byte_Array'(0 => 10, 1 => 11, 2 => 12, 3 => 20, 4 => 21, 5 => 22,
+                                           6 => 30, 7 => 31, 8 => 32, 9 => 40, 10 => 41, 11 => 42);
+         Model_Runner.Images.Nearest (Small, 4, 4, Large);
+         Assert (Large.Width = 4 and then Large.Height = 4 and then Large.Pixels'First = 0
+                 and then Large.Pixels (3 * 0) = 10 and then Large.Pixels (3 * 1) = 10
+                 and then Large.Pixels (3 * 2) = 20 and then Large.Pixels (3 * 15) = 40,
+                 "a picture was not resized to its nearest pixels");
+         Model_Runner.Images.Free (Small);
+         Model_Runner.Images.Free (Large);
+      end;
+
+      --  The template that names the pictures.
+      Assert (Q.Prompts.Template_With ("make it green", [2, 1]) =
+                Q.Prompts.System_Turn & "<|im_start|>user" & ASCII.LF
+                & "<image1><|vision_start|><|image_pad|><|image_pad|><|vision_end|>"
+                & " <image2><|vision_start|><|image_pad|><|vision_end|>make it green<|im_end|>" & ASCII.LF
+                & "<|im_start|>assistant" & ASCII.LF,
+              "the template with pictures is not the reference's");
+   end A_Step_Beside_Pictures_Is_The_Plain_Computation;
 
    --  The noise levels are the reference scheduler's, its own code run in
    --  binary32: forty steps for a 512 picture, eight for the smallest, four
@@ -2174,6 +2380,9 @@ package body Tests.Image_Cases is
 
    overriding procedure Register_Tests (T : in out Case_Type) is
    begin
+      Register_Routine
+        (T, A_Step_Beside_Pictures_Is_The_Plain_Computation'Access,
+         "a step beside reference pictures is the plain computation laid out as the reference lays it");
       Register_Routine
         (T, The_Denoiser_Is_Read_Off_Its_Shapes'Access,
          "Qwen-Image 2.1's denoiser, a file that states nothing, is read off its tensors' shapes");

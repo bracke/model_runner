@@ -612,7 +612,10 @@ package body Model_Runner.Qwen_Image is
       Negative  : N.Real_Array := No_Rows;
       Negative_Rows : Natural := 0;
       Init      : N.Real_Array := No_Rows;
-      Strength  : N.Real := 1.0)
+      Strength  : N.Real := 1.0;
+      References : Reference_List := No_References;
+      Slots      : Slot_List := No_Slots;
+      Negative_Slots : Slot_List := No_Slots)
    is
       use type N.Real;
       All_Levels : constant N.Real_Array := (if Turbo then Turbo_Levels else Sigmas (Steps, Rows * Columns));
@@ -659,14 +662,15 @@ package body Model_Runner.Qwen_Image is
             Sigma : constant N.Real := Levels (Levels'First + Element_Count (Step) - 1);
             Next  : constant N.Real := Levels (Levels'First + Element_Count (Step));
          begin
-            Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status, Toward);
+            Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Text, Text_Rows, Pool, Speed.all, Status, Toward,
+                      References, Slots);
             exit when E.Is_Error (Status);
             if Guidance /= 1.0 then
                if Away = null then
                   T.Allocate (Speed'Length, Away);
                end if;
                Velocity (Item, Latent, Rows, Columns, Sigma * 1000.0, Negative, Negative_Rows, Pool, Away.all,
-                         Status, From);
+                         Status, From, References, Negative_Slots);
                exit when E.Is_Error (Status);
                for I in Speed'Range loop
                   Speed (I) := Away (I) + Guidance * (Speed (I) - Away (I));
@@ -685,6 +689,24 @@ package body Model_Runner.Qwen_Image is
       Forget (Toward);
       Forget (From);
    end Sample;
+
+   procedure Reference_Size
+     (Width, Height           : Positive;
+      From_Width, From_Height : Positive;
+      To_Width, To_Height     : out Positive)
+   is
+      --  As the reference's integers and doubles take it: the area times
+      --  the width over the height, divided whole, then its root; the
+      --  height from that width, in double; each rounded half away.
+      Area   : constant Long_Long_Integer := Long_Long_Integer (Width) * Long_Long_Integer (Height);
+      use type N.Wide_Real;
+      Across : constant N.Wide_Real :=
+        N.Sqrt (N.Wide_Real (Area * Long_Long_Integer (From_Width) / Long_Long_Integer (From_Height)));
+      Down   : constant N.Wide_Real := Across * N.Wide_Real (From_Height) / N.Wide_Real (From_Width);
+   begin
+      To_Width := Positive'Max (32, Natural (N.Wide_Real'Floor (Across / 32.0 + 0.5)) * 32);
+      To_Height := Positive'Max (32, Natural (N.Wide_Real'Floor (Down / 32.0 + 0.5)) * 32);
+   end Reference_Size;
 
    function First_Level (Steps : Positive; Strength : N.Real) return Natural is
       use type N.Real;
@@ -712,11 +734,20 @@ package body Model_Runner.Qwen_Image is
    --  the products' are.
    Tile : constant := 8;
 
+   --  The last key each row of a prefix sees, where some see past
+   --  themselves: a reference's latent pixels see their whole picture.
+   type Limit_Array is array (Element_Count range <>) of Element_Count;
+   type Limit_Access is access Limit_Array;
+   procedure Free is new Ada.Unchecked_Deallocation (Limit_Array, Limit_Access);
+
    type Attention_Work is new Model_Runner.Shares.Work with record
       Q, K, V, A : T.Real_Array_Access;
       Image, Asking, Total, Width, Head, Heads : Element_Count := 0;
       --  The first row asking: the rows before it are answered otherwise.
       First_Row : Element_Count := 0;
+      --  Each prompt row's last key, from the first prompt row; null where
+      --  each sees up to itself.
+      Limits : Limit_Access;
    end record;
 
    overriding procedure Run (Item : in out Attention_Work; First : Element_Count; Last : Element_Count) is
@@ -742,14 +773,28 @@ package body Model_Runner.Qwen_Image is
             --  The nearest and the furthest key any row of the tile sees: a
             --  tile of the prompt's rows alone, the prompt's up to its last.
             Low    : constant Element_Count := (if Start >= Item.Image then Item.Image else 0);
-            Reach  : constant Element_Count :=
-              (if Start >= Item.Image then Start + Rows - 1 else Item.Total - 1);
+
+            function Last_Key (Row : Element_Count) return Element_Count
+            is (if Row < Item.Image then Item.Total - 1
+                elsif Item.Limits = null then Row
+                else Item.Limits (Row - Item.Image));
+
+            function Furthest return Element_Count is
+               Most : Element_Count := 0;
+            begin
+               for R in 0 .. Rows - 1 loop
+                  Most := Element_Count'Max (Most, Last_Key (Start + R));
+               end loop;
+               return Most;
+            end Furthest;
+
+            Reach  : constant Element_Count := Furthest;
          begin
             for R in 0 .. Rows - 1 loop
                declare
                   Row   : constant Element_Count := Start + R;
                   From  : constant Element_Count := (if Row >= Item.Image then Item.Image else 0);
-                  Upto  : constant Element_Count := (if Row >= Item.Image then Row else Item.Total - 1);
+                  Upto  : constant Element_Count := Last_Key (Row);
                   Query : constant Element_Count := Row * Item.Width + Column;
                   Most  : Real := Real'First;
                begin
@@ -1009,12 +1054,18 @@ package body Model_Runner.Qwen_Image is
       Chunk_Size := Element_Count (Rows);
    end Set_Chunking;
 
+   procedure Free is new Ada.Unchecked_Deallocation (Slot_List, Slot_Access);
+
    procedure Forget (Cache : in out Prefix_Cache) is
    begin
       T.Free (Cache.Text);
       T.Free (Cache.Keys);
       T.Free (Cache.Values);
+      T.Free (Cache.Pictures);
+      Free (Cache.Slots);
       Cache.Rows := 0;
+      Cache.Text_Rows := 0;
+      Cache.Place := 0;
    end Forget;
 
    --  The most a prefix cache holds, keys and values together, in bytes.
@@ -1049,15 +1100,83 @@ package body Model_Runner.Qwen_Image is
 
    --  Whether a cache holds these prompt rows' keys and values.
    function Holds (Item : Denoiser; Prefix : Prefix_Cache; Text : N.Real_Array; Text_Rows : Natural) return Boolean
-   is (Text_Rows > 0 and then Prefix.Rows = Text_Rows and then Prefix.Text /= null
+   is (Text_Rows > 0 and then Prefix.Text_Rows = Text_Rows and then Prefix.Text /= null
        and then Prefix.Text'Length = Text'Length and then N."=" (Prefix.Text.all, Text)
        and then Prefix.Keys /= null
        and then Prefix.Keys'Length
-                = Element_Count (Item.Shape.Blocks) * Element_Count (Text_Rows) * Element_Count (Item.Shape.Width));
+                = Element_Count (Item.Shape.Blocks) * Element_Count (Prefix.Rows) * Element_Count (Item.Shape.Width));
+
+   --  Whether a cache was kept beside these pictures.
+   function Same_Pictures (Prefix : Prefix_Cache; References : Reference_List) return Boolean is
+      use type N.Real;
+      use type N.Real_Array;
+      At_Value : Element_Count := 0;
+   begin
+      if Prefix.Pictures = null then
+         return False;
+      end if;
+      for One of References loop
+         if At_Value + 2 + One.Latent'Length > Prefix.Pictures'Length
+           or else Prefix.Pictures (At_Value) /= N.Real (One.Rows)
+           or else Prefix.Pictures (At_Value + 1) /= N.Real (One.Columns)
+           or else Prefix.Pictures (At_Value + 2 .. At_Value + 1 + One.Latent'Length) /= One.Latent.all
+         then
+            return False;
+         end if;
+         At_Value := At_Value + 2 + One.Latent'Length;
+      end loop;
+      return At_Value = Prefix.Pictures'Length;
+   end Same_Pictures;
 
    -----------------
    -- Fill_Prefix --
    -----------------
+
+   --  How many rows a prefix is -- the prompt's, each reference's latent
+   --  pixels in place of its slot's rows -- or nought where the slots do
+   --  not match the references: a run of a picture's slots a quarter of
+   --  its pixels long, the pictures met in order, each once.
+   function Prefix_Length
+     (Text_Rows : Natural; References : Reference_List; Slots : Slot_List) return Element_Count
+   is
+      Count : Element_Count := 0;
+      Row   : Natural := 0;
+      Next  : Natural := 0;
+   begin
+      if References'Length = 0 then
+         return Element_Count (Text_Rows);
+      elsif Slots'Length /= Text_Rows then
+         return 0;
+      end if;
+      while Row < Text_Rows loop
+         declare
+            Which : constant Natural := Slots (Slots'First + Row);
+            Run   : Natural := 0;
+         begin
+            if Which = 0 then
+               Count := Count + 1;
+               Row := Row + 1;
+            else
+               while Row + Run < Text_Rows and then Slots (Slots'First + Row + Run) = Which loop
+                  Run := Run + 1;
+               end loop;
+               if Which /= Next + 1 or else Which > References'Length
+                 or else References (References'First + Which - 1).Latent = null
+                 or else 4 * Run /= References (References'First + Which - 1).Rows
+                                    * References (References'First + Which - 1).Columns
+               then
+                  return 0;
+               end if;
+               Next := Which;
+               Count := Count
+                 + Element_Count (References (References'First + Which - 1).Rows
+                                  * References (References'First + Which - 1).Columns);
+               Row := Row + Run;
+            end if;
+         end;
+      end loop;
+      return (if Next = References'Length then Count else 0);
+   end Prefix_Length;
 
    --  The prompt's keys and values in every block, worked out on its rows
    --  alone: they see no image -- each attends to the prompt up to itself
@@ -1066,13 +1185,21 @@ package body Model_Runner.Qwen_Image is
    --  rows through every block: the products on the device where one is
    --  open, the rest across the pool. Prefix is emptied first and holds
    --  them after, unless Status says why not.
+   --
+   --  With references, each slot's run of rows gives way to its picture's
+   --  latent pixels, read through the latent's way in, at (p, row about
+   --  nought, column about nought), seeing every row before the picture
+   --  and the whole of it; the text after goes on at p plus the picture's
+   --  longer side, as the reference lays it out.
    procedure Fill_Prefix
      (Item      : Denoiser;
       Text      : N.Real_Array;
       Text_Rows : Positive;
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Prefix    : in out Prefix_Cache;
-      Status    : out E.Error_Info)
+      Status    : out E.Error_Info;
+      References : Reference_List := No_References;
+      Slots      : Slot_List := No_Slots)
    is
       package CPU renames Model_Runner.Backend.CPU;
       package Device renames Model_Runner.Backend.Device;
@@ -1088,7 +1215,7 @@ package body Model_Runner.Qwen_Image is
       C       : constant Element_Count := Element_Count (Shape.Context);
       Heads   : constant Element_Count := Element_Count (Shape.Heads);
       Pairs   : constant Element_Count := D / 2;
-      Prompt  : constant Element_Count := Element_Count (Text_Rows);
+      Prompt  : constant Element_Count := Prefix_Length (Text_Rows, References, Slots);
       Epsilon : constant Wide := 1.0E-6;
       On_Device : constant Boolean := Device.Is_Ready;
 
@@ -1096,10 +1223,20 @@ package body Model_Runner.Qwen_Image is
       --  half where the host's work reads a prompt row's; the angles.
       X, H, Q, K, V, A, G, Y, Times, Hidden, Modulation, Gates, Cosines, Sines : T.Real_Array_Access;
 
+      --  Each prefix row's prompt row, or -1 for a picture's pixel; its
+      --  picture and pixel; its place; the last key it sees.
+      type Index_Array is array (Element_Count range <>) of Integer;
+      type Index_Access is access Index_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Index_Array, Index_Access);
+      From_Row, Picture, Pixel, Place_T, Place_H, Place_W : Index_Access;
+      Limits : Limit_Access;
+
       procedure Release is
       begin
          T.Free (X); T.Free (H); T.Free (Q); T.Free (K); T.Free (V); T.Free (A); T.Free (G); T.Free (Y);
          T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Gates); T.Free (Cosines); T.Free (Sines);
+         Free (From_Row); Free (Picture); Free (Pixel); Free (Place_T); Free (Place_H); Free (Place_W);
+         Free (Limits);
       end Release;
 
       procedure Product (Weight : T.View; Vectors : T.Real_Array_Access; Count : Element_Count;
@@ -1126,9 +1263,14 @@ package body Model_Runner.Qwen_Image is
       end Share;
 
       Kept : constant Element_Count := Element_Count (Shape.Blocks) * Prompt * W;
+      Next_Place : Integer := 0;
    begin
       Status := E.Success;
       Forget (Prefix);
+      if Prompt = 0 then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
       T.Allocate (Prompt * Element_Count'Max (W, C), X);
       T.Allocate (Prompt * Element_Count'Max (W, C), H);
       T.Allocate (Prompt * W, Q);
@@ -1156,7 +1298,64 @@ package body Model_Runner.Qwen_Image is
          Status := E.Make (E.Memory_Allocation_Failed);
          return;
       end if;
+      From_Row := new Index_Array (0 .. Prompt - 1);
+      Picture := new Index_Array (0 .. Prompt - 1);
+      Pixel := new Index_Array (0 .. Prompt - 1);
+      Place_T := new Index_Array (0 .. Prompt - 1);
+      Place_H := new Index_Array (0 .. Prompt - 1);
+      Place_W := new Index_Array (0 .. Prompt - 1);
+      if References'Length > 0 then
+         Limits := new Limit_Array (0 .. Prompt - 1);
+      end if;
 
+      --  The layout: a prompt token at (p, p, p), p one on; a picture's
+      --  pixels at (p, row - ceil (rows / 2), column - ceil (columns / 2)),
+      --  each seeing to the picture's last, p on by its longer side.
+      declare
+         At_Row : Element_Count := 0;
+         Row    : Natural := 0;
+      begin
+         while Row < Text_Rows loop
+            declare
+               Which : constant Natural := (if References'Length = 0 then 0 else Slots (Slots'First + Row));
+            begin
+               if Which = 0 then
+                  From_Row (At_Row) := Row;
+                  Picture (At_Row) := 0;
+                  Pixel (At_Row) := 0;
+                  Place_T (At_Row) := Next_Place;
+                  Place_H (At_Row) := Next_Place;
+                  Place_W (At_Row) := Next_Place;
+                  if Limits /= null then
+                     Limits (At_Row) := At_Row;
+                  end if;
+                  Next_Place := Next_Place + 1;
+                  At_Row := At_Row + 1;
+                  Row := Row + 1;
+               else
+                  declare
+                     Seen  : Reference renames References (References'First + Which - 1);
+                     Count : constant Element_Count := Element_Count (Seen.Rows * Seen.Columns);
+                  begin
+                     for P in 0 .. Count - 1 loop
+                        From_Row (At_Row + P) := -1;
+                        Picture (At_Row + P) := Which;
+                        Pixel (At_Row + P) := Integer (P);
+                        Place_T (At_Row + P) := Next_Place;
+                        Place_H (At_Row + P) :=
+                          Integer (P / Element_Count (Seen.Columns)) - (Seen.Rows - Seen.Rows / 2);
+                        Place_W (At_Row + P) :=
+                          Integer (P mod Element_Count (Seen.Columns)) - (Seen.Columns - Seen.Columns / 2);
+                        Limits (At_Row + P) := At_Row + Count - 1;
+                     end loop;
+                     At_Row := At_Row + Count;
+                     Next_Place := Next_Place + Integer'Max (Seen.Rows, Seen.Columns);
+                     Row := Row + Natural (Count) / 4;
+                  end;
+               end if;
+            end;
+         end loop;
+      end;
       --  Time nought through the two linears: the sinusoid's cosines are
       --  one and its sines nought.
       declare
@@ -1189,47 +1388,104 @@ package body Model_Runner.Qwen_Image is
          T.Free (Nought);
       end;
 
-      --  The prompt's rows in, as Velocity takes them.
-      for Row in 0 .. Prompt - 1 loop
-         declare
-            Square : Wide := 0.0;
-         begin
-            for I in 0 .. C - 1 loop
-               Square := Square + Wide (Text (Text'First + Row * C + I)) ** 2;
-            end loop;
-            declare
-               Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (C) + Epsilon);
-            begin
-               for I in 0 .. C - 1 loop
-                  H (Row * C + I) :=
-                    Real (Wide (Text (Text'First + Row * C + I)) * Inverse * (1.0 + Wide (Item.Text_Norm (I))));
+      --  The prompt's rows in, as Velocity takes them, gathered: a gain of
+      --  one plus the stored one, two linears with the tanh form of the
+      --  Gaussian unit between; then each to its place in the prefix.
+      declare
+         Words : Element_Count := 0;
+      begin
+         for At_Row in 0 .. Prompt - 1 loop
+            if From_Row (At_Row) >= 0 then
+               declare
+                  Row    : constant Element_Count := Element_Count (From_Row (At_Row));
+                  Square : Wide := 0.0;
+               begin
+                  for I in 0 .. C - 1 loop
+                     Square := Square + Wide (Text (Text'First + Row * C + I)) ** 2;
+                  end loop;
+                  declare
+                     Inverse : constant Wide := 1.0 / N.Sqrt (Square / Wide (C) + Epsilon);
+                  begin
+                     for I in 0 .. C - 1 loop
+                        H (Words * C + I) :=
+                          Real (Wide (Text (Text'First + Row * C + I)) * Inverse * (1.0 + Wide (Item.Text_Norm (I))));
+                     end loop;
+                  end;
+                  Words := Words + 1;
+               end;
+            end if;
+         end loop;
+         if Words > 0 then
+            Product (Item.Text_In_First, H, Words, Y);
+            if E.Is_Ok (Status) then
+               for I in 0 .. Words * W - 1 loop
+                  declare
+                     Z : constant Wide := Wide (Y (I));
+                  begin
+                     Y (I) := Real (0.5 * Z * (1.0 + N.Tanh (0.797_884_560_802_865_4 * (Z + 0.044_715 * Z ** 3))));
+                  end;
                end loop;
-            end;
+            end if;
+            Product (Item.Text_In_Second, Y, Words, A);
+         end if;
+         if E.Is_Ok (Status) then
+            Words := 0;
+            for At_Row in 0 .. Prompt - 1 loop
+               if From_Row (At_Row) >= 0 then
+                  X (At_Row * W .. At_Row * W + W - 1) := A (Words * W .. Words * W + W - 1);
+                  Words := Words + 1;
+               end if;
+            end loop;
+         end if;
+      end;
+
+      --  Each picture's latent pixels, a pixel's channels each, through the
+      --  latent's way in, to their places.
+      for Which in References'Range loop
+         exit when E.Is_Error (Status);
+         declare
+            Seen     : Reference renames References (Which);
+            Count    : constant Element_Count := Element_Count (Seen.Rows * Seen.Columns);
+            Channels : constant Element_Count := Element_Count (Shape.In_Channels);
+            Pixels   : T.Real_Array_Access;
+            Rows_Out : T.Real_Array_Access;
+            First    : Element_Count := 0;
+         begin
+            if Seen.Latent'Length /= Channels * Count then
+               Status := E.Make (E.Tensor_Shape_Mismatch);
+               exit;
+            end if;
+            while Picture (First) /= Which - References'First + 1 loop
+               First := First + 1;
+            end loop;
+            T.Allocate (Count * Channels, Pixels);
+            T.Allocate (Count * W, Rows_Out);
+            for P in 0 .. Count - 1 loop
+               for Channel in 0 .. Channels - 1 loop
+                  Pixels (P * Channels + Channel) := Seen.Latent (Seen.Latent'First + Channel * Count + P);
+               end loop;
+            end loop;
+            Product (Item.Image_In, Pixels, Count, Rows_Out);
+            if E.Is_Ok (Status) then
+               X (First * W .. (First + Count) * W - 1) := Rows_Out (0 .. Count * W - 1);
+            end if;
+            T.Free (Pixels);
+            T.Free (Rows_Out);
          end;
       end loop;
-      Product (Item.Text_In_First, H, Prompt, Y);
-      if E.Is_Ok (Status) then
-         for I in 0 .. Prompt * W - 1 loop
-            declare
-               Z : constant Wide := Wide (Y (I));
-            begin
-               Y (I) := Real (0.5 * Z * (1.0 + N.Tanh (0.797_884_560_802_865_4 * (Z + 0.044_715 * Z ** 3))));
-            end;
-         end loop;
-      end if;
-      Product (Item.Text_In_Second, Y, Prompt, X);
 
-      --  A prompt token at (p, p, p).
+      --  Each row's angles, at its place.
       for Row in 0 .. Prompt - 1 loop
          declare
-            Pair : Element_Count := 0;
+            Place : constant array (0 .. 2) of Integer := [Place_T (Row), Place_H (Row), Place_W (Row)];
+            Pair  : Element_Count := 0;
          begin
             for Axis in Axis_Pairs'Range loop
                for J in 0 .. Axis_Pairs (Axis) - 1 loop
                   declare
                      Omega : constant Real :=
                        Real (1.0 / N.Exp (N.Log (10_000.0) * Wide (2 * J) / Wide (2 * Axis_Pairs (Axis))));
-                     Angle : constant Real := Real (Row) * Omega;
+                     Angle : constant Real := Real (Place (Axis)) * Omega;
                   begin
                      Cosines (Row * Pairs + Pair) := Real (N.Cos (Wide (Angle)));
                      Sines (Row * Pairs + Pair) := Real (N.Sin (Wide (Angle)));
@@ -1247,7 +1503,7 @@ package body Model_Runner.Qwen_Image is
             Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
             Job     : aliased Attention_Work :=
               (Q => Q, K => K, V => V, A => A, Image => 0, Asking => Prompt, Total => Prompt, Width => W,
-               Head => D, Heads => Heads, First_Row => 0);
+               Head => D, Heads => Heads, First_Row => 0, Limits => Limits);
          begin
             Share (Norm_Rows, Part => 0);
             Product (Layer.Query, H, Prompt, Q);
@@ -1282,7 +1538,27 @@ package body Model_Runner.Qwen_Image is
       Release;
       if E.Is_Ok (Status) then
          Prefix.Text.all := Text;
-         Prefix.Rows := Text_Rows;
+         Prefix.Rows := Natural (Prompt);
+         Prefix.Text_Rows := Text_Rows;
+         Prefix.Place := Next_Place;
+         if References'Length > 0 then
+            Prefix.Slots := new Slot_List'(Slots);
+            declare
+               Length : Element_Count := 0;
+            begin
+               for One of References loop
+                  Length := Length + 2 + One.Latent'Length;
+               end loop;
+               T.Allocate (Length, Prefix.Pictures);
+               Length := 0;
+               for One of References loop
+                  Prefix.Pictures (Length) := Real (One.Rows);
+                  Prefix.Pictures (Length + 1) := Real (One.Columns);
+                  Prefix.Pictures (Length + 2 .. Length + 1 + One.Latent'Length) := One.Latent.all;
+                  Length := Length + 2 + One.Latent'Length;
+               end loop;
+            end;
+         end if;
       else
          Forget (Prefix);
       end if;
@@ -1299,7 +1575,9 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out N.Real_Array;
       Status    : out E.Error_Info;
-      Prefix    : in out Prefix_Cache);
+      Prefix    : in out Prefix_Cache;
+      Prompt_Rows : Natural;
+      Place       : Natural);
 
    procedure Velocity
      (Item      : Denoiser;
@@ -1312,13 +1590,41 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out N.Real_Array;
       Status    : out E.Error_Info;
-      Prefix    : in out Prefix_Cache) is
+      Prefix    : in out Prefix_Cache;
+      References : Reference_List := No_References;
+      Slots      : Slot_List := No_Slots) is
    begin
+      --  With references the prompt's rows are kept whatever their room:
+      --  only kept rows carry the pictures in their slots.
+      if References'Length > 0 then
+         Status := E.Success;
+         if not Item.Ready or else Text_Rows = 0
+           or else Text'Length /= Element_Count (Text_Rows) * Element_Count (Item.Shape.Context)
+         then
+            Result := [others => 0.0];
+            Status := E.Make (E.Tensor_Shape_Mismatch);
+            return;
+         end if;
+         if not (Holds (Item, Prefix, Text, Text_Rows) and then Prefix.Slots /= null
+                 and then Prefix.Slots.all = Slots and then Same_Pictures (Prefix, References))
+         then
+            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, References, Slots);
+            if E.Is_Error (Status) then
+               Result := [others => 0.0];
+               return;
+            end if;
+         end if;
+         Velocity_Body (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Status, Prefix,
+                        Prompt_Rows => Prefix.Rows, Place => Prefix.Place);
+         return;
+      end if;
+
       --  The prompt's rows kept before the step that would keep them, so
       --  that every step carries the image's alone -- unless they would
       --  take too much room, or the denoiser or the rows are not what the
       --  step is given, which the step itself then says.
-      if Item.Ready and then Text_Rows > 0 and then not Holds (Item, Prefix, Text, Text_Rows)
+      if Item.Ready and then Text_Rows > 0
+        and then (not Holds (Item, Prefix, Text, Text_Rows) or else Prefix.Slots /= null)
         and then Text'Length = Element_Count (Text_Rows) * Element_Count (Item.Shape.Context)
         and then Long_Long_Integer (Item.Shape.Blocks) * Long_Long_Integer (Text_Rows)
                  * Long_Long_Integer (Item.Shape.Width) * 8 <= Most_Kept
@@ -1329,7 +1635,8 @@ package body Model_Runner.Qwen_Image is
             return;
          end if;
       end if;
-      Velocity_Body (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Status, Prefix);
+      Velocity_Body (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Status, Prefix,
+                     Prompt_Rows => Text_Rows, Place => Text_Rows);
    end Velocity;
 
    procedure Velocity_Body
@@ -1343,7 +1650,9 @@ package body Model_Runner.Qwen_Image is
       Pool      : Model_Runner.Backend.CPU.Pool_Reference;
       Result    : out N.Real_Array;
       Status    : out E.Error_Info;
-      Prefix    : in out Prefix_Cache)
+      Prefix    : in out Prefix_Cache;
+      Prompt_Rows : Natural;
+      Place       : Natural)
    is
       package CPU renames Model_Runner.Backend.CPU;
       subtype Real is N.Real;
@@ -1357,7 +1666,11 @@ package body Model_Runner.Qwen_Image is
       D       : constant Element_Count := Element_Count (Shape.Head_Size);
       Heads   : constant Element_Count := Element_Count (Shape.Heads);
       Image   : constant Element_Count := Element_Count (Rows) * Element_Count (Columns);
-      Prompt  : constant Element_Count := Element_Count (Text_Rows);
+      --  The prefix's rows: the prompt's, or with references the prompt's
+      --  with each picture's pixels in its slot, which only a kept prefix
+      --  carries.
+      Prompt  : constant Element_Count := Element_Count (Prompt_Rows);
+      Pictured : constant Boolean := Prompt_Rows /= Text_Rows;
       Total   : constant Element_Count := Prompt + Image;
       Epsilon : constant Wide := 1.0E-6;
 
@@ -1369,10 +1682,11 @@ package body Model_Runner.Qwen_Image is
       Kept    : constant Element_Count := Blocks * Prompt * W;
       Reuse   : constant Boolean :=
         Prompt > 0 and then Prefix.Rows = Natural (Prompt) and then Prefix.Text /= null
+        and then Pictured = (Prefix.Slots /= null)
         and then Prefix.Text'Length = Text'Length and then N."=" (Prefix.Text.all, Text)
         and then Prefix.Keys /= null and then Prefix.Keys'Length = Kept;
       Keep    : constant Boolean :=
-        not Reuse and then Prompt > 0 and then Long_Long_Integer (Kept) * 8 <= Most_Kept;
+        not Reuse and then not Pictured and then Prompt > 0 and then Long_Long_Integer (Kept) * 8 <= Most_Kept;
       Live    : constant Element_Count := (if Reuse then Image else Total);
       --  Whether the blocks ran on the device whole.
       Resident : Boolean := False;
@@ -1547,7 +1861,7 @@ package body Model_Runner.Qwen_Image is
             declare
                Job : aliased Attention_Work :=
                  (Q => Q, K => K, V => V, A => A, Image => Image, Asking => Live, Total => Total, Width => W,
-                  Head => D, Heads => Heads, First_Row => Image);
+                  Head => D, Heads => Heads, First_Row => Image, Limits => null);
             begin
                CPU.Dispatch_Shares
                  (Pool, Heads * ((Live - Image + Tile - 1) / Tile), Job'Unchecked_Access, Status,
@@ -2060,7 +2374,8 @@ package body Model_Runner.Qwen_Image is
       if not Item.Ready
         or else Latent'Length /= Element_Count (Shape.In_Channels) * Image
         or else Result'Length /= Element_Count (Shape.Out_Channels) * Image
-        or else Text'Length /= Prompt * Element_Count (Shape.Context)
+        or else Text'Length /= Element_Count (Text_Rows) * Element_Count (Shape.Context)
+        or else (Pictured and then not Reuse)
       then
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
@@ -2207,7 +2522,8 @@ package body Model_Runner.Qwen_Image is
                   Down  : constant Integer := Integer (Pixel / Element_Count (Columns));
                   Along : constant Integer := Integer (Pixel mod Element_Count (Columns));
                begin
-                  Place := [Wide (Prompt), Wide (Down - (Rows - Rows / 2)), Wide (Along - (Columns - Columns / 2))];
+                  Place := [Wide (Velocity_Body.Place), Wide (Down - (Rows - Rows / 2)),
+                            Wide (Along - (Columns - Columns / 2))];
                end;
             end if;
             for Axis in Axis_Pairs'Range loop
@@ -2295,6 +2611,8 @@ package body Model_Runner.Qwen_Image is
          if E.Is_Ok (Status) then
             Prefix.Text.all := Text;
             Prefix.Rows := Natural (Prompt);
+            Prefix.Text_Rows := Natural (Prompt);
+            Prefix.Place := Natural (Prompt);
          else
             Forget (Prefix);
          end if;
