@@ -2361,21 +2361,29 @@ package body Tests.Image_Cases is
          Assert (E.Is_Ok (Status), "the denoiser did not open");
          declare
             Prefix : Q.Prefix_Cache;
-            Within : constant Long_Float := (if On_Device then 2.0E-3 else 1.0E-4);
-            --  A step reading kept rows runs every block on the device as
-            --  one sequence: 2.2e-4 of the largest value, where turning by
-            --  the angles' sines and cosines swapped made 1.2e-3.
-            Reading : constant Long_Float := (if On_Device then 6.0E-4 else 1.0E-4);
+            --  A step runs every block on the device as one sequence, a
+            --  step keeping the prompt's rows too -- each block's prompt
+            --  rows worked just before its image's: 2.2e-4 of the largest
+            --  value, where turning by the angles' sines and cosines
+            --  swapped made 1.2e-3.
+            Within : constant Long_Float := (if On_Device then 6.0E-4 else 1.0E-4);
          begin
             Held (Text, 500.0, Prefix, "a step keeping the prompt's rows", Within);
-            Held (Text, 300.0, Prefix, "a step reading them at another time", Reading);
+            --  The image's rows carried past what the prompt's products
+            --  answered into: the room holds both.
+            Assert (not On_Device
+                    or else Interfaces.">=" (Device.Result_Room,
+                                             Interfaces.Unsigned_64 (Grid_Rows * Grid_Columns * Width * 4)),
+                    "the result room does not hold the image's carried rows");
+            Held (Text, 300.0, Prefix, "a step reading them at another time", Within);
             Held (Other, 300.0, Prefix, "a step for another prompt", Within);
-            Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Reading);
+            Held (Other, 700.0, Prefix, "a step reading that prompt's rows", Within);
             --  And through each block a chunk of rows at a time, the way a
             --  large picture goes: 132 rows as 50, 50 and 32.
             if On_Device then
                Q.Set_Chunking (Past => 64, Rows => 50);
-               Held (Other, 400.0, Prefix, "a step in chunks", Reading);
+               Held (Text, 400.0, Prefix, "a step in chunks keeping the prompt's rows", Within);
+               Held (Text, 600.0, Prefix, "a step in chunks", Within);
                Q.Set_Chunking;
             end if;
             Q.Forget (Prefix);

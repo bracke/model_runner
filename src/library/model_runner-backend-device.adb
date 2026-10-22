@@ -2321,6 +2321,9 @@ package body Model_Runner.Backend.Device is
       end if;
    end Activation_Room;
 
+   function Result_Room return Interfaces.Unsigned_64
+   is (if Ready_Now then Products.Result_Room (Engine) else 0);
+
    function Kept_Answer return System.Address
    is (if Ready_Now then Products.Kept_Answer (Engine) else System.Null_Address);
 
@@ -6784,7 +6787,8 @@ package body Model_Runner.Backend.Device is
 
    procedure Hold
      (Weight : T.View;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Ahead  : Boolean := False)
    is
       Packing : Products.Weight_Packing;
       Known   : Boolean;
@@ -6811,7 +6815,7 @@ package body Model_Runner.Backend.Device is
            (Engine, Storage, Weight.Offset, Packing,
             Natural (Weight.Rows), Natural (Weight.Columns),
             Key => Storage (Storage'First + Weight.Offset)'Address,
-            Ok => Ok);
+            Ok => Ok, Ahead => Ahead);
       end;
 
       if not Ok then

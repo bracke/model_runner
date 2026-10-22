@@ -1364,6 +1364,13 @@ package body Model_Runner.Qwen_Image is
    --  nought, column about nought), seeing every row before the picture
    --  and the whole of it; the text after goes on at p plus the picture's
    --  longer side, as the reference lays it out.
+   --
+   --  Beside, where given, is run once what comes before the blocks is
+   --  done and Prefix already says what it holds: it is handed Fill_To,
+   --  which works the blocks not yet worked up to and with Last, and says
+   --  whether they went. The blocks it leaves are worked after it. A step
+   --  run so works each block's prompt rows just before its image rows --
+   --  the block's matrices go up while the device works the block before.
    procedure Fill_Prefix
      (Item      : Denoiser;
       Text      : N.Real_Array;
@@ -1372,7 +1379,9 @@ package body Model_Runner.Qwen_Image is
       Prefix    : in out Prefix_Cache;
       Status    : out E.Error_Info;
       References : Reference_List := No_References;
-      Slots      : Slot_List := No_Slots)
+      Slots      : Slot_List := No_Slots;
+      Beside     : access procedure
+                     (Fill_To : not null access procedure (Last : Positive; Ok : out Boolean)) := null)
    is
       package CPU renames Model_Runner.Backend.CPU;
       package Device renames Model_Runner.Backend.Device;
@@ -1669,46 +1678,8 @@ package body Model_Runner.Qwen_Image is
          end;
       end loop;
 
-      for Index in Item.Layers'Range loop
-         exit when E.Is_Error (Status);
-         declare
-            Layer   : Block renames Item.Layers (Index);
-            Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
-            Job     : aliased Attention_Work :=
-              (Q => Q, K => K, V => V, A => A, Image => 0, Asking => Prompt, Total => Prompt, Width => W,
-               Head => D, Heads => Heads, First_Row => 0, Limits => Limits);
-         begin
-            Share (Norm_Rows, Part => 0);
-            Product (Layer.Query, H, Prompt, Q);
-            Product (Layer.Key, H, Prompt, K);
-            Product (Layer.Value, H, Prompt, V);
-            Share (Turn_Rows, Gain_Q => Layer.Query_Norm, Gain_K => Layer.Key_Norm);
-            if E.Is_Ok (Status) then
-               Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1) := K (0 .. Prompt * W - 1);
-               Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1) := V (0 .. Prompt * W - 1);
-               CPU.Dispatch_Shares
-                 (Pool, Heads * ((Prompt + Tile - 1) / Tile), Job'Unchecked_Access, Status,
-                  Cost => Prompt * Prompt * W);
-            end if;
-            Product (Layer.Attention_Out, A, Prompt, Y);
-            Share (Gate_Add, Part => 1);
-            Share (Norm_Rows, Part => 2);
-            --  On the device through the gate's and the up's rows apart,
-            --  the matrices the whole blocks keep there, not the two in
-            --  one a second time.
-            if On_Device then
-               if E.Is_Ok (Status) then
-                  Device.Dispatch_Gated (Layer.Gate, Layer.Up, Layer.Feed_Out, H, Prompt, 0, A, Status);
-               end if;
-            else
-               Product (Layer.Gate_Up, H, Prompt, G);
-               Share (Gated_Silu);
-               Product (Layer.Feed_Out, Y, Prompt, A);
-            end if;
-            Share (Gate_Add, Part => 3);
-         end;
-      end loop;
-      Release;
+      --  What Prefix holds, said before its blocks are worked, so that
+      --  a step run beside them finds it its own.
       if E.Is_Ok (Status) then
          Prefix.Text.all := Text;
          Prefix.Rows := Natural (Prompt);
@@ -1732,7 +1703,67 @@ package body Model_Runner.Qwen_Image is
                end loop;
             end;
          end if;
-      else
+      end if;
+      declare
+         --  The blocks worked so far.
+         Done : Natural := Item.Layers'First - 1;
+
+         procedure Fill_To (Last : Positive; Ok : out Boolean) is
+         begin
+            for Index in Done + 1 .. Last loop
+               exit when E.Is_Error (Status);
+               declare
+                  Layer   : Block renames Item.Layers (Index);
+                  Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
+                  Job     : aliased Attention_Work :=
+                    (Q => Q, K => K, V => V, A => A, Image => 0, Asking => Prompt, Total => Prompt, Width => W,
+                     Head => D, Heads => Heads, First_Row => 0, Limits => Limits);
+               begin
+                  Share (Norm_Rows, Part => 0);
+                  Product (Layer.Query, H, Prompt, Q);
+                  Product (Layer.Key, H, Prompt, K);
+                  Product (Layer.Value, H, Prompt, V);
+                  Share (Turn_Rows, Gain_Q => Layer.Query_Norm, Gain_K => Layer.Key_Norm);
+                  if E.Is_Ok (Status) then
+                     Prefix.Keys (Kept_At .. Kept_At + Prompt * W - 1) := K (0 .. Prompt * W - 1);
+                     Prefix.Values (Kept_At .. Kept_At + Prompt * W - 1) := V (0 .. Prompt * W - 1);
+                     CPU.Dispatch_Shares
+                       (Pool, Heads * ((Prompt + Tile - 1) / Tile), Job'Unchecked_Access, Status,
+                        Cost => Prompt * Prompt * W);
+                  end if;
+                  Product (Layer.Attention_Out, A, Prompt, Y);
+                  Share (Gate_Add, Part => 1);
+                  Share (Norm_Rows, Part => 2);
+                  --  On the device through the gate's and the up's rows apart,
+                  --  the matrices the whole blocks keep there, not the two in
+                  --  one a second time.
+                  if On_Device then
+                     if E.Is_Ok (Status) then
+                        Device.Dispatch_Gated (Layer.Gate, Layer.Up, Layer.Feed_Out, H, Prompt, 0, A, Status);
+                     end if;
+                  else
+                     Product (Layer.Gate_Up, H, Prompt, G);
+                     Share (Gated_Silu);
+                     Product (Layer.Feed_Out, Y, Prompt, A);
+                  end if;
+                  Share (Gate_Add, Part => 3);
+               end;
+               Done := Index;
+            end loop;
+            Ok := E.Is_Ok (Status);
+         end Fill_To;
+
+         Filled : Boolean;
+      begin
+         if Beside /= null and then E.Is_Ok (Status) then
+            Beside (Fill_To'Access);
+         end if;
+         --  Not filled is said in Status already; Filled only repeats it.
+         Fill_To (Item.Layers'Last, Filled);
+         pragma Assert (Filled = E.Is_Ok (Status));
+      end;
+      Release;
+      if E.Is_Error (Status) then
          Forget (Prefix);
       end if;
    end Fill_Prefix;
@@ -1750,7 +1781,8 @@ package body Model_Runner.Qwen_Image is
       Status    : out E.Error_Info;
       Prefix    : in out Prefix_Cache;
       Prompt_Rows : Natural;
-      Place       : Natural);
+      Place       : Natural;
+      Fill_To     : access procedure (Last : Positive; Ok : out Boolean) := null);
 
    procedure Velocity
      (Item      : Denoiser;
@@ -1765,7 +1797,33 @@ package body Model_Runner.Qwen_Image is
       Status    : out E.Error_Info;
       Prefix    : in out Prefix_Cache;
       References : Reference_List := No_References;
-      Slots      : Slot_List := No_Slots) is
+      Slots      : Slot_List := No_Slots)
+   is
+      --  The step run beside the prompt's rows, where the device is open:
+      --  each block's prompt rows just before its image's.
+      Stepped     : Boolean := False;
+      Step_Status : E.Error_Info := E.Success;
+
+      procedure Beside (Fill_To : not null access procedure (Last : Positive; Ok : out Boolean)) is
+      begin
+         Velocity_Body (Item, Latent, Rows, Columns, Timestep, Text, Text_Rows, Pool, Result, Step_Status, Prefix,
+                        Prompt_Rows => Prefix.Rows, Place => Prefix.Place, Fill_To => Fill_To);
+         Stepped := True;
+      end Beside;
+
+      --  The prompt's rows into Prefix, and the step beside them where the
+      --  device is open; Stepped then says the step ran and Status is its.
+      procedure Fill (Refs : Reference_List; Kinds : Slot_List) is
+      begin
+         if Model_Runner.Backend.Device.Is_Ready then
+            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, Refs, Kinds, Beside => Beside'Access);
+         else
+            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, Refs, Kinds);
+         end if;
+         if E.Is_Ok (Status) and then Stepped then
+            Status := Step_Status;
+         end if;
+      end Fill;
    begin
       --  With references the prompt's rows are kept whatever their room:
       --  only kept rows carry the pictures in their slots.
@@ -1781,9 +1839,11 @@ package body Model_Runner.Qwen_Image is
          if not (Holds (Item, Prefix, Text, Text_Rows) and then Prefix.Slots /= null
                  and then Prefix.Slots.all = Slots and then Same_Pictures (Prefix, References))
          then
-            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, References, Slots);
+            Fill (References, Slots);
             if E.Is_Error (Status) then
                Result := [others => 0.0];
+               return;
+            elsif Stepped then
                return;
             end if;
          end if;
@@ -1802,9 +1862,11 @@ package body Model_Runner.Qwen_Image is
         and then Long_Long_Integer (Item.Shape.Blocks) * Long_Long_Integer (Text_Rows)
                  * Long_Long_Integer (Item.Shape.Width) * 8 <= Most_Kept
       then
-         Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status);
+         Fill (No_References, No_Slots);
          if E.Is_Error (Status) then
             Result := [others => 0.0];
+            return;
+         elsif Stepped then
             return;
          end if;
       end if;
@@ -1825,7 +1887,8 @@ package body Model_Runner.Qwen_Image is
       Status    : out E.Error_Info;
       Prefix    : in out Prefix_Cache;
       Prompt_Rows : Natural;
-      Place       : Natural)
+      Place       : Natural;
+      Fill_To     : access procedure (Last : Positive; Ok : out Boolean) := null)
    is
       package CPU renames Model_Runner.Backend.CPU;
       subtype Real is N.Real;
@@ -2161,6 +2224,9 @@ package body Model_Runner.Qwen_Image is
          Values_At : constant Element_Count := Total * W;
          Vectors   : T.Real_Array_Access;
          Ok        : Boolean := True;
+         Filled    : Boolean := True;
+         --  Where in the result room the image's sequences run.
+         Origin    : Interfaces.Unsigned_64 := 0;
 
          type Wide_Access is access N.Wide_Real_Array;
          procedure Free_Table is new Ada.Unchecked_Deallocation (N.Wide_Real_Array, Wide_Access);
@@ -2411,6 +2477,22 @@ package body Model_Runner.Qwen_Image is
                      exit;
                   end if;
                end if;
+               --  The prompt's rows through this block, where Prefix is
+               --  being filled beside the step: the block's matrices went
+               --  up while the device worked the one before, and its run
+               --  is at the front of the result room, the image's carried
+               --  activation past where it reaches.
+               if Fill_To /= null then
+                  Fill_To (Index, Filled);
+                  if not Filled then
+                     Status := E.Make (E.Backend_Capability_Missing);
+                     Ok := False;
+                     exit;
+                  end if;
+                  if First then
+                     Origin := (Device.Result_Room + 65_535) / 65_536 * 65_536;
+                  end if;
+               end if;
                Put_Kept (Keys_At, Prefix.Keys, At_Kept);
                Put_Kept (Values_At, Prefix.Values, At_Kept);
                exit when not Ok;
@@ -2505,12 +2587,29 @@ package body Model_Runner.Qwen_Image is
                Device.Run_Steps
                  (Steps, X (0 .. Image * W - 1), Positive (Image),
                   (if Last then X (0)'Address else System.Null_Address), Status,
-                  Carry_In => not First, Carry_Out => not Last);
+                  Carry_In => not First, Carry_Out => not Last, Origin => Origin);
                if E.Is_Error (Status) and then First then
                   Status := E.Success;
                   Ok := False;
                end if;
                <<Next_Block>>
+               --  The next block's matrices up while the device works
+               --  through this one's: a first step uploads eight gigabytes,
+               --  and waited for each block before copying the next's.
+               --  Held already on every step after, and found so.
+               if not Last and then Ok and then E.Is_Ok (Status) then
+                  declare
+                     type Weights is array (1 .. 7) of T.View;
+                     Next   : Block renames Item.Layers (Index + 1);
+                     Answer : E.Error_Info;
+                  begin
+                     for Weight of Weights'(Next.Query, Next.Key, Next.Value, Next.Attention_Out,
+                                            Next.Gate, Next.Up, Next.Feed_Out)
+                     loop
+                        Device.Hold (Weight, Answer, Ahead => True);
+                     end loop;
+                  end;
+               end if;
             end;
          end loop;
          Forget_Vectors;
@@ -2730,6 +2829,18 @@ package body Model_Runner.Qwen_Image is
       --  back behind the image's.
       if On_Device and then Reuse and then E.Is_Ok (Status) then
          Resident_Blocks (Resident);
+      end if;
+      --  The prompt's rows through every block left, before the host's
+      --  blocks read them.
+      if Fill_To /= null and then not Resident and then E.Is_Ok (Status) then
+         declare
+            Filled : Boolean;
+         begin
+            Fill_To (Item.Layers'Last, Filled);
+            if not Filled then
+               Status := E.Make (E.Backend_Capability_Missing);
+            end if;
+         end;
       end if;
       for Index in Item.Layers'Range loop
          exit when E.Is_Error (Status) or else Resident;

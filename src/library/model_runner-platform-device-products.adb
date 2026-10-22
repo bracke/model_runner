@@ -10018,6 +10018,8 @@ package body Model_Runner.Platform.Device.Products is
       Ok := True;
    end Put_Cache;
 
+   function Result_Room (Item : Engine) return Interfaces.Unsigned_64 is (Item.Result_Bytes);
+
    function Kept_Answer (Item : Engine) return System.Address
    is (Item.Kept_At);
 
@@ -11976,9 +11978,16 @@ package body Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Key     : System.Address;
-      Ok      : out Boolean)
+      Ok      : out Boolean;
+      Ahead   : Boolean := False)
    is
       Wide : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
+      Size : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Rows) * Wide;
+
+      --  Room in some heap beside what is kept and kept back, as the
+      --  acquiring counts it, so that nothing need be given back.
+      function Fits (Tier : Tier_Index) return Boolean
+      is (Item.Tier_Kept (Tier) + Item.Tier_Spare (Tier) + Size <= Item.Tier_Limit (Tier));
 
       Buffer, Memory : Address := Null_Handle;
       Base     : Interfaces.Unsigned_64 := 0;
@@ -11996,18 +12005,35 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Nothing in flight may be reading a matrix this evicts, so the
-      --  device is settled first; a load is the only caller and nothing
-      --  is in flight then.
-      Settle (Item, Ok);
-      if not Ok then
-         return;
+      if Ahead then
+         --  Held already: nothing to do, and nothing to wait for.
+         if Index_Find (Item, Key, Size, Packing, Rows, Columns) /= 0 then
+            Ok := True;
+            return;
+         end if;
+
+         --  Nothing given back for it: what goes may be what is running.
+         if Item.Budget > 0
+           and then not Fits (1)
+           and then (Item.Second < 0 or else not Fits (2))
+         then
+            return;
+         end if;
+      else
+         --  Nothing in flight may be reading a matrix this evicts, so the
+         --  device is settled first; a load is the only caller and nothing
+         --  is in flight then.
+         Settle (Item, Ok);
+         if not Ok then
+            return;
+         end if;
       end if;
 
+      --  Ahead, pinned at nought: no kept matrix is old enough to go.
       Acquire_Weights
-        (Item, Weights, At_Byte, Packing, Rows, Columns,
-         Interfaces.Unsigned_64 (Rows) * Wide,
-         Buffer, Memory, Base, Borrowed, Ok, Key);
+        (Item, Weights, At_Byte, Packing, Rows, Columns, Size,
+         Buffer, Memory, Base, Borrowed, Ok, Key,
+         Pinned => (if Ahead then 0 else Interfaces.Unsigned_64'Last));
 
       --  A matrix the budget would not keep is not held: it was uploaded
       --  and is given straight back, and a product will do the same when

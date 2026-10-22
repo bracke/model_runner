@@ -1439,6 +1439,13 @@ package Model_Runner.Backend.Device is
    --  @return The address, or Null_Address where none was left.
    function Kept_Answer return System.Address;
 
+   --  How many bytes the room sequences answer into holds now: an origin
+   --  past them is room nothing run so far wrote, which a carried
+   --  activation can keep while other sequences run before it.
+   --
+   --  @return The bytes, or nought where the device is not open.
+   function Result_Room return Interfaces.Unsigned_64;
+
    --  An empty table, for a caller that rotates nothing.
    No_Turns : constant Model_Runner.Numerics.Wide_Real_Array (1 .. 0) :=
      [others => 0.0];
@@ -2440,9 +2447,13 @@ package Model_Runner.Backend.Device is
    --  @param Status Success, or why the device would not hold it -- which
    --    is not a fault of the model: a product will upload it as it is
    --    wanted, as it always did.
+   --  @param Ahead True where a sequence may be in flight: the matrix goes
+   --    up beside it, and is not held where only giving back a kept one
+   --    would make room. See Products.Hold.
    procedure Hold
      (Weight : Model_Runner.Tensors.View;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Ahead  : Boolean := False);
 
    --  Hold a mixture's gate and up stacks, as Hold holds one: where the
    --  two lie as one region the gated gather reads, the region, which is

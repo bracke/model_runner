@@ -404,6 +404,11 @@ package Model_Runner.Platform.Device.Products is
    --  @param Columns Number of columns.
    --  @param Key Where these weights live; what a product will name.
    --  @param Ok True when the device holds it now.
+   --  @param Ahead True to hold it while a sequence may be in flight: the
+   --    device is not settled, and a matrix the budget has no room for
+   --    beside what is kept is not held, since making room would give back
+   --    one the sequence may be reading. The next block's matrices, put
+   --    there while the device works through this block's.
    procedure Hold
      (Item    : in out Engine;
       Weights : Model_Runner.Bytes.Byte_Array;
@@ -412,7 +417,8 @@ package Model_Runner.Platform.Device.Products is
       Rows    : Natural;
       Columns : Natural;
       Key     : System.Address;
-      Ok      : out Boolean);
+      Ok      : out Boolean;
+      Ahead   : Boolean := False);
 
    --  One matrix against a batch of vectors.
    --
@@ -2315,6 +2321,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to ask.
    --  @return The address, or Null_Address where the last Run left none.
    function Kept_Answer (Item : Engine) return System.Address;
+
+   --  How many bytes the result buffer holds now: past them, an origin is
+   --  room no sequence run so far has written.
+   --
+   --  @param Item Engine to ask.
+   --  @return The bytes, nought before any sequence ran.
+   function Result_Room (Item : Engine) return Interfaces.Unsigned_64;
 
    --  Room for a sequence's activation, mapped, at the front of the result
    --  buffer, where a sequence carrying in reads it: the caller writes the
