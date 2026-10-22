@@ -19787,6 +19787,33 @@ package body Tests.Framework_Cases is
                  and then Cx.Excluded_Why (Large, Index) = "inside file:src/parser.ads, given whole"),
               "an excerpt of a file given whole was given too");
 
+      --  The retrieval as it was before excerpts, where the project asks
+      --  for it: no piece of a file, the files whole.
+      declare
+         Changes  : Cf.Value_Maps.Map;
+         Planned  : Cf.Change_Plan;
+         Revision : Natural;
+         Whole    : Cx.Built;
+      begin
+         Changes.Include ("scalar.context.retrieval", "whole");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Cx.Build (Store, To_String (Id),
+                   (Id => To_Unbounded_String ("large"), Context_Limit => 60_000, Output_Reserve => 512,
+                    others => <>),
+                   Whole, Status);
+         Assert (E.Is_Ok (Status)
+                 and then not (for some Index in 1 .. Cx.Included_Count (Whole) =>
+                                 Ada.Strings.Fixed.Index (To_String (Cx.Included_At (Whole, Index).Id), "code:") = 1)
+                 and then (for some Index in 1 .. Cx.Included_Count (Whole) =>
+                             To_String (Cx.Included_At (Whole, Index).Id) = "file:src/parser.ads"),
+                 "the retrieval as it was before excerpts still gave excerpts, or no files");
+         Changes.Clear;
+         Changes.Include ("scalar.context.retrieval", "");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+      end;
+
       Change := S.No_Changes;
       Cx.Keep (Store, Change, Small, Status);
       S.Commit (Store, Change, Status);

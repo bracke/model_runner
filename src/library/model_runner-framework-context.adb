@@ -1194,6 +1194,12 @@ package body Model_Runner.Framework.Context is
             --  And the symbols it names, by their full names.
             Named_Symbols : Name_Lists.Vector;
 
+            --  The retrieval as it was before excerpts, where the project
+            --  asks for it (scalar context.retrieval=whole): no excerpts,
+            --  what uses the named files given whole, the component's files
+            --  in the graph's order -- what a trial holds the two against.
+            Whole_Only : constant Boolean := Lower (Records.Get (Config, "scalar.context.retrieval")) = "whole";
+
             --  How many lines a declaration the task names shows at most,
             --  and a use; and how many uses.
             Declaration_Lines : constant := 80;
@@ -1328,7 +1334,7 @@ package body Model_Runner.Framework.Context is
                    or else (Word (Word'First) in 'A' .. 'Z' and then Word /= Title_Word));
             begin
                for Word of Named_Words (Item, View) loop
-                  if As_A_Name (Word)
+                  if not Whole_Only and then As_A_Name (Word)
                     and then not (Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word)))
                   then
                      declare
@@ -1421,7 +1427,7 @@ package body Model_Runner.Framework.Context is
                                                Repository.Relation_At (Graph, Index);
                                              Where : constant String := To_String (Link.Where);
                                           begin
-                                             exit when Lines = 2;
+                                             exit when Lines = 2 or else Whole_Only;
                                              if Link.Kind in Repository.References | Repository.Calls
                                                and then Ada.Strings.Fixed.Index (To_String (Link.To), Unit & ".") = 1
                                                and then Where'Length > Path'Length + 1
@@ -1467,7 +1473,8 @@ package body Model_Runner.Framework.Context is
                     Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
                     & " " & Records.Get (View, "definition.question");
                   Hits  : constant Rv.Hit_Lists.Vector :=
-                    Rv.Search (Item, Graph, Project, Asked, Most => 400, Records => False);
+                    (if Whole_Only then Rv.Hit_Lists.Empty_Vector
+                     else Rv.Search (Item, Graph, Project, Asked, Most => 400, Records => False));
                   Order : Name_Lists.Vector;
                   Score : Remembered_Maps.Map;
 
@@ -1481,7 +1488,7 @@ package body Model_Runner.Framework.Context is
                   Listed : Unbounded_String;
                   Lines  : Natural := 0;
                   More   : Natural := 0;
-                  Lines_Most : constant := 150;
+                  Lines_Most : constant Natural := (if Whole_Only then Natural'Last else 150);
                begin
                   for Found of Hits loop
                      declare

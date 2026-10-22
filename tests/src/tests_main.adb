@@ -3666,6 +3666,8 @@ begin
             Knowledge => Option ("--knowledge", "on") /= "off",
             --  --carry on: a task's later runs keep its project's state.
             Carry     => Option ("--carry", "off") = "on",
+            --  --retrieval whole: the context as it was before excerpts.
+            Whole_Files => Option ("--retrieval", "excerpts") = "whole",
             Max_Seconds =>
               (if Option ("--max-seconds", "0")'Length in 1 .. 5
                  and then (for all C of Option ("--max-seconds", "0") => C in '0' .. '9')

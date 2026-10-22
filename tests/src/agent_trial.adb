@@ -46,11 +46,23 @@ package body Agent_Trial is
       --  and the same holds for every attempt after -- what one run learns
       --  the next can use, which no other task here offers.
       Convention : Boolean;
+
+      --  Whether the project holds a ledger too large for a context to give
+      --  whole -- two hundred and forty subprograms, some twenty thousand
+      --  tokens -- and the task names a subprogram of it and no file: what
+      --  a context finds of the code is all the agent starts from.
+      Large : Boolean := False;
    end record;
 
-   function T (Name, Kind, Notes : String; Tested, Styled, Convention : Boolean := False) return Trial_Task is
+   function T (Name, Kind, Notes : String; Tested, Styled, Convention, Large : Boolean := False)
+     return Trial_Task is
      ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled,
-       Convention));
+       Convention, Large));
+
+   --  The ledger's task: a subprogram named, no file.
+   Large_Notes : constant String :=
+     "Make Ledger.Post raise Constraint_Error when Amount is negative, instead of posting it."
+     & " Change only Post.";
 
    --  The edit, said without holding the work to Add alone: a project's
    --  convention reaches past what a task names, and told to change only
@@ -70,7 +82,7 @@ package body Agent_Trial is
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 5) of Trial_Task :=
+   Tasks : constant array (1 .. 6) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -85,11 +97,17 @@ package body Agent_Trial is
       T ("styled", "implementation", Edit_Notes, Tested => True, Styled => True),
       --  The edit again, in a project with a convention: run only when
       --  named, the measure of what is learned once and used again.
-      T ("convention", "implementation", Convention_Notes, Tested => True, Convention => True)];
+      T ("convention", "implementation", Convention_Notes, Tested => True, Convention => True),
+      --  A change to one subprogram of a file too large to give whole,
+      --  named by the subprogram: run only when named, the measure of what
+      --  a context retrieves (--retrieval whole for the context before).
+      T ("large", "implementation", Large_Notes, Tested => True, Large => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
-   procedure Make_Project (Root : String; Tested : Boolean; Convention : Boolean := False) is
+   procedure Make_Project
+     (Root : String; Tested : Boolean; Convention : Boolean := False; Large : Boolean := False)
+   is
       procedure Put (Name, Text : String) is
          File : Ada.Text_IO.File_Type;
       begin
@@ -141,7 +159,55 @@ package body Agent_Trial is
       --  complete for building -- and near them, not only at them: an Add
       --  that saturated only from Integer'Last itself passed a test of the
       --  limits alone.
-      if Tested then
+      --  The ledger: a book of balances, and two hundred and forty small
+      --  subprograms over it, Post among them half way down; its test in
+      --  test_add's place, so the checks are the same.
+      if Large then
+         declare
+            Spec : Unbounded_String;
+            Body_Text : Unbounded_String;
+
+            function Image (Value : Natural) return String
+            is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+         begin
+            Append (Spec, "package Ledger is" & LF & LF
+                    & "   type Book is record" & LF & "      Balance : Integer := 0;" & LF
+                    & "      Entries : Natural := 0;" & LF & "   end record;" & LF & LF);
+            Append (Body_Text, "package body Ledger is" & LF & LF);
+            for Index in 1 .. 240 loop
+               if Index = 120 then
+                  Append (Spec, "   --  Post Amount to the book: its balance moved by it, one entry more." & LF
+                          & "   procedure Post (Item : in out Book; Amount : Integer);" & LF & LF);
+                  Append (Body_Text, "   procedure Post (Item : in out Book; Amount : Integer) is" & LF
+                          & "   begin" & LF & "      Item.Balance := Item.Balance + Amount;" & LF
+                          & "      Item.Entries := Item.Entries + 1;" & LF & "   end Post;" & LF & LF);
+               end if;
+               Append (Spec, "   --  The book's balance less a fee of " & Image (Index) & " in a hundred of Amount,"
+                       & " or nought where that would go below it." & LF
+                       & "   function Fee_" & Image (Index) & " (Item : Book; Amount : Natural) return Integer;"
+                       & LF & LF);
+               Append (Body_Text, "   function Fee_" & Image (Index)
+                       & " (Item : Book; Amount : Natural) return Integer is" & LF
+                       & "      Fee : constant Integer := Amount * " & Image (Index) & " / 100;" & LF
+                       & "   begin" & LF & "      if Fee > Item.Balance then" & LF & "         return 0;" & LF
+                       & "      end if;" & LF & "      return Item.Balance - Fee;" & LF & "   end Fee_"
+                       & Image (Index) & ";" & LF & LF);
+            end loop;
+            Append (Spec, "end Ledger;" & LF);
+            Append (Body_Text, "end Ledger;" & LF);
+            Put ("src/ledger.ads", To_String (Spec));
+            Put ("src/ledger.adb", To_String (Body_Text));
+            Put ("src/test_add.adb",
+                 "with Ledger;" & LF & "procedure Test_Add is" & LF & "   Item : Ledger.Book;" & LF
+                 & "   Refused : Boolean := False;" & LF & "begin" & LF
+                 & "   Ledger.Post (Item, 5);" & LF
+                 & "   begin" & LF & "      Ledger.Post (Item, -3);" & LF & "   exception" & LF
+                 & "      when Constraint_Error => Refused := True;" & LF & "   end;" & LF
+                 & "   if not Refused or else Item.Balance /= 5 or else Item.Entries /= 1 then" & LF
+                 & "      raise Program_Error with ""Post took a negative amount"";" & LF
+                 & "   end if;" & LF & "end Test_Add;" & LF);
+         end;
+      elsif Tested then
          Put ("src/test_add.adb",
               "with Calc;" & LF & "procedure Test_Add is" & LF & "begin" & LF
               & "   if Calc.Add (Integer'Last, 1) /= Integer'Last" & LF
@@ -237,9 +303,13 @@ package body Agent_Trial is
            & " map.permission.project.request_integration=on"
       else "");
 
-   --  What the agents find kept and told to later work, or not.
+   --  What the agents find kept and told to later work, or not; and the
+   --  context retrieved as it was before excerpts, where the trial asks.
+   Whole_Context : Boolean := False;
+
    function Knowledge_Words (Knowledge : Boolean) return String is
-     (if Knowledge then "" else " scalar.knowledge.observations=off");
+     ((if Knowledge then "" else " scalar.knowledge.observations=off")
+      & (if Whole_Context then " scalar.context.retrieval=whole" else ""));
 
    --  The style rules and warnings as errors, and every unit compiled
    --  each time: an edit within the second of the last build is not taken
@@ -396,7 +466,8 @@ package body Agent_Trial is
       Carry     : Boolean := False;
       Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
-      Accept_Lessons : Boolean := False)
+      Accept_Lessons : Boolean := False;
+      Whole_Files    : Boolean := False)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -524,6 +595,7 @@ package body Agent_Trial is
          Ada.Text_IO.Put_Line
            (File, Now & HT & Build & HT & Ada.Directories.Simple_Name (Model) & HT & Task_Name & HT
             & (if Apart then "workspace" else "project") & (if Knowledge then "" else ", knowledge off")
+            & (if Whole_Context then ", whole files" else "")
             & (if Carry then ", carried" else "") & (if Accept_Lessons then ", lessons accepted" else "")
             & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
@@ -564,6 +636,7 @@ package body Agent_Trial is
          return;
       end if;
       Seconds_Bound := Max_Seconds;
+      Whole_Context := Whole_Files;
       for Round in 1 .. Repeats loop
          exit when Halted;
          for Which in Tasks'Range loop
@@ -572,7 +645,7 @@ package body Agent_Trial is
                One : Trial_Task renames Tasks (Which);
             begin
                if Chosen (Only, To_String (One.Name))
-                 and then (Only /= "" or else not (One.Styled or else One.Convention))
+                 and then (Only /= "" or else not (One.Styled or else One.Convention or else One.Large))
                then
                   declare
                      Name    : constant String := To_String (One.Name);
@@ -779,7 +852,7 @@ package body Agent_Trial is
                      if Carried then
                         Reset_Sources (Root);
                      else
-                        Make_Project (Root, One.Tested, One.Convention);
+                        Make_Project (Root, One.Tested, One.Convention, One.Large);
                      end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");

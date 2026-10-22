@@ -50,6 +50,8 @@ package Agent_Trial is
    --    would, the decisions the harness proposed from what earlier runs
    --    mended alike (--accept on): what the checks hold work to, then in
    --    every task's context as a decision rather than an observation.
+   --  @param Whole_Files Whether the project retrieves its context as it
+   --    did before excerpts (--retrieval whole): the large task's measure.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -62,6 +64,7 @@ package Agent_Trial is
       Carry     : Boolean := False;
       Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
-      Accept_Lessons : Boolean := False);
+      Accept_Lessons : Boolean := False;
+      Whole_Files    : Boolean := False);
 
 end Agent_Trial;
