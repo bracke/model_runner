@@ -655,13 +655,14 @@ package body Model_Runner.Qwen_Image.Decoder is
    --  the shortcut, as Decode says.
    --  Or, for the device's 3x3, a band's rows laid out padded: a pixel of
    --  zeros either side of each row and a row of them above and below, each
-   --  pixel's channels padded to Across with zeros.
+   --  pixel's channels padded to Across with zeros; for its 1x1, the same
+   --  without the zeros round the band.
    --  And the encoder's: a band's neighbourhoods for a 3x3 of stride two,
    --  the picture padded a pixel right and below; and a level's input
    --  averaged into the halved pixels as its shortcut, Encode says how.
    type Pixel_Kind is
-     (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows, Gather_Halved,
-      Average_Pixels);
+     (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows, Lay_Rows,
+      Gather_Halved, Average_Pixels);
 
    type Pixel_Work is new Model_Runner.Shares.Work with record
       Kind            : Pixel_Kind := Gather_Rows;
@@ -679,6 +680,9 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  Putting answers laid out a padded row at a time: how many pixels
       --  a row of them holds; nought for answers a pixel after another.
       Padded : Element_Count := 0;
+      --  Putting answers: pixels laid out as Target's, each added to its
+      --  answer as it is put -- a residual block's input -- or none.
+      Plus : T.Real_Array_Access;
    end record;
 
    overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
@@ -823,6 +827,17 @@ package body Model_Runner.Qwen_Image.Decoder is
                   end if;
                end;
             end loop;
+         when Lay_Rows =>
+            --  First .. Last count the band's pixels, from the one Row says.
+            for Pixel in First .. Last loop
+               declare
+                  From : constant Element_Count := (Item.Row + Pixel) * Ins;
+                  Into : constant Element_Count := Pixel * Item.Across;
+               begin
+                  Item.Target (Into .. Into + Ins - 1) := Item.Source (From .. From + Ins - 1);
+                  Item.Target (Into + Ins .. Into + Item.Across - 1) := [others => 0.0];
+               end;
+            end loop;
          when Add_Pixels =>
             for I in First * Ins .. (Last + 1) * Ins - 1 loop
                Item.Target (I) := Item.Target (I) + Item.Source (I);
@@ -865,9 +880,19 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Put_In : N.Real_Array renames Item.Target (Into .. Into + Ins - 1);
                   Bias   : N.Real_Array renames Item.Gain (Item.Gain'First .. Item.Gain'First + Ins - 1);
                begin
-                  for C in 0 .. Ins - 1 loop
-                     Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C);
-                  end loop;
+                  if Item.Plus = null then
+                     for C in 0 .. Ins - 1 loop
+                        Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C);
+                     end loop;
+                  else
+                     declare
+                        Added : N.Real_Array renames Item.Plus (Into .. Into + Ins - 1);
+                     begin
+                        for C in 0 .. Ins - 1 loop
+                           Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C) + Added (Into + C);
+                        end loop;
+                     end;
+                  end if;
                end;
             end loop;
          when Norm_Pixels =>
@@ -1012,15 +1037,23 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  answers put while it makes the next. One after another, the host
       --  and the device took turns at a 1024 picture's full-size level,
       --  each idle while the other worked.
+      --
+      --  A 1x1 the same way, its band laid out unpadded and one product
+      --  over it: as one product over the whole picture it went over and
+      --  came back eight thousand pixels at a time, copied by this task
+      --  alone, the device idle -- a 1024 picture's shortcuts 1.2 s, half
+      --  of it the copies. Plus, where given, is added to each answer as
+      --  it is put: the residual block's input, without a pass of its own.
       procedure Apply_Taps
         (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
-         Gain : T.Real_Array_Access := null) is
+         Gain : T.Real_Array_Access := null; Plus : T.Real_Array_Access := null) is
          package P renames Model_Runner.Platform.Device.Products;
+         Single  : constant Boolean := C.Size = 1;
          Ins     : constant Element_Count := Element_Count (C.Inputs);
          Outs    : constant Element_Count := Element_Count (C.Outputs);
-         Ins_To  : constant Element_Count := C.Taps (0).Columns;
-         Fitted  : constant Element_Count := C.Taps (0).Rows;
-         Wide    : constant Element_Count := Width + 2;
+         Ins_To  : constant Element_Count := (if Single then C.Kernel.Columns else C.Taps (0).Columns);
+         Fitted  : constant Element_Count := (if Single then C.Kernel.Rows else C.Taps (0).Rows);
+         Wide    : constant Element_Count := (if Single then Width else Width + 2);
          Band    : constant Element_Count :=
            Element_Count'Max
              (1, Element_Count'Min
@@ -1044,10 +1077,10 @@ package body Model_Runner.Qwen_Image.Decoder is
          is (Element_Count'Min (Band, Height - From));
 
          function Count_Of (From : Element_Count) return Element_Count
-         is (Rows_Of (From) * Wide - 2);
+         is (if Single then Rows_Of (From) * Wide else Rows_Of (From) * Wide - 2);
 
          function Values_Of (From : Element_Count) return Element_Count
-         is ((Rows_Of (From) + 2) * Wide * Ins_To);
+         is (if Single then Rows_Of (From) * Wide * Ins_To else (Rows_Of (From) + 2) * Wide * Ins_To);
 
          --  The band from row From laid out in lane Which, normed where the
          --  norm is the host's.
@@ -1064,12 +1097,13 @@ package body Model_Runner.Qwen_Image.Decoder is
             declare
                Padded : aliased N.Real_Array (0 .. Values_Of (From) - 1) with Import, Address => Room_At;
                Job    : aliased Pixel_Work :=
-                 (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access,
-                  Gain => (if On_Device_Norm then null else Gain), Silu => True, Row => From, Height => Height,
-                  Width => Width, Channels => Ins, Across => Ins_To, others => 0);
+                 (Kind => (if Single then Lay_Rows else Pad_Rows), Source => Source,
+                  Target => Padded'Unrestricted_Access, Gain => (if On_Device_Norm then null else Gain),
+                  Silu => True, Row => (if Single then From * Width else From), Height => Height,
+                  Width => Width, Channels => Ins, Across => Ins_To, others => <>);
             begin
-               CPU.Dispatch_Shares (Pool, (Rows_Of (From) + 2) * Wide, Job'Unchecked_Access, Status,
-                                    Cost => (Rows_Of (From) + 2) * Wide * Ins_To);
+               CPU.Dispatch_Shares (Pool, Values_Of (From) / Ins_To, Job'Unchecked_Access, Status,
+                                    Cost => Values_Of (From));
             end;
          end Lay;
 
@@ -1093,7 +1127,8 @@ package body Model_Runner.Qwen_Image.Decoder is
             --  gain is fitted for it, and left there for the taps: a pixel
             --  of zeros stays zeros. As the tap product reads the band
             --  where it takes it; in a sequence of its own otherwise.
-            As_One := T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count_Of (From)));
+            As_One := not Single and then T.Is_Present (C.Tap_Stack)
+                      and then Device.Takes_Taps (C.Tap_Stack, Positive (Count_Of (From)));
             if On_Device_Norm and then not As_One then
                declare
                   First : P.Sequence;
@@ -1113,6 +1148,9 @@ package body Model_Runner.Qwen_Image.Decoder is
                end;
             end if;
             P.Open_Sequence (Steps);
+            if Single then
+               Device.Add_View_Product_At (Steps, C.Kernel, 0, Added, Kept => True);
+            end if;
             --  The nine as one product where the device's tile takes the
             --  band: summed where they are made and stored once.
             if As_One then
@@ -1120,7 +1158,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                                      Normed => On_Device_Norm);
             end if;
             for Tap in C.Taps'Range loop
-               exit when not Added or else As_One;
+               exit when not Added or else As_One or else Single;
                Device.Add_View_Product_At
                  (Steps, C.Taps (Tap),
                   Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
@@ -1153,7 +1191,8 @@ package body Model_Runner.Qwen_Image.Decoder is
                Job     : aliased Pixel_Work :=
                  (Kind => Put_Answers, Source => Answers'Unrestricted_Access, Target => Target,
                   Gain => C.Bias, Silu => False, Row => From * Width, Height => Height, Width => Width,
-                  Channels => Outs, Across => Fitted, Padded => Wide, others => 0);
+                  Channels => Outs, Across => Fitted, Padded => (if Single then 0 else Wide), Plus => Plus,
+                  others => <>);
             begin
                CPU.Dispatch_Shares (Pool, Rows_Of (From) * Width, Job'Unchecked_Access, Status,
                                     Cost => Rows_Of (From) * Width * Outs);
@@ -1205,7 +1244,9 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  product, a 3x3 as a product over each pixel's neighbourhood,
       --  gathered a band of rows at a time, zero past the edges; the bias
       --  added and the padding's channels dropped as the answers are put.
-      procedure Apply (C : Convolution; Source : T.Real_Array_Access; Target : in out T.Real_Array_Access) is
+      procedure Apply
+        (C : Convolution; Source : T.Real_Array_Access; Target : in out T.Real_Array_Access;
+         Plus : T.Real_Array_Access := null) is
          Pixels : constant Element_Count := Height * Width;
          Outs   : constant Element_Count := Element_Count (C.Outputs);
          Ins    : constant Element_Count := Element_Count (C.Inputs);
@@ -1219,7 +1260,8 @@ package body Model_Runner.Qwen_Image.Decoder is
          procedure Put (First, Count : Element_Count) is
             Job : aliased Pixel_Work :=
               (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
-               Row => First, Height => Height, Width => Width, Channels => Outs, Across => Fitted, others => 0);
+               Row => First, Height => Height, Width => Width, Channels => Outs, Across => Fitted, Plus => Plus,
+               others => <>);
          begin
             if E.Is_Ok (Status) then
                CPU.Dispatch_Shares (Pool, Count, Job'Unchecked_Access, Status, Cost => Count * Outs);
@@ -1228,6 +1270,10 @@ package body Model_Runner.Qwen_Image.Decoder is
       begin
          Room (Target, Pixels * Outs);
          if E.Is_Error (Status) then
+            return;
+         end if;
+         if C.Size = 1 and then On_Device and then T.Is_Present (C.Kernel) then
+            Apply_Taps (C, Source, Target, Plus => Plus);
             return;
          end if;
          if C.Size = 1 then
@@ -1248,7 +1294,7 @@ package body Model_Runner.Qwen_Image.Decoder is
             return;
          end if;
          if On_Device and then C.Tap_Owned /= null then
-            Apply_Taps (C, Source, Target);
+            Apply_Taps (C, Source, Target, Plus => Plus);
             return;
          end if;
          declare
@@ -1276,7 +1322,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                      Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
                      Job       : aliased Pixel_Work :=
                        (Kind => Gather_Rows, Source => Source, Target => Patches, Gain => null, Silu => False,
-                        Row => Row, Height => Height, Width => Width, Channels => Ins, Across => Across, others => 0);
+                        Row => Row, Height => Height, Width => Width, Channels => Ins, Across => Across, others => <>);
                   begin
                               CPU.Dispatch_Shares (Pool, Rows_Here * Width, Job'Unchecked_Access, Status,
                                           Cost => Rows_Here * Width * Across);
@@ -1303,7 +1349,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          declare
             Job : aliased Pixel_Work :=
               (Kind => Norm_Pixels, Source => Source, Target => Target, Gain => Gain, Silu => Silu, Row => 0,
-               Height => Height, Width => Width, Channels => Channels, others => 0);
+               Height => Height, Width => Width, Channels => Channels, others => <>);
          begin
             CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status, Cost => Height * Width * Channels);
          end;
@@ -1313,7 +1359,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       procedure Add (Target, Source : T.Real_Array_Access; Channels : Element_Count) is
          Job : aliased Pixel_Work :=
            (Kind => Add_Pixels, Source => Source, Target => Target, Gain => null, Silu => False, Row => 0,
-            Height => Height, Width => Width, Channels => Channels, others => 0);
+            Height => Height, Width => Width, Channels => Channels, others => <>);
       begin
          if E.Is_Ok (Status) then
             CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status, Cost => Height * Width * Channels);
@@ -1395,37 +1441,35 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  first. Source, Target and Y are three buffers.
       procedure Normed_Apply
         (C : Convolution; Source : T.Real_Array_Access; Channels : Element_Count; Gain : T.Real_Array_Access;
-         Target : in out T.Real_Array_Access) is
+         Target : in out T.Real_Array_Access; Plus : T.Real_Array_Access := null) is
       begin
          if On_Device and then C.Tap_Owned /= null then
             Room (Target, Height * Width * Element_Count (C.Outputs));
             if E.Is_Ok (Status) then
-               Apply_Taps (C, Source, Target, Gain);
+               Apply_Taps (C, Source, Target, Gain, Plus);
             end if;
          else
             Norm (Source, Channels, Gain, Y);
-            Apply (C, Y, Target);
+            Apply (C, Y, Target, Plus);
          end if;
       end Normed_Apply;
 
       --  X := the residual block of X: norm, SiLU, 3x3, the same again,
-      --  and the input (through a 1x1 where the width changes) added.
+      --  and the input (through a 1x1 where the width changes) added as
+      --  the second 3x3's answers are put.
       procedure Block (R : Residual) is
          Ins  : constant Element_Count := Element_Count (R.Conv_1.Inputs);
          Outs : constant Element_Count := Element_Count (R.Conv_1.Outputs);
          Kept : T.Real_Array_Access;
       begin
-         Normed_Apply (R.Conv_1, X, Ins, R.Norm_1, Z);
-         Normed_Apply (R.Conv_2, Z, Outs, R.Norm_2, V);
-         if E.Is_Error (Status) then
-            return;
-         end if;
          if R.Shortcut.Outputs > 0 then
             Apply (R.Shortcut, X, Kept);
-            Add (V, Kept, Outs);
-            T.Free (Kept);
-         else
-            Add (V, X, Outs);
+         end if;
+         Normed_Apply (R.Conv_1, X, Ins, R.Norm_1, Z);
+         Normed_Apply (R.Conv_2, Z, Outs, R.Norm_2, V, Plus => (if Kept /= null then Kept else X));
+         T.Free (Kept);
+         if E.Is_Error (Status) then
+            return;
          end if;
          Swap (X, V);
       end Block;
@@ -1459,7 +1503,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                   declare
                      Job : aliased Pixel_Work :=
                        (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
-                        Height => Height, Width => Width, Channels => Outs, others => 0);
+                        Height => Height, Width => Width, Channels => Outs, others => <>);
                   begin
                      if E.Is_Ok (Status) then
                         CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
@@ -1476,7 +1520,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                        (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
                         Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
                         Factor => Factor, Repeats => Outs * Factor / Ins,
-                        Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0);
+                        Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0, Plus => null);
                   begin
                      Height := 2 * Height;
                      Width := 2 * Width;
@@ -1723,7 +1767,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          procedure Put (First, Count : Element_Count) is
             Job : aliased Pixel_Work :=
               (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
-               Row => First, Height => Rows, Width => Columns, Channels => Outs, Across => Fitted, others => 0);
+               Row => First, Height => Rows, Width => Columns, Channels => Outs, Across => Fitted, others => <>);
          begin
             Share (Job, Count, Count * Outs);
          end Put;
@@ -1780,7 +1824,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Job       : aliased Pixel_Work :=
                     (Kind => (if Halve then Gather_Halved else Gather_Rows), Source => Source, Target => Patches,
                      Gain => null, Silu => False, Row => Row, Height => H, Width => W,
-                     Channels => Element_Count (C.Inputs), Across => Across, others => 0);
+                     Channels => Element_Count (C.Inputs), Across => Across, others => <>);
                begin
                   Share (Job, Rows_Here * Columns, Rows_Here * Columns * Across);
                   Product (Patches, Rows_Here * Columns);
@@ -1802,7 +1846,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          declare
             Job : aliased Pixel_Work :=
               (Kind => Norm_Pixels, Source => Source, Target => Target, Gain => Gain, Silu => Silu, Row => 0,
-               Height => H, Width => W, Channels => Channels, others => 0);
+               Height => H, Width => W, Channels => Channels, others => <>);
          begin
             Share (Job, H * W, H * W * Channels);
          end;
@@ -1811,7 +1855,7 @@ package body Model_Runner.Qwen_Image.Decoder is
       procedure Add (Target, Source : T.Real_Array_Access; Channels : Element_Count) is
          Job : aliased Pixel_Work :=
            (Kind => Add_Pixels, Source => Source, Target => Target, Gain => null, Silu => False, Row => 0,
-            Height => H, Width => W, Channels => Channels, others => 0);
+            Height => H, Width => W, Channels => Channels, others => <>);
       begin
          Share (Job, H * W, H * W * Channels);
       end Add;
@@ -1929,7 +1973,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Job : aliased Pixel_Work :=
                     (Kind => Average_Pixels, Source => Kept, Target => Y, Gain => null, Silu => False, Row => 0,
                      Height => H, Width => W, Channels => Outs, Across => 0, Inputs => Ins,
-                     Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0);
+                     Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0, Plus => null);
                begin
                   Share (Job, H / 2 * (W / 2), H / 2 * (W / 2) * Outs * 4);
                end;

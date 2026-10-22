@@ -27540,4 +27540,5 @@ panels B9A8C4F2A166CCB4 src/library/model_runner-quantization-interleave.ads src
 # normed taps
 # denoiser panel cache
 # first step's upload beside the device's work (Products.Hold Ahead): text paths take Ahead => False; image paragraph re-measured after the decoder work
-image 6BEA2A3BDDE07C2D src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# image paragraph re-measured: 1024 Turbo 2:21, 512 in forty steps 2:16, decoder about 6 s
+image EBEF2DD2D989635C src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
