@@ -20,6 +20,10 @@
 
 layout(local_size_x = 256) in;
 
+//  The product's weights, where a 3x3's tap product keeps the gain of the
+//  norm before it past its nine taps: see below.
+layout(std430, binding = 0) readonly  buffer Weights { uint w[]; };
+
 layout(std430, binding = 1) readonly  buffer Vectors { uint v[]; };
 layout(std430, binding = 3) writeonly buffer Halves  { uint h[]; };
 
@@ -54,7 +58,68 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+//  x / (1 + exp(-x)), guarded as combine.comp guards it.
+float sigmoid_weighted(float x) {
+    return x / (1.0 + exp(-clamp(x, -60.0, 60.0)));
+}
+
+shared float partial[256];
+
 void main() {
+    //  Four: a 3x3's band normed on the way in, thirty-two lanes a pixel
+    //  of members[0] values and eight pixels a workgroup -- each scaled by
+    //  the root of its mean square plus the epsilon in members[1], times
+    //  the gain at byte base of the weights, through the SiLU -- as
+    //  norm.comp and combine.comp made it in two passes over the band
+    //  before the taps converted it a third time. A pixel past held is
+    //  zeros, as the padding is. A workgroup a pixel left most of its
+    //  lanes idle on a pixel of 160 and made the copy slower than the two
+    //  passes it replaced.
+    if (shape.routed == 4u) {
+        uint width = shape.members[0];
+        uint lane = gl_LocalInvocationID.x & 31u;
+        uint pixel = gl_WorkGroupID.x * 8u + (gl_LocalInvocationID.x >> 5u);
+        uint first = pixel * width;
+        bool real = first < shape.held;
+        bool inside = first < shape.room;
+
+        float mine = 0.0;
+        if (real) {
+            for (uint c = lane; c < width; c += 32u) {
+                float x = uintBitsToFloat(v[first + c]);
+                mine += x * x;
+            }
+        }
+        partial[gl_LocalInvocationID.x] = mine;
+        barrier();
+        for (uint half_of = 16u; half_of > 0u; half_of >>= 1u) {
+            if (lane < half_of) {
+                partial[gl_LocalInvocationID.x] += partial[gl_LocalInvocationID.x + half_of];
+            }
+            barrier();
+        }
+
+        float scale = sqrt(partial[gl_LocalInvocationID.x & ~31u] / float(width)
+                           + uintBitsToFloat(shape.members[1]));
+        scale = (scale == 0.0 || isinf(scale) || isnan(scale)) ? 1.0 : 1.0 / scale;
+
+        uint gains = shape.base >> 2u;
+        if (inside) {
+            for (uint c = lane * 2u; c < width; c += 64u) {
+                float low = 0.0;
+                float high = 0.0;
+                if (real) {
+                    low = sigmoid_weighted(uintBitsToFloat(v[first + c]) * scale
+                                           * uintBitsToFloat(w[gains + c]));
+                    high = sigmoid_weighted(uintBitsToFloat(v[first + c + 1u]) * scale
+                                            * uintBitsToFloat(w[gains + c + 1u]));
+                }
+                h[(first + c) >> 1u] = packHalf2x16(vec2(low, high));
+            }
+        }
+        return;
+    }
+
     //  Two values to a word, because that is how half precision is packed
     //  and it halves the invocations.
     uint at = gl_GlobalInvocationID.x;

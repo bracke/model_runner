@@ -2353,11 +2353,13 @@ package body Model_Runner.Backend.Device is
    -------------------
 
    procedure Add_View_Taps
-     (Steps : in out Products.Sequence;
-      Stack : T.View;
-      Row   : Natural;
-      Added : out Boolean;
-      Kept  : Boolean := False)
+     (Steps   : in out Products.Sequence;
+      Stack   : T.View;
+      Row     : Natural;
+      Added   : out Boolean;
+      Kept    : Boolean := False;
+      Normed  : Boolean := False;
+      Epsilon : Float := 1.0E-12)
    is
       Packing : Products.Weight_Packing;
       Known   : Boolean;
@@ -2371,7 +2373,8 @@ package body Model_Runner.Backend.Device is
       end if;
       Products.Add_Tap_Product
         (Steps, Stack.Base, Stack.Span, Stack.Offset, Packing, Natural (Stack.Rows / 9),
-         Natural (Stack.Columns), Row, Added, Key => At_Offset (Stack.Base, Stack.Offset), Kept => Kept);
+         Natural (Stack.Columns), Row, Added, Key => At_Offset (Stack.Base, Stack.Offset), Kept => Kept,
+         Normed => Normed, Epsilon => Epsilon);
    end Add_View_Taps;
 
    ----------------

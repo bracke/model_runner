@@ -801,6 +801,12 @@ package Model_Runner.Platform.Device.Products is
    --  @param Added False when the sequence is full.
    --  @param Key Identifies the nine so the device may keep them.
    --  @param Kept Whether the host reads the answer.
+   --  @param Normed Whether each of the band's pixels is normed and taken
+   --    through the SiLU on its way in: scaled by the root of its mean
+   --    square plus Epsilon, times the gain -- Columns binary32 values
+   --    lying past the ninth tap, in Gain_Rows (Packing, Columns) rows'
+   --    bytes the storage holds there.
+   --  @param Epsilon The norm's epsilon.
    procedure Add_Tap_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -812,7 +818,18 @@ package Model_Runner.Platform.Device.Products is
       Row     : Natural;
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True);
+      Kept    : Boolean := True;
+      Normed  : Boolean := False;
+      Epsilon : Float := 1.0E-12);
+
+   --  Rows of a tap's packing the gain of a normed tap product takes past
+   --  the nine (Add_Tap_Product): Columns binary32 values, rounded up to
+   --  whole rows.
+   --
+   --  @param Packing How each row is packed.
+   --  @param Columns Columns of one tap.
+   --  @return The rows.
+   function Gain_Rows (Packing : Weight_Packing; Columns : Natural) return Natural;
 
    --  Whether a batch of Count goes to the matrix tile, which a tap
    --  product needs.
@@ -4623,8 +4640,12 @@ private
       Region_At   : Natural := 0;
 
       --  A 3x3's nine taps as one product (Add_Tap_Product): the values
-      --  a padded row of its band holds, or nought for a plain product.
-      Tap_Row : Natural := 0;
+      --  a padded row of its band holds, or nought for a plain product;
+      --  and whether the band is normed on its way in, by the gain kept
+      --  past the nine.
+      Tap_Row     : Natural := 0;
+      Tap_Normed  : Boolean := False;
+      Tap_Epsilon : Float := 0.0;
    end record;
 
    type Step_Array is array (1 .. Sequence_Limit) of Step;

@@ -1341,12 +1341,19 @@ package Model_Runner.Backend.Device is
    --  @param Added False where the format is not one the device reads or
    --    the sequence refused the step.
    --  @param Kept Whether the host reads its answer.
+   --  @param Normed Whether each pixel of the band is normed and taken
+   --    through the SiLU on its way in (Products.Add_Tap_Product): the
+   --    gain, a tap's columns of binary32, lies in Stack's storage just
+   --    past the nine.
+   --  @param Epsilon The norm's epsilon.
    procedure Add_View_Taps
-     (Steps : in out Model_Runner.Platform.Device.Products.Sequence;
-      Stack : Model_Runner.Tensors.View;
-      Row   : Natural;
-      Added : out Boolean;
-      Kept  : Boolean := False);
+     (Steps   : in out Model_Runner.Platform.Device.Products.Sequence;
+      Stack   : Model_Runner.Tensors.View;
+      Row     : Natural;
+      Added   : out Boolean;
+      Kept    : Boolean := False;
+      Normed  : Boolean := False;
+      Epsilon : Float := 1.0E-12);
 
    --  Whether a band of Count pixels runs as one tap product of Stack's
    --  taps (Add_View_Taps): on the matrix tile, the only kernel that

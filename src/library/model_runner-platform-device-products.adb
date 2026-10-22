@@ -8256,7 +8256,13 @@ package body Model_Runner.Platform.Device.Products is
       --  holds, and the bytes from one tap's matrix to the next; nought
       --  for a plain product.
       Tap_Row   : Natural := 0;
-      Tap_Bytes : Interfaces.Unsigned_64 := 0)
+      Tap_Bytes : Interfaces.Unsigned_64 := 0;
+
+      --  Where a normed tap product's gain lies in the weights, in bytes
+      --  and plus one, and its epsilon: the copy is then made normed
+      --  (half_batch.comp's fourth way). Nought for a plain copy.
+      Gain_At : Interfaces.Unsigned_64 := 0;
+      Epsilon : Float := 0.0)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
         To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
@@ -8286,21 +8292,43 @@ package body Model_Runner.Platform.Device.Products is
       if Fresh then
          Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
 
-         declare
-            --  The copying kernel reads the first two words as how many
-            --  values the batch really holds and how many the copy is to
-            --  hold. The rest of the block is nothing to it.
-            Shape : aliased Shape_Constants :=
-              (Rows    => C.unsigned (Held),
-               Columns => C.unsigned (Made),
-               others  => <>);
-         begin
-            Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                  Product_Bytes, Shape'Address);
-            Dispatch
-              (Item.Buffer,
-               C.unsigned ((Made / 2 + Group_Size - 1) / Group_Size), 1, 1);
-         end;
+         if Gain_At > 0 then
+            declare
+               Words : Member_Words := [others => 0];
+               Shape : aliased Shape_Constants;
+            begin
+               Words (0) := C.unsigned (Columns);
+               Words (1) := Float_Bits (C.C_float (Epsilon));
+               Shape :=
+                 (Rows    => C.unsigned (Held),
+                  Columns => C.unsigned (Made),
+                  Base    => C.unsigned (Gain_At - 1),
+                  Members => Words,
+                  Routed  => 4,
+                  others  => <>);
+               Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                     Product_Bytes, Shape'Address);
+               Dispatch
+                 (Item.Buffer,
+                  C.unsigned ((Made / Interfaces.Unsigned_64 (Columns) + 7) / 8), 1, 1);
+            end;
+         else
+            declare
+               --  The copying kernel reads the first two words as how many
+               --  values the batch really holds and how many the copy is to
+               --  hold. The rest of the block is nothing to it.
+               Shape : aliased Shape_Constants :=
+                 (Rows    => C.unsigned (Held),
+                  Columns => C.unsigned (Made),
+                  others  => <>);
+            begin
+               Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                     Product_Bytes, Shape'Address);
+               Dispatch
+                 (Item.Buffer,
+                  C.unsigned ((Made / 2 + Group_Size - 1) / Group_Size), 1, 1);
+            end;
+         end if;
 
          Barrier
            (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute,
@@ -12192,7 +12220,9 @@ package body Model_Runner.Platform.Device.Products is
       Row     : Natural;
       Added   : out Boolean;
       Key     : System.Address := System.Null_Address;
-      Kept    : Boolean := True) is
+      Kept    : Boolean := True;
+      Normed  : Boolean := False;
+      Epsilon : Float := 1.0E-12) is
    begin
       if Steps.Held = Sequence_Limit
         or else Base = System.Null_Address
@@ -12208,10 +12238,22 @@ package body Model_Runner.Platform.Device.Products is
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
          Reads => 0, Kept => Kept, Blends => False, Unit => 0,
-         Attends => False, Region_Rows => 9 * Rows, Tap_Row => Row,
+         Attends => False,
+         Region_Rows => 9 * Rows + (if Normed then Gain_Rows (Packing, Columns) else 0),
+         Tap_Row => Row, Tap_Normed => Normed, Tap_Epsilon => Epsilon,
          others => <>);
       Added := True;
    end Add_Tap_Product;
+
+   ---------------
+   -- Gain_Rows --
+   ---------------
+
+   function Gain_Rows (Packing : Weight_Packing; Columns : Natural) return Natural is
+      Row : constant Interfaces.Unsigned_64 := Row_Bytes (Packing, Columns);
+   begin
+      return Natural ((Interfaces.Unsigned_64 (Columns) * 4 + Row - 1) / Row);
+   end Gain_Rows;
 
    ----------------
    -- Takes_Taps --
@@ -14074,6 +14116,13 @@ package body Model_Runner.Platform.Device.Products is
       function Tap_Stride (Which : Positive) return Interfaces.Unsigned_64
       is (Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
           * Row_Bytes (Steps.Items (Which).Packing, Steps.Items (Which).Columns));
+
+      --  Where a normed tap product's gain lies in its weights' buffer, in
+      --  bytes and plus one -- past the nine -- or nought.
+      function Gain_Place (Which : Positive) return Interfaces.Unsigned_64
+      is (if Steps.Items (Which).Tap_Normed
+          then Places (Which).Base + 9 * Tap_Stride (Which) + 1
+          else 0);
 
       --  Whether a tap product would go anywhere but the tile.
       function Taps_Untiled return Boolean
@@ -15996,6 +16045,7 @@ package body Model_Runner.Platform.Device.Products is
                   This : Step renames Steps.Items (Index);
                   Of_Activation : constant Boolean :=
                     Tiled (Index)
+                    and then not This.Tap_Normed
                     and then This.Reads = 0
                     and then not This.Chained
                     and then not Halved (Index)
@@ -17909,10 +17959,12 @@ package body Model_Runner.Platform.Device.Products is
                      --  The copy still describes this activation if the
                      --  product before this one converted the same answer
                      --  at the same width, and nothing has run in between.
+                     --  A normed copy is no other product's, nor theirs its.
                      Again : constant Boolean :=
-                       Shifted (Index)
-                       or else (Was_From = Reading
-                                and then Was_Wide = This.Columns);
+                       not This.Tap_Normed
+                       and then (Shifted (Index)
+                                 or else (Was_From = Reading
+                                          and then Was_Wide = This.Columns));
                   begin
                      Tile_Product
                        (Item, This.Rows, This.Columns, Count,
@@ -17945,7 +17997,9 @@ package body Model_Runner.Platform.Device.Products is
                           (if Gated (Index) /= 0
                            then Steps.Items (Index + 1).Unit else 0),
                         Tap_Row => This.Tap_Row,
-                        Tap_Bytes => Tap_Stride (Index));
+                        Tap_Bytes => Tap_Stride (Index),
+                        Gain_At => Gain_Place (Index),
+                        Epsilon => This.Tap_Epsilon);
 
                      if not Done then
                         Release_All;
@@ -17955,7 +18009,7 @@ package body Model_Runner.Platform.Device.Products is
                      --  A tap's copy is the activation's, which no later
                      --  step but another tap reads; the leader's is the
                      --  activation's as any product's is.
-                     if Shifted (Index) then
+                     if Shifted (Index) or else This.Tap_Normed then
                         Half_From := -1;
                      else
                         Half_From := Reading;

@@ -229,7 +229,10 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Ins_To    : constant Element_Count := (Ins + 31) / 32 * 32;
                   Tap_Bytes : constant B.Byte_Count := B.Byte_Count (Rows_To * Ins_To) * Element;
                begin
-                  B.Allocate (Tap_Bytes * B.Byte_Count (Taps), Result.Tap_Owned);
+                  --  And room past the nine for the gain of the norm before
+                  --  a 3x3, a tap's columns of binary32, which Fit writes
+                  --  and the device's tap product reads (Add_View_Taps).
+                  B.Allocate (Tap_Bytes * B.Byte_Count (Taps) + B.Byte_Count (Ins_To) * 4, Result.Tap_Owned);
                   if Result.Tap_Owned = null then
                      Status := E.Make (E.Memory_Allocation_Failed);
                      return;
@@ -299,6 +302,15 @@ package body Model_Runner.Qwen_Image.Decoder is
             for I in 0 .. Ins_To - 1 loop
                C.Fit (I) := (if I < Ins then Gain (Gain'First + I) * Root else 0.0);
             end loop;
+            --  And beside the taps, for the device to norm a band with as
+            --  it reads it.
+            declare
+               Past : N.Real_Array (C.Fit'Range)
+                 with Import,
+                      Address => C.Tap_Owned (C.Tap_Owned'Last - B.Byte_Count (Ins_To) * 4 + 1)'Address;
+            begin
+               Past := C.Fit.all;
+            end;
          end;
       end Fit;
 
@@ -1079,8 +1091,10 @@ package body Model_Runner.Qwen_Image.Decoder is
             end if;
             --  The band normed and its SiLU taken on the device, where the
             --  gain is fitted for it, and left there for the taps: a pixel
-            --  of zeros stays zeros.
-            if On_Device_Norm then
+            --  of zeros stays zeros. As the tap product reads the band
+            --  where it takes it; in a sequence of its own otherwise.
+            As_One := T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count_Of (From)));
+            if On_Device_Norm and then not As_One then
                declare
                   First : P.Sequence;
                begin
@@ -1101,9 +1115,9 @@ package body Model_Runner.Qwen_Image.Decoder is
             P.Open_Sequence (Steps);
             --  The nine as one product where the device's tile takes the
             --  band: summed where they are made and stored once.
-            if T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count_Of (From))) then
-               Device.Add_View_Taps (Steps, C.Tap_Stack, Natural (Wide * Ins_To), Added, Kept => True);
-               As_One := True;
+            if As_One then
+               Device.Add_View_Taps (Steps, C.Tap_Stack, Natural (Wide * Ins_To), Added, Kept => True,
+                                     Normed => On_Device_Norm);
             end if;
             for Tap in C.Taps'Range loop
                exit when not Added or else As_One;
