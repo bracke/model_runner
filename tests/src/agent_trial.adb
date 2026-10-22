@@ -1195,11 +1195,14 @@ package body Agent_Trial is
                         Ada.Text_IO.Put (File, Plain (To_String (Seen)));
                         Ada.Text_IO.Close (File);
                         --  Each run's session beside the project, which the next
-                        --  run makes afresh.
+                        --  run makes afresh -- named by the arm it is of, so a
+                        --  trial's other arm, run after, keeps it.
                         if Repeats > 1 then
                            Ada.Text_IO.Create
                              (File, Ada.Text_IO.Out_File,
-                              Root & "-run" & Ada.Strings.Fixed.Trim (Integer'Image (Round), Ada.Strings.Left)
+                              Root & (if Whole_Context then "-whole" else "")
+                              & (if Knowledge then "" else "-knowledge-off")
+                              & "-run" & Ada.Strings.Fixed.Trim (Integer'Image (Round), Ada.Strings.Left)
                               & ".txt");
                            Ada.Text_IO.Put (File, Plain (To_String (Seen)));
                            Ada.Text_IO.Close (File);
