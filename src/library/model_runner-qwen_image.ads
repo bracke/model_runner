@@ -7,6 +7,7 @@ with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.Numerics;
+with Model_Runner.Panel_Cache;
 with Model_Runner.Tensors;
 
 --  Qwen-Image 2.1's denoiser, read from its GGUF (docs/plan-image-
@@ -106,11 +107,16 @@ package Model_Runner.Qwen_Image is
    --  @param Panels Whether the matrices are rewritten into the processor's
    --    panel layout: for a denoiser the processor runs, and not for one
    --    the device does, which reads the file's own layout
+   --  @param Panel_Cache Where the panels are kept between runs, keyed by
+   --    the file as it is, or "" for nowhere: mapped from there where an
+   --    earlier open wrote them and they are still what a rewrite would
+   --    make, built and written there beside the run where not
    procedure Open
      (Item   : in out Denoiser;
       Path   : String;
       Status : out Model_Runner.Errors.Error_Info;
-      Panels : Boolean := True);
+      Panels : Boolean := True;
+      Panel_Cache : String := "");
 
    --  Let a denoiser go: its file, its tensors, its gains.
    --
@@ -120,6 +126,11 @@ package Model_Runner.Qwen_Image is
    --  @param Item a denoiser
    --  @return whether it is open
    function Is_Ready (Item : Denoiser) return Boolean;
+
+   --  @param Item an open denoiser
+   --  @return whether its panels were mapped from the panel cache, rather
+   --    than built by this open
+   function Panels_Mapped (Item : Denoiser) return Boolean;
 
    --  @param Item an open denoiser
    --  @return its configuration
@@ -368,6 +379,9 @@ private
       Place        : Natural := 0;
    end record;
 
+   type Panel_Map_Access is access Model_Runner.Byte_Sources.Files.File_Source;
+   type Panel_Writing_Access is access Model_Runner.Panel_Cache.Writing;
+
    type Denoiser is tagged limited record
       File      : Model_Runner.Byte_Sources.Files.File_Source;
       Container : Model_Runner.GGUF.Containers.Container;
@@ -388,8 +402,12 @@ private
       Norm_Out, Projection_Out : aliased T.View;
 
       --  The matrices rewritten a panel of rows at a time, which the
-      --  processor's integer products read several rows of at once.
-      Panels : Model_Runner.Bytes.Byte_Array_Access;
+      --  processor's integer products read several rows of at once: built
+      --  here, or mapped from the panel cache where an earlier open wrote
+      --  them, and written there beside the run where it had not.
+      Panels       : Model_Runner.Bytes.Byte_Array_Access;
+      Panel_Map    : Panel_Map_Access;
+      Panel_Writer : Panel_Writing_Access;
 
       Layers : Block_Array_Access;
    end record;

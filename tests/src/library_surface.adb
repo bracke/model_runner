@@ -226,7 +226,12 @@ package body Library_Surface is
       --  Whether a picture decoder was opened with its encoder. The command
       --  opens it so where it encodes and knows; a caller handed a decoder
       --  asks before encoding with it.
-      new String'("Can_Encode")];
+      new String'("Can_Encode"),
+
+      --  Whether a denoiser's panels came from the panel cache. The command
+      --  runs the same either way; a caller timing an open, or a test,
+      --  asks which it was.
+      new String'("Panels_Mapped")];
 
    ---------------
    -- Is_Listed --

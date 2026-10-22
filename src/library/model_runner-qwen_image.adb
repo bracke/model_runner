@@ -151,8 +151,9 @@ package body Model_Runner.Qwen_Image is
    --  integer products read a panel's rows together, where the file's
    --  layout has them read one at a time. The file's pages are left alone;
    --  what is not panelled stays where it lies.
-   procedure Build_Panels (Item : in out Denoiser; Status : out E.Error_Info) is
+   procedure Build_Panels (Item : in out Denoiser; Status : out E.Error_Info; Cache : String) is
       package Interleave renames Model_Runner.Quantization.Interleave;
+      package Files renames Model_Runner.Byte_Sources.Files;
 
       function Takes (Where : View_Access) return Boolean
       is (Interleave.Interleaves (Where.Format, Where.Rows, Where.Columns));
@@ -166,6 +167,10 @@ package body Model_Runner.Qwen_Image is
          Item.Time_Second'Unchecked_Access, Item.Modulation'Unchecked_Access, Item.Norm_Out'Unchecked_Access,
          Item.Projection_Out'Unchecked_Access];
       Count : Natural := 0;
+
+      type String_Access is access String;
+      procedure Free is new Ada.Unchecked_Deallocation (String, String_Access);
+      Cache_Header : String_Access;
    begin
       Status := E.Success;
       for V of All_Views loop
@@ -240,6 +245,137 @@ package body Model_Runner.Qwen_Image is
             Add (Layer.Gate_Up'Unchecked_Access);
             Add (Layer.Feed_Out'Unchecked_Access);
          end loop;
+         --  The panel cache's file: a header of Header_Bytes -- a mark, the
+         --  layout's version, the panels' bytes, how many matrices and a
+         --  digest of each one's format and shape -- and then the panels
+         --  in Held's order, as they are laid out here.
+         declare
+            Header_Bytes : constant := 4_096;
+
+            function Word (Value : Interfaces.Unsigned_64) return String is
+               Result : String (1 .. 8);
+               Rest   : Interfaces.Unsigned_64 := Value;
+            begin
+               for Index in Result'Range loop
+                  Result (Index) := Character'Val (Natural (Interfaces."and" (Rest, 255)));
+                  Rest := Interfaces.Shift_Right (Rest, 8);
+               end loop;
+               return Result;
+            end Word;
+
+            function Digest return Interfaces.Unsigned_64 is
+               Hash : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+               procedure Mix (Value : Interfaces.Unsigned_64) is
+               begin
+                  Hash := (Hash xor Value) * 16#0000_0100_0000_01B3#;
+               end Mix;
+            begin
+               for Where of Held loop
+                  Mix (Interfaces.Unsigned_64 (Model_Runner.GGUF.Tensor_Type'Pos (Where.Format)));
+                  Mix (Interfaces.Unsigned_64 (Where.Rows));
+                  Mix (Interfaces.Unsigned_64 (Where.Columns));
+               end loop;
+               return Hash;
+            end Digest;
+
+            Header : constant String :=
+              "MRQIPANL" & Word (1) & Word (Interfaces.Unsigned_64 (Size))
+              & Word (Interfaces.Unsigned_64 (Count)) & Word (Digest);
+
+            --  The panels mapped from the cache and the views remade over
+            --  them, where the file is the size, says what these panels
+            --  say, and the first, middle and last panel of the first and
+            --  last matrix are what a rewrite makes now.
+            function Mapped return Boolean is
+               Map : Panel_Map_Access;
+               Ok  : E.Error_Info;
+
+               procedure Release is new Ada.Unchecked_Deallocation (Files.File_Source, Panel_Map_Access);
+
+               function Same (Which : Positive; Pick : Positive) return Boolean is
+                  Where  : constant View_Access := Held (Which);
+                  One    : constant B.Byte_Count := Interleave.Panel_Bytes (Where.Format, Interleave.Panel_Rows,
+                                                                           Blocks_Of (Where));
+                  Panels : constant B.Byte_Count := B.Byte_Count (Where.Rows / Interleave.Panel_Rows);
+                  Panel  : constant B.Byte_Count :=
+                    (case Pick is when 1 => 0, when 2 => (Panels - 1) / 2, when others => Panels - 1);
+                  Row    : constant B.Byte_Count :=
+                    B.Byte_Count (Blocks_Of (Where)) * B.Byte_Count (Model_Runner.GGUF.Block_Bytes (Where.Format));
+                  Source : B.Byte_Array (1 .. Where.Span) with Import, Address => Where.Base;
+                  Kept   : B.Byte_Array (1 .. One)
+                    with Import,
+                         Address => System.Storage_Elements.To_Address
+                           (System.Storage_Elements.To_Integer (Files.Base (Map.all))
+                            + System.Storage_Elements.Integer_Address (Header_Bytes + Bases (Which) + Panel * One));
+                  Probe  : B.Byte_Array_Access := new B.Byte_Array'(1 .. One => 0);
+                  Taken  : Boolean;
+                  Equal  : Boolean;
+               begin
+                  Interleave.Build
+                    (Format => Where.Format, Source => Source,
+                     From => Where.Offset + Panel * B.Byte_Count (Interleave.Panel_Rows) * Row,
+                     Target => Probe.all, Into => 0, Rows => Interleave.Panel_Rows, Blocks => Blocks_Of (Where),
+                     Ok => Taken);
+                  Equal := Taken and then B."=" (Probe.all, Kept);
+                  B.Free (Probe);
+                  return Equal;
+               end Same;
+            begin
+               if Cache = "" or else not Model_Runner.Panel_Cache.Is_There (Cache) then
+                  return False;
+               end if;
+               Map := new Files.File_Source;
+               Files.Open (Map.all, Cache, Files.Mapping_Required, Status => Ok);
+               if E.Is_Error (Ok) or else Files.Size (Map.all) /= Header_Bytes + Size then
+                  Files.Close (Map.all);
+                  Release (Map);
+                  return False;
+               end if;
+               declare
+                  Held_Header : String (1 .. Header'Length) with Import, Address => Files.Base (Map.all);
+               begin
+                  if Held_Header /= Header
+                    or else not (for all Pick in 1 .. 3 => Same (Held'First, Pick) and then Same (Held'Last, Pick))
+                  then
+                     Files.Close (Map.all);
+                     Release (Map);
+                     return False;
+                  end if;
+               end;
+               for Index in Held'Range loop
+                  declare
+                     Fresh : T.View;
+                  begin
+                     T.Make_Panels_At
+                       (Held (Index).Format, Held (Index).Rows, Held (Index).Columns, Files.Base (Map.all),
+                        Files.Size (Map.all), Header_Bytes + Bases (Index), Fresh, Ok);
+                     if E.Is_Error (Ok) then
+                        Status := Ok;
+                        Files.Close (Map.all);
+                        Release (Map);
+                        return True;
+                     end if;
+                     Held (Index).all := Fresh;
+                  end;
+               end loop;
+               Item.Panel_Map := Map;
+               Model_Runner.Panel_Cache.Mark_Used (Cache);
+               return True;
+            exception
+               when others =>
+                  if Map /= null then
+                     Files.Close (Map.all);
+                     Release (Map);
+                  end if;
+                  return False;
+            end Mapped;
+         begin
+            if Mapped then
+               return;
+            end if;
+            Cache_Header := new String'(Header);
+         end;
+
          B.Allocate (Size, Item.Panels);
          if Item.Panels = null then
             Status := E.Make (E.Memory_Allocation_Failed);
@@ -300,6 +436,19 @@ package body Model_Runner.Qwen_Image is
                Held (Index).all := Fresh;
             end;
          end loop;
+
+         --  And kept for the next open, written beside this run; Close
+         --  waits for the copy before the panels go.
+         if E.Is_Ok (Status) and then Cache /= "" and then Cache_Header /= null then
+            begin
+               Item.Panel_Writer := new Model_Runner.Panel_Cache.Writing;
+               Item.Panel_Writer.Start (Cache, Cache_Header.all, Item.Panels.all (Item.Panels'First)'Address, Size);
+            exception
+               when others =>
+                  null;
+            end;
+         end if;
+         Free (Cache_Header);
       end;
    end Build_Panels;
 
@@ -307,7 +456,8 @@ package body Model_Runner.Qwen_Image is
      (Item   : in out Denoiser;
       Path   : String;
       Status : out E.Error_Info;
-      Panels : Boolean := True)
+      Panels : Boolean := True;
+      Panel_Cache : String := "")
    is
       procedure Fail (Condition : E.Error_Info) is
       begin
@@ -519,7 +669,7 @@ package body Model_Runner.Qwen_Image is
       end;
 
       if Panels then
-         Build_Panels (Item, Status);
+         Build_Panels (Item, Status, Panel_Cache);
       end if;
       if E.Is_Error (Status) then
          Fail (Status);
@@ -551,7 +701,27 @@ package body Model_Runner.Qwen_Image is
       Item.Norm_Out := T.Empty_View;
       Item.Projection_Out := T.Empty_View;
       B.Free (Item.Arena);
+      if Item.Panel_Writer /= null then
+         while not Item.Panel_Writer'Terminated loop
+            delay 0.01;
+         end loop;
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation
+              (Model_Runner.Panel_Cache.Writing, Panel_Writing_Access);
+         begin
+            Release (Item.Panel_Writer);
+         end;
+      end if;
       B.Free (Item.Panels);
+      if Item.Panel_Map /= null then
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation
+              (Model_Runner.Byte_Sources.Files.File_Source, Panel_Map_Access);
+         begin
+            Model_Runner.Byte_Sources.Files.Close (Item.Panel_Map.all);
+            Release (Item.Panel_Map);
+         end;
+      end if;
       Item.Base := System.Null_Address;
       Item.Span := 0;
       Item.Shape := (others => <>);
@@ -720,6 +890,9 @@ package body Model_Runner.Qwen_Image is
 
    function Is_Ready (Item : Denoiser) return Boolean
    is (Item.Ready);
+
+   function Panels_Mapped (Item : Denoiser) return Boolean
+   is (Item.Panel_Map /= null);
 
    function Config (Item : Denoiser) return Configuration
    is (Item.Shape);

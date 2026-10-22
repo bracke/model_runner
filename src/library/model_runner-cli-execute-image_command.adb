@@ -367,10 +367,18 @@ package body Model_Runner.CLI.Execute.Image_Command is
                  (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
                   Which => Item.Device_Index);
             end if;
-            Q.Open (Model,
-                    Path_Of (T.To_String (Item.Model_Path), (if Item.Image_Turbo then Turbo_Name else Denoiser_Name)),
-                    Condition,
-                    Panels => not On_Device);
+            declare
+               Denoiser_Path : constant String :=
+                 Path_Of (T.To_String (Item.Model_Path), (if Item.Image_Turbo then Turbo_Name else Denoiser_Name));
+            begin
+               --  On the processor its panels kept between runs, as a
+               --  model's are: rebuilt each run they took 3 s and 7.6 GB.
+               Q.Open (Model, Denoiser_Path, Condition,
+                       Panels => not On_Device,
+                       Panel_Cache =>
+                         (if On_Device then ""
+                          else Panel_Cache_For (Denoiser_Path, Item.No_Cache)));
+            end;
             for Index in Latents'Range loop
                exit when E.Is_Error (Condition);
                Tk.Allocate (N.Element_Count (Q.Config (Model).Out_Channels * Rows * Columns), Latents (Index));

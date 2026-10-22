@@ -27536,4 +27536,5 @@ panels B9A8C4F2A166CCB4 src/library/model_runner-quantization-interleave.ads src
 # tap-looping tile
 # decoder band pipelining
 # normed taps
-image 7EA93A85BC3BF6F0 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# denoiser panel cache
+image 905C2100B971731D src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb

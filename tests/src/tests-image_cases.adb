@@ -742,6 +742,75 @@ package body Tests.Image_Cases is
       end;
    end Reference_Velocity;
 
+   --  The processor's panels kept between opens: an open with a panel
+   --  cache builds them and writes them beside it, the next maps them,
+   --  and one whose file was damaged inside a panel it checks builds them
+   --  afresh -- each step the same to the bit as the first.
+   procedure Panels_Are_Kept_Between_Opens (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Grid_Rows    : constant := 3;
+      Grid_Columns : constant := 4;
+      Text_Rows    : constant := 5;
+      Cache  : constant String := "obj/qwen-image-denoiser.panels";
+      Model  : Q.Denoiser;
+      Status : E.Error_Info;
+      Latent : N.Real_Array (0 .. Latent_Channels * Grid_Rows * Grid_Columns - 1);
+      Text   : N.Real_Array (0 .. Text_Rows * Context - 1);
+      First, Again : N.Real_Array (Latent'Range);
+      Seed   : Natural := 31;
+      use type N.Real_Array;
+
+      procedure Step (Into : out N.Real_Array; Mapped : Boolean; What : String) is
+      begin
+         Q.Open (Model, Path, Status, Panels => True, Panel_Cache => Cache);
+         Assert (E.Is_Ok (Status), "the denoiser did not open " & What);
+         Assert (Q.Panels_Mapped (Model) = Mapped,
+                 "the denoiser's panels were " & (if Mapped then "not " else "") & "mapped " & What);
+         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Into, Status);
+         Assert (E.Is_Ok (Status), "the step did not run " & What);
+         Q.Close (Model);
+      end Step;
+   begin
+      for Value of Latent loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 100.0;
+      end loop;
+      for Value of Text loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 50.0;
+      end loop;
+      if Ada.Directories.Exists (Cache) then
+         Ada.Directories.Delete_File (Cache);
+      end if;
+      Write_Denoiser (Blocks => [0, 1], Eight => True);
+      Step (First, Mapped => False, What => "with nothing kept");
+      Assert (Ada.Directories.Exists (Cache), "the panels were not kept");
+      Step (Again, Mapped => True, What => "with the panels kept");
+      Assert (Again = First, "a step on the kept panels differs from one on panels built");
+
+      --  A byte of the first panel changed where the open checks it.
+      declare
+         use Ada.Streams.Stream_IO;
+         use type Ada.Streams.Stream_Element;
+         use type Ada.Streams.Stream_Element_Offset;
+         Handle : File_Type;
+         Whole  : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Ada.Directories.Size (Cache)));
+         Last   : Ada.Streams.Stream_Element_Offset;
+      begin
+         Open (Handle, In_File, Cache);
+         Read (Handle, Whole, Last);
+         Close (Handle);
+         Whole (4_097 + 7) := Whole (4_097 + 7) xor 16#5A#;
+         Create (Handle, Out_File, Cache);
+         Write (Handle, Whole);
+         Close (Handle);
+      end;
+      Step (Again, Mapped => False, What => "with the kept panels damaged");
+      Assert (Again = First, "a step on panels built again differs from the first");
+      Ada.Directories.Delete_File (Cache);
+   end Panels_Are_Kept_Between_Opens;
+
    --  One evaluation of the denoiser, in binary32, is the plain binary64
    --  computation of the same network: the time twice, the prompt's rows,
    --  the latent's, every block's modulated attention -- causal among the
@@ -2580,6 +2649,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Step_Beside_Pictures_Is_The_Plain_Computation'Access,
          "a step beside reference pictures is the plain computation laid out as the reference lays it");
+      Register_Routine
+        (T, Panels_Are_Kept_Between_Opens'Access,
+         "the processor's panels are kept between opens, mapped by the next and built afresh where damaged");
       Register_Routine
         (T, The_Denoiser_Is_Read_Off_Its_Shapes'Access,
          "Qwen-Image 2.1's denoiser, a file that states nothing, is read off its tensors' shapes");
