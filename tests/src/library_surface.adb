@@ -213,12 +213,14 @@ package body Library_Surface is
 
       --  Where a picture counts as large: the latent rows past which each
       --  denoiser block goes to the device a chunk at a time, the bytes
-      --  past which the decoder works in stripes, and the bytes past which
+      --  past which the decoder works in stripes, the rows a 3x3 takes a
+      --  band at a time, and the bytes past which
       --  a prompt's keys and values are not kept between steps. The engine's own defaults
       --  are the ones a run wants; a test lowers them so a small fixture
       --  takes the large-picture road and can be set against the whole.
       new String'("Set_Chunking"),
       new String'("Set_Stripes"),
+      new String'("Set_Band_Rows"),
       new String'("Set_Prefix_Room"),
 
       --  Whether a picture decoder was opened with its encoder. The command

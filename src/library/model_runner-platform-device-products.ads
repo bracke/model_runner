@@ -2259,6 +2259,15 @@ package Model_Runner.Platform.Device.Products is
    --  @param Leave_Kept True to copy no kept answer anywhere and leave it
    --    in the mapped result buffer, where Kept_Answer says the first lies
    --    and the host reads it in place; Target then need hold nothing.
+   --  @param Origin Bytes into the result buffer this sequence's room
+   --    begins at: the activation it carries in and out, and its answers
+   --    past that. Two sequences at origins a room apart leave each
+   --    other's answers alone, so the host can read one's while the
+   --    device makes the other's.
+   --  @param Hold With Leave_Kept, return once the sequence is handed
+   --    over rather than once it has run: Kept_Answer says where its
+   --    answer will be, and the caller waits (Finish_All) before reading
+   --    it. Nothing borrowed or timed is held so.
    --
    --  A layer's answer is the next layer's activation, and between them it
    --  went to the host and came back: a megabyte a layer out of the mapped
@@ -2278,7 +2287,9 @@ package Model_Runner.Platform.Device.Products is
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
       Kept_Into : Address_List := No_Places;
-      Leave_Kept : Boolean := False);
+      Leave_Kept : Boolean := False;
+      Origin     : Interfaces.Unsigned_64 := 0;
+      Hold       : Boolean := False);
 
    --  Where the first answer the last Run kept lies in the mapped result
    --  buffer, where that Run was told to leave its answers there: the host
@@ -2298,11 +2309,19 @@ package Model_Runner.Platform.Device.Products is
    --  @param Bytes How much room.
    --  @param Where The room, or Null_Address with Ok False.
    --  @param Ok False where the room could not be had.
+   --  @param Origin Bytes into the result buffer the room begins at, as
+   --    Run takes it.
+   --  @param Wait False to wait for nothing in flight, where the buffer
+   --    already holds the room: the caller knows nothing running reads
+   --    it -- a sequence at another origin. Where it would have to grow,
+   --    it waits all the same.
    procedure Activation_Room
-     (Item  : in out Engine;
-      Bytes : Interfaces.Unsigned_64;
-      Where : out System.Address;
-      Ok    : out Boolean);
+     (Item   : in out Engine;
+      Bytes  : Interfaces.Unsigned_64;
+      Where  : out System.Address;
+      Ok     : out Boolean;
+      Origin : Interfaces.Unsigned_64 := 0;
+      Wait   : Boolean := True);
 
    --  The activation the last sequence left on the device, read back.
    --

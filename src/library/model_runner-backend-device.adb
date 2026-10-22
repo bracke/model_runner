@@ -2310,12 +2310,14 @@ package body Model_Runner.Backend.Device is
    procedure Activation_Room
      (Values : Model_Runner.Numerics.Element_Count;
       Where  : out System.Address;
-      Ok     : out Boolean) is
+      Ok     : out Boolean;
+      Origin : Interfaces.Unsigned_64 := 0;
+      Wait   : Boolean := True) is
    begin
       Where := System.Null_Address;
       Ok := False;
       if Ready_Now then
-         Products.Activation_Room (Engine, Interfaces.Unsigned_64 (Values) * 4, Where, Ok);
+         Products.Activation_Room (Engine, Interfaces.Unsigned_64 (Values) * 4, Where, Ok, Origin, Wait);
       end if;
    end Activation_Room;
 
@@ -2400,7 +2402,9 @@ package body Model_Runner.Backend.Device is
       Status    : out E.Error_Info;
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
-      In_Place  : Boolean := False)
+      In_Place  : Boolean := False;
+      Origin    : Interfaces.Unsigned_64 := 0;
+      Hold      : Boolean := False)
    is
       Ok        : Boolean;
       Cancelled : Boolean := False;
@@ -2416,7 +2420,7 @@ package body Model_Runner.Backend.Device is
         (Engine, Steps, Vectors, Count, None, Ok, Cancelled, null, Carry_In => Carry_In or else In_Place,
          Carry_Out => Carry_Out,
          Kept_Into => (if Into = System.Null_Address or else In_Place then Products.No_Places else One),
-         Leave_Kept => In_Place);
+         Leave_Kept => In_Place, Origin => Origin, Hold => Hold);
       if Ok then
          Note_Timeline (Steps, Count);
       elsif Products.Is_Stalled (Engine) then

@@ -1391,6 +1391,12 @@ package Model_Runner.Backend.Device is
    --  @param In_Place Whether the activation is what the caller wrote into
    --    Activation_Room -- Vectors goes unread -- and the kept answer is left
    --    where Kept_Answer says, not copied to Into.
+   --  @param Origin Bytes into the device's result room this sequence's
+   --    activation and answers begin at (Products.Run): a band at one
+   --    origin is read while the next runs at another.
+   --  @param Hold With In_Place, return once handed over: Kept_Answer says
+   --    where the answer will be, and the caller waits (Finish_All) before
+   --    reading it.
    procedure Run_Steps
      (Steps     : Model_Runner.Platform.Device.Products.Sequence;
       Vectors   : Model_Runner.Tensors.Real_Array;
@@ -1399,7 +1405,9 @@ package Model_Runner.Backend.Device is
       Status    : out Model_Runner.Errors.Error_Info;
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
-      In_Place  : Boolean := False);
+      In_Place  : Boolean := False;
+      Origin    : Interfaces.Unsigned_64 := 0;
+      Hold      : Boolean := False);
 
    --  Room for a sequence's activation in the device's own mapped memory,
    --  for the caller to write and Run_Steps In_Place to read; see
@@ -1408,10 +1416,16 @@ package Model_Runner.Backend.Device is
    --  @param Values How many binary32 values.
    --  @param Where The room, or Null_Address with Ok False.
    --  @param Ok False where no device is open or the room could not be had.
+   --  @param Origin Bytes into the device's result room it begins at, as
+   --    Run_Steps takes it.
+   --  @param Wait False to wait for nothing in flight where the room is
+   --    already there: what runs is at another origin.
    procedure Activation_Room
      (Values : Model_Runner.Numerics.Element_Count;
       Where  : out System.Address;
-      Ok     : out Boolean);
+      Ok     : out Boolean;
+      Origin : Interfaces.Unsigned_64 := 0;
+      Wait   : Boolean := True);
 
    --  Where the answer a Run_Steps In_Place kept lies, until the next run.
    --

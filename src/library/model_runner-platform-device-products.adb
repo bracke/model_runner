@@ -9998,18 +9998,22 @@ package body Model_Runner.Platform.Device.Products is
    ---------------------
 
    procedure Activation_Room
-     (Item  : in out Engine;
-      Bytes : Interfaces.Unsigned_64;
-      Where : out System.Address;
-      Ok    : out Boolean)
+     (Item   : in out Engine;
+      Bytes  : Interfaces.Unsigned_64;
+      Where  : out System.Address;
+      Ok     : out Boolean;
+      Origin : Interfaces.Unsigned_64 := 0;
+      Wait   : Boolean := True)
    is
-      Wanted : constant Interfaces.Unsigned_64 := (Bytes + 255) / 256 * 256;
+      Wanted : constant Interfaces.Unsigned_64 := Origin + (Bytes + 255) / 256 * 256;
    begin
       Where := Null_Handle;
       Item.Kept_At := Null_Handle;
-      Settle (Item, Ok);
-      if not Ok then
-         return;
+      if Wait or else Item.Result_Bytes < Wanted or else Item.Result_At = Null_Handle then
+         Settle (Item, Ok);
+         if not Ok then
+            return;
+         end if;
       end if;
       if Item.Result_Bytes < Wanted then
          Unmap_Standing (Item, Item.Result_Memory, Item.Result_At);
@@ -10024,7 +10028,11 @@ package body Model_Runner.Platform.Device.Products is
       end if;
       Standing (Item, Item.Result_Memory, Item.Result_At, Item.Result_Bytes, Ok);
       if Ok then
-         Where := Item.Result_At;
+         declare
+            use System.Storage_Elements;
+         begin
+            Where := To_Address (To_Integer (Item.Result_At) + Integer_Address (Origin));
+         end;
       end if;
    end Activation_Room;
 
@@ -13887,7 +13895,9 @@ package body Model_Runner.Platform.Device.Products is
       Carry_In  : Boolean := False;
       Carry_Out : Boolean := False;
       Kept_Into : Address_List := No_Places;
-      Leave_Kept : Boolean := False)
+      Leave_Kept : Boolean := False;
+      Origin     : Interfaces.Unsigned_64 := 0;
+      Hold       : Boolean := False)
    is
       use type System.Storage_Elements.Integer_Address;
 
@@ -14267,7 +14277,7 @@ package body Model_Runner.Platform.Device.Products is
                   * Interfaces.Unsigned_64 (Whole_Tiles (Count)) * 4))
          + Alignment - 1) / Alignment * Alignment;
 
-      Result_Bytes : Interfaces.Unsigned_64 := Carry_Room;
+      Result_Bytes : Interfaces.Unsigned_64 := Origin + Carry_Room;
 
       --  Room the angles need, which the widest rotating step decides.
       Turn_Room : Interfaces.Unsigned_64 := 0;
@@ -14944,12 +14954,12 @@ package body Model_Runner.Platform.Device.Products is
       if Carry_Out and then Steps.Held > 0
         and then Places (Steps.Held).Bytes <= Carry_Room
       then
-         Places (Steps.Held).At_Byte := 0;
+         Places (Steps.Held).At_Byte := Origin;
 
          --  A folded join is the product before it, so moving one moves
          --  both: the store that has to land at the front is the product's.
          if Steps.Items (Steps.Held).Folded then
-            Places (Steps.Held - 1).At_Byte := 0;
+            Places (Steps.Held - 1).At_Byte := Origin;
          end if;
       end if;
 
@@ -15115,7 +15125,7 @@ package body Model_Runner.Platform.Device.Products is
             Was_Bytes  : constant Interfaces.Unsigned_64 := Item.Result_Bytes;
             Carrying   : constant Boolean :=
               Carry_In and then Was_Buffer /= Null_Handle
-              and then Was_Bytes >= Vector_Bytes;
+              and then Was_Bytes >= Origin + Vector_Bytes;
          begin
             --  Either way the sequence before may still be writing it.
             Settle (Item, Good);
@@ -15157,12 +15167,15 @@ package body Model_Runner.Platform.Device.Products is
                          Item.Result_Bytes, Good);
                if Good then
                   declare
+                     use System.Storage_Elements;
                      Was : Model_Runner.Bytes.Byte_Array
                        (1 .. Model_Runner.Bytes.Byte_Count (Vector_Bytes))
-                       with Import, Address => Was_At;
+                       with Import,
+                            Address => To_Address (To_Integer (Was_At) + Integer_Address (Origin));
                      Now : Model_Runner.Bytes.Byte_Array
                        (1 .. Model_Runner.Bytes.Byte_Count (Vector_Bytes))
-                       with Import, Address => Item.Result_At;
+                       with Import,
+                            Address => To_Address (To_Integer (Item.Result_At) + Integer_Address (Origin));
                   begin
                      Now := Was;
                   end;
@@ -15349,7 +15362,7 @@ package body Model_Runner.Platform.Device.Products is
                --  The activation: what the host sent, or what the sequence
                --  before this one left at the front of the result buffer.
                if Carry_In then
-                  return (Buffer => Item.Result_Buffer, Offset => Skip,
+                  return (Buffer => Item.Result_Buffer, Offset => Origin + Skip,
                           Extent => Vector_Bytes - Skip);
                end if;
 
@@ -18308,14 +18321,17 @@ package body Model_Runner.Platform.Device.Products is
       --  finishes this, instead of standing idle while the host wakes up,
       --  records and submits.
       declare
-         Reads_Back : Boolean := not Carry_Out;
+         --  Held, a kept answer is the caller's to wait for.
+         Holding    : constant Boolean := Hold and then Leave_Kept;
+         Reads_Back : Boolean := not Carry_Out and then not Holding;
       begin
          for Index in 1 .. Steps.Held loop
             --  A borrowed matrix is given back at the end of this call, and
             --  it may not be given back while the device is still reading
             --  it -- so a sequence that borrowed anything waits.
             Reads_Back :=
-              Reads_Back or else Steps.Items (Index).Kept
+              Reads_Back
+              or else (Steps.Items (Index).Kept and then not Holding)
               or else Places (Index).Borrowed;
          end loop;
 

@@ -144,6 +144,17 @@ package Model_Runner.Qwen_Image.Decoder is
    --  @param Bytes The full-size level's most bytes a buffer.
    procedure Set_Stripes (Bytes : Long_Long_Integer := 2 * 1024 ** 3);
 
+   --  The most rows of pixels a 3x3 on the device takes a band at a time,
+   --  or nought for as many as its room holds. Bands go two at a time in
+   --  two lanes of the device's room -- one laid out and put while the
+   --  other runs -- which a picture as small as a test's never needs: a
+   --  test sets it to one.
+   --
+   --  Task safety: set before the decodes it should govern.
+   --
+   --  @param Rows The most rows a band, or nought.
+   procedure Set_Band_Rows (Rows : Natural := 0);
+
    --  The latent's statistics, from the model's configuration: what the
    --  sampler's latent is multiplied by and moved by before decoding, and
    --  what the encoder's mean is moved by and divided by after.

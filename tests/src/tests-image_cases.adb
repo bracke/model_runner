@@ -2007,11 +2007,12 @@ package body Tests.Image_Cases is
       Grid_Columns : constant := 3;
       Latent  : N.Real_Array (0 .. 64 * Grid_Rows * Grid_Columns - 1);
       Picture : N.Real_Array (0 .. 4 * 256 * Grid_Rows * Grid_Columns - 1);
+      In_Bands : N.Real_Array (Picture'Range) := [others => 0.0];
       Wanted  : N.Wide_Real_Array (Picture'Range);
       Decoder : Dec.Picture_Decoder;
       Status  : E.Error_Info;
       Seed    : Natural := 3;
-      Worst, Largest : Long_Float := 0.0;
+      Worst, Largest, Banded : Long_Float := 0.0;
       Ready   : Boolean;
    begin
       Model_Runner.Backend.Device.Open (Ready);
@@ -2030,17 +2031,28 @@ package body Tests.Image_Cases is
       --  host to put from there.
       Assert (Model_Runner.Backend.Device.Kept_Answer /= System.Null_Address,
               "the head's 3x3 did not leave its answers on the device");
+      --  And a band of one row: every 3x3 runs as bands two at a time, one
+      --  laid out and put while the other runs, as a large picture's do.
+      if E.Is_Ok (Status) then
+         Dec.Set_Band_Rows (1);
+         Dec.Decode (Decoder, Latent, Grid_Rows, Grid_Columns, null, In_Bands, Status);
+         Dec.Set_Band_Rows;
+      end if;
       Dec.Close (Decoder);
       Model_Runner.Backend.Device.Close;
       Assert (E.Is_Ok (Status), "the latent was not decoded on the device: " & E.Error_Code'Image (Status.Code));
       Reference_Decode (Latent, Grid_Rows, Grid_Columns, Wanted);
       for Index in Picture'Range loop
          Worst := Long_Float'Max (Worst, abs (Long_Float (Picture (Index)) - Long_Float (Wanted (Index))));
+         Banded := Long_Float'Max (Banded, abs (Long_Float (In_Bands (Index)) - Long_Float (Wanted (Index))));
          Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (Index)));
       end loop;
       Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
               "a picture decoded on the device differs from the plain computation by" & Worst'Image & " of"
               & Largest'Image);
+      Assert (Banded <= 2.0E-2 * Largest,
+              "a picture decoded on the device a row a band differs from the plain computation by" & Banded'Image
+              & " of" & Largest'Image);
    end A_Latent_Decodes_On_The_Device_As_The_Plain_Computation;
 
    --  A 3x3's nine taps on the device, as the decoder lays them out: one

@@ -867,6 +867,14 @@ package body Model_Runner.Qwen_Image.Decoder is
 
    Stripe_Bytes : Long_Long_Integer := 2 * 1024 ** 3;
 
+   --  See Set_Band_Rows.
+   Band_Rows_Most : Natural := 0;
+
+   procedure Set_Band_Rows (Rows : Natural := 0) is
+   begin
+      Band_Rows_Most := Rows;
+   end Set_Band_Rows;
+
    procedure Set_Stripes (Bytes : Long_Long_Integer := 2 * 1024 ** 3) is
    begin
       Stripe_Bytes := Bytes;
@@ -986,6 +994,12 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  down and one to a column across, and the nine summed on the
       --  device as they are made; the answers in the padding columns
       --  dropped as they are put.
+      --
+      --  Two bands at a time, in two lanes of the device's room: the next
+      --  band is laid out while the device makes this one, and this one's
+      --  answers put while it makes the next. One after another, the host
+      --  and the device took turns at a 1024 picture's full-size level,
+      --  each idle while the other worked.
       procedure Apply_Taps
         (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
          Gain : T.Real_Array_Access := null) is
@@ -996,104 +1010,181 @@ package body Model_Runner.Qwen_Image.Decoder is
          Fitted  : constant Element_Count := C.Taps (0).Rows;
          Wide    : constant Element_Count := Width + 2;
          Band    : constant Element_Count :=
-           Element_Count'Max (1, Element_Count'Min (Height, Element_Count'Max (Tap_Rows, Tap_Answers / Fitted) / Wide));
-         Row     : Element_Count := 0;
+           Element_Count'Max
+             (1, Element_Count'Min
+                (Height,
+                 (if Band_Rows_Most > 0 then Element_Count (Band_Rows_Most)
+                  else Element_Count'Max (Tap_Rows, Tap_Answers / Fitted) / Wide)));
          --  Whether the norm is the device's, ahead of the taps.
          On_Device_Norm : constant Boolean := Gain /= null and then C.Fit /= null;
-      begin
-         --  The band is laid out straight into the device's own memory and
-         --  the answers put from where the device left them: neither goes
-         --  through a copy on one core.
-         while Row < Height and then E.Is_Ok (Status) loop
+
+         --  A lane: room for the widest band's activation, the norm's two
+         --  answers beside it, and the taps' answers, each rounded to the
+         --  tile -- more than a sequence lays out past its origin.
+         Lane : constant Interfaces.Unsigned_64 :=
+           (Interfaces.Unsigned_64 (3 * (Band + 2) * Wide * Ins_To + 2 * Fitted * (Band * Wide + 256)) * 4
+            + 2 ** 20 + 4_095) / 4_096 * 4_096;
+
+         --  Where each lane's room lies in the host's mapping, as Lay found it.
+         Lane_At : array (0 .. 1) of System.Address := [others => System.Null_Address];
+
+         function Rows_Of (From : Element_Count) return Element_Count
+         is (Element_Count'Min (Band, Height - From));
+
+         function Count_Of (From : Element_Count) return Element_Count
+         is (Rows_Of (From) * Wide - 2);
+
+         function Values_Of (From : Element_Count) return Element_Count
+         is ((Rows_Of (From) + 2) * Wide * Ins_To);
+
+         --  The band from row From laid out in lane Which, normed where the
+         --  norm is the host's.
+         procedure Lay (From : Element_Count; Which : Natural; Wait : Boolean) is
+            Room_At : System.Address;
+            Ok      : Boolean;
+         begin
+            Device.Activation_Room (Values_Of (From), Room_At, Ok, Interfaces.Unsigned_64 (Which) * Lane, Wait);
+            if not Ok then
+               Status := E.Make (E.Backend_Capability_Missing);
+               return;
+            end if;
+            Lane_At (Which) := Room_At;
             declare
-               Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
-               Count     : constant Element_Count := Rows_Here * Wide - 2;
-               Values    : constant Element_Count := (Rows_Here + 2) * Wide * Ins_To;
-               Room_At   : System.Address;
-               Ok        : Boolean;
-               Steps     : P.Sequence;
-               Added     : Boolean := True;
-               Sum       : Natural := 0;
-               As_One    : Boolean := False;
+               Padded : aliased N.Real_Array (0 .. Values_Of (From) - 1) with Import, Address => Room_At;
+               Job    : aliased Pixel_Work :=
+                 (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access,
+                  Gain => (if On_Device_Norm then null else Gain), Silu => True, Row => From, Height => Height,
+                  Width => Width, Channels => Ins, Across => Ins_To, others => 0);
             begin
-               Device.Activation_Room (Values, Room_At, Ok);
+               CPU.Dispatch_Shares (Pool, (Rows_Of (From) + 2) * Wide, Job'Unchecked_Access, Status,
+                                    Cost => (Rows_Of (From) + 2) * Wide * Ins_To);
+            end;
+         end Lay;
+
+         --  The band from row From, laid out in lane Which, handed to the
+         --  device: Answer is where its answers will lie.
+         procedure Submit (From : Element_Count; Which : Natural; Answer : out System.Address) is
+            Origin : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Which) * Lane;
+            --  The band where Lay laid it, which a sequence carrying in
+            --  reads on the device rather than from here.
+            Padded : N.Real_Array (0 .. Values_Of (From) - 1) with Import, Address => Lane_At (Which);
+            Steps  : P.Sequence;
+            Added  : Boolean := True;
+            Sum    : Natural := 0;
+            As_One : Boolean := False;
+         begin
+            Answer := System.Null_Address;
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            --  The band normed and its SiLU taken on the device, where the
+            --  gain is fitted for it, and left there for the taps: a pixel
+            --  of zeros stays zeros.
+            if On_Device_Norm then
+               declare
+                  First : P.Sequence;
+               begin
+                  P.Open_Sequence (First);
+                  P.Add_Norm (First, C.Fit.all'Address, B.Byte_Count (Ins_To) * 4, 0, Natural (Ins_To),
+                              1.0E-12, Added, Key => C.Fit.all'Address, Kept => False);
+                  if Added then
+                     P.Add_Combination (First, 4, Added, Kept => False);
+                  end if;
+                  if Added then
+                     Device.Run_Steps (First, Padded, Positive ((Rows_Of (From) + 2) * Wide), System.Null_Address,
+                                       Status, Carry_In => True, Carry_Out => True, Origin => Origin);
+                  else
+                     Status := E.Make (E.Backend_Capability_Missing);
+                  end if;
+               end;
+            end if;
+            P.Open_Sequence (Steps);
+            --  The nine as one product where the device's tile takes the
+            --  band: summed where they are made and stored once.
+            if T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count_Of (From))) then
+               Device.Add_View_Taps (Steps, C.Tap_Stack, Natural (Wide * Ins_To), Added, Kept => True);
+               As_One := True;
+            end if;
+            for Tap in C.Taps'Range loop
+               exit when not Added or else As_One;
+               Device.Add_View_Product_At
+                 (Steps, C.Taps (Tap),
+                  Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
+               if Added and then Tap > 0 then
+                  P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum,
+                              Kept => Tap = C.Taps'Last);
+               end if;
+               Sum := P.Length (Steps);
+            end loop;
+            if not Added then
+               Status := E.Make (E.Backend_Capability_Missing);
+            elsif E.Is_Ok (Status) then
+               Device.Run_Steps (Steps, Padded, Positive (Count_Of (From)), System.Null_Address, Status,
+                                 In_Place => True, Origin => Origin, Hold => True);
+               Answer := Device.Kept_Answer;
+               if E.Is_Ok (Status) and then Answer = System.Null_Address then
+                  Status := E.Make (E.Backend_Capability_Missing);
+               end if;
+            end if;
+         end Submit;
+
+         --  The band from row From's answers, made, put into Target.
+         procedure Put (From : Element_Count; Answer : System.Address) is
+         begin
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            declare
+               Answers : aliased N.Real_Array (0 .. Count_Of (From) * Fitted - 1) with Import, Address => Answer;
+               Job     : aliased Pixel_Work :=
+                 (Kind => Put_Answers, Source => Answers'Unrestricted_Access, Target => Target,
+                  Gain => C.Bias, Silu => False, Row => From * Width, Height => Height, Width => Width,
+                  Channels => Outs, Across => Fitted, Padded => Wide, others => 0);
+            begin
+               CPU.Dispatch_Shares (Pool, Rows_Of (From) * Width, Job'Unchecked_Access, Status,
+                                    Cost => Rows_Of (From) * Width * Outs);
+            end;
+         end Put;
+
+         Row          : Element_Count := 0;
+         Which        : Natural := 0;
+         Answer, Next_Answer : System.Address := System.Null_Address;
+         Room_At      : System.Address;
+         Ok           : Boolean;
+      begin
+         --  Both lanes' room taken now, while nothing runs: room grown
+         --  under a band in flight would be a buffer given back under it.
+         Device.Activation_Room (Element_Count (2 * Lane / 4), Room_At, Ok);
+         if not Ok then
+            Status := E.Make (E.Backend_Capability_Missing);
+            return;
+         end if;
+         Lay (0, 0, Wait => True);
+         Submit (0, 0, Answer);
+         while E.Is_Ok (Status) loop
+            declare
+               Next : constant Element_Count := Row + Rows_Of (Row);
+            begin
+               if Next < Height then
+                  Lay (Next, 1 - Which, Wait => False);
+               end if;
+               Device.Finish_All (Ok);
                if not Ok then
                   Status := E.Make (E.Backend_Capability_Missing);
                   return;
                end if;
-               declare
-                  Padded : aliased N.Real_Array (0 .. Values - 1) with Import, Address => Room_At;
-                  Lay    : aliased Pixel_Work :=
-                    (Kind => Pad_Rows, Source => Source, Target => Padded'Unrestricted_Access,
-                     Gain => (if On_Device_Norm then null else Gain), Silu => True, Row => Row, Height => Height,
-                     Width => Width, Channels => Ins, Across => Ins_To, others => 0);
-               begin
-                  CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
-                                       Cost => (Rows_Here + 2) * Wide * Ins_To);
-                  --  The band normed and its SiLU taken on the device, where
-                  --  the gain is fitted for it, and left there for the taps:
-                  --  a pixel of zeros stays zeros.
-                  if On_Device_Norm and then E.Is_Ok (Status) then
-                     declare
-                        First : P.Sequence;
-                     begin
-                        P.Open_Sequence (First);
-                        P.Add_Norm (First, C.Fit.all'Address, B.Byte_Count (Ins_To) * 4, 0, Natural (Ins_To),
-                                    1.0E-12, Added, Key => C.Fit.all'Address, Kept => False);
-                        if Added then
-                           P.Add_Combination (First, 4, Added, Kept => False);
-                        end if;
-                        if Added then
-                           Device.Run_Steps (First, Padded, Positive ((Rows_Here + 2) * Wide), System.Null_Address,
-                                             Status, Carry_In => True, Carry_Out => True);
-                        else
-                           Status := E.Make (E.Backend_Capability_Missing);
-                        end if;
-                     end;
-                  end if;
-                  P.Open_Sequence (Steps);
-                  --  The nine as one product where the device's tile takes
-                  --  the band: summed where they are made and stored once.
-                  if T.Is_Present (C.Tap_Stack) and then Device.Takes_Taps (C.Tap_Stack, Positive (Count)) then
-                     Device.Add_View_Taps (Steps, C.Tap_Stack, Natural (Wide * Ins_To), Added, Kept => True);
-                     As_One := True;
-                  end if;
-                  for Tap in C.Taps'Range loop
-                     exit when not Added or else As_One;
-                     Device.Add_View_Product_At
-                       (Steps, C.Taps (Tap),
-                        Natural ((Element_Count (Tap / 3) * Wide + Element_Count (Tap rem 3)) * Ins_To), Added);
-                     if Added and then Tap > 0 then
-                        P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum,
-                                    Kept => Tap = C.Taps'Last);
-                     end if;
-                     Sum := P.Length (Steps);
-                  end loop;
-                  if not Added then
-                     Status := E.Make (E.Backend_Capability_Missing);
-                  elsif E.Is_Ok (Status) then
-                     Device.Run_Steps (Steps, Padded, Positive (Count), System.Null_Address, Status, In_Place => True);
-                  end if;
-               end;
-               if E.Is_Ok (Status) and then Device.Kept_Answer = System.Null_Address then
-                  Status := E.Make (E.Backend_Capability_Missing);
+               if Next < Height then
+                  Submit (Next, 1 - Which, Next_Answer);
                end if;
-               if E.Is_Ok (Status) then
-                  declare
-                     Answers : aliased N.Real_Array (0 .. Count * Fitted - 1)
-                       with Import, Address => Device.Kept_Answer;
-                     Put     : aliased Pixel_Work :=
-                       (Kind => Put_Answers, Source => Answers'Unrestricted_Access, Target => Target,
-                        Gain => C.Bias, Silu => False, Row => Row * Width, Height => Height, Width => Width,
-                        Channels => Outs, Across => Fitted, Padded => Wide, others => 0);
-                  begin
-                     CPU.Dispatch_Shares (Pool, Rows_Here * Width, Put'Unchecked_Access, Status,
-                                          Cost => Rows_Here * Width * Outs);
-                  end;
-               end if;
-               Row := Row + Rows_Here;
+               Put (Row, Answer);
+               exit when Next >= Height;
+               Row := Next;
+               Which := 1 - Which;
+               Answer := Next_Answer;
             end;
          end loop;
+         --  Nothing of this convolution left running for what comes after.
+         Device.Finish_All (Ok);
       end Apply_Taps;
 
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a
