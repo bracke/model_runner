@@ -3144,8 +3144,9 @@ private
       --  Whether a split mixture's front half reads as fast on the
       --  processor as the file lays it out: no matrix of it in a format
       --  the processor wants in panels it does not have there, the device
-      --  reading those. Where false a token stays on the split at every
-      --  depth (On_Host_Here): Qwen3-Coder-30B's Q2_K and Q3_K front half
+      --  reading those: Q4_K, Q5_K, Q6_K, Q8_0 and the floating-point
+      --  formats. Where false a token stays on the split at every depth
+      --  (On_Host_Here): Qwen3-Coder-30B's Q2_K and Q3_K front half
       --  generated 9.9 tokens a second on the processor whole against 23.7
       --  split, 509 positions in.
       Host_Front_Raw : Boolean := False;

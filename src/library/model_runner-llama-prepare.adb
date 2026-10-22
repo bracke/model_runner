@@ -149,17 +149,22 @@ is
 
    --  Whether every matrix a split mixture's device runs -- all but the
    --  experts -- reads as fast on the processor from the file's layout as
-   --  from panels: not a two- or three-bit k-quant, which the processor
-   --  reads several times slower so (TinyLlama's Q2_K 12 tokens a second
-   --  against 78 in panels), where Q4_K and up read as fast.
+   --  from panels. Only the formats with a row kernel as fast as their
+   --  panels' do: TinyLlama-1.1B generating on the processor, the file's
+   --  layout against panels, Q4_K_M 62 against 63 tokens a second, Q5_K_M
+   --  54 against 56, Q8_0 39 against 39 -- and Q2_K 10 against 79, Q3_K 15
+   --  against 72, Q4_0 15 against 65, Q4_1 10 against 60, Q5_0 9 against
+   --  55, Q5_1 9 against 52, IQ4_NL 9 against 65, IQ4_XS 11 against 68,
+   --  MXFP4 8.5 against 67. Q6_K is among the K_M files' own; the
+   --  floating-point formats are read as they lie either way.
    function Front_Reads_Raw return Boolean is
-      use type Model_Runner.GGUF.Tensor_Type;
+      package G renames Model_Runner.GGUF;
    begin
       for Where of Matrices (Item) loop
          if not Host_Fed (Where)
            and then Where /= Item.Embeddings'Unchecked_Access
-           and then Where.all.Format in Model_Runner.GGUF.Type_Q2_K
-                                      | Model_Runner.GGUF.Type_Q3_K
+           and then Where.all.Format not in G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K | G.Type_Q8_0
+                                         | G.Type_F16 | G.Type_BF16 | G.Type_F32
          then
             return False;
          end if;
