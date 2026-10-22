@@ -23,7 +23,8 @@ package body Model_Runner.Qwen_Image.Prompts is
       Prompt  : String;
       Rows    : out T.Real_Array_Access;
       Count   : out Natural;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Workers : Model_Runner.Backend.CPU.Pool_Reference := null)
    is
       Words  : constant access constant Vocab.Vocabulary := L.Vocabulary (Encoder);
       Whole  : Vocab.Token_Array (1 .. Max_Tokens);
@@ -48,7 +49,7 @@ package body Model_Runner.Qwen_Image.Prompts is
       --  marker begins, and nothing reads across a marker.
       Dropped := Natural'Min (Dropped, Last);
 
-      Rows_Of (Encoder, Whole (1 .. Last), Dropped, Rows, Status);
+      Rows_Of (Encoder, Whole (1 .. Last), Dropped, Rows, Status, Workers);
       if E.Is_Ok (Status) then
          Count := Last - Dropped;
       end if;
@@ -59,7 +60,8 @@ package body Model_Runner.Qwen_Image.Prompts is
       Tokens  : Vocab.Token_Array;
       Dropped : Natural;
       Rows    : out T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Workers : Model_Runner.Backend.CPU.Pool_Reference := null)
    is
       Width  : constant N.Element_Count := N.Element_Count (L.Config (Encoder).Embedding);
       Kept   : constant Natural := Tokens'Length - Natural'Min (Dropped, Tokens'Length);
@@ -70,7 +72,7 @@ package body Model_Runner.Qwen_Image.Prompts is
       From   : Natural := 0;
    begin
       Rows := null;
-      L.Open (Live, Encoder, Context => Tokens'Length, Status => Status);
+      L.Open (Live, Encoder, Context => Tokens'Length, Workers => Workers, Status => Status);
       if E.Is_Error (Status) then
          return;
       end if;

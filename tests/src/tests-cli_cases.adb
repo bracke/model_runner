@@ -15872,6 +15872,11 @@ package body Tests.CLI_Cases is
       Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--count"),
                          S ("101")], Item);
       Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a hundred and one pictures were accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--no-cache"),
+                         S ("--backend"), S ("cpu")], Item);
+      Assert (E.Is_Ok (Status) and then Item.No_Cache and then Item.Backend_Set
+              and then Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU),
+              "--no-cache and --backend were not taken");
       Status := Parsed ([S ("run"), S ("m.gguf"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png")], Item);
       Assert (Status.Code = E.CLI_Option_Not_For_Command and then Item.Kind = Opt.Command_Run,
               "run took the image command's --out");

@@ -84,7 +84,7 @@ package body Model_Runner.CLI.Options is
        Text ("paged")),
       (Text ("--no-paged"), [Command_Run => True, others => False],
        Text ("no_paged")),
-      (Text ("--no-cache"), [Command_Run => True, others => False],
+      (Text ("--no-cache"), [Command_Run | Command_Image => True, others => False],
        Text ("no_cache")),
       (Text ("--arith"),
        [Command_Run | Command_Embed => True, others => False],

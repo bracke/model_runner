@@ -1,3 +1,4 @@
+with Model_Runner.Backend.CPU;
 with Model_Runner.Errors;
 with Model_Runner.Llama;
 with Model_Runner.Tensors;
@@ -39,12 +40,16 @@ package Model_Runner.Qwen_Image.Prompts is
    --  @param Count how many
    --  @param Status success, or why not: the tokenizer's refusal, a prompt
    --    past Max_Tokens (Tokenizer_Input_Too_Long), or the session's
+   --  @param Workers the pool the encoder's products are shared across;
+   --    null reads the prompt on this task alone, eight times slower on
+   --    eight cores
    procedure Encode
      (Encoder : in out Model_Runner.Llama.Model'Class;
       Prompt  : String;
       Rows    : out Model_Runner.Tensors.Real_Array_Access;
       Count   : out Natural;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Workers : Model_Runner.Backend.CPU.Pool_Reference := null);
 
    --  Encode's reading, once the template is tokens: every token read,
    --  in as many batches as the encoder takes, and the rows of those
@@ -56,12 +61,16 @@ package Model_Runner.Qwen_Image.Prompts is
    --  @param Rows Tokens'Length - Dropped rows, each the encoder's width;
    --    null on failure
    --  @param Status success, or the session's refusal
+   --  @param Workers the pool the encoder's products are shared across;
+   --    null reads the prompt on this task alone, eight times slower on
+   --    eight cores
    procedure Rows_Of
      (Encoder : in out Model_Runner.Llama.Model'Class;
       Tokens  : Model_Runner.Tokenizer.Token_Array;
       Dropped : Natural;
       Rows    : out Model_Runner.Tensors.Real_Array_Access;
-      Status  : out Model_Runner.Errors.Error_Info);
+      Status  : out Model_Runner.Errors.Error_Info;
+      Workers : Model_Runner.Backend.CPU.Pool_Reference := null);
 
    --  The rows a prompt was read as, kept on disk under a key that says
    --  everything they depend on -- the encoder file as it is, the program's

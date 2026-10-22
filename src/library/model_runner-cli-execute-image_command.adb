@@ -148,10 +148,13 @@ package body Model_Runner.CLI.Execute.Image_Command is
                           (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
                            Which => Item.Device_Index);
                      end if;
-                     Load ((if Ready then Chosen else Asked), Screen, Source, Container, Prepared, True, null, null,
-                           Condition);
+                     --  On the processor in the panels a run takes unasked:
+                     --  the prompt in rows read 0.19 s against 3.9 s, and
+                     --  from a cold cache 7 s against 24.
+                     Load ((if Ready then Chosen else Model_Runner.CLI.Execute.Support.With_Panels (Asked)), Screen,
+                           Source, Container, Prepared, True, null, null, Condition);
                      if E.Is_Ok (Condition) and then Text = null then
-                        Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition);
+                        Q.Prompts.Encode (Prepared, Item.Prompts (1).all, Text, Text_Rows, Condition, Team);
                         if E.Is_Ok (Condition) and then not Item.No_Cache then
                            Q.Prompts.Keep (Key_Of (Item.Prompts (1).all), Text.all, Text_Rows);
                         end if;
@@ -160,7 +163,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                      --  from it: the empty prompt unless said, as the
                      --  reference reads it.
                      if E.Is_Ok (Condition) and then Leaning and then Away = null then
-                        Q.Prompts.Encode (Prepared, Negative, Away, Away_Rows, Condition);
+                        Q.Prompts.Encode (Prepared, Negative, Away, Away_Rows, Condition, Team);
                         if E.Is_Ok (Condition) and then not Item.No_Cache then
                            Q.Prompts.Keep (Key_Of (Negative), Away.all, Away_Rows);
                         end if;

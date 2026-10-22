@@ -279,10 +279,10 @@ package body Image_Crossing is
                   Context => Q.Prompts.Max_Tokens);
             end if;
             if E.Is_Ok (Status) then
-               Q.Prompts.Encode (Encoder, U.To_String (Prompt), Text, Text_Rows, Status);
+               Q.Prompts.Encode (Encoder, U.To_String (Prompt), Text, Text_Rows, Status, Pool);
             end if;
             if E.Is_Ok (Status) and then Guidance /= 1.0 then
-               Q.Prompts.Encode (Encoder, U.To_String (Negative), Away_Text, Away_Rows, Status);
+               Q.Prompts.Encode (Encoder, U.To_String (Negative), Away_Text, Away_Rows, Status, Pool);
             end if;
             Model_Runner.Llama.Close (Encoder, Ignored);
             Model_Runner.GGUF.Containers.Close (Container);
