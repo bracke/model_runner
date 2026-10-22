@@ -17,6 +17,7 @@ with AUnit.Test_Cases;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
+with Model_Runner.Float_Panels;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
@@ -1634,6 +1635,105 @@ package body Tests.Image_Cases is
       B.Free (Pixels);
    end A_Large_PNG_Encodes;
 
+   --  The processor's panel products against sums in binary64, with every
+   --  kernel the host has, alone and across a pool: shapes that leave a
+   --  tile short of vectors, a panel short of rows, a block of the inner
+   --  dimension short, an item past the first chunk and group.
+   procedure Panel_Products_Sum (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package FP renames Model_Runner.Float_Panels;
+      use type FP.Kernel_Kind;
+      Kept : constant FP.Kernel_Kind := FP.Kernel;
+      Top  : constant FP.Kernel_Kind :=
+        (if Model_Runner.Platform.Byte_Products then FP.Widest
+         elsif Model_Runner.Platform.Wide_Vectors then FP.Wide
+         else FP.Plain);
+      type Shape is record
+         Rows, Columns, Count : N.Element_Count;
+      end record;
+      Shapes : constant array (Positive range <>) of Shape :=
+        [(1, 1, 1), (31, 7, 5), (32, 300, 6), (70, 33, 7), (160, 260, 200), (64, 512, 97), (40, 3, 13)];
+      Team : aliased Model_Runner.Backend.CPU.Pool (3);
+      use type B.Byte_Count;
+      --  The first thing wrong, said after the pool is closed: a pool left
+      --  open by an assertion deadlocks when its scope ends.
+      Wrong : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      Model_Runner.Backend.CPU.Open (Team);
+      for Kind in FP.Plain .. Top loop
+         FP.Use_Kernel (Kind);
+         for S of Shapes loop
+            for Shared in Boolean loop
+               declare
+                  Bytes   : B.Byte_Array_Access :=
+                    new B.Byte_Array'(0 .. B.Byte_Count (S.Rows * S.Columns * 4) - 1 => 0);
+                  Weights : N.Real_Array (0 .. S.Rows * S.Columns - 1)
+                    with Import, Address => Bytes.all'Address;
+                  Vectors : N.Real_Array (0 .. S.Count * S.Columns - 1);
+                  Answers : N.Real_Array (0 .. S.Count * S.Rows - 1) := [others => -7.0];
+                  Weight  : Model_Runner.Tensors.View;
+                  Set     : FP.Panel_Set;
+                  Status  : E.Error_Info;
+                  Seed    : Natural := Natural (S.Rows * 31 + S.Columns * 7 + S.Count);
+                  Worst   : Long_Float := 0.0;
+               begin
+                  for Value of Weights loop
+                     Seed := (Seed * 1_103 + 12_345) mod 65_521;
+                     Value := N.Real (Seed mod 401 - 200) / 100.0;
+                  end loop;
+                  for Value of Vectors loop
+                     Seed := (Seed * 1_103 + 12_345) mod 65_521;
+                     Value := N.Real (Seed mod 301 - 150) / 70.0;
+                  end loop;
+                  Model_Runner.Tensors.Make (G.Type_F32, S.Rows, S.Columns, Bytes, 0, Weight, Status);
+                  if E.Is_Ok (Status) then
+                     FP.Pack (Weight, Set, Status);
+                  end if;
+                  if E.Is_Error (Status) then
+                     Worst := 1.0;
+                  else
+                     FP.Multiply ((if Shared then Model_Runner.Backend.CPU.Sharing (Team'Unchecked_Access) else null),
+                                  Set, Vectors, S.Count, Answers);
+                     for V in 0 .. S.Count - 1 loop
+                        for R in 0 .. S.Rows - 1 loop
+                           declare
+                              Sum, Size : Long_Float := 0.0;
+                           begin
+                              for K in 0 .. S.Columns - 1 loop
+                                 Sum := Sum + Long_Float (Weights (R * S.Columns + K))
+                                   * Long_Float (Vectors (V * S.Columns + K));
+                                 Size := Size + abs (Long_Float (Weights (R * S.Columns + K))
+                                                     * Long_Float (Vectors (V * S.Columns + K)));
+                              end loop;
+                              Worst := Long_Float'Max (Worst, abs (Long_Float (Answers (V * S.Rows + R)) - Sum)
+                                                                / Long_Float'Max (Size, 1.0e-6));
+                           end;
+                        end loop;
+                     end loop;
+                  end if;
+                  if E.Is_Ok (Status) and then not FP.Is_Packed (Set) then
+                     Worst := 1.0;
+                  end if;
+                  FP.Free (Set);
+                  if FP.Is_Packed (Set) then
+                     Worst := 1.0;
+                  end if;
+                  B.Free (Bytes);
+                  if Worst >= 1.0e-6 and then Ada.Strings.Unbounded.Length (Wrong) = 0 then
+                     Wrong := Ada.Strings.Unbounded.To_Unbounded_String
+                         (FP.Kernel_Kind'Image (Kind) & " (" & Boolean'Image (Shared) & ") at"
+                          & N.Element_Count'Image (S.Rows) & " x" & N.Element_Count'Image (S.Columns) & " by"
+                          & N.Element_Count'Image (S.Count) & " was off by" & Long_Float'Image (Worst));
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end loop;
+      FP.Use_Kernel (Kept);
+      Model_Runner.Backend.CPU.Close (Team);
+      Assert (Ada.Strings.Unbounded.Length (Wrong) = 0, Ada.Strings.Unbounded.To_String (Wrong));
+   end Panel_Products_Sum;
+
    --  Several pictures are numbered beside the name given, before its
    --  extension; one keeps the name.
    procedure Pictures_Are_Numbered (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -1687,6 +1787,8 @@ package body Tests.Image_Cases is
          "one evaluation of the denoiser on the device is the plain computation of the same network");
       Register_Routine
         (T, A_Large_PNG_Encodes'Access, "a picture past what a process's first stack holds encodes");
+      Register_Routine
+        (T, Panel_Products_Sum'Access, "the processor's panel products sum as binary64 does, every kernel");
       Register_Routine
         (T, Stripes_Decode_As_The_Whole'Access,
          "a latent decoded a stripe of rows at a time is the latent decoded whole");

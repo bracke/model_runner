@@ -8,6 +8,7 @@ with Model_Runner.GGUF;
 with Model_Runner.Sampling;
 with Model_Runner.Kernels;
 with Model_Runner.Delta_Rule;
+with Model_Runner.Float_Panels;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
 
@@ -2104,6 +2105,10 @@ begin
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Tensors.Use_Wide_Halves
      (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Float_Panels.Use_Kernel
+     (if Model_Runner.Platform.Byte_Products then Model_Runner.Float_Panels.Widest
+      elsif Model_Runner.Platform.Wide_Vectors then Model_Runner.Float_Panels.Wide
+      else Model_Runner.Float_Panels.Plain);
    Model_Runner.Delta_Rule.Use_Wide
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Sampling.Use_Wide_Walks

@@ -67,6 +67,12 @@ package body Model_Runner.Qwen_Image.Decoder is
 
    procedure Open (Item : in out Picture_Decoder; Path : String; Status : out E.Error_Info) is
 
+      --  Whether the device is to run the convolutions: their taps are laid
+      --  out apart for it where it is, and their kernels in panels for the
+      --  processor where it is not. A decoder decodes on whichever it was
+      --  opened beside, and on the other through the plain products.
+      On_Device : constant Boolean := Model_Runner.Backend.Device.Is_Ready;
+
       --  A tensor of the elements given, or refused naming it.
       function Find (Name : String; Elements : Element_Count) return Natural is
          Index : constant Natural := S.Find (Item.Table, Name);
@@ -112,7 +118,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
       end Vector;
 
-      procedure Convolve (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution) is
+      procedure Laid_Out (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution) is
          Columns : constant Element_Count := Element_Count (Inputs * Size * Size);
          Index   : constant Natural := Find (Name & ".weight", Element_Count (Outputs) * Columns);
       begin
@@ -231,7 +237,7 @@ package body Model_Runner.Qwen_Image.Decoder is
             T.Make (Result.Kernel.Format, Rows_To, Across, Result.Owned, 0, Result.Kernel, Status);
 
             --  A 3x3's taps apart, for the device.
-            if Size = 3 and then E.Is_Ok (Status) then
+            if Size = 3 and then On_Device and then E.Is_Ok (Status) then
                declare
                   Ins_To    : constant Element_Count := (Ins + 31) / 32 * 32;
                   Tap_Bytes : constant B.Byte_Count := B.Byte_Count (Rows_To * Ins_To) * Element;
@@ -270,6 +276,16 @@ package body Model_Runner.Qwen_Image.Decoder is
                end;
             end if;
          end;
+      end Laid_Out;
+
+      --  The convolution Name, laid out for whichever of the device and the
+      --  processor is to run it: on the processor its kernel in panels too.
+      procedure Convolve (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution) is
+      begin
+         Laid_Out (Name, Inputs, Outputs, Size, Result);
+         if not On_Device and then E.Is_Ok (Status) and then T.Is_Present (Result.Kernel) then
+            Model_Runner.Float_Panels.Pack (Result.Kernel, Result.Panels, Status);
+         end if;
       end Convolve;
 
       --  C's Fit, out of the gain of the norm before it.
@@ -410,6 +426,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          T.Free (C.Bias);
          B.Free (C.Owned);
          B.Free (C.Tap_Owned);
+         Model_Runner.Float_Panels.Free (C.Panels);
          T.Free (C.Fit);
          C := (others => <>);
       end Let_Go;
@@ -820,6 +837,19 @@ package body Model_Runner.Qwen_Image.Decoder is
          end;
       end Product;
 
+      --  Target := C's kernel times each of Count vectors: through its
+      --  panels where it has them, which it does where it was opened with
+      --  no device.
+      procedure Product
+        (C : Convolution; Vectors : T.Real_Array_Access; Count : Element_Count; Target : T.Real_Array_Access) is
+      begin
+         if E.Is_Ok (Status) and then not On_Device and then Model_Runner.Float_Panels.Is_Packed (C.Panels) then
+            Model_Runner.Float_Panels.Multiply (CPU.Sharing (Pool), C.Panels, Vectors.all, Count, Target.all);
+         else
+            Product (C.Kernel, Vectors, Count, Target);
+         end if;
+      end Product;
+
       --  Target := C, a 3x3, applied to Source's pixels on the device, a
       --  band of rows at a time -- each pixel normed by Gain first, SiLU
       --  after, where Gain is given: the band laid out padded -- a pixel of
@@ -963,7 +993,7 @@ package body Model_Runner.Qwen_Image.Decoder is
          if C.Size = 1 then
             if Fitted = Outs then
                Answers := Target;
-               Product (C.Kernel, Source, Pixels, Target);
+               Product (C, Source, Pixels, Target);
                Put (0, Pixels);
                return;
             end if;
@@ -972,7 +1002,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                Status := E.Make (E.Memory_Allocation_Failed);
                return;
             end if;
-            Product (C.Kernel, Source, Pixels, Answers);
+            Product (C, Source, Pixels, Answers);
             Put (0, Pixels);
             T.Free (Answers);
             return;
@@ -1010,7 +1040,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                   begin
                               CPU.Dispatch_Shares (Pool, Rows_Here * Width, Job'Unchecked_Access, Status,
                                           Cost => Rows_Here * Width * Across);
-                     Product (C.Kernel, Patches, Rows_Here * Width, Answers);
+                     Product (C, Patches, Rows_Here * Width, Answers);
                      Put (Row * Width, Rows_Here * Width);
                      Row := Row + Rows_Here;
                   end;

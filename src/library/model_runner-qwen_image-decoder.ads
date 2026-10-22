@@ -4,6 +4,7 @@ with Model_Runner.Backend.CPU;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
+with Model_Runner.Float_Panels;
 with Model_Runner.Numerics;
 with Model_Runner.Safetensors;
 with Model_Runner.Tensors;
@@ -129,6 +130,9 @@ private
       --  channels over the padded channels, since that norm's mean is over
       --  the padded ones, and nought past the channels. Null for none.
       Fit       : T.Real_Array_Access;
+      --  The kernel in panels, where the decoder was opened with no device
+      --  to run it: what the processor's products read.
+      Panels   : Model_Runner.Float_Panels.Panel_Set;
       Bias     : T.Real_Array_Access;
       Inputs   : Natural := 0;
       Outputs  : Natural := 0;

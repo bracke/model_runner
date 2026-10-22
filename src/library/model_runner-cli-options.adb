@@ -165,7 +165,7 @@ package body Model_Runner.CLI.Options is
         others => False],
        Text ("threads")),
       (Text ("--backend"),
-       [Command_Run | Command_Embed | Command_Inspect => True,
+       [Command_Run | Command_Embed | Command_Image | Command_Inspect => True,
         others => False],
        Text ("backend")),
       (Text ("--batch-size"),

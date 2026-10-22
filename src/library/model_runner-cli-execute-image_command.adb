@@ -185,11 +185,16 @@ package body Model_Runner.CLI.Execute.Image_Command is
          --  panels otherwise.
          declare
             Model   : Q.Denoiser;
-            On_Device : Boolean;
+            On_Device : Boolean := False;
          begin
-            Model_Runner.Backend.Device.Open
-              (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-               Which => Item.Device_Index);
+            --  Unless --backend names the processor; the decoder follows,
+            --  since it uses the device only where it is open.
+            if not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device)
+            then
+               Model_Runner.Backend.Device.Open
+                 (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+                  Which => Item.Device_Index);
+            end if;
             Q.Open (Model,
                     Path_Of (T.To_String (Item.Model_Path), (if Item.Image_Turbo then Turbo_Name else Denoiser_Name)),
                     Condition,
