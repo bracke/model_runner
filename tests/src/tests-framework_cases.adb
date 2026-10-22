@@ -19723,6 +19723,71 @@ package body Tests.Framework_Cases is
       end;
    end Excerpts_Say_Where_They_Are_From;
 
+   --  An agent working in a tree of its own -- a workspace -- asks of that
+   --  tree: a function added there and a declaration moved there are found
+   --  where they are, by search, declaration and symbol alike, while the
+   --  same questions of the project answer for the project.
+   procedure Workspace_Questions_Read_The_Workspace
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Cq renames Model_Runner.Framework.Code_Queries;
+      Store  : S.Store;
+      Failed : Boolean;
+      Tree   : constant String := Dirs.Full_Name (Fresh ("workspace-tree"));
+
+      function Holds (Text, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      Task_Project (Store, "workspace-questions");
+      Retrieval_Files (Fresh_Root (Store));
+      Retrieval_Files (Tree);
+      --  The workspace's spec, two lines longer at the top and a function
+      --  more at the end.
+      declare
+         Was : constant String := Read_Whole (Tree & "/src/parser.ads");
+         At_End : constant Natural := Ada.Strings.Fixed.Index (Was, "end Parser;");
+      begin
+         Put_File (Tree & "/src/parser.ads",
+                   "--  The workspace's copy." & LF & LF & Was (Was'First .. At_End - 1)
+                   & "   --  The token's height." & LF
+                   & "   function Height (Item : Token) return Natural;" & LF & LF
+                   & Was (At_End .. Was'Last));
+      end;
+
+      declare
+         Said : constant String := Cq.Retrieve (Store, "declaration", "Height", Tree, True, Failed);
+      begin
+         Assert (not Failed and then Holds (Said, "function Height"),
+                 "a declaration made in the workspace was not found there: " & Said);
+      end;
+      declare
+         Said : constant String := Cq.Retrieve (Store, "declaration", "Width", Tree, True, Failed);
+      begin
+         Assert (not Failed and then Holds (Said, "22:    function Width")
+                 and then not Holds (Said, "found where the file now has it"),
+                 "a declaration moved in the workspace was not read from the workspace's graph: " & Said);
+      end;
+      Assert (Holds (Cq.Retrieve (Store, "search", "Height", Tree, True, Failed), "Parser.Height"),
+              "a search in the workspace did not find what was added there");
+      Assert (Holds (Cq.Find (Store, "symbol", "Height", Failed, Root => Tree), "Parser.Height"),
+              "a symbol added in the workspace was not found there");
+
+      Assert (not Rp.Find_Symbols (Cq.Graph_Of (Store, Tree), "Height").Is_Empty
+              and then Rp.Find_Symbols (Cq.Graph_Of (Store, ""), "Height").Is_Empty,
+              "the workspace's graph and the project's were not each their own tree's");
+
+      --  The project, asked the same, answers for the project.
+      declare
+         Said : constant String := Cq.Retrieve (Store, "declaration", "Height", "", True, Failed);
+      begin
+         Assert (Failed, "a declaration only the workspace holds was found in the project: " & Said);
+      end;
+      Assert (not Holds (Cq.Find (Store, "symbol", "Height", Failed), "Parser.Height"),
+              "a symbol only the workspace holds was found in the project");
+      S.Close (Store);
+   end Workspace_Questions_Read_The_Workspace;
+
    --  A task that names a symbol is given its declarations and where it is
    --  used, as excerpts that fit a small room, within the room, the same
    --  each time; in a room that holds the whole file, the file is given
@@ -20311,6 +20376,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Tasks_Are_Given_What_They_Name'Access,
          "a task is given the declarations it names and where they are used, within its room");
+      Register_Routine
+        (T, Workspace_Questions_Read_The_Workspace'Access,
+         "an agent working in a workspace asks the workspace's graph, the project its own");
    end Register_Tests;
 
 end Tests.Framework_Cases;

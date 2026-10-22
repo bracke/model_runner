@@ -1515,7 +1515,7 @@ package body Model_Runner.CLI.Project_Commands is
                        Model_Runner.Framework.Code_Queries.Find
                          (Self.Host.Store_Of.all, Kind,
                           Model_Runner.Tools.Builtin.Text_Argument (Arguments, "query", Found_Scope),
-                          Asked_Failed);
+                          Asked_Failed, Root => Self.Base);
                   begin
                      if Asked_Failed then
                         Outcome.Answer := Tr.Failed;
@@ -1538,7 +1538,8 @@ package body Model_Runner.CLI.Project_Commands is
             declare
                Asked_Failed : Boolean;
                Said : constant String :=
-                 Model_Runner.Framework.Code_Queries.Answer (Self.Host.Store_Of.all, Named, Arguments, Asked_Failed);
+                 Model_Runner.Framework.Code_Queries.Answer
+                   (Self.Host.Store_Of.all, Named, Arguments, Asked_Failed, Root => Self.Base);
             begin
                if Asked_Failed then
                   Outcome.Answer := Tr.Failed;
@@ -1667,7 +1668,8 @@ package body Model_Runner.CLI.Project_Commands is
                then
                   declare
                      Users : constant String :=
-                       Model_Runner.Framework.Code_Queries.Users_Of_File (Self.Host.Store_Of.all, Path);
+                       Model_Runner.Framework.Code_Queries.Users_Of_File
+                         (Self.Host.Store_Of.all, Path, Root => Self.Base);
                      Was   : constant String := Result (Result'First .. Last);
                   begin
                      if Users /= "" then

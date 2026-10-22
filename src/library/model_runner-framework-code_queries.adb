@@ -76,10 +76,24 @@ package body Model_Runner.Framework.Code_Queries is
       return Units;
    end Units_Of_File;
 
+   --------------
+   -- Graph_Of --
+   --------------
+
+   function Graph_Of (Store : Stores.Store; Root : String) return Repository.Graph is
+      Project : constant String := Ada.Directories.Containing_Directory (Stores.Root (Store));
+   begin
+      if Root = "" or else Root = "." or else Ada.Directories.Full_Name (Root) = Ada.Directories.Full_Name (Project)
+      then
+         return Repository.Now (Store);
+      end if;
+      return Repository.Scan (Root, Repository.Roots_Of (Store));
+   end Graph_Of;
+
    --  What uses a file's units, from the graph as it is now; "" for nothing.
-   function Users_Of_File (Store : Stores.Store; Path : String) return String is
+   function Users_Of_File (Store : Stores.Store; Path : String; Root : String := "") return String is
       package Rp renames Repository;
-      Graph : constant Rp.Graph := Rp.Now (Store);
+      Graph : constant Rp.Graph := Graph_Of (Store, Root);
       Said  : Unbounded_String;
       Shown : Natural := 0;
    begin
@@ -101,11 +115,14 @@ package body Model_Runner.Framework.Code_Queries is
      (Store  : Stores.Store;
       Named  : String;
       Args   : String;
-      Failed : out Boolean) return String
+      Failed : out Boolean;
+      Root   : String := "") return String
    is
       package Rp renames Repository;
       package Tc renames Traceability;
-      Graph : constant Rp.Graph := Rp.Now (Store);
+      Graph : constant Rp.Graph := Graph_Of (Store, Root);
+      Tree  : constant String :=
+        (if Root = "" then Ada.Directories.Containing_Directory (Stores.Root (Store)) else Root);
       Have  : Boolean;
       Key   : constant String :=
         (if Named in "find_symbol" | "find_references" then "name"
@@ -116,9 +133,7 @@ package body Model_Runner.Framework.Code_Queries is
       --  A file of the project, by its path within it -- wherever the
       --  caller's directory is.
       function Is_File (Path : String) return Boolean is
-        (Path /= ""
-         and then Ada.Directories.Exists
-                    (Ada.Directories.Containing_Directory (Stores.Root (Store)) & "/" & Path));
+        (Path /= "" and then Ada.Directories.Exists (Tree & "/" & Path));
 
       function Listed (Items : Name_Lists.Vector; Most : Positive) return String is
          Text  : Unbounded_String;
@@ -295,7 +310,7 @@ package body Model_Runner.Framework.Code_Queries is
       if Kind = "search" then
          declare
             Hits : constant Rv.Hit_Lists.Vector :=
-              Rv.Search (Store, Repository.Now (Store), Tree, Asked, Most => 15,
+              Rv.Search (Store, Graph_Of (Store, Root), Tree, Asked, Most => 15,
                          May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Records => Records);
             Rank : Natural := 0;
          begin
@@ -358,7 +373,7 @@ package body Model_Runner.Framework.Code_Queries is
                declare
                   Found : Rv.Excerpt_Lists.Vector;
                begin
-                  Rv.Declaration (Repository.Now (Store), Tree, Asked, 120, Found, Status,
+                  Rv.Declaration (Graph_Of (Store, Root), Tree, Asked, 120, Found, Status,
                                   May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access);
                   if Found.Is_Empty then
                      Failed := True;
@@ -387,7 +402,8 @@ package body Model_Runner.Framework.Code_Queries is
      (Store  : Stores.Store;
       Kind   : String;
       Query  : String;
-      Failed : out Boolean) return String
+      Failed : out Boolean;
+      Root   : String := "") return String
    is
       package Sc renames Model_Runner.Tools.Schemas;
       Named : constant String :=
@@ -398,13 +414,13 @@ package body Model_Runner.Framework.Code_Queries is
         (if Kind in "symbol" | "references" then "name" elsif Kind = "impact" then "target" else "unit");
    begin
       if Kind in "search" | "declaration" then
-         return Retrieve (Store, Kind, Query, "", Records => True, Failed => Failed);
+         return Retrieve (Store, Kind, Query, Root, Records => True, Failed => Failed);
       elsif Named = "" then
          Failed := True;
          return "error: find takes kind symbol, references, depends_on, used_by, impact, search, declaration"
            & " or text -- not " & Kind;
       end if;
-      return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed);
+      return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed, Root);
    end Find;
 
 end Model_Runner.Framework.Code_Queries;

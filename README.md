@@ -248,12 +248,13 @@ agent may read. `/search WORDS` asks the same at the terminal. Measured by
 `tests retrieval-bench` on twelve frozen framework sources, five tasks at
 rooms of 4,096, 8,192 and 32,768 tokens: the lines each task needs went in
 36 times of 36, against 14 before; at 8,192 the lookup task's context is
-4,003 tokens where it was 7,168 and held neither line. Whether agents
-finish sooner for it is not shown: on Mellum2.1-12B, a task naming one
-subprogram of a 2,400-line package took the same calls and time with
-excerpts as with the files whole (`tests agent-trial --task large
-[--retrieval whole]`, three runs each), the model reading the file though
-its context held the lines. The ranking's
+4,003 tokens where it was 7,168 and held neither line. On a task naming one
+subprogram of a 2,400-line package (`tests agent-trial --task large
+[--retrieval whole]`, three runs each), qwen3-8b with excerpts edited on
+its first call and finished in 97 and 111 s with 2 calls, against 150-200 s
+and 3-4 calls with the files whole -- though one of its three runs with
+excerpts looped and failed; Mellum2.1-12B read the file either way and
+took the same time both ways. The ranking's
 rules are written in `Model_Runner.Framework.Retrieval`; the index of the
 files' words is kept in the process and read again on the first search
 after a start.

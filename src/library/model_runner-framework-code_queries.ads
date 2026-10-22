@@ -24,7 +24,19 @@ package Model_Runner.Framework.Code_Queries is
    --  @param Store The store.
    --  @param Path The file, within the project.
    --  @return The units that use it, at most twenty.
-   function Users_Of_File (Store : Stores.Store; Path : String) return String;
+   --  @param Root The tree the agent works in -- a workspace's -- whose
+   --    graph is asked; "" for the project's.
+   function Users_Of_File (Store : Stores.Store; Path : String; Root : String := "") return String;
+
+   --  The graph a question is asked of: the project's as it is now, or,
+   --  for a tree of its own -- a workspace the work is done in -- that
+   --  tree's, scanned the first time and brought up to date after, so an
+   --  answer is about the code the agent sees and changes.
+   --
+   --  @param Store The store.
+   --  @param Root The tree; "" for the project's.
+   --  @return The graph.
+   function Graph_Of (Store : Stores.Store; Root : String) return Repository.Graph;
 
    --  A question to the graph, as a tool call: find_symbol and
    --  find_references take name, dependencies and dependents unit -- a unit
@@ -35,11 +47,13 @@ package Model_Runner.Framework.Code_Queries is
    --  @param Args Its arguments, a JSON object.
    --  @param Failed Whether the call could not be asked: its argument missing.
    --  @return The answer, in lines; saying so where the graph has nothing.
+   --  @param Root The tree the agent works in; "" for the project's.
    function Answer
      (Store  : Stores.Store;
       Named  : String;
       Args   : String;
-      Failed : out Boolean) return String;
+      Failed : out Boolean;
+      Root   : String := "") return String;
 
    --  What the find tool's search and declaration kinds answer, bounded:
    --  search, the hits Retrieval.Search ranks for a query, each with where
@@ -77,10 +91,12 @@ package Model_Runner.Framework.Code_Queries is
    --  @param Failed Whether it could not be asked: no query, or a kind
    --    that is none of these.
    --  @return The answer.
+   --  @param Root The tree the agent works in; "" for the project's.
    function Find
      (Store  : Stores.Store;
       Kind   : String;
       Query  : String;
-      Failed : out Boolean) return String;
+      Failed : out Boolean;
+      Root   : String := "") return String;
 
 end Model_Runner.Framework.Code_Queries;
