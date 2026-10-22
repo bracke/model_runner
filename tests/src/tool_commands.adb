@@ -295,9 +295,9 @@ package body Tool_Commands is
      & "rows and velocities to the reference's";
    Takes_Image : aliased constant String :=
      "--expect FILE [--device] [--model PATH] [--text-encoder PATH] "
-     & "[--vae PATH] [--mmproj PATH] [--reference DIR] [--stripe-bytes N]";
+     & "[--vae PATH] [--mmproj PATH] [--reference DIR] [--stripe-bytes N] [--device-timeline]";
    Opts_Image  : aliased constant String :=
-     " --expect --device --model --text-encoder --vae --mmproj --reference --stripe-bytes ";
+     " --expect --device --model --text-encoder --vae --mmproj --reference --stripe-bytes --device-timeline ";
 
    Held : constant array (1 .. 37) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

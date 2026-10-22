@@ -883,7 +883,9 @@ begin
                    Reference => To_Unbounded_String (Option ("--reference")),
                    Stripe_Bytes =>
                      (if Option ("--stripe-bytes") = "" then 0
-                      else Long_Long_Integer'Value (Option ("--stripe-bytes"))))) /= 0
+                      else Long_Long_Integer'Value (Option ("--stripe-bytes"))),
+                   Timeline => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                                  Ada.Command_Line.Argument (Index) = "--device-timeline"))) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

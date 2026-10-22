@@ -37,6 +37,9 @@ package Image_Crossing is
       --  The decoder's stripe budget for the reference's latent, or nought
       --  for its own.
       Stripe_Bytes : Long_Long_Integer := 0;
+      --  Whether the decode's device steps are timed and said, step by
+      --  step and shape by shape.
+      Timeline : Boolean := False;
    end record;
 
    --  Run the check, saying each figure as it is had.

@@ -617,7 +617,20 @@ package body Image_Crossing is
                      Dec.Set_Stripes (Given.Stripe_Bytes);
                   end if;
                   if E.Is_Ok (Status) then
-                     Dec.Decode (VAE, Latent, Latent_Rows, Latent_Columns, Pool, Planes.all, Status);
+                     declare
+                        Began : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                        use type Ada.Calendar.Time;
+                     begin
+                        if Given.Timeline then
+                           Model_Runner.Backend.Device.Keep_Timeline (True);
+                        end if;
+                        Dec.Decode (VAE, Latent, Latent_Rows, Latent_Columns, Pool, Planes.all, Status);
+                        Ada.Text_IO.Put_Line ("decoded in" & Duration'Image (Ada.Calendar.Clock - Began) & " s");
+                        if Given.Timeline then
+                           Ada.Text_IO.Put_Line (Model_Runner.Backend.Device.Timeline_Report);
+                           Model_Runner.Backend.Device.Keep_Timeline (False);
+                        end if;
+                     end;
                   end if;
                   --  The picture encoded back: near the latent it was
                   --  decoded from, as far as an autoencoder comes back.
