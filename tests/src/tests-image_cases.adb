@@ -1,4 +1,5 @@
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device.Products;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with System;
@@ -2042,6 +2043,124 @@ package body Tests.Image_Cases is
               & Largest'Image);
    end A_Latent_Decodes_On_The_Device_As_The_Plain_Computation;
 
+   --  A 3x3's nine taps on the device, as the decoder lays them out: one
+   --  band padded a pixel round, each tap a product of half precision's
+   --  tile reading it from further on, the nine joined as they are made --
+   --  against the plain sum of the nine. Wide enough for the tile, which
+   --  the decoder's small fixture is not: the taps after the first read
+   --  the half-precision copy the first made, shifted, and a tap that read
+   --  it from the wrong place gave sums of the wrong pixels.
+   procedure Shifted_Taps_On_The_Device_Are_The_Plain_Sum (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package P renames Model_Runner.Platform.Device.Products;
+      package Device renames Model_Runner.Backend.Device;
+      use type Interfaces.Unsigned_32;
+      use type B.Byte_Count;
+      Outs  : constant := 64;
+      Ins   : constant := 64;
+      Wide  : constant := 20;
+      Band  : constant := 6;
+      Count : constant := Band * Wide - 2;
+      Tap_Bytes : constant := Outs * Ins * 2;
+      Padded : N.Real_Array (0 .. (Band + 2) * Wide * Ins - 1);
+      Owned  : B.Byte_Array_Access;
+      Kept_W : N.Real_Array (0 .. 9 * Outs * Ins - 1);
+      Taps   : array (0 .. 8) of Model_Runner.Tensors.View;
+      Steps  : P.Sequence;
+      Added  : Boolean := True;
+      Sum    : Natural := 0;
+      Status : E.Error_Info;
+      Seed   : Natural := 5;
+      Ready  : Boolean;
+      Tiled_Before : Natural;
+      Worst, Largest : Long_Float := 0.0;
+
+      function Bits is new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, Float);
+      function Word is new Ada.Unchecked_Conversion (Float, Interfaces.Unsigned_32);
+   begin
+      Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+      for Value of Padded loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 200.0;
+      end loop;
+      B.Allocate (B.Byte_Count (9 * Tap_Bytes), Owned);
+      for Index in Kept_W'Range loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         declare
+            High : constant Interfaces.Unsigned_32 :=
+              Interfaces.Shift_Right (Word (Float (Seed mod 401 - 200) / 4_000.0), 16);
+            At_Byte : constant B.Byte_Count := Owned'First + B.Byte_Count (Index) * 2;
+         begin
+            Kept_W (Index) := N.Real (Bits (Interfaces.Shift_Left (High, 16)));
+            Owned (At_Byte) := Interfaces.Unsigned_8 (High and 16#FF#);
+            Owned (At_Byte + 1) := Interfaces.Unsigned_8 (Interfaces.Shift_Right (High, 8));
+         end;
+      end loop;
+      for Tap in Taps'Range loop
+         Model_Runner.Tensors.Make
+           (G.Type_BF16, Outs, Ins, Owned, B.Byte_Count (Tap) * Tap_Bytes, Taps (Tap), Status);
+         Assert (E.Is_Ok (Status), "a tap's view was not made");
+      end loop;
+      P.Open_Sequence (Steps);
+      for Tap in Taps'Range loop
+         exit when not Added;
+         Device.Add_View_Product_At (Steps, Taps (Tap), ((Tap / 3) * Wide + Tap rem 3) * Ins, Added);
+         if Added and then Tap > 0 then
+            P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum, Kept => Tap = 8);
+         end if;
+         Sum := P.Length (Steps);
+      end loop;
+      Assert (Added, "the taps were not taken");
+      Tiled_Before := P.Tiled_Products;
+      declare
+         Room_At : System.Address;
+         Ok      : Boolean;
+      begin
+         Device.Activation_Room (Padded'Length, Room_At, Ok);
+         Assert (Ok, "the device gave no room for the band");
+         declare
+            Room : N.Real_Array (Padded'Range) with Import, Address => Room_At;
+         begin
+            Room := Padded;
+            Device.Run_Steps (Steps, Room, Count, System.Null_Address, Status, In_Place => True);
+         end;
+      end;
+      Assert (E.Is_Ok (Status), "the taps did not run: " & E.Error_Code'Image (Status.Code));
+      Assert (P.Tiled_Products > Tiled_Before, "the taps did not go to the tile");
+      Assert (Device.Kept_Answer /= System.Null_Address, "the taps' sum was not kept");
+      declare
+         Answers : N.Real_Array (0 .. Count * Outs - 1) with Import, Address => Device.Kept_Answer;
+      begin
+         for Position in N.Element_Count range 0 .. Count - 1 loop
+            for Row in N.Element_Count range 0 .. Outs - 1 loop
+               declare
+                  Wanted : Long_Float := 0.0;
+               begin
+                  for Tap in N.Element_Count range 0 .. 8 loop
+                     for Column in N.Element_Count range 0 .. Ins - 1 loop
+                        Wanted := Wanted
+                          + Long_Float (Kept_W (Tap * Outs * Ins + Row * Ins + Column))
+                            * Long_Float (Padded ((Position + (Tap / 3) * Wide + Tap rem 3) * Ins + Column));
+                     end loop;
+                  end loop;
+                  Worst := Long_Float'Max (Worst, abs (Long_Float (Answers (Position * Outs + Row)) - Wanted));
+                  Largest := Long_Float'Max (Largest, abs Wanted);
+               end;
+            end loop;
+         end loop;
+      end;
+      for Tap of Taps loop
+         Device.Forget (Tap);
+      end loop;
+      B.Free (Owned);
+      Device.Close;
+      Assert (Largest > 1.0E-2 and then Worst <= 5.0E-3 * Largest,
+              "the taps' sum on the device differs from the plain sum by" & Worst'Image & " of" & Largest'Image);
+   end Shifted_Taps_On_The_Device_Are_The_Plain_Sum;
+
    --  A step with the prompt's rows kept from an earlier one is the plain
    --  computation at its own time: kept at one time, read at another, and
    --  kept afresh for another prompt rather than read -- on the processor
@@ -2437,6 +2556,9 @@ package body Tests.Image_Cases is
       Register_Routine
         (T, A_Latent_Decodes_On_The_Device_As_The_Plain_Computation'Access,
          "a latent decoded with the device open is the plain computation of the same VAE decoder");
+      Register_Routine
+        (T, Shifted_Taps_On_The_Device_Are_The_Plain_Sum'Access,
+         "a 3x3's nine shifted taps on the device's tile are the plain sum of the nine");
       Register_Routine
         (T, The_Prompt_Template_Is_The_References'Access,
          "a prompt is read within the reference's template, character for character");

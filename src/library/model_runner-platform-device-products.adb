@@ -8222,6 +8222,10 @@ package body Model_Runner.Platform.Device.Products is
       Base    : Interfaces.Unsigned_64;
       Fresh   : Boolean;
 
+      --  How many values past its own vectors a fresh copy takes, for the
+      --  taps after it that read from further on.
+      Reach   : Interfaces.Unsigned_64;
+
       --  Where the answer goes in the half-precision buffer, in halves and
       --  plus one, or zero for the binary32 answer into the result buffer.
       Into    : Interfaces.Unsigned_64;
@@ -8253,9 +8257,11 @@ package body Model_Runner.Platform.Device.Products is
       Wall : aliased Memory_Barrier;
 
       Held : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count);
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count)
+        + Reach;
       Made : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Room);
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Room)
+        + Reach;
    begin
       Good := False;
 
@@ -8719,7 +8725,7 @@ package body Model_Runner.Platform.Device.Products is
          if Tiled then
             Tile_Product
               (Item, Rows, Columns, Count, Vectors_Room, Packing,
-               Weight_Base, Fresh => True, Into => 0, Joins => False,
+               Weight_Base, Fresh => True, Reach => 0, Into => 0, Joins => False,
                Good => Good);
 
             if not Good then
@@ -14324,12 +14330,15 @@ package body Model_Runner.Platform.Device.Products is
                --  What it reads, and what it may be asked to write: a
                --  product whose answer is wanted only in half precision
                --  writes it here rather than into the result buffer.
+               --  And as far on as it reads, where it is a tap whose copy
+               --  the first tap made long enough for every tap.
                Half_Bytes := Interfaces.Unsigned_64'Max
                  (Half_Bytes,
-                  Interfaces.Unsigned_64'Max
-                    (Interfaces.Unsigned_64 (This.Columns),
-                     Interfaces.Unsigned_64 (This.Rows))
-                  * Interfaces.Unsigned_64 (Room) * 2);
+                  (Interfaces.Unsigned_64'Max
+                     (Interfaces.Unsigned_64 (This.Columns),
+                      Interfaces.Unsigned_64 (This.Rows))
+                   * Interfaces.Unsigned_64 (Room)
+                   + Interfaces.Unsigned_64 (This.At_Vector)) * 2);
             elsif Listed_Tiled (Index) then
                --  The runs' vectors, laid out by slot.
                Half_Bytes := Interfaces.Unsigned_64'Max
@@ -15841,6 +15850,19 @@ package body Model_Runner.Platform.Device.Products is
          Region    : array (1 .. Sequence_Limit) of Natural :=
            [others => 0];
 
+         --  A convolution's taps: tiled products of the activation, each
+         --  reading it from further on (At_Vector), joined as they go.
+         --  The first converts the activation to halves once, Reach
+         --  values past its own vectors -- as far as the last tap reads --
+         --  and the rest read that copy where their vectors begin. Each
+         --  converted its own stretch before, eight times out of nine
+         --  what the tap before had: a decoder's full-size 3x3 spent a
+         --  third of its time so.
+         Reach     : array (1 .. Sequence_Limit) of Natural :=
+           [others => 0];
+         Shifted   : array (1 .. Sequence_Limit) of Boolean :=
+           [others => False];
+
          --  The combining steps of gated feed-forwards whose projection up
          --  makes the combination itself, in its own store: such a step is
          --  not dispatched, and its answer sits where the projection up
@@ -15850,6 +15872,45 @@ package body Model_Runner.Platform.Device.Products is
            [others => False];
          Gated     : array (1 .. Sequence_Limit) of Natural :=
            [others => 0];
+
+         --  The taps, found: a tiled product of the activation at its
+         --  front leads, and every tiled product of the activation at the
+         --  same width after it reads its copy, until a step of any other
+         --  kind -- which may write the copy's front -- but for the joins
+         --  folded between them, which dispatch nothing.
+         procedure Find_Taps is
+            Leader : Natural := 0;
+         begin
+            for Index in 1 .. Steps.Held loop
+               declare
+                  This : Step renames Steps.Items (Index);
+                  Of_Activation : constant Boolean :=
+                    Tiled (Index)
+                    and then This.Reads = 0
+                    and then not This.Chained
+                    and then not Halved (Index)
+                    and then Gated (Index) = 0;
+               begin
+                  if This.Folded then
+                     null;
+                  elsif Of_Activation and then This.At_Vector = 0
+                    and then Leader = 0
+                  then
+                     Leader := Index;
+                  elsif Of_Activation and then Leader /= 0
+                    and then This.Columns = Steps.Items (Leader).Columns
+                  then
+                     Shifted (Index) := True;
+                     Reach (Leader) :=
+                       Natural'Max (Reach (Leader), This.At_Vector);
+                  elsif Of_Activation and then This.At_Vector = 0 then
+                     Leader := Index;
+                  else
+                     Leader := 0;
+                  end if;
+               end;
+            end loop;
+         end Find_Taps;
 
          --  A walk's activations rounded where it reads them, for it to
          --  multiply as integers: after a barrier where a walk before may
@@ -16155,6 +16216,8 @@ package body Model_Runner.Platform.Device.Products is
                end;
             end loop;
          end;
+
+         Find_Taps;
 
          for Index in 1 .. Steps.Held loop
             declare
@@ -17737,14 +17800,16 @@ package body Model_Runner.Platform.Device.Products is
                      --  product before this one converted the same answer
                      --  at the same width, and nothing has run in between.
                      Again : constant Boolean :=
-                       Was_From = Reading
-                       and then Was_Wide = This.Columns;
+                       Shifted (Index)
+                       or else (Was_From = Reading
+                                and then Was_Wide = This.Columns);
                   begin
                      Tile_Product
                        (Item, This.Rows, This.Columns, Count,
                         Whole_Tiles (Count), This.Packing,
                         Places (Index).Base + Slice_Base (Index),
                         Fresh => not Again,
+                        Reach => Interfaces.Unsigned_64 (Reach (Index)),
                         Into =>
                           (if Halved (Index)
                            then Interfaces.Unsigned_64 (Region (Index))
@@ -17753,7 +17818,9 @@ package body Model_Runner.Platform.Device.Products is
                         Joins => This.Joins,
                         Good => Done,
                         From =>
-                          (if Again and then Reading in Merged'Range
+                          (if Shifted (Index)
+                           then Interfaces.Unsigned_64 (This.At_Vector)
+                           elsif Again and then Reading in Merged'Range
                                 and then Merged (Reading)
                            then Interfaces.Unsigned_64 (Region (Reading))
                                 * (Item.Half_Region / 2)
@@ -17773,7 +17840,14 @@ package body Model_Runner.Platform.Device.Products is
                         return;
                      end if;
 
-                     Half_From := Reading;
+                     --  A tap's copy is the activation's, which no later
+                     --  step but another tap reads; the leader's is the
+                     --  activation's as any product's is.
+                     if Shifted (Index) then
+                        Half_From := -1;
+                     else
+                        Half_From := Reading;
+                     end if;
                      Half_Wide := This.Columns;
                   end;
 
